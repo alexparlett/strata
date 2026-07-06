@@ -38,7 +38,10 @@ Each is **controlled** by an `open: Signal<bool>` owned by the caller, takes its
 content as `children`, and manages the rest itself.
 
 ```rust
-// Anchored menu/dropdown. Owns: catcher, Esc, positioning.
+// Anchored menu/dropdown. Owns: catcher, Esc, positioning. Mount it conditionally
+// (`if let Some(t) = menu() { Popup { … } }`); it calls `on_close` to dismiss.
+// Implemented: `Popup(on_close: EventHandler<()>, at: Point, children)` + the
+// `MenuItem` / `MenuSep` content primitives (`ui/overlay.rs`).
 #[component]
 fn Popup(open: Signal<bool>, at: Anchor, children: Element) -> Element
 

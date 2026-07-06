@@ -12,9 +12,7 @@
 // break `use Action::*` in `dispatch`.
 use dioxus::prelude::Signal;
 use dioxus::signals::WritableExt;
-use crate::state::{
-    AppState, CatalogKind, LogTab, PlanTab, RemoveKind, ResizeTarget, SettingsCat,
-};
+use crate::state::{AppState, LogTab, PlanTab, RemoveKind, ResizeTarget, SettingsCat};
 
 // Domain handler modules. `panel` (the shared `resize_handle` component),
 // `projects` (window startup), and `catalog` (the modal's source scan,
@@ -62,8 +60,6 @@ pub enum Action {
     RenameInput(String),
     CommitRename,
     CancelRename,
-    OpenTabMenu { idx: usize, x: f64, y: f64 },
-    CloseTabMenu,
 
     // ── catalog ──
     OpenConfigNew,
@@ -73,8 +69,6 @@ pub enum Action {
     CancelRemove,
     ConfirmRemove,
     EditView(String),
-    OpenCatalogMenu { kind: CatalogKind, name: String, x: f64, y: f64 },
-    CloseCatalogMenu,
     SetFilter(String),
     ToggleTableOpen(usize),
     ToggleViewOpen(usize),
@@ -225,8 +219,6 @@ fn run(state: Signal<AppState>, action: Action) {
         RenameInput(val) => tab::rename_input(state, val),
         CommitRename => tab::commit_rename(state),
         CancelRename => tab::cancel_rename(state),
-        OpenTabMenu { idx, x, y } => tab::open_menu(state, idx, x, y),
-        CloseTabMenu => tab::close_menu(state),
 
         // catalog
         OpenConfigNew => catalog::open_config_new(state),
@@ -236,8 +228,6 @@ fn run(state: Signal<AppState>, action: Action) {
         CancelRemove => catalog::cancel_remove(state),
         ConfirmRemove => catalog::confirm_remove(state),
         EditView(name) => catalog::edit_view(state, &name),
-        OpenCatalogMenu { kind, name, x, y } => catalog::open_menu(state, kind, name, x, y),
-        CloseCatalogMenu => catalog::close_menu(state),
         SetFilter(f) => catalog::set_filter(state, f),
         ToggleTableOpen(i) => catalog::toggle_table_open(state, i),
         ToggleViewOpen(i) => catalog::toggle_view_open(state, i),

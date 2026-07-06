@@ -169,22 +169,6 @@ pub enum CatalogKind {
     Query,
 }
 
-/// An open catalog-row context menu, anchored at the click point (client px).
-#[derive(Clone)]
-pub struct CtxMenu {
-    pub kind: CatalogKind,
-    pub name: String,
-    pub x: f64,
-    pub y: f64,
-}
-
-/// An open workspace-tab context menu, anchored at the click point (client px).
-#[derive(Clone)]
-pub struct TabMenu {
-    pub idx: usize,
-    pub x: f64,
-    pub y: f64,
-}
 
 /// A closed query tab, retained so it can be reopened (⇧⌘T). Capped at 20.
 pub struct ClosedTab {
@@ -313,9 +297,7 @@ pub struct AppState {
     // remove-confirmation dialog
     pub remove_open: bool,
     pub remove_target: Option<RemoveTarget>,
-    // context menus + tab rename
-    pub ctx_menu: Option<CtxMenu>,
-    pub tab_menu: Option<TabMenu>,
+    // tab rename
     pub renaming_ws: Option<usize>,
     pub rename_val: String,
     pub closed_tabs: Vec<ClosedTab>,
@@ -470,8 +452,6 @@ impl AppState {
             resizing: None,
             remove_open: false,
             remove_target: None,
-            ctx_menu: None,
-            tab_menu: None,
             renaming_ws: None,
             rename_val: String::new(),
             closed_tabs: Vec::new(),

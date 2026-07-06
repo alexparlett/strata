@@ -3,12 +3,23 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::{AppState, CatalogKind, RegStatus};
+use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind};
 use crate::ui::icons;
+use crate::ui::overlay::{MenuItem, MenuSep, Point, Popup};
+
+/// A catalog row's open context menu (self-contained sidebar state).
+#[derive(Clone)]
+struct CtxTarget {
+    kind: CatalogKind,
+    name: String,
+    at: Point,
+}
 
 #[component]
 pub fn Sidebar() -> Element {
     let state = use_context::<Signal<AppState>>();
+    // Self-contained: the catalog row menu lives here, not in `AppState`.
+    let mut menu = use_signal(|| None::<CtxTarget>);
     let ntab = state.read().project.tables.len();
     let nview = state.read().project.views.len();
     let nquery = state.read().project.saved_queries.len();
@@ -46,7 +57,7 @@ pub fn Sidebar() -> Element {
                 }
 
                 for i in 0..ntab {
-                    {render_table(state, i, &filter, &selected)}
+                    {render_table(state, menu, i, &filter, &selected)}
                 }
 
                 // ---- VIEWS ----
@@ -54,7 +65,7 @@ pub fn Sidebar() -> Element {
                     span { class: "sec-label", "VIEWS · {nview}" }
                 }
                 for i in 0..nview {
-                    {render_view(state, i)}
+                    {render_view(state, menu, i)}
                 }
 
                 // ---- SAVED QUERIES (always shown, like Tables/Views) ----
@@ -66,9 +77,61 @@ pub fn Sidebar() -> Element {
                         "No saved queries yet" }
                 } else {
                     for i in 0..nquery {
-                        {render_saved_query(state, i)}
+                        {render_saved_query(state, menu, i)}
                     }
                 }
+            }
+
+            // Self-contained catalog row menu (egui-style Popup container).
+            if let Some(t) = menu() {
+                Popup { on_close: move |_| menu.set(None), at: t.at,
+                    {catalog_menu_items(state, menu, t)}
+                }
+            }
+        }
+    }
+}
+
+/// The rows for a catalog context menu, by kind. Each item dismisses the popup
+/// then dispatches its concrete action.
+fn catalog_menu_items(
+    state: Signal<AppState>,
+    mut menu: Signal<Option<CtxTarget>>,
+    t: CtxTarget,
+) -> Element {
+    let name = t.name.clone();
+    match t.kind {
+        CatalogKind::Table => {
+            let (n1, n2, n3) = (name.clone(), name.clone(), name.clone());
+            rsx! {
+                MenuItem { icon: icons::play(14), label: "View table".to_string(),
+                    onclick: move |_| { menu.set(None); dispatch(state, Action::LoadSelectStar(n1.clone())); } }
+                MenuItem { icon: icons::gear(14), label: "Configure".to_string(),
+                    onclick: move |_| { menu.set(None); dispatch(state, Action::OpenConfigEdit(n2.clone())); } }
+                MenuSep {}
+                MenuItem { icon: icons::trash(14), label: "Drop table".to_string(), danger: true,
+                    onclick: move |_| { menu.set(None); dispatch(state, Action::RequestRemove { kind: RemoveKind::Table, name: n3.clone() }); } }
+            }
+        }
+        CatalogKind::View => {
+            let (n1, n2, n3) = (name.clone(), name.clone(), name.clone());
+            rsx! {
+                MenuItem { icon: icons::play(14), label: "View view".to_string(),
+                    onclick: move |_| { menu.set(None); dispatch(state, Action::LoadSelectStar(n1.clone())); } }
+                MenuItem { icon: icons::pencil(14), label: "Edit query".to_string(),
+                    onclick: move |_| { menu.set(None); dispatch(state, Action::EditView(n2.clone())); } }
+                MenuSep {}
+                MenuItem { icon: icons::trash(14), label: "Drop view".to_string(), danger: true,
+                    onclick: move |_| { menu.set(None); dispatch(state, Action::RequestRemove { kind: RemoveKind::View, name: n3.clone() }); } }
+            }
+        }
+        CatalogKind::Query => {
+            let (n1, n2) = (name.clone(), name.clone());
+            rsx! {
+                MenuItem { icon: icons::pencil(14), label: "Open in new tab".to_string(),
+                    onclick: move |_| { menu.set(None); dispatch(state, Action::OpenSavedQuery(n1.clone())); } }
+                MenuItem { icon: icons::trash(14), label: "Delete query".to_string(), danger: true,
+                    onclick: move |_| { menu.set(None); dispatch(state, Action::DeleteSavedQuery(n2.clone())); } }
             }
         }
     }
@@ -104,7 +167,11 @@ pub fn SidebarRail() -> Element {
     }
 }
 
-fn render_saved_query(state: Signal<AppState>, i: usize) -> Element {
+fn render_saved_query(
+    state: Signal<AppState>,
+    mut menu: Signal<Option<CtxTarget>>,
+    i: usize,
+) -> Element {
     let s = state.read();
     let Some(q) = s.project.saved_queries.get(i) else {
         return rsx! {};
@@ -124,7 +191,7 @@ fn render_saved_query(state: Signal<AppState>, i: usize) -> Element {
                 oncontextmenu: move |e| {
                     e.prevent_default();
                     let c = e.client_coordinates();
-                    dispatch(state, Action::OpenCatalogMenu { kind: CatalogKind::Query, name: nm_ctx.clone(), x: c.x, y: c.y });
+                    menu.set(Some(CtxTarget { kind: CatalogKind::Query, name: nm_ctx.clone(), at: Point { x: c.x, y: c.y } }));
                 },
                 span { style: "color:var(--purple);display:flex;", {icons::brackets(14)} }
                 span { class: "tname", "{name}" }
@@ -135,7 +202,7 @@ fn render_saved_query(state: Signal<AppState>, i: usize) -> Element {
                     onclick: move |e| {
                         e.stop_propagation();
                         let c = e.client_coordinates();
-                        dispatch(state, Action::OpenCatalogMenu { kind: CatalogKind::Query, name: nm_menu.clone(), x: c.x, y: c.y });
+                        menu.set(Some(CtxTarget { kind: CatalogKind::Query, name: nm_menu.clone(), at: Point { x: c.x, y: c.y } }));
                     },
                     {icons::dots(14)}
                 }
@@ -146,6 +213,7 @@ fn render_saved_query(state: Signal<AppState>, i: usize) -> Element {
 
 fn render_table(
     state: Signal<AppState>,
+    mut menu: Signal<Option<CtxTarget>>,
     i: usize,
     filter: &str,
     selected: &Option<(String, String)>,
@@ -199,7 +267,7 @@ fn render_table(
                 oncontextmenu: move |e| {
                     e.prevent_default();
                     let c = e.client_coordinates();
-                    dispatch(state, Action::OpenCatalogMenu { kind: CatalogKind::Table, name: nm_ctx.clone(), x: c.x, y: c.y });
+                    menu.set(Some(CtxTarget { kind: CatalogKind::Table, name: nm_ctx.clone(), at: Point { x: c.x, y: c.y } }));
                 },
                 span { style: "color:var(--dim2);display:flex;",
                     if open { {icons::chevron_down(12)} } else { {icons::chevron_right(12)} }
@@ -213,7 +281,7 @@ fn render_table(
                     onclick: move |e| {
                         e.stop_propagation();
                         let c = e.client_coordinates();
-                        dispatch(state, Action::OpenCatalogMenu { kind: CatalogKind::Table, name: nm_menu.clone(), x: c.x, y: c.y });
+                        menu.set(Some(CtxTarget { kind: CatalogKind::Table, name: nm_menu.clone(), at: Point { x: c.x, y: c.y } }));
                     },
                     {icons::dots(14)}
                 }
@@ -245,7 +313,7 @@ fn render_table(
     }
 }
 
-fn render_view(state: Signal<AppState>, i: usize) -> Element {
+fn render_view(state: Signal<AppState>, mut menu: Signal<Option<CtxTarget>>, i: usize) -> Element {
     let s = state.read();
     let Some(v) = s.project.views.get(i) else {
         return rsx! {};
@@ -270,7 +338,7 @@ fn render_view(state: Signal<AppState>, i: usize) -> Element {
                 oncontextmenu: move |e| {
                     e.prevent_default();
                     let c = e.client_coordinates();
-                    dispatch(state, Action::OpenCatalogMenu { kind: CatalogKind::View, name: nm_ctx.clone(), x: c.x, y: c.y });
+                    menu.set(Some(CtxTarget { kind: CatalogKind::View, name: nm_ctx.clone(), at: Point { x: c.x, y: c.y } }));
                 },
                 span { style: "color:var(--dim2);display:flex;",
                     if open { {icons::chevron_down(12)} } else { {icons::chevron_right(12)} }
@@ -284,7 +352,7 @@ fn render_view(state: Signal<AppState>, i: usize) -> Element {
                     onclick: move |e| {
                         e.stop_propagation();
                         let c = e.client_coordinates();
-                        dispatch(state, Action::OpenCatalogMenu { kind: CatalogKind::View, name: nm_menu.clone(), x: c.x, y: c.y });
+                        menu.set(Some(CtxTarget { kind: CatalogKind::View, name: nm_menu.clone(), at: Point { x: c.x, y: c.y } }));
                     },
                     {icons::dots(14)}
                 }

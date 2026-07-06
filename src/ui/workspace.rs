@@ -13,14 +13,17 @@ use crate::action::{dispatch, Action};
 use crate::engine::Cell;
 use crate::state::AppState;
 use crate::ui::icons;
+use crate::ui::overlay::{MenuItem, MenuSep, Point, Popup};
 
 #[component]
 pub fn Workspace() -> Element {
     let state = use_context::<Signal<AppState>>();
+    // Self-contained: the tab context menu lives here, not in `AppState`.
+    let tab_menu = use_signal(|| None::<(usize, Point)>);
     let has_ws = !state.read().project.workspaces.is_empty();
     rsx! {
         main { class: "ps-main",
-            {tabs(state)}
+            {tabs(state, tab_menu)}
             if has_ws {
                 {editor(state)}
                 {crate::action::panel::resize_handle(state, crate::state::ResizeTarget::Editor)}
@@ -342,7 +345,7 @@ fn empty_state(state: Signal<AppState>) -> Element {
     }
 }
 
-fn tabs(state: Signal<AppState>) -> Element {
+fn tabs(state: Signal<AppState>, mut tab_menu: Signal<Option<(usize, Point)>>) -> Element {
     let sidebar_open = state.read().sidebar_open;
     let active = state.read().project.active_ws;
     let renaming = state.read().renaming_ws;
@@ -362,7 +365,7 @@ fn tabs(state: Signal<AppState>) -> Element {
             oncontextmenu: move |e| {
                 e.prevent_default();
                 let c = e.client_coordinates();
-                dispatch(state, Action::OpenTabMenu { idx: active, x: c.x, y: c.y });
+                tab_menu.set(Some((active, Point { x: c.x, y: c.y })));
             },
             if !sidebar_open {
                 button { class: "icon-btn plain", style: "width:28px;height:28px;margin-bottom:1px;",
@@ -383,7 +386,7 @@ fn tabs(state: Signal<AppState>) -> Element {
                                 e.prevent_default();
                                 e.stop_propagation();
                                 let c = e.client_coordinates();
-                                dispatch(state, Action::OpenTabMenu { idx: i, x: c.x, y: c.y });
+                                tab_menu.set(Some((i, Point { x: c.x, y: c.y })));
                             },
                             span { class: "tdot" }
                             if is_rename {
@@ -417,7 +420,39 @@ fn tabs(state: Signal<AppState>) -> Element {
                 onclick: move |_| dispatch(state, Action::OpenHistory),
                 {icons::clock(13)} "History"
             }
+
+            // Self-contained tab context menu (egui-style Popup container).
+            if let Some((idx, at)) = tab_menu() {
+                Popup { on_close: move |_| tab_menu.set(None), at,
+                    {tab_menu_items(state, tab_menu, idx)}
+                }
+            }
         }
+    }
+}
+
+/// Rows for a workspace-tab context menu. Each dismisses the popup then dispatches.
+fn tab_menu_items(
+    state: Signal<AppState>,
+    mut tab_menu: Signal<Option<(usize, Point)>>,
+    idx: usize,
+) -> Element {
+    let can_reopen = !state.read().closed_tabs.is_empty();
+    rsx! {
+        MenuItem { label: "Rename".to_string(),
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::StartRename(idx)); } }
+        MenuSep {}
+        MenuItem { label: "Close".to_string(),
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseTab(idx)); } }
+        MenuItem { label: "Close others".to_string(),
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseOtherTabs(idx)); } }
+        MenuItem { label: "Close to the right".to_string(),
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseTabsRight(idx)); } }
+        MenuItem { label: "Close all".to_string(),
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseAllTabs); } }
+        MenuSep {}
+        MenuItem { label: "Reopen closed tab".to_string(), meta: "⇧⌘T".to_string(), disabled: !can_reopen,
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::ReopenTab); } }
     }
 }
 

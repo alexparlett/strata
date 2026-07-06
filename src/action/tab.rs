@@ -4,7 +4,7 @@
 use dioxus::prelude::*;
 
 use crate::engine::Command;
-use crate::state::{AppState, ClosedTab, TabMenu, Workspace};
+use crate::state::{AppState, ClosedTab, Workspace};
 
 /// Open a new blank query tab and focus it.
 pub fn add(mut state: Signal<AppState>) {
@@ -147,17 +147,4 @@ pub fn commit_rename(mut state: Signal<AppState>) {
 
 pub fn cancel_rename(mut state: Signal<AppState>) {
     state.write().renaming_ws = None;
-}
-
-// ---- tab context menu ----
-
-/// Open the workspace-tab context menu at a client-pixel anchor.
-pub fn open_menu(mut state: Signal<AppState>, idx: usize, x: f64, y: f64) {
-    let mut s = state.write();
-    s.ctx_menu = None;
-    s.tab_menu = Some(TabMenu { idx, x, y });
-}
-
-pub fn close_menu(mut state: Signal<AppState>) {
-    state.write().tab_menu = None;
 }

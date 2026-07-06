@@ -4,7 +4,6 @@
 mod cell;
 mod command_palette;
 mod config;
-mod context_menus;
 mod export;
 mod project_menu;
 mod remove;
@@ -13,7 +12,6 @@ mod settings;
 pub use cell::CellPopover;
 pub use command_palette::CommandPalette;
 pub use config::ConfigModal;
-pub use context_menus::{CatalogMenu, TabContextMenu};
 pub use export::ExportModal;
 pub use project_menu::ProjectMenu;
 pub use remove::RemoveConfirm;

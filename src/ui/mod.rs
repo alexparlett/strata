@@ -8,6 +8,7 @@ pub mod inspector;
 pub mod launcher;
 pub mod drawer;
 pub mod modals;
+pub mod overlay;
 pub mod sidebar;
 pub mod statusbar;
 pub mod workspace;

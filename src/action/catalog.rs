@@ -6,8 +6,7 @@ use dioxus::prelude::*;
 
 use crate::engine::{self, Command};
 use crate::state::{
-    AppState, CatalogKind, CatalogTable, CfgStatus, ConfigModal, CtxMenu, LogKind, RegStatus,
-    RemoveKind, RemoveTarget,
+    AppState, CatalogTable, CfgStatus, ConfigModal, LogKind, RegStatus, RemoveKind, RemoveTarget,
 };
 
 /// Open the Table Config modal for a new external table.
@@ -161,19 +160,6 @@ pub fn confirm_remove(mut state: Signal<AppState>) {
     let mut s = state.write();
     s.remove_open = false;
     s.remove_target = None;
-}
-
-// ---- catalog-row context menu ----
-
-/// Open the catalog-row context menu at a client-pixel anchor.
-pub fn open_menu(mut state: Signal<AppState>, kind: CatalogKind, name: String, x: f64, y: f64) {
-    let mut s = state.write();
-    s.tab_menu = None;
-    s.ctx_menu = Some(CtxMenu { kind, name, x, y });
-}
-
-pub fn close_menu(mut state: Signal<AppState>) {
-    state.write().ctx_menu = None;
 }
 
 /// Load a view's SQL into the active tab (catalog menu → "Edit query").

@@ -25,8 +25,6 @@ pub fn close_all(mut state: Signal<AppState>) {
     s.page_size_open = false;
     s.remove_open = false;
     s.remove_target = None;
-    s.ctx_menu = None;
-    s.tab_menu = None;
     s.renaming_ws = None;
 }
 
