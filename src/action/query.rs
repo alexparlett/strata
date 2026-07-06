@@ -278,8 +278,8 @@ pub fn delete_saved(mut state: Signal<AppState>, name: &str) {
 /// `Action::RunExport` — file formats pick a destination (native save dialog, or
 /// a folder for a partitioned export) and export the snapshot via the engine's
 /// `COPY … TO`; the "clipboard" format copies the loaded result as text.
-pub fn run_export(mut state: Signal<AppState>) {
-    let (ws_id, ex, page, page_size, tx) = {
+pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportModal) {
+    let (ws_id, page, page_size, tx) = {
         let s = state.read();
         let ws_id = s
             .project
@@ -287,7 +287,7 @@ pub fn run_export(mut state: Signal<AppState>) {
             .get(s.project.active_ws)
             .map(|w| w.id)
             .unwrap_or(0);
-        (ws_id, s.export.clone(), s.page, s.page_size, s.cmd_tx.clone())
+        (ws_id, s.page, s.page_size, s.cmd_tx.clone())
     };
 
     // Clipboard: copy the loaded result in the chosen text format (no file dialog).

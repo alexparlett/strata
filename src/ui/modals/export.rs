@@ -25,8 +25,11 @@ pub fn ExportHost() -> Element {
 
 #[component]
 pub fn ExportModal(on_close: EventHandler<()>) -> Element {
-    let mut state = use_context::<Signal<AppState>>();
-    let ex = state.read().export.clone();
+    let state = use_context::<Signal<AppState>>();
+    // Form state is component-local — reset each time the window opens. The
+    // `RunExport` action carries a snapshot, so `AppState` never holds it.
+    let mut export = use_signal(ExportState::default);
+    let ex = export();
     let (total, cols) = {
         let s = state.read();
         let total = s.result.as_ref().map(|r| r.total).unwrap_or(0);
@@ -61,7 +64,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                 div { class: "spacer" }
                 button { class: "btn", style: "height:34px;", onclick: move |_| on_close.call(()), "Cancel" }
                 button { class: "btn accent", style: "height:34px;",
-                    onclick: move |_| dispatch(state, Action::RunExport),
+                    onclick: move |_| dispatch(state, Action::RunExport(export())),
                     {icons::download(14)}
                     if is_clip { "Copy" } else { "Export" }
                 }
@@ -72,7 +75,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                         for (id, label, desc) in [("csv", "CSV", "delimited text"), ("json", "JSON", "ndjson records"), ("parquet", "Parquet", "columnar"), ("arrow", "Arrow", "IPC"), ("clipboard", "Clipboard", "copy as text")] {
                             button {
                                 class: if fmt == id { "fmt-card on" } else { "fmt-card" },
-                                onclick: move |_| { state.write().export.format = id.to_string(); },
+                                onclick: move |_| { export.write().format = id.to_string(); },
                                 {icons::download(15)}
                                 span { class: "fn", "{label}" }
                                 span { class: "fd", "{desc}" }
@@ -85,7 +88,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                     div { class: "row", style: "gap:6px;",
                         for (val, lbl) in [("all", format!("All ({total})")), ("page", "This page".to_string())] {
                             button { class: if ex.scope == val { "seg on" } else { "seg" },
-                                onclick: move |_| { state.write().export.scope = val.to_string(); }, "{lbl}" }
+                                onclick: move |_| { export.write().scope = val.to_string(); }, "{lbl}" }
                         }
                     }
 
@@ -95,20 +98,20 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                         match fmt.as_str() {
                             "csv" => rsx! {
                                 div { class: "row", style: "gap:11px;cursor:pointer;padding:2px 0 8px;",
-                                    onclick: move |_| { let mut w = state.write(); w.export.csv_header = !w.export.csv_header; },
+                                    onclick: move |_| { let mut w = export.write(); w.csv_header = !w.csv_header; },
                                     div { class: if ex.csv_header { "toggle on" } else { "toggle" }, div { class: "knob" } }
                                     span { style: "font-size:12px;color:var(--text3);", "Include header row" }
                                 }
                                 div { class: "row", style: "gap:8px;margin-bottom:8px;align-items:center;",
                                     span { class: "opt-lbl", "Delimiter" }
                                     for (v, l) in [("comma", "Comma"), ("tab", "Tab"), ("semicolon", "Semicolon"), ("pipe", "Pipe")] {
-                                        button { class: if ex.csv_delim == v { "seg on" } else { "seg" }, onclick: move |_| { state.write().export.csv_delim = v.to_string(); }, "{l}" }
+                                        button { class: if ex.csv_delim == v { "seg on" } else { "seg" }, onclick: move |_| { export.write().csv_delim = v.to_string(); }, "{l}" }
                                     }
                                 }
                                 div { class: "row", style: "gap:8px;align-items:center;",
                                     span { class: "opt-lbl", "Null as" }
                                     for (v, l) in [("empty", "(empty)"), ("null", "NULL"), ("nan", "NaN")] {
-                                        button { class: if ex.csv_null == v { "seg on" } else { "seg" }, onclick: move |_| { state.write().export.csv_null = v.to_string(); }, "{l}" }
+                                        button { class: if ex.csv_null == v { "seg on" } else { "seg" }, onclick: move |_| { export.write().csv_null = v.to_string(); }, "{l}" }
                                     }
                                 }
                             },
@@ -116,14 +119,14 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                 div { class: "row", style: "gap:8px;align-items:center;flex-wrap:wrap;",
                                     span { class: "opt-lbl", "Compression" }
                                     for (v, l) in [("zstd", "zstd"), ("snappy", "snappy"), ("gzip", "gzip"), ("brotli", "brotli"), ("lz4", "lz4"), ("none", "none")] {
-                                        button { class: if ex.pq_compression == v { "seg on" } else { "seg" }, onclick: move |_| { state.write().export.pq_compression = v.to_string(); }, "{l}" }
+                                        button { class: if ex.pq_compression == v { "seg on" } else { "seg" }, onclick: move |_| { export.write().pq_compression = v.to_string(); }, "{l}" }
                                     }
                                 }
                                 if matches!(ex.pq_compression.as_str(), "zstd" | "gzip" | "brotli") {
                                     div { class: "row", style: "gap:8px;margin-top:8px;align-items:center;",
                                         span { class: "opt-lbl", "Level" }
                                         input { class: "input mono", r#type: "number", style: "width:70px;height:28px;padding:0 8px;", value: "{ex.pq_level}",
-                                            oninput: move |e| { if let Ok(n) = e.value().parse::<u32>() { state.write().export.pq_level = n; } } }
+                                            oninput: move |e| { if let Ok(n) = e.value().parse::<u32>() { export.write().pq_level = n; } } }
                                     }
                                 }
                             },
@@ -133,7 +136,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                 div { class: "row", style: "gap:8px;align-items:center;",
                                     span { class: "opt-lbl", "Copy as" }
                                     for (v, l) in [("markdown", "Markdown"), ("tsv", "TSV"), ("csv", "CSV"), ("json", "JSON")] {
-                                        button { class: if ex.clip_format == v { "seg on" } else { "seg" }, onclick: move |_| { state.write().export.clip_format = v.to_string(); }, "{l}" }
+                                        button { class: if ex.clip_format == v { "seg on" } else { "seg" }, onclick: move |_| { export.write().clip_format = v.to_string(); }, "{l}" }
                                     }
                                 }
                             },
@@ -156,8 +159,8 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                         rsx! {
                                             button { class: if on { "seg on" } else { "seg" },
                                                 onclick: move |_| {
-                                                    let mut w = state.write();
-                                                    let pc = &mut w.export.partition_cols;
+                                                    let mut w = export.write();
+                                                    let pc = &mut w.partition_cols;
                                                     if let Some(i) = pc.iter().position(|c| c == &colc) { pc.remove(i); } else { pc.push(colc.clone()); }
                                                 },
                                                 "{label}"
@@ -168,7 +171,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                             }
                             if !ex.partition_cols.is_empty() {
                                 div { class: "row", style: "gap:11px;cursor:pointer;padding:8px 0 0;",
-                                    onclick: move |_| { let mut w = state.write(); w.export.keep_partition = !w.export.keep_partition; },
+                                    onclick: move |_| { let mut w = export.write(); w.keep_partition = !w.keep_partition; },
                                     div { class: if ex.keep_partition { "toggle on" } else { "toggle" }, div { class: "knob" } }
                                     span { style: "font-size:12px;color:var(--text3);", "Keep partition columns inside the files" }
                                 }
@@ -181,7 +184,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                         div { class: "field-label", style: "margin-top:16px;", "DESTINATION" }
                         div { style: "display:flex;align-items:center;height:34px;background:var(--bg);border:1px solid var(--line2);border-radius:9px;overflow:hidden;max-width:360px;",
                             input { class: "input mono", style: "padding:0 11px;", value: "{ex.name}",
-                                oninput: move |e| state.write().export.name = e.value() }
+                                oninput: move |e| export.write().name = e.value() }
                             span { class: "mono", style: "padding:0 11px;color:var(--accent);border-left:1px solid var(--line2);height:100%;display:flex;align-items:center;",
                                 if ex.partition_cols.is_empty() { "{ext}" } else { "/ (folder)" } }
                         }

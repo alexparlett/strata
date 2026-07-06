@@ -14,8 +14,8 @@ Living backlog and source of truth for outstanding work. Design reference:
 | --- | --- | --- | --- |
 | A1 | Project-scoped state | ✅ Done | `Project` domain model in `project.rs`; `AppState` holds it + engine handle + global prefs. Locked: theme/panel sizes are **global**; tables persist as **specs, re-register on open**; recents/prefs in an app-config store. |
 | A2 | Action enum + dispatch | ✅ Done | One `Action` enum + exhaustive `dispatch` (`action/mod.rs`), domain handlers (`query/tab/catalog/panel/overlay`). Menus emit the same actions; only editor/cmdk bindings + modal form state stay inline. |
-| A3 | Modal manager (unify overlay state + stacking) | ⬜ Todo | Replace the pile of `*_open` bools + hand-rolled backdrop/Esc scaffolding with a `Vec<Modal>` **stack** (push/pop/replace/clear) + shared `Overlay` shell; enables stacked modals (confirm-over-config); delete the per-modal bools + `close_all`. |
-| A4 | Modal form state → component-local `use_signal` | ⬜ Todo | Move `cfg`/`export` transient **form** state off `AppState` into a component-local `use_signal`; actions carry the payload (`RunExport(opts)` / `RegisterTable(spec)`). Orthogonal to A3. |
+| A3 | Overlay architecture (containers + store) | ✅ Done | Shipped as reusable **containers** (`Popup`/`Dialog`/`Window` in `ui/components/`) + a per-window **overlay store** (`overlays.rs`, a `GlobalSignal`) driving always-mounted hosts (cmdk/Settings/Export/Config); co-located popups (menus/project/remove/cell) stay on local `use_signal`. Killed the app-global `*_open` bools + `CloseOverlays` coupling. Not the `Vec<Modal>` stack originally sketched — stacking deferred (the `EscStack` upgrade path). See `OVERLAY_ARCHITECTURE.md`. |
+| A4 | Modal form state off `AppState` | 🟡 Thin | **Export:** done — the form is a component-local `use_signal`; `RunExport(opts)` carries the snapshot; `AppState.export` gone. **Config:** pending — `cfg` is engine-coupled (the async source scan writes it; the `Registered` event writes `status`/`error`), so pure component-local doesn't fit; the consistent fix is a dedicated per-window **cfg store** (like `overlays`), not a local signal. |
 
 ## B. v2 design (all shipped)
 
@@ -91,8 +91,9 @@ Remaining pre-v5: **C5** palette depth · **C8** nested JSON · **C9** PART badg
 
 Blocked on design: **B10** open-in current-vs-new window · **C13** import options.
 
-Architecture cleanups (do when touching the area): **A3** modal manager · **A4**
-modal form-state localization.
+Architecture cleanups: **A4** — Config form state off `AppState` (a dedicated
+`cfg` store, since it's engine-coupled; Export's form is already localized).
+(**A3** shipped — see the overlay containers + store.)
 
 Small follow-ups: debounce autosave · scratch-SQL dirty indicator · self-time cost
 metric for the plan view (`EXPLAIN_PLAN_SPEC.md` §8) · stream-drain ANALYZE to

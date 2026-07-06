@@ -264,7 +264,6 @@ pub struct AppState {
     pub confirm_close_running: bool,
     // modal sub-state
     pub cfg: ConfigModal,
-    pub export: ExportModal,
     // bottom drawer (History + Events tabs)
     pub log: Vec<LogEvent>,
     pub log_open: bool,
@@ -409,7 +408,6 @@ impl AppState {
             open_pref: "ask".into(),
             confirm_close_running: true,
             cfg: ConfigModal::default(),
-            export: ExportModal::default(),
             log: Vec::new(),
             log_open: false,
             log_tab: LogTab::History,
