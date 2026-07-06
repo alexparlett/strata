@@ -34,28 +34,18 @@ fn settings_cat_icon(name: &str) -> Element {
     }
 }
 
-/// Always-mounted host for the Settings window. Owns the local `show` signal and
-/// subscribes to the overlay bus: `Action::ToggleSettings` (from the header gear or
-/// ⌘,) flips it. Renders nothing until shown. See `docs/OVERLAY_ARCHITECTURE.md`.
+/// Always-mounted host for the Settings window. Reads the overlay store reactively
+/// (so it re-renders when `settings` flips) and renders nothing until it's open —
+/// visibility is derived during render, no local state, no effect. Triggers (the
+/// header gear, ⌘,) call `overlays::toggle_settings`. See
+/// `docs/OVERLAY_ARCHITECTURE.md`.
 #[component]
 pub fn SettingsHost() -> Element {
-    let mut show = use_signal(|| false);
-    // Subscribe to the overlay bus: react to our action, ignore the rest. `peek`
-    // reads `show` without subscribing, so the effect only re-runs on bus changes.
-    use_effect(move || {
-        let latest = (*crate::action::overlay_bus::BUS.read()).clone();
-        if let Some((_, action)) = latest {
-            if matches!(action, Action::ToggleSettings) {
-                let cur = *show.peek();
-                show.set(!cur);
-            }
-        }
-    });
-    if !show() {
+    if !crate::overlays::OVERLAYS.read().settings {
         return rsx! {};
     }
     rsx! {
-        SettingsModal { on_close: move |_| show.set(false) }
+        SettingsModal { on_close: move |_| crate::overlays::set_settings(false) }
     }
 }
 

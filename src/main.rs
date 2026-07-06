@@ -12,6 +12,7 @@ mod app;
 mod config;
 mod ddl;
 mod engine;
+mod overlays;
 mod plan;
 mod project;
 mod query_error;

@@ -44,6 +44,19 @@ impl PaletteCommand {
     }
 }
 
+/// Always-mounted host for the command palette. Reads the overlay store reactively
+/// and renders the palette only when open. Triggers (⌘K, the header search button)
+/// call `overlays::toggle_cmdk`.
+#[component]
+pub fn CmdkHost() -> Element {
+    if !crate::overlays::OVERLAYS.read().cmdk {
+        return rsx! {};
+    }
+    rsx! {
+        CommandPalette { on_close: move |_| crate::overlays::set_cmdk(false) }
+    }
+}
+
 #[component]
 pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
     let state = use_context::<Signal<AppState>>();

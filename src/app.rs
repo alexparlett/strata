@@ -122,7 +122,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             // subtree. Unknown id → empty string → `:root` still applies.
             style: "{theme_css}",
             "data-density": if state.read().density_compact { "compact" } else { "comfortable" },
-            onkeydown: move |e| handle_key(state, cmdk, e),
+            onkeydown: move |e| handle_key(state, e),
             onmousemove: move |e| {
                 if state.read().resizing.is_some() {
                     let c = e.client_coordinates();
@@ -131,7 +131,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             },
             onmouseup: move |_| dispatch(state, Action::EndResize),
 
-            ui::header::Header { cmdk }
+            ui::header::Header {}
 
             div { class: "ps-body",
                 if state.read().sidebar_open {
@@ -152,10 +152,12 @@ pub fn ProjectRoot(open_path: String) -> Element {
             ui::statusbar::StatusBar {}
 
             // ---- overlays / modals ----
-            if cmdk() { ui::modals::CommandPalette { on_close: move |_| cmdk.set(false) } }
+            // App-global overlays are always-mounted hosts reading the per-window
+            // overlay store (see `crate::overlays`); they render nothing until open.
+            ui::modals::CmdkHost {}
+            ui::modals::SettingsHost {}
             if state.read().config_open { ui::modals::ConfigModal {} }
             if state.read().export_open { ui::modals::ExportModal {} }
-            ui::modals::SettingsHost {}
             // Catalog + tab context menus, the remove-confirm dialog, and the
             // nested-cell view are now self-contained containers rendered by the
             // sidebar / workspace (see `ui::components`).
@@ -171,7 +173,6 @@ async fn drain_events(state: Signal<AppState>, mut evt_rx: UnboundedReceiver<Eve
 
 fn handle_key(
     state: Signal<AppState>,
-    mut cmdk: Signal<bool>,
     e: dioxus_core::Event<dioxus::events::KeyboardData>,
 ) {
     let mods = e.modifiers();
@@ -180,8 +181,7 @@ fn handle_key(
     match e.key() {
         Key::Character(c) if meta && (c == "k" || c == "K") => {
             e.prevent_default();
-            let open = cmdk();
-            cmdk.set(!open);
+            crate::overlays::toggle_cmdk();
         }
         // ⌘T new tab · ⇧⌘T reopen the last closed tab (as the tab menu advertises).
         Key::Character(c) if meta && (c == "t" || c == "T") => {
@@ -202,10 +202,10 @@ fn handle_key(
             e.prevent_default();
             dispatch(state, Action::SaveQuery);
         }
-        // ⌘, — toggle Settings (published to the overlay bus by `dispatch`).
+        // ⌘, — toggle Settings via the overlay store.
         Key::Character(c) if meta && c == "," => {
             e.prevent_default();
-            dispatch(state, Action::ToggleSettings);
+            crate::overlays::toggle_settings();
         }
         Key::Enter if meta => {
             e.prevent_default();
