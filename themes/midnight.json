@@ -58,7 +58,7 @@
     "surface": "#0f141d",
     "surface-sunk": "#0d1119",
     "accent-soft": "rgba(76,198,255,.12)",
-    "zebra": "rgba(255,255,255,.02)",
+    "zebra": "rgba(255,255,255,.055)",
 
     "ui": "'IBM Plex Sans', system-ui, sans-serif",
     "mono": "'JetBrains Mono', ui-monospace, monospace"
