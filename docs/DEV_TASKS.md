@@ -1,8 +1,12 @@
 # Strata — Dev backlog
 
 Living backlog and source of truth for outstanding work. Design reference:
-`Strata.dc.html` (v5 handoff) + `FEATURES.md` (both in `docs/`). Product was
-**renamed Parquet Studio → Strata** in the v5 redesign (section **S**).
+`Strata.dc.html` (**v8 handoff**) + `FEATURES.md`, `CHART_SPEC.md`, and the v3
+`EXPLAIN_PLAN_SPEC.md` (all in `docs/`). Product was **renamed Parquet Studio →
+Strata** in the v5 redesign (section **S**). The **v6–v8** drops added the chart
+view, grid selection / copy / record view, engine settings, tab drag-reorder,
+launcher pinning, and a results / workspace status-bar rework — tracked in section
+**R** + **S17–S20** + **B11**, with per-tab result state in **A5**.
 
 **Status:** ✅ Done · 🟡 Thin (wired but shallow) · ⬜ Todo · 🚧 Blocked (design pending) · ⛔ Dropped / superseded
 
@@ -16,6 +20,7 @@ Living backlog and source of truth for outstanding work. Design reference:
 | A2 | Action enum + dispatch | ✅ Done | One `Action` enum + exhaustive `dispatch` (`action/mod.rs`), domain handlers (`query/tab/catalog/panel/overlay`). Menus emit the same actions; only editor/cmdk bindings + modal form state stay inline. |
 | A3 | Overlay architecture (containers + store) | ✅ Done | Shipped as reusable **containers** (`Popup`/`Dialog`/`Window` in `ui/components/`) + a per-window **overlay store** (`overlays.rs`, a `GlobalSignal`) driving always-mounted hosts (cmdk/Settings/Export/Config); co-located popups (menus/project/remove/cell) stay on local `use_signal`. Killed the app-global `*_open` bools + `CloseOverlays` coupling. Not the `Vec<Modal>` stack originally sketched — stacking deferred (the `EscStack` upgrade path). See `OVERLAY_ARCHITECTURE.md`. |
 | A4 | Modal form state off `AppState` | ✅ Done | **Export:** component-local `use_signal`; `RunExport(opts)` carries the snapshot. **Config:** component-local `draft` seeded from a store `ConfigTarget` (`New`/`Edit(name)`); the project stays **immutable until a successful register** (no placeholder). `RegisterTable(draft)` sends the engine spec + stashes the row in `overlays::pending_register`; on `Registered` the success path builds the real catalog row from the stash + engine columns and autosaves (engine events skip the dispatch autosave), the load-time path updates the existing row, and failure shows an inline `config_err` with the window still open. `AppState` now holds neither `cfg` nor `export`. See `OVERLAY_ARCHITECTURE.md`. |
+| A5 | Per-tab query state + dirty tracking | ⬜ Todo | Prototype scopes **results / plan / error to the tab they live in** (FEATURES §10, "results are tab-independent"). Today `Workspace` is just `{id, name, sql}` and all query output is **global on `AppState`** (`result` / `query_error` / `plan` / `plan_tab` / `plan_raw` / `running` / `pending_req` / `page` / `page_size` / `result_search` / `selected_col`), so switching tabs shows another tab's output. Move the query-lifecycle state onto `Workspace` — each tab carries its own `ran` flag + result / plan / error + page / sort / search / selection (and later chart config + snapshot ts), restored on switch; the engine reducer already tags events with `ws_id`, so route by it (drop stale results whose tab is gone). **Dirty/stale tracking:** `Workspace` records its backing (scratch / `view(name)` / `saved-query(name)`); when the tab's SQL diverges from the saved definition it flags "wants saving" (tab dot + Save affordance), and unsaved scratch tabs prompt on close. Supersedes C1's *no scratch-SQL dirty indicator*. |
 
 ## B. v2 design (all shipped)
 
@@ -36,6 +41,7 @@ Living backlog and source of truth for outstanding work. Design reference:
 | B8 | Welcome / Launcher + multi-window | ✅ Done | `window.rs`: each project its own window + engine; separate launcher window (opens only when the last project closes); ⌘` cycling; titlebar drag; per-project geometry in `.strata`; per-engine snapshot scoping. **Thin:** geometry in physical px (off on mixed-DPI). |
 | B9 | Collapsed sidebar rail | ✅ Done | 46px icon rail (expand / catalog / new-table) when `!sidebar_open`. |
 | B10 | Open in current-vs-new window prompt | ⬜ Todo | "Open Project" modal (This Window / New Window / Cancel + "don't ask again") when opening from inside a project window. **Designed (v7)**, not built. |
+| B11 | Launcher project actions + pinning | ⬜ Todo | Launcher Projects pane (§0): per-row actions — **Pin/Unpin** (pinned sort to top, below the currently-open one), **Open in new window**, **Reveal on disk**, **Remove from list** — plus a **search** box over name/path, colour-initial avatars, and a pin badge. Plus a launcher **Settings** pane exposing the global-prefs subset (theme / startup / projects / safety) through the same `settings` store so a change is already in effect when a project opens. |
 
 ## S. Strata redesign (v5 handoff — current priority)
 
@@ -52,11 +58,29 @@ Living backlog and source of truth for outstanding work. Design reference:
 | S9 | Catalog row menu polish | ✅ Done | Vertical-⋮ row menu (Open / Configure / Edit / Rename / Remove); fixed the ellipsis glyph (was horizontal). |
 | S10 | Reduce redundant status text | ✅ Done | The redundant right-aligned `rows · ms · cols` readout is gone from the status bar (empty right/spacer, matching the design); result stats live only in the pager. The left status line legitimately shows the latest log/status message. |
 | S11 | File menu (native app menu) | ⬜ Todo | Native File menu (Open / Recent / Close / Settings / Save All) via muda. *Not in design — Alex's add.* |
-| S12 | EXPLAIN query-plan view | ✅ Done | Dedicated engine path walks DataFusion's **typed** LogicalPlan/ExecutionPlan + live `MetricsSet` — **no text/JSON parsing**. Physical/Logical tabs (both modes), Raw/Tree, HOTSPOT + per-node metrics. **Known gap:** bar/HOTSPOT key off `elapsed_compute` (≈0 for scans) — self-time fix in `EXPLAIN_PLAN_SPEC.md` §8; ANALYZE buffers via `collect` (stream-drain follow-up). |
+| S12 | EXPLAIN query-plan view | 🟡 Thin | Dedicated engine path walks DataFusion's **typed** LogicalPlan/ExecutionPlan + live `MetricsSet` — **no text/JSON parsing**. Physical/Logical tabs (both modes), Raw/Tree, HOTSPOT + per-node metrics. Reflects the pre-v3 design; **v3 rework outstanding → S20** (self-time, 3-tier metrics, detail field-rows). ANALYZE still buffers via `collect` (stream-drain follow-up). |
 | S13 | Query-lifecycle states in results area | ✅ Done | Four-way switch: no-results / running spinner / error banner / grid. Cancel button on the Running state → S14. |
 | S14 | Query cancellation + confirm-on-close | ⬜ Todo | Run↔Cancel + Esc aborts the in-flight query (engine drops the task) → `cancelled` history + `warn` event. Plus enforce the confirm-before-closing-a-running-window dialog (setting already persists). |
 | S15 | System / behaviour settings | ⬜ Todo | System Settings category (reopen-last, confirm-close, default dir, row limit). **Largely covered by S3's System category** — expose any remaining as toggles. |
 | S16 | Author-friendly theme files + JSON Schema | ⬜ Todo | Restructure theme JSON into named groups + ship `theme.schema.json` (autocomplete/validation); loader flattens groups → `--*`; keep flat-map back-compat; regenerate `REQUIRED_TOKENS` from the schema. |
+| S17 | Engine settings category + SQL escape hatch | ⬜ Todo | 5th Settings category (§15): a curated **~11-knob** subset of DataFusion `ConfigOptions` grouped Execution / Memory & spill / SQL parser / Result format / Optimizer — type-aware controls (number / text-with-suffix / segmented / toggle), each row shows the full `datafusion.*` key, a changed row gets a **MODIFIED** badge + per-row reset, and a **Reset all (n)** clears every override. Only *overrides* are stored (`engineCfg`), so `SHOW`/reset stay honest; `format.null` wired **live** to the grid. **Editor escape hatch:** a lone `SET` / `RESET` / `SHOW` / `SHOW ALL datafusion.*` is intercepted in the run path (no scan) → applied to overrides (`SET`/`RESET` confirm via event log + toast; `SHOW`/`SHOW ALL` open a synthetic config result set); unknown `datafusion.*` keys accepted; non-`datafusion.` statements fall through as queries. Every knob searchable in the settings box. |
+| S18 | Settings: history-limit + search box | ⬜ Todo | **Query-history limit** control (25 / 50 / 100 / 200, default 50) under System → History; lowering it trims the current list immediately and new runs drop the oldest once capped. **Settings search** box above the category nav — a live index over label / keywords / category that replaces the category list while typing; Enter jumps to the top hit, clicking a result switches to its category + scrolls it in + briefly flashes the setting, Esc clears. (S3 flagged search as a minor follow-up.) |
+| S19 | Tab drag-to-reorder | ⬜ Todo | Press-drag a tab: a solid clone lifts + follows the cursor, the source dims, an accent insertion line shows the drop slot; drop commits the reorder (active tab tracked by **identity** so focus never changes). Auto-scroll near either overflow edge; a 5px threshold keeps plain clicks + the ✕ working; suppressed while a tab is being renamed. Pointer events + a floating clone (native HTML5 DnD doesn't fire reliably in the webview). Distinct from S8's tab-bar controls. |
+| S20 | EXPLAIN plan → v3 rework | ⬜ Todo | Rebuild the plan view to `EXPLAIN_PLAN_SPEC.md` **v3** (supersedes S12's shape). Engine sends a derived **self-time** per node (§7: scan `processing`, join `build+join`, exchange `repartition`, else `elapsed_compute`) driving the headline time chip, the time-share bar, and **HOTSPOT = self-time ≥ 60% of max**. **3-tier metrics** (ANALYZE, physical tab): tier-1 headline (`rows` · self-time · `bytes` · bar) · tier-2 priority-ordered non-zero insights (errors → spills → row-group pruning → pushdown → peak/build mem) · tier-3 collapsed **typed grid** grouped Output / Time / I/O / Pruning / Memory / Exchange / Join / Errors / Other, category-coloured left bars, values coloured by metric `type`, per-node **show-zeros** toggle. `detail` parsed into aligned **key/val field rows** (top-level-comma split, bracket-aware; clamp-by-field-count + show-more). Toolbar de-dup (drop the redundant `Logical plan · N` text). |
+
+## R. Results, charting & workspace (v8 handoff)
+
+The results panel + its status bar were substantially reworked in v6–v8. Per-tab
+result state is **A5**; the UI is below.
+
+| ID | Task | Status | Notes |
+| --- | --- | --- | --- |
+| R1 | Unified results status bar + workspace rework | ⬜ Todo | Rework the results panel to the v8 layout. A single **40px status bar** at its foot in **every** state (no-run · running · failed · grid · plan): state-coloured dot + monospace label + subtext (`⌘↵ to run` / `scanning <target>` / error type / `· N ms` / `N operators`), the **snapshot clock chip** (`⏱ snapshot 3m ago`, ticking ~15s), the live **selection readout** (R3), and the **pager** (page-size ▲ dropdown + first/prev/page-input `of M`/next/last) pinned right, shown **grid-only**. Plus the results **toolbar** row: **Find-in-results** (grid-only, live match count) · **Grid/Chart** segmented toggle (R2) · **Refresh** (re-run + reset snapshot label + clear selection) · **Download** (export). Today `workspace.rs` renders only a bare `pager()` and the app's `statusbar.rs` (Events + History) stays separate; the state-driven token, snapshot chip and selection readout don't exist. Snapshot timestamp is **per result-set** (pairs with A5). |
+| R2 | Chart view (snapshot) | ⬜ Todo | New results view — full spec in **`CHART_SPEC.md`**. Grid/Chart toggle swaps the grid for a two-pane chart layout (left encoder strip + right canvas). Six types (bar / line / area / scatter / histogram / pie) on a **dependency-free canvas**, theme-aware via CSS vars. Encoders X / Y / Series / type + **Aggregate** (client-side GROUP BY over the snapshot, **default ON**) with `sum/avg/median/min/max/count/distinct`; scatter trendline; line/area moving-avg / running-total overlay. Schema-driven default encoding, always visible + overridable. **Guardrails** (never silently sample): >200k rows → too-big · aggregate-off >2k → raw-too-big · >60 groups → non-blocking hi-card banner; the **Add GROUP BY in SQL** CTA scaffolds real, user-owned SQL into a **new editable tab** (`date_bin`-bucketed for temporal X). Config **per result-set**; never re-queries source files. Real-engine upgrades (aggregate in DataFusion via `MemTable`, `approx_distinct`, window overlays) in §8. |
+| R3 | Grid selection + live aggregate | ⬜ Todo | Spreadsheet-style selection on the results grid (§10): **cell/range** (click, drag-sweep, shift-extend; accent focus outline + tinted block), **row multi-select** (gutter click / drag / ⌘-toggle / shift-run), **column multi-select** (header click / drag / ⌘-toggle; persists across pages). **⌘A** / top-left `#` = whole page; **Esc** / empty-area click clears; cleared on Refresh + re-run. **⌘C** copies — a range → **TSV**, a row → **CSV w/ header**, a column → **CSV w/ header over the whole snapshot** (skipped when a text field is focused). **Live aggregate** in the status bar: `N cells · R×C` (or `K columns · N values`) + `sum / avg / min / max` over numeric cells (cell/row = current page, column = whole snapshot). |
+| R4 | Copy affordances (cell / row / column / all) | ⬜ Todo | Right-click any result cell → copy menu (§10): **Copy cell**, **Copy row (JSON)**, **Copy row (CSV)**, **Copy column "&lt;name&gt;"** (all snapshot values), **Copy all as CSV** / **Copy all as Markdown**. Operates on the local snapshot honouring the active sort; CSV cells quote-escaped, nested values as inline JSON; confirms via a status-bar toast (`Copied 48,213 rows as CSV`). |
+| R5 | Row detail (record view) | ⬜ Todo | Double-click a row's **number cell** (or "Open row detail" from its right-click menu) → the whole row as a vertical **key→value card** (field name + Arrow type left, value right); nested struct/list/map render as pretty JSON, null dimmed. Header **Row N of M** with prev/next stepping the whole snapshot (respects active sort), **Copy JSON / Copy CSV**, close + backdrop-close. Ideal for wide / nested tables. |
+| R6 | Column sort (chevron, snapshot) | ⬜ Todo | Per-header **▲/▼ chevron** cycling **asc → desc → clear** (accent + name highlight when active). Sorts the **local result snapshot** (the same data pagination reads) — covers the whole result set, **nulls last**, re-paginates from page 1, **no re-query**. Remembered **per result-set**. Sort moved off the header **click** (which now selects the column for R3) onto the explicit chevron. |
 
 ## C. Outstanding from v1
 
@@ -80,9 +104,13 @@ Living backlog and source of truth for outstanding work. Design reference:
 
 ## Suggested order (remaining)
 
-Section **S** (the v5 Strata redesign) is the priority. Remaining S, in rough
-dependency order: **S8** tab-bar controls → **S7** autocomplete → **S11** File
-menu → **S14** query cancellation (adds the Cancel button to S13's Running state).
+The **v8 handoff** (section **R** + S17–S20 + B11) is the new headline. Rough
+order: **A5** per-tab result state is the enabler → **R1** results status-bar /
+workspace rework → **R6/R3** column sort + selection → **R4/R5** copy + record
+view → **R2** chart view → **S17** engine settings → **S20** plan v3. Older
+section **S**, in rough dependency order: **S8** tab-bar controls → **S19** tab
+drag-reorder → **S7** autocomplete → **S11** File menu → **S14** query
+cancellation (adds the Cancel button to S13's Running state).
 Theming follow-ups: **S16** author-friendly theme files, OS-sync live listener,
 live theme reload, plugin theme dirs.
 
@@ -93,12 +121,15 @@ Blocked on design: **B10** open-in current-vs-new window · **C13** import optio
 
 Architecture cleanups: **A3** + **A4** both shipped — overlays run on reusable
 containers + a per-window store; modal form state (Config/Export) is off
-`AppState`. See `OVERLAY_ARCHITECTURE.md`.
+`AppState`. See `OVERLAY_ARCHITECTURE.md`. **A5** (per-tab query state + view/
+saved-query dirty tracking) is the remaining foundation item.
 
-Small follow-ups: debounce autosave · scratch-SQL dirty indicator · self-time cost
-metric for the plan view (`EXPLAIN_PLAN_SPEC.md` §8) · stream-drain ANALYZE to
-bound memory · B8 window geometry in logical (not physical) px · typed source
-paths don't auto-relativize (only picks do).
+Small follow-ups: debounce autosave · stream-drain ANALYZE to bound memory · B8
+window geometry in logical (not physical) px · typed source paths don't
+auto-relativize (only picks do) · verify the unified floating-window chrome
+(A3/A4 `Window`) matches the v8 spec — non-blocking / no backdrop, multiple open
+at once, click-to-raise z-order, per-session geometry. (Scratch-SQL dirty
+indicator → A5; plan self-time → S20.)
 
 ## Done (reference)
 
