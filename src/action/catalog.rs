@@ -13,7 +13,8 @@ use crate::state::{
 pub fn open_config_new(mut state: Signal<AppState>) {
     let mut s = state.write();
     s.cfg = ConfigModal::default();
-    s.config_open = true;
+    drop(s);
+    crate::overlays::open_config();
 }
 
 /// Open the Table Config modal editing an existing table.
@@ -37,7 +38,8 @@ pub fn open_config_edit(mut state: Signal<AppState>, table: &str) {
             ..ConfigModal::default()
         };
     }
-    s.config_open = true;
+    drop(s);
+    crate::overlays::open_config();
 }
 
 /// Confirm the Table Config modal → register the external table.

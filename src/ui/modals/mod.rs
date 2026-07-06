@@ -1,5 +1,7 @@
-//! Overlays / modals — one submodule per overlay. Components are re-exported so
-//! call sites keep using `ui::modals::ConfigModal` etc.
+//! App-global overlays — one submodule each. Every one is an always-mounted
+//! **host** (`CmdkHost`, `SettingsHost`, `ExportHost`, `ConfigHost`) that reads the
+//! per-window overlay store (`crate::overlays`) and renders its window/dialog only
+//! when open. The root mounts the hosts; triggers flip the store.
 
 mod command_palette;
 mod config;
@@ -7,6 +9,6 @@ mod export;
 mod settings;
 
 pub use command_palette::CmdkHost;
-pub use config::ConfigModal;
+pub use config::ConfigHost;
 pub use export::ExportHost;
 pub use settings::SettingsHost;

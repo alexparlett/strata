@@ -20,6 +20,7 @@ pub struct OverlayState {
     pub settings: bool,
     pub cmdk: bool,
     pub export: bool,
+    pub config: bool,
 }
 
 /// The per-window overlay store. Hosts read it reactively
@@ -53,4 +54,16 @@ pub fn open_export() {
 /// `run_export` uses it to dismiss the window when the export is under way.
 pub fn close_export() {
     OVERLAYS.write().export = false;
+}
+
+/// Open the table-config window. The `OpenConfigNew`/`OpenConfigEdit` handlers set
+/// up the form (`AppState.cfg`) first, then call this.
+pub fn open_config() {
+    OVERLAYS.write().config = true;
+}
+
+/// Close the table-config window. Callable from the engine-event layer — the
+/// `Registered` handler uses it to dismiss the window on a successful register.
+pub fn close_config() {
+    OVERLAYS.write().config = false;
 }

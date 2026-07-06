@@ -157,7 +157,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             ui::modals::CmdkHost {}
             ui::modals::SettingsHost {}
             ui::modals::ExportHost {}
-            if state.read().config_open { ui::modals::ConfigModal {} }
+            ui::modals::ConfigHost {}
             // Catalog + tab context menus, the remove-confirm dialog, and the
             // nested-cell view are now self-contained containers rendered by the
             // sidebar / workspace (see `ui::components`).
@@ -410,8 +410,8 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     format!("Registered table '{table}' · {n} cols · schema validated"),
                 );
                 s.set_status(LogKind::Ok, format!("Registered '{table}'"));
-                if s.config_open {
-                    s.config_open = false;
+                if crate::overlays::OVERLAYS.peek().config {
+                    crate::overlays::close_config();
                     s.cfg.status = CfgStatus::Idle;
                 }
             }
@@ -421,7 +421,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 // failures (modal closed) keep the row, marked failed, so the
                 // persisted definition survives and its path can be fixed.
                 if let Some(pos) = s.project.tables.iter().position(|t| t.name == table) {
-                    if s.config_open && s.project.tables[pos].columns.is_empty() {
+                    if crate::overlays::OVERLAYS.peek().config && s.project.tables[pos].columns.is_empty() {
                         s.project.tables.remove(pos);
                     } else {
                         s.project.tables[pos].status = RegStatus::Failed;

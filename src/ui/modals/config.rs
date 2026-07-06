@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, CfgStatus};
+use crate::ui::components::{WinGeom, Window};
 use crate::ui::icons;
 
 // ---------------------------------------------------------------------------
@@ -178,8 +179,22 @@ fn valid_ident(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Always-mounted host for the table-config window. Reads the overlay store and
+/// renders the window only when open. Triggers dispatch `OpenConfigNew` /
+/// `OpenConfigEdit` (which set up `AppState.cfg`, then open the store); the
+/// `Registered` event closes it via `overlays::close_config`.
 #[component]
-pub fn ConfigModal() -> Element {
+pub fn ConfigHost() -> Element {
+    if !crate::overlays::OVERLAYS.read().config {
+        return rsx! {};
+    }
+    rsx! {
+        ConfigModal { on_close: move |_| crate::overlays::close_config() }
+    }
+}
+
+#[component]
+pub fn ConfigModal(on_close: EventHandler<()>) -> Element {
     let mut state = use_context::<Signal<AppState>>();
     let s = state.read();
     let editing = s.cfg.editing.is_some();
@@ -239,18 +254,26 @@ pub fn ConfigModal() -> Element {
     };
 
     rsx! {
-        div { class: "overlay", style: "z-index:62;", onclick: move |_| dispatch(state, Action::CloseOverlays),
-            div { class: "modal", style: "width:620px;max-width:94vw;", onclick: move |e| e.stop_propagation(),
-                div { class: "modal-head",
-                    div { class: "modal-ico", {icons::cube_lines(16)} }
-                    div { style: "flex:1;",
-                        div { class: "modal-title", "{title}" }
-                        div { class: "modal-sub", "one table over any mix of files, directories & globs" }
-                    }
-                    button { class: "icon-btn plain", style: "width:30px;height:30px;", onclick: move |_| dispatch(state, Action::CloseOverlays), {icons::close(14)} }
+        Window {
+            on_close: move |_| on_close.call(()),
+            title: title.to_string(),
+            subtitle: "one table over any mix of files, directories & globs".to_string(),
+            icon: icons::cube_lines(16),
+            init: WinGeom::new(300.0, 96.0, 620.0, 600.0),
+            min_w: 520.0,
+            min_h: 420.0,
+            footer: rsx! {
+                div { class: "spacer" }
+                button { class: "btn", style: "height:34px;", onclick: move |_| on_close.call(()), "Cancel" }
+                button {
+                    class: "btn accent",
+                    style: "height:34px;",
+                    disabled: !form_ready,
+                    onclick: move |_| { if form_ready { dispatch(state, Action::ConfirmConfig); } },
+                    {icons::check(14)} "{confirm_label}"
                 }
-
-                div { class: "modal-body ps-scroll",
+            },
+            div { class: "modal-body ps-scroll",
                     div { class: "row", style: "gap:14px;margin-bottom:18px;align-items:flex-end;",
                         div { style: "flex:1;",
                             div { class: "field-label", "TABLE NAME" }
@@ -403,18 +426,6 @@ pub fn ConfigModal() -> Element {
                     }
                 }
 
-                div { class: "modal-foot",
-                    div { class: "spacer" }
-                    button { class: "btn", style: "height:34px;", onclick: move |_| dispatch(state, Action::CloseOverlays), "Cancel" }
-                    button {
-                        class: "btn accent",
-                        style: "height:34px;",
-                        disabled: !form_ready,
-                        onclick: move |_| { if form_ready { dispatch(state, Action::ConfirmConfig); } },
-                        {icons::check(14)} "{confirm_label}"
-                    }
-                }
-            }
         }
     }
 }

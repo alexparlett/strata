@@ -251,8 +251,6 @@ pub struct AppState {
     // must stay in step with `status_text` (set both via `set_status`).
     pub status_text: String,
     pub status_kind: LogKind,
-    // menus / modals
-    pub config_open: bool,
     // --- settings prefs (persisted to app config) ---
     pub sync_os: bool,
     /// System is in dark mode (detected once at startup; drives Sync-with-OS).
@@ -403,7 +401,6 @@ impl AppState {
             selected_col: None,
             status_text: "Ready · DataFusion 43 · open a project or add a table to begin".into(),
             status_kind: LogKind::Ok,
-            config_open: false,
             sync_os: false,
             os_dark: true,
             row_limit: 100,

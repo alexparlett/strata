@@ -11,7 +11,6 @@ use crate::state::{AppState, LogTab};
 /// state and aren't touched here.
 pub fn close_all(mut state: Signal<AppState>) {
     let mut s = state.write();
-    s.config_open = false;
     s.page_size_open = false;
     s.renaming_ws = None;
 }
