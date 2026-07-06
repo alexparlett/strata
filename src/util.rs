@@ -88,6 +88,18 @@ impl Kind {
     }
 }
 
+/// A stable FNV-1a hash of the **trimmed** SQL — the tab dirty-tracking baseline.
+/// Cheaper than storing/comparing whole strings, and deterministic across runs so
+/// a persisted baseline still matches after reload.
+pub fn sql_hash(sql: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in sql.trim().as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 /// Human-readable byte size (e.g. `1.4 MB`).
 pub fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];

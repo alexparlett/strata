@@ -4,7 +4,7 @@
 use dioxus::prelude::*;
 
 use crate::engine::Command;
-use crate::state::{AppState, ClosedTab, Workspace};
+use crate::state::{AppState, ClosedTab, Origin, Workspace};
 
 /// Open a new blank query tab and focus it.
 pub fn add(mut state: Signal<AppState>) {
@@ -12,11 +12,9 @@ pub fn add(mut state: Signal<AppState>) {
     let id = s.project.next_ws_id;
     s.project.next_ws_id += 1;
     let n = s.project.workspaces.len() + 1;
-    s.project.workspaces.push(Workspace {
-        id,
-        name: format!("query {n}"),
-        sql: String::new(),
-    });
+    s.project
+        .workspaces
+        .push(Workspace::new(id, format!("query {n}"), String::new(), Origin::Scratch));
     s.project.active_ws = s.project.workspaces.len() - 1;
 }
 
@@ -53,11 +51,9 @@ pub fn reopen(mut state: Signal<AppState>) {
     let mut s = state.write();
     let id = s.project.next_ws_id;
     s.project.next_ws_id += 1;
-    s.project.workspaces.push(Workspace {
-        id,
-        name: c.name,
-        sql: c.sql,
-    });
+    s.project
+        .workspaces
+        .push(Workspace::new(id, c.name, c.sql, Origin::Scratch));
     s.project.active_ws = s.project.workspaces.len() - 1;
 }
 

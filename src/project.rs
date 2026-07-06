@@ -86,16 +86,67 @@ pub struct CatalogView {
     pub open: bool,
 }
 
-/// A query tab: its `id`, name, and SQL buffer — all persisted (the id too, so a
+/// What a tab is bound to — drives ⌘S behaviour and the dirty indicator.
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq)]
+pub enum Origin {
+    /// Ad-hoc SQL, not tied to a named catalog object.
+    #[default]
+    Scratch,
+    /// Editing catalog view `name`.
+    View(String),
+    /// Editing saved query `name`.
+    SavedQuery(String),
+}
+
+/// A query tab: `id`, name, SQL buffer, plus its `origin` binding + a hash of the
+/// SQL it was last bound to (the dirty baseline). All persisted (the id too, so a
 /// reopened tab keeps its identity). The live query output lives in `crate::runs`
-/// keyed by this id, **not** here, so the persisted struct stays pure. Legacy
-/// files (no `id`) get one assigned in [`Project::normalize`].
+/// keyed by this id, **not** here. Legacy files (no `id`/`origin`) get defaults in
+/// [`Project::normalize`].
 #[derive(Serialize, Deserialize)]
 pub struct Workspace {
     #[serde(default)]
     pub id: u64,
     pub name: String,
     pub sql: String,
+    #[serde(default)]
+    pub origin: Origin,
+    #[serde(default)]
+    pub origin_hash: u64,
+}
+
+impl Workspace {
+    /// A tab bound to `origin`. The dirty baseline is the empty-string hash for
+    /// scratch (so any content counts as unsaved), or the hash of `sql` for a
+    /// view/saved-query binding (so only edits away from it count).
+    pub fn new(id: u64, name: String, sql: String, origin: Origin) -> Self {
+        let mut w = Workspace {
+            id,
+            name,
+            sql,
+            origin: Origin::Scratch,
+            origin_hash: 0,
+        };
+        w.set_origin(origin);
+        w
+    }
+
+    /// Whether the tab's SQL has diverged from its bound baseline (or, for a
+    /// scratch tab, has any content).
+    pub fn is_dirty(&self) -> bool {
+        crate::util::sql_hash(&self.sql) != self.origin_hash
+    }
+
+    /// Bind the tab to `origin` and (re)set the dirty baseline: the empty-string
+    /// hash for scratch (any content = unsaved), else the current SQL's hash (in
+    /// sync). Used when opening into an existing tab and after ⌘S / save-as-view.
+    pub fn set_origin(&mut self, origin: Origin) {
+        self.origin_hash = match origin {
+            Origin::Scratch => crate::util::sql_hash(""),
+            _ => crate::util::sql_hash(&self.sql),
+        };
+        self.origin = origin;
+    }
 }
 
 /// One past query run. `id` is runtime (reassigned on load).
@@ -222,11 +273,7 @@ impl Project {
             tables: Vec::new(),
             views: Vec::new(),
             saved_queries: Vec::new(),
-            workspaces: vec![Workspace {
-                id: 1,
-                name: "query 1".into(),
-                sql: String::new(),
-            }],
+            workspaces: vec![Workspace::new(1, "query 1".into(), String::new(), Origin::Scratch)],
             active_ws: 0,
             next_ws_id: 2,
             history: Vec::new(),
@@ -330,11 +377,8 @@ impl Project {
     /// rebuild the runtime counters + guarantee a valid `active_ws`.
     fn normalize(&mut self) {
         if self.workspaces.is_empty() {
-            self.workspaces.push(Workspace {
-                id: 1,
-                name: "query 1".into(),
-                sql: String::new(),
-            });
+            self.workspaces
+                .push(Workspace::new(1, "query 1".into(), String::new(), Origin::Scratch));
         }
         // Tab ids are persisted; legacy files (no id → 0) or corrupt/duplicate
         // ids get fresh sequential ones.
@@ -350,6 +394,14 @@ impl Project {
             }
         }
         self.next_ws_id = self.workspaces.iter().map(|w| w.id).max().unwrap_or(0) + 1;
+        // Scratch tabs are dirty iff non-empty → force their baseline to the empty
+        // hash (also backfills legacy tabs, which default to Scratch / 0).
+        let empty = crate::util::sql_hash("");
+        for w in &mut self.workspaces {
+            if w.origin == Origin::Scratch {
+                w.origin_hash = empty;
+            }
+        }
         for (i, h) in self.history.iter_mut().enumerate() {
             h.id = i as u64 + 1;
         }

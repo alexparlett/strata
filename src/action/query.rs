@@ -192,6 +192,14 @@ pub fn save_as_view(mut state: Signal<AppState>) {
     let sql = state.read().active_sql();
     let n = state.read().project.views.len() + 1;
     let name = format!("saved_view_{n}");
+    // The tab is now bound to (and in sync with) this view.
+    {
+        let mut s = state.write();
+        let active = s.project.active_ws;
+        if let Some(w) = s.project.workspaces.get_mut(active) {
+            w.set_origin(crate::state::Origin::View(name.clone()));
+        }
+    }
     let tx = state.read().cmd_tx.clone();
     if let Some(tx) = tx {
         let _ = tx.send(Command::CreateView { name, sql });
@@ -209,7 +217,7 @@ pub fn select_star(mut state: Signal<AppState>, table: &str) {
         format!("SELECT *\nFROM {table};")
     };
     let mut s = state.write();
-    s.open_in_tab(table, sql);
+    s.open_in_tab(table, sql, crate::state::Origin::Scratch);
     s.set_status(
         LogKind::Info,
         format!("Loaded SELECT * for '{table}' — press ⌘/Ctrl+Enter to run"),
@@ -254,6 +262,11 @@ pub fn save(mut state: Signal<AppState>) {
         });
         false
     };
+    // The tab is now bound to (and in sync with) this saved query.
+    let active = s.project.active_ws;
+    if let Some(w) = s.project.workspaces.get_mut(active) {
+        w.set_origin(crate::state::Origin::SavedQuery(name.clone()));
+    }
     let verb = if updated { "Updated" } else { "Saved" };
     s.push_log(LogKind::Ok, format!("{verb} query '{name}' to project"));
     s.set_status(LogKind::Ok, format!("{verb} query '{name}'"));
@@ -271,7 +284,9 @@ pub fn open_saved(mut state: Signal<AppState>, name: &str) {
     let Some(sql) = sql else {
         return;
     };
-    state.write().open_in_tab(name, sql);
+    state
+        .write()
+        .open_in_tab(name, sql, crate::state::Origin::SavedQuery(name.to_string()));
 }
 
 /// Delete a saved query from the project (immediate — no confirm dialog).

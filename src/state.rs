@@ -8,7 +8,7 @@ use crate::engine::Command;
 // The project domain model lives in `crate::project`; re-exported here so the
 // familiar `crate::state::{CatalogTable, Project, …}` paths keep working.
 pub use crate::project::{
-    CatalogTable, CatalogView, HistoryItem, Project, RegStatus, SavedQuery, Workspace,
+    CatalogTable, CatalogView, HistoryItem, Origin, Project, RegStatus, SavedQuery, Workspace,
 };
 use crate::query_error::QueryError;
 
@@ -254,7 +254,7 @@ impl AppState {
     /// been edited) so repeated opens of an unchanged item don't pile up — but a
     /// tab the user has edited is never clobbered; a fresh, uniquely-named tab is
     /// appended instead. Used by SELECT *, edit-view, and open-saved-query.
-    pub fn open_in_tab(&mut self, name: &str, sql: String) {
+    pub fn open_in_tab(&mut self, name: &str, sql: String, origin: Origin) {
         if let Some(idx) = self
             .project
             .workspaces
@@ -262,16 +262,17 @@ impl AppState {
             .position(|w| w.name == name && w.sql == sql)
         {
             self.project.active_ws = idx;
+            if let Some(w) = self.project.workspaces.get_mut(idx) {
+                w.set_origin(origin);
+            }
             return;
         }
         let tab_name = self.unique_tab_name(name);
         let id = self.project.next_ws_id;
         self.project.next_ws_id += 1;
-        self.project.workspaces.push(Workspace {
-            id,
-            name: tab_name,
-            sql,
-        });
+        self.project
+            .workspaces
+            .push(Workspace::new(id, tab_name, sql, origin));
         self.project.active_ws = self.project.workspaces.len() - 1;
     }
 
@@ -282,7 +283,7 @@ impl AppState {
         let name = self.unique_tab_name(&base);
         let id = self.project.next_ws_id;
         self.project.next_ws_id += 1;
-        self.project.workspaces.push(Workspace { id, name, sql });
+        self.project.workspaces.push(Workspace::new(id, name, sql, Origin::Scratch));
         self.project.active_ws = self.project.workspaces.len() - 1;
     }
 

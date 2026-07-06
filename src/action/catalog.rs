@@ -102,7 +102,7 @@ pub fn edit_view(mut state: Signal<AppState>, name: &str) {
         return;
     };
     let mut s = state.write();
-    s.open_in_tab(name, sql);
+    s.open_in_tab(name, sql, crate::state::Origin::View(name.to_string()));
     s.set_status(LogKind::Info, format!("Editing view '{name}'"));
 }
 
