@@ -1,0 +1,125 @@
+//! The results grid — type-coloured cells, zebra striping, find-filtering — and
+//! the nested-cell JSON view (a workspace-local `Dialog`).
+
+use dioxus::prelude::*;
+use dioxus_code::{Code, SourceCode};
+
+use crate::engine::Cell;
+use crate::state::AppState;
+use crate::ui::components::Dialog;
+use crate::ui::icons;
+
+use super::CellView;
+
+pub(crate) fn results_grid(state: Signal<AppState>, cell_view: Signal<Option<CellView>>) -> Element {
+    let s = state.read();
+    let zebra = crate::settings::SETTINGS.read().zebra;
+    let type_color = s.type_color_cells;
+    let page = s.page;
+    let page_size = s.page_size;
+    let search = s.result_search.to_lowercase();
+    let Some(result) = s.result.clone() else {
+        return super::results::results_empty(state);
+    };
+    drop(s);
+
+    // (name, type, type-text-class, cell-class, nested)
+    let cols: Vec<(String, String, &'static str, &'static str, bool)> = result
+        .columns
+        .iter()
+        .map(|c| (c.name.clone(), c.dtype.clone(), c.kind.text_class(), c.kind.cell_class(), c.kind.is_nested()))
+        .collect();
+
+    // `result.rows` is already the current page (server-side snapshot). Number
+    // by global position; the find-box filters within the visible page.
+    let base = page.saturating_sub(1) * page_size;
+    let rows_page: Vec<(usize, Vec<Cell>)> = result
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| search.is_empty() || r.iter().any(|c| c.text.to_lowercase().contains(&search)))
+        .map(|(i, r)| (base + i + 1, r.clone()))
+        .collect();
+
+    rsx! {
+        div { class: "grid-scroll ps-scroll",
+            div { class: "grid-inner",
+                div { class: "grid-head",
+                    div { class: "hnum", "#" }
+                    for (cn, ct, tcls, _cc, _nested) in cols.iter().cloned() {
+                        div { class: "hcol", style: "width:150px;",
+                            span { class: "cn", "{cn}" }
+                            span { class: "ct {tcls}", "{ct}" }
+                        }
+                    }
+                }
+                for (rownum, cells) in rows_page {
+                    div { class: if zebra && rownum % 2 == 0 { "grid-row zebra" } else { "grid-row" },
+                        div { class: "rnum", "{rownum}" }
+                        for (ci, cell) in cells.iter().enumerate() {
+                            {render_cell(cols.get(ci).cloned(), cell.clone(), cell_view, type_color)}
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn render_cell(
+    col: Option<(String, String, &'static str, &'static str, bool)>,
+    cell: Cell,
+    mut cell_view: Signal<Option<CellView>>,
+    type_color: bool,
+) -> Element {
+    let (name, ty, cell_cls, nested) = match col {
+        Some((n, t, _tc, cc, nested)) => (n, t, cc, nested),
+        None => (String::new(), String::new(), "", false),
+    };
+    let mut class = String::from("cell");
+    if cell.null {
+        class.push_str(" null");
+    } else if type_color && !cell_cls.is_empty() {
+        class.push(' ');
+        class.push_str(cell_cls);
+    }
+    let text = cell.text.clone();
+
+    rsx! {
+        div {
+            class: "{class}",
+            style: "width:150px;",
+            onclick: move |_| {
+                if nested {
+                    cell_view.set(Some(CellView {
+                        name: name.clone(),
+                        type_label: ty.clone(),
+                        json: text.clone(),
+                    }));
+                }
+            },
+            "{cell.text}"
+        }
+    }
+}
+
+/// The nested-cell JSON view (struct/list/map cell) — a workspace-local `Dialog`
+/// with a static highlighted `Code` body. The `cell_view` signal owns open/close.
+pub(crate) fn cell_dialog(mut cell_view: Signal<Option<CellView>>, c: CellView) -> Element {
+    rsx! {
+        Dialog { on_close: move |_| cell_view.set(None), card_class: "modal cell-modal".to_string(), z: 64,
+            div { class: "row", style: "gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);",
+                span { class: "mono", style: "font-weight:600;font-size:13px;", "{c.name}" }
+                span { class: "mono", style: "font-size:10px;color:var(--t-list);background:var(--accent-soft);padding:2px 7px;border-radius:5px;", "{c.type_label}" }
+                div { class: "spacer" }
+                button { class: "icon-btn plain", style: "width:28px;height:28px;", onclick: move |_| cell_view.set(None), {icons::close(13)} }
+            }
+            div { style: "overflow:auto;max-height:70vh;",
+                Code {
+                    src: SourceCode::new(crate::ui::lang("json"), c.json.clone()),
+                    theme: crate::ui::code_theme(),
+                }
+            }
+        }
+    }
+}
