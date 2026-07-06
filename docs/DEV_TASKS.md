@@ -6,7 +6,8 @@ Living backlog and source of truth for outstanding work. Design reference:
 Strata** in the v5 redesign (section **S**). The **v6–v8** drops added the chart
 view, grid selection / copy / record view, engine settings, tab drag-reorder,
 launcher pinning, and a results / workspace status-bar rework — tracked in section
-**R** + **S17–S20** + **B11**, with per-tab result state in **A5**.
+**R** + **S17–S20** + **B11**, with per-tab result state in **A5** and view/
+saved-query dirty tracking in **A6**.
 
 **Status:** ✅ Done · 🟡 Thin (wired but shallow) · ⬜ Todo · 🚧 Blocked (design pending) · ⛔ Dropped / superseded
 
@@ -20,7 +21,8 @@ launcher pinning, and a results / workspace status-bar rework — tracked in sec
 | A2 | Action enum + dispatch | ✅ Done | One `Action` enum + exhaustive `dispatch` (`action/mod.rs`), domain handlers (`query/tab/catalog/panel/overlay`). Menus emit the same actions; only editor/cmdk bindings + modal form state stay inline. |
 | A3 | Overlay architecture (containers + store) | ✅ Done | Shipped as reusable **containers** (`Popup`/`Dialog`/`Window` in `ui/components/`) + a per-window **overlay store** (`overlays.rs`, a `GlobalSignal`) driving always-mounted hosts (cmdk/Settings/Export/Config); co-located popups (menus/project/remove/cell) stay on local `use_signal`. Killed the app-global `*_open` bools + `CloseOverlays` coupling. Not the `Vec<Modal>` stack originally sketched — stacking deferred (the `EscStack` upgrade path). See `OVERLAY_ARCHITECTURE.md`. |
 | A4 | Modal form state off `AppState` | ✅ Done | **Export:** component-local `use_signal`; `RunExport(opts)` carries the snapshot. **Config:** component-local `draft` seeded from a store `ConfigTarget` (`New`/`Edit(name)`); the project stays **immutable until a successful register** (no placeholder). `RegisterTable(draft)` sends the engine spec + stashes the row in `overlays::pending_register`; on `Registered` the success path builds the real catalog row from the stash + engine columns and autosaves (engine events skip the dispatch autosave), the load-time path updates the existing row, and failure shows an inline `config_err` with the window still open. `AppState` now holds neither `cfg` nor `export`. See `OVERLAY_ARCHITECTURE.md`. |
-| A5 | Per-tab query state + dirty tracking | ⬜ Todo | Prototype scopes **results / plan / error to the tab they live in** (FEATURES §10, "results are tab-independent"). Today `Workspace` is just `{id, name, sql}` and all query output is **global on `AppState`** (`result` / `query_error` / `plan` / `plan_tab` / `plan_raw` / `running` / `pending_req` / `page` / `page_size` / `result_search` / `selected_col`), so switching tabs shows another tab's output. Move the query-lifecycle state onto `Workspace` — each tab carries its own `ran` flag + result / plan / error + page / sort / search / selection (and later chart config + snapshot ts), restored on switch; the engine reducer already tags events with `ws_id`, so route by it (drop stale results whose tab is gone). **Dirty/stale tracking:** `Workspace` records its backing (scratch / `view(name)` / `saved-query(name)`); when the tab's SQL diverges from the saved definition it flags "wants saving" (tab dot + Save affordance), and unsaved scratch tabs prompt on close. Supersedes C1's *no scratch-SQL dirty indicator*. |
+| A5 | Per-tab query state | ⬜ Todo | Prototype scopes **results / plan / error to the tab they live in** (FEATURES §10, "results are tab-independent"). Today all query output is **global on `AppState`** (`result` / `query_error` / `plan` / `plan_tab` / `plan_raw` / `running` / `pending_req` / `page` / `page_size` / `result_search` / `selected_col`), so switching tabs shows another tab's output. Group the ephemeral output into a `TabRun` keyed by `ws_id` — each tab carries its own result / plan / error + running/pending + page / search / selection (and later sort, chart config, snapshot ts), restored on switch. The engine reducer already tags events with `ws_id`, so route by it (drop results whose tab is gone). App-bar `status_text` stays global ("last event"); the results-panel status (R1) derives from the active tab's run. |
+| A6 | View/saved-query dirty tracking | ⬜ Todo | A tab records its **backing** (scratch / `view(name)` / `saved-query(name)`), set on new-tab / edit-view / open-saved-query and re-bound on ⌘S / save-as-view. "Dirty" = the tab's SQL diverged from the thing it's bound to (or a scratch tab with unsaved content) → a tab **dirty-dot** + emphasized Save affordance, and a confirm-on-close dialog (reuses the `Dialog` container). Note the tab's `sql` already autosaves to the project file, so "unsaved" means *out of sync with the named view/query*, not *unpersisted*. Supersedes C1's *no scratch-SQL dirty indicator*. Builds on A5. |
 
 ## B. v2 design (all shipped)
 
@@ -129,7 +131,7 @@ window geometry in logical (not physical) px · typed source paths don't
 auto-relativize (only picks do) · verify the unified floating-window chrome
 (A3/A4 `Window`) matches the v8 spec — non-blocking / no backdrop, multiple open
 at once, click-to-raise z-order, per-session geometry. (Scratch-SQL dirty
-indicator → A5; plan self-time → S20.)
+indicator → A6; plan self-time → S20.)
 
 ## Done (reference)
 
