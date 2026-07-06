@@ -2,7 +2,8 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::{AppState, CfgStatus};
+use crate::overlays::ConfigTarget;
+use crate::state::{AppState, ConfigModal};
 use crate::ui::components::{WinGeom, Window};
 use crate::ui::icons;
 
@@ -13,7 +14,7 @@ use crate::ui::icons;
 /// Set a config source path and, if the table name is still blank, default it
 /// from the chosen file/folder's name. When the path is a single file with a
 /// recognised extension, the format is auto-detected from it.
-fn set_source(mut state: Signal<AppState>, idx: usize, path: String) {
+fn set_source(mut draft: Signal<ConfigModal>, state: Signal<AppState>, idx: usize, path: String) {
     // Store paths inside the project folder relative to it, so the project stays
     // portable; anything outside stays absolute.
     let base = {
@@ -25,17 +26,17 @@ fn set_source(mut state: Signal<AppState>, idx: usize, path: String) {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned());
     let fmt = detect_format(&path);
-    let mut s = state.write();
-    if let Some(slot) = s.cfg.sources.get_mut(idx) {
+    let mut d = draft.write();
+    if let Some(slot) = d.sources.get_mut(idx) {
         *slot = path;
     }
-    if s.cfg.name.trim().is_empty() {
+    if d.name.trim().is_empty() {
         if let Some(st) = stem {
-            s.cfg.name = st;
+            d.name = st;
         }
     }
     if let Some(fmt) = fmt {
-        s.cfg.format = fmt.to_string();
+        d.format = fmt.to_string();
     }
 }
 
@@ -64,7 +65,7 @@ fn detect_format(path: &str) -> Option<&'static str> {
 /// channel to a Dioxus task, which applies it through a signal write so the UI
 /// re-renders.
 #[cfg(target_os = "macos")]
-fn browse_source(state: Signal<AppState>, idx: usize) {
+fn browse_source(draft: Signal<ConfigModal>, state: Signal<AppState>, idx: usize) {
     use futures::StreamExt;
     use objc::runtime::Object;
     use objc::{class, msg_send, sel, sel_impl};
@@ -72,8 +73,8 @@ fn browse_source(state: Signal<AppState>, idx: usize) {
     let (tx, mut rx) = futures::channel::mpsc::unbounded::<Option<String>>();
     spawn(async move {
         if let Some(Some(path)) = rx.next().await {
-            set_source(state, idx, path);
-            rescan(state);
+            set_source(draft, state, idx, path);
+            rescan(draft, state);
         }
     });
 
@@ -112,11 +113,11 @@ fn browse_source(state: Signal<AppState>, idx: usize) {
 /// Non-macOS fallback: rfd can't offer a combined file/folder dialog, so pick a
 /// file (directory paths and globs can still be typed).
 #[cfg(not(target_os = "macos"))]
-fn browse_source(state: Signal<AppState>, idx: usize) {
+fn browse_source(draft: Signal<ConfigModal>, state: Signal<AppState>, idx: usize) {
     spawn(async move {
         if let Some(handle) = rfd::AsyncFileDialog::new().pick_file().await {
-            set_source(state, idx, handle.path().to_string_lossy().into_owned());
-            rescan(state);
+            set_source(draft, state, idx, handle.path().to_string_lossy().into_owned());
+            rescan(draft, state);
         }
     });
 }
@@ -131,39 +132,39 @@ fn browse_source(state: Signal<AppState>, idx: usize) {
 /// detected Hive keys. The walk is bounded (20k files) so it runs synchronously
 /// — `all_dirs`/errors update in the same render turn as the edit, so the UI
 /// (e.g. the partition toggle brightening once it's available) reacts at once.
-fn rescan(mut state: Signal<AppState>) {
+fn rescan(mut draft: Signal<ConfigModal>, state: Signal<AppState>) {
     let (paths, format, hive_on, base) = {
+        let d = draft.read();
         let s = state.read();
         (
-            s.cfg.sources.clone(),
-            s.cfg.format.clone(),
-            s.cfg.hive_on,
+            d.sources.clone(),
+            d.format.clone(),
+            d.hive_on,
             crate::action::catalog::project_dir(&s),
         )
     };
     let r = crate::action::catalog::scan_sources(&paths, &format, base.as_deref());
-    let mut s = state.write();
-    s.cfg.scanning = false;
-    s.cfg.all_dirs = r.all_dirs;
-    s.cfg.file_count = r.file_count;
-    s.cfg.scan_error = r.error;
-    s.cfg.detected_parts = r.partition_keys;
+    let mut d = draft.write();
+    d.scanning = false;
+    d.all_dirs = r.all_dirs;
+    d.file_count = r.file_count;
+    d.scan_error = r.error;
+    d.detected_parts = r.partition_keys;
     // Partitioning only makes sense over directories. If the paths are no longer
     // all-dirs, force it off. If it's on, adopt newly-detected keys — but only
     // when the *set* of keys changed, so the user's type picks survive an
     // unrelated rescan.
     if !r.all_dirs {
-        s.cfg.hive_on = false;
-        s.cfg.part_cols.clear();
+        d.hive_on = false;
+        d.part_cols.clear();
     } else if hive_on {
-        let same_keys = s
-            .cfg
+        let same_keys = d
             .part_cols
             .iter()
             .map(|(k, _)| k.clone())
-            .eq(s.cfg.detected_parts.iter().map(|(k, _)| k.clone()));
+            .eq(d.detected_parts.iter().map(|(k, _)| k.clone()));
         if !same_keys {
-            s.cfg.part_cols = s.cfg.detected_parts.clone();
+            d.part_cols = d.detected_parts.clone();
         }
     }
 }
@@ -180,40 +181,69 @@ fn valid_ident(s: &str) -> bool {
 }
 
 /// Always-mounted host for the table-config window. Reads the overlay store and
-/// renders the window only when open. Triggers dispatch `OpenConfigNew` /
-/// `OpenConfigEdit` (which set up `AppState.cfg`, then open the store); the
-/// `Registered` event closes it via `overlays::close_config`.
+/// renders the window only when open, handing the modal its target (`New` or
+/// `Edit`). Closing / a successful register clears the store (`close_config`).
 #[component]
 pub fn ConfigHost() -> Element {
-    if !crate::overlays::OVERLAYS.read().config {
-        return rsx! {};
+    match crate::overlays::OVERLAYS.read().config.clone() {
+        Some(target) => rsx! {
+            ConfigModal { target, on_close: move |_| crate::overlays::close_config() }
+        },
+        None => rsx! {},
     }
-    rsx! {
-        ConfigModal { on_close: move |_| crate::overlays::close_config() }
+}
+
+/// Seed a fresh working draft from the target: blank for `New`, a *copy* of the
+/// project table for `Edit`. The project store is never touched.
+fn seed_draft(state: Signal<AppState>, target: &ConfigTarget) -> ConfigModal {
+    match target {
+        ConfigTarget::New => ConfigModal::default(),
+        ConfigTarget::Edit(name) => {
+            let s = state.read();
+            match s.project.tables.iter().find(|t| &t.name == name) {
+                Some(t) => ConfigModal {
+                    editing: Some(t.name.clone()),
+                    name: t.name.clone(),
+                    format: t.format.clone(),
+                    sources: if t.sources.is_empty() {
+                        vec![String::new()]
+                    } else {
+                        t.sources.clone()
+                    },
+                    hive_on: !t.partition_cols.is_empty(),
+                    part_cols: t.partition_cols.clone(),
+                    ..ConfigModal::default()
+                },
+                None => ConfigModal::default(),
+            }
+        }
     }
 }
 
 #[component]
-pub fn ConfigModal(on_close: EventHandler<()>) -> Element {
-    let mut state = use_context::<Signal<AppState>>();
-    let s = state.read();
-    let editing = s.cfg.editing.is_some();
-    let name = s.cfg.name.clone();
-    let format = s.cfg.format.clone();
-    let fmt_open = s.cfg.fmt_open;
-    let sources = s.cfg.sources.clone();
-    let hive_on = s.cfg.hive_on;
-    let part_cols = s.cfg.part_cols.clone();
-    let status = s.cfg.status;
-    let error = s.cfg.error.clone();
-    let all_dirs = s.cfg.all_dirs;
-    let file_count = s.cfg.file_count;
-    let scanning = s.cfg.scanning;
-    let scan_error = s.cfg.scan_error.clone();
-    drop(s);
+pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element {
+    let state = use_context::<Signal<AppState>>();
+    // The working copy is component-local; the project store stays immutable until
+    // a successful register. Seed it from the target once, on mount.
+    let draft = use_signal(move || seed_draft(state, &target));
+    let d = draft.read();
+    let editing = d.editing.is_some();
+    let name = d.name.clone();
+    let format = d.format.clone();
+    let fmt_open = d.fmt_open;
+    let sources = d.sources.clone();
+    let hive_on = d.hive_on;
+    let part_cols = d.part_cols.clone();
+    let all_dirs = d.all_dirs;
+    let file_count = d.file_count;
+    let scanning = d.scanning;
+    let scan_error = d.scan_error.clone();
+    drop(d);
+    // A failed engine register is surfaced inline via the store (window stays open).
+    let reg_err = crate::overlays::OVERLAYS.read().config_err.clone();
 
     // Scan the sources once when the modal opens (validates pre-filled edit paths).
-    use_hook(|| rescan(state));
+    use_hook(move || rescan(draft, state));
 
     let title = if editing { "Configure table" } else { "New external table" };
     let confirm_label = if editing { "Save changes" } else { "Create table" };
@@ -269,7 +299,7 @@ pub fn ConfigModal(on_close: EventHandler<()>) -> Element {
                     class: "btn accent",
                     style: "height:34px;",
                     disabled: !form_ready,
-                    onclick: move |_| { if form_ready { dispatch(state, Action::ConfirmConfig); } },
+                    onclick: move |_| { if form_ready { dispatch(state, Action::RegisterTable(draft())); } },
                     {icons::check(14)} "{confirm_label}"
                 }
             },
@@ -278,19 +308,19 @@ pub fn ConfigModal(on_close: EventHandler<()>) -> Element {
                         div { style: "flex:1;",
                             div { class: "field-label", "TABLE NAME" }
                             input { class: "text-input", value: "{name}", placeholder: "my_table",
-                                oninput: move |e| state.write().cfg.name = e.value() }
+                                oninput: move |e| draft.write().name = e.value() }
                         }
                         div { style: "position:relative;",
                             div { class: "field-label", "FORMAT" }
                             button { class: "btn", style: "width:128px;height:34px;justify-content:space-between;",
-                                onclick: move |_| { let mut w = state.write(); w.cfg.fmt_open = !w.cfg.fmt_open; },
+                                onclick: move |_| { let mut w = draft.write(); w.fmt_open = !w.fmt_open; },
                                 "{format}" {icons::chevron_down(12)}
                             }
                             if fmt_open {
                                 div { class: "menu", style: "position:absolute;top:60px;left:0;width:128px;z-index:5;",
                                     for f in ["parquet", "csv", "json", "arrow"] {
                                         button { class: "menu-item mono", style: "font-size:11.5px;",
-                                            onclick: move |_| { { let mut w = state.write(); w.cfg.format = f.to_string(); w.cfg.fmt_open = false; } rescan(state); },
+                                            onclick: move |_| { { let mut w = draft.write(); w.format = f.to_string(); w.fmt_open = false; } rescan(draft, state); },
                                             "{f}"
                                         }
                                     }
@@ -307,69 +337,60 @@ pub fn ConfigModal(on_close: EventHandler<()>) -> Element {
                         for (idx, src) in sources.iter().cloned().enumerate() {
                             div { class: "src-row",
                                 input { class: "src-input", value: "{src}", placeholder: "/data/2024/  ·  /archive/**/*.parquet",
-                                    oninput: move |e| { let mut w = state.write(); if let Some(p) = w.cfg.sources.get_mut(idx) { *p = e.value(); } },
-                                    onchange: move |_| rescan(state) }
+                                    oninput: move |e| { let mut w = draft.write(); if let Some(p) = w.sources.get_mut(idx) { *p = e.value(); } },
+                                    onchange: move |_| rescan(draft, state) }
                                 span { class: "src-count", "" }
                                 button { class: "mini-btn", style: "width:30px;height:32px;", title: "Browse — file or folder…",
-                                    onclick: move |_| browse_source(state, idx),
+                                    onclick: move |_| browse_source(draft, state, idx),
                                     {icons::folder(15)}
                                 }
                                 // At least one path is required, so the last remaining
                                 // row has no remove button.
                                 if !single_path {
                                     button { class: "mini-btn danger", style: "width:28px;height:32px;", title: "Remove path",
-                                        onclick: move |_| { { let mut w = state.write(); if w.cfg.sources.len() > 1 { w.cfg.sources.remove(idx); } } rescan(state); },
+                                        onclick: move |_| { { let mut w = draft.write(); if w.sources.len() > 1 { w.sources.remove(idx); } } rescan(draft, state); },
                                         {icons::minus(12)}
                                     }
                                 }
                             }
                         }
                     }
-                    button { class: "add-path", onclick: move |_| { state.write().cfg.sources.push(String::new()); rescan(state); },
+                    button { class: "add-path", onclick: move |_| { draft.write().sources.push(String::new()); rescan(draft, state); },
                         {icons::plus(12)} "Add path"
                     }
 
                     // validation status
-                    match status {
-                        CfgStatus::Idle => if scanning { rsx! {
-                            div { class: "status-run",
-                                span { style: "display:flex;", {icons::clock(15)} }
-                                span { "Scanning source paths…" }
+                    if scanning {
+                        div { class: "status-run",
+                            span { style: "display:flex;", {icons::clock(15)} }
+                            span { "Scanning source paths…" }
+                        }
+                    } else if let Some(err) = reg_err.clone() {
+                        div { class: "status-err",
+                            span { style: "flex:none;color:var(--red2);", {icons::alert(15)} }
+                            div {
+                                div { class: "mono", style: "font-weight:600;color:var(--red);", "Registration failed" }
+                                div { class: "mono", style: "font-size:11px;color:#d99;margin-top:2px;", "{err}" }
                             }
-                        } } else if let Some(err) = scan_error.clone() { rsx! {
-                            div { class: "status-err",
-                                span { style: "flex:none;color:var(--red2);", {icons::alert(15)} }
-                                div {
-                                    div { class: "mono", style: "font-weight:600;color:var(--red);", "Sources don't validate" }
-                                    div { class: "mono", style: "font-size:11px;color:#d99;margin-top:2px;", "{err}" }
-                                }
+                        }
+                    } else if let Some(err) = scan_error.clone() {
+                        div { class: "status-err",
+                            span { style: "flex:none;color:var(--red2);", {icons::alert(15)} }
+                            div {
+                                div { class: "mono", style: "font-weight:600;color:var(--red);", "Sources don't validate" }
+                                div { class: "mono", style: "font-size:11px;color:#d99;margin-top:2px;", "{err}" }
                             }
-                        } } else if form_ready { rsx! {
-                            div { class: "status-ok",
-                                {icons::check(15)}
-                                span { "{ready_msg}" }
-                            }
-                        } } else { rsx! {
-                            div { class: "status-wait",
-                                span { style: "flex:none;color:var(--dim3);", {icons::info(15)} }
-                                span { "{incomplete_msg}" }
-                            }
-                        } },
-                        CfgStatus::Validating => rsx! {
-                            div { class: "status-run",
-                                span { style: "display:flex;", {icons::clock(15)} }
-                                span { "Reading files, inferring & validating schema…" }
-                            }
-                        },
-                        CfgStatus::Error => rsx! {
-                            div { class: "status-err",
-                                span { style: "flex:none;color:var(--red2);", {icons::alert(15)} }
-                                div {
-                                    div { class: "mono", style: "font-weight:600;color:var(--red);", "Registration failed" }
-                                    div { class: "mono", style: "font-size:11px;color:#d99;margin-top:2px;", "{error}" }
-                                }
-                            }
-                        },
+                        }
+                    } else if form_ready {
+                        div { class: "status-ok",
+                            {icons::check(15)}
+                            span { "{ready_msg}" }
+                        }
+                    } else {
+                        div { class: "status-wait",
+                            span { style: "flex:none;color:var(--dim3);", {icons::info(15)} }
+                            span { "{incomplete_msg}" }
+                        }
                     }
 
                     // hive partitioning — only available when every path is a directory
@@ -378,13 +399,13 @@ pub fn ConfigModal(on_close: EventHandler<()>) -> Element {
                             class: "row",
                             style: if all_dirs { "gap:11px;cursor:pointer;" } else { "gap:11px;opacity:.5;cursor:not-allowed;" },
                             onclick: move |_| {
-                                let mut w = state.write();
-                                if !w.cfg.all_dirs { return; }
-                                w.cfg.hive_on = !w.cfg.hive_on;
-                                if w.cfg.hive_on {
-                                    w.cfg.part_cols = w.cfg.detected_parts.clone();
+                                let mut w = draft.write();
+                                if !w.all_dirs { return; }
+                                w.hive_on = !w.hive_on;
+                                if w.hive_on {
+                                    w.part_cols = w.detected_parts.clone();
                                 } else {
-                                    w.cfg.part_cols.clear();
+                                    w.part_cols.clear();
                                 }
                             },
                             div { class: if hive_on { "toggle on" } else if all_dirs { "toggle avail" } else { "toggle" }, div { class: "knob" } }
@@ -407,7 +428,7 @@ pub fn ConfigModal(on_close: EventHandler<()>) -> Element {
                                                 for ty in ["Utf8", "Int32", "Int64", "Date"] {
                                                     button {
                                                         class: if ptype == ty { "part-type on" } else { "part-type" },
-                                                        onclick: move |_| { let mut w = state.write(); if let Some(pc) = w.cfg.part_cols.get_mut(pidx) { pc.1 = ty.to_string(); } },
+                                                        onclick: move |_| { let mut w = draft.write(); if let Some(pc) = w.part_cols.get_mut(pidx) { pc.1 = ty.to_string(); } },
                                                         "{ty}"
                                                     }
                                                 }

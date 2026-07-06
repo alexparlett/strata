@@ -15,7 +15,7 @@ use crate::engine::{self, Command, Event};
 use crate::action::panel::resize_handle;
 use crate::query_error::QueryError;
 use crate::state::{
-    AppState, CatalogTable, CatalogView, CfgStatus, HistoryItem, LogKind, RegStatus, ResizeTarget,
+    AppState, CatalogTable, CatalogView, HistoryItem, LogKind, RegStatus, ResizeTarget,
 };
 use crate::ui;
 
@@ -225,6 +225,10 @@ fn handle_key(
 /// This is not a UI action — it's driven by [`drain_events`].
 pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
     let mut s = state.write();
+    // Set when an engine event durably changes the project (a config register
+    // adds/edits a table). Engine events aren't dispatched, so they don't hit the
+    // normal autosave path — we persist explicitly at the end.
+    let mut autosave_after = false;
     match ev {
         Event::QueryResult {
             req_id,
@@ -380,7 +384,31 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
         } => match result {
             Ok(cols) => {
                 let n = cols.len();
-                if let Some(t) = s.project.tables.iter_mut().find(|t| t.name == table) {
+                // A config-originated register finalizes from the stashed row data
+                // (the project was untouched until now); otherwise it's a load-time
+                // register updating the row that project-open already created.
+                if let Some(p) = crate::overlays::take_pending_register(&table) {
+                    let meta = if p.partition_cols.is_empty() {
+                        format!("{n} cols")
+                    } else {
+                        format!("{n} cols · {} partitions", p.partition_cols.len())
+                    };
+                    // Replace any existing row of this name (an edit re-register).
+                    s.project.tables.retain(|t| t.name != table);
+                    s.project.tables.push(CatalogTable {
+                        name: table.clone(),
+                        meta,
+                        format: p.format,
+                        sources: p.sources,
+                        partition_cols: p.partition_cols,
+                        columns: cols,
+                        open: false,
+                        status: RegStatus::Ready,
+                        error: None,
+                    });
+                    crate::overlays::close_config();
+                    autosave_after = true;
+                } else if let Some(t) = s.project.tables.iter_mut().find(|t| t.name == table) {
                     let meta = if t.partition_cols.is_empty() {
                         format!("{n} cols")
                     } else {
@@ -390,8 +418,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     t.meta = meta;
                     t.status = RegStatus::Ready;
                     t.error = None;
-                    // Keep the stored sources as-entered (relative-to-project where
-                    // chosen) — don't overwrite with the engine's resolved path.
                 } else {
                     s.project.tables.push(CatalogTable {
                         name: table.clone(),
@@ -410,26 +436,18 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     format!("Registered table '{table}' · {n} cols · schema validated"),
                 );
                 s.set_status(LogKind::Ok, format!("Registered '{table}'"));
-                if crate::overlays::OVERLAYS.peek().config {
-                    crate::overlays::close_config();
-                    s.cfg.status = CfgStatus::Idle;
-                }
             }
             Err(e) => {
-                // A brand-new registration started from the config modal that never
-                // resolved a schema shouldn't leave a ghost row — drop it. Load-time
-                // failures (modal closed) keep the row, marked failed, so the
-                // persisted definition survives and its path can be fixed.
-                if let Some(pos) = s.project.tables.iter().position(|t| t.name == table) {
-                    if crate::overlays::OVERLAYS.peek().config && s.project.tables[pos].columns.is_empty() {
-                        s.project.tables.remove(pos);
-                    } else {
-                        s.project.tables[pos].status = RegStatus::Failed;
-                        s.project.tables[pos].error = Some(e.clone());
-                    }
+                // A config-originated register that failed → keep the window open
+                // with an inline error; the project was never touched, so there's
+                // nothing to clean up. A load-time failure marks the existing row
+                // failed so its definition survives and its path can be fixed.
+                if crate::overlays::take_pending_register(&table).is_some() {
+                    crate::overlays::set_config_err(e.clone());
+                } else if let Some(pos) = s.project.tables.iter().position(|t| t.name == table) {
+                    s.project.tables[pos].status = RegStatus::Failed;
+                    s.project.tables[pos].error = Some(e.clone());
                 }
-                s.cfg.status = CfgStatus::Error;
-                s.cfg.error = e.clone();
                 tracing::error!("register table '{table}' failed: {e}");
                 s.push_log(LogKind::Error, format!("Register '{table}' failed: {e}"));
                 s.set_status(LogKind::Error, format!("Register failed · {e}"));
@@ -496,6 +514,10 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             s.push_log(LogKind::Info, m.clone());
             s.set_status(LogKind::Info, m);
         }
+    }
+    drop(s);
+    if autosave_after {
+        crate::action::projects::autosave(state);
     }
 }
 

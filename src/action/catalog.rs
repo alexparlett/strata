@@ -6,112 +6,58 @@ use dioxus::prelude::*;
 
 use crate::engine::{self, Command};
 use crate::state::{
-    AppState, CatalogTable, CfgStatus, ConfigModal, LogKind, RegStatus, RemoveKind,
+    AppState, LogKind, RemoveKind,
 };
 
 /// Open the Table Config modal for a new external table.
-pub fn open_config_new(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.cfg = ConfigModal::default();
-    drop(s);
-    crate::overlays::open_config();
+pub fn open_config_new(_state: Signal<AppState>) {
+    // The modal seeds a blank draft from the target — nothing to set up here.
+    crate::overlays::open_config(crate::overlays::ConfigTarget::New);
 }
 
 /// Open the Table Config modal editing an existing table.
-pub fn open_config_edit(mut state: Signal<AppState>, table: &str) {
-    let mut s = state.write();
-    if let Some(t) = s.project.tables.iter().find(|t| t.name == table) {
-        s.cfg = ConfigModal {
-            editing: Some(t.name.clone()),
-            name: t.name.clone(),
-            format: t.format.clone(),
-            fmt_open: false,
-            sources: if t.sources.is_empty() {
-                vec![String::new()]
-            } else {
-                t.sources.clone()
-            },
-            hive_on: !t.partition_cols.is_empty(),
-            part_cols: t.partition_cols.clone(),
-            status: CfgStatus::Idle,
-            error: String::new(),
-            ..ConfigModal::default()
-        };
-    }
-    drop(s);
-    crate::overlays::open_config();
+pub fn open_config_edit(_state: Signal<AppState>, table: &str) {
+    // The modal loads the existing table into its local draft from the target.
+    crate::overlays::open_config(crate::overlays::ConfigTarget::Edit(table.to_string()));
 }
 
-/// Confirm the Table Config modal → register the external table.
-pub fn confirm_config(mut state: Signal<AppState>) {
-    // Validate before touching the engine or catalog — a blank name or no paths
-    // must fail here, not leave a failed placeholder table behind.
-    {
-        let mut s = state.write();
-        if s.cfg.name.trim().is_empty() {
-            s.cfg.status = CfgStatus::Error;
-            s.cfg.error = "Table name is required.".into();
-            return;
-        }
-        if !s.cfg.sources.iter().any(|p| !p.trim().is_empty()) {
-            s.cfg.status = CfgStatus::Error;
-            s.cfg.error = "Add at least one source path.".into();
-            return;
-        }
-    }
-
-    let (spec, tx) = {
-        let mut s = state.write();
-        s.cfg.status = CfgStatus::Validating;
-        let base = project_dir(&s);
-        // Store paths as entered (relative-to-project where the user chose that);
-        // hand the engine fully-resolved absolute paths.
-        let rel_paths: Vec<String> = s
-            .cfg
-            .sources
-            .iter()
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty())
-            .collect();
-        let abs_paths: Vec<String> = rel_paths
-            .iter()
-            .map(|p| resolve_source(base.as_deref(), p))
-            .collect();
-        let partitions = if s.cfg.hive_on {
-            s.cfg.part_cols.clone()
-        } else {
-            vec![]
-        };
-        let spec = engine::TableSpec {
-            name: s.cfg.name.clone(),
-            paths: abs_paths,
-            format: s.cfg.format.clone(),
-            partitions,
-        };
-        // Update the existing row (edit) or insert a loading placeholder (new);
-        // either way the stored sources stay relative-as-entered.
-        if let Some(t) = s.project.tables.iter_mut().find(|t| t.name == spec.name) {
-            t.meta = "registering…".into();
-            t.format = spec.format.clone();
-            t.sources = rel_paths;
-            t.partition_cols = spec.partitions.clone();
-            t.status = RegStatus::Loading;
-            t.error = None;
-        } else {
-            s.project.tables.push(CatalogTable {
-                name: spec.name.clone(),
-                meta: "registering…".into(),
-                format: spec.format.clone(),
-                sources: rel_paths,
-                partition_cols: spec.partitions.clone(),
-                columns: vec![],
-                open: false,
-                status: RegStatus::Loading,
-                error: None,
-            });
-        }
-        (spec, s.cmd_tx.clone())
+/// `Action::RegisterTable` — register the config modal's **draft** with the engine.
+/// The project store is left untouched: the row data is stashed in the overlay
+/// store (`begin_register`), and the engine's `Registered` event builds the real
+/// catalog row on success, or surfaces an inline error on failure. No placeholder
+/// row is ever written — only a successful register saves the table.
+pub fn register_table(state: Signal<AppState>, draft: crate::state::ConfigModal) {
+    let base = project_dir(&state.read());
+    // Store paths as entered (relative-to-project where the user chose that); hand
+    // the engine fully-resolved absolute paths.
+    let rel_paths: Vec<String> = draft
+        .sources
+        .iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    let abs_paths: Vec<String> = rel_paths
+        .iter()
+        .map(|p| resolve_source(base.as_deref(), p))
+        .collect();
+    let partitions = if draft.hive_on {
+        draft.part_cols.clone()
+    } else {
+        vec![]
     };
+    let spec = engine::TableSpec {
+        name: draft.name.clone(),
+        paths: abs_paths,
+        format: draft.format.clone(),
+        partitions: partitions.clone(),
+    };
+    crate::overlays::begin_register(crate::overlays::PendingTable {
+        name: draft.name.clone(),
+        format: draft.format.clone(),
+        sources: rel_paths,
+        partition_cols: partitions,
+    });
+    let tx = state.read().cmd_tx.clone();
     if let Some(tx) = tx {
         let _ = tx.send(Command::Register(spec));
     }

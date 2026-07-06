@@ -13,13 +13,7 @@ pub use crate::project::{
     CatalogTable, CatalogView, HistoryItem, Project, RegStatus, SavedQuery, Workspace,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum CfgStatus {
-    Idle,
-    Validating,
-    Error,
-}
-
+#[derive(Clone)]
 pub struct ConfigModal {
     pub editing: Option<String>,
     pub name: String,
@@ -28,8 +22,6 @@ pub struct ConfigModal {
     pub sources: Vec<String>,
     pub hive_on: bool,
     pub part_cols: Vec<(String, String)>,
-    pub status: CfgStatus,
-    pub error: String,
     // --- live scan results (filled by modals::rescan on path/format change) ---
     /// Every provided path is an existing directory → Hive partitioning allowed.
     pub all_dirs: bool,
@@ -53,8 +45,6 @@ impl Default for ConfigModal {
             sources: vec![String::new()],
             hive_on: false,
             part_cols: vec![],
-            status: CfgStatus::Idle,
-            error: String::new(),
             all_dirs: false,
             file_count: 0,
             scanning: false,
@@ -262,8 +252,6 @@ pub struct AppState {
     /// Where "Open" targets when a window already has a project: ask / this / new.
     pub open_pref: String,
     pub confirm_close_running: bool,
-    // modal sub-state
-    pub cfg: ConfigModal,
     // bottom drawer (History + Events tabs)
     pub log: Vec<LogEvent>,
     pub log_open: bool,
@@ -407,7 +395,6 @@ impl AppState {
             default_project_dir: String::new(),
             open_pref: "ask".into(),
             confirm_close_running: true,
-            cfg: ConfigModal::default(),
             log: Vec::new(),
             log_open: false,
             log_tab: LogTab::History,

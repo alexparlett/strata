@@ -64,7 +64,7 @@ pub enum Action {
     // ── catalog ──
     OpenConfigNew,
     OpenConfigEdit(String),
-    ConfirmConfig,
+    RegisterTable(crate::state::ConfigModal),
     ConfirmRemove { kind: RemoveKind, name: String },
     EditView(String),
     SetFilter(String),
@@ -171,7 +171,7 @@ fn is_durable(a: &Action) -> bool {
             | CloseAllTabs
             | ReopenTab
             | CommitRename
-            | ConfirmConfig
+            | RegisterTable(_)
             | ConfirmRemove { .. }
             | EditView(_)
             | OpenHistoryQuery(_)
@@ -215,7 +215,7 @@ fn run(state: Signal<AppState>, action: Action) {
         // catalog
         OpenConfigNew => catalog::open_config_new(state),
         OpenConfigEdit(name) => catalog::open_config_edit(state, &name),
-        ConfirmConfig => catalog::confirm_config(state),
+        RegisterTable(draft) => catalog::register_table(state, draft),
         ConfirmRemove { kind, name } => catalog::confirm_remove(state, kind, name),
         EditView(name) => catalog::edit_view(state, &name),
         SetFilter(f) => catalog::set_filter(state, f),

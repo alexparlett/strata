@@ -14,13 +14,38 @@
 
 use dioxus::prelude::*;
 
+/// What the table-config window is doing, if open: creating a new table or editing
+/// an existing one (by name). `None` on the store = closed.
+#[derive(Clone, PartialEq)]
+pub enum ConfigTarget {
+    New,
+    Edit(String),
+}
+
+/// Row data for an **in-flight** config register, held here — *not* in the
+/// project — so `project.tables` stays untouched until the engine confirms. The
+/// `Registered` success handler builds the real catalog row from this + the
+/// returned columns; a failure just clears it (there is no placeholder to clean up).
+#[derive(Clone)]
+pub struct PendingTable {
+    pub name: String,
+    pub format: String,
+    pub sources: Vec<String>,
+    pub partition_cols: Vec<(String, String)>,
+}
+
 /// Which overlays are currently open in this window.
 #[derive(Clone, Default)]
 pub struct OverlayState {
     pub settings: bool,
     pub cmdk: bool,
     pub export: bool,
-    pub config: bool,
+    /// The table-config window's target (`Some` = open).
+    pub config: Option<ConfigTarget>,
+    /// Inline register-failure message for the config window (which stays open).
+    pub config_err: Option<String>,
+    /// Row data for a config register awaiting the engine's `Registered` event.
+    pub pending_register: Option<PendingTable>,
 }
 
 /// The per-window overlay store. Hosts read it reactively
@@ -56,14 +81,42 @@ pub fn close_export() {
     OVERLAYS.write().export = false;
 }
 
-/// Open the table-config window. The `OpenConfigNew`/`OpenConfigEdit` handlers set
-/// up the form (`AppState.cfg`) first, then call this.
-pub fn open_config() {
-    OVERLAYS.write().config = true;
+/// Open the table-config window for `target`; the modal seeds its local draft from
+/// it (blank for `New`, a copy of the project table for `Edit`).
+pub fn open_config(target: ConfigTarget) {
+    let mut o = OVERLAYS.write();
+    o.config = Some(target);
+    o.config_err = None;
+    o.pending_register = None;
 }
 
-/// Close the table-config window. Callable from the engine-event layer — the
-/// `Registered` handler uses it to dismiss the window on a successful register.
+/// Close the table-config window and clear its transient state.
 pub fn close_config() {
-    OVERLAYS.write().config = false;
+    let mut o = OVERLAYS.write();
+    o.config = None;
+    o.config_err = None;
+    o.pending_register = None;
+}
+
+/// Show an inline register error in the (still-open) config window.
+pub fn set_config_err(msg: String) {
+    OVERLAYS.write().config_err = Some(msg);
+}
+
+/// Stash the row data for an in-flight config register (clears any prior error).
+pub fn begin_register(pending: PendingTable) {
+    let mut o = OVERLAYS.write();
+    o.pending_register = Some(pending);
+    o.config_err = None;
+}
+
+/// Take the pending register **iff** it's for `name` — i.e. a config-originated
+/// register. Returns `None` for load-time registers (which stash nothing).
+pub fn take_pending_register(name: &str) -> Option<PendingTable> {
+    let mut o = OVERLAYS.write();
+    if o.pending_register.as_ref().map_or(false, |p| p.name == name) {
+        o.pending_register.take()
+    } else {
+        None
+    }
 }
