@@ -14,7 +14,7 @@ pub use crate::project::{
 };
 
 #[derive(Clone)]
-pub struct ConfigModal {
+pub struct ConfigForm {
     pub editing: Option<String>,
     pub name: String,
     pub format: String,
@@ -35,7 +35,7 @@ pub struct ConfigModal {
     pub detected_parts: Vec<(String, String)>,
 }
 
-impl Default for ConfigModal {
+impl Default for ConfigForm {
     fn default() -> Self {
         Self {
             editing: None,
@@ -55,7 +55,7 @@ impl Default for ConfigModal {
 }
 
 #[derive(Clone)]
-pub struct ExportModal {
+pub struct ExportForm {
     pub format: String, // csv / json / parquet / arrow / clipboard
     pub name: String,
     pub scope: String,          // "all" | "page"
@@ -70,7 +70,7 @@ pub struct ExportModal {
     pub adv_open: bool,         // advanced-options disclosure
 }
 
-impl Default for ExportModal {
+impl Default for ExportForm {
     fn default() -> Self {
         Self {
             format: "csv".into(),

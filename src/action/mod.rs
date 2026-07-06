@@ -64,7 +64,7 @@ pub enum Action {
     // ── catalog ──
     OpenConfigNew,
     OpenConfigEdit(String),
-    RegisterTable(crate::state::ConfigModal),
+    RegisterTable(crate::state::ConfigForm),
     ConfirmRemove { kind: RemoveKind, name: String },
     EditView(String),
     SetFilter(String),
@@ -92,7 +92,7 @@ pub enum Action {
     ClearDrawer,
     ToggleLogRow(u64),
     ToggleLogHeight,
-    RunExport(crate::state::ExportModal),
+    RunExport(crate::state::ExportForm),
     // Settings prefs (persist to app config).
     SetTheme(String),
     ToggleSyncOs,

@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::overlays::ConfigTarget;
-use crate::state::{AppState, ConfigModal};
+use crate::state::{AppState, ConfigForm};
 use crate::ui::components::{WinGeom, Window};
 use crate::ui::icons;
 
@@ -14,7 +14,7 @@ use crate::ui::icons;
 /// Set a config source path and, if the table name is still blank, default it
 /// from the chosen file/folder's name. When the path is a single file with a
 /// recognised extension, the format is auto-detected from it.
-fn set_source(mut draft: Signal<ConfigModal>, state: Signal<AppState>, idx: usize, path: String) {
+fn set_source(mut draft: Signal<ConfigForm>, state: Signal<AppState>, idx: usize, path: String) {
     // Store paths inside the project folder relative to it, so the project stays
     // portable; anything outside stays absolute.
     let base = {
@@ -65,7 +65,7 @@ fn detect_format(path: &str) -> Option<&'static str> {
 /// channel to a Dioxus task, which applies it through a signal write so the UI
 /// re-renders.
 #[cfg(target_os = "macos")]
-fn browse_source(draft: Signal<ConfigModal>, state: Signal<AppState>, idx: usize) {
+fn browse_source(draft: Signal<ConfigForm>, state: Signal<AppState>, idx: usize) {
     use futures::StreamExt;
     use objc::runtime::Object;
     use objc::{class, msg_send, sel, sel_impl};
@@ -86,18 +86,16 @@ fn browse_source(draft: Signal<ConfigModal>, state: Signal<AppState>, idx: usize
         let handler = block::ConcreteBlock::new(move |resp: i64| {
             // NSModalResponseOK == 1
             let path = if resp == 1 {
-                unsafe {
-                    let url: *mut Object = msg_send![panel, URL];
-                    if url.is_null() {
+                let url: *mut Object = msg_send![panel, URL];
+                if url.is_null() {
+                    None
+                } else {
+                    let ns: *mut Object = msg_send![url, path];
+                    let c: *const std::os::raw::c_char = msg_send![ns, UTF8String];
+                    if c.is_null() {
                         None
                     } else {
-                        let ns: *mut Object = msg_send![url, path];
-                        let c: *const std::os::raw::c_char = msg_send![ns, UTF8String];
-                        if c.is_null() {
-                            None
-                        } else {
-                            Some(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned())
-                        }
+                        Some(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned())
                     }
                 }
             } else {
@@ -113,10 +111,15 @@ fn browse_source(draft: Signal<ConfigModal>, state: Signal<AppState>, idx: usize
 /// Non-macOS fallback: rfd can't offer a combined file/folder dialog, so pick a
 /// file (directory paths and globs can still be typed).
 #[cfg(not(target_os = "macos"))]
-fn browse_source(draft: Signal<ConfigModal>, state: Signal<AppState>, idx: usize) {
+fn browse_source(draft: Signal<ConfigForm>, state: Signal<AppState>, idx: usize) {
     spawn(async move {
         if let Some(handle) = rfd::AsyncFileDialog::new().pick_file().await {
-            set_source(draft, state, idx, handle.path().to_string_lossy().into_owned());
+            set_source(
+                draft,
+                state,
+                idx,
+                handle.path().to_string_lossy().into_owned(),
+            );
             rescan(draft, state);
         }
     });
@@ -132,7 +135,7 @@ fn browse_source(draft: Signal<ConfigModal>, state: Signal<AppState>, idx: usize
 /// detected Hive keys. The walk is bounded (20k files) so it runs synchronously
 /// — `all_dirs`/errors update in the same render turn as the edit, so the UI
 /// (e.g. the partition toggle brightening once it's available) reacts at once.
-fn rescan(mut draft: Signal<ConfigModal>, state: Signal<AppState>) {
+fn rescan(mut draft: Signal<ConfigForm>, state: Signal<AppState>) {
     let (paths, format, hive_on, base) = {
         let d = draft.read();
         let s = state.read();
@@ -195,13 +198,13 @@ pub fn ConfigHost() -> Element {
 
 /// Seed a fresh working draft from the target: blank for `New`, a *copy* of the
 /// project table for `Edit`. The project store is never touched.
-fn seed_draft(state: Signal<AppState>, target: &ConfigTarget) -> ConfigModal {
+fn seed_draft(state: Signal<AppState>, target: &ConfigTarget) -> ConfigForm {
     match target {
-        ConfigTarget::New => ConfigModal::default(),
+        ConfigTarget::New => ConfigForm::default(),
         ConfigTarget::Edit(name) => {
             let s = state.read();
             match s.project.tables.iter().find(|t| &t.name == name) {
-                Some(t) => ConfigModal {
+                Some(t) => ConfigForm {
                     editing: Some(t.name.clone()),
                     name: t.name.clone(),
                     format: t.format.clone(),
@@ -212,9 +215,9 @@ fn seed_draft(state: Signal<AppState>, target: &ConfigTarget) -> ConfigModal {
                     },
                     hive_on: !t.partition_cols.is_empty(),
                     part_cols: t.partition_cols.clone(),
-                    ..ConfigModal::default()
+                    ..ConfigForm::default()
                 },
-                None => ConfigModal::default(),
+                None => ConfigForm::default(),
             }
         }
     }
@@ -225,7 +228,7 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
     let state = use_context::<Signal<AppState>>();
     // The working copy is component-local; the project store stays immutable until
     // a successful register. Seed it from the target once, on mount.
-    let draft = use_signal(move || seed_draft(state, &target));
+    let mut draft = use_signal(move || seed_draft(state, &target));
     let d = draft.read();
     let editing = d.editing.is_some();
     let name = d.name.clone();
@@ -245,8 +248,16 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
     // Scan the sources once when the modal opens (validates pre-filled edit paths).
     use_hook(move || rescan(draft, state));
 
-    let title = if editing { "Configure table" } else { "New external table" };
-    let confirm_label = if editing { "Save changes" } else { "Create table" };
+    let title = if editing {
+        "Configure table"
+    } else {
+        "New external table"
+    };
+    let confirm_label = if editing {
+        "Save changes"
+    } else {
+        "Create table"
+    };
     let part_warn = part_cols.iter().any(|(_, t)| t == "Utf8");
     let single_path = sources.len() <= 1;
 
@@ -450,4 +461,3 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
         }
     }
 }
-

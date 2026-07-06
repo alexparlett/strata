@@ -2,7 +2,7 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::{AppState, ExportModal as ExportState};
+use crate::state::{AppState, ExportForm};
 use crate::ui::components::{WinGeom, Window};
 use crate::ui::icons;
 
@@ -28,7 +28,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
     let state = use_context::<Signal<AppState>>();
     // Form state is component-local — reset each time the window opens. The
     // `RunExport` action carries a snapshot, so `AppState` never holds it.
-    let mut export = use_signal(ExportState::default);
+    let mut export = use_signal(ExportForm::default);
     let ex = export();
     let (total, cols) = {
         let s = state.read();
@@ -202,7 +202,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
 }
 
 /// Preview text (first few rows in the chosen format) + an estimated file size.
-fn export_preview(state: Signal<AppState>, ex: &ExportState) -> (String, String) {
+fn export_preview(state: Signal<AppState>, ex: &ExportForm) -> (String, String) {
     let s = state.read();
     let Some(res) = &s.result else {
         return (String::new(), String::new());
@@ -276,7 +276,7 @@ fn export_preview(state: Signal<AppState>, ex: &ExportState) -> (String, String)
 
 /// Rough exported-size estimate: avg text bytes/row × total rows, scaled by
 /// compression for columnar formats. Approximate — for a UI hint only.
-fn estimate_size(res: &crate::engine::QueryOutput, eff: &str, ex: &ExportState) -> String {
+fn estimate_size(res: &crate::engine::QueryOutput, eff: &str, ex: &ExportForm) -> String {
     let sample = res.rows.len().min(20);
     if sample == 0 {
         return "0 B".into();

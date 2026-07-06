@@ -35,11 +35,6 @@ pub fn ProjectRoot(open_path: String) -> Element {
     let mut state = use_signal(AppState::empty);
     use_context_provider(|| state);
 
-    // The command palette's open state is local (egui-style): the ⌘K handler and
-    // the header search button both drive this signal, and it closes via its
-    // Dialog — no `AppState` flag, no `CloseOverlays`.
-    let mut cmdk = use_signal(|| false);
-
     // Track this window so siblings can be focused / cycled, and so "Close
     // project" knows whether it's the last one.
     let win_id = use_hook(crate::window::register_current_window);

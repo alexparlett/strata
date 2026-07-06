@@ -278,7 +278,7 @@ pub fn delete_saved(mut state: Signal<AppState>, name: &str) {
 /// `Action::RunExport` — file formats pick a destination (native save dialog, or
 /// a folder for a partitioned export) and export the snapshot via the engine's
 /// `COPY … TO`; the "clipboard" format copies the loaded result as text.
-pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportModal) {
+pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
     let (ws_id, page, page_size, tx) = {
         let s = state.read();
         let ws_id = s

@@ -469,7 +469,7 @@ fn tab_menu_items(
 fn editor(mut state: Signal<AppState>) -> Element {
     let sql = state.read().active_sql();
     let editor_h = state.read().editor_h;
-    let (ln, col, ws_id, epoch) = {
+    let (ws_id, epoch) = {
         let s = state.read();
         let ws_id = s
             .project
@@ -477,7 +477,7 @@ fn editor(mut state: Signal<AppState>) -> Element {
             .get(s.project.active_ws)
             .map(|w| w.id)
             .unwrap_or(0);
-        (s.caret_line, s.caret_col, ws_id, s.editor_epoch)
+        (ws_id, s.editor_epoch)
     };
 
     rsx! {

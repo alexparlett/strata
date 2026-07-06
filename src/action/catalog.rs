@@ -26,7 +26,7 @@ pub fn open_config_edit(_state: Signal<AppState>, table: &str) {
 /// store (`begin_register`), and the engine's `Registered` event builds the real
 /// catalog row on success, or surfaces an inline error on failure. No placeholder
 /// row is ever written — only a successful register saves the table.
-pub fn register_table(state: Signal<AppState>, draft: crate::state::ConfigModal) {
+pub fn register_table(state: Signal<AppState>, draft: crate::state::ConfigForm) {
     let base = project_dir(&state.read());
     // Store paths as entered (relative-to-project where the user chose that); hand
     // the engine fully-resolved absolute paths.
