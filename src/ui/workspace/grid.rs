@@ -1,5 +1,6 @@
 //! The results grid — type-coloured cells, zebra striping, find-filtering — and
-//! the nested-cell JSON view (a workspace-local `Dialog`).
+//! the nested-cell JSON view. The grid owns the cell-view signal locally and
+//! renders its own `CellDialog`.
 
 use dioxus::prelude::*;
 use dioxus_code::{Code, SourceCode};
@@ -9,9 +10,21 @@ use crate::state::AppState;
 use crate::ui::components::Dialog;
 use crate::ui::icons;
 
-use super::CellView;
+/// A nested-cell view target (struct/list/map cell), opened from a grid cell and
+/// shown in a `CellDialog`. Workspace-local to the grid.
+#[derive(Clone, PartialEq)]
+struct CellView {
+    name: String,
+    type_label: String,
+    json: String,
+}
 
-pub(crate) fn results_grid(state: Signal<AppState>, cell_view: Signal<Option<CellView>>) -> Element {
+#[component]
+pub(crate) fn ResultsGrid() -> Element {
+    let state = use_context::<Signal<AppState>>();
+    // The nested-cell view is grid-local, opened from a cell, closed by the dialog.
+    let cell_view = use_signal(|| None::<CellView>);
+
     let s = state.read();
     let zebra = crate::settings::SETTINGS.read().zebra;
     let type_color = s.type_color_cells;
@@ -19,7 +32,8 @@ pub(crate) fn results_grid(state: Signal<AppState>, cell_view: Signal<Option<Cel
     let page_size = s.page_size;
     let search = s.result_search.to_lowercase();
     let Some(result) = s.result.clone() else {
-        return super::results::results_empty(state);
+        // Rendered only alongside a result, so this is a defensive fallback.
+        return rsx! { super::results::Empty {} };
     };
     drop(s);
 
@@ -63,9 +77,15 @@ pub(crate) fn results_grid(state: Signal<AppState>, cell_view: Signal<Option<Cel
                 }
             }
         }
+        if let Some(c) = cell_view() {
+            CellDialog { view: c, cell_view }
+        }
     }
 }
 
+/// One grid cell. A plain fn (called once per cell — thousands per page) so it
+/// stays a lightweight `Element`, not a component scope. Opens the nested-cell
+/// view for struct/list/map cells.
 fn render_cell(
     col: Option<(String, String, &'static str, &'static str, bool)>,
     cell: Cell,
@@ -105,18 +125,20 @@ fn render_cell(
 
 /// The nested-cell JSON view (struct/list/map cell) — a workspace-local `Dialog`
 /// with a static highlighted `Code` body. The `cell_view` signal owns open/close.
-pub(crate) fn cell_dialog(mut cell_view: Signal<Option<CellView>>, c: CellView) -> Element {
+#[component]
+pub(crate) fn CellDialog(cell_view: Signal<Option<CellView>>, view: CellView) -> Element {
+    let mut cell_view = cell_view;
     rsx! {
         Dialog { on_close: move |_| cell_view.set(None), card_class: "modal cell-modal".to_string(), z: 64,
             div { class: "row", style: "gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);",
-                span { class: "mono", style: "font-weight:600;font-size:13px;", "{c.name}" }
-                span { class: "mono", style: "font-size:10px;color:var(--t-list);background:var(--accent-soft);padding:2px 7px;border-radius:5px;", "{c.type_label}" }
+                span { class: "mono", style: "font-weight:600;font-size:13px;", "{view.name}" }
+                span { class: "mono", style: "font-size:10px;color:var(--t-list);background:var(--accent-soft);padding:2px 7px;border-radius:5px;", "{view.type_label}" }
                 div { class: "spacer" }
                 button { class: "icon-btn plain", style: "width:28px;height:28px;", onclick: move |_| cell_view.set(None), {icons::close(13)} }
             }
             div { style: "overflow:auto;max-height:70vh;",
                 Code {
-                    src: SourceCode::new(crate::ui::lang("json"), c.json.clone()),
+                    src: SourceCode::new(crate::ui::lang("json"), view.json.clone()),
                     theme: crate::ui::code_theme(),
                 }
             }

@@ -6,7 +6,9 @@ use dioxus_code_editor::CodeEditor;
 
 use crate::state::AppState;
 
-pub(crate) fn editor(mut state: Signal<AppState>) -> Element {
+#[component]
+pub(crate) fn Editor() -> Element {
+    let mut state = use_context::<Signal<AppState>>();
     let sql = state.read().active_sql();
     let editor_h = state.read().editor_h;
     let (ws_id, epoch) = {

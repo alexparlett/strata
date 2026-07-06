@@ -8,7 +8,9 @@ use dioxus::prelude::*;
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, PlanTab};
 
-pub(crate) fn results_plan(state: Signal<AppState>) -> Element {
+#[component]
+pub(crate) fn PlanView() -> Element {
+    let state = use_context::<Signal<AppState>>();
     let (plan, tab, raw) = {
         let s = state.read();
         let Some(plan) = s.plan.clone() else {
@@ -91,6 +93,7 @@ pub(crate) fn results_plan(state: Signal<AppState>) -> Element {
 }
 
 /// One operator card in the plan tree, indented by depth and coloured by kind.
+/// A plain fn (called once per node) — no hooks, so no need for a component.
 fn plan_node_card(
     n: &crate::plan::PlanNode,
     idx: usize,

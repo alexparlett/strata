@@ -1,4 +1,5 @@
-//! The workspace tab strip and its self-contained context menu (a `Popup`).
+//! The workspace tab strip and its self-contained context menu (a `Popup`). The
+//! tab-menu open-state is a component-local signal, not on `AppState`.
 
 use dioxus::prelude::*;
 
@@ -7,7 +8,12 @@ use crate::state::AppState;
 use crate::ui::components::{MenuItem, MenuSep, Point, Popup};
 use crate::ui::icons;
 
-pub(crate) fn tabs(state: Signal<AppState>, mut tab_menu: Signal<Option<(usize, Point)>>) -> Element {
+#[component]
+pub(crate) fn Tabs() -> Element {
+    let state = use_context::<Signal<AppState>>();
+    // Self-contained: the tab context menu lives here, not in `AppState`.
+    let mut tab_menu = use_signal(|| None::<(usize, Point)>);
+
     let sidebar_open = state.read().sidebar_open;
     let active = state.read().project.active_ws;
     let renaming = state.read().renaming_ws;

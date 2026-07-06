@@ -1,7 +1,7 @@
 //! The results area: a four-way state switch (running spinner / structured error /
 //! EXPLAIN plan / grid) or the "no results yet" placeholder, plus the results
-//! toolbar, the pager, and the no-tabs center-pane empty state. The toolbar and
-//! pager only appear alongside a grid.
+//! toolbar, the pager, and the no-tabs center-pane empty state. Each is its own
+//! context-component; the toolbar and pager only appear alongside a grid.
 
 use dioxus::prelude::*;
 
@@ -9,12 +9,12 @@ use crate::action::{dispatch, Action};
 use crate::state::AppState;
 use crate::ui::icons;
 
-use super::CellView;
-
 /// The results area is one of four mutually-exclusive states: a spinner while a
 /// query runs, the structured error view, the grid (with its search/export
 /// toolbar + pager), or the "no results yet" empty state.
-pub(crate) fn results_area(state: Signal<AppState>, cell_view: Signal<Option<CellView>>) -> Element {
+#[component]
+pub(crate) fn Results() -> Element {
+    let state = use_context::<Signal<AppState>>();
     let (running, has_err, has_plan, has_result) = {
         let s = state.read();
         (
@@ -25,24 +25,26 @@ pub(crate) fn results_area(state: Signal<AppState>, cell_view: Signal<Option<Cel
         )
     };
     if running {
-        rsx! { {results_running(state)} }
+        rsx! { Running {} }
     } else if has_err {
-        rsx! { {results_error(state)} }
+        rsx! { ErrorView {} }
     } else if has_plan {
-        rsx! { {super::plan_view::results_plan(state)} }
+        rsx! { super::plan_view::PlanView {} }
     } else if has_result {
         rsx! {
-            {results_toolbar(state)}
-            {super::grid::results_grid(state, cell_view)}
-            {pager(state)}
+            ResultsToolbar {}
+            super::grid::ResultsGrid {}
+            Pager {}
         }
     } else {
-        rsx! { {results_empty(state)} }
+        rsx! { Empty {} }
     }
 }
 
 /// Results area while a query is in flight — a centred spinner. (Cancel is S14.)
-fn results_running(state: Signal<AppState>) -> Element {
+#[component]
+fn Running() -> Element {
+    let state = use_context::<Signal<AppState>>();
     let target = {
         let s = state.read();
         s.project
@@ -62,7 +64,9 @@ fn results_running(state: Signal<AppState>) -> Element {
 
 /// Results area for the last failed query — an error banner, the message, an
 /// optional code frame with a caret, and an optional hint. Dismiss clears it.
-fn results_error(state: Signal<AppState>) -> Element {
+#[component]
+fn ErrorView() -> Element {
+    let state = use_context::<Signal<AppState>>();
     let Some(err) = state.read().query_error.clone() else {
         return rsx! { div {} };
     };
@@ -91,9 +95,11 @@ fn results_error(state: Signal<AppState>) -> Element {
     }
 }
 
-/// Results area before the active tab has produced any rows. An unrun EXPLAIN
-/// gets a plan-specific hint. Also used as the grid's fallback (see `grid`).
-pub(crate) fn results_empty(state: Signal<AppState>) -> Element {
+/// Results area before the active tab has produced any rows. An unrun EXPLAIN gets
+/// a plan-specific hint. Also the grid's defensive fallback (see `grid`).
+#[component]
+pub(crate) fn Empty() -> Element {
+    let state = use_context::<Signal<AppState>>();
     let is_explain = crate::plan::is_explain(&state.read().active_sql());
     let (title, sub) = if is_explain {
         ("No plan yet", "Run the EXPLAIN to see the query plan.")
@@ -113,7 +119,9 @@ pub(crate) fn results_empty(state: Signal<AppState>) -> Element {
 }
 
 /// Center-pane placeholder shown when no query tab is open (all tabs closed).
-pub(crate) fn empty_state(state: Signal<AppState>) -> Element {
+#[component]
+pub(crate) fn EmptyState() -> Element {
+    let state = use_context::<Signal<AppState>>();
     let has_closed = !state.read().closed_tabs.is_empty();
     let saved: Vec<String> = state
         .read()
@@ -167,7 +175,9 @@ pub(crate) fn empty_state(state: Signal<AppState>) -> Element {
     }
 }
 
-fn results_toolbar(state: Signal<AppState>) -> Element {
+#[component]
+fn ResultsToolbar() -> Element {
+    let state = use_context::<Signal<AppState>>();
     let q = state.read().result_search.clone();
     rsx! {
         div { class: "results-tb",
@@ -183,7 +193,9 @@ fn results_toolbar(state: Signal<AppState>) -> Element {
     }
 }
 
-fn pager(state: Signal<AppState>) -> Element {
+#[component]
+fn Pager() -> Element {
+    let state = use_context::<Signal<AppState>>();
     let (total, elapsed, page, page_size, page_size_open) = {
         let s = state.read();
         (
