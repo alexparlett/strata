@@ -311,7 +311,8 @@ pub fn run_export(mut state: Signal<AppState>) {
                 Err(e) => s.set_status(LogKind::Error, format!("Clipboard failed · {e}")),
             }
         }
-        s.export_open = false;
+        drop(s);
+        crate::overlays::close_export();
         return;
     }
 
@@ -364,7 +365,7 @@ pub fn run_export(mut state: Signal<AppState>) {
                 keep_partition: ex.keep_partition,
             });
         }
-        state.write().export_open = false;
+        crate::overlays::close_export();
     });
 }
 

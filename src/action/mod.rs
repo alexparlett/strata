@@ -92,7 +92,6 @@ pub enum Action {
     ClearDrawer,
     ToggleLogRow(u64),
     ToggleLogHeight,
-    OpenExport,
     RunExport,
     // Settings prefs (persist to app config).
     SetTheme(String),
@@ -250,7 +249,6 @@ fn run(state: Signal<AppState>, action: Action) {
         ClearDrawer => overlay::clear_drawer(state),
         ToggleLogRow(id) => overlay::toggle_log_row(state, id),
         ToggleLogHeight => overlay::toggle_log_height(state),
-        OpenExport => overlay::open_export(state),
         RunExport => query::run_export(state),
         SetTheme(id) => overlay::set_theme(state, id),
         ToggleSyncOs => overlay::toggle_sync_os(state),

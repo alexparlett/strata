@@ -513,7 +513,7 @@ fn results_toolbar(state: Signal<AppState>) -> Element {
                     oninput: move |e| dispatch(state, Action::SetResultSearch(e.value())) }
             }
             div { class: "spacer" }
-            button { class: "btn", style: "height:28px;", onclick: move |_| dispatch(state, Action::OpenExport),
+            button { class: "btn", style: "height:28px;", onclick: move |_| crate::overlays::open_export(),
                 {icons::download(13)} "Export" }
         }
     }

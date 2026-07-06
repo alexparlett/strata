@@ -35,13 +35,21 @@ impl PaletteCommand {
         }
     }
 
-    fn action(self) -> Action {
+    fn effect(self) -> Effect {
         match self {
-            PaletteCommand::NewTable => Action::OpenConfigNew,
-            PaletteCommand::Export => Action::OpenExport,
-            PaletteCommand::CloseProject => Action::CloseProject,
+            PaletteCommand::NewTable => Effect::Dispatch(Action::OpenConfigNew),
+            PaletteCommand::Export => Effect::OpenExport,
+            PaletteCommand::CloseProject => Effect::Dispatch(Action::CloseProject),
         }
     }
+}
+
+/// What selecting a palette row does: dispatch a normal `AppState` action, or open
+/// an overlay-store window directly (window visibility isn't an `AppState` action).
+#[derive(Clone)]
+enum Effect {
+    Dispatch(Action),
+    OpenExport,
 }
 
 /// Always-mounted host for the command palette. Reads the overlay store reactively
@@ -67,27 +75,27 @@ pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
     let cmdk_q = query();
     let q = cmdk_q.to_lowercase();
 
-    // Each row is (label, sub, action) — selecting it just dispatches `action`.
-    let mut items: Vec<(String, String, Action)> = Vec::new();
+    // Each row is (label, sub, effect) — selecting it runs the effect.
+    let mut items: Vec<(String, String, Effect)> = Vec::new();
     {
         let s = state.read();
         for t in &s.project.tables {
             items.push((
                 format!("Query {}", t.name),
                 t.meta.clone(),
-                Action::LoadSelectStar(t.name.clone()),
+                Effect::Dispatch(Action::LoadSelectStar(t.name.clone())),
             ));
         }
         for v in &s.project.views {
             items.push((
                 format!("Query {}", v.name),
                 "view".into(),
-                Action::LoadSelectStar(v.name.clone()),
+                Effect::Dispatch(Action::LoadSelectStar(v.name.clone())),
             ));
         }
     }
     for cmd in PaletteCommand::ALL {
-        items.push((cmd.label().to_string(), "command".into(), cmd.action()));
+        items.push((cmd.label().to_string(), "command".into(), cmd.effect()));
     }
     let filtered: Vec<_> = items
         .into_iter()
@@ -116,11 +124,14 @@ pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
                 if filtered.is_empty() {
                     div { style: "padding:40px;text-align:center;color:var(--dim3);", "No matches" }
                 }
-                for (label, sub, action) in filtered {
+                for (label, sub, effect) in filtered {
                     div {
                         class: "cmdk-item",
                         onclick: move |_| {
-                            dispatch(state, action.clone());
+                            match effect.clone() {
+                                Effect::Dispatch(a) => dispatch(state, a),
+                                Effect::OpenExport => crate::overlays::open_export(),
+                            }
                             on_close.call(());
                         },
                         span { style: "display:flex;color:var(--dim);", {icons::table(15)} }

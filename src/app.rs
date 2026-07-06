@@ -156,8 +156,8 @@ pub fn ProjectRoot(open_path: String) -> Element {
             // overlay store (see `crate::overlays`); they render nothing until open.
             ui::modals::CmdkHost {}
             ui::modals::SettingsHost {}
+            ui::modals::ExportHost {}
             if state.read().config_open { ui::modals::ConfigModal {} }
-            if state.read().export_open { ui::modals::ExportModal {} }
             // Catalog + tab context menus, the remove-confirm dialog, and the
             // nested-cell view are now self-contained containers rendered by the
             // sidebar / workspace (see `ui::components`).

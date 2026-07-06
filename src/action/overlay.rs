@@ -6,11 +6,11 @@ use dioxus::prelude::*;
 use crate::state::{AppState, LogTab};
 
 /// Close every remaining `AppState`-backed overlay (Esc, backdrop clicks). The
-/// container-based overlays (menus, remove-confirm, cell view, command palette,
-/// settings) own their own local open state and are not touched here.
+/// container-based overlays (menus, remove-confirm, cell view) and the
+/// overlay-store windows (command palette, Settings, Export) own their own open
+/// state and aren't touched here.
 pub fn close_all(mut state: Signal<AppState>) {
     let mut s = state.write();
-    s.export_open = false;
     s.config_open = false;
     s.page_size_open = false;
     s.renaming_ws = None;
@@ -94,11 +94,6 @@ pub fn toggle_confirm_close(mut state: Signal<AppState>) {
         s.confirm_close_running = !s.confirm_close_running;
     }
     save_prefs(state);
-}
-
-/// Open the export modal.
-pub fn open_export(mut state: Signal<AppState>) {
-    state.write().export_open = true;
 }
 
 /// Open the bottom drawer on the **History** tab (status-bar History button).

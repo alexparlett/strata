@@ -252,7 +252,6 @@ pub struct AppState {
     pub status_text: String,
     pub status_kind: LogKind,
     // menus / modals
-    pub export_open: bool,
     pub config_open: bool,
     // --- settings prefs (persisted to app config) ---
     pub sync_os: bool,
@@ -404,7 +403,6 @@ impl AppState {
             selected_col: None,
             status_text: "Ready · DataFusion 43 · open a project or add a table to begin".into(),
             status_kind: LogKind::Ok,
-            export_open: false,
             config_open: false,
             sync_os: false,
             os_dark: true,

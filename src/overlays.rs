@@ -19,6 +19,7 @@ use dioxus::prelude::*;
 pub struct OverlayState {
     pub settings: bool,
     pub cmdk: bool,
+    pub export: bool,
 }
 
 /// The per-window overlay store. Hosts read it reactively
@@ -42,4 +43,14 @@ pub fn toggle_cmdk() {
 
 pub fn set_cmdk(open: bool) {
     OVERLAYS.write().cmdk = open;
+}
+
+pub fn open_export() {
+    OVERLAYS.write().export = true;
+}
+
+/// Close the export window. Callable from the non-component action/engine layer —
+/// `run_export` uses it to dismiss the window when the export is under way.
+pub fn close_export() {
+    OVERLAYS.write().export = false;
 }

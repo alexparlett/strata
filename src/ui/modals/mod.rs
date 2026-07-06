@@ -8,5 +8,5 @@ mod settings;
 
 pub use command_palette::CmdkHost;
 pub use config::ConfigModal;
-pub use export::ExportModal;
+pub use export::ExportHost;
 pub use settings::SettingsHost;

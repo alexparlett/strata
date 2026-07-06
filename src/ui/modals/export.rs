@@ -3,14 +3,28 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, ExportModal as ExportState};
+use crate::ui::components::{WinGeom, Window};
 use crate::ui::icons;
 
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
+/// Always-mounted host for the Export window. Reads the overlay store and renders
+/// the window only when open. Triggers (results toolbar, palette) call
+/// `overlays::open_export`; `run_export` closes it via `overlays::close_export`.
 #[component]
-pub fn ExportModal() -> Element {
+pub fn ExportHost() -> Element {
+    if !crate::overlays::OVERLAYS.read().export {
+        return rsx! {};
+    }
+    rsx! {
+        ExportModal { on_close: move |_| crate::overlays::close_export() }
+    }
+}
+
+#[component]
+pub fn ExportModal(on_close: EventHandler<()>) -> Element {
     let mut state = use_context::<Signal<AppState>>();
     let ex = state.read().export.clone();
     let (total, cols) = {
@@ -35,17 +49,24 @@ pub fn ExportModal() -> Element {
     };
 
     rsx! {
-        div { class: "overlay", style: "z-index:60;", onclick: move |_| dispatch(state, Action::CloseOverlays),
-            div { class: "modal", style: "width:820px;max-width:94vw;", onclick: move |e| e.stop_propagation(),
-                div { class: "modal-head",
-                    div { class: "modal-ico", {icons::download(16)} }
-                    div { style: "flex:1;",
-                        div { class: "modal-title", "Export results" }
-                        div { class: "modal-sub", "{total} rows · via COPY … TO" }
-                    }
-                    button { class: "icon-btn plain", style: "width:30px;height:30px;", onclick: move |_| dispatch(state, Action::CloseOverlays), {icons::close(14)} }
+        Window {
+            on_close: move |_| on_close.call(()),
+            title: "Export results".to_string(),
+            subtitle: format!("{total} rows · via COPY … TO"),
+            icon: icons::download(16),
+            init: WinGeom::new(200.0, 84.0, 820.0, 640.0),
+            min_w: 640.0,
+            min_h: 420.0,
+            footer: rsx! {
+                div { class: "spacer" }
+                button { class: "btn", style: "height:34px;", onclick: move |_| on_close.call(()), "Cancel" }
+                button { class: "btn accent", style: "height:34px;",
+                    onclick: move |_| dispatch(state, Action::RunExport),
+                    {icons::download(14)}
+                    if is_clip { "Copy" } else { "Export" }
                 }
-                div { class: "modal-body ps-scroll",
+            },
+            div { class: "modal-body ps-scroll",
                     div { class: "sec-label", style: "margin-bottom:10px;", "FORMAT" }
                     div { class: "fmt-grid",
                         for (id, label, desc) in [("csv", "CSV", "delimited text"), ("json", "JSON", "ndjson records"), ("parquet", "Parquet", "columnar"), ("arrow", "Arrow", "IPC"), ("clipboard", "Clipboard", "copy as text")] {
@@ -173,16 +194,6 @@ pub fn ExportModal() -> Element {
                     }
                     pre { class: "preview-pre ps-scroll", "{preview}" }
                 }
-                div { class: "modal-foot",
-                    div { class: "spacer" }
-                    button { class: "btn", style: "height:34px;", onclick: move |_| dispatch(state, Action::CloseOverlays), "Cancel" }
-                    button { class: "btn accent", style: "height:34px;",
-                        onclick: move |_| dispatch(state, Action::RunExport),
-                        {icons::download(14)}
-                        if is_clip { "Copy" } else { "Export" }
-                    }
-                }
-            }
         }
     }
 }
