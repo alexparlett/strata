@@ -35,6 +35,11 @@ pub fn ProjectRoot(open_path: String) -> Element {
     let mut state = use_signal(AppState::empty);
     use_context_provider(|| state);
 
+    // The command palette's open state is local (egui-style): the ⌘K handler and
+    // the header search button both drive this signal, and it closes via its
+    // Dialog — no `AppState` flag, no `CloseOverlays`.
+    let mut cmdk = use_signal(|| false);
+
     // Track this window so siblings can be focused / cycled, and so "Close
     // project" knows whether it's the last one.
     let win_id = use_hook(crate::window::register_current_window);
@@ -117,7 +122,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             // subtree. Unknown id → empty string → `:root` still applies.
             style: "{theme_css}",
             "data-density": if state.read().density_compact { "compact" } else { "comfortable" },
-            onkeydown: move |e| handle_key(state, e),
+            onkeydown: move |e| handle_key(state, cmdk, e),
             onmousemove: move |e| {
                 if state.read().resizing.is_some() {
                     let c = e.client_coordinates();
@@ -126,7 +131,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             },
             onmouseup: move |_| dispatch(state, Action::EndResize),
 
-            ui::header::Header {}
+            ui::header::Header { cmdk }
 
             div { class: "ps-body",
                 if state.read().sidebar_open {
@@ -147,7 +152,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             ui::statusbar::StatusBar {}
 
             // ---- overlays / modals ----
-            if state.read().cmdk_open { ui::modals::CommandPalette {} }
+            if cmdk() { ui::modals::CommandPalette { on_close: move |_| cmdk.set(false) } }
             if state.read().config_open { ui::modals::ConfigModal {} }
             if state.read().export_open { ui::modals::ExportModal {} }
             if state.read().settings_open { ui::modals::SettingsModal {} }
@@ -164,14 +169,19 @@ async fn drain_events(state: Signal<AppState>, mut evt_rx: UnboundedReceiver<Eve
     }
 }
 
-fn handle_key(state: Signal<AppState>, e: dioxus_core::Event<dioxus::events::KeyboardData>) {
+fn handle_key(
+    state: Signal<AppState>,
+    mut cmdk: Signal<bool>,
+    e: dioxus_core::Event<dioxus::events::KeyboardData>,
+) {
     let mods = e.modifiers();
     let meta = mods.meta() || mods.ctrl();
     let shift = mods.shift();
     match e.key() {
         Key::Character(c) if meta && (c == "k" || c == "K") => {
             e.prevent_default();
-            dispatch(state, Action::ToggleCmdk);
+            let open = cmdk();
+            cmdk.set(!open);
         }
         // ⌘T new tab · ⇧⌘T reopen the last closed tab (as the tab menu advertises).
         Key::Character(c) if meta && (c == "t" || c == "T") => {

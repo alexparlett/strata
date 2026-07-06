@@ -81,7 +81,6 @@ pub enum Action {
     ToggleWindowFill,
 
     // ── overlays ──
-    ToggleCmdk,
     CloseOverlays,
     // Bottom drawer (History + Events tabs).
     OpenHistory,
@@ -240,7 +239,6 @@ fn run(state: Signal<AppState>, action: Action) {
         ToggleWindowFill => panel::toggle_window_fill(state),
 
         // overlays
-        ToggleCmdk => overlay::toggle_cmdk(state),
         CloseOverlays => overlay::close_all(state),
         OpenHistory => overlay::open_history(state),
         OpenEvents => overlay::open_events(state),

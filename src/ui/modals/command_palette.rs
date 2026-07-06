@@ -45,10 +45,11 @@ impl PaletteCommand {
 }
 
 #[component]
-pub fn CommandPalette() -> Element {
+pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
     let state = use_context::<Signal<AppState>>();
     // The query is transient, component-local state: the palette is freshly
-    // mounted each time it opens (gated on `cmdk_open`), so it resets naturally.
+    // mounted each time it opens (the root component gates it on its local `cmdk`
+    // signal), so it resets naturally.
     let mut query = use_signal(String::new);
     let cmdk_q = query();
     let q = cmdk_q.to_lowercase();
@@ -82,7 +83,7 @@ pub fn CommandPalette() -> Element {
 
     rsx! {
         Dialog {
-            on_close: move |_| dispatch(state, Action::CloseOverlays),
+            on_close: move |_| on_close.call(()),
             card_class: "cmdk".to_string(),
             z: 70,
             top: true,
@@ -107,7 +108,7 @@ pub fn CommandPalette() -> Element {
                         class: "cmdk-item",
                         onclick: move |_| {
                             dispatch(state, action.clone());
-                            dispatch(state, Action::CloseOverlays);
+                            on_close.call(());
                         },
                         span { style: "display:flex;color:var(--dim);", {icons::table(15)} }
                         span { class: "lbl", "{label}" }

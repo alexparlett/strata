@@ -25,8 +25,11 @@ fn tool_btn(state: Signal<AppState>, action: Action, title: &str, icon: Element)
 }
 
 #[component]
-pub fn Header() -> Element {
+pub fn Header(cmdk: Signal<bool>) -> Element {
     let state = use_context::<Signal<AppState>>();
+    // The command palette's open state is owned by the root app component; the
+    // header search button toggles it (⌘K does the same).
+    let mut cmdk = cmdk;
     // Self-contained: the project switcher dropdown lives here, not in `AppState`.
     let mut proj_menu = use_signal(|| false);
     let project = state.read().project.name.clone();
@@ -96,7 +99,14 @@ pub fn Header() -> Element {
             }
 
             div { class: "row", style: "gap:8px;",
-                {tool_btn(state, Action::ToggleCmdk, "Search (⌘K)", icons::search(15))}
+                button {
+                    class: "icon-btn",
+                    title: "Search (⌘K)",
+                    onmousedown: move |e| e.stop_propagation(),
+                    ondoubleclick: move |e| e.stop_propagation(),
+                    onclick: move |_| { let open = cmdk(); cmdk.set(!open); },
+                    {icons::search(15)}
+                }
                 {tool_btn(state, Action::OpenSettings, "Settings (⌘,)", icons::gear(15))}
             }
         }

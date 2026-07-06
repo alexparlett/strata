@@ -1,21 +1,15 @@
-//! Overlay / menu action handlers: command palette, the global overlay-close,
-//! and the nested-cell JSON popover. Called from `action::dispatch`.
+//! Overlay / menu action handlers: the global overlay-close plus the settings /
+//! export / drawer handlers. Called from `action::dispatch`.
 
 use dioxus::prelude::*;
 
 use crate::state::{AppState, LogTab, SettingsCat};
 
-/// Toggle the command palette (⌘K). Its search query is component-local, so a
-/// fresh mount resets it — nothing to clear here.
-pub fn toggle_cmdk(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.cmdk_open = !s.cmdk_open;
-}
-
-/// Close every overlay / menu / dialog (Esc, backdrop clicks).
+/// Close every remaining `AppState`-backed overlay (Esc, backdrop clicks). The
+/// container-based overlays (menus, remove-confirm, cell view, command palette)
+/// own their own local open state and are not touched here.
 pub fn close_all(mut state: Signal<AppState>) {
     let mut s = state.write();
-    s.cmdk_open = false;
     s.export_open = false;
     s.config_open = false;
     s.settings_open = false;
