@@ -5,12 +5,10 @@ mod cell;
 mod command_palette;
 mod config;
 mod export;
-mod remove;
 mod settings;
 
 pub use cell::CellPopover;
 pub use command_palette::CommandPalette;
 pub use config::ConfigModal;
 pub use export::ExportModal;
-pub use remove::RemoveConfirm;
 pub use settings::SettingsModal;

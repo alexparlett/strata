@@ -22,8 +22,6 @@ pub fn close_all(mut state: Signal<AppState>) {
     s.cell_open = false;
     s.settings_open = false;
     s.page_size_open = false;
-    s.remove_open = false;
-    s.remove_target = None;
     s.renaming_ws = None;
 }
 

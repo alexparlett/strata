@@ -293,9 +293,6 @@ pub struct AppState {
     pub editor_h: f64,
     pub log_h: f64,
     pub resizing: Option<Resizing>,
-    // remove-confirmation dialog
-    pub remove_open: bool,
-    pub remove_target: Option<RemoveTarget>,
     // tab rename
     pub renaming_ws: Option<usize>,
     pub rename_val: String,
@@ -448,8 +445,6 @@ impl AppState {
             editor_h: 240.0,
             log_h: 188.0,
             resizing: None,
-            remove_open: false,
-            remove_target: None,
             renaming_ws: None,
             rename_val: String::new(),
             closed_tabs: Vec::new(),

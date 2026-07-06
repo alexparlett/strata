@@ -3,9 +3,9 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind};
+use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind, RemoveTarget};
 use crate::ui::icons;
-use crate::ui::components::{MenuItem, MenuSep, Point, Popup};
+use crate::ui::components::{Dialog, MenuItem, MenuSep, Point, Popup};
 
 /// A catalog row's open context menu (self-contained sidebar state).
 #[derive(Clone)]
@@ -20,6 +20,8 @@ pub fn Sidebar() -> Element {
     let state = use_context::<Signal<AppState>>();
     // Self-contained: the catalog row menu lives here, not in `AppState`.
     let mut menu = use_signal(|| None::<CtxTarget>);
+    // The remove-confirm dialog is likewise sidebar-local, opened from a row menu.
+    let remove = use_signal(|| None::<RemoveTarget>);
     let ntab = state.read().project.tables.len();
     let nview = state.read().project.views.len();
     let nquery = state.read().project.saved_queries.len();
@@ -85,8 +87,12 @@ pub fn Sidebar() -> Element {
             // Self-contained catalog row menu (egui-style Popup container).
             if let Some(t) = menu() {
                 Popup { on_close: move |_| menu.set(None), at: t.at,
-                    {catalog_menu_items(state, menu, t)}
+                    {catalog_menu_items(state, menu, remove, t)}
                 }
+            }
+            // The remove-confirm dialog, also sidebar-local (opened from a row menu).
+            if let Some(t) = remove() {
+                {remove_dialog(state, remove, t)}
             }
         }
     }
@@ -97,6 +103,7 @@ pub fn Sidebar() -> Element {
 fn catalog_menu_items(
     state: Signal<AppState>,
     mut menu: Signal<Option<CtxTarget>>,
+    mut remove: Signal<Option<RemoveTarget>>,
     t: CtxTarget,
 ) -> Element {
     let name = t.name.clone();
@@ -110,7 +117,7 @@ fn catalog_menu_items(
                     onclick: move |_| { menu.set(None); dispatch(state, Action::OpenConfigEdit(n2.clone())); } }
                 MenuSep {}
                 MenuItem { icon: icons::trash(14), label: "Drop table".to_string(), danger: true,
-                    onclick: move |_| { menu.set(None); dispatch(state, Action::RequestRemove { kind: RemoveKind::Table, name: n3.clone() }); } }
+                    onclick: move |_| { menu.set(None); remove.set(Some(RemoveTarget { kind: RemoveKind::Table, name: n3.clone() })); } }
             }
         }
         CatalogKind::View => {
@@ -122,7 +129,7 @@ fn catalog_menu_items(
                     onclick: move |_| { menu.set(None); dispatch(state, Action::EditView(n2.clone())); } }
                 MenuSep {}
                 MenuItem { icon: icons::trash(14), label: "Drop view".to_string(), danger: true,
-                    onclick: move |_| { menu.set(None); dispatch(state, Action::RequestRemove { kind: RemoveKind::View, name: n3.clone() }); } }
+                    onclick: move |_| { menu.set(None); remove.set(Some(RemoveTarget { kind: RemoveKind::View, name: n3.clone() })); } }
             }
         }
         CatalogKind::Query => {
@@ -132,6 +139,54 @@ fn catalog_menu_items(
                     onclick: move |_| { menu.set(None); dispatch(state, Action::OpenSavedQuery(n1.clone())); } }
                 MenuItem { icon: icons::trash(14), label: "Delete query".to_string(), danger: true,
                     onclick: move |_| { menu.set(None); dispatch(state, Action::DeleteSavedQuery(n2.clone())); } }
+            }
+        }
+    }
+}
+
+/// The remove-confirmation dialog (drop table / view) — a sidebar-local `Dialog`.
+/// The `remove` signal owns open/close; confirming dispatches the actual drop.
+fn remove_dialog(
+    state: Signal<AppState>,
+    mut remove: Signal<Option<RemoveTarget>>,
+    t: RemoveTarget,
+) -> Element {
+    let (title, body, btn) = match t.kind {
+        RemoveKind::Table => (
+            "Drop table",
+            "Removes the table from the catalog. Files on disk are not deleted.",
+            "Drop table",
+        ),
+        RemoveKind::View => (
+            "Drop view",
+            "Drops the saved view. The tables it queries are unaffected.",
+            "Drop view",
+        ),
+    };
+    let kind = t.kind;
+    let name = t.name.clone();
+    let confirm_name = t.name;
+
+    rsx! {
+        Dialog { on_close: move |_| remove.set(None), card_class: "confirm".to_string(), z: 78,
+            div { class: "confirm-head",
+                div { class: "confirm-ico", {icons::trash(20)} }
+                div { style: "flex:1;min-width:0;",
+                    div { class: "confirm-title", "{title} " span { class: "nm", "{name}" } "?" }
+                    div { class: "confirm-body", "{body}" }
+                }
+            }
+            div { class: "confirm-foot",
+                button { class: "btn-ghost", onclick: move |_| remove.set(None), "Cancel" }
+                button {
+                    class: "btn-danger",
+                    onclick: move |_| {
+                        dispatch(state, Action::ConfirmRemove { kind, name: confirm_name.clone() });
+                        remove.set(None);
+                    },
+                    {icons::trash(14)}
+                    "{btn}"
+                }
             }
         }
     }

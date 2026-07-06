@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 
 use crate::engine::{self, Command};
 use crate::state::{
-    AppState, CatalogTable, CfgStatus, ConfigModal, LogKind, RegStatus, RemoveKind, RemoveTarget,
+    AppState, CatalogTable, CfgStatus, ConfigModal, LogKind, RegStatus, RemoveKind,
 };
 
 /// Open the Table Config modal for a new external table.
@@ -117,49 +117,30 @@ pub fn confirm_config(mut state: Signal<AppState>) {
 
 // ---- remove-confirmation flow ----
 
-/// Open the remove-confirmation dialog for a table or view.
-pub fn request_remove(mut state: Signal<AppState>, kind: RemoveKind, name: String) {
-    let mut s = state.write();
-    s.remove_target = Some(RemoveTarget { kind, name });
-    s.remove_open = true;
-}
-
-/// Dismiss the remove-confirmation dialog without removing anything.
-pub fn cancel_remove(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.remove_open = false;
-    s.remove_target = None;
-}
-
-/// Confirm the pending removal: drop the view / deregister the table, then close.
-/// The engine's `Deregistered` / `ViewChanged{dropped}` event logs the outcome.
-pub fn confirm_remove(mut state: Signal<AppState>) {
-    let target = state.read().remove_target.clone();
-    let Some(t) = target else {
-        return;
-    };
+/// Confirm a removal (from the sidebar's confirm dialog): drop the view /
+/// deregister the table. The engine's `Deregistered` / `ViewChanged{dropped}`
+/// event logs the outcome. The dialog's open state is a sidebar-local signal, so
+/// there's nothing to close here.
+pub fn confirm_remove(mut state: Signal<AppState>, kind: RemoveKind, name: String) {
     let tx = state.read().cmd_tx.clone();
-    match t.kind {
+    match kind {
         RemoveKind::Table => {
             if let Some(tx) = tx {
                 let _ = tx.send(Command::Deregister {
-                    table: t.name.clone(),
+                    table: name.clone(),
                 });
             }
-            state.write().project.tables.retain(|x| x.name != t.name);
+            state.write().project.tables.retain(|x| x.name != name);
         }
         RemoveKind::View => {
             if let Some(tx) = tx {
                 let _ = tx.send(Command::DropView {
-                    name: t.name.clone(),
+                    name: name.clone(),
                 });
             }
-            state.write().project.views.retain(|x| x.name != t.name);
+            state.write().project.views.retain(|x| x.name != name);
         }
     }
-    let mut s = state.write();
-    s.remove_open = false;
-    s.remove_target = None;
 }
 
 /// Load a view's SQL into the active tab (catalog menu → "Edit query").
