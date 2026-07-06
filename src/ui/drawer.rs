@@ -47,12 +47,28 @@ pub fn Drawer() -> Element {
         .map(|h| {
             let dot = if h.ok { "var(--green)" } else { "var(--red2)" };
             let meta = if h.ok { "var(--dim)" } else { "var(--red)" };
-            (h.id, h.sql.clone(), h.ts_label.clone(), h.ms, h.rows, dot, meta)
+            (
+                h.id,
+                h.sql.clone(),
+                h.ts_label.clone(),
+                h.ms,
+                h.rows,
+                dot,
+                meta,
+            )
         })
         .collect();
 
-    let hist_tab_cls = if tab == LogTab::History { "drawer-tab on" } else { "drawer-tab" };
-    let evt_tab_cls = if tab == LogTab::Events { "drawer-tab on" } else { "drawer-tab" };
+    let hist_tab_cls = if tab == LogTab::History {
+        "drawer-tab on"
+    } else {
+        "drawer-tab"
+    };
+    let evt_tab_cls = if tab == LogTab::Events {
+        "drawer-tab on"
+    } else {
+        "drawer-tab"
+    };
 
     rsx! {
         div { class: "ps-log", style: "height:{log_h}px;",

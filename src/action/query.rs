@@ -51,7 +51,9 @@ pub fn run(mut state: Signal<AppState>) {
                 });
             }
             tracing::warn!("blocked statement: {reason}");
-            state.write().set_status(LogKind::Warn, format!("Blocked · {reason}"));
+            state
+                .write()
+                .set_status(LogKind::Warn, format!("Blocked · {reason}"));
         }
         Decision::CaptureView { name, sql } => {
             let tx = state.read().cmd_tx.clone();
@@ -300,7 +302,10 @@ pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
         let (text, n) = {
             let id = state.read().active_tab_id();
             let runs = crate::runs::RUNS.peek();
-            match id.and_then(|id| runs.get(&id)).and_then(|run| run.result.as_ref()) {
+            match id
+                .and_then(|id| runs.get(&id))
+                .and_then(|run| run.result.as_ref())
+            {
                 Some(r) => (result_to_clipboard(r, &ex.clip_format), r.rows.len()),
                 None => (String::new(), 0),
             }
@@ -482,4 +487,3 @@ fn delim_char(d: &str) -> char {
         _ => ',',
     }
 }
-

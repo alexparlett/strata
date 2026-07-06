@@ -86,8 +86,16 @@ pub fn open_in_current(state: Signal<AppState>, path: PathBuf) {
         let s = state.read();
         (
             s.cmd_tx.clone(),
-            s.project.tables.iter().map(|t| t.name.clone()).collect::<Vec<String>>(),
-            s.project.views.iter().map(|v| v.name.clone()).collect::<Vec<String>>(),
+            s.project
+                .tables
+                .iter()
+                .map(|t| t.name.clone())
+                .collect::<Vec<String>>(),
+            s.project
+                .views
+                .iter()
+                .map(|v| v.name.clone())
+                .collect::<Vec<String>>(),
         )
     };
     if let Some(tx) = &tx {
@@ -216,7 +224,10 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
             let _ = tx.send(Command::Register(spec));
         }
         for (view_name, sql) in views {
-            let _ = tx.send(Command::CreateView { name: view_name, sql });
+            let _ = tx.send(Command::CreateView {
+                name: view_name,
+                sql,
+            });
         }
     }
 

@@ -47,7 +47,15 @@ pub(crate) fn ResultsGrid() -> Element {
     let cols: Vec<(String, String, &'static str, &'static str, bool)> = result
         .columns
         .iter()
-        .map(|c| (c.name.clone(), c.dtype.clone(), c.kind.text_class(), c.kind.cell_class(), c.kind.is_nested()))
+        .map(|c| {
+            (
+                c.name.clone(),
+                c.dtype.clone(),
+                c.kind.text_class(),
+                c.kind.cell_class(),
+                c.kind.is_nested(),
+            )
+        })
         .collect();
 
     // `result.rows` is already the current page (server-side snapshot). Number
@@ -57,7 +65,9 @@ pub(crate) fn ResultsGrid() -> Element {
         .rows
         .iter()
         .enumerate()
-        .filter(|(_, r)| search.is_empty() || r.iter().any(|c| c.text.to_lowercase().contains(&search)))
+        .filter(|(_, r)| {
+            search.is_empty() || r.iter().any(|c| c.text.to_lowercase().contains(&search))
+        })
         .map(|(i, r)| (base + i + 1, r.clone()))
         .collect();
 

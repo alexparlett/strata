@@ -57,16 +57,16 @@ impl Default for ConfigForm {
 pub struct ExportForm {
     pub format: String, // csv / json / parquet / arrow / clipboard
     pub name: String,
-    pub scope: String,          // "all" | "page"
-    pub csv_delim: String,      // comma | tab | semicolon | pipe
+    pub scope: String,     // "all" | "page"
+    pub csv_delim: String, // comma | tab | semicolon | pipe
     pub csv_header: bool,
-    pub csv_null: String,       // empty | null | nan
-    pub pq_compression: String, // zstd | snappy | gzip | brotli | lz4 | none
-    pub pq_level: u32,          // compression level (codec-dependent)
-    pub clip_format: String,    // markdown | tsv | csv | json
+    pub csv_null: String,            // empty | null | nan
+    pub pq_compression: String,      // zstd | snappy | gzip | brotli | lz4 | none
+    pub pq_level: u32,               // compression level (codec-dependent)
+    pub clip_format: String,         // markdown | tsv | csv | json
     pub partition_cols: Vec<String>, // ordered columns → Hive dir export
-    pub keep_partition: bool,   // keep partition columns inside the files
-    pub adv_open: bool,         // advanced-options disclosure
+    pub keep_partition: bool,        // keep partition columns inside the files
+    pub adv_open: bool,              // advanced-options disclosure
 }
 
 impl Default for ExportForm {
@@ -142,7 +142,6 @@ pub enum CatalogKind {
     View,
     Query,
 }
-
 
 /// A closed query tab, retained so it can be reopened (⇧⌘T). Capped at 20.
 pub struct ClosedTab {
@@ -364,12 +363,7 @@ impl AppState {
 
     /// Like `push_log`, but attaches a structured error so the Events-tab row
     /// becomes expandable (shows the message, code frame, and hint on click).
-    pub fn push_log_err(
-        &mut self,
-        kind: LogKind,
-        msg: impl Into<String>,
-        err: Option<QueryError>,
-    ) {
+    pub fn push_log_err(&mut self, kind: LogKind, msg: impl Into<String>, err: Option<QueryError>) {
         let id = self.next_log;
         self.next_log += 1;
         self.log.insert(
@@ -395,5 +389,10 @@ fn now_hms() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0)
         % 86_400;
-    format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
 }

@@ -26,9 +26,18 @@ impl PlanKind {
     /// don't contain "scan"/"source".
     pub fn classify(name: &str) -> Self {
         let s = name.to_ascii_lowercase();
-        let is_source = ["source", "scan", "parquet", "csv", "avro", "json", "arrow", "memoryexec"]
-            .iter()
-            .any(|k| s.contains(k));
+        let is_source = [
+            "source",
+            "scan",
+            "parquet",
+            "csv",
+            "avro",
+            "json",
+            "arrow",
+            "memoryexec",
+        ]
+        .iter()
+        .any(|k| s.contains(k));
         if is_source {
             PlanKind::Source
         } else if s.contains("join") {
@@ -139,7 +148,10 @@ pub fn is_explain(sql: &str) -> bool {
 /// `one_line()`) into (name, detail). No colon → all name.
 pub fn split_name_detail(line: &str) -> (String, String) {
     match line.find(':') {
-        Some(i) => (line[..i].trim().to_string(), line[i + 1..].trim().to_string()),
+        Some(i) => (
+            line[..i].trim().to_string(),
+            line[i + 1..].trim().to_string(),
+        ),
         None => (line.trim().to_string(), String::new()),
     }
 }

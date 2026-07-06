@@ -4,8 +4,8 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind, RemoveTarget};
-use crate::ui::icons;
 use crate::ui::components::{Dialog, MenuItem, MenuSep, Point, Popup};
+use crate::ui::icons;
 
 /// A catalog row's open context menu (self-contained sidebar state).
 #[derive(Clone)]
@@ -378,7 +378,14 @@ fn render_view(state: Signal<AppState>, mut menu: Signal<Option<CtxTarget>>, i: 
     let cols: Vec<(String, String, &'static str, &'static str)> = v
         .columns
         .iter()
-        .map(|c| (c.name.clone(), c.dtype.clone(), c.kind.dot_class(), c.kind.text_class()))
+        .map(|c| {
+            (
+                c.name.clone(),
+                c.dtype.clone(),
+                c.kind.dot_class(),
+                c.kind.text_class(),
+            )
+        })
         .collect();
     drop(s);
 

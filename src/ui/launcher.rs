@@ -60,7 +60,9 @@ pub fn LauncherRoot() -> Element {
     let f = filter.read().to_lowercase();
     let rows: Vec<(String, String)> = recents
         .iter()
-        .filter(|(n, p)| f.is_empty() || n.to_lowercase().contains(&f) || p.to_lowercase().contains(&f))
+        .filter(|(n, p)| {
+            f.is_empty() || n.to_lowercase().contains(&f) || p.to_lowercase().contains(&f)
+        })
         .cloned()
         .collect();
 

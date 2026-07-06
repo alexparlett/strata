@@ -38,8 +38,16 @@ pub(crate) fn PlanView() -> Element {
     };
     // Offer the Physical/Logical switch whenever both trees exist — incl. ANALYZE.
     let show_tabs = has_logical && has_physical;
-    let nodes = if eff_physical { &plan.physical } else { &plan.logical };
-    let raw_text = if eff_physical { &plan.physical_text } else { &plan.logical_text };
+    let nodes = if eff_physical {
+        &plan.physical
+    } else {
+        &plan.logical
+    };
+    let raw_text = if eff_physical {
+        &plan.physical_text
+    } else {
+        &plan.logical_text
+    };
     let max_ms = plan.max_ms();
 
     // Summary reflects the *active* tab: the logical tab never shows metrics, even
@@ -56,8 +64,16 @@ pub(crate) fn PlanView() -> Element {
         nodes.len()
     );
 
-    let phys_cls = if eff_physical { "plan-tab on" } else { "plan-tab" };
-    let log_cls = if !eff_physical { "plan-tab on" } else { "plan-tab" };
+    let phys_cls = if eff_physical {
+        "plan-tab on"
+    } else {
+        "plan-tab"
+    };
+    let log_cls = if !eff_physical {
+        "plan-tab on"
+    } else {
+        "plan-tab"
+    };
     let raw_label = if raw { "Tree" } else { "Raw" };
 
     rsx! {
@@ -99,12 +115,7 @@ pub(crate) fn PlanView() -> Element {
 
 /// One operator card in the plan tree, indented by depth and coloured by kind.
 /// A plain fn (called once per node) — no hooks, so no need for a component.
-fn plan_node_card(
-    n: &crate::plan::PlanNode,
-    idx: usize,
-    analyze: bool,
-    max_ms: f64,
-) -> Element {
+fn plan_node_card(n: &crate::plan::PlanNode, idx: usize, analyze: bool, max_ms: f64) -> Element {
     let color = n.kind.color();
     let indent = n.depth * 22;
     let has_metrics = analyze && n.ms_val.is_some();

@@ -202,7 +202,10 @@ mod tests {
 
     #[test]
     fn planning_table_missing() {
-        let e = QueryError::parse("Error during planning: table 'events' not found", "SELECT * FROM events");
+        let e = QueryError::parse(
+            "Error during planning: table 'events' not found",
+            "SELECT * FROM events",
+        );
         assert_eq!(e.etype, "Planning Error");
         assert!(e.message.contains("table 'events' not found"));
         assert!(e.loc.is_none());

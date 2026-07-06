@@ -2,12 +2,12 @@
 //! and calls controller actions in `crate::app`.
 
 pub mod components;
+pub mod drawer;
 pub mod errview;
 pub mod header;
 pub mod icons;
 pub mod inspector;
 pub mod launcher;
-pub mod drawer;
 pub mod modals;
 pub mod sidebar;
 pub mod statusbar;

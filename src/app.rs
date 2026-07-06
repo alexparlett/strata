@@ -60,7 +60,10 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // never does; that's reserved for the explicit "Close project" action.
     use_wry_event_handler(move |event, _| {
         use dioxus::desktop::tao::event::{Event as TaoEvent, WindowEvent};
-        if let TaoEvent::WindowEvent { window_id, event, .. } = event {
+        if let TaoEvent::WindowEvent {
+            window_id, event, ..
+        } = event
+        {
             if *window_id != win_id {
                 return;
             }
@@ -160,10 +163,7 @@ async fn drain_events(state: Signal<AppState>, mut evt_rx: UnboundedReceiver<Eve
     }
 }
 
-fn handle_key(
-    state: Signal<AppState>,
-    e: dioxus_core::Event<dioxus::events::KeyboardData>,
-) {
+fn handle_key(state: Signal<AppState>, e: dioxus_core::Event<dioxus::events::KeyboardData>) {
     let mods = e.modifiers();
     let meta = mods.meta() || mods.ctrl();
     let shift = mods.shift();
@@ -318,7 +318,11 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             match result {
                 Ok(plan) => {
                     let ops = plan.physical.len().max(plan.logical.len());
-                    let kind = if plan.analyze { "Plan with metrics" } else { "Query plan" };
+                    let kind = if plan.analyze {
+                        "Plan with metrics"
+                    } else {
+                        "Query plan"
+                    };
                     s.set_status(LogKind::Ok, format!("{kind} · {ops} operators"));
                     s.push_log(
                         LogKind::Ok,
@@ -363,24 +367,26 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 }
             }
         }
-        Event::PageResult { ws_id, page, result } => {
-            match result {
-                Ok(rows) => {
-                    crate::runs::edit_existing(ws_id, |run| {
-                        if let Some(res) = &mut run.result {
-                            res.rows = rows;
-                            res.page = page;
-                        }
-                        run.page = page;
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("page load failed: {e}");
-                    s.push_log(LogKind::Error, format!("Page load failed: {e}"));
-                    s.set_status(LogKind::Error, format!("Page load failed · {e}"));
-                }
+        Event::PageResult {
+            ws_id,
+            page,
+            result,
+        } => match result {
+            Ok(rows) => {
+                crate::runs::edit_existing(ws_id, |run| {
+                    if let Some(res) = &mut run.result {
+                        res.rows = rows;
+                        res.page = page;
+                    }
+                    run.page = page;
+                });
             }
-        }
+            Err(e) => {
+                tracing::error!("page load failed: {e}");
+                s.push_log(LogKind::Error, format!("Page load failed: {e}"));
+                s.set_status(LogKind::Error, format!("Page load failed · {e}"));
+            }
+        },
         Event::Registered {
             table,
             path,
@@ -524,4 +530,3 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
         crate::action::projects::autosave(state);
     }
 }
-

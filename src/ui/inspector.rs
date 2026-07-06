@@ -37,13 +37,17 @@ pub fn Inspector() -> Element {
         .find(|t| t.name == table)
         .and_then(|t| t.columns.iter().find(|c| c.name == colname).cloned())
         .or_else(|| {
-            s.project.views
+            s.project
+                .views
                 .iter()
                 .find(|v| v.name == table)
                 .and_then(|v| v.columns.iter().find(|c| c.name == colname).cloned())
         });
     let kind = colinfo.as_ref().map(|c| c.kind).unwrap_or(Kind::Str);
-    let dtype = colinfo.as_ref().map(|c| c.dtype.clone()).unwrap_or_default();
+    let dtype = colinfo
+        .as_ref()
+        .map(|c| c.dtype.clone())
+        .unwrap_or_default();
     let children = colinfo.map(|c| c.children).unwrap_or_default();
 
     // stats over the current result
@@ -53,7 +57,10 @@ pub fn Inspector() -> Element {
     let mut nums: Vec<f64> = Vec::new();
     let active_id = s.active_tab_id();
     let runs = crate::runs::RUNS.read();
-    if let Some(res) = active_id.and_then(|id| runs.get(&id)).and_then(|r| r.result.as_ref()) {
+    if let Some(res) = active_id
+        .and_then(|id| runs.get(&id))
+        .and_then(|r| r.result.as_ref())
+    {
         if let Some(ci) = res.columns.iter().position(|c| c.name == colname) {
             for r in &res.rows {
                 if let Some(cell) = r.get(ci) {
@@ -78,11 +85,7 @@ pub fn Inspector() -> Element {
     } else {
         0
     };
-    let fill = if rows > 0 {
-        100 - null_pct
-    } else {
-        100
-    };
+    let fill = if rows > 0 { 100 - null_pct } else { 100 };
     let is_num = kind == Kind::Num;
     let (min, max) = if nums.is_empty() {
         (0.0, 0.0)

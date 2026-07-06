@@ -36,7 +36,9 @@ pub fn Header() -> Element {
     let running = {
         let id = state.read().active_tab_id();
         let runs = crate::runs::RUNS.read();
-        id.and_then(|id| runs.get(&id)).map(|r| r.running).unwrap_or(false)
+        id.and_then(|id| runs.get(&id))
+            .map(|r| r.running)
+            .unwrap_or(false)
     };
 
     rsx! {

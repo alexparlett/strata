@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-
+use dioxus::html::completions::CompleteWithBraces::base;
 use serde::{Deserialize, Serialize};
 
 /// Light/dark grouping — used for the "Sync with OS" split and per-mode fallback.
@@ -78,24 +78,64 @@ impl ResolvedTheme {
 /// left painting a blank variable.
 pub const REQUIRED_TOKENS: &[&str] = &[
     // surfaces
-    "bg", "panel", "main", "elev", "elev2", "elev3",
+    "bg",
+    "panel",
+    "main",
+    "elev",
+    "elev2",
+    "elev3",
     // borders
-    "line", "line2", "line3", "line-hi",
+    "line",
+    "line2",
+    "line3",
+    "line-hi",
     // text
-    "text", "text2", "text3", "dim", "dim2", "dim3", "faint", "faint2",
+    "text",
+    "text2",
+    "text3",
+    "dim",
+    "dim2",
+    "dim3",
+    "faint",
+    "faint2",
     // accents / status
-    "accent", "accent-ink", "green", "purple", "red", "red2", "orange",
+    "accent",
+    "accent-ink",
+    "green",
+    "purple",
+    "red",
+    "red2",
+    "orange",
     // arrow-type colours
-    "t-str", "t-num", "t-bool", "t-ts", "t-struct", "t-list", "t-map",
+    "t-str",
+    "t-num",
+    "t-bool",
+    "t-ts",
+    "t-struct",
+    "t-list",
+    "t-map",
     // editor syntax
-    "syn-keyword", "syn-function", "syn-string", "syn-number", "syn-comment",
-    "syn-identifier", "syn-punct",
+    "syn-keyword",
+    "syn-function",
+    "syn-string",
+    "syn-number",
+    "syn-comment",
+    "syn-identifier",
+    "syn-punct",
     // results grid / cells
-    "cell", "cell-num", "cell-ts", "grid-line", "row-hover",
+    "cell",
+    "cell-num",
+    "cell-ts",
+    "grid-line",
+    "row-hover",
     // elevated surfaces (modals / popovers / footers) + accent tint + zebra
-    "surface", "surface-sunk", "accent-soft", "zebra",
+    "surface",
+    "surface-sunk",
+    "accent-soft",
+    "zebra",
     // fonts (map to the `--ui` / `--mono` CSS variables)
-    "ui", "mono",
+    "ui",
+    "mono",
 ];
 
 /// Tokens that carry a font stack rather than a colour (skip the hex check).
@@ -204,7 +244,11 @@ fn load_all() -> Vec<(Theme, Source)> {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false) {
+                if path
+                    .extension()
+                    .map(|e| e.eq_ignore_ascii_case("json"))
+                    .unwrap_or(false)
+                {
                     match std::fs::read_to_string(&path)
                         .ok()
                         .and_then(|s| serde_json::from_str::<Theme>(&s).ok())

@@ -24,7 +24,8 @@ pub(crate) fn Tabs() -> Element {
     let rename_draft = rename_val();
     let ws: Vec<(usize, String)> = state
         .read()
-        .project.workspaces
+        .project
+        .workspaces
         .iter()
         .enumerate()
         .map(|(i, w)| (i, w.name.clone()))

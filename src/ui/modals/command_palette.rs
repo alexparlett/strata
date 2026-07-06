@@ -147,4 +147,3 @@ pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
         }
     }
 }
-

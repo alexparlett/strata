@@ -75,7 +75,8 @@ fn ErrorView() -> Element {
     let err = {
         let id = state.read().active_tab_id();
         let runs = crate::runs::RUNS.read();
-        id.and_then(|id| runs.get(&id)).and_then(|r| r.query_error.clone())
+        id.and_then(|id| runs.get(&id))
+            .and_then(|r| r.query_error.clone())
     };
     let Some(err) = err else {
         return rsx! { div {} };
@@ -135,7 +136,8 @@ pub(crate) fn EmptyState() -> Element {
     let has_closed = !state.read().closed_tabs.is_empty();
     let saved: Vec<String> = state
         .read()
-        .project.saved_queries
+        .project
+        .saved_queries
         .iter()
         .take(4)
         .map(|q| q.name.clone())
@@ -191,7 +193,9 @@ fn ResultsToolbar() -> Element {
     let q = {
         let id = state.read().active_tab_id();
         let runs = crate::runs::RUNS.read();
-        id.and_then(|id| runs.get(&id)).map(|r| r.result_search.clone()).unwrap_or_default()
+        id.and_then(|id| runs.get(&id))
+            .map(|r| r.result_search.clone())
+            .unwrap_or_default()
     };
     rsx! {
         div { class: "results-tb",
@@ -218,8 +222,12 @@ fn Pager() -> Element {
         let runs = crate::runs::RUNS.read();
         let run = id.and_then(|id| runs.get(&id));
         (
-            run.and_then(|r| r.result.as_ref()).map(|r| r.total).unwrap_or(0),
-            run.and_then(|r| r.result.as_ref()).map(|r| r.elapsed_ms).unwrap_or(0),
+            run.and_then(|r| r.result.as_ref())
+                .map(|r| r.total)
+                .unwrap_or(0),
+            run.and_then(|r| r.result.as_ref())
+                .map(|r| r.elapsed_ms)
+                .unwrap_or(0),
             run.map(|r| r.page).unwrap_or(1),
             run.map(|r| r.page_size).unwrap_or(100),
             page_size_open,

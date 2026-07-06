@@ -11,14 +11,30 @@ use crate::ui::icons;
 
 /// Global shortcuts shown read-only in the Keymap category: (label, desc, keys).
 const KEYMAP: &[(&str, &str, &[&str])] = &[
-    ("Command palette", "Search tables, columns & commands", &["⌘", "K"]),
+    (
+        "Command palette",
+        "Search tables, columns & commands",
+        &["⌘", "K"],
+    ),
     ("New query tab", "Open a fresh SQL tab", &["⌘", "T"]),
-    ("Reopen closed tab", "Restore the last tab you closed", &["⇧", "⌘", "T"]),
+    (
+        "Reopen closed tab",
+        "Restore the last tab you closed",
+        &["⇧", "⌘", "T"],
+    ),
     ("Close tab", "Close the active query tab", &["⌘", "W"]),
-    ("Save query", "Save the active query to the project", &["⌘", "S"]),
+    (
+        "Save query",
+        "Save the active query to the project",
+        &["⌘", "S"],
+    ),
     ("Run query", "Execute the current SQL", &["⌘", "↵"]),
     ("Settings", "Open this panel", &["⌘", ","]),
-    ("Cycle windows", "Focus the next project window", &["⌘", "`"]),
+    (
+        "Cycle windows",
+        "Focus the next project window",
+        &["⌘", "`"],
+    ),
     ("Dismiss", "Close overlays & menus", &["Esc"]),
 ];
 
@@ -78,7 +94,11 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
         SettingsCat::System => "System",
         SettingsCat::Keymap => "Keymap",
     };
-    let grid_style = if sync_os { "opacity:.45;pointer-events:none;" } else { "" };
+    let grid_style = if sync_os {
+        "opacity:.45;pointer-events:none;"
+    } else {
+        ""
+    };
     let os_label = if os_dark { "dark" } else { "light" };
 
     rsx! {
@@ -261,7 +281,11 @@ fn theme_card(t: &crate::theme::ResolvedTheme, active_id: &str) -> Element {
         crate::theme::Source::User => "User",
         crate::theme::Source::Plugin => "Plugin",
     };
-    let ring = if active { "var(--accent)" } else { "var(--line2)" };
+    let ring = if active {
+        "var(--accent)"
+    } else {
+        "var(--line2)"
+    };
     let ringw = if active { "2px" } else { "1px" };
     rsx! {
         button {

@@ -86,9 +86,7 @@ fn decide_startup() -> Startup {
     }
     #[cfg(feature = "sample-data")]
     {
-        Startup::Project(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/sample/sample.strata").to_string(),
-        )
+        Startup::Project(concat!(env!("CARGO_MANIFEST_DIR"), "/sample/sample.strata").to_string())
     }
     #[cfg(not(feature = "sample-data"))]
     {
@@ -101,7 +99,7 @@ fn decide_startup() -> Startup {
 /// already installed.
 fn init_logging() {
     use tracing_subscriber::EnvFilter;
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn,strata=info"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,strata=info"));
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }

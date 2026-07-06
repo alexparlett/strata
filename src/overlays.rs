@@ -114,7 +114,10 @@ pub fn begin_register(pending: PendingTable) {
 /// register. Returns `None` for load-time registers (which stash nothing).
 pub fn take_pending_register(name: &str) -> Option<PendingTable> {
     let mut o = OVERLAYS.write();
-    if o.pending_register.as_ref().map_or(false, |p| p.name == name) {
+    if o.pending_register
+        .as_ref()
+        .map_or(false, |p| p.name == name)
+    {
         o.pending_register.take()
     } else {
         None

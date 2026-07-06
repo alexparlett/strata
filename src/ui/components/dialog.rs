@@ -19,11 +19,13 @@ pub fn Dialog(
     /// the `.overlay` base.
     z: Option<u32>,
     /// Top-align the card instead of centring it (command palette).
-    #[props(default)] top: bool,
+    #[props(default)]
+    top: bool,
     /// The body autofocuses its own field (e.g. a search input). The container then
     /// leaves focus to that field and relies on Esc bubbling up to the scrim's
     /// `onkeydown`; otherwise the scrim grabs focus on mount so Esc works.
-    #[props(default)] has_input: bool,
+    #[props(default)]
+    has_input: bool,
     children: Element,
 ) -> Element {
     let z = z.unwrap_or(60);

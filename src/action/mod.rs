@@ -10,10 +10,10 @@
 // Import `Signal` explicitly rather than glob-importing the dioxus prelude —
 // the prelude also exports an `Action`, which would collide with our enum and
 // break `use Action::*` in `dispatch`.
-use dioxus::prelude::Signal;
-use dioxus::signals::WritableExt;
 use crate::plan::PlanTab;
 use crate::state::{AppState, LogTab, RemoveKind, ResizeTarget};
+use dioxus::prelude::Signal;
+use dioxus::signals::WritableExt;
 
 // Domain handler modules. `panel` (the shared `resize_handle` component),
 // `projects` (window startup), and `catalog` (the modal's source scan,
@@ -65,16 +65,29 @@ pub enum Action {
     OpenConfigNew,
     OpenConfigEdit(String),
     RegisterTable(crate::state::ConfigForm),
-    ConfirmRemove { kind: RemoveKind, name: String },
+    ConfirmRemove {
+        kind: RemoveKind,
+        name: String,
+    },
     EditView(String),
     SetFilter(String),
     ToggleTableOpen(usize),
     ToggleViewOpen(usize),
-    SelectColumn { table: String, column: String },
+    SelectColumn {
+        table: String,
+        column: String,
+    },
 
     // ── panels ──
-    StartResize { target: ResizeTarget, origin: f64, start: f64 },
-    ResizeMove { x: f64, y: f64 },
+    StartResize {
+        target: ResizeTarget,
+        origin: f64,
+        start: f64,
+    },
+    ResizeMove {
+        x: f64,
+        y: f64,
+    },
     EndResize,
     ToggleSidebar,
     CloseInspector,

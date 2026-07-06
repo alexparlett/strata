@@ -234,4 +234,3 @@ pub fn paint_ns_background(r: f64, g: f64, b: f64) {
         let _: () = msg_send![ns_window, setBackgroundColor: color];
     }
 }
-

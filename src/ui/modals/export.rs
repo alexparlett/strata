@@ -34,7 +34,9 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
         let s = state.read();
         let id = s.active_tab_id();
         let runs = crate::runs::RUNS.read();
-        let run_res = id.and_then(|id| runs.get(&id)).and_then(|r| r.result.as_ref());
+        let run_res = id
+            .and_then(|id| runs.get(&id))
+            .and_then(|r| r.result.as_ref());
         let total = run_res.map(|r| r.total).unwrap_or(0);
         let cols: Vec<String> = run_res
             .map(|r| r.columns.iter().map(|c| c.name.clone()).collect())
@@ -207,7 +209,10 @@ fn export_preview(state: Signal<AppState>, ex: &ExportForm) -> (String, String) 
     let s = state.read();
     let id = s.active_tab_id();
     let runs = crate::runs::RUNS.read();
-    let Some(res) = id.and_then(|id| runs.get(&id)).and_then(|r| r.result.as_ref()) else {
+    let Some(res) = id
+        .and_then(|id| runs.get(&id))
+        .and_then(|r| r.result.as_ref())
+    else {
         return (String::new(), String::new());
     };
     // Effective format for preview (clipboard uses its sub-format).
@@ -223,7 +228,11 @@ fn export_preview(state: Signal<AppState>, ex: &ExportForm) -> (String, String) 
     if eff == "parquet" || eff == "arrow" {
         let mut out = format!(
             "{} · {} columns\n",
-            if eff == "parquet" { "Parquet" } else { "Arrow IPC" },
+            if eff == "parquet" {
+                "Parquet"
+            } else {
+                "Arrow IPC"
+            },
             res.columns.len()
         );
         for c in &res.columns {
@@ -245,7 +254,11 @@ fn export_preview(state: Signal<AppState>, ex: &ExportForm) -> (String, String) 
                         format!(
                             "\"{}\": {}",
                             cols.get(i).unwrap_or(&""),
-                            if c.null { "null".into() } else { format!("\"{}\"", c.text) }
+                            if c.null {
+                                "null".into()
+                            } else {
+                                format!("\"{}\"", c.text)
+                            }
                         )
                     })
                     .collect();
@@ -257,7 +270,16 @@ fn export_preview(state: Signal<AppState>, ex: &ExportForm) -> (String, String) 
             let mut out = format!("| {} |\n", cols.join(" | "));
             out.push_str(&format!("|{}\n", " --- |".repeat(cols.len())));
             for r in take {
-                let line: Vec<String> = r.iter().map(|c| if c.null { String::new() } else { c.text.clone() }).collect();
+                let line: Vec<String> = r
+                    .iter()
+                    .map(|c| {
+                        if c.null {
+                            String::new()
+                        } else {
+                            c.text.clone()
+                        }
+                    })
+                    .collect();
                 out.push_str(&format!("| {} |\n", line.join(" | ")));
             }
             out
@@ -267,7 +289,16 @@ fn export_preview(state: Signal<AppState>, ex: &ExportForm) -> (String, String) 
             let mut out = cols.join(&sep.to_string());
             out.push('\n');
             for r in take {
-                let line: Vec<String> = r.iter().map(|c| if c.null { String::new() } else { c.text.clone() }).collect();
+                let line: Vec<String> = r
+                    .iter()
+                    .map(|c| {
+                        if c.null {
+                            String::new()
+                        } else {
+                            c.text.clone()
+                        }
+                    })
+                    .collect();
                 out.push_str(&line.join(&sep.to_string()));
                 out.push('\n');
             }
@@ -291,7 +322,11 @@ fn estimate_size(res: &crate::engine::QueryOutput, eff: &str, ex: &ExportForm) -
         }
     }
     let avg = bytes / sample;
-    let total_rows = if ex.scope == "page" { res.rows.len() } else { res.total };
+    let total_rows = if ex.scope == "page" {
+        res.rows.len()
+    } else {
+        res.total
+    };
     let raw = avg.saturating_mul(total_rows);
     let factor = if eff == "parquet" {
         match ex.pq_compression.as_str() {
@@ -319,4 +354,3 @@ fn human_bytes(n: usize) -> String {
         format!("{:.1} GB", n / 1024.0 / 1024.0 / 1024.0)
     }
 }
-

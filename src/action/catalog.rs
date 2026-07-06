@@ -5,9 +5,7 @@
 use dioxus::prelude::*;
 
 use crate::engine::{self, Command};
-use crate::state::{
-    AppState, LogKind, RemoveKind,
-};
+use crate::state::{AppState, LogKind, RemoveKind};
 
 /// Open the Table Config modal for a new external table.
 pub fn open_config_new(_state: Signal<AppState>) {
@@ -82,9 +80,7 @@ pub fn confirm_remove(mut state: Signal<AppState>, kind: RemoveKind, name: Strin
         }
         RemoveKind::View => {
             if let Some(tx) = tx {
-                let _ = tx.send(Command::DropView {
-                    name: name.clone(),
-                });
+                let _ = tx.send(Command::DropView { name: name.clone() });
             }
             state.write().project.views.retain(|x| x.name != name);
         }
@@ -309,7 +305,11 @@ fn infer_type(v: &str) -> String {
         return "Date".into();
     }
     if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) {
-        return if v.len() > 9 { "Int64".into() } else { "Int32".into() };
+        return if v.len() > 9 {
+            "Int64".into()
+        } else {
+            "Int32".into()
+        };
     }
     "Utf8".into()
 }
@@ -381,7 +381,10 @@ pub fn scan_sources(paths: &[String], format: &str, base: Option<&Path>) -> Scan
     }
 
     let partition_keys = if all_dirs {
-        first_dir.as_deref().map(detect_partitions).unwrap_or_default()
+        first_dir
+            .as_deref()
+            .map(detect_partitions)
+            .unwrap_or_default()
     } else {
         vec![]
     };

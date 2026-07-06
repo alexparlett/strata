@@ -665,7 +665,7 @@ async fn run_explain(ctx: &SessionContext, sql: &str) -> Result<QueryPlan, Strin
         .sql_with_options(sql, opts)
         .await
         .map_err(|e| e.to_string())?;
-    
+
     // Unwrap `EXPLAIN`/`EXPLAIN ANALYZE` to the plan being explained.
     let (inner, analyze) = match df.logical_plan() {
         LogicalPlan::Explain(e) => (e.plan.as_ref(), false),

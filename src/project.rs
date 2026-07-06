@@ -195,7 +195,9 @@ impl Project {
         // ids get fresh sequential ones.
         let ids_ok = {
             let mut seen = std::collections::HashSet::new();
-            self.workspaces.iter().all(|w| w.id != 0 && seen.insert(w.id))
+            self.workspaces
+                .iter()
+                .all(|w| w.id != 0 && seen.insert(w.id))
         };
         if !ids_ok {
             for (i, w) in self.workspaces.iter_mut().enumerate() {
