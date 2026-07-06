@@ -129,7 +129,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
                 } else {
                     ui::sidebar::SidebarRail {}
                 }
-                ui::workspace::Workspace {}
+                ui::workbench::Workbench {}
                 if state.read().inspector_open {
                     {resize_handle(state, ResizeTarget::Inspector)}
                     ui::inspector::Inspector {}

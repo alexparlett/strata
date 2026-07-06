@@ -11,7 +11,7 @@ pub mod drawer;
 pub mod modals;
 pub mod sidebar;
 pub mod statusbar;
-pub mod workspace;
+pub mod workbench;
 
 use dioxus_code::{Language, Theme};
 
