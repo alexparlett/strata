@@ -51,7 +51,7 @@ pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
 /// place, *New window* / *Ask* spawn a window. The picker starts in the
 /// configured **default project directory** when one is set. Async, because a
 /// blocking `rfd` dialog would re-enter the renderer and panic.
-pub fn open_dir(mut state: Signal<AppState>) {
+pub fn open_dir(state: Signal<AppState>) {
     let (open_pref, default_dir) = {
         let s = state.read();
         (s.open_pref.clone(), s.default_project_dir.clone())
@@ -69,7 +69,6 @@ pub fn open_dir(mut state: Signal<AppState>) {
                 crate::window::spawn_project_window(path.to_string_lossy().into_owned());
             }
         }
-        state.write().project_menu_open = false;
     });
 }
 

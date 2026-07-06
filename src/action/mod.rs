@@ -85,7 +85,6 @@ pub enum Action {
     // ── overlays ──
     ToggleCmdk,
     CloseOverlays,
-    ToggleProjectMenu,
     // Bottom drawer (History + Events tabs).
     OpenHistory,
     OpenEvents,
@@ -248,7 +247,6 @@ fn run(state: Signal<AppState>, action: Action) {
         // overlays
         ToggleCmdk => overlay::toggle_cmdk(state),
         CloseOverlays => overlay::close_all(state),
-        ToggleProjectMenu => overlay::toggle_project_menu(state),
         OpenHistory => overlay::open_history(state),
         OpenEvents => overlay::open_events(state),
         SetLogTab(tab) => overlay::set_log_tab(state, tab),

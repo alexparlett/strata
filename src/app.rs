@@ -147,7 +147,6 @@ pub fn ProjectRoot(open_path: String) -> Element {
             ui::statusbar::StatusBar {}
 
             // ---- overlays / modals ----
-            if state.read().project_menu_open { ui::modals::ProjectMenu {} }
             if state.read().cmdk_open { ui::modals::CommandPalette {} }
             if state.read().config_open { ui::modals::ConfigModal {} }
             if state.read().export_open { ui::modals::ExportModal {} }

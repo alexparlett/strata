@@ -21,7 +21,6 @@ pub fn close_all(mut state: Signal<AppState>) {
     s.config_open = false;
     s.cell_open = false;
     s.settings_open = false;
-    s.project_menu_open = false;
     s.page_size_open = false;
     s.remove_open = false;
     s.remove_target = None;
@@ -130,12 +129,6 @@ pub fn open_cell(mut state: Signal<AppState>, name: String, type_label: String, 
     s.cell.type_label = type_label;
     s.cell.json = json;
     s.cell_open = true;
-}
-
-/// Toggle the header's project switcher menu.
-pub fn toggle_project_menu(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.project_menu_open = !s.project_menu_open;
 }
 
 /// Open the bottom drawer on the **History** tab (status-bar History button).

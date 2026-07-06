@@ -21,8 +21,19 @@ pub struct Point {
 /// positioned at `at`, and calls `on_close` on outside-click, right-click, or Esc.
 /// The card stops propagation so clicks inside don't dismiss it.
 #[component]
-pub fn Popup(on_close: EventHandler<()>, at: Point, children: Element) -> Element {
+pub fn Popup(
+    on_close: EventHandler<()>,
+    at: Point,
+    /// Card class — defaults to the context-menu look (`ctx-menu`). Pass e.g.
+    /// `"menu"` for the richer dropdown chrome.
+    card_class: Option<String>,
+    /// Fixed card width in px (else content-sized).
+    width: Option<u32>,
+    children: Element,
+) -> Element {
     let (x, y) = (at.x, at.y);
+    let card = card_class.unwrap_or_else(|| "ctx-menu".to_string());
+    let wstyle = width.map(|w| format!("width:{w}px;")).unwrap_or_default();
     rsx! {
         div {
             // Focusable so Escape is caught without a document-level listener.
@@ -31,6 +42,8 @@ pub fn Popup(on_close: EventHandler<()>, at: Point, children: Element) -> Elemen
             onmounted: move |e| {
                 spawn(async move { let _ = e.set_focus(true).await; });
             },
+            // Don't let a dismiss-click bubble to a drag-on-mousedown parent (header).
+            onmousedown: move |e| e.stop_propagation(),
             onclick: move |_| on_close.call(()),
             oncontextmenu: move |e| {
                 e.prevent_default();
@@ -43,8 +56,8 @@ pub fn Popup(on_close: EventHandler<()>, at: Point, children: Element) -> Elemen
                 }
             },
             div {
-                class: "ctx-menu",
-                style: "left:{x}px;top:{y}px;",
+                class: "{card}",
+                style: "position:fixed;left:{x}px;top:{y}px;{wstyle}",
                 onclick: move |e| e.stop_propagation(),
                 oncontextmenu: move |e| e.stop_propagation(),
                 {children}
