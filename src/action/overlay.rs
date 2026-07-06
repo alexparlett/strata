@@ -19,7 +19,6 @@ pub fn close_all(mut state: Signal<AppState>) {
     s.cmdk_open = false;
     s.export_open = false;
     s.config_open = false;
-    s.cell_open = false;
     s.settings_open = false;
     s.page_size_open = false;
     s.renaming_ws = None;
@@ -118,15 +117,6 @@ pub fn toggle_confirm_close(mut state: Signal<AppState>) {
 /// Open the export modal.
 pub fn open_export(mut state: Signal<AppState>) {
     state.write().export_open = true;
-}
-
-/// Open the nested-cell JSON popover for a struct/list/map cell.
-pub fn open_cell(mut state: Signal<AppState>, name: String, type_label: String, json: String) {
-    let mut s = state.write();
-    s.cell.name = name;
-    s.cell.type_label = type_label;
-    s.cell.json = json;
-    s.cell_open = true;
 }
 
 /// Open the bottom drawer on the **History** tab (status-bar History button).

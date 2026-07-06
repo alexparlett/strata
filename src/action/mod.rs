@@ -107,7 +107,6 @@ pub enum Action {
     SetDefaultProjectDir(String),
     SetOpenPref(String),
     ToggleConfirmClose,
-    OpenCellPopover { name: String, type_label: String, json: String },
 
     // ── project ──
     // RustRover-style: "Open" picks a directory and opens its `.psproj` or
@@ -268,11 +267,6 @@ fn run(state: Signal<AppState>, action: Action) {
         SetDefaultProjectDir(v) => overlay::set_default_project_dir(state, v),
         SetOpenPref(v) => overlay::set_open_pref(state, v),
         ToggleConfirmClose => overlay::toggle_confirm_close(state),
-        OpenCellPopover {
-            name,
-            type_label,
-            json,
-        } => overlay::open_cell(state, name, type_label, json),
 
         // project (open/recent spawn new windows; close closes this window)
         OpenProject => projects::open_dir(state),

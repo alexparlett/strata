@@ -7,19 +7,30 @@
 //! no hooks are called inside loops/branches (Dioxus rules of hooks).
 
 use dioxus::prelude::*;
+use dioxus_code::{Code, SourceCode};
 use dioxus_code_editor::CodeEditor;
 
 use crate::action::{dispatch, Action};
 use crate::engine::Cell;
 use crate::state::AppState;
 use crate::ui::icons;
-use crate::ui::components::{MenuItem, MenuSep, Point, Popup};
+use crate::ui::components::{Dialog, MenuItem, MenuSep, Point, Popup};
+
+/// A nested-cell view target (struct/list/map cell), shown in a `Dialog`.
+#[derive(Clone)]
+struct CellView {
+    name: String,
+    type_label: String,
+    json: String,
+}
 
 #[component]
 pub fn Workspace() -> Element {
     let state = use_context::<Signal<AppState>>();
     // Self-contained: the tab context menu lives here, not in `AppState`.
     let tab_menu = use_signal(|| None::<(usize, Point)>);
+    // The nested-cell view is likewise workspace-local, opened from a grid cell.
+    let cell_view = use_signal(|| None::<CellView>);
     let has_ws = !state.read().project.workspaces.is_empty();
     rsx! {
         main { class: "ps-main",
@@ -27,9 +38,12 @@ pub fn Workspace() -> Element {
             if has_ws {
                 {editor(state)}
                 {crate::action::panel::resize_handle(state, crate::state::ResizeTarget::Editor)}
-                {results_area(state)}
+                {results_area(state, cell_view)}
             } else {
                 {empty_state(state)}
+            }
+            if let Some(c) = cell_view() {
+                {cell_dialog(cell_view, c)}
             }
         }
     }
@@ -39,7 +53,7 @@ pub fn Workspace() -> Element {
 /// query runs, the structured error view, the grid (with its search/export
 /// toolbar + pager), or the "no results yet" empty state. The toolbar and pager
 /// only appear alongside a grid.
-fn results_area(state: Signal<AppState>) -> Element {
+fn results_area(state: Signal<AppState>, cell_view: Signal<Option<CellView>>) -> Element {
     let (running, has_err, has_plan, has_result) = {
         let s = state.read();
         (
@@ -58,7 +72,7 @@ fn results_area(state: Signal<AppState>) -> Element {
     } else if has_result {
         rsx! {
             {results_toolbar(state)}
-            {results_grid(state)}
+            {results_grid(state, cell_view)}
             {pager(state)}
         }
     } else {
@@ -505,7 +519,7 @@ fn results_toolbar(state: Signal<AppState>) -> Element {
     }
 }
 
-fn results_grid(state: Signal<AppState>) -> Element {
+fn results_grid(state: Signal<AppState>, cell_view: Signal<Option<CellView>>) -> Element {
     let s = state.read();
     let zebra = s.zebra;
     let type_color = s.type_color_cells;
@@ -551,7 +565,7 @@ fn results_grid(state: Signal<AppState>) -> Element {
                     div { class: if zebra && rownum % 2 == 0 { "grid-row zebra" } else { "grid-row" },
                         div { class: "rnum", "{rownum}" }
                         for (ci, cell) in cells.iter().enumerate() {
-                            {render_cell(state, cols.get(ci).cloned(), cell.clone(), type_color)}
+                            {render_cell(cols.get(ci).cloned(), cell.clone(), cell_view, type_color)}
                         }
                     }
                 }
@@ -561,9 +575,9 @@ fn results_grid(state: Signal<AppState>) -> Element {
 }
 
 fn render_cell(
-    state: Signal<AppState>,
     col: Option<(String, String, &'static str, &'static str, bool)>,
     cell: Cell,
+    mut cell_view: Signal<Option<CellView>>,
     type_color: bool,
 ) -> Element {
     let (name, ty, cell_cls, nested) = match col {
@@ -585,14 +599,35 @@ fn render_cell(
             style: "width:150px;",
             onclick: move |_| {
                 if nested {
-                    dispatch(state, Action::OpenCellPopover {
+                    cell_view.set(Some(CellView {
                         name: name.clone(),
                         type_label: ty.clone(),
                         json: text.clone(),
-                    });
+                    }));
                 }
             },
             "{cell.text}"
+        }
+    }
+}
+
+/// The nested-cell JSON view (struct/list/map cell) — a workspace-local `Dialog`
+/// with a static highlighted `Code` body. The `cell_view` signal owns open/close.
+fn cell_dialog(mut cell_view: Signal<Option<CellView>>, c: CellView) -> Element {
+    rsx! {
+        Dialog { on_close: move |_| cell_view.set(None), card_class: "modal cell-modal".to_string(), z: 64,
+            div { class: "row", style: "gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);",
+                span { class: "mono", style: "font-weight:600;font-size:13px;", "{c.name}" }
+                span { class: "mono", style: "font-size:10px;color:var(--t-list);background:var(--accent-soft);padding:2px 7px;border-radius:5px;", "{c.type_label}" }
+                div { class: "spacer" }
+                button { class: "icon-btn plain", style: "width:28px;height:28px;", onclick: move |_| cell_view.set(None), {icons::close(13)} }
+            }
+            div { style: "overflow:auto;max-height:70vh;",
+                Code {
+                    src: SourceCode::new(crate::ui::lang("json"), c.json.clone()),
+                    theme: crate::ui::code_theme(),
+                }
+            }
         }
     }
 }

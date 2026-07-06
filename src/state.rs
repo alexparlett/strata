@@ -99,13 +99,6 @@ impl Default for ExportModal {
     }
 }
 
-#[derive(Default)]
-pub struct CellPopover {
-    pub name: String,
-    pub type_label: String,
-    pub json: String,
-}
-
 /// Severity of an entry in the Events tab. `Run` (a query started) and `Warn`
 /// (e.g. a cancelled query) join the ok/info/error kinds.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -264,7 +257,6 @@ pub struct AppState {
     pub cmdk_active: usize,
     pub export_open: bool,
     pub config_open: bool,
-    pub cell_open: bool,
     pub settings_open: bool,
     pub settings_cat: SettingsCat,
     // --- settings prefs (persisted to app config) ---
@@ -281,7 +273,6 @@ pub struct AppState {
     // modal sub-state
     pub cfg: ConfigModal,
     pub export: ExportModal,
-    pub cell: CellPopover,
     // bottom drawer (History + Events tabs)
     pub log: Vec<LogEvent>,
     pub log_open: bool,
@@ -423,7 +414,6 @@ impl AppState {
             cmdk_active: 0,
             export_open: false,
             config_open: false,
-            cell_open: false,
             settings_open: false,
             settings_cat: SettingsCat::Appearance,
             sync_os: false,
@@ -435,7 +425,6 @@ impl AppState {
             confirm_close_running: true,
             cfg: ConfigModal::default(),
             export: ExportModal::default(),
-            cell: CellPopover::default(),
             log: Vec::new(),
             log_open: false,
             log_tab: LogTab::History,

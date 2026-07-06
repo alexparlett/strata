@@ -151,10 +151,9 @@ pub fn ProjectRoot(open_path: String) -> Element {
             if state.read().config_open { ui::modals::ConfigModal {} }
             if state.read().export_open { ui::modals::ExportModal {} }
             if state.read().settings_open { ui::modals::SettingsModal {} }
-            if state.read().cell_open { ui::modals::CellPopover {} }
-            // Catalog + tab context menus and the remove-confirm dialog are now
-            // self-contained containers rendered by the sidebar / workspace (see
-            // `ui::components`).
+            // Catalog + tab context menus, the remove-confirm dialog, and the
+            // nested-cell view are now self-contained containers rendered by the
+            // sidebar / workspace (see `ui::components`).
         }
     }
 }
