@@ -22,11 +22,11 @@ pub struct RecentProject {
     pub last_opened: u64,
 }
 
-/// Machine-global configuration + settings prefs.
+/// The user's settings. Persisted **flat** inside [`AppConfig`] via
+/// `#[serde(flatten)]` (so existing config files stay compatible), and held at
+/// runtime in the per-window [`crate::settings`] store.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct AppConfig {
-    #[serde(default)]
-    pub recent_projects: Vec<RecentProject>,
+pub struct Settings {
     /// Active theme id (see `crate::theme`). Persists across sessions/windows.
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -61,10 +61,9 @@ fn default_open_pref() -> String {
     "ask".to_string()
 }
 
-impl Default for AppConfig {
+impl Default for Settings {
     fn default() -> Self {
         Self {
-            recent_projects: Vec::new(),
             theme: default_theme(),
             sync_os: false,
             density_compact: false,
@@ -76,6 +75,15 @@ impl Default for AppConfig {
             confirm_close_running: true,
         }
     }
+}
+
+/// Machine-global configuration: the recent-projects list + the user [`Settings`].
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct AppConfig {
+    #[serde(default)]
+    pub recent_projects: Vec<RecentProject>,
+    #[serde(flatten)]
+    pub settings: Settings,
 }
 
 impl AppConfig {

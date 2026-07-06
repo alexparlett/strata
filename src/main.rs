@@ -16,6 +16,7 @@ mod overlays;
 mod plan;
 mod project;
 mod query_error;
+mod settings;
 mod state;
 mod theme;
 mod ui;
@@ -36,13 +37,25 @@ fn main() {
     // Clear any snapshots left over from a previous run — once, before any engine
     // window exists. At runtime each window's engine only cleans its own scope.
     engine::purge_snapshot_root();
-    let startup = decide_startup();
-    // The window chrome (transparent macOS titlebar, child-window webview, dark
-    // background) + the project's saved size/position live in
-    // `window::project_window_config_for`. See wry#1056 for `with_as_child_window`.
-    let cfg = window::project_window_config_for(&startup);
-    let _ = STARTUP_PATH.set(startup);
-    LaunchBuilder::new().with_cfg(cfg).launch(root_entry);
+    match decide_startup() {
+        // The window chrome (transparent macOS titlebar, child-window webview,
+        // dark background) + the project's saved size/position live in
+        // `window::project_window_config_for`. See wry#1056 for
+        // `with_as_child_window`.
+        Startup::Project(path) => {
+            let cfg = window::project_window_config_for(&path);
+            let _ = STARTUP_PATH.set(path);
+            LaunchBuilder::new().with_cfg(cfg).launch(root_entry);
+        }
+        // Nothing to reopen → open the launcher as the first window (same window
+        // shown when "Close project" closes the last project window).
+        Startup::Launcher => {
+            let cfg = window::launcher_window_config();
+            LaunchBuilder::new()
+                .with_cfg(cfg)
+                .launch(ui::launcher::LauncherRoot);
+        }
+    }
 }
 
 /// Root of the first window: a project window carrying [`STARTUP_PATH`].
@@ -51,24 +64,34 @@ fn root_entry() -> Element {
     rsx! { app::ProjectRoot { open_path } }
 }
 
-/// Which project the app opens on launch: the most-recent one, else (dev builds)
-/// the bundled sample, else an empty untitled project. The launcher is never the
-/// startup window — it only appears when "Close project" closes the last window.
-fn decide_startup() -> String {
+/// What the app opens on launch.
+enum Startup {
+    /// A project window for this `.strata` path (recent, or the dev sample).
+    Project(String),
+    /// The welcome/launcher window (no recent to reopen, non-dev build).
+    Launcher,
+}
+
+/// Which window the app opens on launch: the most-recent project (when
+/// "Reopen last project on startup" is on), else — in dev builds — the bundled
+/// sample project, else the launcher.
+fn decide_startup() -> Startup {
     let cfg = config::load();
     // "Reopen last project on startup" (System settings) gates reopening recents.
-    if cfg.reopen_on_startup {
+    if cfg.settings.reopen_on_startup {
         if let Some(recent) = cfg.most_recent() {
-            return recent.path.clone();
+            return Startup::Project(recent.path.clone());
         }
     }
     #[cfg(feature = "sample-data")]
     {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/sample/sample.strata").to_string()
+        Startup::Project(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/sample/sample.strata").to_string(),
+        )
     }
     #[cfg(not(feature = "sample-data"))]
     {
-        String::new()
+        Startup::Launcher
     }
 }
 

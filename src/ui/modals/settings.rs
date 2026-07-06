@@ -1,8 +1,7 @@
 //! Settings modal: Appearance / Data display / System / Keymap.
 use dioxus::prelude::*;
 
-use crate::action::{dispatch, Action};
-use crate::state::{AppState, SettingsCat};
+use crate::state::SettingsCat;
 use crate::ui::components::{WinGeom, Window};
 use crate::ui::icons;
 
@@ -51,14 +50,15 @@ pub fn SettingsHost() -> Element {
 
 #[component]
 pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
-    let state = use_context::<Signal<AppState>>();
     // The active category is transient UI state, local to this window.
     let mut cat_sig = use_signal(|| SettingsCat::Appearance);
     let cat = cat_sig();
-    let s = state.read();
-    let theme_id = s.theme_id.clone();
+    // Prefs come from the per-window settings store (read reactively); OS
+    // appearance from its runtime signal. The mutators below call
+    // `crate::settings::*`, which write the store *and* persist to the app config.
+    let s = crate::settings::SETTINGS.read();
+    let theme_id = s.theme.clone();
     let sync_os = s.sync_os;
-    let os_dark = s.os_dark;
     let density_compact = s.density_compact;
     let zebra = s.zebra;
     let row_limit = s.row_limit;
@@ -67,6 +67,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
     let open_pref = s.open_pref.clone();
     let confirm_close = s.confirm_close_running;
     drop(s);
+    let os_dark = *crate::settings::OS_DARK.read();
 
     // When Sync-with-OS is on, the effective theme follows the system appearance
     // and the grid is disabled.
@@ -118,7 +119,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                         match cat {
                             SettingsCat::Appearance => rsx! {
                                 div { class: "settings-row", style: "cursor:pointer;margin-bottom:20px;",
-                                    onclick: move |_| dispatch(state, Action::ToggleSyncOs),
+                                    onclick: move |_| crate::settings::toggle_sync_os(),
                                     div { style: "flex:1;",
                                         div { style: "font:600 13px var(--ui);color:var(--text);", "Sync with OS" }
                                         div { style: "font-size:11.5px;color:var(--dim2);margin-top:3px;", "Match your system light/dark appearance automatically." }
@@ -132,7 +133,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                 }
                                 div { class: "theme-grid", style: "{grid_style}",
                                     for t in crate::theme::registry() {
-                                        {theme_card(state, t, &active_id)}
+                                        {theme_card(t, &active_id)}
                                     }
                                 }
                             },
@@ -142,7 +143,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                     for (val, label) in [(false, "Comfortable"), (true, "Compact")] {
                                         button {
                                             class: if density_compact == val { "seg-btn on" } else { "seg-btn" },
-                                            onclick: move |_| dispatch(state, Action::SetDensity(val)),
+                                            onclick: move |_| crate::settings::set_density(val),
                                             "{label}"
                                         }
                                     }
@@ -150,7 +151,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                 div { style: "font-size:11.5px;color:var(--dim2);margin-top:10px;", "Controls row height in the results grid and catalog." }
                                 div { class: "settings-divider", style: "margin:22px 0;" }
                                 div { class: "settings-row", style: "cursor:pointer;",
-                                    onclick: move |_| dispatch(state, Action::ToggleZebra),
+                                    onclick: move |_| crate::settings::toggle_zebra(),
                                     div { style: "flex:1;",
                                         div { style: "font:600 13px var(--ui);color:var(--text);", "Alternating row colours" }
                                         div { style: "font-size:11.5px;color:var(--dim2);margin-top:3px;", "Shade every other row in the results grid for easier scanning." }
@@ -164,7 +165,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                     for (val, label) in [(100usize, "100"), (1000, "1,000"), (10000, "10,000"), (0, "No limit")] {
                                         button {
                                             class: if row_limit == val { "seg-btn on" } else { "seg-btn" },
-                                            onclick: move |_| dispatch(state, Action::SetRowLimit(val)),
+                                            onclick: move |_| crate::settings::set_row_limit(val),
                                             "{label}"
                                         }
                                     }
@@ -173,7 +174,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                             SettingsCat::System => rsx! {
                                 div { class: "settings-sublabel", "STARTUP" }
                                 div { class: "settings-row", style: "cursor:pointer;",
-                                    onclick: move |_| dispatch(state, Action::ToggleReopenStartup),
+                                    onclick: move |_| crate::settings::toggle_reopen_startup(),
                                     div { style: "flex:1;",
                                         div { style: "font:600 13px var(--ui);color:var(--text);", "Reopen last project on startup" }
                                         div { style: "font-size:11.5px;color:var(--dim2);margin-top:3px;", "Jump straight back into the project you had open." }
@@ -186,12 +187,12 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                 div { style: "font-size:11.5px;color:var(--dim2);margin-bottom:10px;", "Preselected in the Open dialog. Leave blank to use your last location." }
                                 div { class: "row", style: "gap:8px;margin-bottom:22px;",
                                     input { class: "text-input", style: "flex:1;font-family:var(--mono);", value: "{default_dir}", placeholder: "~/data",
-                                        onchange: move |e| dispatch(state, Action::SetDefaultProjectDir(e.value())) }
+                                        onchange: move |e| crate::settings::set_default_project_dir(e.value()) }
                                     button { class: "mini-btn", style: "width:38px;height:34px;", title: "Choose…",
                                         onclick: move |_| { spawn(async move {
                                             if let Some(h) = rfd::AsyncFileDialog::new().pick_folder().await {
                                                 let p = h.path().to_string_lossy().into_owned();
-                                                dispatch(state, Action::SetDefaultProjectDir(p));
+                                                crate::settings::set_default_project_dir(p);
                                             }
                                         }); },
                                         {icons::folder(15)}
@@ -203,7 +204,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                     for (val, label) in [("ask", "Ask every time"), ("this", "This window"), ("new", "New window")] {
                                         button {
                                             class: if open_pref == val { "seg-btn on" } else { "seg-btn" },
-                                            onclick: move |_| dispatch(state, Action::SetOpenPref(val.to_string())),
+                                            onclick: move |_| crate::settings::set_open_pref(val.to_string()),
                                             "{label}"
                                         }
                                     }
@@ -211,7 +212,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                 div { class: "settings-divider", style: "margin:22px 0;" }
                                 div { class: "settings-sublabel", "SAFETY" }
                                 div { class: "settings-row", style: "cursor:pointer;",
-                                    onclick: move |_| dispatch(state, Action::ToggleConfirmClose),
+                                    onclick: move |_| crate::settings::toggle_confirm_close(),
                                     div { style: "flex:1;",
                                         div { style: "font:600 13px var(--ui);color:var(--text);", "Confirm before closing a window with a running query" }
                                         div { style: "font-size:11.5px;color:var(--dim2);margin-top:3px;", "Asks only when a scan is in flight — silent otherwise." }
@@ -246,7 +247,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
 
 /// One theme preview card in the Appearance grid — a mini mockup rendered in the
 /// theme's own colours, plus name / source badge / active check.
-fn theme_card(state: Signal<AppState>, t: &crate::theme::ResolvedTheme, active_id: &str) -> Element {
+fn theme_card(t: &crate::theme::ResolvedTheme, active_id: &str) -> Element {
     let id = t.id.clone();
     let name = t.name.clone();
     let active = t.id == active_id;
@@ -266,7 +267,7 @@ fn theme_card(state: Signal<AppState>, t: &crate::theme::ResolvedTheme, active_i
         button {
             class: "theme-card",
             style: "border:{ringw} solid {ring};",
-            onclick: move |_| dispatch(state, Action::SetTheme(id.clone())),
+            onclick: move |_| crate::settings::set_theme(id.clone()),
             // mini mockup
             div { style: "height:78px;display:flex;flex-direction:column;background:{p0};",
                 div { style: "height:16px;background:{p1};display:flex;align-items:center;padding:0 8px;gap:4px;",

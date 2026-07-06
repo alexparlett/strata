@@ -1,5 +1,6 @@
-//! Overlay / menu action handlers: the global overlay-close plus the settings /
-//! export / drawer handlers. Called from `action::dispatch`.
+//! Overlay / menu action handlers: the global overlay-close plus the drawer
+//! handlers. Called from `action::dispatch`. (Settings prefs no longer live here —
+//! the Settings modal writes the `crate::settings` store directly.)
 
 use dioxus::prelude::*;
 
@@ -13,86 +14,6 @@ pub fn close_all(mut state: Signal<AppState>) {
     let mut s = state.write();
     s.page_size_open = false;
     s.renaming_ws = None;
-}
-
-/// Switch the active theme and persist it to the machine-global app config, so
-/// the choice survives a restart and applies to new windows + the launcher.
-pub fn set_theme(mut state: Signal<AppState>, id: String) {
-    state.write().theme_id = id.clone();
-    let mut cfg = crate::config::load();
-    cfg.theme = id;
-    crate::config::save(&cfg);
-}
-
-/// Persist all Settings-page prefs to the machine-global app config (recent
-/// projects are preserved). Called by every settings-pref handler below.
-pub fn save_prefs(state: Signal<AppState>) {
-    let s = state.read();
-    let mut cfg = crate::config::load();
-    cfg.theme = s.theme_id.clone();
-    cfg.sync_os = s.sync_os;
-    cfg.density_compact = s.density_compact;
-    cfg.zebra = s.zebra;
-    cfg.row_limit = s.row_limit;
-    cfg.reopen_on_startup = s.reopen_on_startup;
-    cfg.default_project_dir = s.default_project_dir.clone();
-    cfg.open_pref = s.open_pref.clone();
-    cfg.confirm_close_running = s.confirm_close_running;
-    crate::config::save(&cfg);
-}
-
-// ---- settings-page prefs (each mutates state, then persists) ----
-
-pub fn toggle_sync_os(mut state: Signal<AppState>) {
-    {
-        let mut s = state.write();
-        s.sync_os = !s.sync_os;
-    }
-    save_prefs(state);
-}
-
-pub fn set_density(mut state: Signal<AppState>, compact: bool) {
-    state.write().density_compact = compact;
-    save_prefs(state);
-}
-
-pub fn toggle_zebra(mut state: Signal<AppState>) {
-    {
-        let mut s = state.write();
-        s.zebra = !s.zebra;
-    }
-    save_prefs(state);
-}
-
-pub fn set_row_limit(mut state: Signal<AppState>, limit: usize) {
-    state.write().row_limit = limit;
-    save_prefs(state);
-}
-
-pub fn toggle_reopen_startup(mut state: Signal<AppState>) {
-    {
-        let mut s = state.write();
-        s.reopen_on_startup = !s.reopen_on_startup;
-    }
-    save_prefs(state);
-}
-
-pub fn set_default_project_dir(mut state: Signal<AppState>, dir: String) {
-    state.write().default_project_dir = dir;
-    save_prefs(state);
-}
-
-pub fn set_open_pref(mut state: Signal<AppState>, pref: String) {
-    state.write().open_pref = pref;
-    save_prefs(state);
-}
-
-pub fn toggle_confirm_close(mut state: Signal<AppState>) {
-    {
-        let mut s = state.write();
-        s.confirm_close_running = !s.confirm_close_running;
-    }
-    save_prefs(state);
 }
 
 /// Open the bottom drawer on the **History** tab (status-bar History button).

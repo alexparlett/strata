@@ -195,11 +195,8 @@ pub struct AppState {
     pub cmd_tx: Option<UnboundedSender<Command>>,
     // the open project (catalog, workspaces, history — the persisted part)
     pub project: Project,
-    // theme (global prefs)
-    pub theme_id: String,
+    // theme (runtime only; the persisted settings live in the `settings` store)
     pub accent: String,
-    pub density_compact: bool,
-    pub zebra: bool,
     pub type_color_cells: bool,
     // layout
     pub sidebar_open: bool,
@@ -241,17 +238,6 @@ pub struct AppState {
     // must stay in step with `status_text` (set both via `set_status`).
     pub status_text: String,
     pub status_kind: LogKind,
-    // --- settings prefs (persisted to app config) ---
-    pub sync_os: bool,
-    /// System is in dark mode (detected once at startup; drives Sync-with-OS).
-    pub os_dark: bool,
-    /// Default LIMIT injected into new query tabs (0 = no limit).
-    pub row_limit: usize,
-    pub reopen_on_startup: bool,
-    pub default_project_dir: String,
-    /// Where "Open" targets when a window already has a project: ask / this / new.
-    pub open_pref: String,
-    pub confirm_close_running: bool,
     // bottom drawer (History + Events tabs)
     pub log: Vec<LogEvent>,
     pub log_open: bool,
@@ -360,10 +346,7 @@ impl AppState {
         AppState {
             cmd_tx: None,
             project: Project::empty(),
-            theme_id: crate::theme::DEFAULT_THEME.into(),
             accent: "#4cc6ff".into(),
-            density_compact: false,
-            zebra: true,
             type_color_cells: true,
             sidebar_open: true,
             inspector_open: true,
@@ -388,13 +371,6 @@ impl AppState {
             selected_col: None,
             status_text: "Ready · DataFusion 43 · open a project or add a table to begin".into(),
             status_kind: LogKind::Ok,
-            sync_os: false,
-            os_dark: true,
-            row_limit: 100,
-            reopen_on_startup: true,
-            default_project_dir: String::new(),
-            open_pref: "ask".into(),
-            confirm_close_running: true,
             log: Vec::new(),
             log_open: false,
             log_tab: LogTab::History,

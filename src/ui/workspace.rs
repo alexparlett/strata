@@ -521,7 +521,7 @@ fn results_toolbar(state: Signal<AppState>) -> Element {
 
 fn results_grid(state: Signal<AppState>, cell_view: Signal<Option<CellView>>) -> Element {
     let s = state.read();
-    let zebra = s.zebra;
+    let zebra = crate::settings::SETTINGS.read().zebra;
     let type_color = s.type_color_cells;
     let page = s.page;
     let page_size = s.page_size;

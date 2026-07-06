@@ -48,7 +48,11 @@ pub fn LauncherRoot() -> Element {
     // project window does.
     let theme_css = use_hook(|| {
         let cfg = crate::config::load();
-        let id = crate::theme::effective_id(&cfg.theme, cfg.sync_os, crate::theme::os_is_dark());
+        let id = crate::theme::effective_id(
+            &cfg.settings.theme,
+            cfg.settings.sync_os,
+            crate::theme::os_is_dark(),
+        );
         crate::theme::css_for(&id)
     });
 

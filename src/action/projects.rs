@@ -53,7 +53,7 @@ pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
 /// blocking `rfd` dialog would re-enter the renderer and panic.
 pub fn open_dir(state: Signal<AppState>) {
     let (open_pref, default_dir) = {
-        let s = state.read();
+        let s = crate::settings::SETTINGS.peek();
         (s.open_pref.clone(), s.default_project_dir.clone())
     };
     spawn(async move {

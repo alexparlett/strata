@@ -93,16 +93,8 @@ pub enum Action {
     ToggleLogRow(u64),
     ToggleLogHeight,
     RunExport(crate::state::ExportForm),
-    // Settings prefs (persist to app config).
-    SetTheme(String),
-    ToggleSyncOs,
-    SetDensity(bool),
-    ToggleZebra,
-    SetRowLimit(usize),
-    ToggleReopenStartup,
-    SetDefaultProjectDir(String),
-    SetOpenPref(String),
-    ToggleConfirmClose,
+    // Settings prefs now write the `crate::settings` store directly from the
+    // Settings modal — they are no longer dispatched through here.
 
     // ── project ──
     // RustRover-style: "Open" picks a directory and opens its `.psproj` or
@@ -250,15 +242,6 @@ fn run(state: Signal<AppState>, action: Action) {
         ToggleLogRow(id) => overlay::toggle_log_row(state, id),
         ToggleLogHeight => overlay::toggle_log_height(state),
         RunExport(opts) => query::run_export(state, opts),
-        SetTheme(id) => overlay::set_theme(state, id),
-        ToggleSyncOs => overlay::toggle_sync_os(state),
-        SetDensity(v) => overlay::set_density(state, v),
-        ToggleZebra => overlay::toggle_zebra(state),
-        SetRowLimit(v) => overlay::set_row_limit(state, v),
-        ToggleReopenStartup => overlay::toggle_reopen_startup(state),
-        SetDefaultProjectDir(v) => overlay::set_default_project_dir(state, v),
-        SetOpenPref(v) => overlay::set_open_pref(state, v),
-        ToggleConfirmClose => overlay::toggle_confirm_close(state),
 
         // project (open/recent spawn new windows; close closes this window)
         OpenProject => projects::open_dir(state),

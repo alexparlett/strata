@@ -44,22 +44,12 @@ pub fn ProjectRoot(open_path: String) -> Element {
         let engine::Handle { cmd_tx, evt_rx } = engine::spawn();
         state.write().cmd_tx = Some(cmd_tx);
         spawn(drain_events(state, evt_rx));
-        let cfg = crate::config::load();
-        let os_dark = crate::theme::os_is_dark();
-        {
-            let mut s = state.write();
-            s.theme_id = cfg.theme;
-            s.sync_os = cfg.sync_os;
-            s.os_dark = os_dark;
-            s.density_compact = cfg.density_compact;
-            s.zebra = cfg.zebra;
-            s.row_limit = cfg.row_limit;
-            s.reopen_on_startup = cfg.reopen_on_startup;
-            s.default_project_dir = cfg.default_project_dir;
-            s.open_pref = cfg.open_pref;
-            s.confirm_close_running = cfg.confirm_close_running;
-            s.recent_projects = cfg.recent_projects;
-        }
+        // Seed this window's settings store from the app config, and detect the
+        // OS appearance (kept live afterwards by the `ThemeChanged` handler
+        // below). Recents stay on `AppState` — a separate concern from settings.
+        crate::settings::load();
+        crate::settings::set_os_dark(crate::theme::os_is_dark());
+        state.write().recent_projects = crate::config::load().recent_projects;
         if !open_path.is_empty() {
             crate::action::projects::load_current(state, std::path::PathBuf::from(open_path));
         }
@@ -70,14 +60,21 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // never does; that's reserved for the explicit "Close project" action.
     use_wry_event_handler(move |event, _| {
         use dioxus::desktop::tao::event::{Event as TaoEvent, WindowEvent};
-        if let TaoEvent::WindowEvent {
-            window_id,
-            event: WindowEvent::CloseRequested,
-            ..
-        } = event
-        {
-            if *window_id == win_id {
-                crate::action::projects::save_on_close(state, win_id);
+        if let TaoEvent::WindowEvent { window_id, event, .. } = event {
+            if *window_id != win_id {
+                return;
+            }
+            match event {
+                WindowEvent::CloseRequested => {
+                    crate::action::projects::save_on_close(state, win_id);
+                }
+                // Follow the OS light/dark switch live (drives Sync-with-OS
+                // without a restart). Reactive, so the theme re-applies at once.
+                WindowEvent::ThemeChanged(theme) => {
+                    use dioxus::desktop::tao::window::Theme;
+                    crate::settings::set_os_dark(*theme == Theme::Dark);
+                }
+                _ => {}
             }
         }
     });
@@ -102,10 +99,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
         ROOT_CLASS.to_string()
     };
     // Active theme tokens (honouring Sync-with-OS), injected on the root below.
-    let theme_css = {
-        let s = state.read();
-        crate::theme::css_for(&crate::theme::effective_id(&s.theme_id, s.sync_os, s.os_dark))
-    };
+    let theme_css = crate::theme::css_for(&crate::settings::effective_theme());
 
     rsx! {
         style { dangerous_inner_html: crate::CSS }
@@ -116,7 +110,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             // overriding the stylesheet `:root` defaults for the whole app
             // subtree. Unknown id → empty string → `:root` still applies.
             style: "{theme_css}",
-            "data-density": if state.read().density_compact { "compact" } else { "comfortable" },
+            "data-density": if crate::settings::SETTINGS.read().density_compact { "compact" } else { "comfortable" },
             onkeydown: move |e| handle_key(state, e),
             onmousemove: move |e| {
                 if state.read().resizing.is_some() {
