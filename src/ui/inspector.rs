@@ -51,7 +51,7 @@ pub fn Inspector() -> Element {
     let mut nulls = 0usize;
     let mut distinct: HashSet<String> = HashSet::new();
     let mut nums: Vec<f64> = Vec::new();
-    if let Some(res) = &s.result {
+    if let Some(res) = s.active_run().and_then(|r| r.result.as_ref()) {
         if let Some(ci) = res.columns.iter().position(|c| c.name == colname) {
             for r in &res.rows {
                 if let Some(cell) = r.get(ci) {

@@ -17,12 +17,16 @@ pub(crate) fn Results() -> Element {
     let state = use_context::<Signal<AppState>>();
     let (running, has_err, has_plan, has_result) = {
         let s = state.read();
-        (
-            s.running,
-            s.query_error.is_some(),
-            s.plan.is_some(),
-            s.result.is_some(),
-        )
+        s.active_run()
+            .map(|r| {
+                (
+                    r.running,
+                    r.query_error.is_some(),
+                    r.plan.is_some(),
+                    r.result.is_some(),
+                )
+            })
+            .unwrap_or((false, false, false, false))
     };
     if running {
         rsx! { Running {} }
@@ -67,7 +71,7 @@ fn Running() -> Element {
 #[component]
 fn ErrorView() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let Some(err) = state.read().query_error.clone() else {
+    let Some(err) = state.read().active_run().and_then(|r| r.query_error.clone()) else {
         return rsx! { div {} };
     };
     let loc = err.loc.clone().unwrap_or_default();
@@ -178,7 +182,7 @@ pub(crate) fn EmptyState() -> Element {
 #[component]
 fn ResultsToolbar() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let q = state.read().result_search.clone();
+    let q = state.read().active_run().map(|r| r.result_search.clone()).unwrap_or_default();
     rsx! {
         div { class: "results-tb",
             div { class: "field", style: "width:320px;max-width:46%;",
@@ -198,11 +202,12 @@ fn Pager() -> Element {
     let state = use_context::<Signal<AppState>>();
     let (total, elapsed, page, page_size, page_size_open) = {
         let s = state.read();
+        let run = s.active_run();
         (
-            s.result.as_ref().map(|r| r.total).unwrap_or(0),
-            s.result.as_ref().map(|r| r.elapsed_ms).unwrap_or(0),
-            s.page,
-            s.page_size,
+            run.and_then(|r| r.result.as_ref()).map(|r| r.total).unwrap_or(0),
+            run.and_then(|r| r.result.as_ref()).map(|r| r.elapsed_ms).unwrap_or(0),
+            run.map(|r| r.page).unwrap_or(1),
+            run.map(|r| r.page_size).unwrap_or(100),
             s.page_size_open,
         )
     };

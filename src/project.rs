@@ -10,7 +10,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::ColumnInfo;
+use crate::engine::{ColumnInfo, QueryOutput};
+use crate::plan::{PlanTab, QueryPlan};
+use crate::query_error::QueryError;
 
 /// Registration lifecycle of a catalog table (runtime, not persisted).
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -79,13 +81,52 @@ pub struct CatalogView {
     pub open: bool,
 }
 
-/// A query tab: its own name and SQL buffer. `id` is runtime (reassigned on load).
+/// Per-tab, ephemeral query output — **never serialized**. The results panel
+/// derives its whole state (grid / plan / error / running / pager) from the active
+/// tab's `TabRun`, and the engine reducer routes each event to the owning tab by
+/// `ws_id`. Same runtime-fields-on-a-durable-struct pattern as `CatalogTable`'s
+/// `columns` / `status`.
+pub struct TabRun {
+    pub result: Option<QueryOutput>,
+    pub query_error: Option<QueryError>,
+    pub plan: Option<QueryPlan>,
+    pub plan_tab: PlanTab,
+    pub plan_raw: bool,
+    pub running: bool,
+    pub pending_req: Option<u64>,
+    /// 1-based page into the snapshot.
+    pub page: usize,
+    pub page_size: usize,
+    pub result_search: String,
+}
+
+impl Default for TabRun {
+    fn default() -> Self {
+        Self {
+            result: None,
+            query_error: None,
+            plan: None,
+            plan_tab: PlanTab::default(),
+            plan_raw: false,
+            running: false,
+            pending_req: None,
+            page: 1,
+            page_size: 100,
+            result_search: String::new(),
+        }
+    }
+}
+
+/// A query tab: its name + SQL buffer (persisted) plus its ephemeral `run`
+/// (results — not persisted). `id` is runtime (reassigned on load).
 #[derive(Serialize, Deserialize)]
 pub struct Workspace {
     #[serde(skip)]
     pub id: u64,
     pub name: String,
     pub sql: String,
+    #[serde(skip)]
+    pub run: TabRun,
 }
 
 /// One past query run. `id` is runtime (reassigned on load).
@@ -155,6 +196,7 @@ impl Project {
                 id: 1,
                 name: "query 1".into(),
                 sql: String::new(),
+                run: TabRun::default(),
             }],
             active_ws: 0,
             next_ws_id: 2,
@@ -186,6 +228,7 @@ impl Project {
                 id: 0,
                 name: "query 1".into(),
                 sql: String::new(),
+                run: TabRun::default(),
             });
         }
         for (i, w) in self.workspaces.iter_mut().enumerate() {

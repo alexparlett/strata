@@ -22,17 +22,19 @@ pub fn run(mut state: Signal<AppState>) {
             let mut s = state.write();
             let r = s.next_req;
             s.next_req += 1;
-            s.running = true;
-            s.query_error = None;
-            s.plan = None;
-            s.pending_req = Some(r);
-            s.page = 1;
             let ws_id = s
                 .project
                 .workspaces
                 .get(s.project.active_ws)
                 .map(|w| w.id)
                 .unwrap_or(0);
+            if let Some(run) = s.active_run_mut() {
+                run.running = true;
+                run.query_error = None;
+                run.plan = None;
+                run.pending_req = Some(r);
+                run.page = 1;
+            }
             (r, ws_id)
         };
         let tx = state.read().cmd_tx.clone();
@@ -49,8 +51,10 @@ pub fn run(mut state: Signal<AppState>) {
     match ddl::classify(&trimmed) {
         Decision::Block { reason } => {
             let mut s = state.write();
-            s.running = false;
-            s.result = None;
+            if let Some(run) = s.active_run_mut() {
+                run.running = false;
+                run.result = None;
+            }
             tracing::warn!("blocked statement: {reason}");
             s.set_status(LogKind::Warn, format!("Blocked · {reason}"));
         }
@@ -72,18 +76,21 @@ pub fn run(mut state: Signal<AppState>) {
                 let mut s = state.write();
                 let r = s.next_req;
                 s.next_req += 1;
-                s.running = true;
-                s.query_error = None;
-                s.plan = None;
-                s.pending_req = Some(r);
-                s.page = 1;
                 let ws_id = s
                     .project
                     .workspaces
                     .get(s.project.active_ws)
                     .map(|w| w.id)
                     .unwrap_or(0);
-                (r, ws_id, s.page_size)
+                let page_size = s.active_run().map(|run| run.page_size).unwrap_or(100);
+                if let Some(run) = s.active_run_mut() {
+                    run.running = true;
+                    run.query_error = None;
+                    run.plan = None;
+                    run.pending_req = Some(r);
+                    run.page = 1;
+                }
+                (r, ws_id, page_size)
             };
             let tx = state.read().cmd_tx.clone();
             if let Some(tx) = tx {
@@ -102,38 +109,47 @@ pub fn run(mut state: Signal<AppState>) {
 /// Dismiss the results-pane error view (falls back to the grid if a prior
 /// result is still loaded, otherwise the "no results yet" empty state).
 pub fn dismiss_error(mut state: Signal<AppState>) {
-    state.write().query_error = None;
+    if let Some(run) = state.write().active_run_mut() {
+        run.query_error = None;
+    }
 }
 
 /// Switch the EXPLAIN plan view between the physical and logical trees.
 pub fn set_plan_tab(mut state: Signal<AppState>, tab: crate::plan::PlanTab) {
-    state.write().plan_tab = tab;
+    if let Some(run) = state.write().active_run_mut() {
+        run.plan_tab = tab;
+    }
 }
 
 /// Toggle the EXPLAIN plan view between the operator-card tree and raw text.
 pub fn toggle_plan_raw(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.plan_raw = !s.plan_raw;
+    if let Some(run) = state.write().active_run_mut() {
+        run.plan_raw = !run.plan_raw;
+    }
 }
 
 /// Fetch a specific page from the active workspace's snapshot (bounded LIMIT/OFFSET).
 pub fn fetch_page(mut state: Signal<AppState>, page: usize) {
     let (ws_id, page_size, has_result) = {
         let s = state.read();
-        (
-            s.project
-                .workspaces
-                .get(s.project.active_ws)
-                .map(|w| w.id)
-                .unwrap_or(0),
-            s.page_size,
-            s.result.is_some(),
-        )
+        let ws_id = s
+            .project
+            .workspaces
+            .get(s.project.active_ws)
+            .map(|w| w.id)
+            .unwrap_or(0);
+        let (page_size, has_result) = s
+            .active_run()
+            .map(|run| (run.page_size, run.result.is_some()))
+            .unwrap_or((100, false));
+        (ws_id, page_size, has_result)
     };
     if !has_result {
         return;
     }
-    state.write().page = page;
+    if let Some(run) = state.write().active_run_mut() {
+        run.page = page;
+    }
     let tx = state.read().cmd_tx.clone();
     if let Some(tx) = tx {
         let _ = tx.send(Command::FetchPage {
@@ -146,7 +162,9 @@ pub fn fetch_page(mut state: Signal<AppState>, page: usize) {
 
 /// Update the find-in-results query.
 pub fn set_result_search(mut state: Signal<AppState>, q: String) {
-    state.write().result_search = q;
+    if let Some(run) = state.write().active_run_mut() {
+        run.result_search = q;
+    }
 }
 
 /// Toggle the page-size dropdown.
@@ -159,8 +177,10 @@ pub fn toggle_page_size_menu(mut state: Signal<AppState>) {
 pub fn set_page_size(mut state: Signal<AppState>, size: usize) {
     {
         let mut s = state.write();
-        s.page_size = size;
         s.page_size_open = false;
+        if let Some(run) = s.active_run_mut() {
+            run.page_size = size;
+        }
     }
     fetch_page(state, 1);
 }
@@ -223,8 +243,8 @@ pub fn save(mut state: Signal<AppState>) {
             return;
         }
         let meta = s
-            .result
-            .as_ref()
+            .active_run()
+            .and_then(|run| run.result.as_ref())
             .map(|r| format!("{} rows", r.total))
             .unwrap_or_else(|| "—".to_string());
         (name, w.sql.clone(), meta)
@@ -287,14 +307,18 @@ pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
             .get(s.project.active_ws)
             .map(|w| w.id)
             .unwrap_or(0);
-        (ws_id, s.page, s.page_size, s.cmd_tx.clone())
+        let (page, page_size) = s
+            .active_run()
+            .map(|run| (run.page, run.page_size))
+            .unwrap_or((1, 100));
+        (ws_id, page, page_size, s.cmd_tx.clone())
     };
 
     // Clipboard: copy the loaded result in the chosen text format (no file dialog).
     if ex.format == "clipboard" {
         let (text, n) = {
             let s = state.read();
-            match &s.result {
+            match s.active_run().and_then(|run| run.result.as_ref()) {
                 Some(r) => (result_to_clipboard(r, &ex.clip_format), r.rows.len()),
                 None => (String::new(), 0),
             }

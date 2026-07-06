@@ -33,7 +33,7 @@ pub fn Header() -> Element {
     let mut proj_menu = use_signal(|| false);
     let project = state.read().project.name.clone();
     let has_ws = !state.read().project.workspaces.is_empty();
-    let running = state.read().running;
+    let running = state.read().active_run().map(|r| r.running).unwrap_or(false);
 
     rsx! {
         header {

@@ -224,11 +224,15 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             ws_id,
             result,
         } => {
-            if s.pending_req != Some(req_id) {
+            // Route to the owning tab; drop the result if that tab is gone or has
+            // since started a newer query (its `pending_req` moved on).
+            let pending = s
+                .run_for(ws_id)
+                .map(|r| r.pending_req == Some(req_id))
+                .unwrap_or(false);
+            if !pending {
                 return;
             }
-            s.running = false;
-            s.pending_req = None;
             let sql = s
                 .project
                 .workspaces
@@ -241,32 +245,38 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             match result {
                 Ok(out) => {
                     let total = out.total;
-                    s.page = out.page;
+                    let elapsed = out.elapsed_ms;
+                    let page = out.page;
                     s.project.history.insert(
                         0,
                         HistoryItem {
                             id: hid,
                             sql,
                             ts_label: "just now".into(),
-                            ms: out.elapsed_ms,
+                            ms: elapsed,
                             rows: total,
                             ok: true,
                         },
                     );
-                    s.query_error = None;
                     s.set_status(
                         LogKind::Ok,
                         format!(
                             "{total} row{} · {} ms",
                             if total == 1 { "" } else { "s" },
-                            out.elapsed_ms,
+                            elapsed,
                         ),
                     );
                     s.push_log(
                         LogKind::Ok,
-                        format!("Query executed · {total} rows · {} ms", out.elapsed_ms),
+                        format!("Query executed · {total} rows · {} ms", elapsed),
                     );
-                    s.result = Some(out);
+                    if let Some(run) = s.run_for(ws_id) {
+                        run.running = false;
+                        run.pending_req = None;
+                        run.page = page;
+                        run.query_error = None;
+                        run.result = Some(out);
+                    }
                 }
                 Err(e) => {
                     tracing::error!("query failed: {e}");
@@ -281,8 +291,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         format!("Query failed · {}", qe.etype),
                         Some(qe.clone()),
                     );
-                    s.query_error = Some(qe);
-                    s.result = None;
                     s.project.history.insert(
                         0,
                         HistoryItem {
@@ -294,6 +302,12 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                             ok: false,
                         },
                     );
+                    if let Some(run) = s.run_for(ws_id) {
+                        run.running = false;
+                        run.pending_req = None;
+                        run.query_error = Some(qe);
+                        run.result = None;
+                    }
                 }
             }
         }
@@ -302,11 +316,13 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             ws_id,
             result,
         } => {
-            if s.pending_req != Some(req_id) {
+            let pending = s
+                .run_for(ws_id)
+                .map(|r| r.pending_req == Some(req_id))
+                .unwrap_or(false);
+            if !pending {
                 return;
             }
-            s.running = false;
-            s.pending_req = None;
             match result {
                 Ok(plan) => {
                     let ops = plan.physical.len().max(plan.logical.len());
@@ -320,9 +336,13 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                             plan.logical.len()
                         ),
                     );
-                    s.query_error = None;
-                    s.result = None;
-                    s.plan = Some(plan);
+                    if let Some(run) = s.run_for(ws_id) {
+                        run.running = false;
+                        run.pending_req = None;
+                        run.query_error = None;
+                        run.result = None;
+                        run.plan = Some(plan);
+                    }
                 }
                 Err(e) => {
                     tracing::error!("explain failed: {e}");
@@ -341,28 +361,31 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         format!("Explain failed · {}", qe.etype),
                         Some(qe.clone()),
                     );
-                    s.query_error = Some(qe);
-                    s.result = None;
-                    s.plan = None;
+                    if let Some(run) = s.run_for(ws_id) {
+                        run.running = false;
+                        run.pending_req = None;
+                        run.query_error = Some(qe);
+                        run.result = None;
+                        run.plan = None;
+                    }
                 }
             }
         }
         Event::PageResult { ws_id, page, result } => {
-            let active_id = s.project.workspaces.get(s.project.active_ws).map(|w| w.id);
-            if active_id == Some(ws_id) {
-                match result {
-                    Ok(rows) => {
-                        if let Some(res) = &mut s.result {
+            match result {
+                Ok(rows) => {
+                    if let Some(run) = s.run_for(ws_id) {
+                        if let Some(res) = &mut run.result {
                             res.rows = rows;
                             res.page = page;
                         }
-                        s.page = page;
+                        run.page = page;
                     }
-                    Err(e) => {
-                        tracing::error!("page load failed: {e}");
-                        s.push_log(LogKind::Error, format!("Page load failed: {e}"));
-                        s.set_status(LogKind::Error, format!("Page load failed · {e}"));
-                    }
+                }
+                Err(e) => {
+                    tracing::error!("page load failed: {e}");
+                    s.push_log(LogKind::Error, format!("Page load failed: {e}"));
+                    s.set_status(LogKind::Error, format!("Page load failed · {e}"));
                 }
             }
         }

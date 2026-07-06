@@ -28,13 +28,16 @@ pub(crate) fn ResultsGrid() -> Element {
     let s = state.read();
     let zebra = crate::settings::SETTINGS.read().zebra;
     let type_color = s.type_color_cells;
-    let page = s.page;
-    let page_size = s.page_size;
-    let search = s.result_search.to_lowercase();
-    let Some(result) = s.result.clone() else {
-        // Rendered only alongside a result, so this is a defensive fallback.
+    // Rendered only alongside a result, so the `else` arms are defensive.
+    let Some(run) = s.active_run() else {
         return rsx! { super::results::Empty {} };
     };
+    let Some(result) = run.result.clone() else {
+        return rsx! { super::results::Empty {} };
+    };
+    let page = run.page;
+    let page_size = run.page_size;
+    let search = run.result_search.to_lowercase();
     drop(s);
 
     // (name, type, type-text-class, cell-class, nested)

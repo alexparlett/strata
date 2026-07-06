@@ -205,7 +205,8 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
         let mut s = state.write();
         s.project = project;
         s.project_path = Some(path.clone());
-        s.result = None;
+        // The new project brings its own tabs (each with a fresh, empty `TabRun`),
+        // so there's no stale result to clear.
         s.set_status(LogKind::Ok, format!("Opened project '{name}'"));
     }
 

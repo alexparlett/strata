@@ -14,10 +14,13 @@ pub(crate) fn PlanView() -> Element {
     let state = use_context::<Signal<AppState>>();
     let (plan, tab, raw) = {
         let s = state.read();
-        let Some(plan) = s.plan.clone() else {
+        let Some(run) = s.active_run() else {
             return rsx! { div {} };
         };
-        (plan, s.plan_tab, s.plan_raw)
+        let Some(plan) = run.plan.clone() else {
+            return rsx! { div {} };
+        };
+        (plan, run.plan_tab, run.plan_raw)
     };
 
     let analyze = plan.analyze;

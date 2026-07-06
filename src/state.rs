@@ -4,13 +4,12 @@
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::engine::{Command, QueryOutput};
-use crate::plan::{PlanTab, QueryPlan};
+use crate::engine::Command;
 use crate::query_error::QueryError;
 // The project domain model lives in `crate::project`; re-exported here so the
 // familiar `crate::state::{CatalogTable, Project, …}` paths keep working.
 pub use crate::project::{
-    CatalogTable, CatalogView, HistoryItem, Project, RegStatus, SavedQuery, Workspace,
+    CatalogTable, CatalogView, HistoryItem, Project, RegStatus, SavedQuery, TabRun, Workspace,
 };
 
 #[derive(Clone)]
@@ -206,25 +205,13 @@ pub struct AppState {
     // editor is keyed by this so it remounts and re-seeds from the new value
     // (dioxus-code-editor seeds its textarea from `value` only on mount).
     pub editor_epoch: u64,
-    // results
-    pub result: Option<QueryOutput>,
-    /// Structured error for the last failed query (drives the results-pane error
-    /// view). Cleared when a new query starts or one succeeds, and by dismiss.
-    pub query_error: Option<QueryError>,
-    /// Parsed EXPLAIN plan (drives the results-pane plan view, S12). Set when an
-    /// EXPLAIN query returns; cleared when any other query runs.
-    pub plan: Option<QueryPlan>,
-    /// Which plan tab the EXPLAIN view shows.
-    pub plan_tab: PlanTab,
-    /// Show the raw plan text instead of the operator-card tree.
-    pub plan_raw: bool,
-    pub running: bool,
-    pub pending_req: Option<u64>,
+    // results — the per-tab query output (grid / plan / error / running / pager)
+    // lives in `project::TabRun`; reach the active tab's via `active_run` /
+    // `active_run_mut`, and route engine events by `ws_id` via `run_for`. Only
+    // these window-global bits stay: the request-id source, the pager-dropdown
+    // open flag, and the column-inspector selection.
     pub next_req: u64,
-    pub page: usize,
-    pub page_size: usize,
     pub page_size_open: bool,
-    pub result_search: String,
     pub selected_col: Option<(String, String)>,
     // status (ephemeral) — `status_kind` drives the status-bar dot colour and
     // must stay in step with `status_text` (set both via `set_status`).
@@ -263,6 +250,30 @@ impl AppState {
         }
     }
 
+    /// The active tab's ephemeral query output (results / plan / error / pager),
+    /// if a tab is open. `None` only when every tab is closed.
+    pub fn active_run(&self) -> Option<&TabRun> {
+        self.project
+            .workspaces
+            .get(self.project.active_ws)
+            .map(|w| &w.run)
+    }
+
+    pub fn active_run_mut(&mut self) -> Option<&mut TabRun> {
+        let idx = self.project.active_ws;
+        self.project.workspaces.get_mut(idx).map(|w| &mut w.run)
+    }
+
+    /// The run state of the tab with this `ws_id` — engine events route here (the
+    /// tab may not be the active one, or may have been closed → `None`).
+    pub fn run_for(&mut self, ws_id: u64) -> Option<&mut TabRun> {
+        self.project
+            .workspaces
+            .iter_mut()
+            .find(|w| w.id == ws_id)
+            .map(|w| &mut w.run)
+    }
+
     /// Open `sql` in a tab named `name` and make it active. Reuses an existing tab
     /// of that name **only if it still holds exactly this SQL** (i.e. it hasn't
     /// been edited) so repeated opens of an unchanged item don't pile up — but a
@@ -285,6 +296,7 @@ impl AppState {
             id,
             name: tab_name,
             sql,
+            run: TabRun::default(),
         });
         self.project.active_ws = self.project.workspaces.len() - 1;
     }
@@ -296,7 +308,7 @@ impl AppState {
         let name = self.unique_tab_name(&base);
         let id = self.project.next_ws_id;
         self.project.next_ws_id += 1;
-        self.project.workspaces.push(Workspace { id, name, sql });
+        self.project.workspaces.push(Workspace { id, name, sql, run: TabRun::default() });
         self.project.active_ws = self.project.workspaces.len() - 1;
     }
 
@@ -348,18 +360,8 @@ impl AppState {
             caret_line: 1,
             caret_col: 1,
             editor_epoch: 0,
-            result: None,
-            query_error: None,
-            plan: None,
-            plan_tab: PlanTab::Physical,
-            plan_raw: false,
-            running: false,
-            pending_req: None,
             next_req: 1,
-            page: 1,
-            page_size: 100,
             page_size_open: false,
-            result_search: String::new(),
             selected_col: None,
             status_text: "Ready · DataFusion 43 · open a project or add a table to begin".into(),
             status_kind: LogKind::Ok,
