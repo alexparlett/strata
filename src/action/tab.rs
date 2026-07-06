@@ -24,7 +24,23 @@ pub fn switch(mut state: Signal<AppState>, idx: usize) {
 }
 
 pub fn close(state: Signal<AppState>, idx: usize) {
-    close_where(state, |i| i == idx);
+    let dirty = state
+        .read()
+        .project
+        .workspaces
+        .get(idx)
+        .map(|w| w.is_dirty())
+        .unwrap_or(false);
+    if dirty {
+        crate::overlays::open_close_confirm(idx);
+    } else {
+        close_where(state, move |i| i == idx);
+    }
+}
+
+/// Close a tab unconditionally — from the discard-confirm dialog (A6).
+pub fn close_force(state: Signal<AppState>, idx: usize) {
+    close_where(state, move |i| i == idx);
 }
 
 /// Close every tab except `idx`.

@@ -53,6 +53,9 @@ pub enum Action {
     NewTab,
     SwitchTab(usize),
     CloseTab(usize),
+    /// Close a tab unconditionally (from the discard-confirm dialog). `CloseTab`
+    /// routes here after the user confirms discarding an unsaved tab.
+    CloseTabForce(usize),
     CloseOtherTabs(usize),
     CloseTabsRight(usize),
     CloseAllTabs,
@@ -147,6 +150,7 @@ fn affects_editor(a: &Action) -> bool {
         SwitchTab(_)
             | NewTab
             | CloseTab(_)
+            | CloseTabForce(_)
             | CloseOtherTabs(_)
             | CloseTabsRight(_)
             | CloseAllTabs
@@ -176,6 +180,7 @@ fn is_durable(a: &Action) -> bool {
             | LoadSelectStar(_)
             | NewTab
             | CloseTab(_)
+            | CloseTabForce(_)
             | CloseOtherTabs(_)
             | CloseTabsRight(_)
             | CloseAllTabs
@@ -224,6 +229,7 @@ fn run(state: Signal<AppState>, action: Action) {
         NewTab => tab::add(state),
         SwitchTab(idx) => tab::switch(state, idx),
         CloseTab(idx) => tab::close(state, idx),
+        CloseTabForce(idx) => tab::close_force(state, idx),
         CloseOtherTabs(idx) => tab::close_others(state, idx),
         CloseTabsRight(idx) => tab::close_right(state, idx),
         CloseAllTabs => tab::close_all(state),
