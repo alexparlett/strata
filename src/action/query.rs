@@ -22,21 +22,15 @@ pub fn run(mut state: Signal<AppState>) {
             let mut s = state.write();
             let r = s.next_req;
             s.next_req += 1;
-            let ws_id = s
-                .project
-                .workspaces
-                .get(s.project.active_ws)
-                .map(|w| w.id)
-                .unwrap_or(0);
-            if let Some(run) = s.active_run_mut() {
-                run.running = true;
-                run.query_error = None;
-                run.plan = None;
-                run.pending_req = Some(r);
-                run.page = 1;
-            }
-            (r, ws_id)
+            (r, s.active_tab_id().unwrap_or(0))
         };
+        crate::runs::edit(ws_id, |run| {
+            run.running = true;
+            run.query_error = None;
+            run.plan = None;
+            run.pending_req = Some(req);
+            run.page = 1;
+        });
         let tx = state.read().cmd_tx.clone();
         if let Some(tx) = tx {
             let _ = tx.send(Command::Explain {
@@ -50,13 +44,14 @@ pub fn run(mut state: Signal<AppState>) {
     }
     match ddl::classify(&trimmed) {
         Decision::Block { reason } => {
-            let mut s = state.write();
-            if let Some(run) = s.active_run_mut() {
-                run.running = false;
-                run.result = None;
+            if let Some(id) = state.read().active_tab_id() {
+                crate::runs::edit_existing(id, |run| {
+                    run.running = false;
+                    run.result = None;
+                });
             }
             tracing::warn!("blocked statement: {reason}");
-            s.set_status(LogKind::Warn, format!("Blocked · {reason}"));
+            state.write().set_status(LogKind::Warn, format!("Blocked · {reason}"));
         }
         Decision::CaptureView { name, sql } => {
             let tx = state.read().cmd_tx.clone();
@@ -72,26 +67,24 @@ pub fn run(mut state: Signal<AppState>) {
             }
         }
         Decision::Query => {
-            let (req, ws_id, page_size) = {
+            let (req, ws_id) = {
                 let mut s = state.write();
                 let r = s.next_req;
                 s.next_req += 1;
-                let ws_id = s
-                    .project
-                    .workspaces
-                    .get(s.project.active_ws)
-                    .map(|w| w.id)
-                    .unwrap_or(0);
-                let page_size = s.active_run().map(|run| run.page_size).unwrap_or(100);
-                if let Some(run) = s.active_run_mut() {
-                    run.running = true;
-                    run.query_error = None;
-                    run.plan = None;
-                    run.pending_req = Some(r);
-                    run.page = 1;
-                }
-                (r, ws_id, page_size)
+                (r, s.active_tab_id().unwrap_or(0))
             };
+            let page_size = crate::runs::RUNS
+                .peek()
+                .get(&ws_id)
+                .map(|run| run.page_size)
+                .unwrap_or(100);
+            crate::runs::edit(ws_id, |run| {
+                run.running = true;
+                run.query_error = None;
+                run.plan = None;
+                run.pending_req = Some(req);
+                run.page = 1;
+            });
             let tx = state.read().cmd_tx.clone();
             if let Some(tx) = tx {
                 let _ = tx.send(Command::Query {
@@ -109,47 +102,37 @@ pub fn run(mut state: Signal<AppState>) {
 /// Dismiss the results-pane error view (falls back to the grid if a prior
 /// result is still loaded, otherwise the "no results yet" empty state).
 pub fn dismiss_error(mut state: Signal<AppState>) {
-    if let Some(run) = state.write().active_run_mut() {
-        run.query_error = None;
+    if let Some(id) = state.read().active_tab_id() {
+        crate::runs::edit_existing(id, |run| run.query_error = None);
     }
 }
 
 /// Switch the EXPLAIN plan view between the physical and logical trees.
 pub fn set_plan_tab(mut state: Signal<AppState>, tab: crate::plan::PlanTab) {
-    if let Some(run) = state.write().active_run_mut() {
-        run.plan_tab = tab;
+    if let Some(id) = state.read().active_tab_id() {
+        crate::runs::edit_existing(id, |run| run.plan_tab = tab);
     }
 }
 
 /// Toggle the EXPLAIN plan view between the operator-card tree and raw text.
 pub fn toggle_plan_raw(mut state: Signal<AppState>) {
-    if let Some(run) = state.write().active_run_mut() {
-        run.plan_raw = !run.plan_raw;
+    if let Some(id) = state.read().active_tab_id() {
+        crate::runs::edit_existing(id, |run| run.plan_raw = !run.plan_raw);
     }
 }
 
 /// Fetch a specific page from the active workspace's snapshot (bounded LIMIT/OFFSET).
 pub fn fetch_page(mut state: Signal<AppState>, page: usize) {
-    let (ws_id, page_size, has_result) = {
-        let s = state.read();
-        let ws_id = s
-            .project
-            .workspaces
-            .get(s.project.active_ws)
-            .map(|w| w.id)
-            .unwrap_or(0);
-        let (page_size, has_result) = s
-            .active_run()
-            .map(|run| (run.page_size, run.result.is_some()))
-            .unwrap_or((100, false));
-        (ws_id, page_size, has_result)
-    };
+    let ws_id = state.read().active_tab_id().unwrap_or(0);
+    let (page_size, has_result) = crate::runs::RUNS
+        .peek()
+        .get(&ws_id)
+        .map(|run| (run.page_size, run.result.is_some()))
+        .unwrap_or((100, false));
     if !has_result {
         return;
     }
-    if let Some(run) = state.write().active_run_mut() {
-        run.page = page;
-    }
+    crate::runs::edit(ws_id, |run| run.page = page);
     let tx = state.read().cmd_tx.clone();
     if let Some(tx) = tx {
         let _ = tx.send(Command::FetchPage {
@@ -162,8 +145,8 @@ pub fn fetch_page(mut state: Signal<AppState>, page: usize) {
 
 /// Update the find-in-results query.
 pub fn set_result_search(mut state: Signal<AppState>, q: String) {
-    if let Some(run) = state.write().active_run_mut() {
-        run.result_search = q;
+    if let Some(id) = state.read().active_tab_id() {
+        crate::runs::edit(id, |run| run.result_search = q);
     }
 }
 
@@ -175,12 +158,13 @@ pub fn toggle_page_size_menu(mut state: Signal<AppState>) {
 
 /// Set the page size and reload the first page.
 pub fn set_page_size(mut state: Signal<AppState>, size: usize) {
-    {
+    let id = {
         let mut s = state.write();
         s.page_size_open = false;
-        if let Some(run) = s.active_run_mut() {
-            run.page_size = size;
-        }
+        s.active_tab_id()
+    };
+    if let Some(id) = id {
+        crate::runs::edit(id, |run| run.page_size = size);
     }
     fetch_page(state, 1);
 }
@@ -242,8 +226,9 @@ pub fn save(mut state: Signal<AppState>) {
         if name.is_empty() {
             return;
         }
-        let meta = s
-            .active_run()
+        let meta = crate::runs::RUNS
+            .peek()
+            .get(&w.id)
             .and_then(|run| run.result.as_ref())
             .map(|r| format!("{} rows", r.total))
             .unwrap_or_else(|| "—".to_string());
@@ -301,14 +286,10 @@ pub fn delete_saved(mut state: Signal<AppState>, name: &str) {
 pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
     let (ws_id, page, page_size, tx) = {
         let s = state.read();
-        let ws_id = s
-            .project
-            .workspaces
-            .get(s.project.active_ws)
-            .map(|w| w.id)
-            .unwrap_or(0);
-        let (page, page_size) = s
-            .active_run()
+        let ws_id = s.active_tab_id().unwrap_or(0);
+        let (page, page_size) = crate::runs::RUNS
+            .peek()
+            .get(&ws_id)
             .map(|run| (run.page, run.page_size))
             .unwrap_or((1, 100));
         (ws_id, page, page_size, s.cmd_tx.clone())
@@ -317,8 +298,9 @@ pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
     // Clipboard: copy the loaded result in the chosen text format (no file dialog).
     if ex.format == "clipboard" {
         let (text, n) = {
-            let s = state.read();
-            match s.active_run().and_then(|run| run.result.as_ref()) {
+            let id = state.read().active_tab_id();
+            let runs = crate::runs::RUNS.peek();
+            match id.and_then(|id| runs.get(&id)).and_then(|run| run.result.as_ref()) {
                 Some(r) => (result_to_clipboard(r, &ex.clip_format), r.rows.len()),
                 None => (String::new(), 0),
             }

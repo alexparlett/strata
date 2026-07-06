@@ -205,8 +205,9 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
         let mut s = state.write();
         s.project = project;
         s.project_path = Some(path.clone());
-        // The new project brings its own tabs (each with a fresh, empty `TabRun`),
-        // so there's no stale result to clear.
+        // New project → new tabs with reassigned ids; drop the previous project's
+        // runs so a reused id can't inherit stale results.
+        crate::runs::clear();
         s.set_status(LogKind::Ok, format!("Opened project '{name}'"));
     }
 

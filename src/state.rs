@@ -5,12 +5,12 @@
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::engine::Command;
-use crate::query_error::QueryError;
 // The project domain model lives in `crate::project`; re-exported here so the
 // familiar `crate::state::{CatalogTable, Project, …}` paths keep working.
 pub use crate::project::{
-    CatalogTable, CatalogView, HistoryItem, Project, RegStatus, SavedQuery, TabRun, Workspace,
+    CatalogTable, CatalogView, HistoryItem, Project, RegStatus, SavedQuery, Workspace,
 };
+use crate::query_error::QueryError;
 
 #[derive(Clone)]
 pub struct ConfigForm {
@@ -186,8 +186,6 @@ pub struct AppState {
     pub cmd_tx: Option<UnboundedSender<Command>>,
     // the open project (catalog, workspaces, history — the persisted part)
     pub project: Project,
-    // theme (runtime only; the persisted settings live in the `settings` store)
-    pub accent: String,
     pub type_color_cells: bool,
     // layout
     pub sidebar_open: bool,
@@ -203,10 +201,9 @@ pub struct AppState {
     // (dioxus-code-editor seeds its textarea from `value` only on mount).
     pub editor_epoch: u64,
     // results — the per-tab query output (grid / plan / error / running / pager)
-    // lives in `project::TabRun`; reach the active tab's via `active_run` /
-    // `active_run_mut`, and route engine events by `ws_id` via `run_for`. Only
-    // these window-global bits stay: the request-id source, the pager-dropdown
-    // open flag, and the column-inspector selection.
+    // lives in the `crate::runs::RUNS` store, keyed by tab id (`active_tab_id`).
+    // Only these window-global bits stay here: the request-id source, the
+    // pager-dropdown open flag, and the column-inspector selection.
     pub next_req: u64,
     pub page_size_open: bool,
     pub selected_col: Option<(String, String)>,
@@ -244,28 +241,13 @@ impl AppState {
         }
     }
 
-    /// The active tab's ephemeral query output (results / plan / error / pager),
-    /// if a tab is open. `None` only when every tab is closed.
-    pub fn active_run(&self) -> Option<&TabRun> {
+    /// The active tab's id — the key into `crate::runs::RUNS` for its live query
+    /// output. `None` only when every tab is closed.
+    pub fn active_tab_id(&self) -> Option<u64> {
         self.project
             .workspaces
             .get(self.project.active_ws)
-            .map(|w| &w.run)
-    }
-
-    pub fn active_run_mut(&mut self) -> Option<&mut TabRun> {
-        let idx = self.project.active_ws;
-        self.project.workspaces.get_mut(idx).map(|w| &mut w.run)
-    }
-
-    /// The run state of the tab with this `ws_id` — engine events route here (the
-    /// tab may not be the active one, or may have been closed → `None`).
-    pub fn run_for(&mut self, ws_id: u64) -> Option<&mut TabRun> {
-        self.project
-            .workspaces
-            .iter_mut()
-            .find(|w| w.id == ws_id)
-            .map(|w| &mut w.run)
+            .map(|w| w.id)
     }
 
     /// Open `sql` in a tab named `name` and make it active. Reuses an existing tab
@@ -290,7 +272,6 @@ impl AppState {
             id,
             name: tab_name,
             sql,
-            run: TabRun::default(),
         });
         self.project.active_ws = self.project.workspaces.len() - 1;
     }
@@ -302,7 +283,7 @@ impl AppState {
         let name = self.unique_tab_name(&base);
         let id = self.project.next_ws_id;
         self.project.next_ws_id += 1;
-        self.project.workspaces.push(Workspace { id, name, sql, run: TabRun::default() });
+        self.project.workspaces.push(Workspace { id, name, sql });
         self.project.active_ws = self.project.workspaces.len() - 1;
     }
 
@@ -344,7 +325,6 @@ impl AppState {
         AppState {
             cmd_tx: None,
             project: Project::empty(),
-            accent: "#4cc6ff".into(),
             type_color_cells: true,
             sidebar_open: true,
             inspector_open: true,

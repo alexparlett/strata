@@ -10,9 +10,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{ColumnInfo, QueryOutput};
-use crate::plan::{PlanTab, QueryPlan};
-use crate::query_error::QueryError;
+use crate::engine::ColumnInfo;
 
 /// Registration lifecycle of a catalog table (runtime, not persisted).
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -81,52 +79,16 @@ pub struct CatalogView {
     pub open: bool,
 }
 
-/// Per-tab, ephemeral query output — **never serialized**. The results panel
-/// derives its whole state (grid / plan / error / running / pager) from the active
-/// tab's `TabRun`, and the engine reducer routes each event to the owning tab by
-/// `ws_id`. Same runtime-fields-on-a-durable-struct pattern as `CatalogTable`'s
-/// `columns` / `status`.
-pub struct TabRun {
-    pub result: Option<QueryOutput>,
-    pub query_error: Option<QueryError>,
-    pub plan: Option<QueryPlan>,
-    pub plan_tab: PlanTab,
-    pub plan_raw: bool,
-    pub running: bool,
-    pub pending_req: Option<u64>,
-    /// 1-based page into the snapshot.
-    pub page: usize,
-    pub page_size: usize,
-    pub result_search: String,
-}
-
-impl Default for TabRun {
-    fn default() -> Self {
-        Self {
-            result: None,
-            query_error: None,
-            plan: None,
-            plan_tab: PlanTab::default(),
-            plan_raw: false,
-            running: false,
-            pending_req: None,
-            page: 1,
-            page_size: 100,
-            result_search: String::new(),
-        }
-    }
-}
-
-/// A query tab: its name + SQL buffer (persisted) plus its ephemeral `run`
-/// (results — not persisted). `id` is runtime (reassigned on load).
+/// A query tab: its `id`, name, and SQL buffer — all persisted (the id too, so a
+/// reopened tab keeps its identity). The live query output lives in `crate::runs`
+/// keyed by this id, **not** here, so the persisted struct stays pure. Legacy
+/// files (no `id`) get one assigned in [`Project::normalize`].
 #[derive(Serialize, Deserialize)]
 pub struct Workspace {
-    #[serde(skip)]
+    #[serde(default)]
     pub id: u64,
     pub name: String,
     pub sql: String,
-    #[serde(skip)]
-    pub run: TabRun,
 }
 
 /// One past query run. `id` is runtime (reassigned on load).
@@ -196,7 +158,6 @@ impl Project {
                 id: 1,
                 name: "query 1".into(),
                 sql: String::new(),
-                run: TabRun::default(),
             }],
             active_ws: 0,
             next_ws_id: 2,
@@ -220,21 +181,28 @@ impl Project {
         Ok(project)
     }
 
-    /// Rebuild the runtime id counters after a load (ids aren't serialized) and
-    /// guarantee at least one tab with a valid `active_ws`.
+    /// After a load: keep persisted tab ids, but repair legacy/corrupt ones, and
+    /// rebuild the runtime counters + guarantee a valid `active_ws`.
     fn normalize(&mut self) {
         if self.workspaces.is_empty() {
             self.workspaces.push(Workspace {
-                id: 0,
+                id: 1,
                 name: "query 1".into(),
                 sql: String::new(),
-                run: TabRun::default(),
             });
         }
-        for (i, w) in self.workspaces.iter_mut().enumerate() {
-            w.id = i as u64 + 1;
+        // Tab ids are persisted; legacy files (no id → 0) or corrupt/duplicate
+        // ids get fresh sequential ones.
+        let ids_ok = {
+            let mut seen = std::collections::HashSet::new();
+            self.workspaces.iter().all(|w| w.id != 0 && seen.insert(w.id))
+        };
+        if !ids_ok {
+            for (i, w) in self.workspaces.iter_mut().enumerate() {
+                w.id = i as u64 + 1;
+            }
         }
-        self.next_ws_id = self.workspaces.len() as u64 + 1;
+        self.next_ws_id = self.workspaces.iter().map(|w| w.id).max().unwrap_or(0) + 1;
         for (i, h) in self.history.iter_mut().enumerate() {
             h.id = i as u64 + 1;
         }

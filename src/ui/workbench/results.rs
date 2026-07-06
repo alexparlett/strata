@@ -16,8 +16,9 @@ use crate::ui::icons;
 pub(crate) fn Results() -> Element {
     let state = use_context::<Signal<AppState>>();
     let (running, has_err, has_plan, has_result) = {
-        let s = state.read();
-        s.active_run()
+        let id = state.read().active_tab_id();
+        let runs = crate::runs::RUNS.read();
+        id.and_then(|id| runs.get(&id))
             .map(|r| {
                 (
                     r.running,
@@ -71,7 +72,12 @@ fn Running() -> Element {
 #[component]
 fn ErrorView() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let Some(err) = state.read().active_run().and_then(|r| r.query_error.clone()) else {
+    let err = {
+        let id = state.read().active_tab_id();
+        let runs = crate::runs::RUNS.read();
+        id.and_then(|id| runs.get(&id)).and_then(|r| r.query_error.clone())
+    };
+    let Some(err) = err else {
         return rsx! { div {} };
     };
     let loc = err.loc.clone().unwrap_or_default();
@@ -182,7 +188,11 @@ pub(crate) fn EmptyState() -> Element {
 #[component]
 fn ResultsToolbar() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let q = state.read().active_run().map(|r| r.result_search.clone()).unwrap_or_default();
+    let q = {
+        let id = state.read().active_tab_id();
+        let runs = crate::runs::RUNS.read();
+        id.and_then(|id| runs.get(&id)).map(|r| r.result_search.clone()).unwrap_or_default()
+    };
     rsx! {
         div { class: "results-tb",
             div { class: "field", style: "width:320px;max-width:46%;",
@@ -201,14 +211,18 @@ fn ResultsToolbar() -> Element {
 fn Pager() -> Element {
     let state = use_context::<Signal<AppState>>();
     let (total, elapsed, page, page_size, page_size_open) = {
-        let s = state.read();
-        let run = s.active_run();
+        let (id, page_size_open) = {
+            let s = state.read();
+            (s.active_tab_id(), s.page_size_open)
+        };
+        let runs = crate::runs::RUNS.read();
+        let run = id.and_then(|id| runs.get(&id));
         (
             run.and_then(|r| r.result.as_ref()).map(|r| r.total).unwrap_or(0),
             run.and_then(|r| r.result.as_ref()).map(|r| r.elapsed_ms).unwrap_or(0),
             run.map(|r| r.page).unwrap_or(1),
             run.map(|r| r.page_size).unwrap_or(100),
-            s.page_size_open,
+            page_size_open,
         )
     };
     let page_count = ((total as f64) / (page_size as f64)).ceil().max(1.0) as usize;

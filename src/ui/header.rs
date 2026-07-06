@@ -6,8 +6,8 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
-use crate::ui::icons;
 use crate::ui::components::{Point, Popup};
+use crate::ui::icons;
 
 /// A 30×30 header icon button that dispatches `action`. `onmousedown` is stopped
 /// so clicking a button never starts a window drag.
@@ -33,7 +33,11 @@ pub fn Header() -> Element {
     let mut proj_menu = use_signal(|| false);
     let project = state.read().project.name.clone();
     let has_ws = !state.read().project.workspaces.is_empty();
-    let running = state.read().active_run().map(|r| r.running).unwrap_or(false);
+    let running = {
+        let id = state.read().active_tab_id();
+        let runs = crate::runs::RUNS.read();
+        id.and_then(|id| runs.get(&id)).map(|r| r.running).unwrap_or(false)
+    };
 
     rsx! {
         header {

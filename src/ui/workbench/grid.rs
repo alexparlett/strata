@@ -25,11 +25,14 @@ pub(crate) fn ResultsGrid() -> Element {
     // The nested-cell view is grid-local, opened from a cell, closed by the dialog.
     let cell_view = use_signal(|| None::<CellView>);
 
-    let s = state.read();
     let zebra = crate::settings::SETTINGS.read().zebra;
-    let type_color = s.type_color_cells;
+    let (type_color, id) = {
+        let s = state.read();
+        (s.type_color_cells, s.active_tab_id())
+    };
+    let runs = crate::runs::RUNS.read();
     // Rendered only alongside a result, so the `else` arms are defensive.
-    let Some(run) = s.active_run() else {
+    let Some(run) = id.and_then(|id| runs.get(&id)) else {
         return rsx! { super::results::Empty {} };
     };
     let Some(result) = run.result.clone() else {
@@ -38,7 +41,7 @@ pub(crate) fn ResultsGrid() -> Element {
     let page = run.page;
     let page_size = run.page_size;
     let search = run.result_search.to_lowercase();
-    drop(s);
+    drop(runs);
 
     // (name, type, type-text-class, cell-class, nested)
     let cols: Vec<(String, String, &'static str, &'static str, bool)> = result

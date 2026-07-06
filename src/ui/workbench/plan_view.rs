@@ -13,8 +13,9 @@ use crate::state::AppState;
 pub(crate) fn PlanView() -> Element {
     let state = use_context::<Signal<AppState>>();
     let (plan, tab, raw) = {
-        let s = state.read();
-        let Some(run) = s.active_run() else {
+        let id = state.read().active_tab_id();
+        let runs = crate::runs::RUNS.read();
+        let Some(run) = id.and_then(|id| runs.get(&id)) else {
             return rsx! { div {} };
         };
         let Some(plan) = run.plan.clone() else {

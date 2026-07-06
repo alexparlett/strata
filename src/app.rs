@@ -10,9 +10,9 @@ use dioxus::desktop::use_wry_event_handler;
 use dioxus::prelude::*;
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::action::panel::resize_handle;
 use crate::action::{dispatch, Action};
 use crate::engine::{self, Command, Event};
-use crate::action::panel::resize_handle;
 use crate::query_error::QueryError;
 use crate::state::{
     AppState, CatalogTable, CatalogView, HistoryItem, LogKind, RegStatus, ResizeTarget,
@@ -226,11 +226,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
         } => {
             // Route to the owning tab; drop the result if that tab is gone or has
             // since started a newer query (its `pending_req` moved on).
-            let pending = s
-                .run_for(ws_id)
-                .map(|r| r.pending_req == Some(req_id))
-                .unwrap_or(false);
-            if !pending {
+            if !crate::runs::is_pending(ws_id, req_id) {
                 return;
             }
             let sql = s
@@ -270,13 +266,13 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         LogKind::Ok,
                         format!("Query executed · {total} rows · {} ms", elapsed),
                     );
-                    if let Some(run) = s.run_for(ws_id) {
+                    crate::runs::edit_existing(ws_id, |run| {
                         run.running = false;
                         run.pending_req = None;
                         run.page = page;
                         run.query_error = None;
                         run.result = Some(out);
-                    }
+                    });
                 }
                 Err(e) => {
                     tracing::error!("query failed: {e}");
@@ -302,12 +298,12 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                             ok: false,
                         },
                     );
-                    if let Some(run) = s.run_for(ws_id) {
+                    crate::runs::edit_existing(ws_id, |run| {
                         run.running = false;
                         run.pending_req = None;
                         run.query_error = Some(qe);
                         run.result = None;
-                    }
+                    });
                 }
             }
         }
@@ -316,11 +312,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             ws_id,
             result,
         } => {
-            let pending = s
-                .run_for(ws_id)
-                .map(|r| r.pending_req == Some(req_id))
-                .unwrap_or(false);
-            if !pending {
+            if !crate::runs::is_pending(ws_id, req_id) {
                 return;
             }
             match result {
@@ -336,13 +328,13 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                             plan.logical.len()
                         ),
                     );
-                    if let Some(run) = s.run_for(ws_id) {
+                    crate::runs::edit_existing(ws_id, |run| {
                         run.running = false;
                         run.pending_req = None;
                         run.query_error = None;
                         run.result = None;
                         run.plan = Some(plan);
-                    }
+                    });
                 }
                 Err(e) => {
                     tracing::error!("explain failed: {e}");
@@ -361,26 +353,26 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         format!("Explain failed · {}", qe.etype),
                         Some(qe.clone()),
                     );
-                    if let Some(run) = s.run_for(ws_id) {
+                    crate::runs::edit_existing(ws_id, |run| {
                         run.running = false;
                         run.pending_req = None;
                         run.query_error = Some(qe);
                         run.result = None;
                         run.plan = None;
-                    }
+                    });
                 }
             }
         }
         Event::PageResult { ws_id, page, result } => {
             match result {
                 Ok(rows) => {
-                    if let Some(run) = s.run_for(ws_id) {
+                    crate::runs::edit_existing(ws_id, |run| {
                         if let Some(res) = &mut run.result {
                             res.rows = rows;
                             res.page = page;
                         }
                         run.page = page;
-                    }
+                    });
                 }
                 Err(e) => {
                     tracing::error!("page load failed: {e}");

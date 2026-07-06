@@ -16,6 +16,7 @@ mod overlays;
 mod plan;
 mod project;
 mod query_error;
+mod runs;
 mod settings;
 mod state;
 mod theme;
