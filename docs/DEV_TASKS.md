@@ -15,7 +15,7 @@ Living backlog and source of truth for outstanding work. Design reference:
 | A1 | Project-scoped state | ✅ Done | `Project` domain model in `project.rs`; `AppState` holds it + engine handle + global prefs. Locked: theme/panel sizes are **global**; tables persist as **specs, re-register on open**; recents/prefs in an app-config store. |
 | A2 | Action enum + dispatch | ✅ Done | One `Action` enum + exhaustive `dispatch` (`action/mod.rs`), domain handlers (`query/tab/catalog/panel/overlay`). Menus emit the same actions; only editor/cmdk bindings + modal form state stay inline. |
 | A3 | Overlay architecture (containers + store) | ✅ Done | Shipped as reusable **containers** (`Popup`/`Dialog`/`Window` in `ui/components/`) + a per-window **overlay store** (`overlays.rs`, a `GlobalSignal`) driving always-mounted hosts (cmdk/Settings/Export/Config); co-located popups (menus/project/remove/cell) stay on local `use_signal`. Killed the app-global `*_open` bools + `CloseOverlays` coupling. Not the `Vec<Modal>` stack originally sketched — stacking deferred (the `EscStack` upgrade path). See `OVERLAY_ARCHITECTURE.md`. |
-| A4 | Modal form state off `AppState` | 🟡 Thin | **Export:** ✅ done — component-local `use_signal`; `RunExport(opts)` carries the snapshot; `AppState.export` gone. **Config:** design locked, not built. Model: the **draft is a local working copy**, project data **immutable until a successful register** (so *no ghost row*, no write-back). Store `config: Option<ConfigTarget>` (`New`\|`Edit(name)`) seeds the draft (blank / copy of the project table); all edits mutate the local draft; the source **scan** becomes a component-side future keyed on `draft.sources` (local `scanning`/`file_count`/`scan_error`). Save → client-validate → `dispatch(RegisterTable(draft))`; on engine success the project store gains/replaces the table + window closes; on **failure the window stays open** with an inline error routed via a store `config_error: Option<String>`. Deletes `AppState.cfg`. **Wrinkle:** today the ghost row carries the table spec (format/sources/parts) through the async register and the `Registered` event finalizes it; removing it (immutable-until-success) means the spec has to survive some other way — a store `pending_register` stash the `Registered` success handler reads (`Event::Registered` only carries name/path/cols). So `Registered` finalizes from `pending_register` for the config path, keeps updating the existing row for the load-time path, and drops the ghost-row cleanup. |
+| A4 | Modal form state off `AppState` | ✅ Done | **Export:** component-local `use_signal`; `RunExport(opts)` carries the snapshot. **Config:** component-local `draft` seeded from a store `ConfigTarget` (`New`/`Edit(name)`); the project stays **immutable until a successful register** (no placeholder). `RegisterTable(draft)` sends the engine spec + stashes the row in `overlays::pending_register`; on `Registered` the success path builds the real catalog row from the stash + engine columns and autosaves (engine events skip the dispatch autosave), the load-time path updates the existing row, and failure shows an inline `config_err` with the window still open. `AppState` now holds neither `cfg` nor `export`. See `OVERLAY_ARCHITECTURE.md`. |
 
 ## B. v2 design (all shipped)
 
@@ -91,9 +91,9 @@ Remaining pre-v5: **C5** palette depth · **C8** nested JSON · **C9** PART badg
 
 Blocked on design: **B10** open-in current-vs-new window · **C13** import options.
 
-Architecture cleanups: **A4** — Config form state off `AppState` (a dedicated
-`cfg` store, since it's engine-coupled; Export's form is already localized).
-(**A3** shipped — see the overlay containers + store.)
+Architecture cleanups: **A3** + **A4** both shipped — overlays run on reusable
+containers + a per-window store; modal form state (Config/Export) is off
+`AppState`. See `OVERLAY_ARCHITECTURE.md`.
 
 Small follow-ups: debounce autosave · scratch-SQL dirty indicator · self-time cost
 metric for the plan view (`EXPLAIN_PLAN_SPEC.md` §8) · stream-drain ANALYZE to
