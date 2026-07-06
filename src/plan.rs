@@ -83,6 +83,15 @@ pub struct PlanNode {
     pub extra: String,
 }
 
+/// Which plan the EXPLAIN view shows (physical vs logical). `EXPLAIN ANALYZE`
+/// forces Physical (the "Plan with Metrics").
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlanTab {
+    #[default]
+    Physical,
+    Logical,
+}
+
 /// A parsed EXPLAIN result: logical + physical trees (physical carries metrics
 /// for ANALYZE) plus each tree's raw indent text for the Raw toggle.
 #[derive(Clone, Debug, PartialEq, Default)]

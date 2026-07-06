@@ -106,7 +106,7 @@ pub fn dismiss_error(mut state: Signal<AppState>) {
 }
 
 /// Switch the EXPLAIN plan view between the physical and logical trees.
-pub fn set_plan_tab(mut state: Signal<AppState>, tab: crate::state::PlanTab) {
+pub fn set_plan_tab(mut state: Signal<AppState>, tab: crate::plan::PlanTab) {
     state.write().plan_tab = tab;
 }
 

@@ -6,7 +6,8 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::{AppState, PlanTab};
+use crate::plan::PlanTab;
+use crate::state::AppState;
 
 #[component]
 pub(crate) fn PlanView() -> Element {

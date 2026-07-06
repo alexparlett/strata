@@ -5,7 +5,7 @@
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::engine::{Command, QueryOutput};
-use crate::plan::QueryPlan;
+use crate::plan::{PlanTab, QueryPlan};
 use crate::query_error::QueryError;
 // The project domain model lives in `crate::project`; re-exported here so the
 // familiar `crate::state::{CatalogTable, Project, …}` paths keep working.
@@ -105,14 +105,6 @@ pub enum LogKind {
 pub enum LogTab {
     History,
     Events,
-}
-
-/// Which plan the EXPLAIN view shows (physical vs logical). `EXPLAIN ANALYZE`
-/// forces Physical (the "Plan with Metrics").
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PlanTab {
-    Physical,
-    Logical,
 }
 
 /// One row in the Event Log panel. Fed from engine events (see

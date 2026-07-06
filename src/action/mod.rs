@@ -12,7 +12,8 @@
 // break `use Action::*` in `dispatch`.
 use dioxus::prelude::Signal;
 use dioxus::signals::WritableExt;
-use crate::state::{AppState, LogTab, PlanTab, RemoveKind, ResizeTarget};
+use crate::plan::PlanTab;
+use crate::state::{AppState, LogTab, RemoveKind, ResizeTarget};
 
 // Domain handler modules. `panel` (the shared `resize_handle` component),
 // `projects` (window startup), and `catalog` (the modal's source scan,
