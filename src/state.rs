@@ -254,8 +254,6 @@ pub struct AppState {
     // menus / modals
     pub export_open: bool,
     pub config_open: bool,
-    pub settings_open: bool,
-    pub settings_cat: SettingsCat,
     // --- settings prefs (persisted to app config) ---
     pub sync_os: bool,
     /// System is in dark mode (detected once at startup; drives Sync-with-OS).
@@ -408,8 +406,6 @@ impl AppState {
             status_kind: LogKind::Ok,
             export_open: false,
             config_open: false,
-            settings_open: false,
-            settings_cat: SettingsCat::Appearance,
             sync_os: false,
             os_dark: true,
             row_limit: 100,

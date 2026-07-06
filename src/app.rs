@@ -39,6 +39,8 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // the header search button both drive this signal, and it closes via its
     // Dialog — no `AppState` flag, no `CloseOverlays`.
     let mut cmdk = use_signal(|| false);
+    // Settings is likewise a root-owned window (opened by ⌘, or the header gear).
+    let mut settings = use_signal(|| false);
 
     // Track this window so siblings can be focused / cycled, and so "Close
     // project" knows whether it's the last one.
@@ -122,7 +124,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             // subtree. Unknown id → empty string → `:root` still applies.
             style: "{theme_css}",
             "data-density": if state.read().density_compact { "compact" } else { "comfortable" },
-            onkeydown: move |e| handle_key(state, cmdk, e),
+            onkeydown: move |e| handle_key(state, cmdk, settings, e),
             onmousemove: move |e| {
                 if state.read().resizing.is_some() {
                     let c = e.client_coordinates();
@@ -131,7 +133,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             },
             onmouseup: move |_| dispatch(state, Action::EndResize),
 
-            ui::header::Header { cmdk }
+            ui::header::Header { cmdk, settings }
 
             div { class: "ps-body",
                 if state.read().sidebar_open {
@@ -155,7 +157,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             if cmdk() { ui::modals::CommandPalette { on_close: move |_| cmdk.set(false) } }
             if state.read().config_open { ui::modals::ConfigModal {} }
             if state.read().export_open { ui::modals::ExportModal {} }
-            if state.read().settings_open { ui::modals::SettingsModal {} }
+            if settings() { ui::modals::SettingsModal { on_close: move |_| settings.set(false) } }
             // Catalog + tab context menus, the remove-confirm dialog, and the
             // nested-cell view are now self-contained containers rendered by the
             // sidebar / workspace (see `ui::components`).
@@ -172,6 +174,7 @@ async fn drain_events(state: Signal<AppState>, mut evt_rx: UnboundedReceiver<Eve
 fn handle_key(
     state: Signal<AppState>,
     mut cmdk: Signal<bool>,
+    mut settings: Signal<bool>,
     e: dioxus_core::Event<dioxus::events::KeyboardData>,
 ) {
     let mods = e.modifiers();
@@ -202,10 +205,11 @@ fn handle_key(
             e.prevent_default();
             dispatch(state, Action::SaveQuery);
         }
-        // ⌘, — open Settings.
+        // ⌘, — toggle Settings.
         Key::Character(c) if meta && c == "," => {
             e.prevent_default();
-            dispatch(state, Action::OpenSettings);
+            let open = settings();
+            settings.set(!open);
         }
         Key::Enter if meta => {
             e.prevent_default();

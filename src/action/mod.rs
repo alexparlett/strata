@@ -12,7 +12,7 @@
 // break `use Action::*` in `dispatch`.
 use dioxus::prelude::Signal;
 use dioxus::signals::WritableExt;
-use crate::state::{AppState, LogTab, PlanTab, RemoveKind, ResizeTarget, SettingsCat};
+use crate::state::{AppState, LogTab, PlanTab, RemoveKind, ResizeTarget};
 
 // Domain handler modules. `panel` (the shared `resize_handle` component),
 // `projects` (window startup), and `catalog` (the modal's source scan,
@@ -94,10 +94,8 @@ pub enum Action {
     ToggleLogHeight,
     OpenExport,
     RunExport,
-    OpenSettings,
-    // Settings prefs (persist to app config) + the modal's category nav.
+    // Settings prefs (persist to app config).
     SetTheme(String),
-    SetSettingsCat(SettingsCat),
     ToggleSyncOs,
     SetDensity(bool),
     ToggleZebra,
@@ -254,9 +252,7 @@ fn run(state: Signal<AppState>, action: Action) {
         ToggleLogHeight => overlay::toggle_log_height(state),
         OpenExport => overlay::open_export(state),
         RunExport => query::run_export(state),
-        OpenSettings => overlay::open_settings(state),
         SetTheme(id) => overlay::set_theme(state, id),
-        SetSettingsCat(cat) => overlay::set_settings_cat(state, cat),
         ToggleSyncOs => overlay::toggle_sync_os(state),
         SetDensity(v) => overlay::set_density(state, v),
         ToggleZebra => overlay::toggle_zebra(state),

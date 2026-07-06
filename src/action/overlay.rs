@@ -3,23 +3,17 @@
 
 use dioxus::prelude::*;
 
-use crate::state::{AppState, LogTab, SettingsCat};
+use crate::state::{AppState, LogTab};
 
 /// Close every remaining `AppState`-backed overlay (Esc, backdrop clicks). The
-/// container-based overlays (menus, remove-confirm, cell view, command palette)
-/// own their own local open state and are not touched here.
+/// container-based overlays (menus, remove-confirm, cell view, command palette,
+/// settings) own their own local open state and are not touched here.
 pub fn close_all(mut state: Signal<AppState>) {
     let mut s = state.write();
     s.export_open = false;
     s.config_open = false;
-    s.settings_open = false;
     s.page_size_open = false;
     s.renaming_ws = None;
-}
-
-/// Open the Settings modal (⌘, or the header gear).
-pub fn open_settings(mut state: Signal<AppState>) {
-    state.write().settings_open = true;
 }
 
 /// Switch the active theme and persist it to the machine-global app config, so
@@ -49,11 +43,6 @@ pub fn save_prefs(state: Signal<AppState>) {
 }
 
 // ---- settings-page prefs (each mutates state, then persists) ----
-
-/// Switch the Settings modal's left-nav category (ephemeral — not persisted).
-pub fn set_settings_cat(mut state: Signal<AppState>, cat: SettingsCat) {
-    state.write().settings_cat = cat;
-}
 
 pub fn toggle_sync_os(mut state: Signal<AppState>) {
     {

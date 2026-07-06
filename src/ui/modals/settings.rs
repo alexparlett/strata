@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, SettingsCat};
+use crate::ui::components::{WinGeom, Window};
 use crate::ui::icons;
 
 // ---------------------------------------------------------------------------
@@ -34,10 +35,12 @@ fn settings_cat_icon(name: &str) -> Element {
 }
 
 #[component]
-pub fn SettingsModal() -> Element {
+pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
     let state = use_context::<Signal<AppState>>();
+    // The active category is transient UI state, local to this window.
+    let mut cat_sig = use_signal(|| SettingsCat::Appearance);
+    let cat = cat_sig();
     let s = state.read();
-    let cat = s.settings_cat;
     let theme_id = s.theme_id.clone();
     let sync_os = s.sync_os;
     let os_dark = s.os_dark;
@@ -63,17 +66,19 @@ pub fn SettingsModal() -> Element {
     let os_label = if os_dark { "dark" } else { "light" };
 
     rsx! {
-        div { class: "overlay", style: "z-index:70;", onclick: move |_| dispatch(state, Action::CloseOverlays),
-            div { class: "modal", style: "width:760px;max-width:96vw;", onclick: move |e| e.stop_propagation(),
-                div { class: "modal-head",
-                    div { class: "modal-ico", {icons::gear(16)} }
-                    div { style: "flex:1;",
-                        div { class: "modal-title", "Settings" }
-                        div { class: "modal-sub", "appearance & behavior" }
-                    }
-                    button { class: "icon-btn plain", style: "width:30px;height:30px;", onclick: move |_| dispatch(state, Action::CloseOverlays), {icons::close(14)} }
-                }
-                div { class: "settings-body",
+        Window {
+            on_close: move |_| on_close.call(()),
+            title: "Settings".to_string(),
+            subtitle: "appearance & behavior".to_string(),
+            icon: icons::gear(16),
+            init: WinGeom::new(260.0, 90.0, 760.0, 600.0),
+            min_w: 640.0,
+            min_h: 440.0,
+            footer: rsx! {
+                div { class: "spacer" }
+                button { class: "btn accent", style: "height:34px;", onclick: move |_| on_close.call(()), "Done" }
+            },
+            div { class: "settings-body",
                     div { class: "settings-nav",
                         div { class: "settings-navlabel", "SETTINGS" }
                         for (c, label, ic) in [
@@ -84,7 +89,7 @@ pub fn SettingsModal() -> Element {
                         ] {
                             button {
                                 class: if cat == c { "settings-nav-item on" } else { "settings-nav-item" },
-                                onclick: move |_| dispatch(state, Action::SetSettingsCat(c)),
+                                onclick: move |_| cat_sig.set(c),
                                 span { class: "sn-ic", {settings_cat_icon(ic)} }
                                 span { "{label}" }
                             }
@@ -225,11 +230,6 @@ pub fn SettingsModal() -> Element {
                         }
                     }
                 }
-                div { class: "settings-foot",
-                    div { class: "spacer" }
-                    button { class: "btn accent", style: "height:34px;", onclick: move |_| dispatch(state, Action::CloseOverlays), "Done" }
-                }
-            }
         }
     }
 }
