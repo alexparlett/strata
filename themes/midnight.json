@@ -1,0 +1,66 @@
+{
+  "id": "midnight",
+  "name": "Midnight",
+  "author": "Strata",
+  "mode": "dark",
+  "tokens": {
+    "bg": "#0b0e13",
+    "panel": "#0e121a",
+    "main": "#090c11",
+    "elev": "#12161f",
+    "elev2": "#161b25",
+    "elev3": "#1b212c",
+
+    "line": "#1c222c",
+    "line2": "#262e39",
+    "line3": "#2a3340",
+    "line-hi": "#37424f",
+
+    "text": "#e7ebf1",
+    "text2": "#c3cbd6",
+    "text3": "#aeb6c2",
+    "dim": "#8b95a3",
+    "dim2": "#6a7482",
+    "dim3": "#5a6472",
+    "faint": "#4a5462",
+    "faint2": "#3f4854",
+
+    "accent": "#4cc6ff",
+    "accent-ink": "#071019",
+    "green": "#4ade80",
+    "purple": "#d2a8ff",
+    "red": "#ff9aa2",
+    "red2": "#f87171",
+    "orange": "#ffa657",
+
+    "t-str": "#7ee787",
+    "t-num": "#79c0ff",
+    "t-bool": "#d2a8ff",
+    "t-ts": "#ffa657",
+    "t-struct": "#f0a5c0",
+    "t-list": "#8ad4ff",
+    "t-map": "#ffcf6b",
+
+    "syn-keyword": "#ff7b9c",
+    "syn-function": "#d2a8ff",
+    "syn-string": "#a5d6ff",
+    "syn-number": "#79c0ff",
+    "syn-comment": "#6a7482",
+    "syn-identifier": "#e7ebf1",
+    "syn-punct": "#8b95a3",
+
+    "cell": "#dbe3ec",
+    "cell-num": "#9fc6ff",
+    "cell-ts": "#e2b98c",
+    "grid-line": "#12161c",
+    "row-hover": "#141a24",
+
+    "surface": "#0f141d",
+    "surface-sunk": "#0d1119",
+    "accent-soft": "rgba(76,198,255,.12)",
+    "zebra": "rgba(255,255,255,.02)",
+
+    "ui": "'IBM Plex Sans', system-ui, sans-serif",
+    "mono": "'JetBrains Mono', ui-monospace, monospace"
+  }
+}

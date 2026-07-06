@@ -1,0 +1,67 @@
+[package]
+name = "strata"
+version = "0.2.0"
+edition = "2021"
+description = "Strata — a local, Athena-style parquet query workspace (Dioxus + DataFusion)."
+license = "MIT"
+
+[features]
+default = ["sample-data"]
+# Dev convenience: on first launch (no recent project), open the bundled on-disk
+# sample project shipped in the repo `sample/` dir. Disable
+# (`--no-default-features`) for a clean production start that reopens the
+# most-recent project or shows the launcher.
+sample-data = []
+
+[dependencies]
+# UI: Dioxus desktop (RSX in a webview, so the Strata CSS ports faithfully)
+dioxus = { version = "0.7", features = ["desktop"] }
+
+# Syntax-highlighted code editor for the SQL query view (tree-sitter based).
+# Grammars are per-language features; enable the ones we render.
+dioxus-code = { version = "0.1", features = ["runtime", "lang-sql", "lang-json"] }
+dioxus-code-editor = "0.1"
+
+# Query engine: Apache DataFusion (Arrow-native SQL over parquet)
+datafusion = "43"
+
+# Async runtime + stream utilities for the engine thread
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# SQL formatting for the editor "Format" action
+sqlformat = "0.3"
+
+# Serde for project (.psproj) + app-config persistence
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Global config (recent projects + prefs) → JSON in the OS user-config dir.
+# serde-based, no Dioxus coupling.
+preferences = "2"
+
+# Native file/folder dialogs
+rfd = "0.15"
+
+# System clipboard (Copy result as markdown)
+arboard = "3"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# macOS: set the NSWindow background dark so window resizes don't flash white
+# (the webview repaints a beat behind the frame). objc is already in the tree
+# via dioxus-desktop; declared here so we can call into AppKit directly.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+# ObjC completion-handler block for NSOpenPanel (combined file/folder picker).
+block = "0.1"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

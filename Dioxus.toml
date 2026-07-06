@@ -1,0 +1,27 @@
+# Dioxus CLI configuration.
+# https://dioxuslabs.com/learn/0.7/guides/tools/configure
+#
+# CSS + icons are compiled into the binary via `include_str!` / `include_bytes!`,
+# so there's no CLI asset pipeline to configure — this file exists for `dx bundle`.
+
+[application]
+
+# Packaging (`dx bundle`, via tauri-bundler). The listed icons are turned into
+# the platform formats and embedded, so the shipped app carries the Strata mark:
+# the Dock/⌘-Tab icon on macOS, the taskbar/installer icon on Windows, and the
+# window icon on Linux. (At runtime, unbundled `dx serve` builds still get a
+# window icon on Windows/Linux from `window::strata_window_icon`.)
+[bundle]
+identifier = "dev.strata.app"
+publisher = "Strata"
+copyright = "Copyright © 2026 Strata"
+category = "DeveloperTool"
+short_description = "A local, Athena-style parquet query workspace."
+long_description = "Strata is a local, Athena-style workspace for querying parquet, CSV, JSON and Arrow files with DataFusion SQL — multi-window projects, an external-table catalog, and export."
+icon = [
+    "assets/icons/strata-32.png",
+    "assets/icons/strata-64.png",
+    "assets/icons/strata-256.png",
+    "assets/icons/strata.icns",
+    "assets/icons/strata.ico",
+]

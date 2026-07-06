@@ -1,0 +1,66 @@
+{
+  "id": "daylight",
+  "name": "Daylight",
+  "author": "Strata",
+  "mode": "light",
+  "tokens": {
+    "bg": "#f6f8fa",
+    "panel": "#ffffff",
+    "main": "#ffffff",
+    "elev": "#f0f3f6",
+    "elev2": "#e9edf1",
+    "elev3": "#e2e7ec",
+
+    "line": "#e4e8ee",
+    "line2": "#d8dee6",
+    "line3": "#cbd3dd",
+    "line-hi": "#b6c0cc",
+
+    "text": "#1c2430",
+    "text2": "#33404f",
+    "text3": "#48576a",
+    "dim": "#6a7482",
+    "dim2": "#8792a0",
+    "dim3": "#9aa4b2",
+    "faint": "#b0bac6",
+    "faint2": "#c2ccd6",
+
+    "accent": "#2b7fd0",
+    "accent-ink": "#ffffff",
+    "green": "#1a7f37",
+    "purple": "#8250df",
+    "red": "#cf222e",
+    "red2": "#d1242f",
+    "orange": "#bc4c00",
+
+    "t-str": "#0a7d33",
+    "t-num": "#0550ae",
+    "t-bool": "#8250df",
+    "t-ts": "#bc4c00",
+    "t-struct": "#bf3989",
+    "t-list": "#0969da",
+    "t-map": "#9a6700",
+
+    "syn-keyword": "#cf222e",
+    "syn-function": "#8250df",
+    "syn-string": "#0a3069",
+    "syn-number": "#0550ae",
+    "syn-comment": "#6e7781",
+    "syn-identifier": "#1f2937",
+    "syn-punct": "#57606a",
+
+    "cell": "#1f2937",
+    "cell-num": "#0550ae",
+    "cell-ts": "#9a6700",
+    "grid-line": "#eaeef2",
+    "row-hover": "#f0f4f8",
+
+    "surface": "#ffffff",
+    "surface-sunk": "#f0f3f6",
+    "accent-soft": "rgba(43,127,208,.12)",
+    "zebra": "rgba(0,0,0,.025)",
+
+    "ui": "'IBM Plex Sans', system-ui, sans-serif",
+    "mono": "'JetBrains Mono', ui-monospace, monospace"
+  }
+}
