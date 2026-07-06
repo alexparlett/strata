@@ -467,6 +467,14 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .modal-sub { font: 400 11.5px var(--mono); color: var(--dim2); margin-top: 2px; }
 .modal-body { flex: 1; overflow-y: auto; padding: 18px; }
 .modal-foot { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-top: 1px solid var(--line); background: var(--surface-sunk); }
+/* Window container (non-modal, egui-style floating panel) */
+.ps-window { position: fixed; z-index: 65; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line3); border-radius: 16px; box-shadow: 0 30px 80px rgba(0,0,0,.6); overflow: hidden; }
+.ps-window:focus { outline: none; }
+.win-titlebar { cursor: grab; user-select: none; }
+.win-titlebar:active { cursor: grabbing; }
+.win-body { flex: 1; min-height: 0; overflow-y: auto; }
+.win-grip { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; }
+.win-drag-capture { position: fixed; inset: 0; z-index: 9999; }
 .field-label { font: 600 10px var(--mono); letter-spacing: .8px; color: var(--dim3); margin-bottom: 8px; }
 .text-input { width: 100%; height: 34px; padding: 0 12px; background: var(--bg); border: 1px solid var(--line2); border-radius: 9px; color: var(--text); font: 500 13px var(--mono); outline: none; }
 .text-input:focus { border-color: var(--accent); }

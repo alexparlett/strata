@@ -4,13 +4,16 @@
 //!
 //! First up is the **overlay** family (A3, egui-style containers you mount
 //! conditionally and hand `children` to — see `docs/OVERLAY_ARCHITECTURE.md`): the
-//! [`Popup`] (anchored menu) and [`Dialog`] (centred, scrimmed) containers plus the
-//! [`MenuItem`] / [`MenuSep`] menu primitives. `Window` follows.
+//! [`Popup`] (anchored menu), [`Dialog`] (centred, scrimmed), and [`Window`]
+//! (non-modal floating panel) containers plus the [`MenuItem`] / [`MenuSep`] menu
+//! primitives.
 
 mod dialog;
 mod menu;
 mod popup;
+mod window;
 
 pub use dialog::Dialog;
 pub use menu::{MenuItem, MenuSep};
 pub use popup::{Point, Popup};
+pub use window::{WinGeom, Window};
