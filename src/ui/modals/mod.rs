@@ -9,4 +9,4 @@ mod settings;
 pub use command_palette::CommandPalette;
 pub use config::ConfigModal;
 pub use export::ExportModal;
-pub use settings::SettingsModal;
+pub use settings::SettingsHost;

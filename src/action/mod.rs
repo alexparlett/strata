@@ -20,6 +20,7 @@ use crate::state::{AppState, LogTab, PlanTab, RemoveKind, ResizeTarget};
 // private — reachable only through `dispatch`.
 pub(crate) mod catalog;
 pub(crate) mod overlay;
+pub(crate) mod overlay_bus;
 pub mod panel;
 // `projects` is public so a window's `ProjectRoot` startup can load its assigned
 // project in place (`load_current`), outside the dispatch funnel.
@@ -81,6 +82,9 @@ pub enum Action {
     ToggleWindowFill,
 
     // ── overlays ──
+    // Overlay visibility is a pure-UI concern: `dispatch` routes these to the
+    // per-window bus (see `overlay_bus`), not to `AppState`.
+    ToggleSettings,
     CloseOverlays,
     // Bottom drawer (History + Events tabs).
     OpenHistory,
@@ -118,6 +122,13 @@ pub enum Action {
 /// definitions/tabs) trigger a project autosave afterward; editor-affecting
 /// actions bump `editor_epoch` so the SQL editor remounts onto the new content.
 pub fn dispatch(mut state: Signal<AppState>, action: Action) {
+    // Overlay actions are a pure-UI concern: publish them to the per-window bus
+    // for the always-mounted host components to react to, rather than running them
+    // against `AppState`. See `overlay_bus`.
+    if overlay_bus::is_overlay(&action) {
+        overlay_bus::publish(action);
+        return;
+    }
     let durable = is_durable(&action);
     let editor = affects_editor(&action);
     run(state, action);
@@ -237,6 +248,9 @@ fn run(state: Signal<AppState>, action: Action) {
         ToggleWindowFill => panel::toggle_window_fill(state),
 
         // overlays
+        // Overlay-visibility actions are intercepted by `dispatch` and published to
+        // the bus, so they never reach here.
+        ToggleSettings => unreachable!("overlay action routed by dispatch"),
         CloseOverlays => overlay::close_all(state),
         OpenHistory => overlay::open_history(state),
         OpenEvents => overlay::open_events(state),
