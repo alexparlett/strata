@@ -135,11 +135,6 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                         {theme_card(state, t, &active_id)}
                                     }
                                 }
-                                div { style: "margin-top:14px;",
-                                    button { class: "btn sm", onclick: move |_| crate::theme::open_user_themes_dir(),
-                                        {icons::folder(13)} "Open themes folder"
-                                    }
-                                }
                             },
                             SettingsCat::DataDisplay => rsx! {
                                 div { style: "font:600 13px var(--ui);color:var(--text);margin-bottom:12px;", "Row density" }
