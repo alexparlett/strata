@@ -416,10 +416,6 @@ fn tabs(state: Signal<AppState>, mut tab_menu: Signal<Option<(usize, Point)>>) -
             button { class: "icon-btn plain", style: "width:28px;height:28px;margin-bottom:1px;flex:none;",
                 title: "New query", onclick: move |_| dispatch(state, Action::NewTab), {icons::plus(15)} }
             }
-            button { class: "btn", style: "height:26px;margin-bottom:2px;flex:none;",
-                onclick: move |_| dispatch(state, Action::OpenHistory),
-                {icons::clock(13)} "History"
-            }
 
             // Self-contained tab context menu (egui-style Popup container).
             if let Some((idx, at)) = tab_menu() {
