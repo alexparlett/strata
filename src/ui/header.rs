@@ -33,6 +33,15 @@ pub fn Header() -> Element {
     let mut proj_menu = use_signal(|| false);
     let project = state.read().project.name.clone();
     let has_ws = !state.read().project.workspaces.is_empty();
+    // Emphasise Save when the active tab has unsaved changes (A6).
+    let active_dirty = {
+        let s = state.read();
+        s.project
+            .workspaces
+            .get(s.project.active_ws)
+            .map(|w| w.is_dirty())
+            .unwrap_or(false)
+    };
     let running = {
         let id = state.read().active_tab_id();
         let runs = crate::runs::RUNS.read();
@@ -98,7 +107,14 @@ pub fn Header() -> Element {
                     {tool_btn(state, Action::FormatSql, "Format SQL", icons::format(15))}
                     {tool_btn(state, Action::ClearSql, "Clear editor", icons::trash(15))}
                     {tool_btn(state, Action::SaveAsView, "Save as view", icons::eye(15))}
-                    {tool_btn(state, Action::SaveQuery, "Save query (⌘S)", icons::save(15))}
+                    button {
+                        class: if active_dirty { "icon-btn dirty" } else { "icon-btn" },
+                        title: "Save query (⌘S)",
+                        onmousedown: move |e| e.stop_propagation(),
+                        ondoubleclick: move |e| e.stop_propagation(),
+                        onclick: move |_| dispatch(state, Action::SaveQuery),
+                        {icons::save(15)}
+                    }
                 }
                 div { class: "hsep" }
             }

@@ -202,6 +202,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .ws-tab.active { background: var(--main); border-color: var(--line); color: var(--text); }
 .ws-tab .tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim2); }
 .ws-tab.active .tdot { background: var(--accent); }
+/* Unsaved / diverged from a bound view or saved query (A6). Wins over active. */
+.ws-tab.dirty .tdot { background: var(--orange); }
+/* Header Save button, emphasised while the active tab has unsaved changes. */
+.icon-btn.dirty { color: var(--orange); }
 .ws-tab .close { color: var(--faint); font-size: 13px; padding-left: 2px; }
 .ws-tab .close:hover { color: var(--text); }
 

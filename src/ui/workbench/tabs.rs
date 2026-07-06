@@ -22,13 +22,13 @@ pub(crate) fn Tabs() -> Element {
     let active = state.read().project.active_ws;
     let renaming_now = renaming();
     let rename_draft = rename_val();
-    let ws: Vec<(usize, String)> = state
+    let ws: Vec<(usize, String, bool)> = state
         .read()
         .project
         .workspaces
         .iter()
         .enumerate()
-        .map(|(i, w)| (i, w.name.clone()))
+        .map(|(i, w)| (i, w.name.clone(), w.is_dirty()))
         .collect();
 
     rsx! {
@@ -46,14 +46,20 @@ pub(crate) fn Tabs() -> Element {
                     {icons::expand_right(15)} }
             }
             div { class: "ws-tabs-scroll",
-            for (i, name) in ws {
+            for (i, name, dirty) in ws {
                 {
                     let is_rename = renaming_now == Some(i);
                     let rv = rename_draft.clone();
                     let name_seed = name.clone();
+                    let tab_class = match (i == active, dirty) {
+                        (true, true) => "ws-tab active dirty",
+                        (true, false) => "ws-tab active",
+                        (false, true) => "ws-tab dirty",
+                        (false, false) => "ws-tab",
+                    };
                     rsx! {
                         div {
-                            class: if i == active { "ws-tab active" } else { "ws-tab" },
+                            class: "{tab_class}",
                             onclick: move |_| dispatch(state, Action::SwitchTab(i)),
                             ondoubleclick: move |e| {
                                 e.stop_propagation();
