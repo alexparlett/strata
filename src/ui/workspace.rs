@@ -482,7 +482,7 @@ fn editor(mut state: Signal<AppState>) -> Element {
 
     rsx! {
         section { style: "flex:none;background:var(--main);",
-            div { style: "margin:0 14px 12px;height:{editor_h}px;background:var(--main);border:1px solid var(--line);border-radius:10px;overflow:auto;",
+            div { style: "height:{editor_h}px;background:var(--main);border-bottom:1px solid var(--line);overflow:auto;",
                 CodeEditor {
                     // Remount when the active content changes for a non-typing
                     // reason: the tab id covers switches, the epoch covers
