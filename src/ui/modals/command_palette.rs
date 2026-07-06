@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
+use crate::ui::components::Dialog;
 use crate::ui::icons;
 
 // ---------------------------------------------------------------------------
@@ -45,8 +46,11 @@ impl PaletteCommand {
 
 #[component]
 pub fn CommandPalette() -> Element {
-    let mut state = use_context::<Signal<AppState>>();
-    let cmdk_q = state.read().cmdk_query.clone();
+    let state = use_context::<Signal<AppState>>();
+    // The query is transient, component-local state: the palette is freshly
+    // mounted each time it opens (gated on `cmdk_open`), so it resets naturally.
+    let mut query = use_signal(String::new);
+    let cmdk_q = query();
     let q = cmdk_q.to_lowercase();
 
     // Each row is (label, sub, action) — selecting it just dispatches `action`.
@@ -77,40 +81,43 @@ pub fn CommandPalette() -> Element {
         .collect();
 
     rsx! {
-        div { class: "overlay top", style: "z-index:70;", onclick: move |_| dispatch(state, Action::CloseOverlays),
-            div { class: "cmdk", onclick: move |e| e.stop_propagation(),
-                div { class: "cmdk-head",
-                    {icons::search(17)}
-                    input {
-                        class: "cmdk-input",
-                        autofocus: true,
-                        placeholder: "Search tables, columns, views — or run a command…",
-                        value: "{cmdk_q}",
-                        oninput: move |e| state.write().cmdk_query = e.value(),
-                    }
-                    span { class: "kbd", "ESC" }
+        Dialog {
+            on_close: move |_| dispatch(state, Action::CloseOverlays),
+            card_class: "cmdk".to_string(),
+            z: 70,
+            top: true,
+            has_input: true,
+            div { class: "cmdk-head",
+                {icons::search(17)}
+                input {
+                    class: "cmdk-input",
+                    autofocus: true,
+                    placeholder: "Search tables, columns, views — or run a command…",
+                    value: "{cmdk_q}",
+                    oninput: move |e| query.set(e.value()),
                 }
-                div { class: "cmdk-list",
-                    if filtered.is_empty() {
-                        div { style: "padding:40px;text-align:center;color:var(--dim3);", "No matches" }
-                    }
-                    for (label, sub, action) in filtered {
-                        div {
-                            class: "cmdk-item",
-                            onclick: move |_| {
-                                dispatch(state, action.clone());
-                                dispatch(state, Action::CloseOverlays);
-                            },
-                            span { style: "display:flex;color:var(--dim);", {icons::table(15)} }
-                            span { class: "lbl", "{label}" }
-                            div { class: "spacer" }
-                            span { class: "sub", "{sub}" }
-                        }
+                span { class: "kbd", "ESC" }
+            }
+            div { class: "cmdk-list",
+                if filtered.is_empty() {
+                    div { style: "padding:40px;text-align:center;color:var(--dim3);", "No matches" }
+                }
+                for (label, sub, action) in filtered {
+                    div {
+                        class: "cmdk-item",
+                        onclick: move |_| {
+                            dispatch(state, action.clone());
+                            dispatch(state, Action::CloseOverlays);
+                        },
+                        span { style: "display:flex;color:var(--dim);", {icons::table(15)} }
+                        span { class: "lbl", "{label}" }
+                        div { class: "spacer" }
+                        span { class: "sub", "{sub}" }
                     }
                 }
-                div { class: "cmdk-foot",
-                    span { "↑↓ navigate" } span { "↵ select" } span { "esc close" }
-                }
+            }
+            div { class: "cmdk-foot",
+                span { "↑↓ navigate" } span { "↵ select" } span { "esc close" }
             }
         }
     }

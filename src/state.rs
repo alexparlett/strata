@@ -253,8 +253,6 @@ pub struct AppState {
     pub status_kind: LogKind,
     // menus / modals
     pub cmdk_open: bool,
-    pub cmdk_query: String,
-    pub cmdk_active: usize,
     pub export_open: bool,
     pub config_open: bool,
     pub settings_open: bool,
@@ -410,8 +408,6 @@ impl AppState {
             status_text: "Ready · DataFusion 43 · open a project or add a table to begin".into(),
             status_kind: LogKind::Ok,
             cmdk_open: false,
-            cmdk_query: String::new(),
-            cmdk_active: 0,
             export_open: false,
             config_open: false,
             settings_open: false,

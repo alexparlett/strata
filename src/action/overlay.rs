@@ -5,12 +5,11 @@ use dioxus::prelude::*;
 
 use crate::state::{AppState, LogTab, SettingsCat};
 
-/// Toggle the command palette (⌘K), resetting its query + selection.
+/// Toggle the command palette (⌘K). Its search query is component-local, so a
+/// fresh mount resets it — nothing to clear here.
 pub fn toggle_cmdk(mut state: Signal<AppState>) {
     let mut s = state.write();
     s.cmdk_open = !s.cmdk_open;
-    s.cmdk_query.clear();
-    s.cmdk_active = 0;
 }
 
 /// Close every overlay / menu / dialog (Esc, backdrop clicks).
