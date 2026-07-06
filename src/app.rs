@@ -471,6 +471,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
         } => {
             if dropped {
                 s.project.views.retain(|v| v.name != name);
+                autosave_after = true;
                 s.push_log(LogKind::Info, format!("Dropped view '{name}'"));
                 s.set_status(LogKind::Info, format!("Dropped view '{name}'"));
             } else {
@@ -490,6 +491,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         }
                         s.push_log(LogKind::Ok, format!("Saved view '{name}'"));
                         s.set_status(LogKind::Ok, format!("Saved view '{name}'"));
+                        autosave_after = true;
                     }
                     Err(e) => {
                         tracing::error!("view '{name}' failed: {e}");
@@ -501,6 +503,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
         }
         Event::Deregistered { table } => {
             s.project.tables.retain(|t| t.name != table);
+            autosave_after = true;
             s.push_log(LogKind::Info, format!("Removed table '{table}'"));
         }
         Event::Exported { result } => match result {

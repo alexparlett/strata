@@ -119,7 +119,7 @@ pub fn LauncherRoot() -> Element {
                                 onclick: move |_| {
                                     spawn(async move {
                                         if let Some(handle) = rfd::AsyncFileDialog::new().pick_folder().await {
-                                            let path = crate::window::resolve_project_file(handle.path());
+                                            let path = crate::window::resolve_project_dir(handle.path());
                                             crate::window::spawn_project_window(path.to_string_lossy().into_owned());
                                             dioxus::desktop::window().close();
                                         }

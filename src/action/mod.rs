@@ -124,12 +124,17 @@ pub enum Action {
 pub fn dispatch(mut state: Signal<AppState>, action: Action) {
     let durable = is_durable(&action);
     let editor = affects_editor(&action);
+    let defs = durable && touches_defs(&action);
     run(state, action);
     if editor {
         state.write().editor_epoch += 1;
     }
     if durable {
-        projects::autosave(state);
+        if defs {
+            projects::autosave(state);
+        } else {
+            projects::autosave_session(state);
+        }
     }
 }
 
@@ -181,6 +186,17 @@ fn is_durable(a: &Action) -> bool {
             | EditView(_)
             | OpenHistoryQuery(_)
             | RunHistoryQuery(_)
+    )
+}
+
+/// Whether a durable action changed the committed **definitions** (catalog / views
+/// / saved queries) → write `project.json`. Otherwise it's session-only (tabs /
+/// history) → `session.json` only.
+fn touches_defs(a: &Action) -> bool {
+    use Action::*;
+    matches!(
+        a,
+        SaveAsView | SaveQuery | DeleteSavedQuery(_) | RegisterTable(_) | ConfirmRemove { .. }
     )
 }
 

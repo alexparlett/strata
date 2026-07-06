@@ -86,7 +86,7 @@ fn decide_startup() -> Startup {
     }
     #[cfg(feature = "sample-data")]
     {
-        Startup::Project(concat!(env!("CARGO_MANIFEST_DIR"), "/sample/sample.strata").to_string())
+        Startup::Project(concat!(env!("CARGO_MANIFEST_DIR"), "/sample/.strata").to_string())
     }
     #[cfg(not(feature = "sample-data"))]
     {

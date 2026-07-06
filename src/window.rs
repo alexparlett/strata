@@ -126,30 +126,11 @@ pub fn open_launcher_window() {
     let _ = dioxus::desktop::window().new_window(dom, launcher_window_config());
 }
 
-/// Resolve a chosen directory to its project file: an existing `*.strata` in the
-/// folder, else `<dir>/<dir-name>.strata` (scaffolded on open). A legacy
-/// `*.psproj` is still recognised so pre-rename projects keep opening.
-pub fn resolve_project_file(dir: &Path) -> PathBuf {
-    let files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .collect();
-    let with_ext = |ext: &str| {
-        files
-            .iter()
-            .find(|p| p.extension().map(|x| x == ext).unwrap_or(false))
-            .cloned()
-    };
-    with_ext("strata")
-        .or_else(|| with_ext("psproj"))
-        .unwrap_or_else(|| {
-            let name = dir
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "project".to_string());
-            dir.join(format!("{name}.strata"))
-        })
+/// The project directory for a chosen folder: `<folder>/.strata`. Whether it
+/// already exists, needs scaffolding, or has a legacy single-file project to
+/// migrate is decided later by `Project::load_from_dir` / `exists_at`.
+pub fn resolve_project_dir(folder: &Path) -> PathBuf {
+    folder.join(".strata")
 }
 
 // ---- window configuration ----
@@ -204,9 +185,7 @@ fn peek_geom(path: &str) -> Option<crate::project::WindowGeom> {
     if path.is_empty() {
         return None;
     }
-    crate::project::Project::load(std::path::Path::new(path))
-        .ok()
-        .and_then(|p| p.window)
+    crate::project::Project::peek_window(std::path::Path::new(path))
 }
 
 pub fn launcher_window_config() -> Config {

@@ -21,8 +21,8 @@ use crate::state::{AppState, LogKind};
 /// Load a project into *this* window (startup / freshly-spawned window). A
 /// missing file becomes a new project scaffolded from the folder name.
 pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
-    let project = if path.exists() {
-        match Project::load(&path) {
+    let project = if Project::exists_at(&path) {
+        match Project::load_from_dir(&path) {
             Ok(p) => p,
             Err(e) => {
                 tracing::error!("open project {}: {e}", path.display());
@@ -33,12 +33,14 @@ pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
             }
         }
     } else {
+        // Scaffold a new project named after the containing folder.
         let mut p = Project::empty();
         p.name = path
-            .file_stem()
+            .parent()
+            .and_then(|f| f.file_name())
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "untitled".to_string());
-        if let Err(e) = p.save(&path) {
+        if let Err(e) = p.save_all(&path) {
             tracing::error!("create project {}: {e}", path.display());
         }
         p
@@ -62,7 +64,7 @@ pub fn open_dir(state: Signal<AppState>) {
             dialog = dialog.set_directory(dir);
         }
         if let Some(handle) = dialog.pick_folder().await {
-            let path = crate::window::resolve_project_file(handle.path());
+            let path = crate::window::resolve_project_dir(handle.path());
             if open_pref == "this" {
                 open_in_current(state, path);
             } else {
@@ -129,7 +131,7 @@ pub fn save(mut state: Signal<AppState>) {
     if let Some(geom) = crate::window::current_window_geom() {
         state.write().project.window = Some(geom);
     }
-    write_project(state);
+    write_files(state, true);
 }
 
 /// Save from the window-close handler (`CloseRequested`), where the dioxus scope
@@ -139,15 +141,24 @@ pub fn save_on_close(mut state: Signal<AppState>, win_id: WindowId) {
     if let Some(geom) = crate::window::window_geom_by_id(win_id) {
         state.write().project.window = Some(geom);
     }
-    write_project(state);
+    write_files(state, true);
 }
 
-/// Write the project to its file (no geometry capture — the caller sets it).
-fn write_project(state: Signal<AppState>) {
+/// Write the project to its `.strata/` dir: both files when `defs` (a definition
+/// changed), else only `session.json` (a tab/history/geometry change — keeps the
+/// committed `project.json` quiet). No-op if no project is backed on disk.
+fn write_files(state: Signal<AppState>, defs: bool) {
     let (path, result) = {
         let s = state.read();
         match &s.project_path {
-            Some(p) => (Some(p.clone()), s.project.save(p)),
+            Some(dir) => (
+                Some(dir.clone()),
+                if defs {
+                    s.project.save_all(dir)
+                } else {
+                    s.project.save_session(dir)
+                },
+            ),
             None => (None, Ok(())),
         }
     };
@@ -156,11 +167,27 @@ fn write_project(state: Signal<AppState>) {
     }
 }
 
-/// Autosave after a durable change (only when a project is open on disk).
-pub fn autosave(state: Signal<AppState>) {
-    if state.read().project_path.is_some() {
-        save(state);
+/// Autosave after a durable change that touched **definitions** — both files.
+pub fn autosave(mut state: Signal<AppState>) {
+    if state.read().project_path.is_none() {
+        return;
     }
+    if let Some(geom) = crate::window::current_window_geom() {
+        state.write().project.window = Some(geom);
+    }
+    write_files(state, true);
+}
+
+/// Autosave after a **session-only** durable change (tabs / history) — writes just
+/// `session.json`, leaving the committed `project.json` untouched.
+pub fn autosave_session(mut state: Signal<AppState>) {
+    if state.read().project_path.is_none() {
+        return;
+    }
+    if let Some(geom) = crate::window::current_window_geom() {
+        state.write().project.window = Some(geom);
+    }
+    write_files(state, false);
 }
 
 /// `Action::CloseProject` — save, then close this window. If it's the last

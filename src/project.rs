@@ -1,16 +1,23 @@
 //! The **project domain model** — catalog definitions, query tabs, and history
-//! that make up a project. This is the persistable core, serialized to a single
-//! `<name>.psproj` JSON file; app/session/UI state lives in `crate::state`.
+//! that make up a project. Persisted as a `.strata/` directory: the durable
+//! definitions in `project.json` (committed) + the working session (tabs, history,
+//! geometry) in `session.json` (gitignored). App/global state lives in
+//! `crate::state`.
 //!
 //! Only *definitions* are durable. For tables/views the `columns`/`status` are
 //! runtime and `#[serde(skip)]`-ped — re-derived when the engine re-registers a
 //! project on open. Reference model: table `sources` are absolute paths.
 
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::engine::ColumnInfo;
+
+/// File names inside the `.strata/` project directory.
+const PROJECT_JSON: &str = "project.json";
+const SESSION_JSON: &str = "session.json";
 
 /// Registration lifecycle of a catalog table (runtime, not persisted).
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -146,6 +153,67 @@ pub struct Project {
     pub window: Option<WindowGeom>,
 }
 
+/// The committed definitions — `.strata/project.json`.
+#[derive(Serialize, Deserialize, Default)]
+struct DefsFile {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    tables: Vec<CatalogTable>,
+    #[serde(default)]
+    views: Vec<CatalogView>,
+    #[serde(default)]
+    saved_queries: Vec<SavedQuery>,
+}
+
+/// The local working session — `.strata/session.json` (gitignored).
+#[derive(Serialize, Deserialize, Default)]
+struct SessionFile {
+    #[serde(default)]
+    workspaces: Vec<Workspace>,
+    #[serde(default)]
+    active_ws: usize,
+    #[serde(default)]
+    history: Vec<HistoryItem>,
+    #[serde(default)]
+    window: Option<WindowGeom>,
+}
+
+fn write_json<T: Serialize>(path: &Path, val: &T) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(val).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| e.to_string())
+}
+
+fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+/// Write `.strata/.gitignore` (ignoring the local session) if it's not there yet.
+fn ensure_gitignore(dir: &Path) {
+    let gi = dir.join(".gitignore");
+    if !gi.exists() {
+        let _ = fs::write(gi, "session.json\n");
+    }
+}
+
+/// A pre-split single-file project (`*.strata`, or legacy `*.psproj`) in `folder`.
+fn legacy_file(folder: &Path) -> Option<PathBuf> {
+    let files: Vec<PathBuf> = fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file())
+        .collect();
+    let with_ext = |ext: &str| {
+        files
+            .iter()
+            .find(|p| p.extension().map(|x| x == ext).unwrap_or(false))
+            .cloned()
+    };
+    with_ext("strata").or_else(|| with_ext("psproj"))
+}
+
 impl Project {
     /// An empty project: no catalog, one blank query tab, no history.
     pub fn empty() -> Self {
@@ -167,18 +235,95 @@ impl Project {
         }
     }
 
-    /// Write the project to `path` as pretty JSON (the `.psproj` manifest).
-    pub fn save(&self, path: &Path) -> Result<(), String> {
-        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| e.to_string())
+    /// Write both files (definitions + session) into the `.strata/` dir, creating
+    /// it and its `.gitignore` if needed. For full / explicit saves.
+    pub fn save_all(&self, dir: &Path) -> Result<(), String> {
+        self.save_defs(dir)?;
+        self.save_session(dir)?;
+        ensure_gitignore(dir);
+        Ok(())
     }
 
-    /// Load a project from a `.psproj` file, normalizing runtime ids/counters.
-    pub fn load(path: &Path) -> Result<Project, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let mut project: Project = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-        project.normalize();
-        Ok(project)
+    /// Write only the committed definitions (`project.json`).
+    pub fn save_defs(&self, dir: &Path) -> Result<(), String> {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let defs = DefsFile {
+            name: self.name.clone(),
+            tables: self.tables.clone(),
+            views: self.views.clone(),
+            saved_queries: self.saved_queries.clone(),
+        };
+        write_json(&dir.join(PROJECT_JSON), &defs)
+    }
+
+    /// Write only the local working session (`session.json`).
+    pub fn save_session(&self, dir: &Path) -> Result<(), String> {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let sess = SessionFile {
+            workspaces: self.workspaces.clone(),
+            active_ws: self.active_ws,
+            history: self.history.clone(),
+            window: self.window,
+        };
+        write_json(&dir.join(SESSION_JSON), &sess)
+    }
+
+    /// Load from a `.strata/` dir (merging the two files); else migrate a legacy
+    /// single-file `*.strata` / `*.psproj` in the parent folder. `Err` when
+    /// neither exists (caller then scaffolds a new project).
+    pub fn load_from_dir(dir: &Path) -> Result<Project, String> {
+        let pj = dir.join(PROJECT_JSON);
+        if pj.exists() {
+            let defs: DefsFile = read_json(&pj)?;
+            let sess: SessionFile = read_json(&dir.join(SESSION_JSON)).unwrap_or_default();
+            let mut project = Project::from_parts(defs, sess);
+            project.normalize();
+            return Ok(project);
+        }
+        if let Some(folder) = dir.parent() {
+            if let Some(legacy) = legacy_file(folder) {
+                let text = fs::read_to_string(&legacy).map_err(|e| e.to_string())?;
+                let mut project: Project =
+                    serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                project.normalize();
+                return Ok(project);
+            }
+        }
+        Err("no project files".into())
+    }
+
+    /// Whether a project already exists at `dir`: a `.strata/project.json`, or a
+    /// legacy single-file project in the parent folder waiting to be migrated.
+    /// Distinguishes "open existing" from "scaffold new" (so a corrupt file is
+    /// never silently overwritten).
+    pub fn exists_at(dir: &Path) -> bool {
+        if dir.join(PROJECT_JSON).exists() {
+            return true;
+        }
+        dir.parent().and_then(legacy_file).is_some()
+    }
+
+    /// Read just the saved window geometry from a `.strata/` dir (to size a window
+    /// before it's created). `None` if absent.
+    pub fn peek_window(dir: &Path) -> Option<WindowGeom> {
+        read_json::<SessionFile>(&dir.join(SESSION_JSON))
+            .ok()
+            .and_then(|s| s.window)
+    }
+
+    fn from_parts(defs: DefsFile, sess: SessionFile) -> Project {
+        Project {
+            name: defs.name,
+            tables: defs.tables,
+            views: defs.views,
+            saved_queries: defs.saved_queries,
+            workspaces: sess.workspaces,
+            active_ws: sess.active_ws,
+            next_ws_id: 0,
+            history: sess.history,
+            next_hist: 0,
+            window: sess.window,
+        }
     }
 
     /// After a load: keep persisted tab ids, but repair legacy/corrupt ones, and
