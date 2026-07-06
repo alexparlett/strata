@@ -1,11 +1,9 @@
-//! Overlay containers (A3). egui-style, self-contained components you hand
-//! content to — the container owns positioning, chrome, and dismissal; the caller
-//! owns *whether* it's mounted (a local `use_signal`) and supplies the body as
-//! `children`. No central `AppState` enum, no reducer. See
+//! `Popup` — an anchored, self-contained overlay container (context menu /
+//! dropdown). egui-style: mount it conditionally (`if open { Popup { … } }`) and it
+//! owns positioning, the full-screen click-catcher, Esc handling, and dismissal via
+//! `on_close`. The caller owns *whether* it's mounted (a local `use_signal`) and
+//! supplies the body as `children`. No central `AppState` enum, no reducer. See
 //! `docs/OVERLAY_ARCHITECTURE.md`.
-//!
-//! This module ships the **`Popup`** container (anchored menu / dropdown) plus the
-//! `MenuItem` / `MenuSep` content primitives. `Window` / `Dialog` follow.
 
 use dioxus::prelude::*;
 
@@ -64,48 +62,4 @@ pub fn Popup(
             }
         }
     }
-}
-
-/// A clickable row inside a [`Popup`] menu. The caller's `onclick` should both
-/// dismiss the popup (clear its signal) and perform the action.
-#[component]
-pub fn MenuItem(
-    icon: Option<Element>,
-    label: String,
-    meta: Option<String>,
-    #[props(default)] danger: bool,
-    #[props(default)] disabled: bool,
-    onclick: EventHandler<()>,
-) -> Element {
-    let cls = if disabled {
-        "ctx-item disabled"
-    } else if danger {
-        "ctx-item danger"
-    } else {
-        "ctx-item"
-    };
-    rsx! {
-        div {
-            class: "{cls}",
-            onclick: move |e| {
-                e.stop_propagation();
-                if !disabled {
-                    onclick.call(());
-                }
-            },
-            if let Some(ic) = icon {
-                span { class: "ci", {ic} }
-            }
-            span { style: "flex:1;", "{label}" }
-            if let Some(m) = meta {
-                span { class: "kbd-hint", "{m}" }
-            }
-        }
-    }
-}
-
-/// A divider between [`MenuItem`]s.
-#[component]
-pub fn MenuSep() -> Element {
-    rsx! { div { class: "ctx-sep" } }
 }

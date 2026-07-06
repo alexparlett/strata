@@ -13,7 +13,7 @@ use crate::action::{dispatch, Action};
 use crate::engine::Cell;
 use crate::state::AppState;
 use crate::ui::icons;
-use crate::ui::overlay::{MenuItem, MenuSep, Point, Popup};
+use crate::ui::components::{MenuItem, MenuSep, Point, Popup};
 
 #[component]
 pub fn Workspace() -> Element {

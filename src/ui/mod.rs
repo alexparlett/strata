@@ -1,6 +1,7 @@
 //! UI components (Dioxus). Each reads the shared `Signal<AppState>` from context
 //! and calls controller actions in `crate::app`.
 
+pub mod components;
 pub mod errview;
 pub mod header;
 pub mod icons;
@@ -8,7 +9,6 @@ pub mod inspector;
 pub mod launcher;
 pub mod drawer;
 pub mod modals;
-pub mod overlay;
 pub mod sidebar;
 pub mod statusbar;
 pub mod workspace;

@@ -41,7 +41,7 @@ content as `children`, and manages the rest itself.
 // Anchored menu/dropdown. Owns: catcher, Esc, positioning. Mount it conditionally
 // (`if let Some(t) = menu() { Popup { … } }`); it calls `on_close` to dismiss.
 // Implemented: `Popup(on_close: EventHandler<()>, at: Point, children)` + the
-// `MenuItem` / `MenuSep` content primitives (`ui/overlay.rs`).
+// `MenuItem` / `MenuSep` content primitives (`ui/components/`).
 #[component]
 fn Popup(open: Signal<bool>, at: Anchor, children: Element) -> Element
 
@@ -127,7 +127,7 @@ A **Dropdown** = a `Btn` trigger + a local `open` signal + a `Popup` of
    `AppState.popup` enum + field, `Action::ClosePopup`, and the variant-matching
    `ui/popup.rs`. Keep `Point`.
 1. **`Popup` container + primitives.** Build `Popup`, `Btn`, `MenuItem`, `MenuSep`
-   in `ui/overlay/`. Migrate the **catalog** + **tab** context menus: each owner
+   in `ui/components/`. Migrate the **catalog** + **tab** context menus: each owner
    (sidebar / workspace) holds a local `use_signal` and renders `Popup` with
    `MenuItem` content. Delete `OpenCatalogMenu`/`OpenTabMenu` actions + the
    `catalog::open_menu`/`tab::open_menu` handlers.

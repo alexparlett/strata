@@ -154,7 +154,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             if state.read().cell_open { ui::modals::CellPopover {} }
             if state.read().remove_open { ui::modals::RemoveConfirm {} }
             // Catalog + tab context menus are now self-contained `Popup` containers
-            // rendered by the sidebar / workspace (see `ui::overlay`).
+            // rendered by the sidebar / workspace (see `ui::components`).
         }
     }
 }

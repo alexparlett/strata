@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
 use crate::ui::icons;
-use crate::ui::overlay::{Point, Popup};
+use crate::ui::components::{Point, Popup};
 
 /// A 30×30 header icon button that dispatches `action`. `onmousedown` is stopped
 /// so clicking a button never starts a window drag.

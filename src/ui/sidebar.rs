@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind};
 use crate::ui::icons;
-use crate::ui::overlay::{MenuItem, MenuSep, Point, Popup};
+use crate::ui::components::{MenuItem, MenuSep, Point, Popup};
 
 /// A catalog row's open context menu (self-contained sidebar state).
 #[derive(Clone)]
