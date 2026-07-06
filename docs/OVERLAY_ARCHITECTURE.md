@@ -123,26 +123,36 @@ A **Dropdown** = a `Btn` trigger + a local `open` signal + a `Popup` of
 
 ## 5. Build & migration order (each step compiles)
 
-0. **Unwind the false start.** Remove the reducer version I began: the
-   `AppState.popup` enum + field, `Action::ClosePopup`, and the variant-matching
-   `ui/popup.rs`. Keep `Point`.
-1. **`Popup` container + primitives.** Build `Popup`, `Btn`, `MenuItem`, `MenuSep`
-   in `ui/components/`. Migrate the **catalog** + **tab** context menus: each owner
-   (sidebar / workspace) holds a local `use_signal` and renders `Popup` with
-   `MenuItem` content. Delete `OpenCatalogMenu`/`OpenTabMenu` actions + the
-   `catalog::open_menu`/`tab::open_menu` handlers.
-2. **Recents dropdown** → `Popup` in the header, local signal. Delete
-   `ToggleProjectMenu`. (Page-size / format dropdowns follow — they want
-   flip-up positioning; small follow-up.)
-3. **`Dialog` container.** Migrate remove-confirm, cell view, command palette off
-   their `AppState` bools + hand-rolled scrims onto `Dialog`.
+0. **DONE — Unwind the false start.** Removed the reducer version (the
+   `AppState.popup` enum + field, `Action::ClosePopup`, the variant-matching
+   `ui/popup.rs`). Kept `Point`.
+1. **DONE — `Popup` container + primitives.** Built in `ui/components/`
+   (`popup.rs` + `menu.rs`, with `card_class`/`width` for the richer dropdown
+   chrome). Catalog + tab context menus migrated to sidebar/workspace-local
+   `use_signal`s; `OpenCatalogMenu`/`OpenTabMenu` actions + handlers deleted.
+2. **DONE — Recents dropdown** → `Popup` in the header, local signal;
+   `ToggleProjectMenu` deleted. (Page-size / format dropdowns still pending — they
+   want flip-up positioning; small follow-up.)
+3. **DONE — `Dialog` container** (`ui/components/dialog.rs`; centred scrim, focus,
+   Esc with `stop_propagation`, `has_input` to defer focus to a body field).
+   remove-confirm → sidebar-local, cell view → workspace-local, command palette →
+   **root-local** (open flag owned by `ProjectRoot`; both ⌘K and the header search
+   button drive it; it closes via an `on_close` callback). Removed the
+   `remove_*`/`cell*`/`cmdk_*` `AppState` fields, the
+   `RequestRemove`/`CancelRemove`/`OpenCellPopover`/`ToggleCmdk` actions, and their
+   `CloseOverlays` coupling.
 4. **`Window` container** (drag + resize + geometry). Migrate Settings / Export /
    Configure; **fold in A4** (their form state → component-local). Non-modal.
-5. **Cleanup.** Delete the leftover `*_open` bools, `overlay::close_all`, and the
-   `if X_open` render pile in `app.rs`.
+5. **Cleanup + unified Esc.** Once every overlay is a container, introduce the
+   **`EscStack`** (a LIFO registry in context; one root handler pops the top on
+   Escape) and have `Popup`/`Dialog`/`Window` register on mount / unregister on
+   unmount. Then delete `overlay::close_all`, the root `CloseOverlays` Esc
+   fallback, the remaining `*_open` bools, and the `if X_open` pile in `app.rs`.
+   This is where the deferred `OverlayScope` finally lands — until then Esc is
+   focus + bubbling (correct while only one overlay is open at a time).
 
-`OverlayScope` (shared stack for stacked-Esc + single-click switch) and
-element-rect anchoring are optional refinements after the containers land.
+Element-rect anchoring (vs. the current fixed/cursor `Point`) is an optional
+refinement after the containers land.
 
 ---
 
