@@ -117,36 +117,15 @@ fn close_where(mut state: Signal<AppState>, remove: impl Fn(usize) -> bool) {
 
 // ---- inline rename ----
 
-pub fn start_rename(mut state: Signal<AppState>, idx: usize) {
-    let name = state
-        .read()
-        .project
-        .workspaces
-        .get(idx)
-        .map(|w| w.name.clone())
-        .unwrap_or_default();
-    let mut s = state.write();
-    s.renaming_ws = Some(idx);
-    s.rename_val = name;
-}
-
-pub fn rename_input(mut state: Signal<AppState>, val: String) {
-    state.write().rename_val = val;
-}
-
-pub fn commit_rename(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    if let Some(idx) = s.renaming_ws {
-        let v = s.rename_val.trim().to_string();
-        if !v.is_empty() {
-            if let Some(w) = s.project.workspaces.get_mut(idx) {
-                w.name = v;
-            }
-        }
+/// Commit an inline tab rename: set the tab's name (an empty draft is a no-op).
+/// Start / draft / cancel are transient UI owned by the `Tabs` component; only
+/// this durable commit is an action, so it autosaves via `dispatch`.
+pub fn rename_tab(mut state: Signal<AppState>, idx: usize, name: String) {
+    let v = name.trim().to_string();
+    if v.is_empty() {
+        return;
     }
-    s.renaming_ws = None;
-}
-
-pub fn cancel_rename(mut state: Signal<AppState>) {
-    state.write().renaming_ws = None;
+    if let Some(w) = state.write().project.workspaces.get_mut(idx) {
+        w.name = v;
+    }
 }

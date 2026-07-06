@@ -197,9 +197,6 @@ pub struct AppState {
     pub recent_projects: Vec<crate::config::RecentProject>,
     // catalog filter (ephemeral UI)
     pub filter: String,
-    // editor caret (ephemeral)
-    pub caret_line: usize,
-    pub caret_col: usize,
     // Bumped whenever the active tab's SQL changes for a reason *other* than the
     // user typing (tab switch, Format, Clear, load-select-star, …). The SQL
     // editor is keyed by this so it remounts and re-seeds from the new value
@@ -228,9 +225,6 @@ pub struct AppState {
     pub editor_h: f64,
     pub log_h: f64,
     pub resizing: Option<Resizing>,
-    // tab rename
-    pub renaming_ws: Option<usize>,
-    pub rename_val: String,
     pub closed_tabs: Vec<ClosedTab>,
 }
 
@@ -357,8 +351,6 @@ impl AppState {
             project_path: None,
             recent_projects: Vec::new(),
             filter: String::new(),
-            caret_line: 1,
-            caret_col: 1,
             editor_epoch: 0,
             next_req: 1,
             page_size_open: false,
@@ -374,8 +366,6 @@ impl AppState {
             editor_h: 240.0,
             log_h: 188.0,
             resizing: None,
-            renaming_ws: None,
-            rename_val: String::new(),
             closed_tabs: Vec::new(),
         }
     }

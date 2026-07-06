@@ -11,9 +11,9 @@ use crate::state::{AppState, LogTab};
 /// overlay-store windows (command palette, Settings, Export) own their own open
 /// state and aren't touched here.
 pub fn close_all(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.page_size_open = false;
-    s.renaming_ws = None;
+    // The inline-rename mode is now `Tabs`-component-local (its input handles its
+    // own Esc); only the pager dropdown remains an `AppState`-backed overlay here.
+    state.write().page_size_open = false;
 }
 
 /// Open the bottom drawer on the **History** tab (status-bar History button).

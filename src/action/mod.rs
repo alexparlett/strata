@@ -57,10 +57,9 @@ pub enum Action {
     CloseTabsRight(usize),
     CloseAllTabs,
     ReopenTab,
-    StartRename(usize),
-    RenameInput(String),
-    CommitRename,
-    CancelRename,
+    /// Commit an inline tab rename. Start / draft / cancel are transient UI state
+    /// owned by the `Tabs` component; only the commit (durable) is an action.
+    RenameTab(usize, String),
 
     // ── catalog ──
     OpenConfigNew,
@@ -163,7 +162,7 @@ fn is_durable(a: &Action) -> bool {
             | CloseTabsRight(_)
             | CloseAllTabs
             | ReopenTab
-            | CommitRename
+            | RenameTab(..)
             | RegisterTable(_)
             | ConfirmRemove { .. }
             | EditView(_)
@@ -200,10 +199,7 @@ fn run(state: Signal<AppState>, action: Action) {
         CloseTabsRight(idx) => tab::close_right(state, idx),
         CloseAllTabs => tab::close_all(state),
         ReopenTab => tab::reopen(state),
-        StartRename(idx) => tab::start_rename(state, idx),
-        RenameInput(val) => tab::rename_input(state, val),
-        CommitRename => tab::commit_rename(state),
-        CancelRename => tab::cancel_rename(state),
+        RenameTab(idx, name) => tab::rename_tab(state, idx, name),
 
         // catalog
         OpenConfigNew => catalog::open_config_new(state),
