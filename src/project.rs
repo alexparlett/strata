@@ -170,6 +170,8 @@ struct SessionFile {
     #[serde(default)]
     next_id: crate::session::WorkspaceId,
     #[serde(default)]
+    view_clock: u64,
+    #[serde(default)]
     history: Vec<HistoryItem>,
     #[serde(default)]
     window: Option<WindowGeom>,
@@ -240,6 +242,7 @@ impl Project {
             workspaces: snap.workspaces,
             active: snap.active,
             next_id: snap.next_id,
+            view_clock: snap.view_clock,
             history: self.history.clone(),
             window: self.window,
         };
@@ -280,6 +283,7 @@ impl Project {
                 workspaces: sess.workspaces,
                 active: sess.active,
                 next_id: sess.next_id,
+                view_clock: sess.view_clock,
             });
             return Ok(project);
         }
