@@ -98,7 +98,7 @@ pub fn set_default_project_dir(dir: String) {
     persist();
 }
 
-pub fn set_open_pref(pref: String) {
+pub fn set_open_pref(pref: crate::config::OpenPref) {
     SETTINGS.resolve().open_pref().set(pref);
     persist();
 }

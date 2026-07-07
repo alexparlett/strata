@@ -222,10 +222,14 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                 div { style: "font:600 13px var(--ui);color:var(--text);margin-bottom:4px;", "Opening a project" }
                                 div { style: "font-size:11.5px;color:var(--dim2);margin-bottom:12px;", "When you open a project from a window that already has one, where should it open?" }
                                 div { class: "seg-row",
-                                    for (val, label) in [("ask", "Ask every time"), ("this", "This window"), ("new", "New window")] {
+                                    for (val, label) in [
+                                        (crate::config::OpenPref::Ask, "Ask every time"),
+                                        (crate::config::OpenPref::This, "This window"),
+                                        (crate::config::OpenPref::New, "New window"),
+                                    ] {
                                         button {
                                             class: if open_pref == val { "seg-btn on" } else { "seg-btn" },
-                                            onclick: move |_| crate::settings::set_open_pref(val.to_string()),
+                                            onclick: move |_| crate::settings::set_open_pref(val),
                                             "{label}"
                                         }
                                     }

@@ -50,6 +50,10 @@ pub struct OverlayState {
     pub pending_register: Option<PendingTable>,
     /// A workspace id awaiting a discard-confirm before it closes (A6). `None` = none.
     pub close_confirm: Option<crate::session::WorkspaceId>,
+    /// A picked project path awaiting a This-Window / New-Window choice (B10).
+    /// `Some` when `open_pref == "ask"` and a project is being opened from a
+    /// project window; the prompt host reads it.
+    pub open_prompt: Option<std::path::PathBuf>,
 }
 
 /// The per-window overlay store. Hosts read it (`OVERLAYS.resolve().read().settings`)
@@ -138,4 +142,15 @@ pub fn open_close_confirm(id: crate::session::WorkspaceId) {
 /// Dismiss the close-confirm dialog.
 pub fn close_close_confirm() {
     OVERLAYS.resolve().close_confirm().set(None);
+}
+
+/// Ask where to open `path` — This Window vs New Window (B10, when the open
+/// preference is "ask"). Callable from the non-component action layer.
+pub fn open_open_prompt(path: std::path::PathBuf) {
+    OVERLAYS.resolve().open_prompt().set(Some(path));
+}
+
+/// Dismiss the open-target prompt.
+pub fn close_open_prompt() {
+    OVERLAYS.resolve().open_prompt().set(None);
 }

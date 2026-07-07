@@ -399,6 +399,12 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .confirm-title .nm { font-family: var(--mono); color: var(--accent); }
 .confirm-body { margin-top: 7px; font: 400 12px/1.6 var(--mono); color: var(--dim); }
 .confirm-foot { display: flex; gap: 10px; justify-content: flex-end; padding: 4px 22px 20px; }
+/* Checkbox primitive (ui/components/checkbox.rs). */
+.chk-row { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; }
+.chk { width: 18px; height: 18px; flex: none; border-radius: 5px; background: var(--elev); border: 1px solid var(--line3); display: flex; align-items: center; justify-content: center; color: transparent; transition: background .12s, border-color .12s; }
+.chk-row:hover .chk { border-color: var(--line-hi); }
+.chk.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chk-label { font-size: 12.5px; color: var(--dim); }
 .btn-ghost { height: 34px; padding: 0 16px; background: transparent; border: 1px solid var(--line2); border-radius: 9px; color: var(--text3); font: 500 12.5px var(--ui); cursor: pointer; }
 .btn-ghost:hover { border-color: var(--line-hi); color: var(--text); }
 .btn-danger { display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; background: var(--red2); border: none; border-radius: 9px; color: #fff; font: 600 12.5px var(--ui); cursor: pointer; }

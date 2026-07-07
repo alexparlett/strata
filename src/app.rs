@@ -156,6 +156,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             ui::modals::ExportHost {}
             ui::modals::ConfigHost {}
             ui::modals::CloseConfirmHost {}
+            ui::modals::OpenPromptHost {}
             // Catalog + tab context menus, the remove-confirm dialog, and the
             // nested-cell view are now self-contained containers rendered by the
             // sidebar / workspace (see `ui::components`).

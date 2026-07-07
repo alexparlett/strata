@@ -8,11 +8,13 @@
 //! (non-modal floating panel) containers plus the [`MenuItem`] / [`MenuSep`] menu
 //! primitives.
 
+mod checkbox;
 mod dialog;
 mod menu;
 mod popup;
 mod window;
 
+pub use checkbox::Checkbox;
 pub use dialog::Dialog;
 pub use menu::{MenuItem, MenuSep};
 pub use popup::{Point, Popup};

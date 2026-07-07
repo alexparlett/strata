@@ -116,6 +116,12 @@ pub enum Action {
     // creates one — there is no separate "New".
     OpenProject,
     OpenRecent(String),
+    /// Resolve the open-target prompt (B10): open the pending project here or in a
+    /// new window, optionally remembering the choice as the open preference.
+    OpenChosen {
+        new_window: bool,
+        remember: bool,
+    },
     SaveProject,
     CloseProject,
 }
@@ -249,7 +255,8 @@ fn run(state: Signal<AppState>, action: Action) {
 
         // project (open/recent spawn new windows; close closes this window)
         OpenProject => projects::open_dir(state),
-        OpenRecent(path) => projects::open_recent(path),
+        OpenRecent(path) => projects::open_recent(state, path),
+        OpenChosen { new_window, remember } => projects::choose_open(state, new_window, remember),
         SaveProject => projects::save(state),
         CloseProject => projects::close(state),
     }

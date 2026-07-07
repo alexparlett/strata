@@ -61,7 +61,7 @@ pub fn open_dir(state: Signal<AppState>) {
     let (open_pref, default_dir) = {
         let store = crate::settings::SETTINGS.resolve();
         let s = store.peek();
-        (s.open_pref.clone(), s.default_project_dir.clone())
+        (s.open_pref, s.default_project_dir.clone())
     };
     spawn(async move {
         let mut dialog = rfd::AsyncFileDialog::new();
@@ -70,18 +70,50 @@ pub fn open_dir(state: Signal<AppState>) {
         }
         if let Some(handle) = dialog.pick_folder().await {
             let path = crate::window::resolve_project_dir(handle.path());
-            if open_pref == "this" {
-                open_in_current(state, path);
-            } else {
-                crate::window::spawn_project_window(path.to_string_lossy().into_owned());
-            }
+            open_with_pref(state, path, open_pref);
         }
     });
 }
 
-/// `Action::OpenRecent` — open a recent project in a **new window**.
-pub fn open_recent(path: String) {
-    crate::window::spawn_project_window(path);
+/// `Action::OpenRecent` — open a recent project, honouring the open preference
+/// (This window / New window / Ask), like [`open_dir`].
+pub fn open_recent(state: Signal<AppState>, path: String) {
+    let pref = crate::settings::SETTINGS.resolve().peek().open_pref;
+    open_with_pref(state, PathBuf::from(path), pref);
+}
+
+/// Route an open to the current window, a new window, or the "ask" prompt (B10),
+/// per the resolved open preference.
+fn open_with_pref(state: Signal<AppState>, path: PathBuf, pref: crate::config::OpenPref) {
+    use crate::config::OpenPref;
+    match pref {
+        OpenPref::This => open_in_current(state, path),
+        OpenPref::New => crate::window::spawn_project_window(path.to_string_lossy().into_owned()),
+        OpenPref::Ask => crate::overlays::open_open_prompt(path),
+    }
+}
+
+/// `Action::OpenChosen` — resolve the open-target prompt (B10): open the pending
+/// project here or in a new window, optionally remembering the choice as the pref.
+pub fn choose_open(state: Signal<AppState>, new_window: bool, remember: bool) {
+    let path = crate::overlays::OVERLAYS.resolve().read().open_prompt.clone();
+    crate::overlays::close_open_prompt();
+    let Some(path) = path else {
+        return;
+    };
+    let pref = if new_window {
+        crate::config::OpenPref::New
+    } else {
+        crate::config::OpenPref::This
+    };
+    if remember {
+        crate::settings::set_open_pref(pref);
+    }
+    if new_window {
+        crate::window::spawn_project_window(path.to_string_lossy().into_owned());
+    } else {
+        open_in_current(state, path);
+    }
 }
 
 /// Open `path` in *this* window, replacing the project in place ("This window"

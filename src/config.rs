@@ -25,6 +25,18 @@ pub struct RecentProject {
 /// The user's settings. Persisted **flat** inside [`AppConfig`] via
 /// `#[serde(flatten)]` (so existing config files stay compatible), and held at
 /// runtime in the per-window [`crate::settings`] store.
+/// Where "Open Project" opens a project when invoked from a window that already
+/// has one: ask each time (the This/New prompt — B10), reuse this window, or a new
+/// window. Serialized lowercase (`"ask"` / `"this"` / `"new"`) — matches older configs.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenPref {
+    #[default]
+    Ask,
+    This,
+    New,
+}
+
 #[derive(Clone, Serialize, Deserialize, dioxus_stores::Store)]
 pub struct Settings {
     /// Active theme id (see `crate::theme`). Persists across sessions/windows.
@@ -42,8 +54,8 @@ pub struct Settings {
     pub reopen_on_startup: bool,
     #[serde(default)]
     pub default_project_dir: String,
-    #[serde(default = "default_open_pref")]
-    pub open_pref: String,
+    #[serde(default)]
+    pub open_pref: OpenPref,
     #[serde(default = "default_true")]
     pub confirm_close_running: bool,
 }
@@ -57,10 +69,6 @@ fn default_row_limit() -> usize {
 fn default_true() -> bool {
     true
 }
-fn default_open_pref() -> String {
-    "ask".to_string()
-}
-
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -71,7 +79,7 @@ impl Default for Settings {
             row_limit: default_row_limit(),
             reopen_on_startup: true,
             default_project_dir: String::new(),
-            open_pref: default_open_pref(),
+            open_pref: OpenPref::Ask,
             confirm_close_running: true,
         }
     }
