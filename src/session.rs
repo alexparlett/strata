@@ -247,6 +247,28 @@ pub fn reopen(name: String, sql: String) {
     store.active().set(id);
 }
 
+/// Duplicate workspace `id`: clone its SQL into a new **scratch** workspace named
+/// "<name> copy", inserted immediately to its right, and focus it. A no-op when
+/// `id` isn't present. The copy is unbound (`Origin::Scratch`) — a working buffer,
+/// not a second binding to the source's view / saved query.
+pub fn duplicate(id: WorkspaceId) {
+    let store = SESSION.resolve();
+    let (src_sql, name, pos) = {
+        let s = store.read();
+        let Some(p) = s.workspaces.iter().position(|w| w.id == id) else {
+            return;
+        };
+        let base = format!("{} copy", s.workspaces[p].name);
+        (s.workspaces[p].sql.clone(), unique_name(&s, &base), p)
+    };
+    let new_id = alloc_id(store);
+    store
+        .workspaces()
+        .write()
+        .insert(pos + 1, Workspace::new(new_id, name, src_sql, Origin::Scratch));
+    store.active().set(new_id);
+}
+
 /// Replace workspace `id`'s SQL (Format / Clear / other programmatic edits). The
 /// live `CodeEditor` writes its own `sql()` lens directly, not through here.
 pub fn set_sql(id: WorkspaceId, sql: String) {

@@ -156,6 +156,8 @@ fn tab_menu_items(
                 rename_val.set(name);
                 renaming.set(Some(id));
             } }
+        MenuItem { label: "Duplicate".to_string(),
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::DuplicateTab(id)); } }
         MenuSep {}
         MenuItem { label: "Close".to_string(),
             onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseTab(id)); } }

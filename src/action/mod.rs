@@ -62,6 +62,8 @@ pub enum Action {
     /// Commit an inline tab rename. Start / draft / cancel are transient UI state
     /// owned by the `Tabs` component; only the commit (durable) is an action.
     RenameTab(crate::session::WorkspaceId, String),
+    /// Duplicate a tab: clone its SQL into a new "<name> copy" tab to its right.
+    DuplicateTab(crate::session::WorkspaceId),
 
     // ── catalog ──
     OpenConfigNew,
@@ -164,6 +166,7 @@ fn is_durable(a: &Action) -> bool {
             | CloseAllTabs
             | ReopenTab
             | RenameTab(..)
+            | DuplicateTab(_)
             | RegisterTable(_)
             | ConfirmRemove { .. }
             | EditView(_)
@@ -213,6 +216,7 @@ fn run(state: Signal<AppState>, action: Action) {
         CloseAllTabs => tab::close_all(state),
         ReopenTab => tab::reopen(state),
         RenameTab(id, name) => tab::rename_tab(state, id, name),
+        DuplicateTab(id) => tab::duplicate(state, id),
 
         // catalog
         OpenConfigNew => catalog::open_config_new(state),

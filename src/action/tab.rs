@@ -17,6 +17,11 @@ pub fn add(_state: Signal<AppState>) {
     crate::session::new_blank();
 }
 
+/// Duplicate workspace `id` into a new "<name> copy" tab to its right, and focus it.
+pub fn duplicate(_state: Signal<AppState>, id: WorkspaceId) {
+    crate::session::duplicate(id);
+}
+
 /// Focus workspace `id`.
 pub fn switch(_state: Signal<AppState>, id: WorkspaceId) {
     crate::session::switch(id);
