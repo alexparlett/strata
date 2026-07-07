@@ -19,6 +19,7 @@ mod query_error;
 mod runs;
 mod settings;
 mod state;
+mod tabs;
 mod theme;
 mod ui;
 mod util;
