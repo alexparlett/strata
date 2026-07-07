@@ -15,7 +15,7 @@ use crate::ui::icons;
 /// `overlays::open_export`; `run_export` closes it via `overlays::close_export`.
 #[component]
 pub fn ExportHost() -> Element {
-    if !crate::overlays::OVERLAYS.read().export {
+    if !crate::overlays::OVERLAYS.resolve().read().export {
         return rsx! {};
     }
     rsx! {

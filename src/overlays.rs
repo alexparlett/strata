@@ -1,18 +1,20 @@
 //! Per-window **overlay store** — visibility state for the app-global overlays
-//! (Settings, the command palette; Export/Config join as they migrate).
+//! (Settings, the command palette, Export, table Config, close-confirm).
 //!
 //! Deliberately kept *out* of `AppState` (the domain/project state): overlay
-//! visibility is a pure UI concern, and `AppState` is being decomposed rather than
-//! grown. This mirrors the React/Zustand shape — a small, focused store read
-//! reactively inside the always-mounted *host* components and written via plain
-//! helpers from anywhere, including the non-component action/engine layer (e.g. an
-//! export runner closing its own window).
+//! visibility is a pure UI concern. Held in a `dioxus-stores` `GlobalStore` — a
+//! small, focused store read reactively inside the always-mounted *host* components
+//! and written via plain helpers from anywhere, including the non-component
+//! action/engine layer (e.g. an export runner closing its own window).
 //!
 //! Each project window is its own `VirtualDom` (see [`crate::window`]), and a
-//! `GlobalSignal` is scoped to its `VirtualDom`, so this store is **per-window** —
-//! overlays never cross-trigger between windows.
+//! `GlobalStore` is scoped to its `VirtualDom`, so this store is **per-window** —
+//! overlays never cross-trigger between windows. **Mutators write through field
+//! lenses** (`OVERLAYS.resolve().cmdk().set(..)`), never a coarse `.write()` — a
+//! lens write is what notifies lens subscribers (see [[workbench-and-runs]]).
 
 use dioxus::prelude::*;
+use dioxus_stores::*;
 
 /// What the table-config window is doing, if open: creating a new table or editing
 /// an existing one (by name). `None` on the store = closed.
@@ -35,7 +37,7 @@ pub struct PendingTable {
 }
 
 /// Which overlays are currently open in this window.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Store)]
 pub struct OverlayState {
     pub settings: bool,
     pub cmdk: bool,
@@ -50,89 +52,90 @@ pub struct OverlayState {
     pub close_confirm: Option<crate::session::WorkspaceId>,
 }
 
-/// The per-window overlay store. Hosts read it reactively
-/// (`OVERLAYS.read().settings`) and re-render when it changes; triggers mutate it
-/// through the helpers below (callable from components *and* plain functions).
-pub static OVERLAYS: GlobalSignal<OverlayState> = Signal::global(OverlayState::default);
+/// The per-window overlay store. Hosts read it (`OVERLAYS.resolve().read().settings`)
+/// and re-render when it changes; triggers mutate it through the lens helpers below
+/// (callable from components *and* plain functions).
+pub static OVERLAYS: GlobalStore<OverlayState> = Global::new(|| OverlayState::default());
 
 pub fn toggle_settings() {
-    let open = OVERLAYS.peek().settings;
-    OVERLAYS.write().settings = !open;
+    let s = OVERLAYS.resolve();
+    let open = s.settings().cloned();
+    s.settings().set(!open);
 }
 
 pub fn set_settings(open: bool) {
-    OVERLAYS.write().settings = open;
+    OVERLAYS.resolve().settings().set(open);
 }
 
 pub fn toggle_cmdk() {
-    let open = OVERLAYS.peek().cmdk;
-    OVERLAYS.write().cmdk = !open;
+    let s = OVERLAYS.resolve();
+    let open = s.cmdk().cloned();
+    s.cmdk().set(!open);
 }
 
 pub fn set_cmdk(open: bool) {
-    OVERLAYS.write().cmdk = open;
+    OVERLAYS.resolve().cmdk().set(open);
 }
 
 pub fn open_export() {
-    OVERLAYS.write().export = true;
+    OVERLAYS.resolve().export().set(true);
 }
 
 /// Close the export window. Callable from the non-component action/engine layer —
 /// `run_export` uses it to dismiss the window when the export is under way.
 pub fn close_export() {
-    OVERLAYS.write().export = false;
+    OVERLAYS.resolve().export().set(false);
 }
 
 /// Open the table-config window for `target`; the modal seeds its local draft from
 /// it (blank for `New`, a copy of the project table for `Edit`).
 pub fn open_config(target: ConfigTarget) {
-    let mut o = OVERLAYS.write();
-    o.config = Some(target);
-    o.config_err = None;
-    o.pending_register = None;
+    let s = OVERLAYS.resolve();
+    s.config().set(Some(target));
+    s.config_err().set(None);
+    s.pending_register().set(None);
 }
 
 /// Close the table-config window and clear its transient state.
 pub fn close_config() {
-    let mut o = OVERLAYS.write();
-    o.config = None;
-    o.config_err = None;
-    o.pending_register = None;
+    let s = OVERLAYS.resolve();
+    s.config().set(None);
+    s.config_err().set(None);
+    s.pending_register().set(None);
 }
 
 /// Show an inline register error in the (still-open) config window.
 pub fn set_config_err(msg: String) {
-    OVERLAYS.write().config_err = Some(msg);
+    OVERLAYS.resolve().config_err().set(Some(msg));
 }
 
 /// Stash the row data for an in-flight config register (clears any prior error).
 pub fn begin_register(pending: PendingTable) {
-    let mut o = OVERLAYS.write();
-    o.pending_register = Some(pending);
-    o.config_err = None;
+    let s = OVERLAYS.resolve();
+    s.pending_register().set(Some(pending));
+    s.config_err().set(None);
 }
 
 /// Take the pending register **iff** it's for `name` — i.e. a config-originated
 /// register. Returns `None` for load-time registers (which stash nothing).
 pub fn take_pending_register(name: &str) -> Option<PendingTable> {
-    let mut o = OVERLAYS.write();
-    if o.pending_register
-        .as_ref()
-        .map_or(false, |p| p.name == name)
-    {
-        o.pending_register.take()
-    } else {
-        None
+    let s = OVERLAYS.resolve();
+    match s.pending_register().cloned() {
+        Some(p) if p.name == name => {
+            s.pending_register().set(None);
+            Some(p)
+        }
+        _ => None,
     }
 }
 
 /// Ask to confirm closing workspace `id` (it has unsaved changes). Callable from
 /// the non-component action layer (`tab::close`).
 pub fn open_close_confirm(id: crate::session::WorkspaceId) {
-    OVERLAYS.write().close_confirm = Some(id);
+    OVERLAYS.resolve().close_confirm().set(Some(id));
 }
 
 /// Dismiss the close-confirm dialog.
 pub fn close_close_confirm() {
-    OVERLAYS.write().close_confirm = None;
+    OVERLAYS.resolve().close_confirm().set(None);
 }

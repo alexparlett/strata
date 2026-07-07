@@ -188,7 +188,7 @@ fn valid_ident(s: &str) -> bool {
 /// `Edit`). Closing / a successful register clears the store (`close_config`).
 #[component]
 pub fn ConfigHost() -> Element {
-    match crate::overlays::OVERLAYS.read().config.clone() {
+    match crate::overlays::OVERLAYS.resolve().read().config.clone() {
         Some(target) => rsx! {
             ConfigModal { target, on_close: move |_| crate::overlays::close_config() }
         },
@@ -243,7 +243,7 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
     let scan_error = d.scan_error.clone();
     drop(d);
     // A failed engine register is surfaced inline via the store (window stays open).
-    let reg_err = crate::overlays::OVERLAYS.read().config_err.clone();
+    let reg_err = crate::overlays::OVERLAYS.resolve().read().config_err.clone();
 
     // Scan the sources once when the modal opens (validates pre-filled edit paths).
     use_hook(move || rescan(draft, state));

@@ -57,7 +57,7 @@ enum Effect {
 /// call `overlays::toggle_cmdk`.
 #[component]
 pub fn CmdkHost() -> Element {
-    if !crate::overlays::OVERLAYS.read().cmdk {
+    if !crate::overlays::OVERLAYS.resolve().read().cmdk {
         return rsx! {};
     }
     rsx! {

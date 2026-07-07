@@ -26,7 +26,7 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
     // The nested-cell view is grid-local, opened from a cell, closed by the dialog.
     let cell_view = use_signal(|| None::<CellView>);
 
-    let zebra = crate::settings::SETTINGS.read().zebra;
+    let zebra = crate::settings::SETTINGS.resolve().read().zebra;
     let type_color = state.read().type_color_cells;
     let runs = crate::runs::RUNS.read();
     // Rendered only alongside a result, so the `else` arms are defensive.

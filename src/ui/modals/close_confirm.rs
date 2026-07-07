@@ -12,7 +12,7 @@ use crate::ui::icons;
 #[component]
 pub fn CloseConfirmHost() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let Some(id) = crate::overlays::OVERLAYS.read().close_confirm else {
+    let Some(id) = crate::overlays::OVERLAYS.resolve().read().close_confirm else {
         return rsx! {};
     };
     let name = crate::session::snapshot()

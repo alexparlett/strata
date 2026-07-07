@@ -56,7 +56,7 @@ fn settings_cat_icon(name: &str) -> Element {
 /// `docs/OVERLAY_ARCHITECTURE.md`.
 #[component]
 pub fn SettingsHost() -> Element {
-    if !crate::overlays::OVERLAYS.read().settings {
+    if !crate::overlays::OVERLAYS.resolve().read().settings {
         return rsx! {};
     }
     rsx! {
@@ -72,7 +72,8 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
     // Prefs come from the per-window settings store (read reactively); OS
     // appearance from its runtime signal. The mutators below call
     // `crate::settings::*`, which write the store *and* persist to the app config.
-    let s = crate::settings::SETTINGS.read();
+    let store = crate::settings::SETTINGS.resolve();
+    let s = store.read();
     let theme_id = s.theme.clone();
     let sync_os = s.sync_os;
     let density_compact = s.density_compact;

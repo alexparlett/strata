@@ -118,7 +118,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             // overriding the stylesheet `:root` defaults for the whole app
             // subtree. Unknown id → empty string → `:root` still applies.
             style: "{theme_css}",
-            "data-density": if crate::settings::SETTINGS.read().density_compact { "compact" } else { "comfortable" },
+            "data-density": if crate::settings::SETTINGS.resolve().read().density_compact { "compact" } else { "comfortable" },
             onkeydown: move |e| handle_key(state, e),
             onmousemove: move |e| {
                 if state.read().resizing.is_some() {

@@ -25,7 +25,7 @@ pub struct RecentProject {
 /// The user's settings. Persisted **flat** inside [`AppConfig`] via
 /// `#[serde(flatten)]` (so existing config files stay compatible), and held at
 /// runtime in the per-window [`crate::settings`] store.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, dioxus_stores::Store)]
 pub struct Settings {
     /// Active theme id (see `crate::theme`). Persists across sessions/windows.
     #[serde(default = "default_theme")]
