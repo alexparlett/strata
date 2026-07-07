@@ -220,6 +220,33 @@ pub fn logout(sz: u32) -> Element {
         },
     )
 }
+/// Octagon + `!` — the Problems activity-rail icon (S23).
+pub fn problems(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.7",
+        rsx! {
+            path { d: "M8.5 2.5h7L21.5 8.5v7L15.5 21.5h-7L2.5 15.5v-7z" }
+            path { d: "M12 8v4.5" }
+            path { d: "M12 16h.01" }
+        },
+    )
+}
+/// Stacked lines — the Events activity-rail icon (S23).
+pub fn events(sz: u32) -> Element {
+    stroke(sz, "1.7", rsx! { path { d: "M4 6h16M4 12h16M4 18h10" } })
+}
+/// Document with a folded corner — the Problems group header (owning tab, S23).
+pub fn file(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.7",
+        rsx! {
+            path { d: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" }
+            path { d: "M14 3v5h5" }
+        },
+    )
+}
 pub fn collapse_left(sz: u32) -> Element {
     stroke(
         sz,

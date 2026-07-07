@@ -155,23 +155,27 @@ pub fn ProjectRoot(open_path: String) -> Element {
 
             ui::header::Header {}
 
+            // S23 (RustRover model): a permanent activity rail on the far left, then
+            // a right-area column so the bottom drawer pushes the panes up while the
+            // thin rail stays full height. No status footer — the rail carries
+            // Events/History, run state lives in the results panel.
             div { class: "ps-body",
-                if state.read().sidebar_open {
-                    ui::sidebar::Sidebar {}
-                    {resize_handle(state, ResizeTarget::Sidebar)}
-                } else {
-                    ui::sidebar::SidebarRail {}
-                }
-                ui::workbench::Workbench {}
-                if state.read().inspector_open {
-                    {resize_handle(state, ResizeTarget::Inspector)}
-                    ui::inspector::Inspector {}
+                ui::activity_rail::ActivityRail {}
+                div { class: "ps-right",
+                    div { class: "ps-panes",
+                        if state.read().sidebar_open {
+                            ui::sidebar::Sidebar {}
+                            {resize_handle(state, ResizeTarget::Sidebar)}
+                        }
+                        ui::workbench::Workbench {}
+                        if state.read().inspector_open {
+                            {resize_handle(state, ResizeTarget::Inspector)}
+                            ui::inspector::Inspector {}
+                        }
+                    }
+                    if state.read().log_open { ui::drawer::Drawer {} }
                 }
             }
-
-            if state.read().log_open { ui::drawer::Drawer {} }
-
-            ui::statusbar::StatusBar {}
 
             // ---- overlays / modals ----
             // App-global overlays are always-mounted hosts reading the per-window
@@ -330,6 +334,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         LogKind::Error,
                         format!("Query failed · {}", qe.etype),
                         Some(qe.clone()),
+                        Some(ws_id),
                     );
                     s.project.history.insert(
                         0,
@@ -437,6 +442,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         LogKind::Error,
                         format!("Explain failed · {}", qe.etype),
                         Some(qe.clone()),
+                        Some(ws_id),
                     );
                     crate::runs::edit_existing(ws_id, |run| {
                         run.running = false;

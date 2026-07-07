@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 
-use crate::state::{AppState, LogTab};
+use crate::state::{AppState, LogKind, LogTab};
 
 /// Close every remaining `AppState`-backed overlay (Esc, backdrop clicks). The
 /// container-based overlays (menus, remove-confirm, cell view) and the
@@ -40,6 +40,18 @@ pub fn open_events(mut state: Signal<AppState>) {
     }
 }
 
+/// Open the bottom drawer on the **Problems** tab (rail Problems button, S23).
+/// Toggles closed if it's already open on Problems.
+pub fn open_problems(mut state: Signal<AppState>) {
+    let mut s = state.write();
+    if s.log_open && s.log_tab == LogTab::Problems {
+        s.log_open = false;
+    } else {
+        s.log_open = true;
+        s.log_tab = LogTab::Problems;
+    }
+}
+
 /// Switch the drawer's active tab (History / Events tab buttons).
 pub fn set_log_tab(mut state: Signal<AppState>, tab: LogTab) {
     state.write().log_tab = tab;
@@ -65,6 +77,8 @@ pub fn clear_drawer(mut state: Signal<AppState>) {
     match s.log_tab {
         LogTab::Events => s.log.clear(),
         LogTab::History => s.project.history.clear(),
+        // Problems is a filtered view of error events — clearing it removes them.
+        LogTab::Problems => s.log.retain(|e| e.kind != LogKind::Error),
     }
 }
 

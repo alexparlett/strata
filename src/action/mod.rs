@@ -104,6 +104,7 @@ pub enum Action {
     // Bottom drawer (History + Events tabs).
     OpenHistory,
     OpenEvents,
+    OpenProblems,
     SetLogTab(LogTab),
     OpenHistoryQuery(String),
     RunHistoryQuery(String),
@@ -250,6 +251,7 @@ fn run(state: Signal<AppState>, action: Action) {
         CloseOverlays => overlay::close_all(state),
         OpenHistory => overlay::open_history(state),
         OpenEvents => overlay::open_events(state),
+        OpenProblems => overlay::open_problems(state),
         SetLogTab(tab) => overlay::set_log_tab(state, tab),
         OpenHistoryQuery(sql) => overlay::open_history_query(state, sql),
         RunHistoryQuery(sql) => {

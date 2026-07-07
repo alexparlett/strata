@@ -192,36 +192,6 @@ fn remove_dialog(
     }
 }
 
-/// Collapsed catalog: a thin icon rail (RustRover-style) shown instead of hiding
-/// the sidebar entirely. Rendered by `app` when `!sidebar_open`.
-#[component]
-pub fn SidebarRail() -> Element {
-    let state = use_context::<Signal<AppState>>();
-    rsx! {
-        aside { class: "ps-rail",
-            button {
-                class: "rail-btn",
-                title: "Expand catalog",
-                onclick: move |_| dispatch(state, Action::ToggleSidebar),
-                {icons::expand_right(17)}
-            }
-            div { class: "rail-sep" }
-            button {
-                class: "rail-btn accent",
-                title: "Catalog",
-                onclick: move |_| dispatch(state, Action::ToggleSidebar),
-                {icons::database(17)}
-            }
-            button {
-                class: "rail-btn",
-                title: "New table",
-                onclick: move |_| dispatch(state, Action::OpenConfigNew),
-                {icons::plus(16)}
-            }
-        }
-    }
-}
-
 fn render_saved_query(
     state: Signal<AppState>,
     mut menu: Signal<Option<CtxTarget>>,

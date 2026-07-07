@@ -107,6 +107,7 @@ pub enum LogKind {
 pub enum LogTab {
     History,
     Events,
+    Problems,
 }
 
 /// One row in the Event Log panel. Fed from engine events (see
@@ -122,6 +123,9 @@ pub struct LogEvent {
     pub err: Option<QueryError>,
     /// Whether this row is expanded in the Events tab.
     pub open: bool,
+    /// Owning query tab for an error row — groups the Problems view and jumps to it
+    /// (S23). `None` for non-tab events.
+    pub ws: Option<u64>,
 }
 
 /// What a pending removal targets — drives the confirm dialog's wording and the
@@ -272,12 +276,19 @@ impl AppState {
     }
 
     pub fn push_log(&mut self, kind: LogKind, msg: impl Into<String>) {
-        self.push_log_err(kind, msg, None);
+        self.push_log_err(kind, msg, None, None);
     }
 
-    /// Like `push_log`, but attaches a structured error so the Events-tab row
-    /// becomes expandable (shows the message, code frame, and hint on click).
-    pub fn push_log_err(&mut self, kind: LogKind, msg: impl Into<String>, err: Option<QueryError>) {
+    /// Like `push_log`, but attaches a structured error (the Events-row detail /
+    /// results error view) and the owning query tab `ws` (Problems grouping + jump,
+    /// S23).
+    pub fn push_log_err(
+        &mut self,
+        kind: LogKind,
+        msg: impl Into<String>,
+        err: Option<QueryError>,
+        ws: Option<u64>,
+    ) {
         let id = self.next_log;
         self.next_log += 1;
         self.log.insert(
@@ -289,6 +300,7 @@ impl AppState {
                 ts: now_hms(),
                 err,
                 open: false,
+                ws,
             },
         );
         self.log.truncate(200);

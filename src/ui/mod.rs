@@ -1,6 +1,7 @@
 //! UI components (Dioxus). Each reads the shared `Signal<AppState>` from context
 //! and calls controller actions in `crate::app`.
 
+pub mod activity_rail;
 pub mod components;
 pub mod drawer;
 pub mod errview;
@@ -10,7 +11,8 @@ pub mod inspector;
 pub mod launcher;
 pub mod modals;
 pub mod sidebar;
-pub mod statusbar;
+// `statusbar` retired by S23 (the activity rail carries Events/History; run state
+// lives in the results panel). The file is kept but no longer compiled.
 pub mod workbench;
 
 use dioxus_code::{Language, Theme};
