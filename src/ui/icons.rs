@@ -192,6 +192,10 @@ pub fn pencil(sz: u32) -> Element {
 pub fn play(sz: u32) -> Element {
     rsx! { svg { width: "{sz}", height: "{sz}", "viewBox": "0 0 24 24", fill: "currentColor", path { d: "M8 5v14l11-7z" } } }
 }
+/// Filled rounded square — the Cancel / stop-running affordance (S14).
+pub fn stop(sz: u32) -> Element {
+    rsx! { svg { width: "{sz}", height: "{sz}", "viewBox": "0 0 24 24", fill: "currentColor", rect { x: "6", y: "6", width: "12", height: "12", rx: "2" } } }
+}
 pub fn collapse_left(sz: u32) -> Element {
     stroke(
         sz,

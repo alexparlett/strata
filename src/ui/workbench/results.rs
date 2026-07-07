@@ -50,6 +50,7 @@ pub(crate) fn Results(ws_id: WorkspaceId) -> Element {
 /// Results area while a query is in flight — a centred spinner. (Cancel is S14.)
 #[component]
 fn Running(ws_id: WorkspaceId) -> Element {
+    let state = use_context::<Signal<AppState>>();
     let target = crate::session::snapshot()
         .workspaces
         .iter()
@@ -61,6 +62,12 @@ fn Running(ws_id: WorkspaceId) -> Element {
             {icons::spinner(30)}
             div { class: "res-title", "Running query…" }
             div { class: "res-sub mono", "scanning {target}" }
+            button {
+                class: "btn cancel sm",
+                onclick: move |_| dispatch(state, Action::CancelQuery),
+                {icons::stop(11)}
+                "Cancel"
+            }
         }
     }
 }

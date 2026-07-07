@@ -239,7 +239,15 @@ fn handle_key(state: Signal<AppState>, e: dioxus_core::Event<dioxus::events::Key
             e.prevent_default();
             crate::window::cycle_to_next_window();
         }
-        Key::Escape => dispatch(state, Action::CloseOverlays),
+        // Esc closes an open overlay first; with none open it cancels a running
+        // query (S14) — a no-op when nothing is running.
+        Key::Escape => {
+            if crate::overlays::any_open() {
+                dispatch(state, Action::CloseOverlays);
+            } else {
+                dispatch(state, Action::CancelQuery);
+            }
+        }
         _ => {}
     }
 }
@@ -286,6 +294,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                             ms: elapsed,
                             rows: total,
                             ok: true,
+                            cancelled: false,
                         },
                     );
                     s.set_status(
@@ -330,6 +339,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                             ms: 0,
                             rows: 0,
                             ok: false,
+                            cancelled: false,
                         },
                     );
                     crate::runs::edit_existing(ws_id, |run| {
@@ -340,6 +350,43 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     });
                 }
             }
+        }
+        Event::QueryCancelled {
+            req_id,
+            ws_id,
+            elapsed_ms,
+        } => {
+            // Drop if the tab moved on or closed.
+            if !crate::runs::is_pending(ws_id, req_id) {
+                return;
+            }
+            let sql = crate::session::snapshot()
+                .workspaces
+                .iter()
+                .find(|w| w.id == ws_id)
+                .map(|w| w.sql.clone())
+                .unwrap_or_default();
+            let hid = s.project.next_hist;
+            s.project.next_hist += 1;
+            s.project.history.insert(
+                0,
+                HistoryItem {
+                    id: hid,
+                    sql,
+                    ts_label: "just now".into(),
+                    ms: elapsed_ms,
+                    rows: 0,
+                    ok: false,
+                    cancelled: true,
+                },
+            );
+            s.set_status(LogKind::Warn, format!("Query cancelled · {elapsed_ms} ms"));
+            s.push_log(LogKind::Warn, format!("Query cancelled · {elapsed_ms} ms"));
+            crate::runs::edit_existing(ws_id, |run| {
+                run.running = false;
+                run.pending_req = None;
+                // Cancellation isn't an error — leave any prior result / error as-is.
+            });
         }
         Event::ExplainResult {
             req_id,

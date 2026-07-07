@@ -33,6 +33,8 @@ mod tab;
 pub enum Action {
     // ── query & results ──
     RunQuery,
+    /// Cancel the active tab's in-flight query / explain (S14).
+    CancelQuery,
     FetchPage(usize),
     LoadSelectStar(String),
     FormatSql,
@@ -191,6 +193,7 @@ fn run(state: Signal<AppState>, action: Action) {
     match action {
         // query & results
         RunQuery => query::run(state),
+        CancelQuery => query::cancel(state),
         FetchPage(page) => query::fetch_page(state, page),
         LoadSelectStar(name) => query::select_star(state, &name),
         FormatSql => query::format(state),

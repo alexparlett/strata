@@ -49,15 +49,26 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
         section { style: "flex:none;background:var(--main);",
             // Inline query toolbar (relocated from the global header, S4).
             div { class: "ed-toolbar",
-                button {
-                    class: "btn accent",
-                    style: "height:28px;",
-                    title: "Run query (⌘/Ctrl+Enter)",
-                    disabled: running,
-                    onclick: move |_| dispatch(state, Action::RunQuery),
-                    {icons::play(13)}
-                    if running { "Running…" } else { "Run" }
-                    span { class: "kbd", style: "background:rgba(7,16,25,.22);color:inherit;border:none;margin-left:2px;", "⌘↵" }
+                if running {
+                    button {
+                        class: "btn cancel",
+                        style: "height:28px;",
+                        title: "Cancel query (Esc)",
+                        onclick: move |_| dispatch(state, Action::CancelQuery),
+                        {icons::stop(12)}
+                        "Cancel"
+                        span { class: "kbd", style: "background:rgba(7,16,25,.22);color:inherit;border:none;margin-left:2px;", "Esc" }
+                    }
+                } else {
+                    button {
+                        class: "btn accent",
+                        style: "height:28px;",
+                        title: "Run query (⌘/Ctrl+Enter)",
+                        onclick: move |_| dispatch(state, Action::RunQuery),
+                        {icons::play(13)}
+                        "Run"
+                        span { class: "kbd", style: "background:rgba(7,16,25,.22);color:inherit;border:none;margin-left:2px;", "⌘↵" }
+                    }
                 }
                 div { style: "width:1px;height:18px;background:var(--line);margin:0 2px;" }
                 {tool_btn(state, Action::FormatSql, "Format SQL", icons::format(15))}

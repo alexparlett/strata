@@ -9,6 +9,7 @@
 //! UI → engine: `tokio::mpsc::unbounded` of [`Command`]. engine → UI:
 //! `tokio::mpsc::unbounded` of [`Event`], drained by a Dioxus coroutine.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -89,6 +90,12 @@ pub enum Command {
         ws_id: u64,
         sql: String,
     },
+    /// Abort the in-flight Query/Explain for `ws_id`, but only if it's still request
+    /// `req_id` (S14).
+    Cancel {
+        ws_id: u64,
+        req_id: u64,
+    },
     /// Read a page from the workspace's existing snapshot (no recompute).
     FetchPage {
         ws_id: u64,
@@ -146,6 +153,12 @@ pub enum Event {
         ws_id: u64,
         result: Result<QueryPlan, String>,
     },
+    /// A Query/Explain was cancelled (S14) — clears the tab's running state.
+    QueryCancelled {
+        req_id: u64,
+        ws_id: u64,
+        elapsed_ms: u128,
+    },
     PageResult {
         ws_id: u64,
         page: usize,
@@ -185,6 +198,15 @@ pub fn spawn() -> Handle {
     Handle { cmd_tx, evt_rx }
 }
 
+/// An in-flight Query/Explain task for one workspace (S14). Keyed by `ws_id` in
+/// `engine_loop`'s registry so a re-run or a `Cancel` can abort it; aborting drops
+/// the DataFusion stream, cancelling execution cooperatively.
+struct InFlight {
+    req_id: u64,
+    start: Instant,
+    abort: tokio::task::AbortHandle,
+}
+
 async fn engine_loop(
     mut cmd_rx: UnboundedReceiver<Command>,
     evt_tx: UnboundedSender<Event>,
@@ -194,6 +216,9 @@ async fn engine_loop(
     // (`purge_snapshot_root`), not here — wiping the shared root at runtime would
     // clobber other windows' engines.
     let ctx = SessionContext::new();
+    // In-flight Query/Explain tasks, keyed by ws_id (S14). Owned by this single loop
+    // task (no locking); the spawned tasks only send events back.
+    let mut inflight: HashMap<u64, InFlight> = HashMap::new();
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             Command::Register(spec) => {
@@ -249,20 +274,69 @@ async fn engine_loop(
                 sql,
                 page_size,
             } => {
-                let result = run_and_snapshot(&ctx, engine_id, ws_id, &sql, page_size).await;
-                let _ = evt_tx.send(Event::QueryResult {
-                    req_id,
-                    ws_id,
-                    result,
+                // A re-run supersedes the tab's previous query — abort it (saves CPU;
+                // today its stale result is merely dropped by `is_pending`).
+                if let Some(f) = inflight.remove(&ws_id) {
+                    f.abort.abort();
+                }
+                let ctx = ctx.clone();
+                let tx = evt_tx.clone();
+                let task = tokio::spawn(async move {
+                    let result = run_and_snapshot(&ctx, engine_id, ws_id, &sql, page_size).await;
+                    let _ = tx.send(Event::QueryResult {
+                        req_id,
+                        ws_id,
+                        result,
+                    });
                 });
+                inflight.insert(
+                    ws_id,
+                    InFlight {
+                        req_id,
+                        start: Instant::now(),
+                        abort: task.abort_handle(),
+                    },
+                );
             }
             Command::Explain { req_id, ws_id, sql } => {
-                let result = run_explain(&ctx, &sql).await;
-                let _ = evt_tx.send(Event::ExplainResult {
-                    req_id,
-                    ws_id,
-                    result,
+                // An explain supersedes the tab's previous run too (mutually exclusive).
+                if let Some(f) = inflight.remove(&ws_id) {
+                    f.abort.abort();
+                }
+                let ctx = ctx.clone();
+                let tx = evt_tx.clone();
+                let task = tokio::spawn(async move {
+                    let result = run_explain(&ctx, &sql).await;
+                    let _ = tx.send(Event::ExplainResult {
+                        req_id,
+                        ws_id,
+                        result,
+                    });
                 });
+                inflight.insert(
+                    ws_id,
+                    InFlight {
+                        req_id,
+                        start: Instant::now(),
+                        abort: task.abort_handle(),
+                    },
+                );
+            }
+            Command::Cancel { ws_id, req_id } => {
+                // Abort only if the tab's in-flight run is still this request.
+                if inflight.get(&ws_id).map(|f| f.req_id) == Some(req_id) {
+                    let f = inflight.remove(&ws_id).unwrap();
+                    let elapsed_ms = f.start.elapsed().as_millis();
+                    f.abort.abort();
+                    // Clear the partial snapshot the aborted task may have left.
+                    let _ = ctx.deregister_table(snapshot_name(ws_id).as_str());
+                    let _ = std::fs::remove_file(snapshot_file(engine_id, ws_id));
+                    let _ = evt_tx.send(Event::QueryCancelled {
+                        req_id,
+                        ws_id,
+                        elapsed_ms,
+                    });
+                }
             }
             Command::FetchPage {
                 ws_id,
@@ -277,10 +351,18 @@ async fn engine_loop(
                 });
             }
             Command::CleanupWorkspace { ws_id } => {
+                // Abort a still-running query first so it can't re-register a
+                // snapshot for a tab we're tearing down.
+                if let Some(f) = inflight.remove(&ws_id) {
+                    f.abort.abort();
+                }
                 let _ = ctx.deregister_table(snapshot_name(ws_id).as_str());
                 let _ = std::fs::remove_file(snapshot_file(engine_id, ws_id));
             }
             Command::CleanupAll => {
+                for (_, f) in inflight.drain() {
+                    f.abort.abort();
+                }
                 // Only this engine's (this window's) snapshots.
                 let _ = std::fs::remove_dir_all(snapshot_dir(engine_id));
             }

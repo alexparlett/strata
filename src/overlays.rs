@@ -61,6 +61,19 @@ pub struct OverlayState {
 /// (callable from components *and* plain functions).
 pub static OVERLAYS: GlobalStore<OverlayState> = Global::new(|| OverlayState::default());
 
+/// Whether any dismissible overlay is currently open. Drives Esc priority (S14):
+/// Esc closes an open overlay first, and only cancels a running query when none is up.
+pub fn any_open() -> bool {
+    let store = OVERLAYS.resolve();
+    let s = store.read();
+    s.settings
+        || s.cmdk
+        || s.export
+        || s.config.is_some()
+        || s.close_confirm.is_some()
+        || s.open_prompt.is_some()
+}
+
 pub fn toggle_settings() {
     let s = OVERLAYS.resolve();
     let open = s.settings().cloned();

@@ -108,6 +108,9 @@ pub struct HistoryItem {
     pub ms: u128,
     pub rows: usize,
     pub ok: bool,
+    /// Cancelled by the user (S14) — distinct from ok / failed.
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 /// A named SQL snippet stored in the project — distinct from a `CatalogView`

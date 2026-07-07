@@ -104,6 +104,23 @@ pub fn run(mut state: Signal<AppState>) {
     }
 }
 
+/// Cancel the active tab's in-flight query / explain (S14). No-op if nothing is
+/// running. Scoped to the current `pending_req`, so a stale Esc/click can't abort a
+/// just-started newer run.
+pub fn cancel(state: Signal<AppState>) {
+    let ws_id = crate::session::active_id();
+    let req = crate::runs::RUNS.resolve().get(ws_id).and_then(|e| {
+        let r = e.peek();
+        r.running.then_some(r.pending_req).flatten()
+    });
+    let Some(req_id) = req else {
+        return;
+    };
+    if let Some(tx) = state.read().cmd_tx.clone() {
+        let _ = tx.send(Command::Cancel { ws_id, req_id });
+    }
+}
+
 /// Dismiss the results-pane error view (falls back to the grid if a prior
 /// result is still loaded, otherwise the "no results yet" empty state).
 pub fn dismiss_error(_state: Signal<AppState>) {
