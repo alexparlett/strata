@@ -19,6 +19,10 @@ use crate::ui::icons;
 pub(crate) fn Tabs() -> Element {
     let state = use_context::<Signal<AppState>>();
     let mut tab_menu = use_signal(|| None::<(WorkspaceId, Point)>);
+    // S8 tab-bar controls: the ⋯ overflow menu + the "show all tabs" searchable popover.
+    let mut overflow_menu = use_signal(|| None::<Point>);
+    let mut tab_list = use_signal(|| None::<Point>);
+    let mut tab_list_query = use_signal(String::new);
     // Inline-rename mode: which workspace (by id) is being renamed, and its draft.
     let mut renaming = use_signal(|| None::<WorkspaceId>);
     let mut rename_val = use_signal(String::new);
@@ -102,14 +106,46 @@ pub(crate) fn Tabs() -> Element {
                     }
                 }
             }
-            button { class: "icon-btn plain", style: "width:28px;height:28px;margin-bottom:1px;flex:none;",
-                title: "New query", onclick: move |_| dispatch(state, Action::NewTab), {icons::plus(15)} }
+            }
+
+            // Pinned right cluster (S8): new-tab · show-all-tabs · overflow.
+            div { class: "ws-tab-cluster",
+                button { class: "icon-btn plain", style: "width:28px;height:28px;",
+                    title: "New query", onclick: move |_| dispatch(state, Action::NewTab),
+                    {icons::plus(15)} }
+                button { class: "icon-btn plain", style: "width:26px;height:28px;",
+                    title: "Show all tabs",
+                    onclick: move |e| {
+                        let c = e.client_coordinates();
+                        tab_list_query.set(String::new());
+                        tab_list.set(Some(Point { x: (c.x - 290.0).max(8.0), y: c.y + 10.0 }));
+                    },
+                    {icons::chevron_down(14)} }
+                button { class: "icon-btn plain", style: "width:24px;height:28px;",
+                    title: "Tab actions",
+                    onclick: move |e| {
+                        let c = e.client_coordinates();
+                        overflow_menu.set(Some(Point { x: (c.x - 180.0).max(8.0), y: c.y + 10.0 }));
+                    },
+                    {icons::dots(15)} }
             }
 
             // Self-contained tab context menu (egui-style Popup container).
             if let Some((id, at)) = tab_menu() {
                 Popup { on_close: move |_| tab_menu.set(None), at,
                     {tab_menu_items(state, tab_menu, renaming, rename_val, id)}
+                }
+            }
+            // ⋯ overflow menu — whole-strip actions (S8).
+            if let Some(at) = overflow_menu() {
+                Popup { on_close: move |_| overflow_menu.set(None), at,
+                    {overflow_menu_items(state, overflow_menu, active, !state.read().closed_tabs.is_empty())}
+                }
+            }
+            // "Show all tabs" searchable popover (S8).
+            if let Some(at) = tab_list() {
+                Popup { on_close: move |_| tab_list.set(None), at, card_class: "menu".to_string(), width: 320,
+                    {tab_list_body(state, tab_list, tab_list_query, active)}
                 }
             }
         }
@@ -170,5 +206,85 @@ fn tab_menu_items(
         MenuSep {}
         MenuItem { label: "Reopen closed tab".to_string(), meta: "⇧⌘T".to_string(), disabled: !can_reopen,
             onclick: move |_| { tab_menu.set(None); dispatch(state, Action::ReopenTab); } }
+    }
+}
+
+/// Rows for the ⋯ tab-overflow menu (S8): whole-strip actions (not tied to one tab).
+fn overflow_menu_items(
+    state: Signal<AppState>,
+    mut overflow: Signal<Option<Point>>,
+    active: WorkspaceId,
+    can_reopen: bool,
+) -> Element {
+    rsx! {
+        MenuItem { label: "Close all tabs".to_string(),
+            onclick: move |_| { overflow.set(None); dispatch(state, Action::CloseAllTabs); } }
+        MenuItem { label: "Close other tabs".to_string(),
+            onclick: move |_| { overflow.set(None); dispatch(state, Action::CloseOtherTabs(active)); } }
+        MenuSep {}
+        MenuItem { label: "Reopen closed tab".to_string(), meta: "⇧⌘T".to_string(), disabled: !can_reopen,
+            onclick: move |_| { overflow.set(None); dispatch(state, Action::ReopenTab); } }
+    }
+}
+
+/// Body of the "show all tabs" searchable popover (S8): a filter box + a row per
+/// workspace (click switches, × closes). Reads the live session so closing a row
+/// updates the list in place; Enter opens the first match.
+fn tab_list_body(
+    state: Signal<AppState>,
+    mut tab_list: Signal<Option<Point>>,
+    mut query: Signal<String>,
+    active: WorkspaceId,
+) -> Element {
+    let q = query();
+    let ql = q.to_lowercase();
+    let rows: Vec<(WorkspaceId, String, bool, bool)> = crate::session::snapshot()
+        .workspaces
+        .iter()
+        .filter(|w| ql.is_empty() || w.name.to_lowercase().contains(&ql))
+        .map(|w| (w.id, w.name.clone(), w.id == active, w.is_dirty()))
+        .collect();
+    let first = rows.first().map(|r| r.0);
+    rsx! {
+        div { class: "tablist-search",
+            span { class: "tablist-search-ic", {icons::search(13)} }
+            input {
+                class: "tablist-input",
+                value: "{q}",
+                placeholder: "Find a query tab…",
+                spellcheck: false,
+                onmounted: move |e| { spawn(async move { let _ = e.set_focus(true).await; }); },
+                oninput: move |e| query.set(e.value()),
+                onkeydown: move |e| match e.key() {
+                    Key::Enter => {
+                        if let Some(id) = first {
+                            e.prevent_default();
+                            tab_list.set(None);
+                            dispatch(state, Action::SwitchTab(id));
+                        }
+                    }
+                    Key::Escape => { e.prevent_default(); tab_list.set(None); }
+                    _ => {}
+                },
+            }
+        }
+        div { class: "tablist-rows",
+            if rows.is_empty() {
+                div { class: "tablist-empty", "No matching tabs" }
+            }
+            for (id, name, is_active, dirty) in rows {
+                div {
+                    class: if is_active { "tablist-row active" } else { "tablist-row" },
+                    onclick: move |_| { tab_list.set(None); dispatch(state, Action::SwitchTab(id)); },
+                    span { class: if dirty { "tdot dirty" } else { "tdot" } }
+                    span { class: "tablist-name", "{name}" }
+                    span {
+                        class: "tablist-close",
+                        onclick: move |e| { e.stop_propagation(); dispatch(state, Action::CloseTab(id)); },
+                        "×"
+                    }
+                }
+            }
+        }
     }
 }

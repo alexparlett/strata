@@ -208,6 +208,23 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .icon-btn.dirty { color: var(--orange); }
 .ws-tab .close { color: var(--faint); font-size: 13px; padding-left: 2px; }
 .ws-tab .close:hover { color: var(--text); }
+/* S8 tab-bar controls: pinned right cluster + "show all tabs" popover. */
+.ws-tab-cluster { flex: none; align-self: flex-end; display: flex; align-items: center; gap: 1px; margin-left: 2px; padding-left: 3px; margin-bottom: 1px; border-left: 1px solid var(--line); }
+.tablist-search { display: flex; align-items: center; gap: 7px; padding: 2px 6px 8px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.tablist-search-ic { display: flex; flex: none; color: var(--dim3); }
+.tablist-input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--text); font-family: inherit; font-size: 13px; }
+.tablist-input::placeholder { color: var(--dim3); }
+.tablist-rows { display: flex; flex-direction: column; gap: 1px; max-height: calc(60vh - 56px); overflow-y: auto; }
+.tablist-row { display: flex; align-items: center; gap: 9px; padding: 0 8px; height: 32px; border-radius: 7px; cursor: pointer; color: var(--text2); font-size: 12.5px; }
+.tablist-row:hover { background: var(--elev3); }
+.tablist-row.active { background: var(--main); color: var(--text); }
+.tablist-row .tdot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dim2); }
+.tablist-row.active .tdot { background: var(--accent); }
+.tablist-row .tdot.dirty { background: var(--orange); }
+.tablist-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tablist-close { flex: none; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 5px; color: var(--faint); font-size: 14px; }
+.tablist-close:hover { background: var(--elev2); color: var(--text); }
+.tablist-empty { padding: 12px 8px; color: var(--dim3); font-size: 12px; text-align: center; }
 
 /* editor */
 .editor-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px 6px; }
