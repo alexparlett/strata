@@ -239,7 +239,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                 div { class: "settings-row", style: "cursor:pointer;",
                                     onclick: move |_| crate::settings::toggle_confirm_close(),
                                     div { style: "flex:1;",
-                                        div { style: "font:600 13px var(--ui);color:var(--text);", "Confirm before closing a window with a running query" }
+                                        div { style: "font:600 13px var(--ui);color:var(--text);", "Confirm before closing a tab or window with a running query" }
                                         div { style: "font-size:11.5px;color:var(--dim2);margin-top:3px;", "Asks only when a scan is in flight — silent otherwise." }
                                     }
                                     div { class: if confirm_close { "toggle on" } else { "toggle" }, div { class: "knob" } }

@@ -36,6 +36,14 @@ pub struct PendingTable {
     pub partition_cols: Vec<(String, String)>,
 }
 
+/// What a running-query close confirm (S14) is guarding: a single tab (by id) or
+/// the whole window (Close Project).
+#[derive(Clone, Copy, PartialEq)]
+pub enum RunningCloseTarget {
+    Tab(crate::session::WorkspaceId),
+    Window,
+}
+
 /// Which overlays are currently open in this window.
 #[derive(Clone, Default, Store)]
 pub struct OverlayState {
@@ -50,6 +58,8 @@ pub struct OverlayState {
     pub pending_register: Option<PendingTable>,
     /// A workspace id awaiting a discard-confirm before it closes (A6). `None` = none.
     pub close_confirm: Option<crate::session::WorkspaceId>,
+    /// A tab or the window awaiting a running-query close confirm (S14). `None` = none.
+    pub close_running_confirm: Option<RunningCloseTarget>,
     /// A picked project path awaiting a This-Window / New-Window choice (B10).
     /// `Some` when `open_pref == "ask"` and a project is being opened from a
     /// project window; the prompt host reads it.
@@ -71,6 +81,7 @@ pub fn any_open() -> bool {
         || s.export
         || s.config.is_some()
         || s.close_confirm.is_some()
+        || s.close_running_confirm.is_some()
         || s.open_prompt.is_some()
 }
 
@@ -155,6 +166,16 @@ pub fn open_close_confirm(id: crate::session::WorkspaceId) {
 /// Dismiss the close-confirm dialog.
 pub fn close_close_confirm() {
     OVERLAYS.resolve().close_confirm().set(None);
+}
+
+/// Ask to confirm closing a tab / the window that has a running query (S14).
+pub fn open_running_close(target: RunningCloseTarget) {
+    OVERLAYS.resolve().close_running_confirm().set(Some(target));
+}
+
+/// Dismiss the running-query close confirm.
+pub fn close_running_close() {
+    OVERLAYS.resolve().close_running_confirm().set(None);
 }
 
 /// Ask where to open `path` — This Window vs New Window (B10, when the open

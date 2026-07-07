@@ -5,12 +5,17 @@
 //! functions plus the runtime bookkeeping (closed-tab stack, runs, engine scopes).
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use dioxus::prelude::*;
 
 use crate::engine::Command;
 use crate::session::WorkspaceId;
 use crate::state::{AppState, ClosedTab};
+
+/// Only confirm closing a tab whose query has actually been running a while — a
+/// query that finishes in ms shouldn't nag on every ⌘W (S14).
+const CLOSE_CONFIRM_THRESHOLD: Duration = Duration::from_millis(1500);
 
 /// Open a new blank query tab and focus it.
 pub fn add(_state: Signal<AppState>) {
@@ -27,13 +32,23 @@ pub fn switch(_state: Signal<AppState>, id: WorkspaceId) {
     crate::session::switch(id);
 }
 
-/// Close workspace `id` — confirm first if it has unsaved changes (A6).
+/// Close workspace `id`. Unsaved edits confirm first (A6, discard dialog); else a
+/// query that's been running past the threshold confirms (S14, running dialog);
+/// otherwise it closes straight away (a quick query is cancelled silently on close).
 pub fn close(state: Signal<AppState>, id: WorkspaceId) {
     if crate::session::is_dirty(id) {
         crate::overlays::open_close_confirm(id);
-    } else {
-        close_ids(state, &HashSet::from([id]));
+        return;
     }
+    if crate::settings::confirm_close_running() {
+        if let Some(since) = crate::runs::running_since(id) {
+            if since.elapsed() >= CLOSE_CONFIRM_THRESHOLD {
+                crate::overlays::open_running_close(crate::overlays::RunningCloseTarget::Tab(id));
+                return;
+            }
+        }
+    }
+    close_ids(state, &HashSet::from([id]));
 }
 
 /// Close workspace `id` unconditionally — from the discard-confirm dialog (A6).

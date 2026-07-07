@@ -1,6 +1,8 @@
 //! Query / results / saved-query action handlers. Called from `action::dispatch`
 //! (and from `catalog::menu_action` for the `SELECT *` / saved-query menu items).
 
+use std::time::Instant;
+
 use dioxus::prelude::*;
 
 use crate::ddl::{self, Decision};
@@ -30,6 +32,7 @@ pub fn run(mut state: Signal<AppState>) {
             run.query_error = None;
             run.plan = None;
             run.pending_req = Some(req);
+            run.started_at = Some(Instant::now());
             run.page = 1;
         });
         let tx = state.read().cmd_tx.clone();
@@ -88,6 +91,7 @@ pub fn run(mut state: Signal<AppState>) {
                 run.query_error = None;
                 run.plan = None;
                 run.pending_req = Some(req);
+                run.started_at = Some(Instant::now());
                 run.page = 1;
             });
             let tx = state.read().cmd_tx.clone();

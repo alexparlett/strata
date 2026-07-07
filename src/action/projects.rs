@@ -270,10 +270,26 @@ pub fn use_persist_session(state: Signal<AppState>) {
     });
 }
 
-/// `Action::CloseProject` — save, then close this window. If it's the last
-/// project window, open the launcher; otherwise focus a sibling. An OS
-/// close-button doesn't route here, so it never opens the launcher.
+/// `Action::CloseProject` — save, then close this window. If any tab has a running
+/// query and the confirm-close setting is on, ask first (S14); otherwise close
+/// straight away via [`close_now`].
 pub fn close(state: Signal<AppState>) {
+    let any_running = crate::session::snapshot()
+        .workspaces
+        .iter()
+        .any(|w| crate::runs::is_running(w.id));
+    if any_running && crate::settings::confirm_close_running() {
+        crate::overlays::open_running_close(crate::overlays::RunningCloseTarget::Window);
+        return;
+    }
+    close_now(state);
+}
+
+/// Actually close this window (save + record + launcher/sibling focus + close).
+/// If it's the last project window, open the launcher; otherwise focus a sibling.
+/// An OS close-button doesn't route here, so it never opens the launcher. Reached
+/// directly, or from the running-query confirm's "Stop & close".
+pub fn close_now(state: Signal<AppState>) {
     save(state);
     if let Some(dir) = state.read().project_path.clone() {
         crate::config::mark_closed(&dir.to_string_lossy());

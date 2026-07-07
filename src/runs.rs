@@ -17,6 +17,7 @@
 //! ids, so a new tab could otherwise inherit a stale run.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use dioxus::prelude::*;
 use dioxus_stores::*;
@@ -35,6 +36,9 @@ pub struct WorkspaceRun {
     pub plan_raw: bool,
     pub running: bool,
     pub pending_req: Option<u64>,
+    /// When the current run started — lets tab-close threshold-gate its confirm
+    /// (S14). Runtime-only; `None` when not running.
+    pub started_at: Option<Instant>,
     /// 1-based page into the snapshot.
     pub page: usize,
     pub page_size: usize,
@@ -51,6 +55,7 @@ impl Default for WorkspaceRun {
             plan_raw: false,
             running: false,
             pending_req: None,
+            started_at: None,
             page: 1,
             page_size: 100,
             result_search: String::new(),
@@ -90,6 +95,27 @@ pub fn is_pending(id: u64, req_id: u64) -> bool {
         .get(id)
         .map(|e| e.peek().pending_req == Some(req_id))
         .unwrap_or(false)
+}
+
+/// Whether tab `id` currently has a query running (S14 — close confirms).
+pub fn is_running(id: u64) -> bool {
+    RUNS.resolve()
+        .get(id)
+        .map(|e| e.peek().running)
+        .unwrap_or(false)
+}
+
+/// When tab `id`'s in-flight query started, if it's running (threshold-gating the
+/// tab-close confirm — S14).
+pub fn running_since(id: u64) -> Option<Instant> {
+    RUNS.resolve().get(id).and_then(|e| {
+        let r = e.peek();
+        if r.running {
+            r.started_at
+        } else {
+            None
+        }
+    })
 }
 
 /// Drop the runs for closed tabs.

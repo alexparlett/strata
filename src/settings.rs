@@ -109,3 +109,14 @@ pub fn toggle_confirm_close() {
     s.confirm_close_running().set(!v);
     persist();
 }
+
+/// Whether to confirm before closing a tab/window with a running query (S14).
+pub fn confirm_close_running() -> bool {
+    SETTINGS.resolve().peek().confirm_close_running
+}
+
+/// Set the confirm-close-running preference (a dialog's "don't ask again").
+pub fn set_confirm_close_running(v: bool) {
+    SETTINGS.resolve().confirm_close_running().set(v);
+    persist();
+}

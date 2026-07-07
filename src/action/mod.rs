@@ -128,6 +128,8 @@ pub enum Action {
     },
     SaveProject,
     CloseProject,
+    /// Close the window unconditionally — from the running-query close confirm (S14).
+    CloseWindowForce,
 }
 
 /// Execute an [`Action`]. Durable actions (those that mutate the project's
@@ -266,5 +268,6 @@ fn run(state: Signal<AppState>, action: Action) {
         OpenChosen { new_window, remember } => projects::choose_open(state, new_window, remember),
         SaveProject => projects::save(state),
         CloseProject => projects::close(state),
+        CloseWindowForce => projects::close_now(state),
     }
 }
