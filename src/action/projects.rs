@@ -121,6 +121,11 @@ pub fn choose_open(state: Signal<AppState>, new_window: bool, remember: bool) {
 /// window's engine, then load the new one.
 pub fn open_in_current(state: Signal<AppState>, path: PathBuf) {
     save(state);
+    // The current window is being repurposed for `path`; mark the old project
+    // closed (`install` marks the new one open).
+    if let Some(old) = state.read().project_path.clone() {
+        crate::config::mark_closed(&old.to_string_lossy());
+    }
     let (tx, tables, views) = {
         let s = state.read();
         (
@@ -179,6 +184,9 @@ pub fn save_on_close(mut state: Signal<AppState>, win_id: WindowId) {
         state.write().project.window = Some(geom);
     }
     write_files(state, true);
+    if let Some(dir) = state.read().project_path.clone() {
+        crate::config::mark_closed(&dir.to_string_lossy());
+    }
 }
 
 /// Write the project to its `.strata/` dir: both files when `defs` (a definition
@@ -267,6 +275,9 @@ pub fn use_persist_session(state: Signal<AppState>) {
 /// close-button doesn't route here, so it never opens the launcher.
 pub fn close(state: Signal<AppState>) {
     save(state);
+    if let Some(dir) = state.read().project_path.clone() {
+        crate::config::mark_closed(&dir.to_string_lossy());
+    }
     if crate::window::project_window_count() <= 1 {
         crate::window::open_launcher_window();
     } else {
@@ -335,6 +346,7 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
     // disk; later durable edits autosave through `dispatch`.
     let mut cfg = config::load();
     cfg.push_recent(&name, &path.to_string_lossy());
+    cfg.add_open(&path.to_string_lossy());
     config::save(&cfg);
     state.write().recent_projects = cfg.recent_projects;
 }

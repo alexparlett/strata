@@ -93,6 +93,11 @@ impl Default for Settings {
 pub struct AppConfig {
     #[serde(default)]
     pub recent_projects: Vec<RecentProject>,
+    /// Paths (`.strata` dirs) of the projects with an open window right now, so
+    /// "Reopen projects on startup" can restore the whole set. Maintained live —
+    /// added on open, removed on any window close.
+    #[serde(default)]
+    pub open_projects: Vec<String>,
     #[serde(flatten)]
     pub settings: Settings,
 }
@@ -132,6 +137,18 @@ impl AppConfig {
         self.recent_projects.retain(|r| r.path != path);
     }
 
+    /// Record that `path` has an open window (dedup).
+    pub fn add_open(&mut self, path: &str) {
+        if !self.open_projects.iter().any(|p| p == path) {
+            self.open_projects.push(path.to_string());
+        }
+    }
+
+    /// Record that `path`'s window has closed.
+    pub fn remove_open(&mut self, path: &str) {
+        self.open_projects.retain(|p| p != path);
+    }
+
     /// The most-recently-opened project, if any (used to reopen on launch).
     pub fn most_recent(&self) -> Option<&RecentProject> {
         self.recent_projects.first()
@@ -148,6 +165,21 @@ pub fn save(cfg: &AppConfig) {
     if let Err(e) = cfg.save(&APP_INFO, KEY) {
         tracing::error!("save config: {e}");
     }
+}
+
+/// Record a project window opening in the persisted open-set (drives "Reopen
+/// projects on startup"). Load-mutate-save so it works from any window.
+pub fn mark_open(path: &str) {
+    let mut cfg = load();
+    cfg.add_open(path);
+    save(&cfg);
+}
+
+/// Record a project window closing in the persisted open-set.
+pub fn mark_closed(path: &str) {
+    let mut cfg = load();
+    cfg.remove_open(path);
+    save(&cfg);
 }
 
 fn now_secs() -> u64 {

@@ -197,8 +197,8 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                 div { class: "settings-row", style: "cursor:pointer;",
                                     onclick: move |_| crate::settings::toggle_reopen_startup(),
                                     div { style: "flex:1;",
-                                        div { style: "font:600 13px var(--ui);color:var(--text);", "Reopen last project on startup" }
-                                        div { style: "font-size:11.5px;color:var(--dim2);margin-top:3px;", "Jump straight back into the project you had open." }
+                                        div { style: "font:600 13px var(--ui);color:var(--text);", "Reopen projects on startup" }
+                                        div { style: "font-size:11.5px;color:var(--dim2);margin-top:3px;", "Reopen the projects you had open when you last quit." }
                                     }
                                     div { class: if reopen { "toggle on" } else { "toggle" }, div { class: "knob" } }
                                 }

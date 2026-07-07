@@ -3,6 +3,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use dioxus::prelude::*;
@@ -34,6 +35,25 @@ pub const CSS: &str = include_str!("../assets/main.css");
 /// [`root_entry`]. Subsequent windows carry their path as a component prop.
 static STARTUP_PATH: OnceLock<String> = OnceLock::new();
 
+/// The *additional* projects to reopen on startup (beyond the first window). The
+/// first `ProjectRoot` spawns a window for each, once — see [`spawn_startup_rest`].
+static STARTUP_REST: OnceLock<Vec<String>> = OnceLock::new();
+static REST_SPAWNED: AtomicBool = AtomicBool::new(false);
+
+/// Spawn windows for the additional startup projects (beyond the first), exactly
+/// once. Called from the first `ProjectRoot` after it mounts (creating windows
+/// needs a running desktop context, which `main` doesn't have yet).
+pub fn spawn_startup_rest() {
+    if REST_SPAWNED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(rest) = STARTUP_REST.get() {
+        for path in rest {
+            window::spawn_project_window(path.clone());
+        }
+    }
+}
+
 fn main() {
     init_logging();
     // Clear any snapshots left over from a previous run — once, before any engine
@@ -44,9 +64,11 @@ fn main() {
         // dark background) + the project's saved size/position live in
         // `window::project_window_config_for`. See wry#1056 for
         // `with_as_child_window`.
-        Startup::Project(path) => {
-            let cfg = window::project_window_config_for(&path);
-            let _ = STARTUP_PATH.set(path);
+        Startup::Projects(mut paths) => {
+            let first = paths.remove(0);
+            let cfg = window::project_window_config_for(&first);
+            let _ = STARTUP_PATH.set(first);
+            let _ = STARTUP_REST.set(paths);
             LaunchBuilder::new().with_cfg(cfg).launch(root_entry);
         }
         // Nothing to reopen → open the launcher as the first window (same window
@@ -68,21 +90,27 @@ fn root_entry() -> Element {
 
 /// What the app opens on launch.
 enum Startup {
-    /// A project window for this `.strata` path (recent, or the dev sample).
-    Project(String),
-    /// The welcome/launcher window (no recent to reopen, non-dev build).
+    /// Reopen these `.strata` project paths (the first as the launch window, the
+    /// rest spawned by it) — the set that had windows open at the last quit.
+    Projects(Vec<String>),
+    /// The welcome/launcher window (nothing to reopen).
     Launcher,
 }
 
-/// Which window the app opens on launch: the most-recent project (when
-/// "Reopen last project on startup" is on), else — in dev builds — the bundled
-/// sample project, else the launcher.
+/// Which window(s) the app opens on launch: when "Reopen projects on startup" is
+/// on, reopen every project that had a window open at the last quit (filtered to
+/// ones that still exist on disk); otherwise the launcher.
 fn decide_startup() -> Startup {
     let cfg = config::load();
-    // "Reopen last project on startup" (System settings) gates reopening recents.
     if cfg.settings.reopen_on_startup {
-        if let Some(recent) = cfg.most_recent() {
-            return Startup::Project(recent.path.clone());
+        let paths: Vec<String> = cfg
+            .open_projects
+            .iter()
+            .filter(|p| project::Project::exists_at(std::path::Path::new(p)))
+            .cloned()
+            .collect();
+        if !paths.is_empty() {
+            return Startup::Projects(paths);
         }
     }
     Startup::Launcher

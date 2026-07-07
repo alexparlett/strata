@@ -58,6 +58,9 @@ pub fn ProjectRoot(open_path: String) -> Element {
         if !open_path.is_empty() {
             crate::action::projects::load_current(state, std::path::PathBuf::from(open_path));
         }
+        // The launch window reopens the rest of last session's projects (once),
+        // deferred so window creation doesn't run during this window's mount.
+        spawn(async move { crate::spawn_startup_rest(); });
     });
 
     // Persist window geometry + save on an OS close-button (the window is still
