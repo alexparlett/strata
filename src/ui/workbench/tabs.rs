@@ -238,13 +238,18 @@ fn tab_list_body(
 ) -> Element {
     let q = query();
     let ql = q.to_lowercase();
-    let rows: Vec<(WorkspaceId, String, bool, bool)> = crate::session::snapshot()
-        .workspaces
+    // Most-recently-viewed first, so the capped top-10 are the recent tabs.
+    let mut wss = crate::session::snapshot().workspaces;
+    wss.sort_by(|a, b| b.last_viewed.cmp(&a.last_viewed));
+    let mut rows: Vec<(WorkspaceId, String, bool, bool)> = wss
         .iter()
         .filter(|w| ql.is_empty() || w.name.to_lowercase().contains(ql.as_str()))
         .map(|w| (w.id, w.name.clone(), w.id == active, w.is_dirty()))
         .collect();
     let first = rows.first().map(|r| r.0);
+    // Show at most 10; beyond that the user narrows via the filter box.
+    let overflow = rows.len().saturating_sub(10);
+    rows.truncate(10);
     rsx! {
         div { class: "tablist-search",
             span { class: "tablist-search-ic", {icons::search(13)} }
@@ -285,6 +290,9 @@ fn tab_list_body(
                     }
                 }
             }
+        }
+        if overflow > 0 {
+            div { class: "tablist-more", "+{overflow} more — keep typing to filter" }
         }
     }
 }

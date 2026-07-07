@@ -225,6 +225,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .tablist-close { flex: none; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 5px; color: var(--faint); font-size: 14px; }
 .tablist-close:hover { background: var(--elev2); color: var(--text); }
 .tablist-empty { padding: 12px 8px; color: var(--dim3); font-size: 12px; text-align: center; }
+.tablist-more { padding: 8px; margin-top: 2px; border-top: 1px solid var(--line); color: var(--dim3); font-size: 11px; text-align: center; }
 
 /* editor */
 .editor-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px 6px; }

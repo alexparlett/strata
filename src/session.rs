@@ -44,6 +44,10 @@ pub struct Workspace {
     pub origin: Origin,
     #[serde(default)]
     pub origin_hash: u64,
+    /// Monotonic stamp of the last time this workspace was focused — drives the
+    /// "show all tabs" most-recently-viewed cap. `0` = not yet focused.
+    #[serde(default)]
+    pub last_viewed: u64,
 }
 
 impl Workspace {
@@ -55,6 +59,7 @@ impl Workspace {
             sql,
             origin: Origin::Scratch,
             origin_hash: 0,
+            last_viewed: 0,
         };
         w.set_origin(origin);
         w
@@ -91,6 +96,10 @@ pub struct Session {
     /// Monotonic id allocator, persisted so a reopened workspace keeps its identity.
     #[serde(default)]
     pub next_id: WorkspaceId,
+    /// Monotonic focus clock — bumped on every activation; a workspace snapshots it
+    /// into `last_viewed`, giving a most-recently-viewed order for the tab list.
+    #[serde(default)]
+    pub view_clock: u64,
 }
 
 /// This window's durable session. Per-window: a `GlobalStore` is per-app, and each
@@ -158,6 +167,21 @@ fn unique_name(s: &Session, base: &str) -> String {
         .unwrap_or_else(|| base.to_string())
 }
 
+/// Focus `id` and stamp it as the most-recently-viewed workspace (drives the
+/// "show all tabs" MRU cap). Every activation path routes through here so the
+/// clock stays authoritative.
+fn set_active(store: Store<Session>, id: WorkspaceId) {
+    let clock = store.view_clock().cloned() + 1;
+    store.view_clock().set(clock);
+    for w in store.workspaces().iter() {
+        if w.id().cloned() == id {
+            w.last_viewed().set(clock);
+            break;
+        }
+    }
+    store.active().set(id);
+}
+
 // Entry lookups are inlined (capture the sub-store into an inferred `Option`) so
 // the un-nameable per-entry lens generic never has to be written in a signature.
 
@@ -178,7 +202,7 @@ pub fn open_named(name: &str, sql: String, origin: Origin) {
     if let Some(mut w) = reuse {
         let id = w.id().cloned();
         w.write().set_origin(origin);
-        store.active().set(id);
+        set_active(store, id);
         return;
     }
     let name = {
@@ -187,7 +211,7 @@ pub fn open_named(name: &str, sql: String, origin: Origin) {
     };
     let id = alloc_id(store);
     store.workspaces().push(Workspace::new(id, name, sql, origin));
-    store.active().set(id);
+    set_active(store, id);
 }
 
 /// Append a **new** blank workspace (`query N`) and focus it (⌘T).
@@ -201,7 +225,7 @@ pub fn new_blank() -> WorkspaceId {
     store
         .workspaces()
         .push(Workspace::new(id, name, String::new(), Origin::Scratch));
-    store.active().set(id);
+    set_active(store, id);
     id
 }
 
@@ -216,7 +240,7 @@ pub fn open_new(sql: String) {
     store
         .workspaces()
         .push(Workspace::new(id, name, sql, Origin::Scratch));
-    store.active().set(id);
+    set_active(store, id);
 }
 
 /// Focus a workspace that already holds exactly `sql`, else append a new one
@@ -231,7 +255,7 @@ pub fn open_or_focus_sql(sql: String) {
         }
     }
     if let Some(w) = hit {
-        store.active().set(w.id().cloned());
+        set_active(store, w.id().cloned());
     } else {
         open_new(sql);
     }
@@ -244,7 +268,7 @@ pub fn reopen(name: String, sql: String) {
     store
         .workspaces()
         .push(Workspace::new(id, name, sql, Origin::Scratch));
-    store.active().set(id);
+    set_active(store, id);
 }
 
 /// Duplicate workspace `id`: clone its SQL into a new **scratch** workspace named
@@ -266,7 +290,7 @@ pub fn duplicate(id: WorkspaceId) {
         .workspaces()
         .write()
         .insert(pos + 1, Workspace::new(new_id, name, src_sql, Origin::Scratch));
-    store.active().set(new_id);
+    set_active(store, new_id);
 }
 
 /// Replace workspace `id`'s SQL (Format / Clear / other programmatic edits). The
@@ -302,7 +326,7 @@ pub fn set_origin(id: WorkspaceId, origin: Origin) {
 
 /// Focus workspace `id`.
 pub fn switch(id: WorkspaceId) {
-    SESSION.resolve().active().set(id);
+    set_active(SESSION.resolve(), id);
 }
 
 /// Rename workspace `id` (an empty name is ignored by the caller).
@@ -343,7 +367,7 @@ pub fn remove_ids(ids: &HashSet<WorkspaceId>) {
                 s.workspaces[active_pos.unwrap_or(0).min(n - 1)].id
             }
         };
-        store.active().set(new_active);
+        set_active(store, new_active);
     }
 }
 
@@ -383,6 +407,10 @@ fn normalize(s: &mut Session) {
         }
     }
     s.next_id = s.workspaces.iter().map(|w| w.id).max().unwrap_or(0) + 1;
+    // Keep the focus clock above any persisted stamp so new activations stay monotonic.
+    s.view_clock = s
+        .view_clock
+        .max(s.workspaces.iter().map(|w| w.last_viewed).max().unwrap_or(0));
     if !s.workspaces.iter().any(|w| w.id == s.active) {
         s.active = s.workspaces[0].id;
     }
