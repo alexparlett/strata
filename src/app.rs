@@ -102,7 +102,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
     let mut menu_cmd = use_signal(|| None::<String>);
     use_muda_event_handler(move |ev| {
         if crate::window::is_focused_window(win_id) {
-            menu_cmd.set(Some(ev.id.0.clone()));
+            menu_cmd.set(Some(ev.id.to_string()));
         }
     });
     use_effect(move || {
