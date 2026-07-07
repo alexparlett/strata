@@ -176,7 +176,6 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .tbl-row { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 8px; border-radius: 7px; cursor: pointer; }
 .tbl-row:hover { background: var(--elev2); }
 .tbl-row .tname { font: 500 12.5px var(--mono); color: var(--text); }
-.tbl-row .tmeta { margin-left: auto; font: 400 9.5px var(--mono); color: var(--dim3); }
 .tbl-cols { margin: 2px 0 6px 15px; padding-left: 9px; border-left: 1px solid var(--line); }
 .col-row { display: flex; align-items: center; gap: 7px; height: 25px; padding: 0 8px; border-radius: 6px; cursor: pointer; }
 .col-row:hover { background: var(--elev2); }
@@ -429,7 +428,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .btn-danger:hover { filter: brightness(1.08); }
 
 /* ============ CONTEXT MENUS ============ */
-.row-menu { width: 22px; height: 22px; flex: none; border: none; background: transparent; border-radius: 5px; color: var(--dim3); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.row-menu { width: 22px; height: 22px; flex: none; border: none; background: transparent; border-radius: 5px; color: var(--dim3); cursor: pointer; display: flex; align-items: center; justify-content: center; margin-left: auto; }
 .row-menu:hover { background: var(--elev3); color: var(--text); }
 .ctx-backdrop { position: fixed; inset: 0; z-index: 77; outline: none; }
 .ctx-menu { position: fixed; min-width: 210px; background: var(--elev); border: 1px solid var(--line3); border-radius: 10px; box-shadow: 0 18px 50px rgba(0,0,0,.55); padding: 5px; }

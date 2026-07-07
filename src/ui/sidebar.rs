@@ -250,7 +250,6 @@ fn render_saved_query(
                 },
                 span { style: "color:var(--purple);display:flex;", {icons::brackets(14)} }
                 span { class: "tname", "{name}" }
-                div { style: "flex:1;" }
                 button {
                     class: "row-menu",
                     title: "Actions",
@@ -281,7 +280,6 @@ fn render_table(
         return rsx! {};
     }
     let name = t.name.clone();
-    let meta = t.meta.clone();
     let open = t.open;
     let status = t.status;
     let parts = t.partition_cols.clone();
@@ -306,11 +304,6 @@ fn render_table(
         .collect();
     drop(s);
 
-    let status_icon = match status {
-        RegStatus::Loading => "⏳",
-        RegStatus::Ready => "",
-        RegStatus::Failed => "⚠",
-    };
     let nm_ctx = name.clone();
     let nm_menu = name.clone();
 
@@ -329,7 +322,6 @@ fn render_table(
                 }
                 span { style: "color:var(--dim);display:flex;", {icons::table(14)} }
                 span { class: "tname", "{name}" }
-                span { class: "tmeta", "{status_icon} {meta}" }
                 button {
                     class: "row-menu",
                     title: "Actions",
@@ -407,7 +399,6 @@ fn render_view(state: Signal<AppState>, mut menu: Signal<Option<CtxTarget>>, i: 
                 }
                 span { style: "color:var(--purple);display:flex;", {icons::eye(14)} }
                 span { class: "tname", "{name}" }
-                span { class: "tmeta", "view" }
                 button {
                     class: "row-menu",
                     title: "Actions",
