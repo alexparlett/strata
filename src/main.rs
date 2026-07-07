@@ -85,14 +85,7 @@ fn decide_startup() -> Startup {
             return Startup::Project(recent.path.clone());
         }
     }
-    #[cfg(feature = "sample-data")]
-    {
-        Startup::Project(concat!(env!("CARGO_MANIFEST_DIR"), "/sample/.strata").to_string())
-    }
-    #[cfg(not(feature = "sample-data"))]
-    {
-        Startup::Launcher
-    }
+    Startup::Launcher
 }
 
 /// Install a tracing subscriber. Defaults to `warn` for deps + `info` for this

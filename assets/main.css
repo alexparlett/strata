@@ -513,6 +513,13 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .launch-row:hover { background: var(--elev2); }
 .launch-open { display: flex; align-items: center; gap: 8px; border: none; background: transparent; cursor: pointer; font: 600 13px var(--ui); letter-spacing: .5px; color: var(--text3); text-transform: uppercase; }
 .launch-open:hover { color: var(--accent); }
+.launch-lbl { font: 600 10px var(--mono); letter-spacing: .8px; color: var(--dim3); padding: 10px 14px 4px; }
+.launch-row .row-actions { display: flex; gap: 2px; flex: none; opacity: 0; transition: opacity .12s; }
+.launch-row:hover .row-actions { opacity: 1; }
+.row-act { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; border-radius: 7px; cursor: pointer; color: var(--dim2); }
+.row-act:hover { background: var(--elev3); color: var(--text); }
+.row-act.on { color: var(--accent); }
+.pin-badge { display: flex; align-items: center; color: var(--accent); flex: none; }
 
 /* segmented option pills (export modal) */
 .seg { height: 28px; padding: 0 11px; border: 1px solid var(--line2); background: var(--bg); border-radius: 7px; color: var(--dim); font: 500 11.5px var(--ui); cursor: pointer; white-space: nowrap; }

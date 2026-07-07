@@ -34,6 +34,29 @@ pub fn folder(sz: u32) -> Element {
         rsx! { path { d: "M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" } },
     )
 }
+/// Pushpin (B11 — pin a project to the top of the launcher).
+pub fn pin(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.7",
+        rsx! {
+            line { x1: "12", y1: "17", x2: "12", y2: "22" }
+            path { d: "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" }
+        },
+    )
+}
+/// External-link box (B11 — open a project in a new window).
+pub fn external(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.7",
+        rsx! {
+            path { d: "M15 3h6v6" }
+            path { d: "M10 14 21 3" }
+            path { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" }
+        },
+    )
+}
 pub fn cube_lines(sz: u32) -> Element {
     stroke(
         sz,

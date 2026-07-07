@@ -16,10 +16,13 @@ const KEY: &str = "config";
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RecentProject {
     pub name: String,
-    /// Absolute path to the `.psproj` file.
+    /// Absolute path to the project's `.strata` dir.
     pub path: String,
     /// Unix epoch seconds of the last open (for display / ordering).
     pub last_opened: u64,
+    /// Pinned to the top of the launcher list (B11).
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// The user's settings. Persisted **flat** inside [`AppConfig`] via
@@ -97,6 +100,13 @@ pub struct AppConfig {
 impl AppConfig {
     /// Add or promote a project in the recents list (most-recent first, cap 12).
     pub fn push_recent(&mut self, name: &str, path: &str) {
+        // Preserve the pin across a re-open (retain-then-insert would drop it).
+        let pinned = self
+            .recent_projects
+            .iter()
+            .find(|r| r.path == path)
+            .map(|r| r.pinned)
+            .unwrap_or(false);
         self.recent_projects.retain(|r| r.path != path);
         self.recent_projects.insert(
             0,
@@ -104,9 +114,22 @@ impl AppConfig {
                 name: name.to_string(),
                 path: path.to_string(),
                 last_opened: now_secs(),
+                pinned,
             },
         );
         self.recent_projects.truncate(12);
+    }
+
+    /// Pin or unpin the recent at `path` (B11).
+    pub fn set_pinned(&mut self, path: &str, pinned: bool) {
+        if let Some(r) = self.recent_projects.iter_mut().find(|r| r.path == path) {
+            r.pinned = pinned;
+        }
+    }
+
+    /// Drop the recent at `path` from the list (B11 — doesn't touch the project).
+    pub fn remove_recent(&mut self, path: &str) {
+        self.recent_projects.retain(|r| r.path != path);
     }
 
     /// The most-recently-opened project, if any (used to reopen on launch).
