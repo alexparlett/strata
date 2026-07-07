@@ -24,13 +24,15 @@ pub(crate) fn Editor() -> Element {
 
     rsx! {
         section { style: "flex:none;background:var(--main);",
-            div { style: "height:{editor_h}px;background:var(--main);border-bottom:1px solid var(--line);overflow:auto;",
+            // The key is on the wrapper element (not the `CodeEditor` itself): on a
+            // tab switch / programmatic edit the whole subtree is torn down and the
+            // editor remounts from the new `value` — the id covers switches, the
+            // epoch covers Format/Clear/load. (`dioxus-code-editor` seeds its
+            // textarea only on mount, so it must be a real remount.)
+            div {
+                key: "{ws_id}-{epoch}",
+                style: "height:{editor_h}px;background:var(--main);border-bottom:1px solid var(--line);overflow:auto;",
                 CodeEditor {
-                    // Remount when the active content changes for a non-typing
-                    // reason: the tab id covers switches, the epoch covers
-                    // programmatic edits (Format/Clear/load). The editor seeds its
-                    // textarea from `value` only on mount, so this re-seeds it.
-                    key: "{ws_id}-{epoch}",
                     value: sql.clone(),
                     language: crate::ui::lang("sql"),
                     theme: crate::ui::code_theme(),
@@ -38,7 +40,8 @@ pub(crate) fn Editor() -> Element {
                     spellcheck: false,
                     placeholder: "SELECT * FROM your_table LIMIT 100;",
                     class: "ps-sql",
-                    oninput: move |v: String| state.write().set_active_sql(v),
+                    // Write by the tab id this editor rendered for — never "active".
+                    oninput: move |v: String| state.write().set_sql_for(ws_id, v),
                 }
             }
         }

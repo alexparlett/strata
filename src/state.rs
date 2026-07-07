@@ -240,6 +240,15 @@ impl AppState {
         }
     }
 
+    /// Set the SQL of the tab with `id` — the editor writes by the id it rendered
+    /// for, not `active_ws`, so a late `oninput` after a tab switch can't leak the
+    /// old tab's text into the now-active one.
+    pub fn set_sql_for(&mut self, id: u64, sql: String) {
+        if let Some(w) = self.project.workspaces.iter_mut().find(|w| w.id == id) {
+            w.sql = sql;
+        }
+    }
+
     /// The active tab's id — the key into `crate::runs::RUNS` for its live query
     /// output. `None` only when every tab is closed.
     pub fn active_tab_id(&self) -> Option<u64> {

@@ -52,7 +52,7 @@ where
 }
 
 /// One logical table (a DataFusion `ListingTable` over many source paths).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct CatalogTable {
     pub name: String,
     #[serde(skip)]
@@ -74,7 +74,7 @@ pub struct CatalogTable {
 }
 
 /// A saved, query-backed catalog view (a real DataFusion `CREATE VIEW`).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct CatalogView {
     pub name: String,
     pub sql: String,
@@ -103,7 +103,7 @@ pub enum Origin {
 /// reopened tab keeps its identity). The live query output lives in `crate::runs`
 /// keyed by this id, **not** here. Legacy files (no `id`/`origin`) get defaults in
 /// [`Project::normalize`].
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Workspace {
     #[serde(default)]
     pub id: u64,
@@ -116,9 +116,9 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// A tab bound to `origin`. The dirty baseline is the empty-string hash for
-    /// scratch (so any content counts as unsaved), or the hash of `sql` for a
-    /// view/saved-query binding (so only edits away from it count).
+    /// A tab bound to `origin`, with its dirty baseline snapshotted from `sql`
+    /// (see `set_origin`). A view/saved-query tab is dirty once edited away from
+    /// that baseline; a scratch tab is never dirty (see `is_dirty`).
     pub fn new(id: u64, name: String, sql: String, origin: Origin) -> Self {
         let mut w = Workspace {
             id,
@@ -152,7 +152,7 @@ impl Workspace {
 }
 
 /// One past query run. `id` is runtime (reassigned on load).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct HistoryItem {
     #[serde(skip)]
     pub id: u64,
@@ -166,7 +166,7 @@ pub struct HistoryItem {
 /// A named SQL snippet stored in the project — distinct from a `CatalogView`
 /// (which is a real DataFusion view). Re-opened in a query tab, not queryable
 /// by name.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SavedQuery {
     pub name: String,
     pub sql: String,
@@ -185,7 +185,6 @@ pub struct WindowGeom {
 
 /// The open project — the durable core serialized to `<name>.psproj`. Global
 /// prefs and ephemeral UI live on `AppState`, not here.
-#[derive(Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
     // catalog
@@ -195,14 +194,11 @@ pub struct Project {
     // workspaces
     pub workspaces: Vec<Workspace>,
     pub active_ws: usize,
-    #[serde(skip)]
     pub next_ws_id: u64,
     // history
     pub history: Vec<HistoryItem>,
-    #[serde(skip)]
     pub next_hist: u64,
     // last window geometry (absent on new / never-moved projects)
-    #[serde(default)]
     pub window: Option<WindowGeom>,
 }
 
@@ -248,23 +244,6 @@ fn ensure_gitignore(dir: &Path) {
     if !gi.exists() {
         let _ = fs::write(gi, "session.json\n");
     }
-}
-
-/// A pre-split single-file project (`*.strata`, or legacy `*.psproj`) in `folder`.
-fn legacy_file(folder: &Path) -> Option<PathBuf> {
-    let files: Vec<PathBuf> = fs::read_dir(folder)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file())
-        .collect();
-    let with_ext = |ext: &str| {
-        files
-            .iter()
-            .find(|p| p.extension().map(|x| x == ext).unwrap_or(false))
-            .cloned()
-    };
-    with_ext("strata").or_else(|| with_ext("psproj"))
 }
 
 impl Project {
@@ -329,15 +308,6 @@ impl Project {
             project.normalize();
             return Ok(project);
         }
-        if let Some(folder) = dir.parent() {
-            if let Some(legacy) = legacy_file(folder) {
-                let text = fs::read_to_string(&legacy).map_err(|e| e.to_string())?;
-                let mut project: Project =
-                    serde_json::from_str(&text).map_err(|e| e.to_string())?;
-                project.normalize();
-                return Ok(project);
-            }
-        }
         Err("no project files".into())
     }
 
@@ -346,10 +316,7 @@ impl Project {
     /// Distinguishes "open existing" from "scaffold new" (so a corrupt file is
     /// never silently overwritten).
     pub fn exists_at(dir: &Path) -> bool {
-        if dir.join(PROJECT_JSON).exists() {
-            return true;
-        }
-        dir.parent().and_then(legacy_file).is_some()
+        dir.join(PROJECT_JSON).exists()
     }
 
     /// Read just the saved window geometry from a `.strata/` dir (to size a window
