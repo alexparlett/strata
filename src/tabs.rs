@@ -145,7 +145,7 @@ pub fn active_id() -> TabId {
 
 /// Open a fresh tab bound to `origin`, focus it, and return its id.
 pub fn open_tab(name: String, sql: String, origin: Origin) -> TabId {
-    let store = SESSION.resolve();
+    let mut store = SESSION.resolve();
     let mut s = store.write();
     let id = s.next_id.max(1);
     s.next_id = id + 1;
@@ -157,7 +157,7 @@ pub fn open_tab(name: String, sql: String, origin: Origin) -> TabId {
 /// Replace tab `id`'s SQL (Format / Clear / other programmatic edits). The live
 /// `CodeEditor` writes its own `sql()` lens directly and does *not* go through here.
 pub fn set_sql(id: TabId, sql: String) {
-    let store = SESSION.resolve();
+    let mut store = SESSION.resolve();
     let mut s = store.write();
     if let Some(t) = s.tabs.iter_mut().find(|t| t.id == id) {
         t.sql = sql;
@@ -171,7 +171,7 @@ pub fn switch(id: TabId) {
 
 /// Close tab `id`, moving focus to a sensible neighbour if it was active.
 pub fn close(id: TabId) {
-    let store = SESSION.resolve();
+    let mut store = SESSION.resolve();
     let mut s = store.write();
     if let Some(i) = s.tabs.iter().position(|t| t.id == id) {
         s.tabs.remove(i);
@@ -184,7 +184,7 @@ pub fn close(id: TabId) {
 
 /// Rename tab `id`.
 pub fn rename(id: TabId, name: String) {
-    let store = SESSION.resolve();
+    let mut store = SESSION.resolve();
     let mut s = store.write();
     if let Some(t) = s.tabs.iter_mut().find(|t| t.id == id) {
         t.name = name;
