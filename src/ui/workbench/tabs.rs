@@ -118,14 +118,14 @@ pub(crate) fn Tabs() -> Element {
                     onclick: move |e| {
                         let c = e.client_coordinates();
                         tab_list_query.set(String::new());
-                        tab_list.set(Some(Point { x: (c.x - 290.0).max(8.0), y: c.y + 10.0 }));
+                        tab_list.set(Some(Point { x: (c.x - 290.0).max(8.0), y: c.y + 20.0 }));
                     },
                     {icons::chevron_down(14)} }
                 button { class: "icon-btn plain", style: "width:24px;height:28px;",
                     title: "Tab actions",
                     onclick: move |e| {
                         let c = e.client_coordinates();
-                        overflow_menu.set(Some(Point { x: (c.x - 180.0).max(8.0), y: c.y + 10.0 }));
+                        overflow_menu.set(Some(Point { x: (c.x - 180.0).max(8.0), y: c.y + 20.0 }));
                     },
                     {icons::dots(15)} }
             }
