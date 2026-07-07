@@ -52,19 +52,19 @@ pending**.
 
 ## 2. Auth model — no app-managed secrets
 
-Authentication modes (per connection):
+The app stores only **non-secret metadata** per connection: bucket · provider ·
+region · auth-mode · profile name. Credentials resolve at query time from the
+standard provider chains — the app never takes or stores keys.
 
-- **Ambient** — the standard default provider chain (see §3).
-- **Named profile** — a profile from `~/.aws/{config,credentials}` (AWS only).
-- **Anonymous** — unsigned / public buckets (`aws.SKIP_SIGNATURE`); HTTP(S) never
-  needs credentials.
-
-A connection stores only **non-secret metadata**: bucket · provider · region ·
-auth-mode · profile name. Keychain is **not** part of the AWS chain — an optional
-later integration, not baseline.
+**Auth modes are provider-specific** (not one shared segmented control) — see §6 for
+the full per-provider breakdown. In brief: an **Ambient** default-chain mode and an
+**Anonymous** (public-bucket) mode exist for every provider; **AWS** adds **Named
+profile**, **GCS** adds **Service-account file** (a path), **Azure** adds **Azure CLI
+/ Managed identity**. Keychain is not part of any of these chains — an optional later
+integration, not baseline.
 
 > Diverges from the v10 design's Access-Key-ID/Secret form — that form should drop
-> the secret fields.
+> the secret fields (see §7).
 
 ## 3. Credential mechanics (researched)
 
@@ -88,9 +88,10 @@ later integration, not baseline.
 
 ## 4. Remote sources in Configure-table (FEATURES §6)
 
-- Source paths may be `s3://` · `gs://`·`gcs://` · `az://`·`abfs://` · `http(s)://`
-  through one `ListingTableUrl` — globs / dirs / Hive partitioning work identically
-  to local paths.
+- Source paths may be `s3://` · `gs://`·`gcs://` · `http(s)://` (and `az://`·`abfs://`
+  once Azure lands — see Provider scope) through one `ListingTableUrl` — globs / dirs
+  / Hive partitioning work identically to local paths. **OSS / COS / R2 / MinIO** ride
+  the S3 path via a custom endpoint.
 - Remote panel names the derived bucket/provider + live connection status.
 - **Public-bucket** toggle → `aws.SKIP_SIGNATURE true`.
 - **One table = one object store**: the store is derived from the *first* path;
@@ -110,6 +111,72 @@ add / edit / forget.
 - auth-mode + profile name are **per-machine** → may belong in the gitignored
   `session.json` instead (**open question**).
 - Either way, **no key/secret ever touches disk via the app**.
+
+## 6. Provider auth options
+
+Provider is derived from the URL scheme; the auth control **and its field set change
+per provider**. Only secret-free options are offered.
+
+### AWS S3 — `s3://` (+ S3-compatible)
+- **Fields:** Bucket (from URL) · **Region — required** (arrow-rs#2795) · optional
+  **Endpoint** + **Allow HTTP** (S3-compatible: MinIO / Cloudflare R2 / Alibaba OSS /
+  Tencent COS).
+- **Auth:** **Ambient** (env → `~/.aws` profiles → SSO → web-identity → ECS → IMDS) ·
+  **Named profile** (from `~/.aws/config`) · **Anonymous** (`skip_signature`).
+- **Bridge:** `aws-config` needed **only** for profile / SSO; env / IMDS / ECS /
+  anonymous work with `object_store` alone.
+- **Excluded (secrets):** inline Access Key ID / Secret / session token.
+
+### GCS — `gs://`
+- **Fields:** Bucket.
+- **Auth:** **Ambient / ADC** (`GOOGLE_APPLICATION_CREDENTIALS` → gcloud ADC →
+  GCE/GKE metadata) · **Service-account file** (a **path**, not inline JSON) ·
+  **Anonymous**.
+- Native to `object_store`; no extra SDK. **Excluded:** inline service-account JSON
+  key, static bearer token. (No "profile" concept in GCP.)
+
+### HTTP(S) — `http(s)://`
+- No auth, no fields beyond the URL — always anonymous. Arguably not a "connection"
+  at all (paths resolve directly); listed only because the scheme appears in the picker.
+
+### Azure — `az://` / `abfs://` — **DEFERRED** (decision pending, see Provider scope)
+- Needs the `object_store` `azure` feature + our own registration. **If built:**
+  Fields = **Account name — required** · optional Endpoint; Auth = **Ambient** (auto
+  chain) · **Azure CLI** · **Managed identity** · **Anonymous**. **Excluded:** account
+  key, SAS token, service-principal client secret, bearer token.
+
+| Provider | Scheme | Required non-secret fields | Secret-free auth modes | Extra dep |
+| --- | --- | --- | --- | --- |
+| S3 (+ compatible) | `s3://` | Region (+ Endpoint for compat) | Ambient · Named profile · Anonymous | `aws-config` (profile/SSO only) |
+| GCS | `gs://` | — | Ambient/ADC · Service-account file · Anonymous | none |
+| HTTP(S) | `http(s)://` | — | (none — anonymous) | none |
+| Azure *(deferred)* | `az://`/`abfs://` | Account name | Ambient · Azure CLI · Managed identity · Anonymous | `object_store` `azure` feature |
+
+## 7. Design changes required (v10 handoff)
+
+Concrete deltas from the current v10 mocks — for the designer:
+
+1. **Connection Add/Edit modal — replace the auth control** (§15b). Remove the
+   **Access key** mode and its **Access Key ID / Secret** fields. Auth is now
+   **per-provider** (see §6): S3 = Ambient / Named profile / Anonymous (+ a profile
+   picker); GCS = Ambient / Service-account file / Anonymous; Azure = Ambient / Azure
+   CLI / Managed identity / Anonymous. Keep Bucket URL; **Region** for S3, **Account
+   name** for Azure, a **file-path picker** for GCS.
+2. **Configure-table inline auth panel — same change** (FEATURES §6): drop the
+   Access-key entry; mirror the per-provider modes.
+3. **Credential copy — "Strata never stores secrets."** Replace *"credentials …
+   saved with the project"* and the *"prototype stores key/secret"* note: credentials
+   resolve at query time from the environment / a named profile; only non-secret
+   metadata (bucket · provider · region · auth-mode · profile name) is saved with the
+   project.
+4. **Region is required for S3** — a validation state, not an optional field.
+5. **Status-dot legend:** *Connected* = resolves from environment / profile, or
+   Anonymous; *Needs credentials* = the chain yields nothing. Drop the
+   "access-key-with-keys-present" case.
+6. **Provider set:** baseline is **S3 (+ S3-compatible via endpoint) · GCS ·
+   HTTP(S)**. **Decide Azure:** the design lists `az://` but it's not in v1 — either
+   commit it to S21 or drop `az://` from the mocks. **OSS / COS / R2 / MinIO are
+   S3-compatible** (S3 + custom endpoint), not separate providers.
 
 ## References
 
