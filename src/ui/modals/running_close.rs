@@ -1,7 +1,9 @@
-//! Running-query close confirm (S14) — one dialog, two entry points: a tab whose
-//! query has run past the threshold (`tab::close`) or the window with any query
-//! running (`projects::close`). "Stop & close" cancels the query/queries and
-//! closes; the secondary keeps it/them open; a "don't ask again" flips the setting.
+//! Running-query close confirm (S14) — one **mode-driven** dialog (v11), two entry
+//! points: a tab whose query is **in flight** (`tab::close` — no threshold; a
+//! finished query has `running == false`, so quick queries never prompt) or the
+//! window / Close Project with any query running (`projects::close`). "Stop & close"
+//! / "Stop & exit" cancels the query and closes; the secondary keeps it open; a
+//! "don't ask again" flips the setting.
 //!
 //! A cancelled query has nowhere to keep running, so there is deliberately no
 //! "detach / keep running" option.
@@ -30,53 +32,48 @@ fn RunningCloseCard(target: RunningCloseTarget) -> Element {
     let state = use_context::<Signal<AppState>>();
     let mut dont_ask = use_signal(|| false);
 
-    let snap = crate::session::snapshot();
-    let (title, body): (String, String) = match target {
+    // Mode-driven copy (v11): tab close vs project exit.
+    let (title, name, body, is_project): (&str, String, &str, bool) = match target {
         RunningCloseTarget::Tab(id) => {
-            let name = snap
+            let name = crate::session::snapshot()
                 .workspaces
                 .iter()
                 .find(|w| w.id == id)
                 .map(|w| w.name.clone())
                 .unwrap_or_default();
             (
-                format!("Stop the query in “{name}”?"),
-                "Closing this tab will cancel the query still running in it — there's nowhere for it to keep running.".to_string(),
+                "Confirm close",
+                name,
+                "A query is running. Are you sure you want to stop it and close this tab?",
+                false,
             )
         }
-        RunningCloseTarget::Window => {
-            let n = snap
-                .workspaces
-                .iter()
-                .filter(|w| crate::runs::is_running(w.id))
-                .count();
-            (
-                "Stop running queries?".to_string(),
-                format!(
-                    "{n} quer{} still running will be cancelled when the project closes.",
-                    if n == 1 { "y" } else { "ies" }
-                ),
-            )
-        }
+        RunningCloseTarget::Window => (
+            "Confirm exit",
+            state.read().project.name.clone(),
+            "Queries are running. Are you sure you want to stop them and exit?",
+            true,
+        ),
     };
-    let keep_label = match target {
-        RunningCloseTarget::Tab(_) => "Keep tab open",
-        RunningCloseTarget::Window => "Keep open",
-    };
+    let keep_label = if is_project { "Cancel" } else { "Keep tab open" };
+    let stop_label = if is_project { "Stop & exit" } else { "Stop & close" };
 
     rsx! {
         Dialog { on_close: move |_| crate::overlays::close_running_close(), card_class: "confirm".to_string(), z: 80,
-            div { class: "confirm-head",
-                div { class: "confirm-ico", {icons::stop(18)} }
-                div { style: "flex:1;min-width:0;",
-                    div { class: "confirm-title", "{title}" }
-                    div { class: "confirm-body", "{body}" }
+            div { class: "confirm-pad",
+                div { class: "confirm-head-row",
+                    div { class: "confirm-ico warn", {icons::warning(18)} }
+                    div { style: "min-width:0;",
+                        div { class: "confirm-title", "{title}" }
+                        div { class: "confirm-sub", "{name}" }
+                    }
+                }
+                div { class: "confirm-msg", "{body}" }
+                div { class: "confirm-check",
+                    Checkbox { checked: dont_ask(), on_toggle: move |v| dont_ask.set(v), "Don't ask again" }
                 }
             }
-            div { style: "padding:2px 4px 6px;",
-                Checkbox { checked: dont_ask(), on_toggle: move |v| dont_ask.set(v), "Don't ask again" }
-            }
-            div { class: "confirm-foot",
+            div { class: "confirm-foot split",
                 button { class: "btn-ghost", onclick: move |_| crate::overlays::close_running_close(), "{keep_label}" }
                 button {
                     class: "btn-danger",
@@ -90,8 +87,8 @@ fn RunningCloseCard(target: RunningCloseTarget) -> Element {
                             RunningCloseTarget::Window => dispatch(state, Action::CloseWindowForce),
                         }
                     },
-                    {icons::stop(14)}
-                    "Stop & close"
+                    if is_project { {icons::logout(14)} } else { {icons::stop(14)} }
+                    "{stop_label}"
                 }
             }
         }
