@@ -15,6 +15,14 @@
 //! `workspace::Workspace` component here is that tab's *view*.
 
 use dioxus::prelude::*;
+// Store collection methods (`.iter()` over the workspaces Vec store); the crate's
+// own examples import this glob alongside the dioxus prelude.
+use dioxus_stores::*;
+
+// The `Store` derive on `Session`/`Workspace` generates these lens-accessor
+// extension traits (`.workspaces()`, `.active()`, `.id()`, …); they must be in
+// scope to iterate the session store and read per-workspace fields.
+use crate::session::{SessionStoreExt, WorkspaceStoreExt};
 
 mod editor;
 mod grid;

@@ -205,8 +205,10 @@ pub fn use_persist_session(state: Signal<AppState>) {
     let mut gen = use_signal(|| 0u64);
     use_effect(move || {
         // Subscribe to this window's session store (structural + per-field lens
-        // writes both re-run this effect).
-        let _sub = crate::session::store().read();
+        // writes both re-run this effect). Bind the store first so the read guard
+        // doesn't outlive a temporary.
+        let store = crate::session::store();
+        let _sub = store.read();
         // No-op until the project is backed on disk.
         if state.peek().project_path.is_none() {
             return;

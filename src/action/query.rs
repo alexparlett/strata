@@ -130,7 +130,7 @@ pub fn toggle_plan_raw(_state: Signal<AppState>) {
 }
 
 /// Fetch a specific page from the active workspace's snapshot (bounded LIMIT/OFFSET).
-pub fn fetch_page(mut state: Signal<AppState>, page: usize) {
+pub fn fetch_page(state: Signal<AppState>, page: usize) {
     let ws_id = crate::session::active_id();
     let (page_size, has_result) = crate::runs::RUNS
         .peek()

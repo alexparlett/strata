@@ -12,6 +12,7 @@ use dioxus_code_editor::CodeEditor;
 use dioxus_stores::Store;
 
 use crate::action::{dispatch, Action};
+use crate::session::WorkspaceStoreExt;
 use crate::state::AppState;
 use crate::ui::icons;
 

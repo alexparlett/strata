@@ -11,6 +11,7 @@ use dioxus::prelude::*;
 use dioxus_stores::Store;
 
 use crate::action::panel::resize_handle;
+use crate::session::WorkspaceStoreExt;
 use crate::state::{AppState, ResizeTarget};
 
 #[component]

@@ -9,7 +9,7 @@
 //! project on open. Reference model: table `sources` are absolute paths.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 

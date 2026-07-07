@@ -7,9 +7,10 @@
 //! built from the ordered `crate::session::snapshot()`.
 
 use dioxus::prelude::*;
+use dioxus_stores::*;
 
 use crate::action::{dispatch, Action};
-use crate::session::WorkspaceId;
+use crate::session::{SessionStoreExt, WorkspaceId, WorkspaceStoreExt};
 use crate::state::AppState;
 use crate::ui::components::{MenuItem, MenuSep, Point, Popup};
 use crate::ui::icons;
@@ -23,14 +24,17 @@ pub(crate) fn Tabs() -> Element {
     let mut rename_val = use_signal(String::new);
 
     let sidebar_open = state.read().sidebar_open;
-    let active = crate::session::active_id();
+    // Read the active id + each entry through their lenses, so a `switch`
+    // (`.active().set`) or a structural / per-field write re-renders the strip —
+    // matching how `session` mutates the store.
+    let sess = crate::session::store();
+    let active = sess.active().cloned();
     let renaming_now = renaming();
     let rename_draft = rename_val();
-    let ws: Vec<(WorkspaceId, String, bool)> = crate::session::snapshot()
-        .workspaces
-        .iter()
-        .map(|w| (w.id, w.name.clone(), w.is_dirty()))
-        .collect();
+    let mut ws: Vec<(WorkspaceId, String, bool)> = Vec::new();
+    for w in sess.workspaces().iter() {
+        ws.push((w.id().cloned(), w.name().cloned(), w.read().is_dirty()));
+    }
 
     rsx! {
         div {

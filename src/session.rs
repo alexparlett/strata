@@ -5,23 +5,26 @@
 //! origin); the `Tabs` strip and the `Workspace` *view* render it.
 //!
 //! **Single source of truth.** Every open workspace lives in the per-window
-//! [`SESSION`] store, addressed by a stable [`WorkspaceId`] — no more `Vec`-index
-//! vs id-`HashMap` mismatch, and no `active_ws` indirection. `Session` derives
-//! `Store`, so the workbench iterates `SESSION.resolve().workspaces().iter()` and
-//! hands each `Workspace` *view* a sub-store scoped to *its* workspace: per-entry
-//! reactivity, and the controlled `CodeEditor` binds straight to `ws.sql()` — no
-//! key/remount, no cross-tab write, which is what kills the editing bug.
+//! [`SESSION`] store, addressed by a stable [`WorkspaceId`]. `Session`/`Workspace`
+//! derive `Store`, so the UI reads through *lenses* (`store.active()`,
+//! `store.workspaces().iter()`, `ws.sql()`) — per-entry reactivity, and the
+//! controlled `CodeEditor` binds straight to `ws.sql()`.
+//!
+//! **All mutations write through lenses, never a coarse root `.write()`.** Only a
+//! lens write notifies the matching lens subscribers: a coarse `SESSION.write()`
+//! would leave `.active()` / `.workspaces()` readers (the `Workbench`) stale — that
+//! was the tab-switch bug. So `switch` is `store.active().set(id)`, structural
+//! edits go through `store.workspaces()`, and per-field edits through the entry's
+//! own lens (`ws.sql()`, `ws.name()`).
 //!
 //! **Durable vs runtime.** `Session` is pure serde (persisted in `session.json`);
 //! a workspace's live query output is the runtime half and lives, keyed by the
-//! same id, in [`crate::runs`] (never serialized). The action layer mutates the
-//! durable side through the free functions here; the live editor writes its own
-//! workspace's `sql()` lens directly.
+//! same id, in [`crate::runs`] (never serialized).
 
 use std::collections::HashSet;
 
 use dioxus::prelude::*;
-use dioxus_stores::{GlobalStore, Store};
+use dioxus_stores::*;
 use serde::{Deserialize, Serialize};
 
 use crate::project::Origin;
@@ -103,7 +106,7 @@ pub fn store() -> Store<Session> {
 
 /// The active workspace's id (`0` when there are none).
 pub fn active_id() -> WorkspaceId {
-    SESSION.resolve().read().active
+    SESSION.resolve().active().cloned()
 }
 
 /// A clone of the active workspace, if any.
@@ -118,7 +121,7 @@ pub fn active_sql() -> String {
     active().map(|w| w.sql).unwrap_or_default()
 }
 
-/// A clone of every workspace, in strip order (for action-layer reads).
+/// A clone of every workspace + active/next_id, in strip order (action-layer reads).
 pub fn snapshot() -> Session {
     SESSION.resolve().read().clone()
 }
@@ -135,17 +138,12 @@ pub fn is_dirty(id: WorkspaceId) -> bool {
         .unwrap_or(false)
 }
 
-// --- durable mutations -----------------------------------------------------
-//
-// Structural edits go through `.write()` on the whole `Session` (coarse, but
-// correct — add/remove/reorder change the strip anyway). The *live editor* writes
-// its own workspace's `sql()` sub-store lens instead, so a keystroke re-renders
-// only that workspace.
+// --- durable mutations (lens writes) ---------------------------------------
 
-/// Allocate the next workspace id (and bump the counter).
-fn alloc_id(s: &mut Session) -> WorkspaceId {
-    let id = s.next_id.max(1);
-    s.next_id = id + 1;
+/// Allocate the next workspace id (persisted counter), via the `next_id` lens.
+fn alloc_id(store: Store<Session>) -> WorkspaceId {
+    let id = store.next_id().cloned().max(1);
+    store.next_id().set(id + 1);
     id
 }
 
@@ -160,100 +158,143 @@ fn unique_name(s: &Session, base: &str) -> String {
         .unwrap_or_else(|| base.to_string())
 }
 
+// Entry lookups are inlined (capture the sub-store into an inferred `Option`) so
+// the un-nameable per-entry lens generic never has to be written in a signature.
+
 /// Open `sql` in a workspace named `name`, bound to `origin`, and focus it. Reuses
 /// an existing workspace of that name **only if it still holds exactly this SQL**
-/// (unedited), so repeated opens of an unchanged item don't pile up; an edited one
-/// is never clobbered — a fresh, uniquely-named workspace is appended. Used by
-/// SELECT *, edit-view, and open-saved-query.
+/// (unedited); an edited one is never clobbered — a fresh, uniquely-named workspace
+/// is appended. Used by SELECT *, edit-view, and open-saved-query.
 pub fn open_named(name: &str, sql: String, origin: Origin) {
-    let mut store = SESSION.resolve();
-    let mut s = store.write();
-    if let Some(w) = s.workspaces.iter_mut().find(|w| w.name == name && w.sql == sql) {
-        w.set_origin(origin);
-        s.active = { let id = w.id; id };
+    let store = SESSION.resolve();
+    // Reuse an unedited same-named workspace.
+    let mut reuse = None;
+    for w in store.workspaces().iter() {
+        if w.name().cloned() == name && w.sql().cloned() == sql {
+            reuse = Some(w);
+            break;
+        }
+    }
+    if let Some(mut w) = reuse {
+        let id = w.id().cloned();
+        w.write().set_origin(origin);
+        store.active().set(id);
         return;
     }
-    let name = unique_name(&s, name);
-    let id = alloc_id(&mut s);
-    s.workspaces.push(Workspace::new(id, name, sql, origin));
-    s.active = id;
+    let name = {
+        let s = store.read();
+        unique_name(&s, name)
+    };
+    let id = alloc_id(store);
+    store.workspaces().push(Workspace::new(id, name, sql, origin));
+    store.active().set(id);
 }
 
 /// Append a **new** blank workspace (`query N`) and focus it (⌘T).
 pub fn new_blank() -> WorkspaceId {
-    let mut store = SESSION.resolve();
-    let mut s = store.write();
-    let base = format!("query {}", s.workspaces.len() + 1);
-    let name = unique_name(&s, &base);
-    let id = alloc_id(&mut s);
-    s.workspaces.push(Workspace::new(id, name, String::new(), Origin::Scratch));
-    s.active = id;
+    let store = SESSION.resolve();
+    let name = {
+        let s = store.read();
+        unique_name(&s, &format!("query {}", s.workspaces.len() + 1))
+    };
+    let id = alloc_id(store);
+    store
+        .workspaces()
+        .push(Workspace::new(id, name, String::new(), Origin::Scratch));
+    store.active().set(id);
     id
 }
 
 /// Append a workspace holding `sql` (uniquely named `query N`) and focus it.
 pub fn open_new(sql: String) {
-    let mut store = SESSION.resolve();
-    let mut s = store.write();
-    let base = format!("query {}", s.workspaces.len() + 1);
-    let name = unique_name(&s, &base);
-    let id = alloc_id(&mut s);
-    s.workspaces.push(Workspace::new(id, name, sql, Origin::Scratch));
-    s.active = id;
+    let store = SESSION.resolve();
+    let name = {
+        let s = store.read();
+        unique_name(&s, &format!("query {}", s.workspaces.len() + 1))
+    };
+    let id = alloc_id(store);
+    store
+        .workspaces()
+        .push(Workspace::new(id, name, sql, Origin::Scratch));
+    store.active().set(id);
 }
 
 /// Focus a workspace that already holds exactly `sql`, else append a new one
 /// (idempotent — history double-clicks can't spawn duplicates).
 pub fn open_or_focus_sql(sql: String) {
-    let mut store = SESSION.resolve();
-    let mut s = store.write();
-    if let Some(w) = s.workspaces.iter().find(|w| w.sql == sql) {
-        s.active = w.id;
-        return;
+    let store = SESSION.resolve();
+    let mut hit = None;
+    for w in store.workspaces().iter() {
+        if w.sql().cloned() == sql {
+            hit = Some(w);
+            break;
+        }
     }
-    drop(s);
-    open_new(sql);
+    if let Some(w) = hit {
+        store.active().set(w.id().cloned());
+    } else {
+        open_new(sql);
+    }
 }
 
 /// Re-open a previously closed workspace (⇧⌘T) with its saved name + SQL.
 pub fn reopen(name: String, sql: String) {
-    let mut store = SESSION.resolve();
-    let mut s = store.write();
-    let id = alloc_id(&mut s);
-    s.workspaces.push(Workspace::new(id, name, sql, Origin::Scratch));
-    s.active = id;
+    let store = SESSION.resolve();
+    let id = alloc_id(store);
+    store
+        .workspaces()
+        .push(Workspace::new(id, name, sql, Origin::Scratch));
+    store.active().set(id);
 }
 
 /// Replace workspace `id`'s SQL (Format / Clear / other programmatic edits). The
 /// live `CodeEditor` writes its own `sql()` lens directly, not through here.
 pub fn set_sql(id: WorkspaceId, sql: String) {
-    let mut store = SESSION.resolve();
-    let mut s = store.write();
-    if let Some(w) = s.workspaces.iter_mut().find(|w| w.id == id) {
-        w.sql = sql;
+    let store = SESSION.resolve();
+    let mut hit = None;
+    for w in store.workspaces().iter() {
+        if w.id().cloned() == id {
+            hit = Some(w);
+            break;
+        }
+    }
+    if let Some(w) = hit {
+        w.sql().set(sql);
     }
 }
 
 /// Rebind workspace `id` to `origin` (after ⌘S / save-as-view).
 pub fn set_origin(id: WorkspaceId, origin: Origin) {
-    let mut store = SESSION.resolve();
-    let mut s = store.write();
-    if let Some(w) = s.workspaces.iter_mut().find(|w| w.id == id) {
-        w.set_origin(origin);
+    let store = SESSION.resolve();
+    let mut hit = None;
+    for w in store.workspaces().iter() {
+        if w.id().cloned() == id {
+            hit = Some(w);
+            break;
+        }
+    }
+    if let Some(mut w) = hit {
+        w.write().set_origin(origin);
     }
 }
 
 /// Focus workspace `id`.
 pub fn switch(id: WorkspaceId) {
-    SESSION.resolve().write().active = id;
+    SESSION.resolve().active().set(id);
 }
 
 /// Rename workspace `id` (an empty name is ignored by the caller).
 pub fn rename(id: WorkspaceId, name: String) {
-    let mut store = SESSION.resolve();
-    let mut s = store.write();
-    if let Some(w) = s.workspaces.iter_mut().find(|w| w.id == id) {
-        w.name = name;
+    let store = SESSION.resolve();
+    let mut hit = None;
+    for w in store.workspaces().iter() {
+        if w.id().cloned() == id {
+            hit = Some(w);
+            break;
+        }
+    }
+    if let Some(w) = hit {
+        w.name().set(name);
     }
 }
 
@@ -261,20 +302,26 @@ pub fn rename(id: WorkspaceId, name: String) {
 /// leaving the session empty). The caller records the closed workspaces + reaps
 /// their runs / engine scopes.
 pub fn remove_ids(ids: &HashSet<WorkspaceId>) {
-    let mut store = SESSION.resolve();
-    let mut s = store.write();
-    let active_gone = ids.contains(&s.active);
-    // Index of the active workspace *before* removal, to pick a neighbour.
-    let active_pos = s.workspaces.iter().position(|w| w.id == s.active);
-    s.workspaces.retain(|w| !ids.contains(&w.id));
-    if active_gone {
-        let n = s.workspaces.len();
-        s.active = if n == 0 {
-            0
-        } else {
-            let i = active_pos.unwrap_or(0).min(n - 1);
-            s.workspaces[i].id
+    let store = SESSION.resolve();
+    let (active, active_pos) = {
+        let s = store.read();
+        (
+            s.active,
+            s.workspaces.iter().position(|w| w.id == s.active),
+        )
+    };
+    store.workspaces().write().retain(|w| !ids.contains(&w.id));
+    if ids.contains(&active) {
+        let new_active = {
+            let s = store.read();
+            let n = s.workspaces.len();
+            if n == 0 {
+                0
+            } else {
+                s.workspaces[active_pos.unwrap_or(0).min(n - 1)].id
+            }
         };
+        store.active().set(new_active);
     }
 }
 
@@ -290,7 +337,8 @@ pub fn load(mut loaded: Session) {
 /// Reset to a single blank workspace (a brand-new project).
 pub fn reset_blank() {
     let mut s = Session::default();
-    s.workspaces.push(Workspace::new(1, "query 1".into(), String::new(), Origin::Scratch));
+    s.workspaces
+        .push(Workspace::new(1, "query 1".into(), String::new(), Origin::Scratch));
     s.active = 1;
     s.next_id = 2;
     *SESSION.resolve().write() = s;
