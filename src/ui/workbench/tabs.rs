@@ -241,7 +241,7 @@ fn tab_list_body(
     let rows: Vec<(WorkspaceId, String, bool, bool)> = crate::session::snapshot()
         .workspaces
         .iter()
-        .filter(|w| ql.is_empty() || w.name.to_lowercase().contains(&ql))
+        .filter(|w| ql.is_empty() || w.name.to_lowercase().contains(ql.as_str()))
         .map(|w| (w.id, w.name.clone(), w.id == active, w.is_dirty()))
         .collect();
     let first = rows.first().map(|r| r.0);
