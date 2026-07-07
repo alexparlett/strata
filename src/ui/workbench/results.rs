@@ -17,19 +17,19 @@ use crate::ui::icons;
 /// run from `crate::runs::RUNS` by `ws_id`.
 #[component]
 pub(crate) fn Results(ws_id: WorkspaceId) -> Element {
-    let (running, has_err, has_plan, has_result) = {
-        let runs = crate::runs::RUNS.read();
-        runs.get(&ws_id)
-            .map(|r| {
-                (
-                    r.running,
-                    r.query_error.is_some(),
-                    r.plan.is_some(),
-                    r.result.is_some(),
-                )
-            })
-            .unwrap_or((false, false, false, false))
-    };
+    let (running, has_err, has_plan, has_result) = crate::runs::RUNS
+        .resolve()
+        .get(ws_id)
+        .map(|e| {
+            let r = e.read();
+            (
+                r.running,
+                r.query_error.is_some(),
+                r.plan.is_some(),
+                r.result.is_some(),
+            )
+        })
+        .unwrap_or((false, false, false, false));
     if running {
         rsx! { Running { ws_id } }
     } else if has_err {
@@ -70,10 +70,10 @@ fn Running(ws_id: WorkspaceId) -> Element {
 #[component]
 fn ErrorView(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
-    let err = {
-        let runs = crate::runs::RUNS.read();
-        runs.get(&ws_id).and_then(|r| r.query_error.clone())
-    };
+    let err = crate::runs::RUNS
+        .resolve()
+        .get(ws_id)
+        .and_then(|e| e.read().query_error.clone());
     let Some(err) = err else {
         return rsx! { div {} };
     };
@@ -191,12 +191,11 @@ pub(crate) fn EmptyState() -> Element {
 #[component]
 fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
-    let q = {
-        let runs = crate::runs::RUNS.read();
-        runs.get(&ws_id)
-            .map(|r| r.result_search.clone())
-            .unwrap_or_default()
-    };
+    let q = crate::runs::RUNS
+        .resolve()
+        .get(ws_id)
+        .map(|e| e.read().result_search.clone())
+        .unwrap_or_default();
     rsx! {
         div { class: "results-tb",
             div { class: "field", style: "width:320px;max-width:46%;",
@@ -216,19 +215,20 @@ fn Pager(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
     let (total, elapsed, page, page_size, page_size_open) = {
         let page_size_open = state.read().page_size_open;
-        let runs = crate::runs::RUNS.read();
-        let run = runs.get(&ws_id);
-        (
-            run.and_then(|r| r.result.as_ref())
-                .map(|r| r.total)
-                .unwrap_or(0),
-            run.and_then(|r| r.result.as_ref())
-                .map(|r| r.elapsed_ms)
-                .unwrap_or(0),
-            run.map(|r| r.page).unwrap_or(1),
-            run.map(|r| r.page_size).unwrap_or(100),
-            page_size_open,
-        )
+        let (total, elapsed, page, page_size) = crate::runs::RUNS
+            .resolve()
+            .get(ws_id)
+            .map(|e| {
+                let r = e.read();
+                let (total, elapsed) = r
+                    .result
+                    .as_ref()
+                    .map(|res| (res.total, res.elapsed_ms))
+                    .unwrap_or((0, 0));
+                (total, elapsed, r.page, r.page_size)
+            })
+            .unwrap_or((0, 0, 1, 100));
+        (total, elapsed, page, page_size, page_size_open)
     };
     let page_count = ((total as f64) / (page_size as f64)).ceil().max(1.0) as usize;
 

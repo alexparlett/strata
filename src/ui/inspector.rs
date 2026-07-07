@@ -56,11 +56,11 @@ pub fn Inspector() -> Element {
     let mut distinct: HashSet<String> = HashSet::new();
     let mut nums: Vec<f64> = Vec::new();
     let active_id = crate::session::active_id();
-    let runs = crate::runs::RUNS.read();
-    if let Some(res) = runs
-        .get(&active_id)
-        .and_then(|r| r.result.as_ref())
-    {
+    let result = crate::runs::RUNS
+        .resolve()
+        .get(active_id)
+        .and_then(|e| e.read().result.clone());
+    if let Some(res) = result.as_ref() {
         if let Some(ci) = res.columns.iter().position(|c| c.name == colname) {
             for r in &res.rows {
                 if let Some(cell) = r.get(ci) {

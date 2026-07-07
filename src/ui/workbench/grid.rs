@@ -28,18 +28,18 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
 
     let zebra = crate::settings::SETTINGS.resolve().read().zebra;
     let type_color = state.read().type_color_cells;
-    let runs = crate::runs::RUNS.read();
     // Rendered only alongside a result, so the `else` arms are defensive.
-    let Some(run) = runs.get(&ws_id) else {
+    let Some(entry) = crate::runs::RUNS.resolve().get(ws_id) else {
         return rsx! { super::results::Empty { ws_id } };
     };
+    let run = entry.read();
     let Some(result) = run.result.clone() else {
         return rsx! { super::results::Empty { ws_id } };
     };
     let page = run.page;
     let page_size = run.page_size;
     let search = run.result_search.to_lowercase();
-    drop(runs);
+    drop(run);
 
     // (name, type, type-text-class, cell-class, nested)
     let cols: Vec<(String, String, &'static str, &'static str, bool)> = result

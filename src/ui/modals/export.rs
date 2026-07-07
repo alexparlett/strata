@@ -32,15 +32,19 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
     let ex = export();
     let (total, cols) = {
         let id = crate::session::active_id();
-        let runs = crate::runs::RUNS.read();
-        let run_res = runs
-            .get(&id)
-            .and_then(|r| r.result.as_ref());
-        let total = run_res.map(|r| r.total).unwrap_or(0);
-        let cols: Vec<String> = run_res
-            .map(|r| r.columns.iter().map(|c| c.name.clone()).collect())
-            .unwrap_or_default();
-        (total, cols)
+        crate::runs::RUNS
+            .resolve()
+            .get(id)
+            .map(|e| {
+                let run = e.read();
+                let run_res = run.result.as_ref();
+                let total = run_res.map(|r| r.total).unwrap_or(0);
+                let cols: Vec<String> = run_res
+                    .map(|r| r.columns.iter().map(|c| c.name.clone()).collect())
+                    .unwrap_or_default();
+                (total, cols)
+            })
+            .unwrap_or((0, Vec::new()))
     };
     let (preview, size_est) = export_preview(state, &ex);
     let fmt = ex.format.clone();
@@ -206,11 +210,11 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
 /// Preview text (first few rows in the chosen format) + an estimated file size.
 fn export_preview(_state: Signal<AppState>, ex: &ExportForm) -> (String, String) {
     let id = crate::session::active_id();
-    let runs = crate::runs::RUNS.read();
-    let Some(res) = runs
-        .get(&id)
-        .and_then(|r| r.result.as_ref())
-    else {
+    let Some(entry) = crate::runs::RUNS.resolve().get(id) else {
+        return (String::new(), String::new());
+    };
+    let run = entry.read();
+    let Some(res) = run.result.as_ref() else {
         return (String::new(), String::new());
     };
     // Effective format for preview (clipboard uses its sub-format).

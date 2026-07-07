@@ -39,9 +39,9 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
     let running = {
         let id = ws.id().cloned();
         crate::runs::RUNS
-            .read()
-            .get(&id)
-            .map(|r| r.running)
+            .resolve()
+            .get(id)
+            .map(|e| e.read().running)
             .unwrap_or(false)
     };
 

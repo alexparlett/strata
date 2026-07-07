@@ -79,9 +79,9 @@ pub fn run(mut state: Signal<AppState>) {
             };
             let ws_id = crate::session::active_id();
             let page_size = crate::runs::RUNS
-                .peek()
-                .get(&ws_id)
-                .map(|run| run.page_size)
+                .resolve()
+                .get(ws_id)
+                .map(|e| e.peek().page_size)
                 .unwrap_or(100);
             crate::runs::edit(ws_id, |run| {
                 run.running = true;
@@ -133,9 +133,12 @@ pub fn toggle_plan_raw(_state: Signal<AppState>) {
 pub fn fetch_page(state: Signal<AppState>, page: usize) {
     let ws_id = crate::session::active_id();
     let (page_size, has_result) = crate::runs::RUNS
-        .peek()
-        .get(&ws_id)
-        .map(|run| (run.page_size, run.result.is_some()))
+        .resolve()
+        .get(ws_id)
+        .map(|e| {
+            let run = e.peek();
+            (run.page_size, run.result.is_some())
+        })
         .unwrap_or((100, false));
     if !has_result {
         return;
@@ -236,10 +239,14 @@ pub fn save(mut state: Signal<AppState>) {
     }
     let sql = w.sql.clone();
     let meta = crate::runs::RUNS
-        .peek()
-        .get(&w.id)
-        .and_then(|run| run.result.as_ref())
-        .map(|r| format!("{} rows", r.total))
+        .resolve()
+        .get(w.id)
+        .and_then(|e| {
+            e.peek()
+                .result
+                .as_ref()
+                .map(|r| format!("{} rows", r.total))
+        })
         .unwrap_or_else(|| "—".to_string());
     let mut s = state.write();
     let updated = if let Some(q) = s
@@ -301,9 +308,12 @@ pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
         let s = state.read();
         let ws_id = crate::session::active_id();
         let (page, page_size) = crate::runs::RUNS
-            .peek()
-            .get(&ws_id)
-            .map(|run| (run.page, run.page_size))
+            .resolve()
+            .get(ws_id)
+            .map(|e| {
+                let run = e.peek();
+                (run.page, run.page_size)
+            })
             .unwrap_or((1, 100));
         (ws_id, page, page_size, s.cmd_tx.clone())
     };
@@ -312,14 +322,17 @@ pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
     if ex.format == "clipboard" {
         let (text, n) = {
             let id = crate::session::active_id();
-            let runs = crate::runs::RUNS.peek();
-            match runs
-                .get(&id)
-                .and_then(|run| run.result.as_ref())
-            {
-                Some(r) => (result_to_clipboard(r, &ex.clip_format), r.rows.len()),
-                None => (String::new(), 0),
-            }
+            crate::runs::RUNS
+                .resolve()
+                .get(id)
+                .map(|e| {
+                    let run = e.peek();
+                    match run.result.as_ref() {
+                        Some(r) => (result_to_clipboard(r, &ex.clip_format), r.rows.len()),
+                        None => (String::new(), 0),
+                    }
+                })
+                .unwrap_or((String::new(), 0))
         };
         let mut s = state.write();
         if text.is_empty() {

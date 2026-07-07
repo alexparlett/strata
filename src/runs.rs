@@ -1,21 +1,25 @@
-//! Per-window store of each tab's live query output (`WorkspaceRun`), keyed by tab id.
+//! Per-window store of each tab's live query output (`WorkspaceRun`), keyed by
+//! workspace id.
 //!
-//! Deliberately **off `AppState`**: `AppState` is one coarse `Signal`, so any
-//! write re-renders every reader. Holding the runs in their own `GlobalSignal`
-//! (like [`crate::settings`] / [`crate::overlays`]) means the frequent small
-//! mutations — find-in-results, paging, the plan-tab toggle — re-render only the
-//! components that read `RUNS` (the results panel), not the editor / tabs /
-//! sidebar. Never persisted; results are rebuilt as queries run.
+//! Deliberately **separate from the durable session store** ([`crate::session`]):
+//! a run is *heavy, ephemeral view-state* (a page of `QueryOutput` rows, running
+//! flags, paging), whereas the session store is the *lightweight, cloned, persisted*
+//! model. Keeping runs out means `session::snapshot()` / persistence stay cheap and
+//! don't drag result pages around, and the persist effect (which watches `SESSION`)
+//! isn't triggered by pure query activity. Keyed by the same `crate::session::
+//! WorkspaceId` — one stable id addresses both a workspace and its run.
 //!
-//! Keyed by the tab's `id`; the *active* tab's id comes from the session store
-//! ([`crate::session::active_id`]). Entries are created on first write
-//! (`edit`), dropped when a tab closes (`drop_ids`), and cleared on project open
-//! (`clear`) — a fresh project reassigns ids, so a new tab could otherwise inherit
-//! a stale run.
+//! A `dioxus-stores` `GlobalStore<HashMap<..>>`: `.get(id)` opens a scope that
+//! tracks **just that key's** value, so the active tab's `Results` re-renders on its
+//! own run, not on every tab's. Per-window (a `GlobalStore` is per-app). Never
+//! persisted; entries are created on first write (`edit`), dropped when a tab closes
+//! (`drop_ids`), and cleared on project open (`clear`) — a fresh project reassigns
+//! ids, so a new tab could otherwise inherit a stale run.
 
 use std::collections::{HashMap, HashSet};
 
 use dioxus::prelude::*;
+use dioxus_stores::*;
 
 use crate::engine::QueryOutput;
 use crate::plan::{PlanTab, QueryPlan};
@@ -54,37 +58,48 @@ impl Default for WorkspaceRun {
     }
 }
 
-/// This window's per-tab runs, keyed by tab id.
-pub static RUNS: GlobalSignal<HashMap<u64, WorkspaceRun>> = Signal::global(HashMap::new);
+/// This window's per-tab runs, keyed by workspace id.
+pub static RUNS: GlobalStore<HashMap<u64, WorkspaceRun>> = Global::new(|| HashMap::new());
 
 /// Mutate tab `id`'s run, creating a default entry if absent. For the active tab
 /// about to write (run start, paging, find, plan toggle).
 pub fn edit(id: u64, f: impl FnOnce(&mut WorkspaceRun)) {
-    f(RUNS.write().entry(id).or_default());
+    let mut store = RUNS.resolve();
+    if !store.contains_key(&id) {
+        store.insert(id, WorkspaceRun::default());
+    }
+    if let Some(mut entry) = store.get(id) {
+        let mut run = entry.write();
+        f(&mut run);
+    }
 }
 
 /// Mutate tab `id`'s run **only if it already exists** — for engine events, whose
 /// tab may have been closed or superseded (no entry → the result is dropped).
 pub fn edit_existing(id: u64, f: impl FnOnce(&mut WorkspaceRun)) {
-    if let Some(run) = RUNS.write().get_mut(&id) {
-        f(run);
+    let store = RUNS.resolve();
+    if let Some(mut entry) = store.get(id) {
+        let mut run = entry.write();
+        f(&mut run);
     }
 }
 
 /// Whether tab `id`'s run has request `req_id` in flight (engine-event routing).
 pub fn is_pending(id: u64, req_id: u64) -> bool {
-    RUNS.peek()
-        .get(&id)
-        .map(|r| r.pending_req == Some(req_id))
+    RUNS.resolve()
+        .get(id)
+        .map(|e| e.peek().pending_req == Some(req_id))
         .unwrap_or(false)
 }
 
 /// Drop the runs for closed tabs.
 pub fn drop_ids(ids: &HashSet<u64>) {
-    RUNS.write().retain(|id, _| !ids.contains(id));
+    let mut store = RUNS.resolve();
+    store.retain(|id, _| !ids.contains(id));
 }
 
 /// Clear every run (on project open — new tabs may reuse old ids).
 pub fn clear() {
-    RUNS.write().clear();
+    let mut store = RUNS.resolve();
+    store.clear();
 }

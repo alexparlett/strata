@@ -14,10 +14,10 @@ use crate::state::AppState;
 pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
     let (plan, tab, raw) = {
-        let runs = crate::runs::RUNS.read();
-        let Some(run) = runs.get(&ws_id) else {
+        let Some(entry) = crate::runs::RUNS.resolve().get(ws_id) else {
             return rsx! { div {} };
         };
+        let run = entry.read();
         let Some(plan) = run.plan.clone() else {
             return rsx! { div {} };
         };
