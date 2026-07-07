@@ -131,20 +131,22 @@ impl Workspace {
         w
     }
 
-    /// Whether the tab's SQL has diverged from its bound baseline (or, for a
-    /// scratch tab, has any content).
+    /// Whether a **bound** tab (view / saved query) has diverged from its committed
+    /// definition. Scratch tabs are session-local working buffers (Tier 2) — they
+    /// have no committed definition to be out of sync with (and are restored from
+    /// `session.json`), so they're never dirty.
     pub fn is_dirty(&self) -> bool {
-        crate::util::sql_hash(&self.sql) != self.origin_hash
+        match self.origin {
+            Origin::Scratch => false,
+            _ => crate::util::sql_hash(&self.sql) != self.origin_hash,
+        }
     }
 
-    /// Bind the tab to `origin` and (re)set the dirty baseline: the empty-string
-    /// hash for scratch (any content = unsaved), else the current SQL's hash (in
-    /// sync). Used when opening into an existing tab and after ⌘S / save-as-view.
+    /// Bind the tab to `origin`, snapshotting the current SQL as the dirty baseline
+    /// (so it's in sync). Used when opening into an existing tab and after ⌘S /
+    /// save-as-view. (For scratch, `origin_hash` is unused — see `is_dirty`.)
     pub fn set_origin(&mut self, origin: Origin) {
-        self.origin_hash = match origin {
-            Origin::Scratch => crate::util::sql_hash(""),
-            _ => crate::util::sql_hash(&self.sql),
-        };
+        self.origin_hash = crate::util::sql_hash(&self.sql);
         self.origin = origin;
     }
 }
@@ -394,14 +396,6 @@ impl Project {
             }
         }
         self.next_ws_id = self.workspaces.iter().map(|w| w.id).max().unwrap_or(0) + 1;
-        // Scratch tabs are dirty iff non-empty → force their baseline to the empty
-        // hash (also backfills legacy tabs, which default to Scratch / 0).
-        let empty = crate::util::sql_hash("");
-        for w in &mut self.workspaces {
-            if w.origin == Origin::Scratch {
-                w.origin_hash = empty;
-            }
-        }
         for (i, h) in self.history.iter_mut().enumerate() {
             h.id = i as u64 + 1;
         }
