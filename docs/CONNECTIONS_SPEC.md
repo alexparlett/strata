@@ -1,9 +1,9 @@
 # Connections + remote object-store sources (S21)
 
 Spec for the v10 Connections feature: reading parquet/csv/etc. from remote object
-stores (S3 / GCS / Azure / HTTP) via **project-scoped connections**, with **no
-app-managed secrets**. Design source: v10 `Strata.dc.html` + `FEATURES.md` §6/§15b
-+ CHANGELOG.
+stores (S3 + S3-compatible, GCS, HTTP; **Azure optional** — see Provider scope) via
+**project-scoped connections**, with **no app-managed secrets**. Design source: v10
+`Strata.dc.html` + `FEATURES.md` §6/§15b + CHANGELOG.
 
 ## Direction (decided)
 
@@ -13,6 +13,25 @@ app-managed secrets**. Design source: v10 `Strata.dc.html` + `FEATURES.md` §6/�
 - For AWS we **wrap the `aws-config` default provider chain in an
   `object_store::CredentialProvider`** (the datafusion-cli pattern) — this is the
   chosen approach, not the env-only fallback.
+
+## Provider scope
+
+We register object stores **ourselves** (`ctx.register_object_store(url, store)` per
+bucket), so the supported set is what the **`object_store`** crate implements + which
+feature we enable — *not* what `datafusion-cli` happens to auto-register.
+
+- **datafusion-cli's** built-in remote schemes are **`s3://` · `oss://` · `cos://` ·
+  `gs://` · `http(s)://`** — **not** `az://`. (OSS / COS are the S3 builder + a custom
+  endpoint — i.e. **S3-compatible**, not separate stores.)
+- **`object_store`** additionally ships an **Azure** store behind its **`azure`
+  feature** — so Azure *is* reachable, but we enable the feature and write the
+  registration ourselves (same shape as S3 / GCS); nothing hands it to us for free.
+
+**v1 baseline:** **S3** (+ S3-compatible — OSS / COS / Cloudflare R2 / MinIO via a
+custom **endpoint**), **GCS**, **HTTP(S)**. **Azure (`az://` / `abfs://`) is a
+fast-follow** (flip the `object_store` `azure` feature + register). The v10 design
+still lists `az://`, so either we build Azure or the design drops it — **decision
+pending**.
 
 ## 1. Connections pane
 
