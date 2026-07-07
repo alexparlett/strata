@@ -49,8 +49,8 @@ pub fn set_log_tab(mut state: Signal<AppState>, tab: LogTab) {
 /// open. Idempotent (reuse-if-same) so a double-click — which fires `onclick`
 /// twice before `ondoubleclick` — doesn't spawn duplicate tabs. (Double-click
 /// also runs it — see `Action::RunHistoryQuery`.)
-pub fn open_history_query(mut state: Signal<AppState>, sql: String) {
-    state.write().open_or_focus_sql(sql);
+pub fn open_history_query(_state: Signal<AppState>, sql: String) {
+    crate::session::open_or_focus_sql(sql);
 }
 
 /// Toggle the bottom drawer open/closed (drawer close button).

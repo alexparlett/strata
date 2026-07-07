@@ -13,7 +13,6 @@
 use crate::plan::PlanTab;
 use crate::state::{AppState, LogTab, RemoveKind, ResizeTarget};
 use dioxus::prelude::Signal;
-use dioxus::signals::WritableExt;
 
 // Domain handler modules. `panel` (the shared `resize_handle` component),
 // `projects` (window startup), and `catalog` (the modal's source scan,
@@ -51,18 +50,18 @@ pub enum Action {
 
     // ── tabs ──
     NewTab,
-    SwitchTab(usize),
-    CloseTab(usize),
+    SwitchTab(crate::session::WorkspaceId),
+    CloseTab(crate::session::WorkspaceId),
     /// Close a tab unconditionally (from the discard-confirm dialog). `CloseTab`
     /// routes here after the user confirms discarding an unsaved tab.
-    CloseTabForce(usize),
-    CloseOtherTabs(usize),
-    CloseTabsRight(usize),
+    CloseTabForce(crate::session::WorkspaceId),
+    CloseOtherTabs(crate::session::WorkspaceId),
+    CloseTabsRight(crate::session::WorkspaceId),
     CloseAllTabs,
     ReopenTab,
     /// Commit an inline tab rename. Start / draft / cancel are transient UI state
     /// owned by the `Tabs` component; only the commit (durable) is an action.
-    RenameTab(usize, String),
+    RenameTab(crate::session::WorkspaceId, String),
 
     // ── catalog ──
     OpenConfigNew,
@@ -122,16 +121,13 @@ pub enum Action {
 }
 
 /// Execute an [`Action`]. Durable actions (those that mutate the project's
-/// definitions/tabs) trigger a project autosave afterward; editor-affecting
-/// actions bump `editor_epoch` so the SQL editor remounts onto the new content.
-pub fn dispatch(mut state: Signal<AppState>, action: Action) {
+/// definitions or the working session) trigger an autosave afterward. The SQL
+/// editor is a *controlled* input bound to its workspace's `sql` lens, so no
+/// remount / epoch bump is needed — programmatic edits flow straight to the store.
+pub fn dispatch(state: Signal<AppState>, action: Action) {
     let durable = is_durable(&action);
-    let editor = affects_editor(&action);
     let defs = durable && touches_defs(&action);
     run(state, action);
-    if editor {
-        state.write().editor_epoch += 1;
-    }
     if durable {
         if defs {
             projects::autosave(state);
@@ -139,30 +135,6 @@ pub fn dispatch(mut state: Signal<AppState>, action: Action) {
             projects::autosave_session(state);
         }
     }
-}
-
-/// Whether an action changes the active tab's SQL for a reason *other* than the
-/// user typing, so the SQL editor must remount (see `AppState::editor_epoch`).
-fn affects_editor(a: &Action) -> bool {
-    use Action::*;
-    matches!(
-        a,
-        SwitchTab(_)
-            | NewTab
-            | CloseTab(_)
-            | CloseTabForce(_)
-            | CloseOtherTabs(_)
-            | CloseTabsRight(_)
-            | CloseAllTabs
-            | ReopenTab
-            | FormatSql
-            | ClearSql
-            | LoadSelectStar(_)
-            | OpenSavedQuery(_)
-            | EditView(_)
-            | OpenHistoryQuery(_)
-            | RunHistoryQuery(_)
-    )
 }
 
 /// Whether an action mutates the durable project → should autosave.
@@ -227,14 +199,14 @@ fn run(state: Signal<AppState>, action: Action) {
 
         // tabs
         NewTab => tab::add(state),
-        SwitchTab(idx) => tab::switch(state, idx),
-        CloseTab(idx) => tab::close(state, idx),
-        CloseTabForce(idx) => tab::close_force(state, idx),
-        CloseOtherTabs(idx) => tab::close_others(state, idx),
-        CloseTabsRight(idx) => tab::close_right(state, idx),
+        SwitchTab(id) => tab::switch(state, id),
+        CloseTab(id) => tab::close(state, id),
+        CloseTabForce(id) => tab::close_force(state, id),
+        CloseOtherTabs(id) => tab::close_others(state, id),
+        CloseTabsRight(id) => tab::close_right(state, id),
         CloseAllTabs => tab::close_all(state),
         ReopenTab => tab::reopen(state),
-        RenameTab(idx, name) => tab::rename_tab(state, idx, name),
+        RenameTab(id, name) => tab::rename_tab(state, id, name),
 
         // catalog
         OpenConfigNew => catalog::open_config_new(state),

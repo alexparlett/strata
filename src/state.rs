@@ -8,8 +8,11 @@ use crate::engine::Command;
 // The project domain model lives in `crate::project`; re-exported here so the
 // familiar `crate::state::{CatalogTable, Project, …}` paths keep working.
 pub use crate::project::{
-    CatalogTable, CatalogView, HistoryItem, Origin, Project, RegStatus, SavedQuery, Workspace,
+    CatalogTable, CatalogView, HistoryItem, Origin, Project, RegStatus, SavedQuery,
 };
+// A tab's data now lives in the reactive session store; re-exported so the
+// familiar `crate::state::Workspace` path keeps working.
+pub use crate::session::Workspace;
 use crate::query_error::QueryError;
 
 #[derive(Clone)]
@@ -194,14 +197,10 @@ pub struct AppState {
     pub recent_projects: Vec<crate::config::RecentProject>,
     // catalog filter (ephemeral UI)
     pub filter: String,
-    // Bumped whenever the active tab's SQL changes for a reason *other* than the
-    // user typing (tab switch, Format, Clear, load-select-star, …). The SQL
-    // editor is keyed by this so it remounts and re-seeds from the new value
-    // (dioxus-code-editor seeds its textarea from `value` only on mount).
-    pub editor_epoch: u64,
     // results — the per-tab query output (grid / plan / error / running / pager)
-    // lives in the `crate::runs::RUNS` store, keyed by tab id (`active_tab_id`).
-    // Only these window-global bits stay here: the request-id source, the
+    // lives in the `crate::runs::RUNS` store, keyed by workspace id (the active
+    // one from `crate::session::active_id`). Only these window-global bits stay
+    // here: the request-id source, the
     // pager-dropdown open flag, and the column-inspector selection.
     pub next_req: u64,
     pub page_size_open: bool,
@@ -225,100 +224,6 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn active_sql(&self) -> String {
-        self.project
-            .workspaces
-            .get(self.project.active_ws)
-            .map(|w| w.sql.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn set_active_sql(&mut self, sql: String) {
-        let idx = self.project.active_ws;
-        if let Some(w) = self.project.workspaces.get_mut(idx) {
-            w.sql = sql;
-        }
-    }
-
-    /// Set the SQL of the tab with `id` — the editor writes by the id it rendered
-    /// for, not `active_ws`, so a late `oninput` after a tab switch can't leak the
-    /// old tab's text into the now-active one.
-    pub fn set_sql_for(&mut self, id: u64, sql: String) {
-        if let Some(w) = self.project.workspaces.iter_mut().find(|w| w.id == id) {
-            w.sql = sql;
-        }
-    }
-
-    /// The active tab's id — the key into `crate::runs::RUNS` for its live query
-    /// output. `None` only when every tab is closed.
-    pub fn active_tab_id(&self) -> Option<u64> {
-        self.project
-            .workspaces
-            .get(self.project.active_ws)
-            .map(|w| w.id)
-    }
-
-    /// Open `sql` in a tab named `name` and make it active. Reuses an existing tab
-    /// of that name **only if it still holds exactly this SQL** (i.e. it hasn't
-    /// been edited) so repeated opens of an unchanged item don't pile up — but a
-    /// tab the user has edited is never clobbered; a fresh, uniquely-named tab is
-    /// appended instead. Used by SELECT *, edit-view, and open-saved-query.
-    pub fn open_in_tab(&mut self, name: &str, sql: String, origin: Origin) {
-        if let Some(idx) = self
-            .project
-            .workspaces
-            .iter()
-            .position(|w| w.name == name && w.sql == sql)
-        {
-            self.project.active_ws = idx;
-            if let Some(w) = self.project.workspaces.get_mut(idx) {
-                w.set_origin(origin);
-            }
-            return;
-        }
-        let tab_name = self.unique_tab_name(name);
-        let id = self.project.next_ws_id;
-        self.project.next_ws_id += 1;
-        self.project
-            .workspaces
-            .push(Workspace::new(id, tab_name, sql, origin));
-        self.project.active_ws = self.project.workspaces.len() - 1;
-    }
-
-    /// Append a **new** tab with `sql` (uniquely named `query N`) and make it
-    /// active — never reuses an existing tab.
-    pub fn open_new_tab(&mut self, sql: String) {
-        let base = format!("query {}", self.project.workspaces.len() + 1);
-        let name = self.unique_tab_name(&base);
-        let id = self.project.next_ws_id;
-        self.project.next_ws_id += 1;
-        self.project.workspaces.push(Workspace::new(id, name, sql, Origin::Scratch));
-        self.project.active_ws = self.project.workspaces.len() - 1;
-    }
-
-    /// Focus an existing tab that already holds exactly `sql`, else append a new
-    /// one. Used by history load — idempotent, so a double-click (which fires
-    /// `onclick` twice before `ondoubleclick`) can't spawn duplicate tabs.
-    pub fn open_or_focus_sql(&mut self, sql: String) {
-        if let Some(idx) = self.project.workspaces.iter().position(|w| w.sql == sql) {
-            self.project.active_ws = idx;
-        } else {
-            self.open_new_tab(sql);
-        }
-    }
-
-    /// A tab name that doesn't collide with an existing tab (`base`, then
-    /// `base 2`, `base 3`, …).
-    fn unique_tab_name(&self, base: &str) -> String {
-        if !self.project.workspaces.iter().any(|w| w.name == base) {
-            return base.to_string();
-        }
-        (2..)
-            .map(|n| format!("{base} {n}"))
-            .find(|cand| !self.project.workspaces.iter().any(|w| &w.name == cand))
-            .unwrap_or_else(|| base.to_string())
-    }
-
     pub fn existing_table_names(&self) -> std::collections::BTreeSet<String> {
         self.project
             .tables
@@ -340,7 +245,6 @@ impl AppState {
             project_path: None,
             recent_projects: Vec::new(),
             filter: String::new(),
-            editor_epoch: 0,
             next_req: 1,
             page_size_open: false,
             selected_col: None,

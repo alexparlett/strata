@@ -1,6 +1,7 @@
-//! Top header: logo, project switcher, the query toolbar (Run · Format · Clear ·
-//! Save-as-view · Save-query — moved up from the editor run-bar, S4), and the
-//! ⌘K search + ⌘, settings on the right.
+//! Top header: logo, project switcher, and the ⌘K search + ⌘, settings on the
+//! right. The per-query toolbar (Run · Format · Clear · Save-as-view · Save-query)
+//! now lives inside the editor pane (see `ui::workbench::editor`), bound to the
+//! active workspace — the header keeps only project-scoped controls.
 
 use dioxus::prelude::*;
 
@@ -8,21 +9,6 @@ use crate::action::{dispatch, Action};
 use crate::state::AppState;
 use crate::ui::components::{Point, Popup};
 use crate::ui::icons;
-
-/// A 30×30 header icon button that dispatches `action`. `onmousedown` is stopped
-/// so clicking a button never starts a window drag.
-fn tool_btn(state: Signal<AppState>, action: Action, title: &str, icon: Element) -> Element {
-    rsx! {
-        button {
-            class: "icon-btn",
-            title: "{title}",
-            onmousedown: move |e| e.stop_propagation(),
-            ondoubleclick: move |e| e.stop_propagation(),
-            onclick: move |_| dispatch(state, action.clone()),
-            {icon}
-        }
-    }
-}
 
 #[component]
 pub fn Header() -> Element {
@@ -32,23 +18,6 @@ pub fn Header() -> Element {
     // Self-contained: the project switcher dropdown lives here, not in `AppState`.
     let mut proj_menu = use_signal(|| false);
     let project = state.read().project.name.clone();
-    let has_ws = !state.read().project.workspaces.is_empty();
-    // Emphasise Save when the active tab has unsaved changes (A6).
-    let active_dirty = {
-        let s = state.read();
-        s.project
-            .workspaces
-            .get(s.project.active_ws)
-            .map(|w| w.is_dirty())
-            .unwrap_or(false)
-    };
-    let running = {
-        let id = state.read().active_tab_id();
-        let runs = crate::runs::RUNS.read();
-        id.and_then(|id| runs.get(&id))
-            .map(|r| r.running)
-            .unwrap_or(false)
-    };
 
     rsx! {
         header {
@@ -88,36 +57,6 @@ pub fn Header() -> Element {
             }
 
             div { class: "spacer" }
-
-            // Query toolbar — only when a tab is open.
-            if has_ws {
-                div { class: "row", style: "gap:6px;",
-                    button {
-                        class: "btn accent",
-                        style: "height:30px;",
-                        title: "Run query (⌘/Ctrl+Enter)",
-                        disabled: running,
-                        onmousedown: move |e| e.stop_propagation(),
-                        ondoubleclick: move |e| e.stop_propagation(),
-                        onclick: move |_| dispatch(state, Action::RunQuery),
-                        {icons::play(13)}
-                        if running { "Running…" } else { "Run" }
-                        span { class: "kbd", style: "background:rgba(7,16,25,.22);color:inherit;border:none;margin-left:2px;", "⌘↵" }
-                    }
-                    {tool_btn(state, Action::FormatSql, "Format SQL", icons::format(15))}
-                    {tool_btn(state, Action::ClearSql, "Clear editor", icons::trash(15))}
-                    {tool_btn(state, Action::SaveAsView, "Save as view", icons::eye(15))}
-                    button {
-                        class: if active_dirty { "icon-btn dirty" } else { "icon-btn" },
-                        title: "Save query (⌘S)",
-                        onmousedown: move |e| e.stop_propagation(),
-                        ondoubleclick: move |e| e.stop_propagation(),
-                        onclick: move |_| dispatch(state, Action::SaveQuery),
-                        {icons::save(15)}
-                    }
-                }
-                div { class: "hsep" }
-            }
 
             div { class: "row", style: "gap:8px;",
                 button {

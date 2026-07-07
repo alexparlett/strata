@@ -101,9 +101,10 @@ pub fn edit_view(mut state: Signal<AppState>, name: &str) {
     let Some(sql) = sql else {
         return;
     };
-    let mut s = state.write();
-    s.open_in_tab(name, sql, crate::state::Origin::View(name.to_string()));
-    s.set_status(LogKind::Info, format!("Editing view '{name}'"));
+    crate::session::open_named(name, sql, crate::project::Origin::View(name.to_string()));
+    state
+        .write()
+        .set_status(LogKind::Info, format!("Editing view '{name}'"));
 }
 
 // ---- catalog interactions ----

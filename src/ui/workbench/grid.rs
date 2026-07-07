@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 use dioxus_code::{Code, SourceCode};
 
 use crate::engine::Cell;
+use crate::session::WorkspaceId;
 use crate::state::AppState;
 use crate::ui::components::Dialog;
 use crate::ui::icons;
@@ -20,23 +21,20 @@ struct CellView {
 }
 
 #[component]
-pub(crate) fn ResultsGrid() -> Element {
+pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
     // The nested-cell view is grid-local, opened from a cell, closed by the dialog.
     let cell_view = use_signal(|| None::<CellView>);
 
     let zebra = crate::settings::SETTINGS.read().zebra;
-    let (type_color, id) = {
-        let s = state.read();
-        (s.type_color_cells, s.active_tab_id())
-    };
+    let type_color = state.read().type_color_cells;
     let runs = crate::runs::RUNS.read();
     // Rendered only alongside a result, so the `else` arms are defensive.
-    let Some(run) = id.and_then(|id| runs.get(&id)) else {
-        return rsx! { super::results::Empty {} };
+    let Some(run) = runs.get(&ws_id) else {
+        return rsx! { super::results::Empty { ws_id } };
     };
     let Some(result) = run.result.clone() else {
-        return rsx! { super::results::Empty {} };
+        return rsx! { super::results::Empty { ws_id } };
     };
     let page = run.page;
     let page_size = run.page_size;

@@ -2,10 +2,14 @@
 //! transient tab-strip UI — the context menu, plus the inline-rename target +
 //! draft text — is component-local `use_signal` state, never on `AppState`; only
 //! the durable rename commit (`Action::RenameTab`) goes through the action layer.
+//!
+//! Tabs are addressed by their stable `crate::session::WorkspaceId`; the strip is
+//! built from the ordered `crate::session::snapshot()`.
 
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
+use crate::session::WorkspaceId;
 use crate::state::AppState;
 use crate::ui::components::{MenuItem, MenuSep, Point, Popup};
 use crate::ui::icons;
@@ -13,22 +17,19 @@ use crate::ui::icons;
 #[component]
 pub(crate) fn Tabs() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let mut tab_menu = use_signal(|| None::<(usize, Point)>);
-    // Inline-rename mode: which tab (by index) is being renamed, and its draft.
-    let mut renaming = use_signal(|| None::<usize>);
+    let mut tab_menu = use_signal(|| None::<(WorkspaceId, Point)>);
+    // Inline-rename mode: which workspace (by id) is being renamed, and its draft.
+    let mut renaming = use_signal(|| None::<WorkspaceId>);
     let mut rename_val = use_signal(String::new);
 
     let sidebar_open = state.read().sidebar_open;
-    let active = state.read().project.active_ws;
+    let active = crate::session::active_id();
     let renaming_now = renaming();
     let rename_draft = rename_val();
-    let ws: Vec<(usize, String, bool)> = state
-        .read()
-        .project
+    let ws: Vec<(WorkspaceId, String, bool)> = crate::session::snapshot()
         .workspaces
         .iter()
-        .enumerate()
-        .map(|(i, w)| (i, w.name.clone(), w.is_dirty()))
+        .map(|w| (w.id, w.name.clone(), w.is_dirty()))
         .collect();
 
     rsx! {
@@ -46,12 +47,12 @@ pub(crate) fn Tabs() -> Element {
                     {icons::expand_right(15)} }
             }
             div { class: "ws-tabs-scroll",
-            for (i, name, dirty) in ws {
+            for (id, name, dirty) in ws {
                 {
-                    let is_rename = renaming_now == Some(i);
+                    let is_rename = renaming_now == Some(id);
                     let rv = rename_draft.clone();
                     let name_seed = name.clone();
-                    let tab_class = match (i == active, dirty) {
+                    let tab_class = match (id == active, dirty) {
                         (true, true) => "ws-tab active dirty",
                         (true, false) => "ws-tab active",
                         (false, true) => "ws-tab dirty",
@@ -60,17 +61,17 @@ pub(crate) fn Tabs() -> Element {
                     rsx! {
                         div {
                             class: "{tab_class}",
-                            onclick: move |_| dispatch(state, Action::SwitchTab(i)),
+                            onclick: move |_| dispatch(state, Action::SwitchTab(id)),
                             ondoubleclick: move |e| {
                                 e.stop_propagation();
                                 rename_val.set(name_seed.clone());
-                                renaming.set(Some(i));
+                                renaming.set(Some(id));
                             },
                             oncontextmenu: move |e| {
                                 e.prevent_default();
                                 e.stop_propagation();
                                 let c = e.client_coordinates();
-                                tab_menu.set(Some((i, Point { x: c.x, y: c.y })));
+                                tab_menu.set(Some((id, Point { x: c.x, y: c.y })));
                             },
                             span { class: "tdot" }
                             if is_rename {
@@ -82,16 +83,16 @@ pub(crate) fn Tabs() -> Element {
                                     onmounted: move |e| { spawn(async move { let _ = e.set_focus(true).await; }); },
                                     oninput: move |e| rename_val.set(e.value()),
                                     onkeydown: move |e| match e.key() {
-                                        Key::Enter => { e.prevent_default(); commit_rename(state, renaming, rename_val, i); }
+                                        Key::Enter => { e.prevent_default(); commit_rename(state, renaming, rename_val, id); }
                                         Key::Escape => { e.prevent_default(); renaming.set(None); }
                                         _ => {}
                                     },
-                                    onblur: move |_| commit_rename(state, renaming, rename_val, i),
+                                    onblur: move |_| commit_rename(state, renaming, rename_val, id),
                                     onclick: move |e| e.stop_propagation(),
                                 }
                             } else {
                                 span { "{name}" }
-                                span { class: "close", onclick: move |e| { e.stop_propagation(); dispatch(state, Action::CloseTab(i)); }, "×" }
+                                span { class: "close", onclick: move |e| { e.stop_propagation(); dispatch(state, Action::CloseTab(id)); }, "×" }
                             }
                         }
                     }
@@ -102,29 +103,29 @@ pub(crate) fn Tabs() -> Element {
             }
 
             // Self-contained tab context menu (egui-style Popup container).
-            if let Some((idx, at)) = tab_menu() {
+            if let Some((id, at)) = tab_menu() {
                 Popup { on_close: move |_| tab_menu.set(None), at,
-                    {tab_menu_items(state, tab_menu, renaming, rename_val, idx)}
+                    {tab_menu_items(state, tab_menu, renaming, rename_val, id)}
                 }
             }
         }
     }
 }
 
-/// Commit the inline rename for tab `idx` (Enter / blur): dispatch the durable
+/// Commit the inline rename for workspace `id` (Enter / blur): dispatch the durable
 /// rename, then leave rename mode. A no-op when not renaming, so the Enter that
 /// already committed doesn't fire again on the follow-up blur.
 fn commit_rename(
     state: Signal<AppState>,
-    mut renaming: Signal<Option<usize>>,
+    mut renaming: Signal<Option<WorkspaceId>>,
     rename_val: Signal<String>,
-    idx: usize,
+    id: WorkspaceId,
 ) {
     if renaming.peek().is_none() {
         return;
     }
     let v = rename_val.peek().clone();
-    dispatch(state, Action::RenameTab(idx, v));
+    dispatch(state, Action::RenameTab(id, v));
     renaming.set(None);
 }
 
@@ -132,33 +133,32 @@ fn commit_rename(
 /// "Rename" seeds the component-local rename signals; the rest dispatch actions.
 fn tab_menu_items(
     state: Signal<AppState>,
-    mut tab_menu: Signal<Option<(usize, Point)>>,
-    mut renaming: Signal<Option<usize>>,
+    mut tab_menu: Signal<Option<(WorkspaceId, Point)>>,
+    mut renaming: Signal<Option<WorkspaceId>>,
     mut rename_val: Signal<String>,
-    idx: usize,
+    id: WorkspaceId,
 ) -> Element {
     let can_reopen = !state.read().closed_tabs.is_empty();
     rsx! {
         MenuItem { label: "Rename".to_string(),
             onclick: move |_| {
                 tab_menu.set(None);
-                let name = state
-                    .read()
-                    .project
+                let name = crate::session::snapshot()
                     .workspaces
-                    .get(idx)
+                    .iter()
+                    .find(|w| w.id == id)
                     .map(|w| w.name.clone())
                     .unwrap_or_default();
                 rename_val.set(name);
-                renaming.set(Some(idx));
+                renaming.set(Some(id));
             } }
         MenuSep {}
         MenuItem { label: "Close".to_string(),
-            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseTab(idx)); } }
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseTab(id)); } }
         MenuItem { label: "Close others".to_string(),
-            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseOtherTabs(idx)); } }
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseOtherTabs(id)); } }
         MenuItem { label: "Close to the right".to_string(),
-            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseTabsRight(idx)); } }
+            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseTabsRight(id)); } }
         MenuItem { label: "Close all".to_string(),
             onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseAllTabs); } }
         MenuSep {}

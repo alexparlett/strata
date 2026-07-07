@@ -7,8 +7,8 @@
 //! components that read `RUNS` (the results panel), not the editor / tabs /
 //! sidebar. Never persisted; results are rebuilt as queries run.
 //!
-//! Keyed by the tab's `id`; the *active* tab's id comes from `AppState`
-//! ([`crate::state::AppState::active_tab_id`]). Entries are created on first write
+//! Keyed by the tab's `id`; the *active* tab's id comes from the session store
+//! ([`crate::session::active_id`]). Entries are created on first write
 //! (`edit`), dropped when a tab closes (`drop_ids`), and cleared on project open
 //! (`clear`) — a fresh project reassigns ids, so a new tab could otherwise inherit
 //! a stale run.

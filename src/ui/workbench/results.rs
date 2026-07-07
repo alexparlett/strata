@@ -1,24 +1,25 @@
 //! The results area: a four-way state switch (running spinner / structured error /
 //! EXPLAIN plan / grid) or the "no results yet" placeholder, plus the results
 //! toolbar, the pager, and the no-tabs center-pane empty state. Each is its own
-//! context-component; the toolbar and pager only appear alongside a grid.
+//! context-component keyed by its workspace's id; the toolbar and pager only
+//! appear alongside a grid.
 
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
+use crate::session::WorkspaceId;
 use crate::state::AppState;
 use crate::ui::icons;
 
 /// The results area is one of four mutually-exclusive states: a spinner while a
 /// query runs, the structured error view, the grid (with its search/export
-/// toolbar + pager), or the "no results yet" empty state.
+/// toolbar + pager), or the "no results yet" empty state. Reads this workspace's
+/// run from `crate::runs::RUNS` by `ws_id`.
 #[component]
-pub(crate) fn Results() -> Element {
-    let state = use_context::<Signal<AppState>>();
+pub(crate) fn Results(ws_id: WorkspaceId) -> Element {
     let (running, has_err, has_plan, has_result) = {
-        let id = state.read().active_tab_id();
         let runs = crate::runs::RUNS.read();
-        id.and_then(|id| runs.get(&id))
+        runs.get(&ws_id)
             .map(|r| {
                 (
                     r.running,
@@ -30,34 +31,31 @@ pub(crate) fn Results() -> Element {
             .unwrap_or((false, false, false, false))
     };
     if running {
-        rsx! { Running {} }
+        rsx! { Running { ws_id } }
     } else if has_err {
-        rsx! { ErrorView {} }
+        rsx! { ErrorView { ws_id } }
     } else if has_plan {
-        rsx! { super::plan_view::PlanView {} }
+        rsx! { super::plan_view::PlanView { ws_id } }
     } else if has_result {
         rsx! {
-            ResultsToolbar {}
-            super::grid::ResultsGrid {}
-            Pager {}
+            ResultsToolbar { ws_id }
+            super::grid::ResultsGrid { ws_id }
+            Pager { ws_id }
         }
     } else {
-        rsx! { Empty {} }
+        rsx! { Empty { ws_id } }
     }
 }
 
 /// Results area while a query is in flight — a centred spinner. (Cancel is S14.)
 #[component]
-fn Running() -> Element {
-    let state = use_context::<Signal<AppState>>();
-    let target = {
-        let s = state.read();
-        s.project
-            .workspaces
-            .get(s.project.active_ws)
-            .map(|w| w.name.clone())
-            .unwrap_or_else(|| "sources".into())
-    };
+fn Running(ws_id: WorkspaceId) -> Element {
+    let target = crate::session::snapshot()
+        .workspaces
+        .iter()
+        .find(|w| w.id == ws_id)
+        .map(|w| w.name.clone())
+        .unwrap_or_else(|| "sources".into());
     rsx! {
         div { class: "res-state res-running",
             {icons::spinner(30)}
@@ -70,13 +68,11 @@ fn Running() -> Element {
 /// Results area for the last failed query — an error banner, the message, an
 /// optional code frame with a caret, and an optional hint. Dismiss clears it.
 #[component]
-fn ErrorView() -> Element {
+fn ErrorView(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
     let err = {
-        let id = state.read().active_tab_id();
         let runs = crate::runs::RUNS.read();
-        id.and_then(|id| runs.get(&id))
-            .and_then(|r| r.query_error.clone())
+        runs.get(&ws_id).and_then(|r| r.query_error.clone())
     };
     let Some(err) = err else {
         return rsx! { div {} };
@@ -106,12 +102,17 @@ fn ErrorView() -> Element {
     }
 }
 
-/// Results area before the active tab has produced any rows. An unrun EXPLAIN gets
+/// Results area before this workspace has produced any rows. An unrun EXPLAIN gets
 /// a plan-specific hint. Also the grid's defensive fallback (see `grid`).
 #[component]
-pub(crate) fn Empty() -> Element {
-    let state = use_context::<Signal<AppState>>();
-    let is_explain = crate::plan::is_explain(&state.read().active_sql());
+pub(crate) fn Empty(ws_id: WorkspaceId) -> Element {
+    let sql = crate::session::snapshot()
+        .workspaces
+        .iter()
+        .find(|w| w.id == ws_id)
+        .map(|w| w.sql.clone())
+        .unwrap_or_default();
+    let is_explain = crate::plan::is_explain(&sql);
     let (title, sub) = if is_explain {
         ("No plan yet", "Run the EXPLAIN to see the query plan.")
     } else {
@@ -188,12 +189,11 @@ pub(crate) fn EmptyState() -> Element {
 }
 
 #[component]
-fn ResultsToolbar() -> Element {
+fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
     let q = {
-        let id = state.read().active_tab_id();
         let runs = crate::runs::RUNS.read();
-        id.and_then(|id| runs.get(&id))
+        runs.get(&ws_id)
             .map(|r| r.result_search.clone())
             .unwrap_or_default()
     };
@@ -212,15 +212,12 @@ fn ResultsToolbar() -> Element {
 }
 
 #[component]
-fn Pager() -> Element {
+fn Pager(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
     let (total, elapsed, page, page_size, page_size_open) = {
-        let (id, page_size_open) = {
-            let s = state.read();
-            (s.active_tab_id(), s.page_size_open)
-        };
+        let page_size_open = state.read().page_size_open;
         let runs = crate::runs::RUNS.read();
-        let run = id.and_then(|id| runs.get(&id));
+        let run = runs.get(&ws_id);
         (
             run.and_then(|r| r.result.as_ref())
                 .map(|r| r.total)

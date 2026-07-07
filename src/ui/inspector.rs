@@ -55,10 +55,10 @@ pub fn Inspector() -> Element {
     let mut nulls = 0usize;
     let mut distinct: HashSet<String> = HashSet::new();
     let mut nums: Vec<f64> = Vec::new();
-    let active_id = s.active_tab_id();
+    let active_id = crate::session::active_id();
     let runs = crate::runs::RUNS.read();
-    if let Some(res) = active_id
-        .and_then(|id| runs.get(&id))
+    if let Some(res) = runs
+        .get(&active_id)
         .and_then(|r| r.result.as_ref())
     {
         if let Some(ci) = res.columns.iter().position(|c| c.name == colname) {

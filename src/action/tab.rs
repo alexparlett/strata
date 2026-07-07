@@ -1,61 +1,71 @@
 //! Workspace-tab action handlers: new/close (+ variants)/reopen, inline rename,
-//! and the tab context menu. Called from `action::dispatch`.
+//! and the tab context menu. Called from `action::dispatch`. Tabs are addressed
+//! by their stable [`crate::session::WorkspaceId`]; the durable model lives in the
+//! reactive [`crate::session`] store, so these are thin wrappers over its free
+//! functions plus the runtime bookkeeping (closed-tab stack, runs, engine scopes).
+
+use std::collections::HashSet;
 
 use dioxus::prelude::*;
 
 use crate::engine::Command;
-use crate::state::{AppState, ClosedTab, Origin, Workspace};
+use crate::session::WorkspaceId;
+use crate::state::{AppState, ClosedTab};
 
 /// Open a new blank query tab and focus it.
-pub fn add(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    let id = s.project.next_ws_id;
-    s.project.next_ws_id += 1;
-    let n = s.project.workspaces.len() + 1;
-    s.project
-        .workspaces
-        .push(Workspace::new(id, format!("query {n}"), String::new(), Origin::Scratch));
-    s.project.active_ws = s.project.workspaces.len() - 1;
+pub fn add(_state: Signal<AppState>) {
+    crate::session::new_blank();
 }
 
-/// Focus tab `idx`.
-pub fn switch(mut state: Signal<AppState>, idx: usize) {
-    state.write().project.active_ws = idx;
+/// Focus workspace `id`.
+pub fn switch(_state: Signal<AppState>, id: WorkspaceId) {
+    crate::session::switch(id);
 }
 
-pub fn close(state: Signal<AppState>, idx: usize) {
-    let dirty = state
-        .read()
-        .project
-        .workspaces
-        .get(idx)
-        .map(|w| w.is_dirty())
-        .unwrap_or(false);
-    if dirty {
-        crate::overlays::open_close_confirm(idx);
+/// Close workspace `id` — confirm first if it has unsaved changes (A6).
+pub fn close(state: Signal<AppState>, id: WorkspaceId) {
+    if crate::session::is_dirty(id) {
+        crate::overlays::open_close_confirm(id);
     } else {
-        close_where(state, move |i| i == idx);
+        close_ids(state, &HashSet::from([id]));
     }
 }
 
-/// Close a tab unconditionally — from the discard-confirm dialog (A6).
-pub fn close_force(state: Signal<AppState>, idx: usize) {
-    close_where(state, move |i| i == idx);
+/// Close workspace `id` unconditionally — from the discard-confirm dialog (A6).
+pub fn close_force(state: Signal<AppState>, id: WorkspaceId) {
+    close_ids(state, &HashSet::from([id]));
 }
 
-/// Close every tab except `idx`.
-pub fn close_others(state: Signal<AppState>, idx: usize) {
-    close_where(state, move |i| i != idx);
+/// Close every tab except `id`.
+pub fn close_others(state: Signal<AppState>, id: WorkspaceId) {
+    let ids: HashSet<WorkspaceId> = crate::session::snapshot()
+        .workspaces
+        .iter()
+        .map(|w| w.id)
+        .filter(|&i| i != id)
+        .collect();
+    close_ids(state, &ids);
 }
 
-/// Close every tab to the right of `idx`.
-pub fn close_right(state: Signal<AppState>, idx: usize) {
-    close_where(state, move |i| i > idx);
+/// Close every tab to the right of `id` (in strip order).
+pub fn close_right(state: Signal<AppState>, id: WorkspaceId) {
+    let workspaces = crate::session::snapshot().workspaces;
+    let pos = workspaces.iter().position(|w| w.id == id);
+    let ids: HashSet<WorkspaceId> = match pos {
+        Some(p) => workspaces.iter().skip(p + 1).map(|w| w.id).collect(),
+        None => HashSet::new(),
+    };
+    close_ids(state, &ids);
 }
 
 /// Close every tab, leaving the workspace empty (center pane shows the empty state).
 pub fn close_all(state: Signal<AppState>) {
-    close_where(state, |_| true);
+    let ids: HashSet<WorkspaceId> = crate::session::snapshot()
+        .workspaces
+        .iter()
+        .map(|w| w.id)
+        .collect();
+    close_ids(state, &ids);
 }
 
 /// Reopen the most recently closed tab (⇧⌘T).
@@ -64,40 +74,29 @@ pub fn reopen(mut state: Signal<AppState>) {
     let Some(c) = closed else {
         return;
     };
-    let mut s = state.write();
-    let id = s.project.next_ws_id;
-    s.project.next_ws_id += 1;
-    s.project
-        .workspaces
-        .push(Workspace::new(id, c.name, c.sql, Origin::Scratch));
-    s.project.active_ws = s.project.workspaces.len() - 1;
+    crate::session::reopen(c.name, c.sql);
 }
 
-/// Core tab-removal: drops every tab whose index satisfies `remove`, records
-/// them on the closed-tab stack (capped 20), reaps their snapshots, and keeps
-/// the previously-active tab selected (or leaves the workspace empty).
-fn close_where(mut state: Signal<AppState>, remove: impl Fn(usize) -> bool) {
-    let (removed, active_id, tx) = {
-        let s = state.read();
-        let removed: Vec<(u64, String, String)> = s
-            .project
-            .workspaces
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| remove(*i))
-            .map(|(_, w)| (w.id, w.name.clone(), w.sql.clone()))
-            .collect();
-        let active_id = s.project.workspaces.get(s.project.active_ws).map(|w| w.id);
-        (removed, active_id, s.cmd_tx.clone())
-    };
+/// Core tab-removal: records the removed workspaces on the closed-tab stack
+/// (capped 20), removes them from the session (which re-picks a neighbour focus),
+/// reaps their runs, and tells the engine to drop their scopes. A no-op on an
+/// empty id set.
+fn close_ids(mut state: Signal<AppState>, ids: &HashSet<WorkspaceId>) {
+    if ids.is_empty() {
+        return;
+    }
+    // Collect the removed workspaces (in strip order) for the closed-tab stack.
+    let removed: Vec<(WorkspaceId, String, String)> = crate::session::snapshot()
+        .workspaces
+        .iter()
+        .filter(|w| ids.contains(&w.id))
+        .map(|w| (w.id, w.name.clone(), w.sql.clone()))
+        .collect();
     if removed.is_empty() {
         return;
     }
-    let remove_ids: std::collections::HashSet<u64> = removed.iter().map(|(id, ..)| *id).collect();
-    {
+    let tx = {
         let mut s = state.write();
-        s.project.workspaces.retain(|w| !remove_ids.contains(&w.id));
-        crate::runs::drop_ids(&remove_ids);
         for (_, name, sql) in &removed {
             s.closed_tabs.push(ClosedTab {
                 name: name.clone(),
@@ -108,17 +107,10 @@ fn close_where(mut state: Signal<AppState>, remove: impl Fn(usize) -> bool) {
         if overflow > 0 {
             s.closed_tabs.drain(0..overflow);
         }
-        if s.project.workspaces.is_empty() {
-            // No tabs left → the center pane renders the empty state.
-            s.project.active_ws = 0;
-        } else {
-            let keep = active_id
-                .filter(|id| !remove_ids.contains(id))
-                .and_then(|id| s.project.workspaces.iter().position(|w| w.id == id))
-                .unwrap_or(0);
-            s.project.active_ws = keep.min(s.project.workspaces.len() - 1);
-        }
-    }
+        s.cmd_tx.clone()
+    };
+    crate::session::remove_ids(ids);
+    crate::runs::drop_ids(ids);
     if let Some(tx) = tx {
         for (id, ..) in &removed {
             let _ = tx.send(Command::CleanupWorkspace { ws_id: *id });
@@ -131,12 +123,10 @@ fn close_where(mut state: Signal<AppState>, remove: impl Fn(usize) -> bool) {
 /// Commit an inline tab rename: set the tab's name (an empty draft is a no-op).
 /// Start / draft / cancel are transient UI owned by the `Tabs` component; only
 /// this durable commit is an action, so it autosaves via `dispatch`.
-pub fn rename_tab(mut state: Signal<AppState>, idx: usize, name: String) {
+pub fn rename_tab(_state: Signal<AppState>, id: WorkspaceId, name: String) {
     let v = name.trim().to_string();
     if v.is_empty() {
         return;
     }
-    if let Some(w) = state.write().project.workspaces.get_mut(idx) {
-        w.name = v;
-    }
+    crate::session::rename(id, v);
 }

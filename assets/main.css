@@ -231,6 +231,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .run-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; }
 .run-hint { font: 400 11.5px var(--mono); color: var(--dim2); }
 
+/* editor query toolbar (inline, above the code) */
+.ed-toolbar { height: 38px; display: flex; align-items: center; gap: 6px; padding: 0 6px; border-bottom: 1px solid var(--line); }
+
 /* results toolbar */
 .results-tb { height: 40px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 14px; background: var(--bg); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 

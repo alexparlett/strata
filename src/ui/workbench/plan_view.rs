@@ -7,15 +7,15 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::plan::PlanTab;
+use crate::session::WorkspaceId;
 use crate::state::AppState;
 
 #[component]
-pub(crate) fn PlanView() -> Element {
+pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
     let (plan, tab, raw) = {
-        let id = state.read().active_tab_id();
         let runs = crate::runs::RUNS.read();
-        let Some(run) = id.and_then(|id| runs.get(&id)) else {
+        let Some(run) = runs.get(&ws_id) else {
             return rsx! { div {} };
         };
         let Some(plan) = run.plan.clone() else {

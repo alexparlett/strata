@@ -46,8 +46,8 @@ pub struct OverlayState {
     pub config_err: Option<String>,
     /// Row data for a config register awaiting the engine's `Registered` event.
     pub pending_register: Option<PendingTable>,
-    /// A tab index awaiting a discard-confirm before it closes (A6). `None` = none.
-    pub close_confirm: Option<usize>,
+    /// A workspace id awaiting a discard-confirm before it closes (A6). `None` = none.
+    pub close_confirm: Option<crate::session::WorkspaceId>,
 }
 
 /// The per-window overlay store. Hosts read it reactively
@@ -126,10 +126,10 @@ pub fn take_pending_register(name: &str) -> Option<PendingTable> {
     }
 }
 
-/// Ask to confirm closing tab `idx` (it has unsaved changes). Callable from the
-/// non-component action layer (`tab::close`).
-pub fn open_close_confirm(idx: usize) {
-    OVERLAYS.write().close_confirm = Some(idx);
+/// Ask to confirm closing workspace `id` (it has unsaved changes). Callable from
+/// the non-component action layer (`tab::close`).
+pub fn open_close_confirm(id: crate::session::WorkspaceId) {
+    OVERLAYS.write().close_confirm = Some(id);
 }
 
 /// Dismiss the close-confirm dialog.

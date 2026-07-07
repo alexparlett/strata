@@ -9,7 +9,7 @@ use crate::state::{AppState, LogKind, SavedQuery};
 
 /// Run the active tab's SQL (DDL-classified: run / capture-view / drop-view / block).
 pub fn run(mut state: Signal<AppState>) {
-    let sql = state.read().active_sql();
+    let sql = crate::session::active_sql();
     let trimmed = sql.trim().to_string();
     if trimmed.is_empty() {
         state.write().set_status(LogKind::Info, "Nothing to run");
@@ -18,12 +18,13 @@ pub fn run(mut state: Signal<AppState>) {
     // `EXPLAIN [ANALYZE]` takes a dedicated path: the engine runs it and returns
     // a parsed plan tree (S12) rather than a paged result snapshot.
     if crate::plan::is_explain(&trimmed) {
-        let (req, ws_id) = {
+        let req = {
             let mut s = state.write();
             let r = s.next_req;
             s.next_req += 1;
-            (r, s.active_tab_id().unwrap_or(0))
+            r
         };
+        let ws_id = crate::session::active_id();
         crate::runs::edit(ws_id, |run| {
             run.running = true;
             run.query_error = None;
@@ -44,7 +45,8 @@ pub fn run(mut state: Signal<AppState>) {
     }
     match ddl::classify(&trimmed) {
         Decision::Block { reason } => {
-            if let Some(id) = state.read().active_tab_id() {
+            let id = crate::session::active_id();
+            if id != 0 {
                 crate::runs::edit_existing(id, |run| {
                     run.running = false;
                     run.result = None;
@@ -69,12 +71,13 @@ pub fn run(mut state: Signal<AppState>) {
             }
         }
         Decision::Query => {
-            let (req, ws_id) = {
+            let req = {
                 let mut s = state.write();
                 let r = s.next_req;
                 s.next_req += 1;
-                (r, s.active_tab_id().unwrap_or(0))
+                r
             };
+            let ws_id = crate::session::active_id();
             let page_size = crate::runs::RUNS
                 .peek()
                 .get(&ws_id)
@@ -103,29 +106,32 @@ pub fn run(mut state: Signal<AppState>) {
 
 /// Dismiss the results-pane error view (falls back to the grid if a prior
 /// result is still loaded, otherwise the "no results yet" empty state).
-pub fn dismiss_error(mut state: Signal<AppState>) {
-    if let Some(id) = state.read().active_tab_id() {
+pub fn dismiss_error(_state: Signal<AppState>) {
+    let id = crate::session::active_id();
+    if id != 0 {
         crate::runs::edit_existing(id, |run| run.query_error = None);
     }
 }
 
 /// Switch the EXPLAIN plan view between the physical and logical trees.
-pub fn set_plan_tab(mut state: Signal<AppState>, tab: crate::plan::PlanTab) {
-    if let Some(id) = state.read().active_tab_id() {
+pub fn set_plan_tab(_state: Signal<AppState>, tab: crate::plan::PlanTab) {
+    let id = crate::session::active_id();
+    if id != 0 {
         crate::runs::edit_existing(id, |run| run.plan_tab = tab);
     }
 }
 
 /// Toggle the EXPLAIN plan view between the operator-card tree and raw text.
-pub fn toggle_plan_raw(mut state: Signal<AppState>) {
-    if let Some(id) = state.read().active_tab_id() {
+pub fn toggle_plan_raw(_state: Signal<AppState>) {
+    let id = crate::session::active_id();
+    if id != 0 {
         crate::runs::edit_existing(id, |run| run.plan_raw = !run.plan_raw);
     }
 }
 
 /// Fetch a specific page from the active workspace's snapshot (bounded LIMIT/OFFSET).
 pub fn fetch_page(mut state: Signal<AppState>, page: usize) {
-    let ws_id = state.read().active_tab_id().unwrap_or(0);
+    let ws_id = crate::session::active_id();
     let (page_size, has_result) = crate::runs::RUNS
         .peek()
         .get(&ws_id)
@@ -146,8 +152,9 @@ pub fn fetch_page(mut state: Signal<AppState>, page: usize) {
 }
 
 /// Update the find-in-results query.
-pub fn set_result_search(mut state: Signal<AppState>, q: String) {
-    if let Some(id) = state.read().active_tab_id() {
+pub fn set_result_search(_state: Signal<AppState>, q: String) {
+    let id = crate::session::active_id();
+    if id != 0 {
         crate::runs::edit(id, |run| run.result_search = q);
     }
 }
@@ -160,46 +167,40 @@ pub fn toggle_page_size_menu(mut state: Signal<AppState>) {
 
 /// Set the page size and reload the first page.
 pub fn set_page_size(mut state: Signal<AppState>, size: usize) {
-    let id = {
-        let mut s = state.write();
-        s.page_size_open = false;
-        s.active_tab_id()
-    };
-    if let Some(id) = id {
+    state.write().page_size_open = false;
+    let id = crate::session::active_id();
+    if id != 0 {
         crate::runs::edit(id, |run| run.page_size = size);
     }
     fetch_page(state, 1);
 }
 
 /// Pretty-print the active tab's SQL in place.
-pub fn format(mut state: Signal<AppState>) {
-    let cur = state.read().active_sql();
+pub fn format(_state: Signal<AppState>) {
+    let cur = crate::session::active_sql();
     let out = sqlformat::format(
         &cur,
         &sqlformat::QueryParams::None,
         &sqlformat::FormatOptions::default(),
     );
-    state.write().set_active_sql(out);
+    crate::session::set_sql(crate::session::active_id(), out);
 }
 
 /// Clear the active tab's SQL.
-pub fn clear(mut state: Signal<AppState>) {
-    state.write().set_active_sql(String::new());
+pub fn clear(_state: Signal<AppState>) {
+    crate::session::set_sql(crate::session::active_id(), String::new());
 }
 
 /// Save the active SELECT as a named catalog view (auto-named `saved_view_N`).
 pub fn save_as_view(mut state: Signal<AppState>) {
-    let sql = state.read().active_sql();
+    let sql = crate::session::active_sql();
     let n = state.read().project.views.len() + 1;
     let name = format!("saved_view_{n}");
     // The tab is now bound to (and in sync with) this view.
-    {
-        let mut s = state.write();
-        let active = s.project.active_ws;
-        if let Some(w) = s.project.workspaces.get_mut(active) {
-            w.set_origin(crate::state::Origin::View(name.clone()));
-        }
-    }
+    crate::session::set_origin(
+        crate::session::active_id(),
+        crate::state::Origin::View(name.clone()),
+    );
     let tx = state.read().cmd_tx.clone();
     if let Some(tx) = tx {
         let _ = tx.send(Command::CreateView { name, sql });
@@ -216,9 +217,8 @@ pub fn select_star(mut state: Signal<AppState>, table: &str) {
     } else {
         format!("SELECT *\nFROM {table};")
     };
-    let mut s = state.write();
-    s.open_in_tab(table, sql, crate::state::Origin::Scratch);
-    s.set_status(
+    crate::session::open_named(table, sql, crate::state::Origin::Scratch);
+    state.write().set_status(
         LogKind::Info,
         format!("Loaded SELECT * for '{table}' — press ⌘/Ctrl+Enter to run"),
     );
@@ -227,23 +227,20 @@ pub fn select_star(mut state: Signal<AppState>, table: &str) {
 /// Save the active tab's SQL to the project under the tab's name (upsert by name,
 /// case-insensitive). Bound to ⌘S.
 pub fn save(mut state: Signal<AppState>) {
-    let (name, sql, meta) = {
-        let s = state.read();
-        let Some(w) = s.project.workspaces.get(s.project.active_ws) else {
-            return;
-        };
-        let name = w.name.trim().to_string();
-        if name.is_empty() {
-            return;
-        }
-        let meta = crate::runs::RUNS
-            .peek()
-            .get(&w.id)
-            .and_then(|run| run.result.as_ref())
-            .map(|r| format!("{} rows", r.total))
-            .unwrap_or_else(|| "—".to_string());
-        (name, w.sql.clone(), meta)
+    let Some(w) = crate::session::active() else {
+        return;
     };
+    let name = w.name.trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    let sql = w.sql.clone();
+    let meta = crate::runs::RUNS
+        .peek()
+        .get(&w.id)
+        .and_then(|run| run.result.as_ref())
+        .map(|r| format!("{} rows", r.total))
+        .unwrap_or_else(|| "—".to_string());
     let mut s = state.write();
     let updated = if let Some(q) = s
         .project
@@ -262,18 +259,19 @@ pub fn save(mut state: Signal<AppState>) {
         });
         false
     };
-    // The tab is now bound to (and in sync with) this saved query.
-    let active = s.project.active_ws;
-    if let Some(w) = s.project.workspaces.get_mut(active) {
-        w.set_origin(crate::state::Origin::SavedQuery(name.clone()));
-    }
     let verb = if updated { "Updated" } else { "Saved" };
     s.push_log(LogKind::Ok, format!("{verb} query '{name}' to project"));
     s.set_status(LogKind::Ok, format!("{verb} query '{name}'"));
+    drop(s);
+    // The tab is now bound to (and in sync with) this saved query.
+    crate::session::set_origin(
+        w.id,
+        crate::state::Origin::SavedQuery(name.clone()),
+    );
 }
 
 /// Open a saved query: reuse a tab already named after it, else open a new tab.
-pub fn open_saved(mut state: Signal<AppState>, name: &str) {
+pub fn open_saved(state: Signal<AppState>, name: &str) {
     let sql = state
         .read()
         .project
@@ -284,9 +282,7 @@ pub fn open_saved(mut state: Signal<AppState>, name: &str) {
     let Some(sql) = sql else {
         return;
     };
-    state
-        .write()
-        .open_in_tab(name, sql, crate::state::Origin::SavedQuery(name.to_string()));
+    crate::session::open_named(name, sql, crate::state::Origin::SavedQuery(name.to_string()));
 }
 
 /// Delete a saved query from the project (immediate — no confirm dialog).
@@ -303,7 +299,7 @@ pub fn delete_saved(mut state: Signal<AppState>, name: &str) {
 pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
     let (ws_id, page, page_size, tx) = {
         let s = state.read();
-        let ws_id = s.active_tab_id().unwrap_or(0);
+        let ws_id = crate::session::active_id();
         let (page, page_size) = crate::runs::RUNS
             .peek()
             .get(&ws_id)
@@ -315,10 +311,10 @@ pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
     // Clipboard: copy the loaded result in the chosen text format (no file dialog).
     if ex.format == "clipboard" {
         let (text, n) = {
-            let id = state.read().active_tab_id();
+            let id = crate::session::active_id();
             let runs = crate::runs::RUNS.peek();
-            match id
-                .and_then(|id| runs.get(&id))
+            match runs
+                .get(&id)
                 .and_then(|run| run.result.as_ref())
             {
                 Some(r) => (result_to_clipboard(r, &ex.clip_format), r.rows.len()),

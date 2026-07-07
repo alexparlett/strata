@@ -12,14 +12,13 @@ use crate::ui::icons;
 #[component]
 pub fn CloseConfirmHost() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let Some(idx) = crate::overlays::OVERLAYS.read().close_confirm else {
+    let Some(id) = crate::overlays::OVERLAYS.read().close_confirm else {
         return rsx! {};
     };
-    let name = state
-        .read()
-        .project
+    let name = crate::session::snapshot()
         .workspaces
-        .get(idx)
+        .iter()
+        .find(|w| w.id == id)
         .map(|w| w.name.clone())
         .unwrap_or_default();
 
@@ -40,7 +39,7 @@ pub fn CloseConfirmHost() -> Element {
                     class: "btn-danger",
                     onclick: move |_| {
                         crate::overlays::close_close_confirm();
-                        dispatch(state, Action::CloseTabForce(idx));
+                        dispatch(state, Action::CloseTabForce(id));
                     },
                     {icons::trash(14)}
                     "Discard"

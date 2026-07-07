@@ -35,6 +35,11 @@ pub fn ProjectRoot(open_path: String) -> Element {
     let mut state = use_signal(AppState::empty);
     use_context_provider(|| state);
 
+    // Persist live editor SQL edits: the controlled editor writes its workspace's
+    // `sql` lens directly (bypassing `dispatch`'s autosave), so this effect
+    // subscribes to the session store and writes a debounced `session.json`.
+    crate::action::projects::use_persist_session(state);
+
     // Track this window so siblings can be focused / cycled, and so "Close
     // project" knows whether it's the last one.
     let win_id = use_hook(crate::window::register_current_window);
@@ -185,8 +190,10 @@ fn handle_key(state: Signal<AppState>, e: dioxus_core::Event<dioxus::events::Key
         // ⌘W close the current tab.
         Key::Character(c) if meta && (c == "w" || c == "W") => {
             e.prevent_default();
-            let active = state.read().project.active_ws;
-            dispatch(state, Action::CloseTab(active));
+            let active = crate::session::active_id();
+            if active != 0 {
+                dispatch(state, Action::CloseTab(active));
+            }
         }
         Key::Character(c) if meta && !shift && (c == "s" || c == "S") => {
             e.prevent_default();
@@ -230,8 +237,8 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             if !crate::runs::is_pending(ws_id, req_id) {
                 return;
             }
-            let sql = s
-                .project
+            // The owning workspace's SQL now lives in the reactive session store.
+            let sql = crate::session::snapshot()
                 .workspaces
                 .iter()
                 .find(|w| w.id == ws_id)
@@ -343,8 +350,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 }
                 Err(e) => {
                     tracing::error!("explain failed: {e}");
-                    let sql = s
-                        .project
+                    let sql = crate::session::snapshot()
                         .workspaces
                         .iter()
                         .find(|w| w.id == ws_id)

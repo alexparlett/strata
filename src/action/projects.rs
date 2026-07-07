@@ -33,7 +33,11 @@ pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
             }
         }
     } else {
-        // Scaffold a new project named after the containing folder.
+        // Scaffold a new project named after the containing folder. Workspaces
+        // live in the reactive session store (not on `Project`), so seed it with a
+        // single blank workspace here — the load path does this inside
+        // `Project::load_from_dir`, the scaffold path must do it explicitly.
+        crate::session::reset_blank();
         let mut p = Project::empty();
         p.name = path
             .parent()
@@ -190,6 +194,39 @@ pub fn autosave_session(mut state: Signal<AppState>) {
     write_files(state, false);
 }
 
+/// Persist live editor edits to `session.json`. The controlled `CodeEditor` writes
+/// its workspace's `sql` lens directly (bypassing `dispatch`, so no autosave
+/// fires), so this effect subscribes to the reactive [`crate::session`] store and
+/// writes a (debounced) `session.json` whenever it changes — including a keystroke.
+/// Mounted once in the root project component (`ProjectRoot`).
+pub fn use_persist_session(state: Signal<AppState>) {
+    // A generation counter so a burst of edits collapses into one write: each
+    // change bumps it, the spawned task writes only if it's still the latest.
+    let mut gen = use_signal(|| 0u64);
+    use_effect(move || {
+        // Subscribe to this window's session store (structural + per-field lens
+        // writes both re-run this effect).
+        let _sub = crate::session::store().read();
+        // No-op until the project is backed on disk.
+        if state.peek().project_path.is_none() {
+            return;
+        }
+        let g = {
+            let mut w = gen.write();
+            *w += 1;
+            *w
+        };
+        spawn(async move {
+            // Debounce: coalesce a run of keystrokes into a single write.
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            if *gen.peek() != g {
+                return; // superseded by a newer edit
+            }
+            write_files(state, false);
+        });
+    });
+}
+
 /// `Action::CloseProject` — save, then close this window. If it's the last
 /// project window, open the launcher; otherwise focus a sibling. An OS
 /// close-button doesn't route here, so it never opens the launcher.
@@ -240,8 +277,9 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
         let mut s = state.write();
         s.project = project;
         s.project_path = Some(path.clone());
-        // New project → new tabs with reassigned ids; drop the previous project's
-        // runs so a reused id can't inherit stale results.
+        // The workspaces for the incoming project were already loaded into the
+        // reactive session store (`load_from_dir` / `reset_blank`); drop the
+        // previous project's runs so a reused id can't inherit stale results.
         crate::runs::clear();
         s.set_status(LogKind::Ok, format!("Opened project '{name}'"));
     }

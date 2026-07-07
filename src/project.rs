@@ -98,59 +98,6 @@ pub enum Origin {
     SavedQuery(String),
 }
 
-/// A query tab: `id`, name, SQL buffer, plus its `origin` binding + a hash of the
-/// SQL it was last bound to (the dirty baseline). All persisted (the id too, so a
-/// reopened tab keeps its identity). The live query output lives in `crate::runs`
-/// keyed by this id, **not** here. Legacy files (no `id`/`origin`) get defaults in
-/// [`Project::normalize`].
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Workspace {
-    #[serde(default)]
-    pub id: u64,
-    pub name: String,
-    pub sql: String,
-    #[serde(default)]
-    pub origin: Origin,
-    #[serde(default)]
-    pub origin_hash: u64,
-}
-
-impl Workspace {
-    /// A tab bound to `origin`, with its dirty baseline snapshotted from `sql`
-    /// (see `set_origin`). A view/saved-query tab is dirty once edited away from
-    /// that baseline; a scratch tab is never dirty (see `is_dirty`).
-    pub fn new(id: u64, name: String, sql: String, origin: Origin) -> Self {
-        let mut w = Workspace {
-            id,
-            name,
-            sql,
-            origin: Origin::Scratch,
-            origin_hash: 0,
-        };
-        w.set_origin(origin);
-        w
-    }
-
-    /// Whether a **bound** tab (view / saved query) has diverged from its committed
-    /// definition. Scratch tabs are session-local working buffers (Tier 2) — they
-    /// have no committed definition to be out of sync with (and are restored from
-    /// `session.json`), so they're never dirty.
-    pub fn is_dirty(&self) -> bool {
-        match self.origin {
-            Origin::Scratch => false,
-            _ => crate::util::sql_hash(&self.sql) != self.origin_hash,
-        }
-    }
-
-    /// Bind the tab to `origin`, snapshotting the current SQL as the dirty baseline
-    /// (so it's in sync). Used when opening into an existing tab and after ⌘S /
-    /// save-as-view. (For scratch, `origin_hash` is unused — see `is_dirty`.)
-    pub fn set_origin(&mut self, origin: Origin) {
-        self.origin_hash = crate::util::sql_hash(&self.sql);
-        self.origin = origin;
-    }
-}
-
 /// One past query run. `id` is runtime (reassigned on load).
 #[derive(Serialize, Deserialize, Clone)]
 pub struct HistoryItem {
@@ -191,10 +138,6 @@ pub struct Project {
     pub tables: Vec<CatalogTable>,
     pub views: Vec<CatalogView>,
     pub saved_queries: Vec<SavedQuery>,
-    // workspaces
-    pub workspaces: Vec<Workspace>,
-    pub active_ws: usize,
-    pub next_ws_id: u64,
     // history
     pub history: Vec<HistoryItem>,
     pub next_hist: u64,
@@ -215,13 +158,17 @@ struct DefsFile {
     saved_queries: Vec<SavedQuery>,
 }
 
-/// The local working session — `.strata/session.json` (gitignored).
+/// The local working session — `.strata/session.json` (gitignored). Its workspace
+/// portion mirrors [`crate::session::Session`]; on load it's handed to
+/// `crate::session::load` to populate this window's reactive session store.
 #[derive(Serialize, Deserialize, Default)]
 struct SessionFile {
     #[serde(default)]
-    workspaces: Vec<Workspace>,
+    workspaces: Vec<crate::session::Workspace>,
     #[serde(default)]
-    active_ws: usize,
+    active: crate::session::WorkspaceId,
+    #[serde(default)]
+    next_id: crate::session::WorkspaceId,
     #[serde(default)]
     history: Vec<HistoryItem>,
     #[serde(default)]
@@ -247,16 +194,15 @@ fn ensure_gitignore(dir: &Path) {
 }
 
 impl Project {
-    /// An empty project: no catalog, one blank query tab, no history.
+    /// An empty project: no catalog, no history. Workspaces live in the reactive
+    /// [`crate::session`] store, not here — the caller resets it separately (see
+    /// `crate::session::reset_blank`).
     pub fn empty() -> Self {
         Project {
             name: "untitled".into(),
             tables: Vec::new(),
             views: Vec::new(),
             saved_queries: Vec::new(),
-            workspaces: vec![Workspace::new(1, "query 1".into(), String::new(), Origin::Scratch)],
-            active_ws: 0,
-            next_ws_id: 2,
             history: Vec::new(),
             next_hist: 1,
             window: None,
@@ -284,28 +230,57 @@ impl Project {
         write_json(&dir.join(PROJECT_JSON), &defs)
     }
 
-    /// Write only the local working session (`session.json`).
+    /// Write only the local working session (`session.json`). The workspace portion
+    /// comes from this window's reactive [`crate::session`] store (its snapshot);
+    /// history + geometry come from the project.
     pub fn save_session(&self, dir: &Path) -> Result<(), String> {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let snap = crate::session::snapshot();
         let sess = SessionFile {
-            workspaces: self.workspaces.clone(),
-            active_ws: self.active_ws,
+            workspaces: snap.workspaces,
+            active: snap.active,
+            next_id: snap.next_id,
             history: self.history.clone(),
             window: self.window,
         };
         write_json(&dir.join(SESSION_JSON), &sess)
     }
 
-    /// Load from a `.strata/` dir (merging the two files); else migrate a legacy
-    /// single-file `*.strata` / `*.psproj` in the parent folder. `Err` when
-    /// neither exists (caller then scaffolds a new project).
+    /// Load from a `.strata/` dir (merging the two files). `Err` when the project
+    /// file doesn't exist (caller then scaffolds a new project).
+    ///
+    /// **Side effect:** as well as returning the [`Project`] (catalog defs + history
+    /// + geometry), this populates *this window's* reactive [`crate::session`] store
+    /// from the session file's workspaces (via `crate::session::load`, which repairs
+    /// ids and guarantees a valid active workspace). Workspaces no longer live on
+    /// `Project`, so opening a project must go through here to seed the editor.
     pub fn load_from_dir(dir: &Path) -> Result<Project, String> {
         let pj = dir.join(PROJECT_JSON);
         if pj.exists() {
             let defs: DefsFile = read_json(&pj)?;
             let sess: SessionFile = read_json(&dir.join(SESSION_JSON)).unwrap_or_default();
-            let mut project = Project::from_parts(defs, sess);
-            project.normalize();
+            let mut project = Project {
+                name: defs.name,
+                tables: defs.tables,
+                views: defs.views,
+                saved_queries: defs.saved_queries,
+                history: sess.history,
+                next_hist: 0,
+                window: sess.window,
+            };
+            // History ids are runtime — assign them 1..n on load (as the old
+            // `normalize` did).
+            for (i, h) in project.history.iter_mut().enumerate() {
+                h.id = i as u64 + 1;
+            }
+            project.next_hist = project.history.len() as u64 + 1;
+            // Populate this window's reactive session store from the loaded
+            // workspaces (repairs legacy/duplicate ids, ensures ≥1 workspace).
+            crate::session::load(crate::session::Session {
+                workspaces: sess.workspaces,
+                active: sess.active,
+                next_id: sess.next_id,
+            });
             return Ok(project);
         }
         Err("no project files".into())
@@ -327,48 +302,4 @@ impl Project {
             .and_then(|s| s.window)
     }
 
-    fn from_parts(defs: DefsFile, sess: SessionFile) -> Project {
-        Project {
-            name: defs.name,
-            tables: defs.tables,
-            views: defs.views,
-            saved_queries: defs.saved_queries,
-            workspaces: sess.workspaces,
-            active_ws: sess.active_ws,
-            next_ws_id: 0,
-            history: sess.history,
-            next_hist: 0,
-            window: sess.window,
-        }
-    }
-
-    /// After a load: keep persisted tab ids, but repair legacy/corrupt ones, and
-    /// rebuild the runtime counters + guarantee a valid `active_ws`.
-    fn normalize(&mut self) {
-        if self.workspaces.is_empty() {
-            self.workspaces
-                .push(Workspace::new(1, "query 1".into(), String::new(), Origin::Scratch));
-        }
-        // Tab ids are persisted; legacy files (no id → 0) or corrupt/duplicate
-        // ids get fresh sequential ones.
-        let ids_ok = {
-            let mut seen = std::collections::HashSet::new();
-            self.workspaces
-                .iter()
-                .all(|w| w.id != 0 && seen.insert(w.id))
-        };
-        if !ids_ok {
-            for (i, w) in self.workspaces.iter_mut().enumerate() {
-                w.id = i as u64 + 1;
-            }
-        }
-        self.next_ws_id = self.workspaces.iter().map(|w| w.id).max().unwrap_or(0) + 1;
-        for (i, h) in self.history.iter_mut().enumerate() {
-            h.id = i as u64 + 1;
-        }
-        self.next_hist = self.history.len() as u64 + 1;
-        if self.active_ws >= self.workspaces.len() {
-            self.active_ws = self.workspaces.len() - 1;
-        }
-    }
 }

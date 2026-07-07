@@ -31,11 +31,10 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
     let mut export = use_signal(ExportForm::default);
     let ex = export();
     let (total, cols) = {
-        let s = state.read();
-        let id = s.active_tab_id();
+        let id = crate::session::active_id();
         let runs = crate::runs::RUNS.read();
-        let run_res = id
-            .and_then(|id| runs.get(&id))
+        let run_res = runs
+            .get(&id)
             .and_then(|r| r.result.as_ref());
         let total = run_res.map(|r| r.total).unwrap_or(0);
         let cols: Vec<String> = run_res
@@ -205,12 +204,11 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
 }
 
 /// Preview text (first few rows in the chosen format) + an estimated file size.
-fn export_preview(state: Signal<AppState>, ex: &ExportForm) -> (String, String) {
-    let s = state.read();
-    let id = s.active_tab_id();
+fn export_preview(_state: Signal<AppState>, ex: &ExportForm) -> (String, String) {
+    let id = crate::session::active_id();
     let runs = crate::runs::RUNS.read();
-    let Some(res) = id
-        .and_then(|id| runs.get(&id))
+    let Some(res) = runs
+        .get(&id)
         .and_then(|r| r.result.as_ref())
     else {
         return (String::new(), String::new());
