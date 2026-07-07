@@ -1,13 +1,16 @@
 # Strata — Dev backlog
 
 Living backlog and source of truth for outstanding work. Design reference:
-`Strata.dc.html` (**v8 handoff**) + `FEATURES.md`, `CHART_SPEC.md`, and the v3
+`Strata.dc.html` (**v9 handoff**) + `FEATURES.md`, `CHART_SPEC.md`, and the v3
 `EXPLAIN_PLAN_SPEC.md` (all in `docs/`). Product was **renamed Parquet Studio →
 Strata** in the v5 redesign (section **S**). The **v6–v8** drops added the chart
 view, grid selection / copy / record view, engine settings, tab drag-reorder,
 launcher pinning, and a results / workspace status-bar rework — tracked in section
-**R** + **S17–S20** + **B11**, with per-tab result state in **A5** and view/
-saved-query dirty tracking in **A6**.
+**R** + **S17–S20** + **B11a/b**, with per-tab result state in **A5** and view/
+saved-query dirty tracking in **A6**. The **v9** drop rebuilds the Settings surface
+from scratch (unified floating Settings/Export/Configure windows + a new
+**Connections** manager, per the v9 CHANGELOG) — tracked as **S21**, which the
+launcher Settings pane (**B11b**) reuses rather than the old `⌘,` modal.
 
 **Status:** ✅ Done · 🟡 Thin (wired but shallow) · ⬜ Todo · 🚧 Blocked (design pending) · ⛔ Dropped / superseded
 
@@ -44,7 +47,8 @@ saved-query dirty tracking in **A6**.
 | B8 | Welcome / Launcher + multi-window | ✅ Done | `window.rs`: each project its own window + engine; separate launcher window (opens only when the last project closes); ⌘` cycling; titlebar drag; per-project geometry in `.strata`; per-engine snapshot scoping. **Thin:** geometry in physical px (off on mixed-DPI). |
 | B9 | Collapsed sidebar rail | ✅ Done | 46px icon rail (expand / catalog / new-table) when `!sidebar_open`. |
 | B10 | Open in current-vs-new window prompt | ✅ Done | When `open_pref == Ask`, opening from a project window (Open Project **or** Open Recent) shows the prompt — This Window / New Window / Cancel + a "remember, don't ask again" toggle that persists the choice. `overlays::open_prompt` + always-mounted `OpenPromptHost` → `OpenPromptCard` (child mounted only while open, so the checkbox resets each open) + `Action::OpenChosen`; `projects::open_with_pref` routes this/new/ask. Launcher unaffected (spawns windows directly). Also folded in: `open_pref` `String` → `config::OpenPref` enum (serde lowercase, back-compat), and a reusable `ui::components::Checkbox` (button `role=checkbox`, controlled, our own — dioxus-primitives is unreleased + needs the CLI). |
-| B11 | Launcher project actions + pinning | ⬜ Todo | Launcher Projects pane (§0): per-row actions — **Pin/Unpin** (pinned sort to top, below the currently-open one), **Open in new window**, **Reveal on disk**, **Remove from list** — plus a **search** box over name/path, colour-initial avatars, and a pin badge. Plus a launcher **Settings** pane exposing the global-prefs subset (theme / startup / projects / safety) through the same `settings` store so a change is already in effect when a project opens. |
+| B11a | Launcher project actions + pinning | ✅ Done | Launcher Projects pane (§0): per-row actions — **Pin/Unpin** (PINNED/RECENT sections), **Open in new window**, **Reveal on disk**, **Remove from list** — plus a **search** box over name/path, colour-initial avatars, and a pin badge. Row actions `stop_propagation` over the row's open-click; reactive `recents` signal re-renders on mutate. Shipped alongside: **reopen the whole set of open projects on startup** — `AppConfig.open_projects` (added on `install`, removed on every window-close path), `decide_startup` reopens all still-existing entries; setting renamed "Reopen projects on startup". |
+| B11b | Launcher Settings pane | ⬜ Todo | A launcher **Settings** pane exposing the global-prefs subset (theme / startup / projects / safety) through the same `settings` store so a change is already in effect when a project opens. **Split out from B11 because the Settings surface is being rebuilt from scratch in v9 (→ S21):** this pane should mount / reuse the rebuilt Settings component (unified floating window, Connections/Engine categories, search) rather than the old `⌘,` modal. **Gated on S21.** |
 
 ## S. Strata redesign (v5 handoff — current priority)
 
@@ -70,6 +74,7 @@ saved-query dirty tracking in **A6**.
 | S18 | Settings: history-limit + search box | ⬜ Todo | **Query-history limit** control (25 / 50 / 100 / 200, default 50) under System → History; lowering it trims the current list immediately and new runs drop the oldest once capped. **Settings search** box above the category nav — a live index over label / keywords / category that replaces the category list while typing; Enter jumps to the top hit, clicking a result switches to its category + scrolls it in + briefly flashes the setting, Esc clears. (S3 flagged search as a minor follow-up.) |
 | S19 | Tab drag-to-reorder | ⬜ Todo | Press-drag a tab: a solid clone lifts + follows the cursor, the source dims, an accent insertion line shows the drop slot; drop commits the reorder (active tab tracked by **identity** so focus never changes). Auto-scroll near either overflow edge; a 5px threshold keeps plain clicks + the ✕ working; suppressed while a tab is being renamed. Pointer events + a floating clone (native HTML5 DnD doesn't fire reliably in the webview). Distinct from S8's tab-bar controls. |
 | S20 | EXPLAIN plan → v3 rework | ⬜ Todo | Rebuild the plan view to `EXPLAIN_PLAN_SPEC.md` **v3** (supersedes S12's shape). Engine sends a derived **self-time** per node (§7: scan `processing`, join `build+join`, exchange `repartition`, else `elapsed_compute`) driving the headline time chip, the time-share bar, and **HOTSPOT = self-time ≥ 60% of max**. **3-tier metrics** (ANALYZE, physical tab): tier-1 headline (`rows` · self-time · `bytes` · bar) · tier-2 priority-ordered non-zero insights (errors → spills → row-group pruning → pushdown → peak/build mem) · tier-3 collapsed **typed grid** grouped Output / Time / I/O / Pruning / Memory / Exchange / Join / Errors / Other, category-coloured left bars, values coloured by metric `type`, per-node **show-zeros** toggle. `detail` parsed into aligned **key/val field rows** (top-level-comma split, bracket-aware; clamp-by-field-count + show-more). Toolbar de-dup (drop the redundant `Logical plan · N` text). |
+| S21 | Settings window rebuilt from scratch (v9) | ⬜ Todo | Per the **v9 handoff** CHANGELOG: **Settings / Export / Configure unified into one floating `Window`** (drag / resize / z-order, no backdrop; footer Cancel/OK for Settings) — the A3/A4 `Window` container is the vehicle. New **Connections** category + manager: saved object stores (`s3://` / `gs://` / `az://` / `http(s)`) independent of any one table, sibling to Engine, feeding remote sources. The existing settings follow-ups land as **categories inside the rebuilt shell**: **S17** Engine category + SQL escape hatch, **S18** history-limit + settings-search. Also folds in the query-actions → editor-local toolbar move (done this session) + results control-bar tightening. **Launcher Settings pane (B11b) reuses this component.** Design in the v9 `Strata.dc.html` + CHANGELOG. |
 
 ## R. Results, charting & workspace (v8 handoff)
 
@@ -107,7 +112,7 @@ result state is **A5**; the UI is below.
 
 ## Suggested order (remaining)
 
-The **v8 handoff** (section **R** + S17–S20 + B11) is the new headline. Rough
+The **v9 handoff** (section **R** + S17–S21 + B11a/b) is the new headline. Rough
 order: **A5** per-tab result state is the enabler → **R1** results status-bar /
 workspace rework → **R6/R3** column sort + selection → **R4/R5** copy + record
 view → **R2** chart view → **S17** engine settings → **S20** plan v3. Older
