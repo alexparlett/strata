@@ -123,8 +123,10 @@ pub struct LogEvent {
     pub err: Option<QueryError>,
     /// Whether this row is expanded in the Events tab.
     pub open: bool,
-    /// Owning query tab for an error row — groups the Problems view and jumps to it
-    /// (S23). `None` for non-tab events.
+    /// Owning query tab this event came from, if any. Problems no longer derives
+    /// from the log (it reads `crate::diagnostics`); kept as event origin metadata
+    /// for a future Events-by-tab grouping. `None` for non-tab events.
+    #[allow(dead_code)]
     pub ws: Option<u64>,
 }
 

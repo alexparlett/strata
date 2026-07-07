@@ -1,12 +1,18 @@
 //! Bottom drawer (S5 + S23) — one panel showing **History / Events / Problems**,
 //! chosen by the activity rail (no in-drawer tab strip). Header is just
-//! `title · count` + Clear / expand / close. Events is a flat log; Problems is the
-//! `error`-kind subset **grouped by owning query tab** (click a row → switch to it);
-//! history rows come from the project. Drag the top edge to resize.
+//! `title · count` + Clear (History/Events only) / expand / close. Events is a flat
+//! log; **Problems reads
+//! live per-tab diagnostics from `crate::diagnostics`** (validation ∪ execution),
+//! grouped by owning tab (click a row → switch to it); history rows come from the
+//! project. Drag the top edge to resize.
 
 use dioxus::prelude::*;
+// `.iter()` over the session store's workspaces collection.
+use dioxus_stores::*;
 
 use crate::action::{dispatch, Action};
+// Lens accessors (`.workspaces()`, `.id()`, `.name()`) for the Problems grouping.
+use crate::session::{SessionStoreExt, WorkspaceStoreExt};
 use crate::state::{AppState, LogEvent, LogKind, LogTab};
 use crate::ui::icons;
 
@@ -34,16 +40,11 @@ pub fn Drawer() -> Element {
     } else {
         "M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"
     };
-    let (title, count): (&str, usize) = {
-        let s = state.read();
-        match tab {
-            LogTab::History => ("History", s.project.history.len()),
-            LogTab::Events => ("Events", s.log.len()),
-            LogTab::Problems => (
-                "Problems",
-                s.log.iter().filter(|e| e.kind == LogKind::Error).count(),
-            ),
-        }
+    let (title, count): (&str, usize) = match tab {
+        LogTab::History => ("History", state.read().project.history.len()),
+        LogTab::Events => ("Events", state.read().log.len()),
+        // Problems counts live error diagnostics (validation ∪ execution), not log rows.
+        LogTab::Problems => ("Problems", crate::diagnostics::total_errors()),
     };
 
     rsx! {
@@ -53,7 +54,11 @@ pub fn Drawer() -> Element {
                 span { class: "title", "{title}" }
                 span { class: "count", "{count}" }
                 div { class: "spacer" }
-                button { class: "txtbtn", onclick: move |_| dispatch(state, Action::ClearDrawer), "Clear" }
+                // No Clear on Problems — they're live diagnostics that clear
+                // themselves when the SQL is fixed (or the query re-run).
+                if tab != LogTab::Problems {
+                    button { class: "txtbtn", onclick: move |_| dispatch(state, Action::ClearDrawer), "Clear" }
+                }
                 button { class: "iconbtn", title: "Expand / collapse", onclick: move |_| dispatch(state, Action::ToggleLogHeight),
                     svg {
                         width: "14", height: "14", "viewBox": "0 0 24 24", fill: "none",
@@ -156,78 +161,68 @@ fn events_body(state: Signal<AppState>) -> Element {
     }
 }
 
-/// Problems tab: `error`-kind events grouped by owning query tab (sticky headers),
-/// flat one-liner rows with a `line:col` ref; click a row → switch to its tab.
+/// Problems tab: each tab's live diagnostics (validation + execution) grouped
+/// under a sticky per-tab header, flat one-liner rows with an optional class chip
+/// and `line:col` ref; click a row → switch to that tab. Sourced from
+/// `crate::diagnostics` (NOT the event log), so a fixed problem clears itself.
 fn problems_body(state: Signal<AppState>) -> Element {
-    let snap = crate::session::snapshot();
-    let name_of = |ws: Option<u64>| -> String {
-        match ws {
-            Some(id) => snap
-                .workspaces
-                .iter()
-                .find(|w| w.id == id)
-                .map(|w| w.name.clone())
-                .unwrap_or_else(|| "closed tab".into()),
-            None => "General".into(),
-        }
-    };
-    let errors: Vec<(u64, String, Option<String>, Option<u64>)> = state
-        .read()
-        .log
-        .iter()
-        .filter(|e| e.kind == LogKind::Error)
-        .map(|e| {
-            (
-                e.id,
-                e.msg.clone(),
-                e.err.as_ref().and_then(|q| q.loc.clone()),
-                e.ws,
-            )
-        })
-        .collect();
+    use crate::diagnostics::{Diagnostic, Severity};
 
-    if errors.is_empty() {
+    // Iterate the reactive session store so the view tracks the tab set, and read
+    // each tab's diagnostics reactively (validation slice ∪ execution error).
+    let sess = crate::session::store();
+    let mut groups: Vec<(u64, String, Vec<Diagnostic>)> = Vec::new();
+    for w in sess.workspaces().iter() {
+        let id = w.id().cloned();
+        let diags = crate::diagnostics::problems_for(id);
+        if !diags.is_empty() {
+            groups.push((id, w.name().cloned(), diags));
+        }
+    }
+
+    if groups.is_empty() {
         return rsx! {
             div { class: "prob-empty",
                 {icons::check(26)}
-                div { "No problems — queries are clean" }
+                div { "No problems detected" }
             }
         };
     }
 
-    // Group by owning tab, first-seen order.
-    let mut groups: Vec<(Option<u64>, Vec<(u64, String, Option<String>)>)> = Vec::new();
-    for (id, msg, loc, ws) in errors {
-        if let Some(g) = groups.iter_mut().find(|(gws, _)| *gws == ws) {
-            g.1.push((id, msg, loc));
-        } else {
-            groups.push((ws, vec![(id, msg, loc)]));
-        }
-    }
-
     rsx! {
         div { class: "ps-log-body ps-scroll",
-            for (ws, rows) in groups {
+            for (id, name, diags) in groups {
                 {
-                    let gname = name_of(ws);
-                    let n = rows.len();
+                    let n = diags.len();
                     let gcount = format!("{n} problem{}", if n == 1 { "" } else { "s" });
                     rsx! {
                         div { class: "prob-group",
                             {icons::file(14)}
-                            span { class: "prob-gname", "{gname}" }
+                            span { class: "prob-gname", "{name}" }
                             span { class: "prob-gcount", "{gcount}" }
                         }
-                        for (id, msg, loc) in rows {
-                            div {
-                                key: "p{id}",
-                                class: "prob-row",
-                                title: "Go to source",
-                                onclick: move |_| { if let Some(w) = ws { dispatch(state, Action::SwitchTab(w)); } },
-                                {icons::problems(15)}
-                                span { class: "prob-msg", "{msg}" }
-                                if let Some(l) = loc {
-                                    span { class: "prob-loc", "{l}" }
+                        for (i, d) in diags.into_iter().enumerate() {
+                            {
+                                let (row_cls, sev_icon) = match d.severity {
+                                    Severity::Error => ("prob-row err", icons::problems(15)),
+                                    Severity::Warning => ("prob-row warn", icons::warning(15)),
+                                    Severity::Info => ("prob-row info", icons::events(15)),
+                                };
+                                rsx! {
+                                    div {
+                                        key: "p{id}-{i}",
+                                        class: "{row_cls}",
+                                        title: "Go to source",
+                                        onclick: move |_| dispatch(state, Action::SwitchTab(id)),
+                                        {sev_icon}
+                                        span { class: "prob-msg", "{d.message}" }
+                                        if let Some(code) = d.code.clone() {
+                                            span { class: "prob-code", "{code}" }
+                                        }
+                                        if let Some(l) = d.loc.clone() {
+                                            span { class: "prob-loc", "{l}" }
+                                        }
+                                    }
                                 }
                             }
                         }

@@ -12,6 +12,7 @@ mod action;
 mod app;
 mod config;
 mod ddl;
+mod diagnostics;
 mod engine;
 mod menu;
 mod overlays;

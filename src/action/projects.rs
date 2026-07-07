@@ -343,6 +343,7 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
         // reactive session store (`load_from_dir` / `reset_blank`); drop the
         // previous project's runs so a reused id can't inherit stale results.
         crate::runs::clear();
+        crate::diagnostics::clear();
         s.set_status(LogKind::Ok, format!("Opened project '{name}'"));
     }
 

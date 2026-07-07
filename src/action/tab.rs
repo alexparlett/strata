@@ -123,6 +123,7 @@ fn close_ids(mut state: Signal<AppState>, ids: &HashSet<WorkspaceId>) {
     };
     crate::session::remove_ids(ids);
     crate::runs::drop_ids(ids);
+    crate::diagnostics::drop_ids(ids);
     if let Some(tx) = tx {
         for (id, ..) in &removed {
             let _ = tx.send(Command::CleanupWorkspace { ws_id: *id });

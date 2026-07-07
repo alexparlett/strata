@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 
-use crate::state::{AppState, LogKind, LogTab};
+use crate::state::{AppState, LogTab};
 
 /// Close every remaining `AppState`-backed overlay (Esc, backdrop clicks). The
 /// container-based overlays (menus, remove-confirm, cell view) and the
@@ -71,14 +71,15 @@ pub fn toggle_log(mut state: Signal<AppState>) {
     s.log_open = !s.log_open;
 }
 
-/// Clear the active drawer tab: the events list, or the project's query history.
+/// Clear the active drawer tab.
 pub fn clear_drawer(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    match s.log_tab {
-        LogTab::Events => s.log.clear(),
-        LogTab::History => s.project.history.clear(),
-        // Problems is a filtered view of error events — clearing it removes them.
-        LogTab::Problems => s.log.retain(|e| e.kind != LogKind::Error),
+    let tab = state.read().log_tab;
+    match tab {
+        LogTab::Events => state.write().log.clear(),
+        LogTab::History => state.write().project.history.clear(),
+        // Problems has no Clear button (they're live diagnostics — a fixed problem
+        // clears itself). Kept as an exhaustive no-op arm.
+        LogTab::Problems => {}
     }
 }
 

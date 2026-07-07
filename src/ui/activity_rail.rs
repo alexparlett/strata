@@ -7,17 +7,20 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::{AppState, LogKind, LogTab};
+use crate::state::{AppState, LogTab};
 use crate::ui::icons;
 
 #[component]
 pub(crate) fn ActivityRail() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let (sidebar_open, log_open, log_tab, problem_count) = {
+    let (sidebar_open, log_open, log_tab) = {
         let s = state.read();
-        let n = s.log.iter().filter(|e| e.kind == LogKind::Error).count();
-        (s.sidebar_open, s.log_open, s.log_tab, n)
+        (s.sidebar_open, s.log_open, s.log_tab)
     };
+    // Live error-diagnostic count across all tabs (validation ∪ execution). Reads
+    // the session + diagnostics + runs stores reactively, so the badge tracks
+    // problems as they appear and clear — no query run required.
+    let problem_count = crate::diagnostics::total_errors();
     let on = |t: LogTab| log_open && log_tab == t;
 
     rsx! {
@@ -35,7 +38,8 @@ pub(crate) fn ActivityRail() -> Element {
     }
 }
 
-/// One rail button: active accent stripe + an optional red count badge (Problems).
+/// One rail button: active = accent-soft tint + accent icon (per design's
+/// `_railStyle`); an optional red count badge (Problems).
 fn rail_btn(
     state: Signal<AppState>,
     title: &str,
@@ -50,9 +54,6 @@ fn rail_btn(
             class: "{cls}",
             title: "{title}",
             onclick: move |_| dispatch(state, action.clone()),
-            if active {
-                span { class: "rail-stripe" }
-            }
             {icon}
             if let Some(n) = badge {
                 if n > 0 {

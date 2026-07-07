@@ -27,7 +27,6 @@ pub(crate) fn Tabs() -> Element {
     let mut renaming = use_signal(|| None::<WorkspaceId>);
     let mut rename_val = use_signal(String::new);
 
-    let sidebar_open = state.read().sidebar_open;
     // Read the active id + each entry through their lenses, so a `switch`
     // (`.active().set`) or a structural / per-field write re-renders the strip —
     // matching how `session` mutates the store.
@@ -49,11 +48,6 @@ pub(crate) fn Tabs() -> Element {
                 let c = e.client_coordinates();
                 tab_menu.set(Some((active, Point { x: c.x, y: c.y })));
             },
-            if !sidebar_open {
-                button { class: "icon-btn plain", style: "width:28px;height:28px;margin-bottom:1px;",
-                    title: "Show panel", onclick: move |_| dispatch(state, Action::ToggleSidebar),
-                    {icons::expand_right(15)} }
-            }
             div { class: "ws-tabs-scroll",
             for (id, name, dirty) in ws {
                 {

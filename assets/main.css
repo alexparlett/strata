@@ -165,10 +165,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .ps-panes { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .act-rail { width: 48px; flex: none; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 3px; }
 .act-rail .rail-spacer { flex: 1; }
-.rail-btn { position: relative; width: 34px; height: 34px; flex: none; border: none; background: transparent; color: var(--dim2); border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.rail-btn { position: relative; width: 40px; height: 38px; flex: none; border: none; background: transparent; color: var(--dim2); border-radius: 9px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .rail-btn:hover { background: var(--elev2); color: var(--text2); }
-.rail-btn.on { background: var(--elev2); color: var(--accent); }
-.rail-btn .rail-stripe { position: absolute; left: -7px; top: 8px; bottom: 8px; width: 2.5px; border-radius: 0 2px 2px 0; background: var(--accent); }
+.rail-btn.on { background: var(--accent-soft); color: var(--accent); }
 .rail-btn .rail-badge { position: absolute; top: 0; right: 0; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; background: var(--red2); color: #fff; font: 700 9px var(--mono); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--panel); }
 
 /* ---------- collapsed sidebar rail (B9) ---------- */
@@ -644,8 +643,11 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .prob-gname { font: 600 12px var(--ui); color: var(--text2); }
 .prob-gcount { font: 400 11px var(--ui); color: var(--faint); }
 .prob-row { display: flex; align-items: center; gap: 9px; padding: 4px 14px 4px 32px; cursor: pointer; color: var(--red); }
+.prob-row.warn { color: var(--orange); }
+.prob-row.info { color: var(--dim2); }
 .prob-row:hover { background: var(--elev2); }
 .prob-msg { flex: 1; min-width: 0; font: 400 12.5px var(--ui); color: var(--text2); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prob-code { font: 500 10.5px var(--mono); color: var(--faint); background: var(--elev2); padding: 1px 6px; border-radius: 4px; flex: none; }
 .prob-loc { font: 400 11.5px var(--mono); color: var(--faint); flex: none; }
 
 /* nested cell popover */
