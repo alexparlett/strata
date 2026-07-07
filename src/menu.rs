@@ -70,7 +70,7 @@ impl MenuCmd {
 
 impl From<MenuCmd> for MenuId {
     fn from(c: MenuCmd) -> MenuId {
-        MenuId::from(c.id())
+        MenuId(c.id())
     }
 }
 
