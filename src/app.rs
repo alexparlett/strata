@@ -6,7 +6,7 @@
 //! holds the component, the engine wiring, and the engine→state reducer
 //! ([`apply_event`]).
 
-use dioxus::desktop::use_wry_event_handler;
+use dioxus::desktop::{use_muda_event_handler, use_wry_event_handler};
 use dioxus::prelude::*;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -85,8 +85,30 @@ pub fn ProjectRoot(open_path: String) -> Element {
                     use dioxus::desktop::tao::window::Theme;
                     crate::settings::set_os_dark(*theme == Theme::Dark);
                 }
+                // Track focus so the app-global native menu (S11) routes File
+                // commands to this window only when it is the key window.
+                WindowEvent::Focused(focused) => {
+                    crate::window::note_focused(win_id, *focused);
+                }
                 _ => {}
             }
+        }
+    });
+
+    // Native File-menu commands (S11). The macOS menu is app-global and its events
+    // carry only the item id, so act only when this is the focused window; relay the
+    // id into a signal a `use_effect` consumes, so the (async) open-folder dialog
+    // runs with a reactive scope.
+    let mut menu_cmd = use_signal(|| None::<String>);
+    use_muda_event_handler(move |ev| {
+        if crate::window::is_focused_window(win_id) {
+            menu_cmd.set(Some(ev.id.0.clone()));
+        }
+    });
+    use_effect(move || {
+        if let Some(id) = menu_cmd() {
+            menu_cmd.set(None);
+            crate::menu::run_project_command(state, &id);
         }
     });
 

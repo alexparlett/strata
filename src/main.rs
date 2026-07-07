@@ -13,6 +13,7 @@ mod app;
 mod config;
 mod ddl;
 mod engine;
+mod menu;
 mod overlays;
 mod plan;
 mod project;
