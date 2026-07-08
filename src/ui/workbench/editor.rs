@@ -125,6 +125,8 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     oncaret: move |caret: usize| refresh_completion(state, ws, comp, comp_gen, caret),
                     onkeydown: move |e: KeyboardEvent| handle_completion_key(ws, comp, comp_gen, e),
                     onblur: move |_| close_completion(comp, comp_gen),
+                    // Clicking in the editor to move the caret keeps focus (no blur) — close too.
+                    onmousedown: move |_| close_completion(comp, comp_gen),
                     // Completion popup — rendered inside the viewport (children slot) so it
                     // shares the text coordinate system + `--dxc-editor-*` vars.
                     {completion_menu(ws, comp)}

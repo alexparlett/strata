@@ -501,10 +501,12 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   caret-color: var(--text); z-index: 2;
 }
 .dxc-editor-input::placeholder { color: var(--dim3); }
-/* Squiggle: wavy underline on the line's baseline, coloured by severity. */
+/* Squiggle: wavy underline on the line's baseline — error red for all validation
+   problems (a typo/syntax issue means the query won't run). */
 .dxc-squiggle {
   position: absolute;
   height: var(--dxc-editor-line-height);
+  color: var(--red2);
   background-repeat: repeat-x;
   background-position: left bottom;
   background-size: 6px 3px;
@@ -512,9 +514,6 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
     linear-gradient(45deg, transparent 65%, currentColor 80%, transparent 90%),
     linear-gradient(-45deg, transparent 65%, currentColor 80%, transparent 90%);
 }
-.dxc-squiggle.err { color: var(--red2); }
-.dxc-squiggle.warn { color: var(--orange); }
-.dxc-squiggle.info { color: var(--accent); }
 
 /* ---------- SQL autocomplete popup (S7) ---------- */
 .sql-comp {
