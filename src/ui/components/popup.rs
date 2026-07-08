@@ -28,19 +28,21 @@ pub fn Popup(
     card_class: Option<String>,
     /// Fixed card width in px (else content-sized).
     width: Option<u32>,
-    /// Hover/tooltip mode: drop the full-screen click-catcher backdrop and make the card
-    /// pointer-transparent (`pointer-events:none`), so it never steals clicks, selection,
-    /// or focus. Dismissal is the caller's job — unmount it when the pointer leaves.
-    /// (`on_close`/Esc are inert here.) Used by the editor's lint hover popover.
-    #[props(default = false)]
-    hover: bool,
+    /// Whether to render the full-screen click-catcher backdrop that dismisses on
+    /// outside-click / right-click / Esc (and grabs focus so Esc is caught). Default
+    /// `true` — a menu/dropdown. Pass `false` for a **hover tooltip**: no backdrop (so it
+    /// never steals the editor's focus nor swallows the `mousemove` that drives
+    /// show/hide) and a pointer-transparent card. Dismissal is then the caller's job —
+    /// unmount it on mouseleave. (`on_close`/Esc are inert.) Used by the lint popover.
+    #[props(default = true)]
+    backdrop: bool,
     children: Element,
 ) -> Element {
     let (x, y) = (at.x, at.y);
     let card = card_class.unwrap_or_else(|| "ctx-menu".to_string());
     let wstyle = width.map(|w| format!("width:{w}px;")).unwrap_or_default();
-    if hover {
-        // Bare positioned card, no backdrop, no pointer capture.
+    if !backdrop {
+        // Bare positioned card — no dismiss layer, pointer-transparent (a tooltip).
         return rsx! {
             div {
                 class: "{card}",

@@ -253,7 +253,7 @@ fn lint_popover(
         Popup {
             at: Point { x, y },
             card_class: "sql-lint-pop".to_string(),
-            hover: true,
+            backdrop: false,
             span { class: "sql-lint-ico", {icons::warning(13)} }
             span { class: "sql-lint-msg", "{msg}" }
         }
