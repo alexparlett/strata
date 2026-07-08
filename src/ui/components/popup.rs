@@ -107,6 +107,46 @@ impl RectAlign {
     pub const LEFT: RectAlign = RectAlign { parent: a2(Align::Min, Align::Center), child: a2(Align::Max, Align::Center) };
     pub const LEFT_END: RectAlign = RectAlign { parent: a2(Align::Min, Align::Max), child: a2(Align::Max, Align::Max) };
 
+    /// Flip along one/both axes — the alternatives tried by [`RectAlign::best`].
+    pub fn flip_x(self) -> Self {
+        RectAlign {
+            parent: Align2 { x: flip(self.parent.x), y: self.parent.y },
+            child: Align2 { x: flip(self.child.x), y: self.child.y },
+        }
+    }
+    pub fn flip_y(self) -> Self {
+        RectAlign {
+            parent: Align2 { x: self.parent.x, y: flip(self.parent.y) },
+            child: Align2 { x: self.child.x, y: flip(self.child.y) },
+        }
+    }
+    pub fn flip(self) -> Self {
+        self.flip_x().flip_y()
+    }
+
+    /// The child rect `(left, top, w, h)` this alignment would produce for `size`.
+    fn resolved(self, anchor: Rect, size: (f64, f64), gap: f64) -> (f64, f64, f64, f64) {
+        let gx = gap_sign(self.parent.x, self.child.x);
+        let gy = gap_sign(self.parent.y, self.child.y);
+        let ax = anchor.x + self.parent.x.frac() * anchor.w + gx * gap;
+        let ay = anchor.y + self.parent.y.frac() * anchor.h + gy * gap;
+        (ax - self.child.x.frac() * size.0, ay - self.child.y.frac() * size.1, size.0, size.1)
+    }
+
+    fn fits(self, anchor: Rect, size: (f64, f64), vp: (f64, f64), gap: f64) -> bool {
+        let (l, t, w, h) = self.resolved(anchor, size, gap);
+        l >= 0.0 && t >= 0.0 && l + w <= vp.0 && t + h <= vp.1
+    }
+
+    /// The first of `[self, flip_y, flip_x, flip]` whose popup (of `size`) fits inside the
+    /// `vp` viewport; else `self`. Egui's `find_best_align`, for edge auto-flipping.
+    pub fn best(self, anchor: Rect, size: (f64, f64), vp: (f64, f64), gap: f64) -> Self {
+        [self, self.flip_y(), self.flip_x(), self.flip()]
+            .into_iter()
+            .find(|a| a.fits(anchor, size, vp, gap))
+            .unwrap_or(self)
+    }
+
     /// The CSS `left/top/transform` that places the popup against `anchor`, pushed out by
     /// `gap` px along the placement side.
     pub fn style(self, anchor: Rect, gap: f64) -> String {
@@ -132,6 +172,23 @@ fn gap_sign(parent: Align, child: Align) -> f64 {
     }
 }
 
+/// Flip a single axis (Min↔Max; Center unchanged).
+fn flip(a: Align) -> Align {
+    match a {
+        Align::Min => Align::Max,
+        Align::Max => Align::Min,
+        Align::Center => Align::Center,
+    }
+}
+
+/// Viewport size in client (CSS) px = OS window physical size / scale factor.
+fn viewport() -> (f64, f64) {
+    let win = dioxus::desktop::window();
+    let sf = win.scale_factor();
+    let sz = win.inner_size();
+    (sz.width as f64 / sf, sz.height as f64 / sf)
+}
+
 /// A fixed-position card placed against `anchor` per `align`. `card_class` styles it
 /// (default the shared `ds-menu`); `children` is the body. Stops click/contextmenu
 /// propagation so, composed inside a [`Backdrop`], an inside-click doesn't dismiss it.
@@ -145,11 +202,25 @@ pub fn Popup(
 ) -> Element {
     let card = card_class.unwrap_or_else(|| "ds-menu".to_string());
     let wstyle = width.map(|w| format!("width:{w}px;")).unwrap_or_default();
-    let pos = align.style(anchor, 4.0);
+    // Effective alignment: starts at `align`, then auto-flips after measuring the card if
+    // the requested placement would overflow the viewport (egui `find_best_align`).
+    let mut eff = use_signal(|| align);
+    let pos = eff().style(anchor, 4.0);
     rsx! {
         div {
             class: "{card}",
             style: "position:fixed;{pos}{wstyle}z-index:78;",
+            onmounted: move |e| {
+                let m = e.data();
+                spawn(async move {
+                    if let Ok(r) = m.get_client_rect().await {
+                        let best = align.best(anchor, (r.size.width, r.size.height), viewport(), 4.0);
+                        if *eff.peek() != best {
+                            eff.set(best);
+                        }
+                    }
+                });
+            },
             onclick: move |e| e.stop_propagation(),
             oncontextmenu: move |e| e.stop_propagation(),
             {children}
