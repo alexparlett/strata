@@ -67,7 +67,6 @@ fn use_revalidate(state: Signal<AppState>, ws: Store<crate::session::Workspace>)
                 return; // superseded by a newer edit
             }
             let diags = crate::sql::analyze(&sql, &catalog);
-            tracing::info!("revalidate tab {id}: {} diagnostic(s)", diags.len());
             crate::diagnostics::set(id, diags);
         });
     });
