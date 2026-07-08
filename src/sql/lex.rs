@@ -9,9 +9,17 @@
 
 use std::ops::Range;
 
-use datafusion::sql::sqlparser::dialect::GenericDialect;
+use datafusion::sql::sqlparser::dialect::{Dialect, GenericDialect};
 use datafusion::sql::sqlparser::keywords::Keyword;
 use datafusion::sql::sqlparser::tokenizer::{Token, Tokenizer};
+
+/// Whether `ch` continues a SQL identifier/word, per DataFusion's parser dialect
+/// (`GenericDialect` — its default; the tokeniser below uses the same one). Used for
+/// completion's word-boundary + dismiss logic so it matches the parser's notion of a
+/// word rather than a hardcoded character set.
+pub fn is_word_char(ch: char) -> bool {
+    GenericDialect {}.is_identifier_part(ch)
+}
 
 /// One lexical token with a byte-offset span into the source.
 #[derive(Clone, Debug, PartialEq)]

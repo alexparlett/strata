@@ -194,10 +194,12 @@ fn refresh_completion(
     caret: usize,
 ) {
     let sql = ws.sql().cloned();
+    // "Typing a word" = the char before the caret continues an identifier (per the
+    // parser dialect), or is `.` (member access → re-trigger for that table's columns).
     let typing = sql
         .get(..caret)
         .and_then(|s| s.chars().last())
-        .map(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        .map(|c| crate::sql::is_word_char(c) || c == '.')
         .unwrap_or(false);
     if !typing {
         // A word boundary (space, punctuation, …) dismisses the popup immediately.
@@ -273,19 +275,18 @@ fn handle_completion_key(
             close_completion(comp, comp_gen);
             e.prevent_default();
         }
-        Key::Character(s) => match s.as_str() {
-            // Space dismisses the popup and is NOT inserted (you don't want it doubled).
-            " " => {
-                close_completion(comp, comp_gen);
-                e.prevent_default();
-            }
-            // SQL punctuation dismisses the popup but still types (a following `.`
-            // naturally re-opens completion for that table's columns).
-            "." | "\"" | "'" | ";" | "(" | ")" | "[" | "]" | "{" | "}" => {
-                close_completion(comp, comp_gen);
-            }
-            _ => {}
-        },
+        // Space dismisses the popup and is NOT inserted (you don't want it doubled).
+        Key::Character(s) if s == " " => {
+            close_completion(comp, comp_gen);
+            e.prevent_default();
+        }
+        // Any non-word character (per the dialect) dismisses the popup — punctuation,
+        // operators, brackets, `.`, `;`, quotes — but still types. A following `.`
+        // re-opens completion for that table's columns.
+        Key::Character(s) if s.chars().next().map_or(false, |c| !crate::sql::is_word_char(c)) => {
+            close_completion(comp, comp_gen);
+        }
+        // Word characters: leave the popup open — refresh_completion updates it.
         _ => {}
     }
 }

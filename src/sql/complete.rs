@@ -34,22 +34,36 @@ pub struct Completion {
 
 /// Curated multi-word phrases — `sqlparser` keywords are single tokens, so these read
 /// nicer as one completion (`GROUP BY` not `GROUP` then `BY`). Offered alongside the
-/// full single-word `ALL_KEYWORDS` set (query keywords only).
+/// full single-word `ALL_KEYWORDS` set. Query-only; every word here must be a keyword
+/// we *don't* block below, so the phrase and its parts stay consistent.
 const MULTI_WORD: &[&str] = &[
-    "GROUP BY", "ORDER BY", "PARTITION BY", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN",
-    "FULL JOIN", "CROSS JOIN", "LEFT OUTER JOIN", "RIGHT OUTER JOIN", "FULL OUTER JOIN",
-    "UNION ALL", "IS NULL", "IS NOT NULL", "NOT IN", "IS DISTINCT FROM",
+    // clauses
+    "GROUP BY", "ORDER BY", "PARTITION BY", "UNION ALL",
+    // joins (incl. DataFusion's semi/anti/natural — see the SELECT reference)
+    "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN", "NATURAL JOIN",
+    "LEFT OUTER JOIN", "RIGHT OUTER JOIN", "FULL OUTER JOIN",
+    "LEFT SEMI JOIN", "RIGHT SEMI JOIN", "LEFT ANTI JOIN", "RIGHT ANTI JOIN",
+    // predicates
+    "IS NULL", "IS NOT NULL", "NOT IN", "IS DISTINCT FROM", "IS NOT DISTINCT FROM",
 ];
 
 /// DDL/DML keywords excluded from completion — those statements are blocked in the
-/// editor (`crate::ddl` allows only queries + CREATE/DROP VIEW via the UI), so offering
-/// them would mislead. Filtered (case-insensitively) out of `ALL_KEYWORDS`.
+/// editor (`crate::ddl` allows only queries + CREATE/DROP VIEW via the UI, and SET /
+/// SHOW / RESET stay), so offering them would mislead. Filtered (case-insensitively)
+/// out of `ALL_KEYWORDS`. (Scalar fns like `replace` still come from the engine
+/// registry, so blocking the *keyword* doesn't hide the function.)
 const BLOCKED_KEYWORDS: &[&str] = &[
-    "CREATE", "TABLE", "EXTERNAL", "DATABASE", "SCHEMA", "DROP", "ALTER", "TRUNCATE",
-    "RENAME", "INSERT", "INTO", "UPDATE", "DELETE", "COPY", "MERGE", "UPSERT", "REPLACE",
-    "GRANT", "REVOKE", "COMMIT", "ROLLBACK", "SAVEPOINT", "BEGIN", "START", "TRANSACTION",
-    "LOCK", "UNLOCK", "CONSTRAINT", "REFERENCES", "INDEX", "SEQUENCE", "TRIGGER",
-    "PROCEDURE", "STORED", "OVERWRITE", "VACUUM",
+    // create / drop / alter surface
+    "CREATE", "TABLE", "VIEW", "EXTERNAL", "DATABASE", "SCHEMA", "DROP", "ALTER",
+    "TRUNCATE", "RENAME", "CASCADE", "RESTRICT", "TEMPORARY", "TEMP", "UNLOGGED",
+    // data mutation
+    "INSERT", "INTO", "UPDATE", "DELETE", "COPY", "MERGE", "UPSERT", "REPLACE",
+    "OVERWRITE", "VACUUM",
+    // transactions / permissions
+    "GRANT", "REVOKE", "COMMIT", "ROLLBACK", "SAVEPOINT", "BEGIN", "START",
+    "TRANSACTION", "LOCK", "UNLOCK",
+    // schema objects
+    "CONSTRAINT", "REFERENCES", "INDEX", "SEQUENCE", "TRIGGER", "PROCEDURE", "STORED",
 ];
 
 /// Completions for the caret at byte `caret` in `sql`.

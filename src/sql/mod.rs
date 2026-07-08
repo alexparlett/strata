@@ -19,6 +19,7 @@ pub mod symbols;
 pub mod validate;
 
 pub use complete::{complete, Completion, CompletionKind};
+pub use lex::is_word_char;
 pub use symbols::{Catalog, ColumnSym, TableSym};
 pub use validate::analyze;
 
