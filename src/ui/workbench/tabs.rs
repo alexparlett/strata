@@ -12,7 +12,7 @@ use dioxus_stores::*;
 use crate::action::{dispatch, Action};
 use crate::session::{SessionStoreExt, WorkspaceId, WorkspaceStoreExt};
 use crate::state::AppState;
-use crate::ui::components::{MenuItem, MenuSep, Point, Popup};
+use crate::ui::components::{Backdrop, ContextMenu, MenuItem, MenuSep, Point, Popup};
 use crate::ui::icons;
 
 #[component]
@@ -124,22 +124,26 @@ pub(crate) fn Tabs() -> Element {
                     {icons::dots(15)} }
             }
 
-            // Self-contained tab context menu (egui-style Popup container).
+            // Self-contained tab context menu (right-click → ContextMenu).
             if let Some((id, at)) = tab_menu() {
-                Popup { on_close: move |_| tab_menu.set(None), at,
+                ContextMenu { on_close: move |_| tab_menu.set(None), at: Some(at),
                     {tab_menu_items(state, tab_menu, renaming, rename_val, id)}
                 }
             }
             // ⋯ overflow menu — whole-strip actions (S8).
             if let Some(at) = overflow_menu() {
-                Popup { on_close: move |_| overflow_menu.set(None), at,
-                    {overflow_menu_items(state, overflow_menu, active, !state.read().closed_tabs.is_empty())}
+                Backdrop { on_close: move |_| overflow_menu.set(None),
+                    Popup { at,
+                        {overflow_menu_items(state, overflow_menu, active, !state.read().closed_tabs.is_empty())}
+                    }
                 }
             }
             // "Show all tabs" searchable popover (S8).
             if let Some(at) = tab_list() {
-                Popup { on_close: move |_| tab_list.set(None), at, card_class: "menu".to_string(), width: 320,
-                    {tab_list_body(state, tab_list, tab_list_query, active)}
+                Backdrop { on_close: move |_| tab_list.set(None),
+                    Popup { at, card_class: "menu".to_string(), width: 320,
+                        {tab_list_body(state, tab_list, tab_list_query, active)}
+                    }
                 }
             }
         }

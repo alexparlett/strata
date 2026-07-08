@@ -7,7 +7,7 @@
 
 use dioxus::prelude::*;
 
-use super::popup::{Point, Popup};
+use super::popup::{Backdrop, Point, Popup};
 
 /// Right-click menu. `at` is `Some(point)` (the cursor anchor) while open, `None` closed;
 /// `on_close` clears it. Children are the menu rows (`.ds-menu-item` / `.ds-menu-sep`).
@@ -20,12 +20,13 @@ pub fn ContextMenu(
 ) -> Element {
     rsx! {
         if let Some(p) = at {
-            Popup {
-                on_close: move |_| on_close.call(()),
-                at: p,
-                card_class: "ds-menu".to_string(),
-                width: if width > 0 { Some(width) } else { None },
-                {children}
+            Backdrop { on_close: move |_| on_close.call(()),
+                Popup {
+                    at: p,
+                    card_class: "ds-menu".to_string(),
+                    width: if width > 0 { Some(width) } else { None },
+                    {children}
+                }
             }
         }
     }

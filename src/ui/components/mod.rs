@@ -2,14 +2,17 @@
 //! from, independent of any one feature or `AppState`. Each component owns its own
 //! look and behaviour; callers hand in content (`children`) and callbacks.
 //!
-//! The **overlay** family (A3, egui-style containers you mount conditionally and hand
-//! `children` to — see `docs/OVERLAY_ARCHITECTURE.md`): the [`Popup`] (anchored card /
-//! optional dismiss backdrop), [`Dialog`] (centred, scrimmed), and [`Window`] (non-modal
-//! floating panel) containers plus the [`MenuItem`] / [`MenuSep`] menu primitives.
+//! The **overlay** family (A3, egui-style — see `docs/OVERLAY_ARCHITECTURE.md`). The base
+//! is [`Popup`]: a dumb fixed-position card. Everything composes it:
+//! - **menu / dropdown** = [`Backdrop`] `{ Popup { … } }` (backdrop owns dismiss + Esc + focus);
+//! - **tooltip** = [`Tooltip`] = `Popup` + the pointer-transparent `ds-float` class.
 //!
-//! On top of `Popup` (S29, design system — see `docs/DESIGN_SYSTEM.md`): [`Select`] (the
-//! single-select dropdown, trigger + `.ds-menu` card) and [`ContextMenu`] (right-click
-//! menu). The lint hover popover (S27) is a `Popup{backdrop:false}` styled as a `.ds-callout`.
+//! [`Dialog`] (centred, scrimmed) + [`Window`] (non-modal floating panel) are the other
+//! containers; [`MenuItem`] / [`MenuSep`] are the shared menu rows.
+//!
+//! On the base (S29, design system — see `docs/DESIGN_SYSTEM.md`): [`Select`] (single-
+//! select dropdown, trigger + `.ds-menu` card) and [`ContextMenu`] (right-click menu),
+//! both `Backdrop { Popup }` internally. The S27 lint hover is a `Tooltip` (`.ds-callout`).
 
 mod checkbox;
 mod context_menu;
@@ -17,12 +20,14 @@ mod dialog;
 mod menu;
 mod popup;
 mod select;
+mod tooltip;
 mod window;
 
 pub use checkbox::Checkbox;
 pub use context_menu::ContextMenu;
 pub use dialog::Dialog;
 pub use menu::{MenuItem, MenuSep};
-pub use popup::{Point, Popup};
+pub use popup::{Backdrop, Point, Popup};
 pub use select::{Select, SelectOption};
+pub use tooltip::Tooltip;
 pub use window::{WinGeom, Window};

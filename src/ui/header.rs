@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
-use crate::ui::components::{Point, Popup};
+use crate::ui::components::{Backdrop, Point, Popup};
 use crate::ui::icons;
 
 #[component]
@@ -47,12 +47,13 @@ pub fn Header() -> Element {
                 {icons::chevron_down(12)}
             }
             if proj_menu() {
-                Popup {
-                    on_close: move |_| proj_menu.set(false),
-                    at: Point { x: 232.0, y: 46.0 },
-                    card_class: "menu".to_string(),
-                    width: 328,
-                    {project_menu_body(state, proj_menu)}
+                Backdrop { on_close: move |_| proj_menu.set(false),
+                    Popup {
+                        at: Point { x: 232.0, y: 46.0 },
+                        card_class: "menu".to_string(),
+                        width: 328,
+                        {project_menu_body(state, proj_menu)}
+                    }
                 }
             }
 

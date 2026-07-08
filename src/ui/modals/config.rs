@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use crate::action::{dispatch, Action};
 use crate::overlays::ConfigTarget;
 use crate::state::{AppState, ConfigForm};
-use crate::ui::components::{WinGeom, Window};
+use crate::ui::components::{Select, SelectOption, WinGeom, Window};
 use crate::ui::icons;
 
 // ---------------------------------------------------------------------------
@@ -233,7 +233,6 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
     let editing = d.editing.is_some();
     let name = d.name.clone();
     let format = d.format.clone();
-    let fmt_open = d.fmt_open;
     let sources = d.sources.clone();
     let hive_on = d.hive_on;
     let part_cols = d.part_cols.clone();
@@ -325,21 +324,18 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                             input { class: "text-input", value: "{name}", placeholder: "my_table",
                                 oninput: move |e| draft.write().name = e.value() }
                         }
-                        div { style: "position:relative;",
+                        div {
                             div { class: "field-label", "FORMAT" }
-                            button { class: "btn", style: "width:128px;height:34px;justify-content:space-between;",
-                                onclick: move |_| { let mut w = draft.write(); w.fmt_open = !w.fmt_open; },
-                                "{format}" {icons::chevron_down(12)}
-                            }
-                            if fmt_open {
-                                div { class: "menu", style: "position:absolute;top:60px;left:0;width:128px;z-index:5;",
-                                    for f in ["parquet", "csv", "json", "arrow"] {
-                                        button { class: "menu-item mono", style: "font-size:11.5px;",
-                                            onclick: move |_| { { let mut w = draft.write(); w.format = f.to_string(); w.fmt_open = false; } rescan(draft, state); },
-                                            "{f}"
-                                        }
-                                    }
-                                }
+                            Select {
+                                value: format.clone(),
+                                width: 128,
+                                options: vec![
+                                    SelectOption::new("parquet", "parquet"),
+                                    SelectOption::new("csv", "csv"),
+                                    SelectOption::new("json", "json"),
+                                    SelectOption::new("arrow", "arrow"),
+                                ],
+                                on_select: move |v: String| { draft.write().format = v; rescan(draft, state); },
                             }
                         }
                     }

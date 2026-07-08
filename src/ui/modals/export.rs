@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, ExportForm};
-use crate::ui::components::{WinGeom, Window};
+use crate::ui::components::{Select, SelectOption, WinGeom, Window};
 use crate::ui::icons;
 
 // ---------------------------------------------------------------------------
@@ -122,10 +122,20 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                 }
                             },
                             "parquet" => rsx! {
-                                div { class: "row", style: "gap:8px;align-items:center;flex-wrap:wrap;",
+                                div { class: "row", style: "gap:8px;align-items:center;",
                                     span { class: "opt-lbl", "Compression" }
-                                    for (v, l) in [("zstd", "zstd"), ("snappy", "snappy"), ("gzip", "gzip"), ("brotli", "brotli"), ("lz4", "lz4"), ("none", "none")] {
-                                        button { class: if ex.pq_compression == v { "seg on" } else { "seg" }, onclick: move |_| { export.write().pq_compression = v.to_string(); }, "{l}" }
+                                    Select {
+                                        value: ex.pq_compression.clone(),
+                                        width: 140,
+                                        options: vec![
+                                            SelectOption::new("zstd", "zstd"),
+                                            SelectOption::new("snappy", "snappy"),
+                                            SelectOption::new("gzip", "gzip"),
+                                            SelectOption::new("brotli", "brotli"),
+                                            SelectOption::new("lz4", "lz4"),
+                                            SelectOption::new("none", "none"),
+                                        ],
+                                        on_select: move |v: String| { export.write().pq_compression = v; },
                                     }
                                 }
                                 if matches!(ex.pq_compression.as_str(), "zstd" | "gzip" | "brotli") {

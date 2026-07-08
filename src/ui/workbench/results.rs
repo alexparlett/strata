@@ -14,6 +14,7 @@ use crate::action::{dispatch, Action};
 use crate::runs::ResultsView;
 use crate::session::WorkspaceId;
 use crate::state::AppState;
+use crate::ui::components::{Select, SelectOption};
 use crate::ui::icons;
 
 /// Results = optional toolbar (grid/chart) + the state body + the unified status bar.
@@ -383,23 +384,21 @@ fn pager_controls(
     page: usize,
     page_size: usize,
 ) -> Element {
-    let page_size_open = state.read().page_size_open;
     let page_count = ((total as f64) / (page_size as f64)).ceil().max(1.0) as usize;
     rsx! {
-        div { style: "position:relative;",
-            button { class: "btn sm", style: "height:26px;",
-                onclick: move |_| dispatch(state, Action::TogglePageSizeMenu),
-                "{page_size} / page" {icons::chevron_down(11)}
-            }
-            if page_size_open {
-                div { class: "menu", style: "position:absolute;bottom:32px;right:0;width:120px;z-index:6;",
-                    for sz in [50usize, 100, 500, 1000] {
-                        button { class: "menu-item mono",
-                            onclick: move |_| dispatch(state, Action::SetPageSize(sz)),
-                            "{sz} / page" }
-                    }
-                }
-            }
+        Select {
+            value: page_size.to_string(),
+            width: 118,
+            up: true,
+            options: vec![
+                SelectOption::new("50", "50 / page"),
+                SelectOption::new("100", "100 / page"),
+                SelectOption::new("500", "500 / page"),
+                SelectOption::new("1000", "1,000 / page"),
+            ],
+            on_select: move |v: String| {
+                if let Ok(n) = v.parse::<usize>() { dispatch(state, Action::SetPageSize(n)); }
+            },
         }
         div { style: "width:1px;height:18px;background:var(--line);" }
         div { class: "row", style: "gap:3px;",

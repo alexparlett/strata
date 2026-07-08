@@ -6,7 +6,7 @@
 
 use dioxus::prelude::*;
 
-use super::popup::{Point, Popup};
+use super::popup::{Backdrop, Point, Popup};
 use crate::ui::icons;
 
 /// One option in a [`Select`]: the stored `value` + its display `label`.
@@ -38,9 +38,12 @@ pub fn Select(
     on_select: EventHandler<String>,
     #[props(default = 160)] width: u32,
     #[props(into, default)] placeholder: String,
+    /// Open the menu **above** the trigger (for bottom-anchored triggers, e.g. the pager).
+    #[props(default)] up: bool,
 ) -> Element {
     let mut open = use_signal(|| false);
     let mut anchor = use_signal(|| Point { x: 0.0, y: 0.0 });
+    let n = options.len();
 
     let current = options
         .iter()
@@ -59,23 +62,30 @@ pub fn Select(
             class: "ds-select",
             style: "width:{width}px;",
             // Trigger client top-left = cursor client − cursor element offset (constant for
-            // the element); anchor the menu one trigger-height below it.
+            // the element). Anchor the menu just below the trigger — or, for `up`, above it
+            // (estimated menu height = rows·31 + card padding, no async measurement).
             onclick: move |e: MouseEvent| {
                 let cp = e.client_coordinates();
                 let ep = e.element_coordinates();
-                anchor.set(Point { x: cp.x - ep.x, y: cp.y - ep.y + TRIGGER_H + 4.0 });
+                let (left, top) = (cp.x - ep.x, cp.y - ep.y);
+                let y = if up {
+                    top - (n as f64 * 31.0 + 8.0) - 4.0
+                } else {
+                    top + TRIGGER_H + 4.0
+                };
+                anchor.set(Point { x: left, y });
                 open.set(!open());
             },
             span { class: "ds-select-val", "{current}" }
             {icons::chevron_down(12)}
         }
         if open() {
-            Popup {
-                on_close: move |_| open.set(false),
-                at: anchor(),
-                card_class: "ds-menu".to_string(),
-                width,
-                for opt in options.iter().cloned() {
+            Backdrop { on_close: move |_| open.set(false),
+                Popup {
+                    at: anchor(),
+                    card_class: "ds-menu".to_string(),
+                    width,
+                    for opt in options.iter().cloned() {
                     {
                         let selected = opt.value == value;
                         let picked = opt.value.clone();
@@ -94,6 +104,7 @@ pub fn Select(
                                 }
                             }
                         }
+                    }
                     }
                 }
             }

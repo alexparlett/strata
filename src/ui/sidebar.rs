@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind, RemoveTarget};
-use crate::ui::components::{Dialog, MenuItem, MenuSep, Point, Popup};
+use crate::ui::components::{ContextMenu, Dialog, MenuItem, MenuSep, Point};
 use crate::ui::icons;
 
 /// A catalog row's open context menu (self-contained sidebar state).
@@ -84,9 +84,9 @@ pub fn Sidebar() -> Element {
                 }
             }
 
-            // Self-contained catalog row menu (egui-style Popup container).
+            // Self-contained catalog row menu (right-click → ContextMenu).
             if let Some(t) = menu() {
-                Popup { on_close: move |_| menu.set(None), at: t.at,
+                ContextMenu { on_close: move |_| menu.set(None), at: Some(t.at),
                     {catalog_menu_items(state, menu, remove, t)}
                 }
             }

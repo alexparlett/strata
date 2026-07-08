@@ -583,6 +583,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .ds-menu-item.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
 .ds-menu-item.danger { color: var(--red2); }
 .ds-menu-item.disabled { opacity: .5; pointer-events: none; }
+.ds-menu-item .ds-mi-ico { flex: none; display: flex; color: var(--dim); }
+.ds-menu-item.sel .ds-mi-ico, .ds-menu-item.danger .ds-mi-ico { color: inherit; }
 .ds-menu-item .ds-mi-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .ds-menu-item .ds-mi-check { flex: none; display: flex; color: var(--accent); }
 .ds-menu-sep { height: 1px; background: var(--grid-line); margin: 4px 6px; }
@@ -596,6 +598,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 }
 .ds-callout .ds-callout-ico { flex: none; display: flex; margin-top: 1px; }
 .ds-callout .ds-callout-msg { font: 400 12px/1.5 var(--ui); word-break: break-word; }
+/* Pointer-transparent floating card — the only thing that makes a `Popup` a `Tooltip`. */
+.ds-float { pointer-events: none; }
 .ds-callout.err {
   background: color-mix(in srgb, var(--red2) 10%, var(--elev));
   border: 1px solid color-mix(in srgb, var(--red2) 32%, transparent);

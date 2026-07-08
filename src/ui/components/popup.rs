@@ -1,62 +1,60 @@
-//! `Popup` — an anchored, self-contained overlay container (context menu /
-//! dropdown). egui-style: mount it conditionally (`if open { Popup { … } }`) and it
-//! owns positioning, the full-screen click-catcher, Esc handling, and dismissal via
-//! `on_close`. The caller owns *whether* it's mounted (a local `use_signal`) and
-//! supplies the body as `children`. No central `AppState` enum, no reducer. See
+//! `Popup` — the **generic positioned-card base**: a single fixed-position card at a
+//! client `Point`, nothing else. No dismissal, no focus, no branching — those are
+//! *composed* around it:
+//!
+//! - a dismissable menu / dropdown = [`Backdrop`] `{ Popup { … } }` (the backdrop owns the
+//!   click-catcher / Esc / focus + `on_close`);
+//! - a hover tooltip = [`Tooltip`](super::tooltip::Tooltip), which is `Popup` + a
+//!   pointer-transparent class.
+//!
+//! Keeping `Popup` a dumb positioner is what lets both reuse it. See
 //! `docs/OVERLAY_ARCHITECTURE.md`.
 
 use dioxus::prelude::*;
 
-/// A screen point in client pixels — a popup's anchor.
+/// A screen point in client pixels — an overlay's anchor.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
 }
 
-/// Anchored popup container (context menu / dropdown). Mount it conditionally
-/// (`if open { Popup { … } }`); it renders a full-screen click-catcher + a card
-/// positioned at `at`, and calls `on_close` on outside-click, right-click, or Esc.
-/// The card stops propagation so clicks inside don't dismiss it.
+/// A fixed-position card at `at`. `card_class` styles it (default the shared `ds-menu`);
+/// `children` is the body. Stops click/contextmenu propagation so that, when composed
+/// inside a [`Backdrop`], an inside-click doesn't bubble out and dismiss it.
 #[component]
 pub fn Popup(
-    #[props(default = EventHandler::new(|_: ()| {}))] on_close: EventHandler<()>,
     at: Point,
-    /// Card class — defaults to the context-menu look (`ctx-menu`). Pass e.g.
-    /// `"menu"` for the richer dropdown chrome.
     card_class: Option<String>,
-    /// Fixed card width in px (else content-sized).
     width: Option<u32>,
-    /// Whether to render the full-screen click-catcher backdrop that dismisses on
-    /// outside-click / right-click / Esc (and grabs focus so Esc is caught). Default
-    /// `true` — a menu/dropdown. Pass `false` for a **hover tooltip**: no backdrop (so it
-    /// never steals the editor's focus nor swallows the `mousemove` that drives
-    /// show/hide) and a pointer-transparent card. Dismissal is then the caller's job —
-    /// unmount it on mouseleave. (`on_close`/Esc are inert.) Used by the lint popover.
-    #[props(default = true)]
-    backdrop: bool,
     children: Element,
 ) -> Element {
     let (x, y) = (at.x, at.y);
-    let card = card_class.unwrap_or_else(|| "ctx-menu".to_string());
+    let card = card_class.unwrap_or_else(|| "ds-menu".to_string());
     let wstyle = width.map(|w| format!("width:{w}px;")).unwrap_or_default();
-    // A tooltip (`backdrop:false`) is a *pass-through* layer: `pointer-events:none` so it
-    // never captures clicks or swallows the editor's `mousemove`, and it doesn't grab
-    // focus. A menu (`backdrop:true`) captures + dismisses + focuses for Esc. The two
-    // differ only in these attribute values, so it's one render tree.
-    let pe = if backdrop { "auto" } else { "none" };
-    // A backdrop-less card (tooltip/callout) has no full-screen wrapper to stack under, so
-    // it needs its own z-index to float above content; the backdrop path stacks inside it.
-    let card_z = if backdrop { "" } else { "z-index:60;" };
     rsx! {
         div {
-            // Focusable so Escape is caught without a document-level listener (menu only —
-            // `set_focus(false)` is a no-op, so a tooltip never steals the editor's focus).
+            class: "{card}",
+            style: "position:fixed;left:{x}px;top:{y}px;{wstyle}z-index:78;",
+            onclick: move |e| e.stop_propagation(),
+            oncontextmenu: move |e| e.stop_propagation(),
+            {children}
+        }
+    }
+}
+
+/// Full-screen dismiss layer for a menu/dropdown: catches an outside click / right-click /
+/// Esc and calls `on_close`, and grabs focus so Esc is caught without a document listener.
+/// Compose it around a [`Popup`]: `Backdrop { on_close, Popup { at, … } }` — the `Popup`
+/// card (z above this) stops propagation, so only outside-clicks reach `on_close`.
+#[component]
+pub fn Backdrop(on_close: EventHandler<()>, children: Element) -> Element {
+    rsx! {
+        div {
             class: "ctx-backdrop",
-            style: "pointer-events:{pe};",
             tabindex: "0",
             onmounted: move |e| {
-                spawn(async move { let _ = e.set_focus(backdrop).await; });
+                spawn(async move { let _ = e.set_focus(true).await; });
             },
             // Don't let a dismiss-click bubble to a drag-on-mousedown parent (header).
             onmousedown: move |e| e.stop_propagation(),
@@ -71,13 +69,7 @@ pub fn Popup(
                     on_close.call(());
                 }
             },
-            div {
-                class: "{card}",
-                style: "position:fixed;left:{x}px;top:{y}px;{wstyle}pointer-events:{pe};{card_z}",
-                onclick: move |e| e.stop_propagation(),
-                oncontextmenu: move |e| e.stop_propagation(),
-                {children}
-            }
+            {children}
         }
     }
 }
