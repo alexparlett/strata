@@ -266,13 +266,27 @@ fn handle_completion_key(
     }
 }
 
-/// Replace the completion's `replace` span in the tab's SQL with its insert text.
+/// Replace the completion's `replace` span in the tab's SQL with its insert text, then
+/// restore the caret to the end of the inserted word — the controlled-value reset would
+/// otherwise jump it to the end of the buffer (so the next space lands there).
 fn apply_completion(ws: Store<crate::session::Workspace>, item: &Completion) {
     let mut sql = ws.sql().cloned();
-    if item.replace.start <= sql.len() && item.replace.end <= sql.len() {
-        sql.replace_range(item.replace.clone(), &item.insert);
-        ws.sql().set(sql);
+    if item.replace.start > sql.len() || item.replace.end > sql.len() {
+        return;
     }
+    let caret = item.replace.start + item.insert.len();
+    sql.replace_range(item.replace.clone(), &item.insert);
+    ws.sql().set(sql);
+    // Deferred a frame so it runs after dioxus repaints the textarea with the new value.
+    // (Byte offset == UTF-16 offset for ASCII SQL — non-ASCII would drift slightly.)
+    let js = format!(
+        "requestAnimationFrame(() => {{ const t = document.activeElement; \
+         if (t && t.classList && t.classList.contains('dxc-editor-input')) \
+         t.setSelectionRange({caret}, {caret}); }});"
+    );
+    spawn(async move {
+        let _ = dioxus::document::eval(&js).await;
+    });
 }
 
 fn kind_glyph(kind: CompletionKind) -> &'static str {

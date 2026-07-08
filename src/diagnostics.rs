@@ -91,56 +91,44 @@ impl Diagnostic {
 
 /// This window's per-tab **validation** diagnostics, keyed by workspace id.
 /// (Execution errors are not stored here — see the module docs.)
+///
+/// Read/written **coarsely** (whole-map `read`/`write`), not per-key: cross-tab
+/// aggregators (the Problems drawer + rail badge) are always mounted and would
+/// subscribe to a key *before* it exists, and the per-key `.get(id)` subscription
+/// doesn't fire for that absent→present transition. A whole-map `read` subscribes to
+/// every change, so any `set`/`drop`/`clear` wakes them — one store, no epoch.
 pub static DIAGS: GlobalStore<HashMap<u64, Vec<Diagnostic>>> = Global::new(|| HashMap::new());
 
-/// A coarse revision counter, bumped on every [`set`]. Cross-tab readers (the
-/// Problems drawer + rail badge) subscribe to it, because the per-key `DIAGS.get(id)`
-/// subscription does **not** fire for the absent→present transition of a key — so a
-/// tab's first diagnostic wouldn't otherwise wake them (the editor only updated because
-/// it re-renders every keystroke anyway).
-pub static DIAG_REV: GlobalStore<u64> = Global::new(|| 0u64);
-
 /// Replace tab `id`'s validation slice (the validator is authoritative each pass).
-/// Always writes the key — an empty slice is a valid "clean" state; entries are
-/// swept on tab close / project open. Mirrors `runs::edit` (insert-then-`entry.write`)
-/// so per-key subscribers (Problems view, rail badge) are notified — a bare `.insert()`
-/// updated the map but did not wake them.
+/// An empty slice drops the key ("clean"); a coarse whole-map write notifies readers.
 pub fn set(id: u64, diags: Vec<Diagnostic>) {
     let mut store = DIAGS.resolve();
-    if !store.contains_key(&id) {
-        store.insert(id, Vec::new());
+    let mut map = store.write();
+    if diags.is_empty() {
+        map.remove(&id);
+    } else {
+        map.insert(id, diags);
     }
-    if let Some(mut entry) = store.get(id) {
-        *entry.write() = diags;
-    }
-    // Wake cross-tab readers (Problems drawer + rail badge).
-    let rev = DIAG_REV.resolve();
-    let next = *rev.peek() + 1;
-    *rev.write() = next;
 }
 
 /// Drop closed tabs' diagnostics (paired with `runs::drop_ids`).
 pub fn drop_ids(ids: &HashSet<u64>) {
-    DIAGS.resolve().retain(|id, _| !ids.contains(id));
+    let mut store = DIAGS.resolve();
+    store.write().retain(|id, _| !ids.contains(id));
 }
 
 /// Clear every tab's diagnostics (project open — ids get reassigned).
 pub fn clear() {
-    DIAGS.resolve().clear();
+    let mut store = DIAGS.resolve();
+    store.write().clear();
 }
 
-/// All problems for tab `id`: its validation slice (from [`DIAGS`]) unioned with
-/// its execution error (from `runs`). **Reactive** — call inside a component
-/// render so the reads subscribe (both stores track this key, creation included).
+/// All problems for tab `id`: its validation slice (from [`DIAGS`]) unioned with its
+/// execution error (from `runs`). **Reactive** — reads the whole `DIAGS` map so any
+/// diagnostic change re-renders the caller (see the store docs).
 pub fn problems_for(id: u64) -> Vec<Diagnostic> {
-    // Subscribe to the revision counter so cross-tab readers re-render on any change
-    // (covers the absent→present key case the per-key subscription misses).
-    let _rev = DIAG_REV.resolve().read();
-    let mut out: Vec<Diagnostic> = DIAGS
-        .resolve()
-        .get(id)
-        .map(|e| e.read().clone())
-        .unwrap_or_default();
+    let store = DIAGS.resolve();
+    let mut out: Vec<Diagnostic> = store.read().get(&id).cloned().unwrap_or_default();
     if let Some(qe) = crate::runs::RUNS
         .resolve()
         .get(id)
