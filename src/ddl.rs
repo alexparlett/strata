@@ -13,7 +13,8 @@
 //! which executes or returns a proper error); writes/DDL are explicitly blocked.
 
 use datafusion::sql::parser::{DFParser, Statement as DFStatement};
-use datafusion::sql::sqlparser::ast::{ObjectType, Statement as SqlStatement};
+use datafusion::sql::sqlparser::ast::{CreateView, ObjectType, Statement as SqlStatement};
+use serde_json::to_string;
 
 #[derive(Debug, Clone)]
 pub enum Decision {
@@ -40,13 +41,16 @@ pub fn classify(sql: &str) -> Decision {
         DFStatement::CopyTo(_) => block("Use the Export dialog to write results to files."),
         DFStatement::Explain(_) => Decision::Query,
         DFStatement::Statement(inner) => classify_sql(*inner),
+        DFStatement::Reset(_) => block(
+            "Reset not supported",
+        ),
     }
 }
 
 fn classify_sql(stmt: SqlStatement) -> Decision {
     match stmt {
         // views — allowed + captured
-        SqlStatement::CreateView { name, query, .. } => Decision::CaptureView {
+        SqlStatement::CreateView(CreateView { name, query, ..}) => Decision::CaptureView {
             name: last_ident(&name.to_string()),
             sql: query.to_string(),
         },
