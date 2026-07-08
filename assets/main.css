@@ -264,19 +264,24 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 
 /* results toolbar (R1/R7): tight 38px bar — find (left) · toggle + refresh + download (right) */
 .results-tb { height: 38px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 6px; background: var(--bg); border-bottom: 1px solid var(--line); }
-.results-tb .icon-btn { width: 28px; height: 28px; }
+.results-tb .icon-btn, .plan-tb .icon-btn { width: 28px; height: 28px; }
+/* Active state for an icon-only toggle (e.g. the plan Raw/Tree button) — accent tint,
+   matching the segmented toggle's selected look. */
+.icon-btn.plain.on { background: var(--accent-soft); color: var(--accent); }
+.icon-btn.plain.on:hover { background: var(--accent-soft); color: var(--accent); }
 .res-find { width: 320px; max-width: 46%; height: 28px; }
 .res-find-count { flex: none; font: 400 10.5px var(--mono); color: var(--dim2); white-space: nowrap; }
 .res-find-clear { width: 20px; height: 20px; flex: none; border: none; background: transparent; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: var(--dim); cursor: pointer; }
 .res-find-clear:hover { background: var(--elev2); color: var(--text); }
-/* Table/Chart toggle — the design's segmented pill: soft-tinted selected (accent-soft
-   bg + accent text/icon), NOT the solid-accent `.seg-btn.on`. Scoped + high-specificity
-   so it wins over the conflicting global `.seg`/`.seg-btn` blocks. */
-.res-view-toggle { flex: none; }
-.res-view-toggle .seg-btn { height: 26px; padding: 0 11px; display: flex; align-items: center; gap: 7px; font: 500 12px var(--ui); color: var(--text3); background: transparent; }
-.res-view-toggle .seg-btn:hover { color: var(--text); }
-.res-view-toggle .seg-btn.on { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
-.res-view-toggle .seg-btn svg { flex: none; }
+/* Shared segmented toggle (results Table/Chart + plan Physical/Logical) — the design's
+   pill: soft-tinted selected (accent-soft bg + accent text/icon), NOT the solid-accent
+   `.seg-btn.on`. Scoped + high-specificity so it wins over the conflicting global
+   `.seg`/`.seg-btn` blocks. */
+.seg-toggle { flex: none; }
+.seg-toggle .seg-btn { height: 26px; padding: 0 11px; display: flex; align-items: center; gap: 7px; font: 500 12px var(--ui); color: var(--text3); background: transparent; }
+.seg-toggle .seg-btn:hover { color: var(--text); }
+.seg-toggle .seg-btn.on { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.seg-toggle .seg-btn svg { flex: none; }
 
 /* results grid */
 .grid-scroll { flex: 1; overflow: auto; min-height: 0; background: var(--main); }
@@ -351,11 +356,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 
 /* ---------- EXPLAIN plan view (S12) ---------- */
 .res-plan { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--main); border-top: 1px solid var(--line); }
-.plan-tb { height: 40px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.plan-tabs { display: flex; gap: 2px; padding: 2px; background: var(--panel); border: 1px solid var(--line2); border-radius: 8px; }
-.plan-tab { height: 24px; padding: 0 12px; border: none; border-radius: 6px; cursor: pointer; font: 600 11px var(--mono); background: transparent; color: var(--dim); }
-.plan-tab:hover { color: var(--text2); }
-.plan-tab.on { background: var(--elev2); color: var(--text); }
+/* Header aligned with the results toolbar (R1/R7): 38px, gap 6px, pad 0 6px. The
+   Physical/Logical toggle reuses the shared `.seg-row`/`.seg-toggle` segmented pill. */
+.plan-tb { height: 38px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 6px; background: var(--bg); border-bottom: 1px solid var(--line); }
 .plan-summary { font: 400 11.5px var(--mono); color: var(--dim2); }
 .plan-analyze { font: 600 9px var(--mono); letter-spacing: .5px; color: var(--t-map); background: color-mix(in srgb, var(--t-map) 14%, transparent); padding: 2px 6px; border-radius: 4px; }
 .plan-body { flex: 1; overflow: auto; min-height: 0; padding: 16px 18px; }

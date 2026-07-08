@@ -65,22 +65,24 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
     );
 
     let phys_cls = if eff_physical {
-        "plan-tab on"
+        "seg-btn on"
     } else {
-        "plan-tab"
+        "seg-btn"
     };
     let log_cls = if !eff_physical {
-        "plan-tab on"
+        "seg-btn on"
     } else {
-        "plan-tab"
+        "seg-btn"
     };
-    let raw_label = if raw { "Tree" } else { "Raw" };
+    // Icon-only Raw/Tree toggle (consistent with the results toolbar's icon buttons);
+    // the title carries the action since there's no label.
+    let raw_title = if raw { "Show the plan tree" } else { "Show the raw plan text" };
 
     rsx! {
         div { class: "res-plan",
             div { class: "plan-tb",
                 if show_tabs {
-                    div { class: "plan-tabs",
+                    div { class: "seg-row seg-toggle",
                         button { class: "{phys_cls}", onclick: move |_| dispatch(state, Action::SetPlanTab(PlanTab::Physical)), "Physical" }
                         button { class: "{log_cls}", onclick: move |_| dispatch(state, Action::SetPlanTab(PlanTab::Logical)), "Logical" }
                     }
@@ -90,12 +92,12 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
                     span { class: "plan-analyze mono", "ANALYZE" }
                 }
                 div { class: "spacer" }
-                button { class: "btn sm", style: "height:28px;", onclick: move |_| dispatch(state, Action::TogglePlanRaw),
-                    svg { width: "13", height: "13", "viewBox": "0 0 24 24", fill: "none",
+                button { class: if raw { "icon-btn plain on" } else { "icon-btn plain" }, title: "{raw_title}",
+                    onclick: move |_| dispatch(state, Action::TogglePlanRaw),
+                    svg { width: "15", height: "15", "viewBox": "0 0 24 24", fill: "none",
                         stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round",
                         path { d: "M4 7h16M4 12h10M4 17h13" }
                     }
-                    "{raw_label}"
                 }
             }
             if raw {

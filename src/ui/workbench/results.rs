@@ -253,7 +253,7 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
     rsx! {
         div { class: "results-tb",
             // Table/Chart toggle (left) — always present in a result state.
-            div { class: "seg-row res-view-toggle",
+            div { class: "seg-row seg-toggle",
                 button { class: if grid { "seg-btn on" } else { "seg-btn" },
                     onclick: move |_| dispatch(state, Action::SetResultsView(ResultsView::Grid)),
                     {icons::table(13)} "Table" }
