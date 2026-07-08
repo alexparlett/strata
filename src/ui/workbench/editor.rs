@@ -255,25 +255,27 @@ fn handle_completion_key(
     };
     let n = c.items.len();
     match e.key() {
+        // prevent_default() first, before any signal writes / async work, so the
+        // textarea's own handling (caret move, Tab insert, newline) is suppressed.
         Key::ArrowDown => {
+            e.prevent_default();
             c.sel = (c.sel + 1) % n;
             comp.set(Some(c));
-            e.prevent_default();
         }
         Key::ArrowUp => {
+            e.prevent_default();
             c.sel = (c.sel + n - 1) % n;
             comp.set(Some(c));
-            e.prevent_default();
         }
         Key::Enter | Key::Tab => {
+            e.prevent_default();
             let item = c.items[c.sel].clone();
             apply_completion(ws, &item);
             close_completion(comp, comp_gen);
-            e.prevent_default();
         }
         Key::Escape => {
-            close_completion(comp, comp_gen);
             e.prevent_default();
+            close_completion(comp, comp_gen);
         }
         // Space dismisses the popup and is NOT inserted (you don't want it doubled).
         Key::Character(s) if s == " " => {
