@@ -252,6 +252,16 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
 
     rsx! {
         div { class: "results-tb",
+            // Table/Chart toggle (left) — always present in a result state.
+            div { class: "seg-row res-view-toggle",
+                button { class: if grid { "seg-btn on" } else { "seg-btn" },
+                    onclick: move |_| dispatch(state, Action::SetResultsView(ResultsView::Grid)),
+                    {icons::table(13)} "Table" }
+                button { class: if !grid { "seg-btn on" } else { "seg-btn" },
+                    onclick: move |_| dispatch(state, Action::SetResultsView(ResultsView::Chart)),
+                    {icons::chart(13)} "Chart" }
+            }
+            // Find-in-results (grid-only).
             if grid {
                 div { class: "field res-find",
                     {icons::search(14)}
@@ -266,14 +276,7 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
                 }
             }
             div { class: "spacer" }
-            div { class: "seg-row res-view-toggle",
-                button { class: if grid { "seg-btn on" } else { "seg-btn" },
-                    onclick: move |_| dispatch(state, Action::SetResultsView(ResultsView::Grid)),
-                    {icons::table(13)} "Table" }
-                button { class: if !grid { "seg-btn on" } else { "seg-btn" },
-                    onclick: move |_| dispatch(state, Action::SetResultsView(ResultsView::Chart)),
-                    {icons::chart(13)} "Chart" }
-            }
+            // Refresh + download (right).
             button { class: "icon-btn plain", title: "Refresh — re-run the query",
                 onclick: move |_| dispatch(state, Action::RunQuery),
                 {icons::refresh(15)} }

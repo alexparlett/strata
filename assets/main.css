@@ -269,8 +269,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .res-find-count { flex: none; font: 400 10.5px var(--mono); color: var(--dim2); white-space: nowrap; }
 .res-find-clear { width: 20px; height: 20px; flex: none; border: none; background: transparent; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: var(--dim); cursor: pointer; }
 .res-find-clear:hover { background: var(--elev2); color: var(--text); }
-.res-view-toggle { height: 28px; }
-.res-view-toggle .seg-btn { display: flex; align-items: center; gap: 5px; }
+.res-view-toggle { flex: none; }
+.res-view-toggle .seg-btn { height: 26px; padding: 0 11px; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.res-view-toggle .seg-btn svg { flex: none; }
 
 /* results grid */
 .grid-scroll { flex: 1; overflow: auto; min-height: 0; background: var(--main); }
