@@ -37,6 +37,9 @@ pub struct CaretAnalysis {
     pub aliases: Vec<(String, String)>,
     /// Table names in scope (FROM/JOIN targets of the current statement).
     pub in_scope: Vec<String>,
+    /// Column aliases defined in the SELECT list (`expr AS name`) — referenceable in
+    /// GROUP BY / ORDER BY / HAVING.
+    pub select_aliases: Vec<String>,
 }
 
 const JOIN_LEADINS: &[&str] = &[
@@ -96,6 +99,26 @@ fn is_name(t: &Tok) -> bool {
     matches!(t.kind, TokKind::Ident | TokKind::QuotedIdent)
 }
 
+/// Column aliases from the SELECT projection list (`… AS <ident>`, between SELECT and
+/// FROM) — referenceable later in GROUP BY / ORDER BY / HAVING. Only explicit `AS`
+/// aliases (not the ambiguous implicit `expr alias` form).
+fn column_aliases(toks: &[Tok]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_select = false;
+    for (i, t) in toks.iter().enumerate() {
+        if t.kind == TokKind::Keyword && t.eq_ci("SELECT") {
+            in_select = true;
+        } else if t.kind == TokKind::Keyword && t.eq_ci("FROM") {
+            in_select = false;
+        } else if in_select && t.kind == TokKind::Keyword && t.eq_ci("AS") {
+            if let Some(next) = toks.get(i + 1).filter(|n| is_name(n)) {
+                out.push(next.text.clone());
+            }
+        }
+    }
+    out
+}
+
 /// Analyse the caret: partial word, clause context, and in-scope tables.
 pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
     let caret = caret.min(sql.len());
@@ -108,6 +131,7 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
 
     let aliases = aliases_of(&stmt);
     let in_scope: Vec<String> = aliases.iter().map(|(_, t)| t.clone()).collect();
+    let select_aliases = column_aliases(&stmt);
 
     // The partial word = a name/keyword token whose span ends exactly at the caret
     // (i.e. we're typing its tail). Otherwise the caret sits after some other token.
@@ -163,6 +187,7 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         replace,
         aliases,
         in_scope,
+        select_aliases,
     }
 }
 

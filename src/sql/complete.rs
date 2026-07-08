@@ -104,6 +104,11 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog) -> Vec<Completion> {
                     }
                 }
             }
+            // SELECT-list column aliases (e.g. `SUM(x) AS spend`) — referenceable in
+            // GROUP BY / ORDER BY / HAVING.
+            for a in &ca.select_aliases {
+                items.push(column_item(a, Some("alias"), &replace));
+            }
             for f in catalog.functions.all() {
                 items.push(function_item(f, &replace));
             }
