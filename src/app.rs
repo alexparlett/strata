@@ -322,6 +322,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         run.page = page;
                         run.query_error = None;
                         run.result = Some(out);
+                        run.ran_at = Some(std::time::Instant::now());
                     });
                 }
                 Err(e) => {

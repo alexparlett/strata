@@ -281,6 +281,22 @@ pub fn table(sz: u32) -> Element {
         rsx! { rect { x: "3", y: "4", width: "18", height: "16", rx: "2" } path { d: "M3 9h18M3 14h18M9 4v16" } },
     )
 }
+/// Two circular arrows — the results **Refresh** (re-run) button.
+pub fn refresh(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.7",
+        rsx! { path { d: "M21 12a9 9 0 1 1-2.64-6.36" } path { d: "M21 3v6h-6" } },
+    )
+}
+/// Axis + vertical bars — the results **Chart** toggle.
+pub fn chart(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.7",
+        rsx! { path { d: "M3 3v18h18" } path { d: "M8 17v-5M13 17V8M18 17v-8" } },
+    )
+}
 /// Filled-outline circle with an exclamation — the results-pane error banner.
 pub fn err_circle(sz: u32) -> Element {
     stroke(

@@ -49,6 +49,7 @@ pub enum Action {
     TogglePlanRaw,
     TogglePageSizeMenu,
     SetPageSize(usize),
+    SetResultsView(crate::runs::ResultsView),
 
     // ── tabs ──
     NewTab,
@@ -211,6 +212,7 @@ fn run(state: Signal<AppState>, action: Action) {
         TogglePlanRaw => query::toggle_plan_raw(state),
         TogglePageSizeMenu => query::toggle_page_size_menu(state),
         SetPageSize(sz) => query::set_page_size(state, sz),
+        SetResultsView(v) => query::set_results_view(v),
 
         // tabs
         NewTab => tab::add(state),

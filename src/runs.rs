@@ -17,6 +17,7 @@
 //! ids, so a new tab could otherwise inherit a stale run.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use dioxus::prelude::*;
 use dioxus_stores::*;
@@ -24,6 +25,15 @@ use dioxus_stores::*;
 use crate::engine::QueryOutput;
 use crate::plan::{PlanTab, QueryPlan};
 use crate::query_error::QueryError;
+
+/// Which result view is active for a tab — the grid (default) or the chart (R2).
+/// Toggled from the results toolbar; kept per result-set (per tab).
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResultsView {
+    #[default]
+    Grid,
+    Chart,
+}
 
 /// One tab's live query output — never serialized. The results panel derives its
 /// whole state (grid / plan / error / running / pager) from the active tab's run.
@@ -39,6 +49,12 @@ pub struct WorkspaceRun {
     pub page: usize,
     pub page_size: usize,
     pub result_search: String,
+    /// Grid vs chart for this result-set (the results toolbar toggle).
+    pub view: ResultsView,
+    /// When the current result-set landed — drives the "⏱ snapshot Xm ago" chip.
+    /// `None` until the tab has actually produced a result. Monotonic (`Instant`),
+    /// never serialized (like the rest of the run).
+    pub ran_at: Option<Instant>,
 }
 
 impl Default for WorkspaceRun {
@@ -54,6 +70,8 @@ impl Default for WorkspaceRun {
             page: 1,
             page_size: 100,
             result_search: String::new(),
+            view: ResultsView::Grid,
+            ran_at: None,
         }
     }
 }

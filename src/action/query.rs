@@ -179,6 +179,14 @@ pub fn set_result_search(_state: Signal<AppState>, q: String) {
     }
 }
 
+/// Switch the active tab's result view (grid ↔ chart). Per result-set.
+pub fn set_results_view(v: crate::runs::ResultsView) {
+    let id = crate::session::active_id();
+    if id != 0 {
+        crate::runs::edit(id, |run| run.view = v);
+    }
+}
+
 /// Toggle the page-size dropdown.
 pub fn toggle_page_size_menu(mut state: Signal<AppState>) {
     let mut s = state.write();
