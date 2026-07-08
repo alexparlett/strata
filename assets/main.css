@@ -559,20 +559,65 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .sql-comp-label { flex: 1; color: var(--text2); overflow: hidden; text-overflow: ellipsis; }
 .sql-comp-detail { flex: none; color: var(--faint); font-size: 10.5px; }
 
-/* ---------- SQL lint hover popover (S27) ---------- */
-/* The squiggle's diagnostic message, shown only on hover. Icon + text, red left-border,
-   styled like the results error banner. Positioning is owned by the `Popup` container
-   (hover mode: fixed + pointer-transparent); this is just the card look. */
-.sql-lint-pop {
-  z-index: 29; max-width: 380px; margin-top: 3px;
-  display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px;
-  background: color-mix(in srgb, var(--red2) 9%, var(--panel));
-  border: 1px solid color-mix(in srgb, var(--red2) 20%, transparent);
-  border-left: 2px solid var(--red2);
-  border-radius: 5px; box-shadow: 0 8px 22px rgba(0,0,0,.42);
+/* ---------- Design system: Select / dropdown menu (S29 · Canvas §05) ---------- */
+.ds-select {
+  height: 34px; padding: 0 11px; display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line2); background: var(--panel); color: var(--text);
+  font: 500 12.5px var(--ui); border-radius: 8px; cursor: pointer; white-space: nowrap;
 }
-.sql-lint-ico { flex: none; display: flex; color: var(--red2); margin-top: 1px; }
-.sql-lint-msg { font: 400 11.5px/1.45 var(--mono); color: var(--text); word-break: break-word; }
+.ds-select:hover { border-color: var(--line-hi); }
+.ds-select .ds-select-val { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; }
+.ds-select > svg { flex: none; color: var(--dim2); }
+
+/* Shared menu card (dropdown + context menu) + rows. */
+.ds-menu {
+  display: flex; flex-direction: column; gap: 1px; padding: 4px;
+  background: var(--elev); border: 1px solid var(--line3); border-radius: 9px;
+  box-shadow: 0 12px 30px rgba(0,0,0,.4);
+}
+.ds-menu-item {
+  display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px;
+  border-radius: 6px; cursor: pointer; font: 500 12.5px var(--ui); color: var(--text); white-space: nowrap;
+}
+.ds-menu-item:hover { box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--text) 7%, transparent); }
+.ds-menu-item.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.ds-menu-item.danger { color: var(--red2); }
+.ds-menu-item.disabled { opacity: .5; pointer-events: none; }
+.ds-menu-item .ds-mi-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.ds-menu-item .ds-mi-check { flex: none; display: flex; color: var(--accent); }
+.ds-menu-sep { height: 1px; background: var(--grid-line); margin: 4px 6px; }
+
+/* ---------- Design system: callout card (S29 · Canvas §08) ---------- */
+/* Left-accent-bar card. As a floating popover it rides `Popup{backdrop:false}` (S27 lint
+   hover); inline it's a panel callout. `.err`/`.warn`/`.info` set the semantic colour. */
+.ds-callout {
+  display: flex; align-items: flex-start; gap: 8px; max-width: 380px;
+  padding: 9px 12px; border-radius: 8px;
+}
+.ds-callout .ds-callout-ico { flex: none; display: flex; margin-top: 1px; }
+.ds-callout .ds-callout-msg { font: 400 12px/1.5 var(--ui); word-break: break-word; }
+.ds-callout.err {
+  background: color-mix(in srgb, var(--red2) 10%, var(--elev));
+  border: 1px solid color-mix(in srgb, var(--red2) 32%, transparent);
+  border-left: 3px solid var(--red2);
+  box-shadow: 0 8px 22px rgba(0,0,0,.42);
+}
+.ds-callout.err .ds-callout-ico { color: var(--red2); }
+.ds-callout.err .ds-callout-msg { color: var(--red); }
+.ds-callout.warn {
+  background: color-mix(in srgb, var(--orange) 12%, var(--elev));
+  border: 1px solid color-mix(in srgb, var(--orange) 32%, transparent);
+  border-left: 3px solid var(--orange);
+}
+.ds-callout.warn .ds-callout-ico { color: var(--orange); }
+.ds-callout.warn .ds-callout-msg { color: var(--text2); }
+.ds-callout.info {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-left: 3px solid var(--accent);
+}
+.ds-callout.info .ds-callout-ico { color: var(--accent); }
+.ds-callout.info .ds-callout-msg { color: var(--text2); }
 
 /* Retune the GitHub-Dark preset to the app: transparent bg (the wrapper paints
    var(--main)), themed gutter, accent caret + selection. Token colors are left

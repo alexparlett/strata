@@ -249,10 +249,10 @@ fn lint_popover(hover: Signal<Option<LintHover>>, comp: Signal<Option<Completing
     rsx! {
         Popup {
             at: Point { x, y },
-            card_class: "sql-lint-pop".to_string(),
+            card_class: "ds-callout err".to_string(),
             backdrop: false,
-            span { class: "sql-lint-ico", {icons::warning(13)} }
-            span { class: "sql-lint-msg", "{msg}" }
+            span { class: "ds-callout-ico", {icons::err_circle(14)} }
+            span { class: "ds-callout-msg", "{msg}" }
         }
     }
 }

@@ -45,6 +45,9 @@ pub fn Popup(
     // focus. A menu (`backdrop:true`) captures + dismisses + focuses for Esc. The two
     // differ only in these attribute values, so it's one render tree.
     let pe = if backdrop { "auto" } else { "none" };
+    // A backdrop-less card (tooltip/callout) has no full-screen wrapper to stack under, so
+    // it needs its own z-index to float above content; the backdrop path stacks inside it.
+    let card_z = if backdrop { "" } else { "z-index:60;" };
     rsx! {
         div {
             // Focusable so Escape is caught without a document-level listener (menu only —
@@ -70,7 +73,7 @@ pub fn Popup(
             },
             div {
                 class: "{card}",
-                style: "position:fixed;left:{x}px;top:{y}px;{wstyle}pointer-events:{pe};",
+                style: "position:fixed;left:{x}px;top:{y}px;{wstyle}pointer-events:{pe};{card_z}",
                 onclick: move |e| e.stop_propagation(),
                 oncontextmenu: move |e| e.stop_propagation(),
                 {children}
