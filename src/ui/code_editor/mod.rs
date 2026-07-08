@@ -66,6 +66,14 @@ pub struct CodeEditorProps {
     /// keeps focus (no blur), so the consumer uses this to dismiss the popup too.
     #[props(default = EventHandler::new(|_: MouseEvent| {}))]
     pub onmousedown: EventHandler<MouseEvent>,
+    /// Mouse move over the text surface — the consumer hit-tests it against the
+    /// `decorations` to drive the lint hover popover (S27). `element_coordinates()` is
+    /// relative to the textarea, which shares the layers' text coordinate system.
+    #[props(default = EventHandler::new(|_: MouseEvent| {}))]
+    pub onmousemove: EventHandler<MouseEvent>,
+    /// Mouse leaving the text surface — dismiss the lint hover popover.
+    #[props(default = EventHandler::new(|_: MouseEvent| {}))]
+    pub onmouseleave: EventHandler<MouseEvent>,
     /// Squiggle/mark overlays by byte range.
     #[props(default)]
     pub decorations: Vec<Decoration>,
@@ -138,6 +146,8 @@ pub fn CodeEditor(props: CodeEditorProps) -> Element {
     let onkeydown = props.onkeydown;
     let onblur = props.onblur;
     let onmousedown = props.onmousedown;
+    let onmousemove = props.onmousemove;
+    let onmouseleave = props.onmouseleave;
 
     // Decoration overlay: single-line squiggles positioned by (line, col) in ch/em.
     let decos = decoration_boxes(&props.value, &props.decorations);
@@ -186,6 +196,8 @@ pub fn CodeEditor(props: CodeEditorProps) -> Element {
                     onkeydown: move |e: KeyboardEvent| onkeydown.call(e),
                     onblur: move |e: FocusEvent| onblur.call(e),
                     onmousedown: move |e: MouseEvent| onmousedown.call(e),
+                    onmousemove: move |e: MouseEvent| onmousemove.call(e),
+                    onmouseleave: move |e: MouseEvent| onmouseleave.call(e),
                     // Value as the text child (upstream form): dioxus skips re-writing it
                     // when it already matches the DOM, so the caret isn't reset to the end
                     // on re-renders (e.g. when the popup opens/closes).

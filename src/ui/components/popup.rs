@@ -20,6 +20,7 @@ pub struct Point {
 /// The card stops propagation so clicks inside don't dismiss it.
 #[component]
 pub fn Popup(
+    #[props(default = EventHandler::new(|_: ()| {}))]
     on_close: EventHandler<()>,
     at: Point,
     /// Card class — defaults to the context-menu look (`ctx-menu`). Pass e.g.
@@ -27,11 +28,27 @@ pub fn Popup(
     card_class: Option<String>,
     /// Fixed card width in px (else content-sized).
     width: Option<u32>,
+    /// Hover/tooltip mode: drop the full-screen click-catcher backdrop and make the card
+    /// pointer-transparent (`pointer-events:none`), so it never steals clicks, selection,
+    /// or focus. Dismissal is the caller's job — unmount it when the pointer leaves.
+    /// (`on_close`/Esc are inert here.) Used by the editor's lint hover popover.
+    #[props(default = false)]
+    hover: bool,
     children: Element,
 ) -> Element {
     let (x, y) = (at.x, at.y);
     let card = card_class.unwrap_or_else(|| "ctx-menu".to_string());
     let wstyle = width.map(|w| format!("width:{w}px;")).unwrap_or_default();
+    if hover {
+        // Bare positioned card, no backdrop, no pointer capture.
+        return rsx! {
+            div {
+                class: "{card}",
+                style: "position:fixed;left:{x}px;top:{y}px;{wstyle}pointer-events:none;",
+                {children}
+            }
+        };
+    }
     rsx! {
         div {
             // Focusable so Escape is caught without a document-level listener.

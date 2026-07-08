@@ -16,6 +16,7 @@ use crate::session::WorkspaceStoreExt;
 use crate::sql::{Catalog, Completion, CompletionKind};
 use crate::state::AppState;
 use crate::ui::code_editor::{CodeEditor, Decoration};
+use crate::ui::components::{Point, Popup};
 use crate::ui::icons;
 
 /// The open completion popup for this editor.
@@ -26,6 +27,16 @@ struct Completing {
     /// Caret line/column (0-based) for anchoring the menu.
     line: usize,
     col: usize,
+}
+
+/// The lint hover popover (S27): the diagnostic message under the pointer. `x`/`y` are
+/// the client-px anchor (just below the squiggled token's start), stable while the
+/// pointer stays on the same token so the popover doesn't jitter with the cursor.
+#[derive(Clone, PartialEq)]
+struct LintHover {
+    message: String,
+    x: f64,
+    y: f64,
 }
 
 /// A 30×30 toolbar icon button that dispatches `action`.
@@ -59,19 +70,24 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
         .iter()
         .any(|d| matches!(d.source, crate::diagnostics::DiagSource::Validation));
     let decorations: Vec<Decoration> = problems
-        .into_iter()
+        .iter()
         .filter_map(|d| {
-            d.span.map(|range| Decoration {
+            d.span.clone().map(|range| Decoration {
                 range,
                 severity: d.severity,
             })
         })
         .collect();
+    // Kept for the hover popover's hit-test (message + span per diagnostic).
+    let hover_problems = problems;
 
     // Component-local completion state (per tab; only the active one is edited).
     let mut comp = use_signal(|| None::<Completing>);
     // Debounce generation for completion (like validation).
     let comp_gen = use_signal(|| 0u64);
+    // The lint hover popover (S27): the diagnostic message shown while the pointer is
+    // over a squiggle. Component-local, like completion.
+    let mut hover = use_signal(|| None::<LintHover>);
 
     rsx! {
         section { style: "flex:none;background:var(--main);",
@@ -127,11 +143,42 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     onblur: move |_| close_completion(comp, comp_gen),
                     // Clicking in the editor to move the caret keeps focus (no blur) — close too.
                     onmousedown: move |_| close_completion(comp, comp_gen),
-                    // Completion popup — rendered inside the viewport (children slot) so it
-                    // shares the text coordinate system + `--dxc-editor-*` vars.
+                    // Hover a squiggle → show its diagnostic message (S27). Suppressed while
+                    // the completion popup is open. Only writes `hover` when the anchored hit
+                    // changes, so the frequent mousemove doesn't thrash re-renders.
+                    onmousemove: move |e: MouseEvent| {
+                        if comp.peek().is_some() {
+                            if hover.peek().is_some() { hover.set(None); }
+                            return;
+                        }
+                        let ep = e.element_coordinates();
+                        let sql = ws.sql().cloned();
+                        let next = hovered_lint(&sql, &hover_problems, ep.x, ep.y).map(
+                            |(message, line, col)| {
+                                // Token's client-px anchor = textarea client origin (cursor
+                                // client − cursor element) + token's element-px position,
+                                // one line below the token. Cursor-independent → no jitter.
+                                let cp = e.client_coordinates();
+                                let x = cp.x - ep.x + col as f64 * ED_CH_W + ED_PAD_X;
+                                let y = cp.y - ep.y + (line + 1) as f64 * ED_LINE_H;
+                                LintHover { message, x, y }
+                            },
+                        );
+                        if *hover.peek() != next {
+                            hover.set(next);
+                        }
+                    },
+                    onmouseleave: move |_| {
+                        if hover.peek().is_some() { hover.set(None); }
+                    },
+                    // Completion menu — inside the viewport (children slot) so it shares the
+                    // text coordinate system + `--dxc-editor-*` vars.
                     {completion_menu(ws, comp)}
                 }
             }
+            // Lint hover popover (S27) — a fixed-positioned `Popup` in hover mode, so it
+            // lives at section level rather than in the editor's text coordinate system.
+            {lint_popover(hover, comp)}
         }
     }
 }
@@ -182,6 +229,73 @@ fn completion_menu(
             }
         }
     }
+}
+
+/// The lint hover popover — the diagnostic message on a red-bordered card, anchored just
+/// below the squiggled token, via the reusable [`Popup`] in hover mode (no backdrop,
+/// pointer-transparent). Empty when nothing is hovered, or while the completion popup is
+/// open (they'd overlap — completion wins).
+fn lint_popover(
+    hover: Signal<Option<LintHover>>,
+    comp: Signal<Option<Completing>>,
+) -> Element {
+    if comp.read().is_some() {
+        return rsx! {};
+    }
+    let snap = hover.read();
+    let Some(h) = snap.as_ref() else {
+        return rsx! {};
+    };
+    let (x, y, msg) = (h.x, h.y, h.message.clone());
+    drop(snap);
+
+    rsx! {
+        Popup {
+            at: Point { x, y },
+            card_class: "sql-lint-pop".to_string(),
+            hover: true,
+            span { class: "sql-lint-ico", {icons::warning(13)} }
+            span { class: "sql-lint-msg", "{msg}" }
+        }
+    }
+}
+
+// Editor text metrics for pointer→(line,col) hit-testing. Fixed by the `.ps-sql` CSS:
+// 19px line-height, JetBrains Mono 12px (0.6em advance → 7.2px per char). The layers
+// carry an 8px left text padding (`padding: 0 8px`).
+const ED_LINE_H: f64 = 19.0;
+const ED_CH_W: f64 = 7.2;
+const ED_PAD_X: f64 = 8.0;
+
+/// Hit-test a pointer position (element coords, px) against the diagnostics: return the
+/// first whose squiggle box covers it, as `(message, line, col)` of the token start.
+/// Column is approximate (monospace metric) but the box is at least one char wide and
+/// diagnostics are sparse, so it's forgiving enough.
+fn hovered_lint(
+    sql: &str,
+    problems: &[crate::diagnostics::Diagnostic],
+    x: f64,
+    y: f64,
+) -> Option<(String, usize, usize)> {
+    if x < ED_PAD_X || y < 0.0 {
+        return None;
+    }
+    let line = (y / ED_LINE_H).floor() as usize;
+    let col = ((x - ED_PAD_X) / ED_CH_W).floor() as usize;
+    for d in problems {
+        let range = match &d.span {
+            Some(r) => r.clone(),
+            None => continue,
+        };
+        let (dl, dc) = line_col(sql, range.start);
+        let (el, ec) = line_col(sql, range.end);
+        // Width to the token's end on its start line (rest-of-line for multi-line spans).
+        let end_col = if el == dl { ec.max(dc + 1) } else { usize::MAX };
+        if line == dl && col >= dc && col < end_col {
+            return Some((d.message.clone(), dl, dc));
+        }
+    }
+    None
 }
 
 /// Recompute completions at `caret`, **debounced 500ms** (like validation) so the

@@ -533,6 +533,21 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .sql-comp-label { flex: 1; color: var(--text2); overflow: hidden; text-overflow: ellipsis; }
 .sql-comp-detail { flex: none; color: var(--faint); font-size: 10.5px; }
 
+/* ---------- SQL lint hover popover (S27) ---------- */
+/* The squiggle's diagnostic message, shown only on hover. Icon + text, red left-border,
+   styled like the results error banner. Positioning is owned by the `Popup` container
+   (hover mode: fixed + pointer-transparent); this is just the card look. */
+.sql-lint-pop {
+  z-index: 29; max-width: 380px; margin-top: 3px;
+  display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px;
+  background: color-mix(in srgb, var(--red2) 9%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--red2) 20%, transparent);
+  border-left: 2px solid var(--red2);
+  border-radius: 5px; box-shadow: 0 8px 22px rgba(0,0,0,.42);
+}
+.sql-lint-ico { flex: none; display: flex; color: var(--red2); margin-top: 1px; }
+.sql-lint-msg { font: 400 11.5px/1.45 var(--mono); color: var(--text); word-break: break-word; }
+
 /* Retune the GitHub-Dark preset to the app: transparent bg (the wrapper paints
    var(--main)), themed gutter, accent caret + selection. Token colors are left
    to the preset since they already match the app's type palette. */
