@@ -172,6 +172,12 @@ fn refresh_completion(
         Catalog::build(&st.project.tables, &st.project.views, st.functions.clone())
     };
     let items = crate::sql::complete(&sql, caret, &catalog);
+    tracing::info!(
+        "completion @caret {caret}: {} item(s), {} table(s), {} fn(s)",
+        items.len(),
+        catalog.tables.len(),
+        catalog.functions.scalar.len() + catalog.functions.aggregate.len() + catalog.functions.window.len(),
+    );
     if items.is_empty() {
         comp.set(None);
     } else {

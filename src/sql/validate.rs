@@ -89,10 +89,7 @@ fn check_keyword_typos(toks: &[Tok], catalog: &Catalog, sql: &str, out: &mut Vec
         if CLAUSE_KEYWORDS.iter().any(|k| k.eq_ignore_ascii_case(&up)) {
             continue; // it *is* a keyword (lexer may have classed a contextual word as ident)
         }
-        if let Some(kw) = CLAUSE_KEYWORDS
-            .iter()
-            .find(|k| edit_distance_at_most_1(&up, k))
-        {
+        if let Some(kw) = CLAUSE_KEYWORDS.iter().find(|k| near_keyword(&up, k)) {
             out.push(diag(
                 Severity::Warning,
                 format!("Unknown keyword `{}` — did you mean `{}`?", t.text, kw),
@@ -140,18 +137,23 @@ fn line_col(sql: &str, offset: usize) -> String {
     format!("line {line}:{col}")
 }
 
-/// Whether `a` and `b` are equal or differ by a single insertion/deletion/substitution
-/// (case-insensitive; inputs already upper-cased). Cheap early-out on length.
-fn edit_distance_at_most_1(a: &str, b: &str) -> bool {
-    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+/// A likely typo of a keyword: differs by ≤1 insert/delete/substitute **or** a single
+/// adjacent transposition (Damerau) — so `FORM`→`FROM` (a swap = 2 substitutions) is
+/// caught. Case-insensitive; inputs already upper-cased.
+fn near_keyword(a: &str, b: &str) -> bool {
+    let (av, bv): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if av == bv {
+        return false;
+    }
+    edit_distance_at_most_1(&av, &bv) || adjacent_transposition(&av, &bv)
+}
+
+/// ≤1 insertion/deletion/substitution via a two-pointer walk.
+fn edit_distance_at_most_1(a: &[char], b: &[char]) -> bool {
     let (la, lb) = (a.len(), b.len());
     if la.abs_diff(lb) > 1 {
         return false;
     }
-    if a == b {
-        return false; // exact match isn't a typo (handled by callers anyway)
-    }
-    // Two-pointer walk allowing one edit.
     let (mut i, mut j, mut edits) = (0usize, 0usize, 0u8);
     while i < la && j < lb {
         if a[i].eq_ignore_ascii_case(&b[j]) {
@@ -163,14 +165,28 @@ fn edit_distance_at_most_1(a: &str, b: &str) -> bool {
             }
             edits += 1;
             match la.cmp(&lb) {
-                std::cmp::Ordering::Greater => i += 1, // deletion from a
-                std::cmp::Ordering::Less => j += 1,    // insertion into a
+                std::cmp::Ordering::Greater => i += 1,
+                std::cmp::Ordering::Less => j += 1,
                 std::cmp::Ordering::Equal => {
                     i += 1;
                     j += 1;
-                } // substitution
+                }
             }
         }
     }
     true
+}
+
+/// Exactly one adjacent swap (same length, two neighbouring positions swapped).
+fn adjacent_transposition(a: &[char], b: &[char]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff: Vec<usize> = (0..a.len())
+        .filter(|&i| !a[i].eq_ignore_ascii_case(&b[i]))
+        .collect();
+    diff.len() == 2
+        && diff[1] == diff[0] + 1
+        && a[diff[0]].eq_ignore_ascii_case(&b[diff[1]])
+        && a[diff[1]].eq_ignore_ascii_case(&b[diff[0]])
 }

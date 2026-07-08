@@ -44,7 +44,11 @@ pub(crate) fn Workspace(ws: Store<crate::session::Workspace>, active: bool) -> E
 fn use_revalidate(state: Signal<AppState>, ws: Store<crate::session::Workspace>) {
     let mut generation = use_signal(|| 0u64);
     use_effect(move || {
-        // Subscribe to this tab's id + sql (lens reads); catalog via peek (no sub).
+        // Subscribe to the session store so this fires on *every* edit — the proven
+        // pattern from `use_persist_session` (a bare `ws.sql().cloned()` read here did
+        // not reliably wake the effect). We still revalidate only THIS tab.
+        let store = crate::session::store();
+        let _sub = store.read();
         let id = ws.id().cloned();
         let sql = ws.sql().cloned();
         let catalog = {
@@ -63,6 +67,7 @@ fn use_revalidate(state: Signal<AppState>, ws: Store<crate::session::Workspace>)
                 return; // superseded by a newer edit
             }
             let diags = crate::sql::analyze(&sql, &catalog);
+            tracing::info!("revalidate tab {id}: {} diagnostic(s)", diags.len());
             crate::diagnostics::set(id, diags);
         });
     });
