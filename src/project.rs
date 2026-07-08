@@ -308,5 +308,4 @@ impl Project {
             .ok()
             .and_then(|s| s.window)
     }
-
 }

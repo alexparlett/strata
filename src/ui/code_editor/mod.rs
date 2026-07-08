@@ -268,7 +268,10 @@ fn decoration_boxes(sql: &str, decos: &[Decoration]) -> Vec<DecoBox> {
             } else {
                 // Multi-line: to end of the start line.
                 let line_end = starts.get(line + 1).copied().unwrap_or(sql.len());
-                line_col(&starts, line_end.saturating_sub(1)).1.saturating_sub(col).max(1)
+                line_col(&starts, line_end.saturating_sub(1))
+                    .1
+                    .saturating_sub(col)
+                    .max(1)
             };
             let class = match d.severity {
                 crate::diagnostics::Severity::Error => "err",

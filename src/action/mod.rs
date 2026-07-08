@@ -267,7 +267,10 @@ fn run(state: Signal<AppState>, action: Action) {
         // project (open/recent spawn new windows; close closes this window)
         OpenProject => projects::open_dir(state),
         OpenRecent(path) => projects::open_recent(state, path),
-        OpenChosen { new_window, remember } => projects::choose_open(state, new_window, remember),
+        OpenChosen {
+            new_window,
+            remember,
+        } => projects::choose_open(state, new_window, remember),
         SaveProject => projects::save(state),
         CloseProject => projects::close(state),
         CloseWindowForce => projects::close_now(state),

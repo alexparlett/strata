@@ -20,7 +20,7 @@ pub mod validate;
 
 pub use complete::{complete, Completion, CompletionKind};
 pub use lex::is_word_char;
-pub use symbols::{Catalog, ColumnSym, TableSym};
+pub use symbols::Catalog;
 pub use validate::analyze;
 
 /// The engine's registered functions (built-ins + any UDFs), by category — names

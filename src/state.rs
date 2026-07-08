@@ -12,7 +12,6 @@ pub use crate::project::{
 };
 // A tab's data now lives in the reactive session store; re-exported so the
 // familiar `crate::state::Workspace` path keeps working.
-pub use crate::session::Workspace;
 use crate::query_error::QueryError;
 
 #[derive(Clone)]

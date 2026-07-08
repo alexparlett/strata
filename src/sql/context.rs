@@ -43,8 +43,8 @@ pub struct CaretAnalysis {
 }
 
 const JOIN_LEADINS: &[&str] = &[
-    "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL", "OUTER", "LATERAL",
-    "SEMI", "ANTI",
+    "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL", "OUTER", "LATERAL", "SEMI",
+    "ANTI",
 ];
 const EXPR_CLAUSES: &[&str] = &["WHERE", "HAVING", "QUALIFY", "ON", "ORDER", "GROUP", "BY"];
 
@@ -135,9 +135,13 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
 
     // The partial word = a name/keyword token whose span ends exactly at the caret
     // (i.e. we're typing its tail). Otherwise the caret sits after some other token.
-    let partial_tok = stmt
-        .iter()
-        .find(|t| t.span.end == caret && matches!(t.kind, TokKind::Ident | TokKind::Keyword | TokKind::QuotedIdent));
+    let partial_tok = stmt.iter().find(|t| {
+        t.span.end == caret
+            && matches!(
+                t.kind,
+                TokKind::Ident | TokKind::Keyword | TokKind::QuotedIdent
+            )
+    });
     let (partial, replace) = match partial_tok {
         Some(t) => (t.text.clone(), t.span.clone()),
         None => (String::new(), caret..caret),
@@ -157,7 +161,10 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
 
     let context = if prev.is_none() {
         Context::StatementStart
-    } else if prev.map(|t| t.kind == TokKind::Punct && t.text == ".").unwrap_or(false) {
+    } else if prev
+        .map(|t| t.kind == TokKind::Punct && t.text == ".")
+        .unwrap_or(false)
+    {
         // `x.` → columns of x (resolve alias → table).
         let owner = prev2.map(|t| t.text.clone()).unwrap_or_default();
         let table = aliases
@@ -168,7 +175,10 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         Context::AfterDot(table)
     } else if prev.map(|t| t.eq_ci("FROM")).unwrap_or(false) {
         Context::AfterFrom
-    } else if prev.map(|t| JOIN_LEADINS.iter().any(|k| t.eq_ci(k))).unwrap_or(false) {
+    } else if prev
+        .map(|t| JOIN_LEADINS.iter().any(|k| t.eq_ci(k)))
+        .unwrap_or(false)
+    {
         Context::AfterJoin
     } else {
         // Fall back to the most recent clause keyword in this statement.
@@ -194,8 +204,8 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
 /// The most recent clause keyword among the tokens before the caret.
 fn last_clause(before: &[&Tok]) -> Option<String> {
     const CLAUSES: &[&str] = &[
-        "SELECT", "FROM", "WHERE", "GROUP", "HAVING", "QUALIFY", "ORDER", "ON",
-        "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL",
+        "SELECT", "FROM", "WHERE", "GROUP", "HAVING", "QUALIFY", "ORDER", "ON", "JOIN", "INNER",
+        "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL",
     ];
     before
         .iter()

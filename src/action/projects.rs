@@ -96,7 +96,11 @@ fn open_with_pref(state: Signal<AppState>, path: PathBuf, pref: crate::config::O
 /// `Action::OpenChosen` — resolve the open-target prompt (B10): open the pending
 /// project here or in a new window, optionally remembering the choice as the pref.
 pub fn choose_open(state: Signal<AppState>, new_window: bool, remember: bool) {
-    let path = crate::overlays::OVERLAYS.resolve().read().open_prompt.clone();
+    let path = crate::overlays::OVERLAYS
+        .resolve()
+        .read()
+        .open_prompt
+        .clone();
     crate::overlays::close_open_prompt();
     let Some(path) = path else {
         return;

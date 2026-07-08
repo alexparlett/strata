@@ -34,7 +34,9 @@ impl TableSym {
     }
 
     pub fn column(&self, name: &str) -> Option<&ColumnSym> {
-        self.columns.iter().find(|c| c.name.eq_ignore_ascii_case(name))
+        self.columns
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(name))
     }
 }
 
@@ -67,7 +69,9 @@ impl Catalog {
     }
 
     pub fn table(&self, name: &str) -> Option<&TableSym> {
-        self.tables.iter().find(|t| t.name.eq_ignore_ascii_case(name))
+        self.tables
+            .iter()
+            .find(|t| t.name.eq_ignore_ascii_case(name))
     }
 
     pub fn has_table(&self, name: &str) -> bool {

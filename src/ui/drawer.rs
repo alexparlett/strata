@@ -88,7 +88,16 @@ pub fn Drawer() -> Element {
 /// History tab: one row per past run (single-line preview + a `N lines` chip for
 /// multi-line SQL). Click loads, double-click loads & runs.
 fn history_body(state: Signal<AppState>) -> Element {
-    let history: Vec<(u64, String, String, u128, usize, usize, &'static str, &'static str)> = state
+    let history: Vec<(
+        u64,
+        String,
+        String,
+        u128,
+        usize,
+        usize,
+        &'static str,
+        &'static str,
+    )> = state
         .read()
         .project
         .history
@@ -97,7 +106,16 @@ fn history_body(state: Signal<AppState>) -> Element {
             let dot = if h.ok { "var(--green)" } else { "var(--red2)" };
             let meta = if h.ok { "var(--dim)" } else { "var(--red)" };
             let lines = h.sql.lines().count();
-            (h.id, h.sql.clone(), h.ts_label.clone(), h.ms, h.rows, lines, dot, meta)
+            (
+                h.id,
+                h.sql.clone(),
+                h.ts_label.clone(),
+                h.ms,
+                h.rows,
+                lines,
+                dot,
+                meta,
+            )
         })
         .collect();
     rsx! {

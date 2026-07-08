@@ -74,7 +74,15 @@ pub fn lex(sql: &str) -> (Vec<Tok>, Option<LexError>) {
         Ok(tokens) => (
             tokens
                 .into_iter()
-                .filter_map(|t| convert(&starts, sql, t.token, offset(&starts, t.span.start), offset(&starts, t.span.end)))
+                .filter_map(|t| {
+                    convert(
+                        &starts,
+                        sql,
+                        t.token,
+                        offset(&starts, t.span.start),
+                        offset(&starts, t.span.end),
+                    )
+                })
                 .collect(),
             None,
         ),
@@ -92,13 +100,7 @@ pub fn lex(sql: &str) -> (Vec<Tok>, Option<LexError>) {
     }
 }
 
-fn convert(
-    _starts: &[usize],
-    _sql: &str,
-    token: Token,
-    start: usize,
-    end: usize,
-) -> Option<Tok> {
+fn convert(_starts: &[usize], _sql: &str, token: Token, start: usize, end: usize) -> Option<Tok> {
     let span = start..end.max(start);
     let (kind, text) = match token {
         Token::Whitespace(_) => return None,
@@ -113,9 +115,9 @@ fn convert(
             (kind, w.value)
         }
         Token::Number(n, _) => (TokKind::Num, n),
-        Token::SingleQuotedString(s) | Token::NationalStringLiteral(s) | Token::EscapedStringLiteral(s) => {
-            (TokKind::Str, s)
-        }
+        Token::SingleQuotedString(s)
+        | Token::NationalStringLiteral(s)
+        | Token::EscapedStringLiteral(s) => (TokKind::Str, s),
         Token::DoubleQuotedString(s) => (TokKind::QuotedIdent, s),
         Token::Comma => (TokKind::Punct, ",".into()),
         Token::LParen => (TokKind::Punct, "(".into()),

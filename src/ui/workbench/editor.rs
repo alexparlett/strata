@@ -235,10 +235,7 @@ fn completion_menu(
 /// below the squiggled token, via the reusable [`Popup`] in hover mode (no backdrop,
 /// pointer-transparent). Empty when nothing is hovered, or while the completion popup is
 /// open (they'd overlap — completion wins).
-fn lint_popover(
-    hover: Signal<Option<LintHover>>,
-    comp: Signal<Option<Completing>>,
-) -> Element {
+fn lint_popover(hover: Signal<Option<LintHover>>, comp: Signal<Option<Completing>>) -> Element {
     if comp.read().is_some() {
         return rsx! {};
     }
@@ -399,7 +396,11 @@ fn handle_completion_key(
         // Any non-word character (per the dialect) dismisses the popup — punctuation,
         // operators, brackets, `.`, `;`, quotes — but still types. A following `.`
         // re-opens completion for that table's columns.
-        Key::Character(s) if s.chars().next().map_or(false, |c| !crate::sql::is_word_char(c)) => {
+        Key::Character(s)
+            if s.chars()
+                .next()
+                .map_or(false, |c| !crate::sql::is_word_char(c)) =>
+        {
             close_completion(comp, comp_gen);
         }
         // Word characters: leave the popup open — refresh_completion updates it.

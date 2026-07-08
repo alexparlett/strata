@@ -38,13 +38,30 @@ pub struct Completion {
 /// we *don't* block below, so the phrase and its parts stay consistent.
 const MULTI_WORD: &[&str] = &[
     // clauses
-    "GROUP BY", "ORDER BY", "PARTITION BY", "UNION ALL",
+    "GROUP BY",
+    "ORDER BY",
+    "PARTITION BY",
+    "UNION ALL",
     // joins (incl. DataFusion's semi/anti/natural — see the SELECT reference)
-    "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN", "NATURAL JOIN",
-    "LEFT OUTER JOIN", "RIGHT OUTER JOIN", "FULL OUTER JOIN",
-    "LEFT SEMI JOIN", "RIGHT SEMI JOIN", "LEFT ANTI JOIN", "RIGHT ANTI JOIN",
+    "INNER JOIN",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "FULL JOIN",
+    "CROSS JOIN",
+    "NATURAL JOIN",
+    "LEFT OUTER JOIN",
+    "RIGHT OUTER JOIN",
+    "FULL OUTER JOIN",
+    "LEFT SEMI JOIN",
+    "RIGHT SEMI JOIN",
+    "LEFT ANTI JOIN",
+    "RIGHT ANTI JOIN",
     // predicates
-    "IS NULL", "IS NOT NULL", "NOT IN", "IS DISTINCT FROM", "IS NOT DISTINCT FROM",
+    "IS NULL",
+    "IS NOT NULL",
+    "NOT IN",
+    "IS DISTINCT FROM",
+    "IS NOT DISTINCT FROM",
 ];
 
 /// DDL/DML keywords excluded from completion — those statements are blocked in the
@@ -54,16 +71,51 @@ const MULTI_WORD: &[&str] = &[
 /// registry, so blocking the *keyword* doesn't hide the function.)
 const BLOCKED_KEYWORDS: &[&str] = &[
     // create / drop / alter surface
-    "CREATE", "TABLE", "VIEW", "EXTERNAL", "DATABASE", "SCHEMA", "DROP", "ALTER",
-    "TRUNCATE", "RENAME", "CASCADE", "RESTRICT", "TEMPORARY", "TEMP", "UNLOGGED",
+    "CREATE",
+    "TABLE",
+    "VIEW",
+    "EXTERNAL",
+    "DATABASE",
+    "SCHEMA",
+    "DROP",
+    "ALTER",
+    "TRUNCATE",
+    "RENAME",
+    "CASCADE",
+    "RESTRICT",
+    "TEMPORARY",
+    "TEMP",
+    "UNLOGGED",
     // data mutation
-    "INSERT", "INTO", "UPDATE", "DELETE", "COPY", "MERGE", "UPSERT", "REPLACE",
-    "OVERWRITE", "VACUUM",
+    "INSERT",
+    "INTO",
+    "UPDATE",
+    "DELETE",
+    "COPY",
+    "MERGE",
+    "UPSERT",
+    "REPLACE",
+    "OVERWRITE",
+    "VACUUM",
     // transactions / permissions
-    "GRANT", "REVOKE", "COMMIT", "ROLLBACK", "SAVEPOINT", "BEGIN", "START",
-    "TRANSACTION", "LOCK", "UNLOCK",
+    "GRANT",
+    "REVOKE",
+    "COMMIT",
+    "ROLLBACK",
+    "SAVEPOINT",
+    "BEGIN",
+    "START",
+    "TRANSACTION",
+    "LOCK",
+    "UNLOCK",
     // schema objects
-    "CONSTRAINT", "REFERENCES", "INDEX", "SEQUENCE", "TRIGGER", "PROCEDURE", "STORED",
+    "CONSTRAINT",
+    "REFERENCES",
+    "INDEX",
+    "SEQUENCE",
+    "TRIGGER",
+    "PROCEDURE",
+    "STORED",
 ];
 
 /// Completions for the caret at byte `caret` in `sql`.
@@ -133,9 +185,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog) -> Vec<Completion> {
         items.sort_by(|a, b| {
             let (al, bl) = (a.label.to_ascii_lowercase(), b.label.to_ascii_lowercase());
             let (ap, bp) = (al.starts_with(&partial), bl.starts_with(&partial));
-            bp.cmp(&ap)
-                .then(al.len().cmp(&bl.len()))
-                .then(al.cmp(&bl))
+            bp.cmp(&ap).then(al.len().cmp(&bl.len())).then(al.cmp(&bl))
         });
     }
     items.truncate(50);

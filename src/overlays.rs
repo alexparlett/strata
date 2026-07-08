@@ -14,7 +14,6 @@
 //! lens write is what notifies lens subscribers (see [[workbench-and-runs]]).
 
 use dioxus::prelude::*;
-use dioxus_stores::*;
 
 /// What the table-config window is doing, if open: creating a new table or editing
 /// an existing one (by name). `None` on the store = closed.

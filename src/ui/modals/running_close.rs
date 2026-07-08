@@ -21,7 +21,11 @@ use crate::ui::icons;
 
 #[component]
 pub fn RunningCloseHost() -> Element {
-    let Some(target) = crate::overlays::OVERLAYS.resolve().read().close_running_confirm else {
+    let Some(target) = crate::overlays::OVERLAYS
+        .resolve()
+        .read()
+        .close_running_confirm
+    else {
         return rsx! {};
     };
     rsx! { RunningCloseCard { target } }
@@ -55,8 +59,16 @@ fn RunningCloseCard(target: RunningCloseTarget) -> Element {
             true,
         ),
     };
-    let keep_label = if is_project { "Cancel" } else { "Keep tab open" };
-    let stop_label = if is_project { "Stop & exit" } else { "Stop & close" };
+    let keep_label = if is_project {
+        "Cancel"
+    } else {
+        "Keep tab open"
+    };
+    let stop_label = if is_project {
+        "Stop & exit"
+    } else {
+        "Stop & close"
+    };
 
     rsx! {
         Dialog { on_close: move |_| crate::overlays::close_running_close(), card_class: "confirm".to_string(), z: 80,

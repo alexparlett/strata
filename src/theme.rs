@@ -12,11 +12,11 @@
 //! User/plugin discovery and the Settings grid are wired next; the token set the
 //! CSS actually *consumes* is still being widened from the hardcoded palette.
 
+use dioxus::html::completions::CompleteWithBraces::base;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use dioxus::html::completions::CompleteWithBraces::base;
-use serde::{Deserialize, Serialize};
 
 /// Light/dark grouping — used for the "Sync with OS" split and per-mode fallback.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]

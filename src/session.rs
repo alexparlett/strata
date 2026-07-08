@@ -210,7 +210,9 @@ pub fn open_named(name: &str, sql: String, origin: Origin) {
         unique_name(&s, name)
     };
     let id = alloc_id(store);
-    store.workspaces().push(Workspace::new(id, name, sql, origin));
+    store
+        .workspaces()
+        .push(Workspace::new(id, name, sql, origin));
     set_active(store, id);
 }
 
@@ -286,10 +288,10 @@ pub fn duplicate(id: WorkspaceId) {
         (s.workspaces[p].sql.clone(), unique_name(&s, &base), p)
     };
     let new_id = alloc_id(store);
-    store
-        .workspaces()
-        .write()
-        .insert(pos + 1, Workspace::new(new_id, name, src_sql, Origin::Scratch));
+    store.workspaces().write().insert(
+        pos + 1,
+        Workspace::new(new_id, name, src_sql, Origin::Scratch),
+    );
     set_active(store, new_id);
 }
 
@@ -351,10 +353,7 @@ pub fn remove_ids(ids: &HashSet<WorkspaceId>) {
     let store = SESSION.resolve();
     let (active, active_pos) = {
         let s = store.read();
-        (
-            s.active,
-            s.workspaces.iter().position(|w| w.id == s.active),
-        )
+        (s.active, s.workspaces.iter().position(|w| w.id == s.active))
     };
     store.workspaces().write().retain(|w| !ids.contains(&w.id));
     if ids.contains(&active) {
@@ -383,8 +382,12 @@ pub fn load(mut loaded: Session) {
 /// Reset to a single blank workspace (a brand-new project).
 pub fn reset_blank() {
     let mut s = Session::default();
-    s.workspaces
-        .push(Workspace::new(1, "query 1".into(), String::new(), Origin::Scratch));
+    s.workspaces.push(Workspace::new(
+        1,
+        "query 1".into(),
+        String::new(),
+        Origin::Scratch,
+    ));
     s.active = 1;
     s.next_id = 2;
     *SESSION.resolve().write() = s;
@@ -394,8 +397,12 @@ pub fn reset_blank() {
 /// ones, ensure ≥1 workspace, rebuild `next_id`, and guarantee a valid `active`.
 fn normalize(s: &mut Session) {
     if s.workspaces.is_empty() {
-        s.workspaces
-            .push(Workspace::new(1, "query 1".into(), String::new(), Origin::Scratch));
+        s.workspaces.push(Workspace::new(
+            1,
+            "query 1".into(),
+            String::new(),
+            Origin::Scratch,
+        ));
     }
     let ids_ok = {
         let mut seen = HashSet::new();
@@ -408,9 +415,13 @@ fn normalize(s: &mut Session) {
     }
     s.next_id = s.workspaces.iter().map(|w| w.id).max().unwrap_or(0) + 1;
     // Keep the focus clock above any persisted stamp so new activations stay monotonic.
-    s.view_clock = s
-        .view_clock
-        .max(s.workspaces.iter().map(|w| w.last_viewed).max().unwrap_or(0));
+    s.view_clock = s.view_clock.max(
+        s.workspaces
+            .iter()
+            .map(|w| w.last_viewed)
+            .max()
+            .unwrap_or(0),
+    );
     if !s.workspaces.iter().any(|w| w.id == s.active) {
         s.active = s.workspaces[0].id;
     }

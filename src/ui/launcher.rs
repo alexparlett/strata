@@ -58,9 +58,7 @@ pub fn LauncherRoot() -> Element {
         .read()
         .iter()
         .filter(|r| {
-            f.is_empty()
-                || r.name.to_lowercase().contains(&f)
-                || r.path.to_lowercase().contains(&f)
+            f.is_empty() || r.name.to_lowercase().contains(&f) || r.path.to_lowercase().contains(&f)
         })
         .cloned()
         .collect();
@@ -167,11 +165,18 @@ pub fn LauncherRoot() -> Element {
 /// `stop_propagation`s so it doesn't also fire the row's open-and-close click. Pin
 /// and remove write the config store, then reload the `recents` signal from it.
 fn project_row(r: RecentProject, mut recents: Signal<Vec<RecentProject>>) -> Element {
-    let RecentProject { name, path, pinned, .. } = r;
+    let RecentProject {
+        name, path, pinned, ..
+    } = r;
     let ini = initials(&name);
     let col = avatar_color(&name);
-    let (open_path, new_path, pin_path, rev_path, rm_path) =
-        (path.clone(), path.clone(), path.clone(), path.clone(), path.clone());
+    let (open_path, new_path, pin_path, rev_path, rm_path) = (
+        path.clone(),
+        path.clone(),
+        path.clone(),
+        path.clone(),
+        path.clone(),
+    );
     rsx! {
         div {
             class: "launch-row",

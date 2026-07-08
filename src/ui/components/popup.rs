@@ -20,8 +20,7 @@ pub struct Point {
 /// The card stops propagation so clicks inside don't dismiss it.
 #[component]
 pub fn Popup(
-    #[props(default = EventHandler::new(|_: ()| {}))]
-    on_close: EventHandler<()>,
+    #[props(default = EventHandler::new(|_: ()| {}))] on_close: EventHandler<()>,
     at: Point,
     /// Card class — defaults to the context-menu look (`ctx-menu`). Pass e.g.
     /// `"menu"` for the richer dropdown chrome.
@@ -41,23 +40,20 @@ pub fn Popup(
     let (x, y) = (at.x, at.y);
     let card = card_class.unwrap_or_else(|| "ctx-menu".to_string());
     let wstyle = width.map(|w| format!("width:{w}px;")).unwrap_or_default();
-    if !backdrop {
-        // Bare positioned card — no dismiss layer, pointer-transparent (a tooltip).
-        return rsx! {
-            div {
-                class: "{card}",
-                style: "position:fixed;left:{x}px;top:{y}px;{wstyle}pointer-events:none;",
-                {children}
-            }
-        };
-    }
+    // A tooltip (`backdrop:false`) is a *pass-through* layer: `pointer-events:none` so it
+    // never captures clicks or swallows the editor's `mousemove`, and it doesn't grab
+    // focus. A menu (`backdrop:true`) captures + dismisses + focuses for Esc. The two
+    // differ only in these attribute values, so it's one render tree.
+    let pe = if backdrop { "auto" } else { "none" };
     rsx! {
         div {
-            // Focusable so Escape is caught without a document-level listener.
+            // Focusable so Escape is caught without a document-level listener (menu only —
+            // `set_focus(false)` is a no-op, so a tooltip never steals the editor's focus).
             class: "ctx-backdrop",
+            style: "pointer-events:{pe};",
             tabindex: "0",
             onmounted: move |e| {
-                spawn(async move { let _ = e.set_focus(true).await; });
+                spawn(async move { let _ = e.set_focus(backdrop).await; });
             },
             // Don't let a dismiss-click bubble to a drag-on-mousedown parent (header).
             onmousedown: move |e| e.stop_propagation(),
@@ -74,7 +70,7 @@ pub fn Popup(
             },
             div {
                 class: "{card}",
-                style: "position:fixed;left:{x}px;top:{y}px;{wstyle}",
+                style: "position:fixed;left:{x}px;top:{y}px;{wstyle}pointer-events:{pe};",
                 onclick: move |e| e.stop_propagation(),
                 oncontextmenu: move |e| e.stop_propagation(),
                 {children}

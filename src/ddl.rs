@@ -14,7 +14,6 @@
 
 use datafusion::sql::parser::{DFParser, Statement as DFStatement};
 use datafusion::sql::sqlparser::ast::{CreateView, ObjectType, Statement as SqlStatement};
-use serde_json::to_string;
 
 #[derive(Debug, Clone)]
 pub enum Decision {
@@ -74,6 +73,7 @@ fn classify_sql(stmt: SqlStatement) -> Decision {
         SqlStatement::CreateTable(_) => block(
             "In-memory / CTAS tables aren't supported. Register files as an external table via Table Config, or save a query as a view.",
         ),
+        let
         SqlStatement::Insert(_) | SqlStatement::Update { .. } | SqlStatement::Delete(_) => {
             block("Data is read-only here. Use Export to write results to a file.")
         }

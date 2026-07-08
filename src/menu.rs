@@ -102,7 +102,12 @@ pub fn app_menu() -> Menu {
     // (⌘T new-tab, ⌘W close-tab, ⌘, settings, ⌘S save-query) so those keep flowing
     // to `handle_key`; only the genuinely-new ⌘O / ⌥⌘S are bound here.
     let new_query = MenuItem::with_id(MenuCmd::NewQuery, "New Query", true, None);
-    let open = MenuItem::with_id(MenuCmd::OpenProject, "Open Project…", true, accel("CmdOrCtrl+O"));
+    let open = MenuItem::with_id(
+        MenuCmd::OpenProject,
+        "Open Project…",
+        true,
+        accel("CmdOrCtrl+O"),
+    );
     let recent = recent_submenu();
     let close = MenuItem::with_id(MenuCmd::CloseProject, "Close Project", true, None);
     let save_all = MenuItem::with_id(MenuCmd::SaveAll, "Save All", true, accel("Alt+CmdOrCtrl+S"));
@@ -158,7 +163,14 @@ fn recent_submenu() -> Submenu {
     let items: Vec<MenuItem> = recents
         .iter()
         .take(10)
-        .map(|r| MenuItem::with_id(MenuCmd::OpenRecent(r.path.clone()), r.name.as_str(), true, None))
+        .map(|r| {
+            MenuItem::with_id(
+                MenuCmd::OpenRecent(r.path.clone()),
+                r.name.as_str(),
+                true,
+                None,
+            )
+        })
         .collect();
     let refs: Vec<&dyn IsMenuItem> = items.iter().map(|i| i as &dyn IsMenuItem).collect();
     let _ = recent.append_items(&refs);

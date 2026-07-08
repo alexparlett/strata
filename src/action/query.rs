@@ -288,10 +288,7 @@ pub fn save(mut state: Signal<AppState>) {
     s.set_status(LogKind::Ok, format!("{verb} query '{name}'"));
     drop(s);
     // The tab is now bound to (and in sync with) this saved query.
-    crate::session::set_origin(
-        w.id,
-        crate::state::Origin::SavedQuery(name.clone()),
-    );
+    crate::session::set_origin(w.id, crate::state::Origin::SavedQuery(name.clone()));
 }
 
 /// Open a saved query: reuse a tab already named after it, else open a new tab.
@@ -306,7 +303,11 @@ pub fn open_saved(state: Signal<AppState>, name: &str) {
     let Some(sql) = sql else {
         return;
     };
-    crate::session::open_named(name, sql, crate::state::Origin::SavedQuery(name.to_string()));
+    crate::session::open_named(
+        name,
+        sql,
+        crate::state::Origin::SavedQuery(name.to_string()),
+    );
 }
 
 /// Delete a saved query from the project (immediate — no confirm dialog).

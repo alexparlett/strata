@@ -243,7 +243,11 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
     let scan_error = d.scan_error.clone();
     drop(d);
     // A failed engine register is surfaced inline via the store (window stays open).
-    let reg_err = crate::overlays::OVERLAYS.resolve().read().config_err.clone();
+    let reg_err = crate::overlays::OVERLAYS
+        .resolve()
+        .read()
+        .config_err
+        .clone();
 
     // Scan the sources once when the modal opens (validates pre-filled edit paths).
     use_hook(move || rescan(draft, state));

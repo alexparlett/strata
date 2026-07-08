@@ -16,7 +16,12 @@ use crate::ui::icons;
 
 #[component]
 pub fn OpenPromptHost() -> Element {
-    let Some(path) = crate::overlays::OVERLAYS.resolve().read().open_prompt.clone() else {
+    let Some(path) = crate::overlays::OVERLAYS
+        .resolve()
+        .read()
+        .open_prompt
+        .clone()
+    else {
         return rsx! {};
     };
     rsx! { OpenPromptCard { path } }
