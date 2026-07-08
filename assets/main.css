@@ -465,6 +465,57 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .tab-rename { width: 118px; background: var(--bg); border: 1px solid var(--accent); border-radius: 5px; outline: none; color: var(--text); font-family: inherit; font-size: 12.5px; font-weight: 500; padding: 2px 6px; }
 
 /* ============ SQL EDITOR (dioxus-code-editor) ============ */
+/* ---------- vendored code editor base layout (S26a) ----------
+   The textarea-over-highlight editor from src/ui/code_editor. The upstream crate's
+   stylesheet is gone (we vendored the component), so this supplies the base layout;
+   the `.ps-sql` block below sets the size vars (`--dxc-editor-*`) every layer reads. */
+.dxc-editor {
+  --dxc-editor-font-size: 13px;
+  --dxc-editor-line-height: 1.5em;
+  display: flex;
+  align-items: stretch;
+  position: relative;
+  overflow: auto;
+  font-family: var(--mono, monospace);
+}
+.dxc-editor-gutter { flex: none; padding: 0 8px; text-align: right; user-select: none; }
+.dxc-editor-gutter-line {
+  height: var(--dxc-editor-line-height);
+  line-height: var(--dxc-editor-line-height);
+  font-size: var(--dxc-editor-font-size);
+}
+.dxc-editor-viewport { position: relative; flex: 1; min-width: 0; }
+.dxc-editor-highlight, .dxc-editor-input, .dxc-editor-decorations {
+  margin: 0;
+  padding: 0 8px;
+  font: var(--dxc-editor-font-size)/var(--dxc-editor-line-height) var(--mono, monospace);
+  white-space: pre;
+  tab-size: 4;
+}
+.dxc-editor-highlight { position: relative; pointer-events: none; z-index: 0; }
+.dxc-editor-line { height: var(--dxc-editor-line-height); }
+.dxc-editor-decorations { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.dxc-editor-input {
+  position: absolute; inset: 0; border: none; outline: none; resize: none;
+  overflow: hidden; background: transparent; color: transparent;
+  caret-color: var(--text); z-index: 2;
+}
+.dxc-editor-input::placeholder { color: var(--dim3); }
+/* Squiggle: wavy underline on the line's baseline, coloured by severity. */
+.dxc-squiggle {
+  position: absolute;
+  height: var(--dxc-editor-line-height);
+  background-repeat: repeat-x;
+  background-position: left bottom;
+  background-size: 6px 3px;
+  background-image:
+    linear-gradient(45deg, transparent 65%, currentColor 80%, transparent 90%),
+    linear-gradient(-45deg, transparent 65%, currentColor 80%, transparent 90%);
+}
+.dxc-squiggle.err { color: var(--red2); }
+.dxc-squiggle.warn { color: var(--orange); }
+.dxc-squiggle.info { color: var(--accent); }
+
 /* Retune the GitHub-Dark preset to the app: transparent bg (the wrapper paints
    var(--main)), themed gutter, accent caret + selection. Token colors are left
    to the preset since they already match the app's type palette. */

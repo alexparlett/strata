@@ -8,8 +8,9 @@
 //! the *active* workspace (this pane is only interactive when it's the active one).
 
 use dioxus::prelude::*;
-use dioxus_code_editor::CodeEditor;
 use dioxus_stores::Store;
+
+use crate::ui::code_editor::{CodeEditor, Decoration};
 
 use crate::action::{dispatch, Action};
 use crate::session::WorkspaceStoreExt;
@@ -36,14 +37,23 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
     // TODO(verify): reading the whole `Store<Workspace>` value to call the
     // plain-struct `is_dirty()` (needs origin + origin_hash + sql together).
     let dirty = ws.read().is_dirty();
-    let running = {
-        let id = ws.id().cloned();
-        crate::runs::RUNS
-            .resolve()
-            .get(id)
-            .map(|e| e.read().running)
-            .unwrap_or(false)
-    };
+    let ws_id = ws.id().cloned();
+    let running = crate::runs::RUNS
+        .resolve()
+        .get(ws_id)
+        .map(|e| e.read().running)
+        .unwrap_or(false);
+    // Diagnostics with a byte span → inline squiggles (S25). Reactive: this tab's
+    // Problems re-render the editor's overlay as they appear/clear.
+    let decorations: Vec<Decoration> = crate::diagnostics::problems_for(ws_id)
+        .into_iter()
+        .filter_map(|d| {
+            d.span.map(|range| Decoration {
+                range,
+                severity: d.severity,
+            })
+        })
+        .collect();
 
     rsx! {
         section { style: "flex:none;background:var(--main);",
@@ -94,6 +104,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     spellcheck: false,
                     placeholder: "SELECT * FROM your_table LIMIT 100;",
                     class: "ps-sql",
+                    decorations,
                     oninput: move |v: String| ws.sql().set(v),
                 }
             }

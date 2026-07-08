@@ -2,6 +2,7 @@
 //! and calls controller actions in `crate::app`.
 
 pub mod activity_rail;
+pub mod code_editor;
 pub mod components;
 pub mod drawer;
 pub mod errview;
