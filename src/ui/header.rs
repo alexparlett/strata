@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
-use crate::ui::components::{Backdrop, Point, Popup};
+use crate::ui::components::DropdownMenu;
 use crate::ui::icons;
 
 #[component]
@@ -16,7 +16,6 @@ pub fn Header() -> Element {
     // The command palette + Settings are app-global overlays: the header buttons
     // toggle them through the per-window overlay store (⌘K / ⌘, do the same).
     // Self-contained: the project switcher dropdown lives here, not in `AppState`.
-    let mut proj_menu = use_signal(|| false);
     let project = state.read().project.name.clone();
 
     rsx! {
@@ -36,25 +35,16 @@ pub fn Header() -> Element {
 
             div { class: "hsep" }
 
-            button {
+            DropdownMenu {
                 class: "proj-btn",
                 title: "Switch project",
-                onmousedown: move |e| e.stop_propagation(),
-                ondoubleclick: move |e| e.stop_propagation(),
-                onclick: move |_| { let v = proj_menu(); proj_menu.set(!v); },
-                {icons::folder(14)}
-                span { class: "name", "{project}" }
-                {icons::chevron_down(12)}
-            }
-            if proj_menu() {
-                Backdrop { on_close: move |_| proj_menu.set(false),
-                    Popup {
-                        at: Point { x: 232.0, y: 46.0 },
-                        card_class: "menu".to_string(),
-                        width: 328,
-                        {project_menu_body(state, proj_menu)}
-                    }
-                }
+                width: 328,
+                trigger: rsx! {
+                    {icons::folder(14)}
+                    span { class: "name", "{project}" }
+                    {icons::chevron_down(12)}
+                },
+                {project_menu_body(state)}
             }
 
             div { class: "spacer" }
@@ -81,10 +71,11 @@ pub fn Header() -> Element {
     }
 }
 
-/// The project switcher dropdown body (Open… + open/recent projects). Rendered as
-/// a `Popup`'s children. "Open folder…" closes the menu then dispatches — the
-/// async picker task is spawned on the Header scope, so it survives the unmount.
-fn project_menu_body(state: Signal<AppState>, mut proj_menu: Signal<bool>) -> Element {
+/// The project switcher dropdown body (Open… + open/recent projects) — the
+/// `DropdownMenu`'s children. Closing is the `DropdownMenu`'s job (any inner click), so
+/// items just dispatch; the async open-picker is spawned on the Header scope so it
+/// survives the unmount.
+fn project_menu_body(state: Signal<AppState>) -> Element {
     let active = state.read().project.name.clone();
     let active_ini = initials_of(&active);
     let active_path = state
@@ -109,7 +100,7 @@ fn project_menu_body(state: Signal<AppState>, mut proj_menu: Signal<bool>) -> El
     rsx! {
         div {
             class: "menu-item",
-            onclick: move |_| { proj_menu.set(false); dispatch(state, Action::OpenProject); },
+            onclick: move |_| dispatch(state, Action::OpenProject),
             {icons::folder(14)}
             span { "Open folder…" }
         }
@@ -134,7 +125,7 @@ fn project_menu_body(state: Signal<AppState>, mut proj_menu: Signal<bool>) -> El
                     rsx! {
                         div {
                             class: "proj-item",
-                            onclick: move |_| { proj_menu.set(false); dispatch(state, Action::OpenRecent(open_path.clone())); },
+                            onclick: move |_| dispatch(state, Action::OpenRecent(open_path.clone())),
                             span { class: "avatar", style: "background:#7ee787;", "{ini}" }
                             div { class: "meta",
                                 div { class: "nm", "{name}" }

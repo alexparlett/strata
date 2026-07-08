@@ -18,6 +18,7 @@
 mod checkbox;
 mod context_menu;
 mod dialog;
+mod dropdown_menu;
 mod menu;
 mod popup;
 mod select;
@@ -27,6 +28,7 @@ mod window;
 pub use checkbox::Checkbox;
 pub use context_menu::ContextMenu;
 pub use dialog::Dialog;
+pub use dropdown_menu::DropdownMenu;
 pub use menu::{MenuItem, MenuSep};
 pub use popup::{Backdrop, Point, Popup};
 pub use select::{Select, SelectOption};
