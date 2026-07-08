@@ -25,7 +25,8 @@ pub fn ContextMenu(
                     anchor: Rect::point(p.x, p.y),
                     card_class: "ds-menu".to_string(),
                     width: if width > 0 { Some(width) } else { None },
-                    {children}
+                    // Any bubbled inner click dismisses (action rows just do their thing).
+                    div { onclick: move |_| on_close.call(()), {children} }
                 }
             }
         }

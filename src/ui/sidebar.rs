@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind, RemoveTarget};
-use crate::ui::components::{ContextMenu, Dialog, MenuItem, MenuSep, Point};
+use crate::ui::components::{ContextMenu, Dialog, DropdownMenu, MenuItem, MenuSep, Point, RectAlign};
 use crate::ui::icons;
 
 /// A catalog row's open context menu (self-contained sidebar state).
@@ -59,7 +59,7 @@ pub fn Sidebar() -> Element {
                 }
 
                 for i in 0..ntab {
-                    {render_table(state, menu, i, &filter, &selected)}
+                    {render_table(state, menu, remove, i, &filter, &selected)}
                 }
 
                 // ---- VIEWS ----
@@ -67,7 +67,7 @@ pub fn Sidebar() -> Element {
                     span { class: "sec-label", "VIEWS · {nview}" }
                 }
                 for i in 0..nview {
-                    {render_view(state, menu, i)}
+                    {render_view(state, menu, remove, i)}
                 }
 
                 // ---- SAVED QUERIES (always shown, like Tables/Views) ----
@@ -79,7 +79,7 @@ pub fn Sidebar() -> Element {
                         "No saved queries yet" }
                 } else {
                     for i in 0..nquery {
-                        {render_saved_query(state, menu, i)}
+                        {render_saved_query(state, menu, remove, i)}
                     }
                 }
             }
@@ -87,7 +87,7 @@ pub fn Sidebar() -> Element {
             // Self-contained catalog row menu (right-click → ContextMenu).
             if let Some(t) = menu() {
                 ContextMenu { on_close: move |_| menu.set(None), at: Some(t.at),
-                    {catalog_menu_items(state, menu, remove, t)}
+                    {catalog_menu_items(state, remove, t.kind, t.name.clone())}
                 }
             }
             // The remove-confirm dialog, also sidebar-local (opened from a row menu).
@@ -98,47 +98,47 @@ pub fn Sidebar() -> Element {
     }
 }
 
-/// The rows for a catalog context menu, by kind. Each item dismisses the popup
-/// then dispatches its concrete action.
+/// The rows for a catalog row menu, by kind. Shared by the ⋮ `DropdownMenu` and the
+/// right-click `ContextMenu` — both dismiss via their own close-wrapper, so items just
+/// dispatch (open the remove-confirm for drops).
 fn catalog_menu_items(
     state: Signal<AppState>,
-    mut menu: Signal<Option<CtxTarget>>,
     mut remove: Signal<Option<RemoveTarget>>,
-    t: CtxTarget,
+    kind: CatalogKind,
+    name: String,
 ) -> Element {
-    let name = t.name.clone();
-    match t.kind {
+    match kind {
         CatalogKind::Table => {
             let (n1, n2, n3) = (name.clone(), name.clone(), name.clone());
             rsx! {
                 MenuItem { icon: icons::play(14), label: "View table".to_string(),
-                    onclick: move |_| { menu.set(None); dispatch(state, Action::LoadSelectStar(n1.clone())); } }
+                    onclick: move |_| dispatch(state, Action::LoadSelectStar(n1.clone())) }
                 MenuItem { icon: icons::gear(14), label: "Configure".to_string(),
-                    onclick: move |_| { menu.set(None); dispatch(state, Action::OpenConfigEdit(n2.clone())); } }
+                    onclick: move |_| dispatch(state, Action::OpenConfigEdit(n2.clone())) }
                 MenuSep {}
                 MenuItem { icon: icons::trash(14), label: "Drop table".to_string(), danger: true,
-                    onclick: move |_| { menu.set(None); remove.set(Some(RemoveTarget { kind: RemoveKind::Table, name: n3.clone() })); } }
+                    onclick: move |_| remove.set(Some(RemoveTarget { kind: RemoveKind::Table, name: n3.clone() })) }
             }
         }
         CatalogKind::View => {
             let (n1, n2, n3) = (name.clone(), name.clone(), name.clone());
             rsx! {
                 MenuItem { icon: icons::play(14), label: "View view".to_string(),
-                    onclick: move |_| { menu.set(None); dispatch(state, Action::LoadSelectStar(n1.clone())); } }
+                    onclick: move |_| dispatch(state, Action::LoadSelectStar(n1.clone())) }
                 MenuItem { icon: icons::pencil(14), label: "Edit query".to_string(),
-                    onclick: move |_| { menu.set(None); dispatch(state, Action::EditView(n2.clone())); } }
+                    onclick: move |_| dispatch(state, Action::EditView(n2.clone())) }
                 MenuSep {}
                 MenuItem { icon: icons::trash(14), label: "Drop view".to_string(), danger: true,
-                    onclick: move |_| { menu.set(None); remove.set(Some(RemoveTarget { kind: RemoveKind::View, name: n3.clone() })); } }
+                    onclick: move |_| remove.set(Some(RemoveTarget { kind: RemoveKind::View, name: n3.clone() })) }
             }
         }
         CatalogKind::Query => {
             let (n1, n2) = (name.clone(), name.clone());
             rsx! {
                 MenuItem { icon: icons::pencil(14), label: "Open in new tab".to_string(),
-                    onclick: move |_| { menu.set(None); dispatch(state, Action::OpenSavedQuery(n1.clone())); } }
+                    onclick: move |_| dispatch(state, Action::OpenSavedQuery(n1.clone())) }
                 MenuItem { icon: icons::trash(14), label: "Delete query".to_string(), danger: true,
-                    onclick: move |_| { menu.set(None); dispatch(state, Action::DeleteSavedQuery(n2.clone())); } }
+                    onclick: move |_| dispatch(state, Action::DeleteSavedQuery(n2.clone())) }
             }
         }
     }
@@ -195,6 +195,7 @@ fn remove_dialog(
 fn render_saved_query(
     state: Signal<AppState>,
     mut menu: Signal<Option<CtxTarget>>,
+    remove: Signal<Option<RemoveTarget>>,
     i: usize,
 ) -> Element {
     let s = state.read();
@@ -220,15 +221,10 @@ fn render_saved_query(
                 },
                 span { style: "color:var(--purple);display:flex;", {icons::brackets(14)} }
                 span { class: "tname", "{name}" }
-                button {
-                    class: "row-menu",
-                    title: "Actions",
-                    onclick: move |e| {
-                        e.stop_propagation();
-                        let c = e.client_coordinates();
-                        menu.set(Some(CtxTarget { kind: CatalogKind::Query, name: nm_menu.clone(), at: Point { x: c.x, y: c.y } }));
-                    },
-                    {icons::dots(14)}
+                DropdownMenu {
+                    class: "row-menu", title: "Actions", align: RectAlign::BOTTOM_END, width: 180,
+                    trigger: rsx! { {icons::dots(14)} },
+                    {catalog_menu_items(state, remove, CatalogKind::Query, nm_menu.clone())}
                 }
             }
         }
@@ -238,6 +234,7 @@ fn render_saved_query(
 fn render_table(
     state: Signal<AppState>,
     mut menu: Signal<Option<CtxTarget>>,
+    remove: Signal<Option<RemoveTarget>>,
     i: usize,
     filter: &str,
     selected: &Option<(String, String)>,
@@ -292,15 +289,10 @@ fn render_table(
                 }
                 span { style: "color:var(--dim);display:flex;", {icons::table(14)} }
                 span { class: "tname", "{name}" }
-                button {
-                    class: "row-menu",
-                    title: "Actions",
-                    onclick: move |e| {
-                        e.stop_propagation();
-                        let c = e.client_coordinates();
-                        menu.set(Some(CtxTarget { kind: CatalogKind::Table, name: nm_menu.clone(), at: Point { x: c.x, y: c.y } }));
-                    },
-                    {icons::dots(14)}
+                DropdownMenu {
+                    class: "row-menu", title: "Actions", align: RectAlign::BOTTOM_END, width: 180,
+                    trigger: rsx! { {icons::dots(14)} },
+                    {catalog_menu_items(state, remove, CatalogKind::Table, nm_menu.clone())}
                 }
             }
             if open {
@@ -330,7 +322,12 @@ fn render_table(
     }
 }
 
-fn render_view(state: Signal<AppState>, mut menu: Signal<Option<CtxTarget>>, i: usize) -> Element {
+fn render_view(
+    state: Signal<AppState>,
+    mut menu: Signal<Option<CtxTarget>>,
+    remove: Signal<Option<RemoveTarget>>,
+    i: usize,
+) -> Element {
     let s = state.read();
     let Some(v) = s.project.views.get(i) else {
         return rsx! {};
@@ -369,15 +366,10 @@ fn render_view(state: Signal<AppState>, mut menu: Signal<Option<CtxTarget>>, i: 
                 }
                 span { style: "color:var(--purple);display:flex;", {icons::eye(14)} }
                 span { class: "tname", "{name}" }
-                button {
-                    class: "row-menu",
-                    title: "Actions",
-                    onclick: move |e| {
-                        e.stop_propagation();
-                        let c = e.client_coordinates();
-                        menu.set(Some(CtxTarget { kind: CatalogKind::View, name: nm_menu.clone(), at: Point { x: c.x, y: c.y } }));
-                    },
-                    {icons::dots(14)}
+                DropdownMenu {
+                    class: "row-menu", title: "Actions", align: RectAlign::BOTTOM_END, width: 180,
+                    trigger: rsx! { {icons::dots(14)} },
+                    {catalog_menu_items(state, remove, CatalogKind::View, nm_menu.clone())}
                 }
             }
             if open {

@@ -32,8 +32,9 @@ pub fn MenuItem(
     rsx! {
         div {
             class: "{cls}",
-            onclick: move |e| {
-                e.stop_propagation();
+            // No stop_propagation: the click bubbles to the menu's close-wrapper
+            // (ContextMenu / DropdownMenu), which dismisses. The row just does its action.
+            onclick: move |_| {
                 if !disabled {
                     onclick.call(());
                 }

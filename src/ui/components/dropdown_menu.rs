@@ -21,26 +21,34 @@ pub fn DropdownMenu(
     /// Trigger button content (icon / label / chevron).
     trigger: Element,
     #[props(into, default)] class: String,
+    #[props(into, default)] style: String,
     #[props(into, default)] title: String,
     /// Menu width in px.
     width: Option<u32>,
     /// Placement of the menu relative to the trigger.
     #[props(default)] align: RectAlign,
+    /// Optional caller-owned open state — pass one when the menu content must dismiss
+    /// itself programmatically (e.g. a search box closing on Enter). Defaults to internal.
+    #[props(default)] open: Option<Signal<bool>>,
     /// Menu rows.
     children: Element,
 ) -> Element {
-    let mut open = use_signal(|| false);
+    let internal = use_signal(|| false);
+    let mut open = open.unwrap_or(internal);
     let mut anchor = use_signal(|| Rect::point(0.0, 0.0));
     let mut trigger_ref = use_signal(|| None::<Rc<MountedData>>);
 
     rsx! {
         button {
             class: "{class}",
+            style: "{style}",
             title: "{title}",
             onmounted: move |e| trigger_ref.set(Some(e.data())),
             onmousedown: move |e| e.stop_propagation(),
             ondoubleclick: move |e| e.stop_propagation(),
-            onclick: move |_| {
+            onclick: move |e| {
+                // Don't let opening the menu also fire a parent row's click handler.
+                e.stop_propagation();
                 let handle = trigger_ref.peek().clone();
                 spawn(async move {
                     let Some(h) = handle else { return };
