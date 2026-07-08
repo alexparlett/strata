@@ -62,7 +62,7 @@ fn use_revalidate(state: Signal<AppState>, ws: Store<crate::session::Workspace>)
         };
         spawn(async move {
             // Debounce a burst of keystrokes into one validation pass.
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if *generation.peek() != g {
                 return; // superseded by a newer edit
             }

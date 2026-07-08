@@ -115,32 +115,54 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     oninput: move |v: String| ws.sql().set(v),
                     oncaret: move |caret: usize| refresh_completion(state, ws, comp, caret),
                     onkeydown: move |e: KeyboardEvent| handle_completion_key(ws, comp, e),
+                    // Completion popup — rendered inside the viewport (children slot) so it
+                    // shares the text coordinate system + `--dxc-editor-*` vars.
+                    {completion_menu(ws, comp)}
                 }
-                if let Some(c) = comp.read().as_ref() {
-                    div {
-                        class: "sql-comp",
-                        // Anchor below the caret line; +44px clears the line-number gutter.
-                        style: "top:calc(var(--dxc-editor-line-height) * {c.line + 1});left:calc({c.col}ch + 44px);",
-                        for (i, item) in c.items.iter().enumerate() {
-                            {
-                                let accept = item.clone();
-                                rsx! {
-                                    div {
-                                        key: "c{i}",
-                                        class: if i == c.sel { "sql-comp-row sel" } else { "sql-comp-row" },
-                                        // mousedown (not click) so the textarea doesn't blur first.
-                                        onmousedown: move |e| {
-                                            e.prevent_default();
-                                            apply_completion(ws, &accept);
-                                            comp.set(None);
-                                        },
-                                        span { class: "sql-comp-kind", "{kind_glyph(item.kind)}" }
-                                        span { class: "sql-comp-label", "{item.label}" }
-                                        if let Some(d) = &item.detail {
-                                            span { class: "sql-comp-detail", "{d}" }
-                                        }
-                                    }
-                                }
+            }
+        }
+    }
+}
+
+/// The completion popup as an element for the editor's viewport children slot — an
+/// empty node when closed. Positioned in viewport coords: below the caret line,
+/// `col` chars in (+8px text padding). Reads `comp`, so the editor re-renders when it
+/// changes.
+fn completion_menu(
+    ws: Store<crate::session::Workspace>,
+    mut comp: Signal<Option<Completing>>,
+) -> Element {
+    let snap = comp.read();
+    let Some(c) = snap.as_ref() else {
+        return rsx! {};
+    };
+    let next_line = c.line + 1;
+    let col = c.col;
+    let sel = c.sel;
+    let items = c.items.clone();
+    drop(snap);
+
+    rsx! {
+        div {
+            class: "sql-comp",
+            style: "top:calc(var(--dxc-editor-line-height) * {next_line});left:calc({col}ch + 8px);",
+            for (i, item) in items.into_iter().enumerate() {
+                {
+                    let accept = item.clone();
+                    rsx! {
+                        div {
+                            key: "c{i}",
+                            class: if i == sel { "sql-comp-row sel" } else { "sql-comp-row" },
+                            // mousedown (not click) so the textarea doesn't blur first.
+                            onmousedown: move |e| {
+                                e.prevent_default();
+                                apply_completion(ws, &accept);
+                                comp.set(None);
+                            },
+                            span { class: "sql-comp-kind", "{kind_glyph(item.kind)}" }
+                            span { class: "sql-comp-label", "{item.label}" }
+                            if let Some(d) = &item.detail {
+                                span { class: "sql-comp-detail", "{d}" }
                             }
                         }
                     }

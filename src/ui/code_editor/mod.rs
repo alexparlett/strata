@@ -60,6 +60,10 @@ pub struct CodeEditorProps {
     /// Squiggle/mark overlays by byte range.
     #[props(default)]
     pub decorations: Vec<Decoration>,
+    /// Extra nodes rendered *inside* the viewport (after the textarea) — used for the
+    /// completion popup, which needs the editor's text coordinate system and the
+    /// `--dxc-editor-*` CSS vars (both absent outside `.dxc-editor`).
+    pub children: Element,
 }
 
 struct EditorBuffer {
@@ -157,7 +161,7 @@ pub fn CodeEditor(props: CodeEditorProps) -> Element {
                         div {
                             key: "d{i}",
                             class: "dxc-squiggle {d.class}",
-                            style: "top:calc(var(--dxc-editor-line-height) * {d.line});left:{d.col}ch;width:{d.width}ch;",
+                            style: "top:calc(var(--dxc-editor-line-height) * {d.line});left:calc({d.col}ch + 8px);width:{d.width}ch;",
                         }
                     }
                 }
@@ -171,6 +175,9 @@ pub fn CodeEditor(props: CodeEditorProps) -> Element {
                     oninput: on_input,
                     onkeydown: move |e: KeyboardEvent| onkeydown.call(e),
                 }
+                // Consumer overlay (completion popup) — inside the viewport so it shares
+                // the text coordinate system + the `--dxc-editor-*` vars.
+                {props.children}
             }
         }
     }

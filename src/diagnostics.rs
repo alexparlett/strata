@@ -95,9 +95,17 @@ pub static DIAGS: GlobalStore<HashMap<u64, Vec<Diagnostic>>> = Global::new(|| Ha
 
 /// Replace tab `id`'s validation slice (the validator is authoritative each pass).
 /// Always writes the key — an empty slice is a valid "clean" state; entries are
-/// swept on tab close / project open.
+/// swept on tab close / project open. Mirrors `runs::edit` (insert-then-`entry.write`)
+/// so per-key subscribers (Problems view, rail badge) are notified — a bare `.insert()`
+/// updated the map but did not wake them.
 pub fn set(id: u64, diags: Vec<Diagnostic>) {
-    DIAGS.resolve().insert(id, diags);
+    let mut store = DIAGS.resolve();
+    if !store.contains_key(&id) {
+        store.insert(id, Vec::new());
+    }
+    if let Some(mut entry) = store.get(id) {
+        *entry.write() = diags;
+    }
 }
 
 /// Drop closed tabs' diagnostics (paired with `runs::drop_ids`).
