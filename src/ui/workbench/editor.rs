@@ -1,21 +1,32 @@
 //! The SQL editor pane — an inline query toolbar (Run · Format · Clear ·
-//! Save-as-view · Save-query, relocated from the global header) over a *controlled*
-//! `dioxus-code-editor` `CodeEditor` bound straight to this workspace's `sql` lens.
+//! Save-as-view · Save-query) over the vendored, *controlled* `CodeEditor` bound to
+//! this workspace's `sql` lens, plus **autocomplete** (S7) and inline **squiggles**
+//! (S25) driven by `crate::sql`.
 //!
-//! The editor is controlled (`value` + `oninput` ↔ `ws.sql()`), so a keystroke
-//! re-renders only this workspace and writes only its SQL — no key/remount, and no
-//! cross-tab leak. The toolbar's actions still funnel through `dispatch`, acting on
-//! the *active* workspace (this pane is only interactive when it's the active one).
+//! The editor is controlled (`value` + `oninput` ↔ `ws.sql()`). Completion is
+//! component-local (only the active tab receives input): the editor's `oncaret`
+//! (caret from the input diff) recomputes completions, `onkeydown` drives the popup's
+//! ↑/↓/Enter/Tab/Esc, and the menu is anchored at the caret via monospace metrics.
 
 use dioxus::prelude::*;
 use dioxus_stores::Store;
 
-use crate::ui::code_editor::{CodeEditor, Decoration};
-
 use crate::action::{dispatch, Action};
 use crate::session::WorkspaceStoreExt;
+use crate::sql::{Catalog, Completion, CompletionKind};
 use crate::state::AppState;
+use crate::ui::code_editor::{CodeEditor, Decoration};
 use crate::ui::icons;
+
+/// The open completion popup for this editor.
+#[derive(Clone, PartialEq)]
+struct Completing {
+    items: Vec<Completion>,
+    sel: usize,
+    /// Caret line/column (0-based) for anchoring the menu.
+    line: usize,
+    col: usize,
+}
 
 /// A 30×30 toolbar icon button that dispatches `action`.
 fn tool_btn(state: Signal<AppState>, action: Action, title: &str, icon: Element) -> Element {
@@ -33,9 +44,6 @@ fn tool_btn(state: Signal<AppState>, action: Action, title: &str, icon: Element)
 pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
     let state = use_context::<Signal<AppState>>();
     let editor_h = state.read().editor_h;
-    // Emphasise Save when this workspace has unsaved changes (A6).
-    // TODO(verify): reading the whole `Store<Workspace>` value to call the
-    // plain-struct `is_dirty()` (needs origin + origin_hash + sql together).
     let dirty = ws.read().is_dirty();
     let ws_id = ws.id().cloned();
     let running = crate::runs::RUNS
@@ -43,8 +51,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
         .get(ws_id)
         .map(|e| e.read().running)
         .unwrap_or(false);
-    // Diagnostics with a byte span → inline squiggles (S25). Reactive: this tab's
-    // Problems re-render the editor's overlay as they appear/clear.
+    // Diagnostics with a byte span → inline squiggles (S25). Reactive.
     let decorations: Vec<Decoration> = crate::diagnostics::problems_for(ws_id)
         .into_iter()
         .filter_map(|d| {
@@ -55,9 +62,11 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
         })
         .collect();
 
+    // Component-local completion state (per tab; only the active one is edited).
+    let mut comp = use_signal(|| None::<Completing>);
+
     rsx! {
         section { style: "flex:none;background:var(--main);",
-            // Inline query toolbar (relocated from the global header, S4).
             div { class: "ed-toolbar",
                 if running {
                     button {
@@ -93,9 +102,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                 }
             }
             div {
-                style: "height:{editor_h}px;background:var(--main);border-bottom:1px solid var(--line);overflow:auto;",
-                // Controlled editor: bound directly to this workspace's `sql` lens.
-                // A keystroke writes only `ws.sql`, re-rendering only this pane.
+                style: "position:relative;height:{editor_h}px;background:var(--main);border-bottom:1px solid var(--line);overflow:auto;",
                 CodeEditor {
                     value: ws.sql().cloned(),
                     language: crate::ui::lang("sql"),
@@ -106,8 +113,146 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     class: "ps-sql",
                     decorations,
                     oninput: move |v: String| ws.sql().set(v),
+                    oncaret: move |caret: usize| refresh_completion(state, ws, comp, caret),
+                    onkeydown: move |e: KeyboardEvent| handle_completion_key(ws, comp, e),
+                }
+                if let Some(c) = comp.read().as_ref() {
+                    div {
+                        class: "sql-comp",
+                        // Anchor below the caret line; +44px clears the line-number gutter.
+                        style: "top:calc(var(--dxc-editor-line-height) * {c.line + 1});left:calc({c.col}ch + 44px);",
+                        for (i, item) in c.items.iter().enumerate() {
+                            {
+                                let accept = item.clone();
+                                rsx! {
+                                    div {
+                                        key: "c{i}",
+                                        class: if i == c.sel { "sql-comp-row sel" } else { "sql-comp-row" },
+                                        // mousedown (not click) so the textarea doesn't blur first.
+                                        onmousedown: move |e| {
+                                            e.prevent_default();
+                                            apply_completion(ws, &accept);
+                                            comp.set(None);
+                                        },
+                                        span { class: "sql-comp-kind", "{kind_glyph(item.kind)}" }
+                                        span { class: "sql-comp-label", "{item.label}" }
+                                        if let Some(d) = &item.detail {
+                                            span { class: "sql-comp-detail", "{d}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/// Recompute completions at `caret`; show only while typing a word (auto-trigger).
+fn refresh_completion(
+    state: Signal<AppState>,
+    ws: Store<crate::session::Workspace>,
+    mut comp: Signal<Option<Completing>>,
+    caret: usize,
+) {
+    let sql = ws.sql().cloned();
+    let typing = sql
+        .get(..caret)
+        .and_then(|s| s.chars().last())
+        .map(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        .unwrap_or(false);
+    if !typing {
+        comp.set(None);
+        return;
+    }
+    let catalog = {
+        let st = state.peek();
+        Catalog::build(&st.project.tables, &st.project.views, st.functions.clone())
+    };
+    let items = crate::sql::complete(&sql, caret, &catalog);
+    if items.is_empty() {
+        comp.set(None);
+    } else {
+        let (line, col) = line_col(&sql, caret);
+        comp.set(Some(Completing {
+            items,
+            sel: 0,
+            line,
+            col,
+        }));
+    }
+}
+
+/// Popup keyboard nav; returns having `prevent_default`ed when it consumed the key.
+fn handle_completion_key(
+    ws: Store<crate::session::Workspace>,
+    mut comp: Signal<Option<Completing>>,
+    e: KeyboardEvent,
+) {
+    let Some(mut c) = comp.peek().clone() else {
+        return;
+    };
+    let n = c.items.len();
+    match e.key() {
+        Key::ArrowDown => {
+            c.sel = (c.sel + 1) % n;
+            comp.set(Some(c));
+            e.prevent_default();
+        }
+        Key::ArrowUp => {
+            c.sel = (c.sel + n - 1) % n;
+            comp.set(Some(c));
+            e.prevent_default();
+        }
+        Key::Enter | Key::Tab => {
+            let item = c.items[c.sel].clone();
+            apply_completion(ws, &item);
+            comp.set(None);
+            e.prevent_default();
+        }
+        Key::Escape => {
+            comp.set(None);
+            e.prevent_default();
+        }
+        _ => {}
+    }
+}
+
+/// Replace the completion's `replace` span in the tab's SQL with its insert text.
+fn apply_completion(ws: Store<crate::session::Workspace>, item: &Completion) {
+    let mut sql = ws.sql().cloned();
+    if item.replace.start <= sql.len() && item.replace.end <= sql.len() {
+        sql.replace_range(item.replace.clone(), &item.insert);
+        ws.sql().set(sql);
+    }
+}
+
+fn kind_glyph(kind: CompletionKind) -> &'static str {
+    match kind {
+        CompletionKind::Table => "T",
+        CompletionKind::View => "V",
+        CompletionKind::Column => "·",
+        CompletionKind::Function => "ƒ",
+        CompletionKind::Keyword => "K",
+    }
+}
+
+/// 0-based (line, column) for a byte offset (column in chars = mono `ch` units).
+fn line_col(sql: &str, off: usize) -> (usize, usize) {
+    let off = off.min(sql.len());
+    let (mut line, mut col) = (0usize, 0usize);
+    for (i, ch) in sql.char_indices() {
+        if i >= off {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
 }

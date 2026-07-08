@@ -516,6 +516,24 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .dxc-squiggle.warn { color: var(--orange); }
 .dxc-squiggle.info { color: var(--accent); }
 
+/* ---------- SQL autocomplete popup (S7) ---------- */
+.sql-comp {
+  position: absolute; z-index: 30; min-width: 220px; max-width: 360px;
+  max-height: 240px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line-hi); border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.45); padding: 4px;
+}
+.sql-comp-row {
+  display: flex; align-items: center; gap: 8px; padding: 3px 8px;
+  border-radius: 4px; cursor: pointer; white-space: nowrap;
+  font: 12px var(--mono);
+}
+.sql-comp-row.sel { background: var(--accent-soft); }
+.sql-comp-row:hover { background: var(--elev2); }
+.sql-comp-kind { flex: none; width: 14px; text-align: center; color: var(--accent); font-size: 11px; }
+.sql-comp-label { flex: 1; color: var(--text2); overflow: hidden; text-overflow: ellipsis; }
+.sql-comp-detail { flex: none; color: var(--faint); font-size: 10.5px; }
+
 /* Retune the GitHub-Dark preset to the app: transparent bg (the wrapper paints
    var(--main)), themed gutter, accent caret + selection. Token colors are left
    to the preset since they already match the app's type palette. */
