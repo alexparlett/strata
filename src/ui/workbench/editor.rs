@@ -273,10 +273,19 @@ fn handle_completion_key(
             close_completion(comp, comp_gen);
             e.prevent_default();
         }
-        // Space dismisses the popup (word boundary) — but is still inserted.
-        Key::Character(s) if s == " " => {
-            close_completion(comp, comp_gen);
-        }
+        Key::Character(s) => match s.as_str() {
+            // Space dismisses the popup and is NOT inserted (you don't want it doubled).
+            " " => {
+                close_completion(comp, comp_gen);
+                e.prevent_default();
+            }
+            // SQL punctuation dismisses the popup but still types (a following `.`
+            // naturally re-opens completion for that table's columns).
+            "." | "\"" | "'" | ";" | "(" | ")" | "[" | "]" | "{" | "}" => {
+                close_completion(comp, comp_gen);
+            }
+            _ => {}
+        },
         _ => {}
     }
 }

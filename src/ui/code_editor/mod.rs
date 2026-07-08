@@ -182,11 +182,14 @@ pub fn CodeEditor(props: CodeEditorProps) -> Element {
                     spellcheck: props.spellcheck,
                     wrap: "off",
                     placeholder: props.placeholder,
-                    value: "{textarea_value}",
                     oninput: on_input,
                     onkeydown: move |e: KeyboardEvent| onkeydown.call(e),
                     onblur: move |e: FocusEvent| onblur.call(e),
                     onmousedown: move |e: MouseEvent| onmousedown.call(e),
+                    // Value as the text child (upstream form): dioxus skips re-writing it
+                    // when it already matches the DOM, so the caret isn't reset to the end
+                    // on re-renders (e.g. when the popup opens/closes).
+                    "{textarea_value}"
                 }
                 // Consumer overlay (completion popup) — inside the viewport so it shares
                 // the text coordinate system + the `--dxc-editor-*` vars.
