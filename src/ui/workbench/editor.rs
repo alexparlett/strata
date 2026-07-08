@@ -52,8 +52,12 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
         .map(|e| e.read().running)
         .unwrap_or(false);
     // This tab's diagnostics → inline squiggles + Run-gating (S25). Reactive.
+    // Run is blocked by any *validation* problem (a typo/syntax issue means the query
+    // won't run); a lingering *execution* error doesn't block — you re-run to clear it.
     let problems = crate::diagnostics::problems_for(ws_id);
-    let has_errors = problems.iter().any(|d| d.is_error());
+    let block_run = problems
+        .iter()
+        .any(|d| matches!(d.source, crate::diagnostics::DiagSource::Validation));
     let decorations: Vec<Decoration> = problems
         .into_iter()
         .filter_map(|d| {
@@ -86,9 +90,9 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     button {
                         class: "btn accent",
                         style: "height:28px;",
-                        disabled: has_errors,
-                        title: if has_errors { "Fix the validation errors to run" } else { "Run query (⌘/Ctrl+Enter)" },
-                        onclick: move |_| if !has_errors { dispatch(state, Action::RunQuery) },
+                        disabled: block_run,
+                        title: if block_run { "Fix the validation problems to run" } else { "Run query (⌘/Ctrl+Enter)" },
+                        onclick: move |_| if !block_run { dispatch(state, Action::RunQuery) },
                         {icons::play(13)}
                         "Run"
                         span { class: "kbd", style: "background:rgba(7,16,25,.22);color:inherit;border:none;margin-left:2px;", "⌘↵" }
@@ -119,8 +123,8 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     decorations,
                     oninput: move |v: String| ws.sql().set(v),
                     oncaret: move |caret: usize| refresh_completion(state, ws, comp, comp_gen, caret),
-                    onkeydown: move |e: KeyboardEvent| handle_completion_key(ws, comp, e),
-                    onblur: move |_| comp.set(None),
+                    onkeydown: move |e: KeyboardEvent| handle_completion_key(ws, comp, comp_gen, e),
+                    onblur: move |_| close_completion(comp, comp_gen),
                     // Completion popup — rendered inside the viewport (children slot) so it
                     // shares the text coordinate system + `--dxc-editor-*` vars.
                     {completion_menu(ws, comp)}
@@ -195,7 +199,7 @@ fn refresh_completion(
         .unwrap_or(false);
     if !typing {
         // A word boundary (space, punctuation, …) dismisses the popup immediately.
-        comp.set(None);
+        close_completion(comp, comp_gen);
         return;
     }
     let catalog = {
@@ -227,10 +231,19 @@ fn refresh_completion(
     });
 }
 
-/// Popup keyboard nav; returns having `prevent_default`ed when it consumed the key.
+/// Close the popup **and invalidate any pending debounced completion** — otherwise a
+/// task scheduled by the previous keystroke fires ~500ms later and re-opens it (why
+/// space / click-away appeared not to close it).
+fn close_completion(mut comp: Signal<Option<Completing>>, mut comp_gen: Signal<u64>) {
+    *comp_gen.write() += 1;
+    comp.set(None);
+}
+
+/// Popup keyboard nav; `prevent_default`s when it consumes the key.
 fn handle_completion_key(
     ws: Store<crate::session::Workspace>,
     mut comp: Signal<Option<Completing>>,
+    comp_gen: Signal<u64>,
     e: KeyboardEvent,
 ) {
     let Some(mut c) = comp.peek().clone() else {
@@ -251,16 +264,16 @@ fn handle_completion_key(
         Key::Enter | Key::Tab => {
             let item = c.items[c.sel].clone();
             apply_completion(ws, &item);
-            comp.set(None);
+            close_completion(comp, comp_gen);
             e.prevent_default();
         }
         Key::Escape => {
-            comp.set(None);
+            close_completion(comp, comp_gen);
             e.prevent_default();
         }
         // Space dismisses the popup (word boundary) — but is still inserted.
         Key::Character(s) if s == " " => {
-            comp.set(None);
+            close_completion(comp, comp_gen);
         }
         _ => {}
     }
@@ -277,12 +290,14 @@ fn apply_completion(ws: Store<crate::session::Workspace>, item: &Completion) {
     let caret = item.replace.start + item.insert.len();
     sql.replace_range(item.replace.clone(), &item.insert);
     ws.sql().set(sql);
-    // Deferred a frame so it runs after dioxus repaints the textarea with the new value.
-    // (Byte offset == UTF-16 offset for ASCII SQL — non-ASCII would drift slightly.)
+    // Deferred (setTimeout 0) so it runs *after* dioxus applies the controlled value
+    // update to the textarea (that update is an async webview message; a bare rAF can
+    // race ahead of it). Byte offset == UTF-16 offset for ASCII SQL.
     let js = format!(
-        "requestAnimationFrame(() => {{ const t = document.activeElement; \
+        "setTimeout(() => {{ const t = document.querySelector('.dxc-editor-input:focus') \
+         || document.activeElement; \
          if (t && t.classList && t.classList.contains('dxc-editor-input')) \
-         t.setSelectionRange({caret}, {caret}); }});"
+         t.setSelectionRange({caret}, {caret}); }}, 0);"
     );
     spawn(async move {
         let _ = dioxus::document::eval(&js).await;
