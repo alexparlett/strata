@@ -50,20 +50,8 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
     };
     let max_ms = plan.max_ms();
 
-    // Summary reflects the *active* tab: the logical tab never shows metrics, even
-    // during an ANALYZE run.
-    let summary = format!(
-        "{} · {} operators",
-        if !eff_physical {
-            "Logical plan"
-        } else if analyze {
-            "Plan with metrics"
-        } else {
-            "Physical plan"
-        },
-        nodes.len()
-    );
-
+    // (The "N operators · mode" summary lives in the results status bar now, not the
+    // plan header — matches the design.)
     let phys_cls = if eff_physical {
         "seg-btn on"
     } else {
@@ -87,7 +75,6 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
                         button { class: "{log_cls}", onclick: move |_| dispatch(state, Action::SetPlanTab(PlanTab::Logical)), "Logical" }
                     }
                 }
-                span { class: "plan-summary mono", "{summary}" }
                 if analyze && eff_physical {
                     span { class: "plan-analyze mono", "ANALYZE" }
                 }

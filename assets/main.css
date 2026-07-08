@@ -359,7 +359,6 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 /* Header aligned with the results toolbar (R1/R7): 38px, gap 6px, pad 0 6px. The
    Physical/Logical toggle reuses the shared `.seg-row`/`.seg-toggle` segmented pill. */
 .plan-tb { height: 38px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 6px; background: var(--bg); border-bottom: 1px solid var(--line); }
-.plan-summary { font: 400 11.5px var(--mono); color: var(--dim2); }
 .plan-analyze { font: 600 9px var(--mono); letter-spacing: .5px; color: var(--t-map); background: color-mix(in srgb, var(--t-map) 14%, transparent); padding: 2px 6px; border-radius: 4px; }
 .plan-body { flex: 1; overflow: auto; min-height: 0; padding: 16px 18px; }
 .plan-raw { margin: 0; font: 400 12px/1.65 var(--mono); color: var(--text2); white-space: pre; width: max-content; }
