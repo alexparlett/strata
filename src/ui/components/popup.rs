@@ -240,10 +240,18 @@ pub fn Backdrop(on_close: EventHandler<()>, children: Element) -> Element {
             onmounted: move |e| {
                 spawn(async move { let _ = e.set_focus(true).await; });
             },
+            // Stop propagation on every dismiss path: the backdrop is a DOM child of the
+            // component that opened it (e.g. the tab strip / catalog, which have their own
+            // `oncontextmenu`), so an un-stopped click/right-click would bubble up and
+            // *reopen* the menu at the cursor after we just closed it.
             onmousedown: move |e| e.stop_propagation(),
-            onclick: move |_| on_close.call(()),
+            onclick: move |e| {
+                e.stop_propagation();
+                on_close.call(());
+            },
             oncontextmenu: move |e| {
                 e.prevent_default();
+                e.stop_propagation();
                 on_close.call(());
             },
             onkeydown: move |e| {
