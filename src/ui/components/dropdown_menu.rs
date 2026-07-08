@@ -12,24 +12,25 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 
-use super::popup::{Backdrop, Point, Popup};
+use super::popup::{Backdrop, Popup, Rect, RectAlign};
 
-/// A trigger `<button>` (styled by `class`) that opens `children` as a menu beneath it.
+/// A trigger `<button>` (styled by `class`) that opens `children` as a menu placed against
+/// it by `align` (default `BOTTOM_START`; e.g. `BOTTOM_END` to right-align).
 #[component]
 pub fn DropdownMenu(
     /// Trigger button content (icon / label / chevron).
     trigger: Element,
     #[props(into, default)] class: String,
     #[props(into, default)] title: String,
-    /// Menu width in px (also the width used for right-alignment).
+    /// Menu width in px.
     width: Option<u32>,
-    /// Right-align the menu's right edge to the trigger's (default: left-align).
-    #[props(default)] align_right: bool,
+    /// Placement of the menu relative to the trigger.
+    #[props(default)] align: RectAlign,
     /// Menu rows.
     children: Element,
 ) -> Element {
     let mut open = use_signal(|| false);
-    let mut anchor = use_signal(|| Point { x: 0.0, y: 0.0 });
+    let mut anchor = use_signal(|| Rect::point(0.0, 0.0));
     let mut trigger_ref = use_signal(|| None::<Rc<MountedData>>);
 
     rsx! {
@@ -44,13 +45,7 @@ pub fn DropdownMenu(
                 spawn(async move {
                     let Some(h) = handle else { return };
                     if let Ok(r) = h.get_client_rect().await {
-                        let mw = width.map(|w| w as f64).unwrap_or(r.size.width);
-                        let x = if align_right {
-                            r.origin.x + r.size.width - mw
-                        } else {
-                            r.origin.x
-                        };
-                        anchor.set(Point { x, y: r.origin.y + r.size.height + 4.0 });
+                        anchor.set(Rect { x: r.origin.x, y: r.origin.y, w: r.size.width, h: r.size.height });
                         open.set(true);
                     }
                 });
@@ -59,7 +54,7 @@ pub fn DropdownMenu(
         }
         if open() {
             Backdrop { on_close: move |_| open.set(false),
-                Popup { at: anchor(), width,
+                Popup { anchor: anchor(), align, width,
                     // Bubbled inner click closes the menu (action rows); a search field
                     // etc. stops propagation to stay open.
                     div { onclick: move |_| open.set(false), {children} }

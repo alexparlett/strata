@@ -30,7 +30,7 @@ pub use context_menu::ContextMenu;
 pub use dialog::Dialog;
 pub use dropdown_menu::DropdownMenu;
 pub use menu::{MenuItem, MenuSep};
-pub use popup::{Backdrop, Point, Popup};
+pub use popup::{Align, Align2, Backdrop, Point, Popup, Rect, RectAlign};
 pub use select::{Select, SelectOption};
 pub use tooltip::Tooltip;
 pub use window::{WinGeom, Window};

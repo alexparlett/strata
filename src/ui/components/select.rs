@@ -1,12 +1,14 @@
 //! `Select` — the app-themed single-select dropdown (S29, design system §05). A trigger
-//! button (current value + chevron) that opens a [`Popup`] anchored **below the trigger**
-//! and width-matched, listing the options as menu rows with the selected one accent-tinted
-//! + checked. Composes the base [`Popup`] (dismiss backdrop + Esc) — the trigger-relative
-//! anchoring lives here so `Popup` stays a dumb positioner.
+//! button (current value + chevron) opens a [`Popup`] placed against the trigger by a
+//! [`RectAlign`] (default `BOTTOM_START`; e.g. `TOP_START` to open upward), listing the
+//! options with the selected one accent-tinted + checked. Composes the base [`Popup`] +
+//! [`Backdrop`]; the trigger is measured (`get_client_rect`) so the menu anchors to it.
+
+use std::rc::Rc;
 
 use dioxus::prelude::*;
 
-use super::popup::{Backdrop, Point, Popup};
+use super::popup::{Backdrop, Popup, Rect, RectAlign};
 use crate::ui::icons;
 
 /// One option in a [`Select`]: the stored `value` + its display `label`.
@@ -25,12 +27,9 @@ impl SelectOption {
     }
 }
 
-/// Height of the `.ds-select` trigger (kept in sync with the CSS) — used to anchor the
-/// menu just below the trigger from the click event, no async rect measurement.
-const TRIGGER_H: f64 = 34.0;
-
 /// App-themed dropdown. `value` is the current option's `value`; picking a row calls
-/// `on_select` with the chosen value. `width` sizes both the trigger and the menu.
+/// `on_select` with the chosen value. `width` sizes the trigger + menu; `align` places
+/// the menu relative to the trigger.
 #[component]
 pub fn Select(
     #[props(into)] value: String,
@@ -38,12 +37,11 @@ pub fn Select(
     on_select: EventHandler<String>,
     #[props(default = 160)] width: u32,
     #[props(into, default)] placeholder: String,
-    /// Open the menu **above** the trigger (for bottom-anchored triggers, e.g. the pager).
-    #[props(default)] up: bool,
+    #[props(default)] align: RectAlign,
 ) -> Element {
     let mut open = use_signal(|| false);
-    let mut anchor = use_signal(|| Point { x: 0.0, y: 0.0 });
-    let n = options.len();
+    let mut anchor = use_signal(|| Rect::point(0.0, 0.0));
+    let mut trigger_ref = use_signal(|| None::<Rc<MountedData>>);
 
     let current = options
         .iter()
@@ -61,20 +59,16 @@ pub fn Select(
         button {
             class: "ds-select",
             style: "width:{width}px;",
-            // Trigger client top-left = cursor client − cursor element offset (constant for
-            // the element). Anchor the menu just below the trigger — or, for `up`, above it
-            // (estimated menu height = rows·31 + card padding, no async measurement).
-            onclick: move |e: MouseEvent| {
-                let cp = e.client_coordinates();
-                let ep = e.element_coordinates();
-                let (left, top) = (cp.x - ep.x, cp.y - ep.y);
-                let y = if up {
-                    top - (n as f64 * 31.0 + 8.0) - 4.0
-                } else {
-                    top + TRIGGER_H + 4.0
-                };
-                anchor.set(Point { x: left, y });
-                open.set(!open());
+            onmounted: move |e| trigger_ref.set(Some(e.data())),
+            onclick: move |_| {
+                let handle = trigger_ref.peek().clone();
+                spawn(async move {
+                    let Some(h) = handle else { return };
+                    if let Ok(r) = h.get_client_rect().await {
+                        anchor.set(Rect { x: r.origin.x, y: r.origin.y, w: r.size.width, h: r.size.height });
+                        open.set(true);
+                    }
+                });
             },
             span { class: "ds-select-val", "{current}" }
             {icons::chevron_down(12)}
@@ -82,29 +76,30 @@ pub fn Select(
         if open() {
             Backdrop { on_close: move |_| open.set(false),
                 Popup {
-                    at: anchor(),
+                    anchor: anchor(),
+                    align,
                     card_class: "ds-menu".to_string(),
                     width,
                     for opt in options.iter().cloned() {
-                    {
-                        let selected = opt.value == value;
-                        let picked = opt.value.clone();
-                        rsx! {
-                            div {
-                                key: "{opt.value}",
-                                class: if selected { "ds-menu-item sel" } else { "ds-menu-item" },
-                                onclick: move |e| {
-                                    e.stop_propagation();
-                                    on_select.call(picked.clone());
-                                    open.set(false);
-                                },
-                                span { class: "ds-mi-label", "{opt.label}" }
-                                if selected {
-                                    span { class: "ds-mi-check", {icons::check(13)} }
+                        {
+                            let selected = opt.value == value;
+                            let picked = opt.value.clone();
+                            rsx! {
+                                div {
+                                    key: "{opt.value}",
+                                    class: if selected { "ds-menu-item sel" } else { "ds-menu-item" },
+                                    onclick: move |e| {
+                                        e.stop_propagation();
+                                        on_select.call(picked.clone());
+                                        open.set(false);
+                                    },
+                                    span { class: "ds-mi-label", "{opt.label}" }
+                                    if selected {
+                                        span { class: "ds-mi-check", {icons::check(13)} }
+                                    }
                                 }
                             }
                         }
-                    }
                     }
                 }
             }

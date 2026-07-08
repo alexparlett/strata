@@ -14,7 +14,7 @@ use crate::action::{dispatch, Action};
 use crate::runs::ResultsView;
 use crate::session::WorkspaceId;
 use crate::state::AppState;
-use crate::ui::components::{Select, SelectOption};
+use crate::ui::components::{RectAlign, Select, SelectOption};
 use crate::ui::icons;
 
 /// Results = optional toolbar (grid/chart) + the state body + the unified status bar.
@@ -389,7 +389,7 @@ fn pager_controls(
         Select {
             value: page_size.to_string(),
             width: 118,
-            up: true,
+            align: RectAlign::TOP_START,
             options: vec![
                 SelectOption::new("50", "50 / page"),
                 SelectOption::new("100", "100 / page"),

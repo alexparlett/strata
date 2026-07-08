@@ -7,13 +7,15 @@
 
 use dioxus::prelude::*;
 
-use super::popup::{Point, Popup};
+use super::popup::{Point, Popup, Rect, RectAlign};
 
-/// A pointer-transparent floating card at `at`. `card_class` styles it (default the
+/// A pointer-transparent floating card anchored at `at`, placed by `align` (default
+/// `BOTTOM_START` — just below/right of the point). `card_class` styles it (default the
 /// neutral `ds-tooltip`); `children` is the body.
 #[component]
 pub fn Tooltip(
     at: Point,
+    #[props(default)] align: RectAlign,
     #[props(into, default)] card_class: String,
     width: Option<u32>,
     children: Element,
@@ -26,6 +28,6 @@ pub fn Tooltip(
     // `ds-float` = pointer-events:none — the only thing that makes this a tooltip vs a menu.
     let card = format!("{base} ds-float");
     rsx! {
-        Popup { at, card_class: card, width, {children} }
+        Popup { anchor: Rect::point(at.x, at.y), align, card_class: card, width, {children} }
     }
 }

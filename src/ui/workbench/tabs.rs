@@ -12,7 +12,7 @@ use dioxus_stores::*;
 use crate::action::{dispatch, Action};
 use crate::session::{SessionStoreExt, WorkspaceId, WorkspaceStoreExt};
 use crate::state::AppState;
-use crate::ui::components::{Backdrop, ContextMenu, MenuItem, MenuSep, Point, Popup};
+use crate::ui::components::{Backdrop, ContextMenu, MenuItem, MenuSep, Point, Popup, Rect};
 use crate::ui::icons;
 
 #[component]
@@ -133,7 +133,7 @@ pub(crate) fn Tabs() -> Element {
             // ⋯ overflow menu — whole-strip actions (S8).
             if let Some(at) = overflow_menu() {
                 Backdrop { on_close: move |_| overflow_menu.set(None),
-                    Popup { at,
+                    Popup { anchor: Rect::point(at.x, at.y),
                         {overflow_menu_items(state, overflow_menu, active, !state.read().closed_tabs.is_empty())}
                     }
                 }
@@ -141,7 +141,7 @@ pub(crate) fn Tabs() -> Element {
             // "Show all tabs" searchable popover (S8).
             if let Some(at) = tab_list() {
                 Backdrop { on_close: move |_| tab_list.set(None),
-                    Popup { at, card_class: "menu".to_string(), width: 320,
+                    Popup { anchor: Rect::point(at.x, at.y), card_class: "menu".to_string(), width: 320,
                         {tab_list_body(state, tab_list, tab_list_query, active)}
                     }
                 }
