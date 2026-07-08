@@ -1,5 +1,5 @@
-//! The EXPLAIN plan view (S12): a toolbar (Physical/Logical tabs, summary, ANALYZE
-//! badge, Raw/Tree toggle) over an indented tree of operator cards — or the raw
+//! The EXPLAIN plan view (S12): a toolbar (Physical/Logical toggle, ANALYZE badge,
+//! icon-only Raw/Tree toggle) over an indented tree of operator cards — or the raw
 //! plan text. ANALYZE forces the physical "Plan with Metrics" and adds per-node
 //! rows/time, a time-share bar, and a HOTSPOT badge for the slowest operators.
 
