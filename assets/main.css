@@ -568,6 +568,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .ds-select:hover { border-color: var(--line-hi); }
 .ds-select .ds-select-val { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; }
 .ds-select > svg { flex: none; color: var(--dim2); }
+/* Children are pointer-transparent so a click's `element_coordinates` is always relative
+   to the button (not a clicked child) — otherwise the menu anchors off to the child. */
+.ds-select > * { pointer-events: none; }
 
 /* Shared menu card (dropdown + context menu) + rows. */
 .ds-menu {
@@ -600,6 +603,18 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .ds-callout .ds-callout-msg { font: 400 12px/1.5 var(--ui); word-break: break-word; }
 /* Pointer-transparent floating card — the only thing that makes a `Popup` a `Tooltip`. */
 .ds-float { pointer-events: none; }
+
+/* ---------- Design system: tooltip (S29 · Canvas §07) ---------- */
+/* Neutral chrome shared with menus (elev bg, border3, r9, shadow). Colored chrome (e.g.
+   an error's red left bar) is a *callout* (§08), not a tooltip — the lint hover is a
+   tooltip with a red icon + neutral message, per the design. */
+.ds-tooltip {
+  display: flex; align-items: flex-start; gap: 7px; max-width: 340px;
+  padding: 7px 11px; background: var(--elev); border: 1px solid var(--line3);
+  border-radius: 9px; box-shadow: 0 12px 30px rgba(0,0,0,.4);
+}
+.ds-tooltip .ds-tt-ico { flex: none; display: flex; margin-top: 1px; }
+.ds-tooltip .ds-tt-msg { font: 400 12px/1.45 var(--ui); color: var(--text2); word-break: break-word; min-width: 0; }
 .ds-callout.err {
   background: color-mix(in srgb, var(--red2) 10%, var(--elev));
   border: 1px solid color-mix(in srgb, var(--red2) 32%, transparent);

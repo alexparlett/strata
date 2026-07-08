@@ -231,10 +231,10 @@ fn completion_menu(
     }
 }
 
-/// The lint hover popover — the diagnostic message on a `.ds-callout` card, anchored just
-/// below the squiggled token, via the reusable [`Tooltip`] (non-dismissing, pointer-
-/// transparent). Empty when nothing is hovered, or while the completion popup is open
-/// (they'd overlap — completion wins).
+/// The lint hover popover — the diagnostic message on the neutral `.ds-tooltip` card (red
+/// icon + neutral text, per §07), anchored just below the squiggled token, via the
+/// reusable [`Tooltip`] (non-dismissing, pointer-transparent). Empty when nothing is
+/// hovered, or while the completion popup is open (they'd overlap — completion wins).
 fn lint_popover(hover: Signal<Option<LintHover>>, comp: Signal<Option<Completing>>) -> Element {
     if comp.read().is_some() {
         return rsx! {};
@@ -249,9 +249,10 @@ fn lint_popover(hover: Signal<Option<LintHover>>, comp: Signal<Option<Completing
     rsx! {
         Tooltip {
             at: Point { x, y },
-            card_class: "ds-callout err",
-            span { class: "ds-callout-ico", {icons::err_circle(14)} }
-            span { class: "ds-callout-msg", "{msg}" }
+            // Neutral tooltip chrome (§07) with a red icon + neutral message — the design's
+            // lint hover, *not* a colored callout.
+            span { class: "ds-tt-ico", style: "color:var(--red2);", {icons::err_circle(13)} }
+            span { class: "ds-tt-msg", "{msg}" }
         }
     }
 }

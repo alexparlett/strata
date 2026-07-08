@@ -2,14 +2,15 @@
 //! positioner) plus the `ds-float` class, which makes the card pointer-transparent so it
 //! never steals focus or swallows the `mousemove`/`mouseleave` on the surface underneath
 //! that drive it. No backdrop, no dismissal — the caller mounts it conditionally and
-//! unmounts on leave. Used by the SQL lint hover popover (S27), styled as a `.ds-callout`.
+//! unmounts on leave. Default chrome is the neutral `.ds-tooltip` (§07). Used by the SQL
+//! lint hover popover (S27).
 
 use dioxus::prelude::*;
 
 use super::popup::{Point, Popup};
 
-/// A pointer-transparent floating card at `at`. `card_class` styles it (default
-/// `ds-callout`); `children` is the body.
+/// A pointer-transparent floating card at `at`. `card_class` styles it (default the
+/// neutral `ds-tooltip`); `children` is the body.
 #[component]
 pub fn Tooltip(
     at: Point,
@@ -18,7 +19,7 @@ pub fn Tooltip(
     children: Element,
 ) -> Element {
     let base = if card_class.is_empty() {
-        "ds-callout"
+        "ds-tooltip"
     } else {
         card_class.as_str()
     };

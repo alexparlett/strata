@@ -12,7 +12,8 @@
 //!
 //! On the base (S29, design system — see `docs/DESIGN_SYSTEM.md`): [`Select`] (single-
 //! select dropdown, trigger + `.ds-menu` card) and [`ContextMenu`] (right-click menu),
-//! both `Backdrop { Popup }` internally. The S27 lint hover is a `Tooltip` (`.ds-callout`).
+//! both `Backdrop { Popup }` internally. The S27 lint hover is a `Tooltip` (neutral
+//! `.ds-tooltip` chrome + a red icon).
 
 mod checkbox;
 mod context_menu;
