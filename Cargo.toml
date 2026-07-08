@@ -27,7 +27,9 @@ dioxus-code-editor = "0.1"
 dioxus-stores = "0.7"
 
 # Query engine: Apache DataFusion (Arrow-native SQL over parquet)
-datafusion = "43"
+# A9: 43 → 54. datafusion is our only DataFusion-family pin (arrow/parquet/
+# sqlparser/object_store come through its re-exports). See docs/A9_DATAFUSION_UPGRADE.md.
+datafusion = "54"
 
 # Async runtime + stream utilities for the engine thread
 tokio = { version = "1", features = ["full"] }

@@ -227,6 +227,10 @@ pub struct AppState {
     pub log_h: f64,
     pub resizing: Option<Resizing>,
     pub closed_tabs: Vec<ClosedTab>,
+    /// The engine's registered SQL functions (built-ins + UDFs), pushed once on
+    /// startup (`engine::Event::Functions`, A9/F5). Read by the SQL language
+    /// service (`crate::sql`) for completion + validation.
+    pub functions: crate::sql::FunctionCatalog,
 }
 
 impl AppState {
@@ -254,7 +258,7 @@ impl AppState {
             next_req: 1,
             page_size_open: false,
             selected_col: None,
-            status_text: "Ready · DataFusion 43 · open a project or add a table to begin".into(),
+            status_text: "Ready · DataFusion 54 · open a project or add a table to begin".into(),
             status_kind: LogKind::Ok,
             log: Vec::new(),
             log_open: false,
@@ -266,6 +270,7 @@ impl AppState {
             log_h: 188.0,
             resizing: None,
             closed_tabs: Vec::new(),
+            functions: crate::sql::FunctionCatalog::default(),
         }
     }
 

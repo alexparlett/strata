@@ -4,11 +4,10 @@
 //! provider asserts and later retracts. Two providers feed the Problems view:
 //!
 //! * **Validation** — static analysis that needs *no* execution (e.g. a keyword
-//!   typo `FORM`→`FROM`, unbalanced parens). Recomputed, debounced, on every SQL
-//!   edit via [`revalidate`]; the validator is authoritative and *replaces* the
-//!   tab's slice each pass, so fixing the SQL clears the problem on the next
-//!   keystroke — no run required. Stored here in [`DIAGS`]. The validator itself
-//!   is a **stub** for now (the real rules land as their own task).
+//!   typo `FORM`→`FROM`, unbalanced parens). Computed by `crate::sql::analyze`,
+//!   debounced per tab (`ui::workbench::workspace::use_revalidate`), then stored via
+//!   [`set`]; authoritative — it *replaces* the tab's slice each pass, so fixing the
+//!   SQL clears the problem on the next keystroke, no run required. Stored in [`DIAGS`].
 //! * **Execution** — a query that actually failed. Already tracked, correctly
 //!   lifecycled, as `runs::WorkspaceRun::query_error` (set on failure, cleared on
 //!   rerun-start and on success). We don't duplicate it here; [`problems_for`]
@@ -20,6 +19,7 @@
 //! persisted; dropped on tab close ([`drop_ids`]) and project open ([`clear`]).
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use dioxus::prelude::*;
 use dioxus_stores::*;
@@ -56,10 +56,13 @@ pub struct Diagnostic {
     pub severity: Severity,
     pub source: DiagSource,
     pub message: String,
-    /// `line L:C` (matches `QueryError::loc`) — for the jump + a future squiggle.
+    /// `line L:C` (matches `QueryError::loc`) — the Problems-row display label.
     pub loc: Option<String>,
     /// Short class/rule chip, e.g. "Planning Error" or a lint id.
     pub code: Option<String>,
+    /// Byte range into the tab's SQL (S25) — drives the editor squiggle + the
+    /// click-to-select jump. `None` for execution errors (only a `line:col` string).
+    pub span: Option<Range<usize>>,
 }
 
 impl Diagnostic {
@@ -81,6 +84,7 @@ impl Diagnostic {
             message,
             loc: qe.loc.clone(),
             code: Some(qe.etype.clone()),
+            span: None,
         }
     }
 }
@@ -104,21 +108,6 @@ pub fn drop_ids(ids: &HashSet<u64>) {
 /// Clear every tab's diagnostics (project open — ids get reassigned).
 pub fn clear() {
     DIAGS.resolve().clear();
-}
-
-/// Recompute tab `id`'s **validation** diagnostics from its SQL and store them.
-/// Called debounced on every SQL edit (see the per-tab `use_revalidate` in
-/// `ui::workbench::workspace`).
-pub fn revalidate(id: u64, sql: &str) {
-    set(id, validate(sql));
-}
-
-/// The static validator. **Stub** — the seam is fully wired (called debounced on
-/// every edit, results feed Problems + the rail badge) but no rules fire yet. The
-/// real rules (keyword-typo lints like `FORM`→`FROM`, unbalanced parens/quotes,
-/// unknown tables/columns) land as their own backlog task.
-fn validate(_sql: &str) -> Vec<Diagnostic> {
-    Vec::new()
 }
 
 /// All problems for tab `id`: its validation slice (from [`DIAGS`]) unioned with

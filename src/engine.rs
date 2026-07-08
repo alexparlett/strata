@@ -168,6 +168,14 @@ pub enum Event {
     Exported {
         result: Result<(String, usize), String>,
     },
+    /// The engine's registered function names (built-ins + any UDFs), sent once on
+    /// startup so the UI SQL language service (S26/S7/S25) can complete + validate
+    /// real functions. Names only; signatures/detail can follow later.
+    Functions {
+        scalar: Vec<String>,
+        aggregate: Vec<String>,
+        window: Vec<String>,
+    },
     Notice(String),
 }
 
@@ -216,6 +224,23 @@ async fn engine_loop(
     // (`purge_snapshot_root`), not here — wiping the shared root at runtime would
     // clobber other windows' engines.
     let ctx = SessionContext::new();
+    // Enumerate the full function registry (built-ins + any UDFs) once, so the UI's
+    // SQL language service (S26/S7/S25) can offer + validate real function names.
+    // `udafs`/`udwfs` name-set enumerators are DataFusion 54 (part of why A9 gates S26).
+    {
+        use datafusion::execution::registry::FunctionRegistry;
+        let mut scalar: Vec<String> = ctx.udfs().into_iter().collect();
+        let mut aggregate: Vec<String> = ctx.udafs().into_iter().collect();
+        let mut window: Vec<String> = ctx.udwfs().into_iter().collect();
+        scalar.sort();
+        aggregate.sort();
+        window.sort();
+        let _ = evt_tx.send(Event::Functions {
+            scalar,
+            aggregate,
+            window,
+        });
+    }
     // In-flight Query/Explain tasks, keyed by ws_id (S14). Owned by this single loop
     // task (no locking); the spawned tasks only send events back.
     let mut inflight: HashMap<u64, InFlight> = HashMap::new();

@@ -609,6 +609,18 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 s.set_status(LogKind::Error, format!("Export failed · {e}"));
             }
         },
+        Event::Functions {
+            scalar,
+            aggregate,
+            window,
+        } => {
+            // The engine's registered functions (A9/F5) — feed the SQL language service.
+            s.functions = crate::sql::FunctionCatalog {
+                scalar,
+                aggregate,
+                window,
+            };
+        }
         Event::Notice(m) => {
             tracing::warn!("{m}");
             s.push_log(LogKind::Info, m.clone());

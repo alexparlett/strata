@@ -22,6 +22,7 @@ mod query_error;
 mod runs;
 mod session;
 mod settings;
+mod sql;
 mod state;
 mod theme;
 mod ui;
