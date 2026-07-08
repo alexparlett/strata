@@ -20,7 +20,7 @@ pub(crate) fn ActivityRail() -> Element {
     // Live error-diagnostic count across all tabs (validation ∪ execution). Reads
     // the session + diagnostics + runs stores reactively, so the badge tracks
     // problems as they appear and clear — no query run required.
-    let problem_count = crate::diagnostics::total_errors();
+    let problem_count = crate::diagnostics::total_problems();
     let on = |t: LogTab| log_open && log_tab == t;
 
     rsx! {

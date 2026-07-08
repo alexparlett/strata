@@ -51,8 +51,10 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
         .get(ws_id)
         .map(|e| e.read().running)
         .unwrap_or(false);
-    // Diagnostics with a byte span → inline squiggles (S25). Reactive.
-    let decorations: Vec<Decoration> = crate::diagnostics::problems_for(ws_id)
+    // This tab's diagnostics → inline squiggles + Run-gating (S25). Reactive.
+    let problems = crate::diagnostics::problems_for(ws_id);
+    let has_errors = problems.iter().any(|d| d.is_error());
+    let decorations: Vec<Decoration> = problems
         .into_iter()
         .filter_map(|d| {
             d.span.map(|range| Decoration {
@@ -64,6 +66,8 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
 
     // Component-local completion state (per tab; only the active one is edited).
     let mut comp = use_signal(|| None::<Completing>);
+    // Debounce generation for completion (like validation).
+    let comp_gen = use_signal(|| 0u64);
 
     rsx! {
         section { style: "flex:none;background:var(--main);",
@@ -82,8 +86,9 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     button {
                         class: "btn accent",
                         style: "height:28px;",
-                        title: "Run query (⌘/Ctrl+Enter)",
-                        onclick: move |_| dispatch(state, Action::RunQuery),
+                        disabled: has_errors,
+                        title: if has_errors { "Fix the validation errors to run" } else { "Run query (⌘/Ctrl+Enter)" },
+                        onclick: move |_| if !has_errors { dispatch(state, Action::RunQuery) },
                         {icons::play(13)}
                         "Run"
                         span { class: "kbd", style: "background:rgba(7,16,25,.22);color:inherit;border:none;margin-left:2px;", "⌘↵" }
@@ -113,8 +118,9 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     class: "ps-sql",
                     decorations,
                     oninput: move |v: String| ws.sql().set(v),
-                    oncaret: move |caret: usize| refresh_completion(state, ws, comp, caret),
+                    oncaret: move |caret: usize| refresh_completion(state, ws, comp, comp_gen, caret),
                     onkeydown: move |e: KeyboardEvent| handle_completion_key(ws, comp, e),
+                    onblur: move |_| comp.set(None),
                     // Completion popup — rendered inside the viewport (children slot) so it
                     // shares the text coordinate system + `--dxc-editor-*` vars.
                     {completion_menu(ws, comp)}
@@ -172,11 +178,13 @@ fn completion_menu(
     }
 }
 
-/// Recompute completions at `caret`; show only while typing a word (auto-trigger).
+/// Recompute completions at `caret`, **debounced 500ms** (like validation) so the
+/// popup doesn't flash on every keystroke. Shows only while typing a word.
 fn refresh_completion(
     state: Signal<AppState>,
     ws: Store<crate::session::Workspace>,
     mut comp: Signal<Option<Completing>>,
+    mut comp_gen: Signal<u64>,
     caret: usize,
 ) {
     let sql = ws.sql().cloned();
@@ -186,6 +194,7 @@ fn refresh_completion(
         .map(|c| c.is_alphanumeric() || c == '_' || c == '.')
         .unwrap_or(false);
     if !typing {
+        // A word boundary (space, punctuation, …) dismisses the popup immediately.
         comp.set(None);
         return;
     }
@@ -193,24 +202,29 @@ fn refresh_completion(
         let st = state.peek();
         Catalog::build(&st.project.tables, &st.project.views, st.functions.clone())
     };
-    let items = crate::sql::complete(&sql, caret, &catalog);
-    tracing::info!(
-        "completion @caret {caret}: {} item(s), {} table(s), {} fn(s)",
-        items.len(),
-        catalog.tables.len(),
-        catalog.functions.scalar.len() + catalog.functions.aggregate.len() + catalog.functions.window.len(),
-    );
-    if items.is_empty() {
-        comp.set(None);
-    } else {
-        let (line, col) = line_col(&sql, caret);
-        comp.set(Some(Completing {
-            items,
-            sel: 0,
-            line,
-            col,
-        }));
-    }
+    let g = {
+        let mut w = comp_gen.write();
+        *w += 1;
+        *w
+    };
+    spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if *comp_gen.peek() != g {
+            return; // superseded by a newer keystroke
+        }
+        let items = crate::sql::complete(&sql, caret, &catalog);
+        if items.is_empty() {
+            comp.set(None);
+        } else {
+            let (line, col) = line_col(&sql, caret);
+            comp.set(Some(Completing {
+                items,
+                sel: 0,
+                line,
+                col,
+            }));
+        }
+    });
 }
 
 /// Popup keyboard nav; returns having `prevent_default`ed when it consumed the key.
@@ -243,6 +257,10 @@ fn handle_completion_key(
         Key::Escape => {
             comp.set(None);
             e.prevent_default();
+        }
+        // Space dismisses the popup (word boundary) — but is still inserted.
+        Key::Character(s) if s == " " => {
+            comp.set(None);
         }
         _ => {}
     }

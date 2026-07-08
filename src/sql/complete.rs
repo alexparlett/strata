@@ -4,6 +4,10 @@
 
 use std::ops::Range;
 
+// The full keyword set DataFusion's parser recognises (sqlparser's own table, via the
+// datafusion re-export) — the authoritative list, not a hand-picked subset.
+use datafusion::sql::sqlparser::keywords::ALL_KEYWORDS;
+
 use crate::sql::context::{analyze_caret, Context};
 use crate::sql::lex::lex;
 use crate::sql::symbols::{Catalog, TableSym};
@@ -28,13 +32,24 @@ pub struct Completion {
     pub replace: Range<usize>,
 }
 
-const STATEMENT_KEYWORDS: &[&str] = &[
-    "SELECT", "WITH", "CREATE", "INSERT", "COPY", "EXPLAIN", "DROP", "DESCRIBE", "SHOW",
-    "SET",
+/// Curated multi-word phrases — `sqlparser` keywords are single tokens, so these read
+/// nicer as one completion (`GROUP BY` not `GROUP` then `BY`). Offered alongside the
+/// full single-word `ALL_KEYWORDS` set (query keywords only).
+const MULTI_WORD: &[&str] = &[
+    "GROUP BY", "ORDER BY", "PARTITION BY", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN",
+    "FULL JOIN", "CROSS JOIN", "LEFT OUTER JOIN", "RIGHT OUTER JOIN", "FULL OUTER JOIN",
+    "UNION ALL", "IS NULL", "IS NOT NULL", "NOT IN", "IS DISTINCT FROM",
 ];
-const EXPR_KEYWORDS: &[&str] = &[
-    "AND", "OR", "NOT", "IN", "IS", "NULL", "LIKE", "ILIKE", "BETWEEN", "CASE", "WHEN",
-    "THEN", "ELSE", "END", "DISTINCT", "AS",
+
+/// DDL/DML keywords excluded from completion — those statements are blocked in the
+/// editor (`crate::ddl` allows only queries + CREATE/DROP VIEW via the UI), so offering
+/// them would mislead. Filtered (case-insensitively) out of `ALL_KEYWORDS`.
+const BLOCKED_KEYWORDS: &[&str] = &[
+    "CREATE", "TABLE", "EXTERNAL", "DATABASE", "SCHEMA", "DROP", "ALTER", "TRUNCATE",
+    "RENAME", "INSERT", "INTO", "UPDATE", "DELETE", "COPY", "MERGE", "UPSERT", "REPLACE",
+    "GRANT", "REVOKE", "COMMIT", "ROLLBACK", "SAVEPOINT", "BEGIN", "START", "TRANSACTION",
+    "LOCK", "UNLOCK", "CONSTRAINT", "REFERENCES", "INDEX", "SEQUENCE", "TRIGGER",
+    "PROCEDURE", "STORED", "OVERWRITE", "VACUUM",
 ];
 
 /// Completions for the caret at byte `caret` in `sql`.
@@ -47,25 +62,23 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog) -> Vec<Completion> {
     let mut items: Vec<Completion> = Vec::new();
 
     match &ca.context {
-        Context::StatementStart => {
-            for k in STATEMENT_KEYWORDS {
-                items.push(keyword(k, &replace));
-            }
-        }
-        Context::AfterFrom | Context::AfterJoin => {
-            for t in &catalog.tables {
-                items.push(table_item(t, &replace));
-            }
-        }
         Context::AfterDot(table) => {
+            // Only columns of the qualified table.
             if let Some(t) = catalog.table(table) {
                 for c in &t.columns {
                     items.push(column_item(&c.name, Some(&c.dtype), &replace));
                 }
             }
         }
+        Context::AfterFrom | Context::AfterJoin => {
+            // The table name being typed, plus keywords that can follow (WHERE / JOIN
+            // / GROUP BY / …) — the filter narrows to whichever the partial matches.
+            for t in &catalog.tables {
+                items.push(table_item(t, &replace));
+            }
+            push_keywords(&mut items, &replace);
+        }
         Context::SelectList | Context::Expr => {
-            // In-scope columns first (qualified detail), then functions + keywords.
             for tname in &ca.in_scope {
                 if let Some(t) = catalog.table(tname) {
                     for c in &t.columns {
@@ -80,29 +93,48 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog) -> Vec<Completion> {
             for f in catalog.functions.all() {
                 items.push(function_item(f, &replace));
             }
-            for k in EXPR_KEYWORDS {
-                items.push(keyword(k, &replace));
-            }
+            push_keywords(&mut items, &replace);
         }
-        Context::Unknown => {
+        // Statement start / unknown: keywords + any symbols (the partial narrows it).
+        Context::StatementStart | Context::Unknown => {
             for t in &catalog.tables {
                 items.push(table_item(t, &replace));
             }
             for f in catalog.functions.all() {
                 items.push(function_item(f, &replace));
             }
+            push_keywords(&mut items, &replace);
         }
     }
 
-    // Filter to the partial word, prefix matches first.
+    // Filter to the partial word; rank prefix matches first, then shorter, then
+    // alphabetical (so `fr` surfaces `FROM` above a substring match).
     if !partial.is_empty() {
         items.retain(|c| c.label.to_ascii_lowercase().contains(&partial));
-        items.sort_by_key(|c| {
-            usize::from(!c.label.to_ascii_lowercase().starts_with(&partial))
+        items.sort_by(|a, b| {
+            let (al, bl) = (a.label.to_ascii_lowercase(), b.label.to_ascii_lowercase());
+            let (ap, bp) = (al.starts_with(&partial), bl.starts_with(&partial));
+            bp.cmp(&ap)
+                .then(al.len().cmp(&bl.len()))
+                .then(al.cmp(&bl))
         });
     }
     items.truncate(50);
     items
+}
+
+/// Push the query keyword set: curated multi-word phrases + the full single-word
+/// `ALL_KEYWORDS`, minus the blocked DDL/DML keywords.
+fn push_keywords(items: &mut Vec<Completion>, replace: &Range<usize>) {
+    for &k in MULTI_WORD {
+        items.push(keyword(k, replace));
+    }
+    for &k in ALL_KEYWORDS {
+        if BLOCKED_KEYWORDS.iter().any(|b| b.eq_ignore_ascii_case(k)) {
+            continue;
+        }
+        items.push(keyword(k, replace));
+    }
 }
 
 fn table_item(t: &TableSym, replace: &Range<usize>) -> Completion {

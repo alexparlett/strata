@@ -57,6 +57,11 @@ pub struct CodeEditorProps {
     /// Raw keydown on the textarea (for the completion popup to intercept nav keys).
     #[props(default = EventHandler::new(|_: KeyboardEvent| {}))]
     pub onkeydown: EventHandler<KeyboardEvent>,
+    /// Textarea blur — the consumer uses this to dismiss the completion popup on
+    /// click-off. (Clicking the popup itself `prevent_default`s mousedown, so focus —
+    /// and thus this — isn't lost.)
+    #[props(default = EventHandler::new(|_: FocusEvent| {}))]
+    pub onblur: EventHandler<FocusEvent>,
     /// Squiggle/mark overlays by byte range.
     #[props(default)]
     pub decorations: Vec<Decoration>,
@@ -127,6 +132,7 @@ pub fn CodeEditor(props: CodeEditorProps) -> Element {
         oncaret.call(caret);
     };
     let onkeydown = props.onkeydown;
+    let onblur = props.onblur;
 
     // Decoration overlay: single-line squiggles positioned by (line, col) in ch/em.
     let decos = decoration_boxes(&props.value, &props.decorations);
@@ -174,6 +180,7 @@ pub fn CodeEditor(props: CodeEditorProps) -> Element {
                     value: "{textarea_value}",
                     oninput: on_input,
                     onkeydown: move |e: KeyboardEvent| onkeydown.call(e),
+                    onblur: move |e: FocusEvent| onblur.call(e),
                 }
                 // Consumer overlay (completion popup) — inside the viewport so it shares
                 // the text coordinate system + the `--dxc-editor-*` vars.

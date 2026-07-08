@@ -44,7 +44,7 @@ pub fn Drawer() -> Element {
         LogTab::History => ("History", state.read().project.history.len()),
         LogTab::Events => ("Events", state.read().log.len()),
         // Problems counts live error diagnostics (validation ∪ execution), not log rows.
-        LogTab::Problems => ("Problems", crate::diagnostics::total_errors()),
+        LogTab::Problems => ("Problems", crate::diagnostics::total_problems()),
     };
 
     rsx! {

@@ -93,6 +93,13 @@ impl Diagnostic {
 /// (Execution errors are not stored here — see the module docs.)
 pub static DIAGS: GlobalStore<HashMap<u64, Vec<Diagnostic>>> = Global::new(|| HashMap::new());
 
+/// A coarse revision counter, bumped on every [`set`]. Cross-tab readers (the
+/// Problems drawer + rail badge) subscribe to it, because the per-key `DIAGS.get(id)`
+/// subscription does **not** fire for the absent→present transition of a key — so a
+/// tab's first diagnostic wouldn't otherwise wake them (the editor only updated because
+/// it re-renders every keystroke anyway).
+pub static DIAG_REV: GlobalStore<u64> = Global::new(|| 0u64);
+
 /// Replace tab `id`'s validation slice (the validator is authoritative each pass).
 /// Always writes the key — an empty slice is a valid "clean" state; entries are
 /// swept on tab close / project open. Mirrors `runs::edit` (insert-then-`entry.write`)
@@ -106,6 +113,10 @@ pub fn set(id: u64, diags: Vec<Diagnostic>) {
     if let Some(mut entry) = store.get(id) {
         *entry.write() = diags;
     }
+    // Wake cross-tab readers (Problems drawer + rail badge).
+    let rev = DIAG_REV.resolve();
+    let next = *rev.peek() + 1;
+    *rev.write() = next;
 }
 
 /// Drop closed tabs' diagnostics (paired with `runs::drop_ids`).
@@ -122,6 +133,9 @@ pub fn clear() {
 /// its execution error (from `runs`). **Reactive** — call inside a component
 /// render so the reads subscribe (both stores track this key, creation included).
 pub fn problems_for(id: u64) -> Vec<Diagnostic> {
+    // Subscribe to the revision counter so cross-tab readers re-render on any change
+    // (covers the absent→present key case the per-key subscription misses).
+    let _rev = DIAG_REV.resolve().read();
     let mut out: Vec<Diagnostic> = DIAGS
         .resolve()
         .get(id)
@@ -137,17 +151,12 @@ pub fn problems_for(id: u64) -> Vec<Diagnostic> {
     out
 }
 
-/// Total error-severity problems across all open tabs (Problems header + rail
-/// badge). **Reactive** — call inside a component render.
-pub fn total_errors() -> usize {
+/// Total problem count (all severities) across all open tabs — the Problems header
+/// count + rail badge. **Reactive** — call inside a component render.
+pub fn total_problems() -> usize {
     let sess = crate::session::store();
     sess.workspaces()
         .iter()
-        .map(|w| {
-            problems_for(w.id().cloned())
-                .iter()
-                .filter(|d| d.is_error())
-                .count()
-        })
+        .map(|w| problems_for(w.id().cloned()).len())
         .sum()
 }
