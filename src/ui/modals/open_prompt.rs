@@ -11,8 +11,8 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
-use crate::ui::components::{Checkbox, Dialog};
-use crate::ui::icons;
+use crate::ui::components::{Button, ButtonVariant, Checkbox, Dialog, Icon, Prose, Title};
+use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub fn OpenPromptHost() -> Element {
@@ -42,16 +42,16 @@ fn OpenPromptCard(path: std::path::PathBuf) -> Element {
             div { style: "padding:22px 24px 16px;",
                 div { style: "display:flex;align-items:center;gap:12px;margin-bottom:14px;",
                     span { style: "width:38px;height:38px;flex:none;border-radius:9px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;",
-                        {icons::folder(19)}
+                        Icon { name: IconName::Folder, size: IconSize::Lg }
                     }
                     div { style: "min-width:0;",
-                        div { style: "font:600 14.5px var(--ui);color:var(--text);", "Open Project" }
-                        div { style: "font:400 12.5px var(--ui);color:var(--dim2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
+                        Title { "Open Project" }
+                        Prose { style: "color:var(--dim2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
                             "{name}"
                         }
                     }
                 }
-                div { style: "font-size:13px;line-height:1.5;color:var(--text3);",
+                Prose { style: "display:block;line-height:1.5;color:var(--text3);",
                     "Open this project in the current window, or in a new window?"
                 }
                 div { style: "margin-top:16px;",
@@ -59,18 +59,14 @@ fn OpenPromptCard(path: std::path::PathBuf) -> Element {
                 }
             }
             div { style: "display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:14px 20px;background:var(--panel);border-top:1px solid var(--line);",
-                button {
-                    style: "height:34px;padding:0 14px;border:none;background:transparent;color:var(--dim);border-radius:8px;cursor:pointer;font:600 12.5px var(--ui);",
-                    onclick: move |_| crate::overlays::close_open_prompt(),
-                    "Cancel"
-                }
-                button {
-                    style: "height:34px;padding:0 16px;border:1px solid var(--line3);background:var(--elev);color:var(--text);border-radius:8px;cursor:pointer;font:600 12.5px var(--ui);",
+                Button { variant: ButtonVariant::Ghost, onclick: move |_| crate::overlays::close_open_prompt(), "Cancel" }
+                Button {
+                    variant: ButtonVariant::Secondary,
                     onclick: move |_| dispatch(state, Action::OpenChosen { new_window: true, remember: remember() }),
                     "New Window"
                 }
-                button {
-                    style: "height:34px;padding:0 16px;border:none;background:var(--accent);color:#fff;border-radius:8px;cursor:pointer;font:600 12.5px var(--ui);",
+                Button {
+                    variant: ButtonVariant::Primary,
                     onclick: move |_| dispatch(state, Action::OpenChosen { new_window: false, remember: remember() }),
                     "This Window"
                 }

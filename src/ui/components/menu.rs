@@ -5,14 +5,18 @@
 
 use dioxus::prelude::*;
 
-use crate::ui::icons;
+use super::Meta;
+use crate::ui::icons::{IconName, IconSize};
 
 /// A clickable row inside a menu card. The caller's `onclick` should both dismiss the
 /// menu (clear its signal) and perform the action. `selected` tints the row + adds a
 /// check (for single-select menus); `danger` reddens; `disabled` dims + inert.
 #[component]
 pub fn MenuItem(
-    icon: Option<Element>,
+    icon: Option<IconName>,
+    /// Leading-icon size in px (menu rows use 14).
+    #[props(default = IconSize::Sm)]
+    icon_size: IconSize,
     label: String,
     meta: Option<String>,
     #[props(default)] danger: bool,
@@ -40,14 +44,14 @@ pub fn MenuItem(
                 }
             },
             if let Some(ic) = icon {
-                span { class: "ds-mi-ico", {ic} }
+                span { class: "ds-mi-ico", {ic.el(icon_size)} }
             }
             span { class: "ds-mi-label", "{label}" }
             if let Some(m) = meta {
-                span { class: "kbd-hint", "{m}" }
+                Meta { class: "kbd-hint", "{m}" }
             }
             if selected {
-                span { class: "ds-mi-check", {icons::check(13)} }
+                span { class: "ds-mi-check", {IconName::Check.el(IconSize::Sm)} }
             }
         }
     }

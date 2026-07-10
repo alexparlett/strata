@@ -6,6 +6,10 @@ pub mod code_editor;
 pub mod components;
 pub mod drawer;
 pub mod errview;
+/// Dev-only S28/S29 component gallery (Help → Component Gallery); compiled out of
+/// release builds.
+#[cfg(debug_assertions)]
+pub mod gallery;
 pub mod header;
 pub mod icons;
 pub mod inspector;

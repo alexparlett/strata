@@ -7,25 +7,33 @@
 
 use dioxus::prelude::*;
 
-use crate::ui::icons;
+use super::Body;
+use super::Icon;
+use crate::ui::icons::{IconName, IconSize};
 
 #[component]
-pub fn Checkbox(checked: bool, on_toggle: EventHandler<bool>, children: Element) -> Element {
+pub fn Checkbox(
+    checked: bool,
+    on_toggle: EventHandler<bool>,
+    #[props(default)] disabled: bool,
+    children: Element,
+) -> Element {
     rsx! {
         button {
             r#type: "button",
             "role": "checkbox",
             "aria-checked": if checked { "true" } else { "false" },
-            class: "chk-row",
-            onclick: move |_| on_toggle.call(!checked),
+            class: if disabled { "chk-row disabled" } else { "chk-row" },
+            disabled: disabled,
+            onclick: move |_| { if !disabled { on_toggle.call(!checked); } },
             span {
                 class: if checked { "chk on" } else { "chk" },
                 "data-state": if checked { "checked" } else { "unchecked" },
                 if checked {
-                    {icons::check(11)}
+                    Icon { name: IconName::Check, size: IconSize::Xs }
                 }
             }
-            span { class: "chk-label", {children} }
+            Body { class: "chk-label", {children} }
         }
     }
 }

@@ -14,8 +14,12 @@ use crate::action::{dispatch, Action};
 use crate::runs::ResultsView;
 use crate::session::WorkspaceId;
 use crate::state::AppState;
-use crate::ui::components::{RectAlign, Select, SelectOption};
-use crate::ui::icons;
+use crate::ui::components::{
+    Body, Button, ButtonVariant, DotStatus, Eyebrow, Icon, IconButton, IconButtonVariant, Meta,
+    MonoValue, Pager, Path, Prose, RectAlign, SearchBar, Segment, SegmentOption, Select,
+    SelectOption, Spacer, StatusDot, Title,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 /// Results = optional toolbar (grid/chart) + the state body + the unified status bar.
 /// The body is a mutually-exclusive state switch; the status bar is always present so
@@ -70,13 +74,14 @@ fn Running(ws_id: WorkspaceId) -> Element {
     let target = target_name(ws_id);
     rsx! {
         div { class: "res-state res-running",
-            {icons::spinner(30)}
-            div { class: "res-title", "Running query…" }
-            div { class: "res-sub mono", "scanning {target}" }
-            button {
-                class: "btn cancel sm",
+            Icon { name: IconName::Spinner, size: IconSize::Px(30) }
+            Title { class: "res-title", "Running query…" }
+            Path { class: "res-sub mono", "scanning {target}" }
+            Button {
+                variant: ButtonVariant::Danger,
+                small: true,
+                icon: IconName::Stop, icon_size: IconSize::Xs,
                 onclick: move |_| dispatch(state, Action::CancelQuery),
-                {icons::stop(11)}
                 "Cancel"
             }
         }
@@ -99,18 +104,17 @@ fn ErrorView(ws_id: WorkspaceId) -> Element {
     rsx! {
         div { class: "res-error ps-scroll",
             div { class: "err-banner",
-                span { class: "err-ico", {icons::err_circle(15)} }
-                span { class: "err-type", "{err.etype}" }
+                span { class: "err-ico", Icon { name: IconName::ErrCircle, size: IconSize::Sm } }
+                MonoValue { class: "err-type", "{err.etype}" }
                 if !loc.is_empty() {
-                    span { class: "err-loc", "{loc}" }
+                    Path { class: "err-loc", "{loc}" }
                 }
-                div { class: "spacer" }
-                button { class: "err-dismiss", title: "Dismiss",
+                Spacer {}
+                IconButton {
+                    variant: IconButtonVariant::Ghost,
+                    icon: IconName::Close,
+                    title: "Dismiss",
                     onclick: move |_| dispatch(state, Action::DismissQueryError),
-                    svg { width: "12", height: "12", "viewBox": "0 0 24 24", fill: "none",
-                        stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round",
-                        path { d: "M6 6l12 12M18 6L6 18" }
-                    }
                 }
             }
             div { class: "err-body",
@@ -141,9 +145,9 @@ pub(crate) fn Empty(ws_id: WorkspaceId) -> Element {
     };
     rsx! {
         div { class: "res-state res-empty",
-            div { class: "res-empty-ico", {icons::rows(22)} }
-            div { class: "res-title", "{title}" }
-            div { class: "res-sub", "{sub}" }
+            div { class: "res-empty-ico", Icon { name: IconName::Rows, size: IconSize::Px(22) } }
+            Title { class: "res-title", "{title}" }
+            Prose { class: "res-sub", "{sub}" }
         }
     }
 }
@@ -154,9 +158,9 @@ pub(crate) fn Empty(ws_id: WorkspaceId) -> Element {
 fn ChartPlaceholder() -> Element {
     rsx! {
         div { class: "res-state res-empty",
-            div { class: "res-empty-ico", {icons::chart(22)} }
-            div { class: "res-title", "Chart view coming soon" }
-            div { class: "res-sub", "Visualising the result snapshot lands with R2. Switch back to Table to view rows." }
+            div { class: "res-empty-ico", Icon { name: IconName::Chart, size: IconSize::Px(22) } }
+            Title { class: "res-title", "Chart view coming soon" }
+            Prose { class: "res-sub", "Visualising the result snapshot lands with R2. Switch back to Table to view rows." }
         }
     }
 }
@@ -176,39 +180,41 @@ pub(crate) fn EmptyState() -> Element {
         .collect();
     rsx! {
         div { class: "ws-empty",
-            div { class: "ws-empty-ico", {icons::database(26)} }
-            div { class: "ws-empty-title", "No query open" }
-            div { class: "ws-empty-sub",
+            div { class: "ws-empty-ico", Icon { name: IconName::Database, size: IconSize::Px(26) } }
+            Title { class: "ws-empty-title", "No query open" }
+            Prose { class: "ws-empty-sub",
                 "Open a new query tab to explore your data, or run "
-                span { class: "mono hl", "SELECT *" }
+                MonoValue { class: "mono hl", "SELECT *" }
                 " on a table from the catalog."
             }
             div { class: "ws-empty-actions",
-                button { class: "btn accent", style: "height:36px;",
+                Button {
+                    variant: ButtonVariant::Primary,
+                    icon: IconName::Plus, icon_size: IconSize::Sm,
+                    kbd: "⌘N",
                     onclick: move |_| dispatch(state, Action::NewTab),
-                    {icons::plus(15)}
                     "New query"
-                    span { class: "kbd", style: "margin-left:2px;", "⌘N" }
                 }
                 if has_closed {
-                    button { class: "btn", style: "height:36px;",
+                    Button {
+                        variant: ButtonVariant::Secondary,
+                        icon: IconName::Reopen, icon_size: IconSize::Sm,
                         onclick: move |_| dispatch(state, Action::ReopenTab),
-                        {icons::reopen(14)}
                         "Reopen closed"
                     }
                 }
             }
             if !saved.is_empty() {
                 div { class: "ws-empty-saved",
-                    div { class: "lbl", "SAVED QUERIES" }
+                    Eyebrow { class: "lbl", "SAVED QUERIES" }
                     for name in saved {
                         {
                             let nm = name.clone();
                             rsx! {
                                 div { class: "ws-empty-q",
                                     onclick: move |_| dispatch(state, Action::OpenSavedQuery(nm.clone())),
-                                    span { style: "color:var(--purple);display:flex;flex:none;", {icons::brackets(14)} }
-                                    span { class: "nm", "{name}" }
+                                    Icon { name: IconName::Brackets, size: IconSize::Sm, color: "var(--purple)" }
+                                    Body { class: "nm", "{name}" }
                                 }
                             }
                         }
@@ -254,36 +260,45 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
     rsx! {
         div { class: "results-tb",
             // Table/Chart toggle (left) — always present in a result state.
-            div { class: "seg-row seg-toggle",
-                button { class: if grid { "seg-btn on" } else { "seg-btn" },
-                    onclick: move |_| dispatch(state, Action::SetResultsView(ResultsView::Grid)),
-                    {icons::table(13)} "Table" }
-                button { class: if !grid { "seg-btn on" } else { "seg-btn" },
-                    onclick: move |_| dispatch(state, Action::SetResultsView(ResultsView::Chart)),
-                    {icons::chart(13)} "Chart" }
+            Segment {
+                value: if grid { "grid" } else { "chart" },
+                compact: true,
+                on_select: move |v: String| dispatch(state, Action::SetResultsView(
+                    if v == "chart" { ResultsView::Chart } else { ResultsView::Grid },
+                )),
+                options: vec![
+                    SegmentOption::with_icon("grid", "Table", IconName::Table),
+                    SegmentOption::with_icon("chart", "Chart", IconName::Chart),
+                ],
             }
-            // Find-in-results (grid-only).
+            // Find-in-results (grid-only) — the shared SearchBar (search icon + clear),
+            // with the match count as extra trailing content.
             if grid {
-                div { class: "field res-find",
-                    {icons::search(14)}
-                    input { class: "input mono", placeholder: "Find in results", value: "{search}",
-                        oninput: move |e| dispatch(state, Action::SetResultSearch(e.value())) }
-                    if !search.is_empty() {
-                        span { class: "res-find-count", "{matches} of {page_rows} on page" }
-                        button { class: "res-find-clear", title: "Clear",
-                            onclick: move |_| dispatch(state, Action::SetResultSearch(String::new())),
-                            {icons::close(12)} }
-                    }
+                SearchBar {
+                    value: search.clone(),
+                    oninput: move |v| dispatch(state, Action::SetResultSearch(v)),
+                    mono: true,
+                    placeholder: "Find in results",
+                    width: 320,
+                    trailing: rsx! {
+                        if !search.is_empty() {
+                            Meta { class: "res-find-count", "{matches} of {page_rows} on page" }
+                        }
+                    },
                 }
             }
-            div { class: "spacer" }
+            Spacer {}
             // Refresh + download (right).
-            button { class: "icon-btn plain", title: "Refresh — re-run the query",
+            IconButton { icon: IconName::Refresh,
+                variant: IconButtonVariant::Ghost,
+                title: "Refresh — re-run the query",
                 onclick: move |_| dispatch(state, Action::RunQuery),
-                {icons::refresh(15)} }
-            button { class: "icon-btn plain", title: "Export results",
+            }
+            IconButton { icon: IconName::Download,
+                variant: IconButtonVariant::Ghost,
+                title: "Export results",
                 onclick: move |_| crate::overlays::open_export(),
-                {icons::download(15)} }
+            }
         }
     }
 }
@@ -322,7 +337,11 @@ fn StatusBar(ws_id: WorkspaceId) -> Element {
                 ("err", "Query failed".to_string(), qe.etype.clone())
             } else if let Some(p) = &r.plan {
                 let logical = matches!(r.plan_tab, crate::plan::PlanTab::Logical);
-                let ops = if logical { p.logical.len() } else { p.physical.len() };
+                let ops = if logical {
+                    p.logical.len()
+                } else {
+                    p.physical.len()
+                };
                 let mode = if logical {
                     "logical"
                 } else if p.analyze {
@@ -330,9 +349,17 @@ fn StatusBar(ws_id: WorkspaceId) -> Element {
                 } else {
                     "physical"
                 };
-                ("plan", "Query plan".to_string(), format!("{ops} operators · {mode}"))
+                (
+                    "plan",
+                    "Query plan".to_string(),
+                    format!("{ops} operators · {mode}"),
+                )
             } else if has_result {
-                ("ok", format!("{} rows", fmt_int(total as u64)), format!("{elapsed} ms"))
+                (
+                    "ok",
+                    format!("{} rows", fmt_int(total as u64)),
+                    format!("{elapsed} ms"),
+                )
             } else {
                 ("idle", "No query run".to_string(), "⌘↵ to run".to_string())
             };
@@ -342,7 +369,17 @@ fn StatusBar(ws_id: WorkspaceId) -> Element {
             } else {
                 None
             };
-            (dot, label, sub, snap, has_result, r.view, r.page, r.page_size, total)
+            (
+                dot,
+                label,
+                sub,
+                snap,
+                has_result,
+                r.view,
+                r.page,
+                r.page_size,
+                total,
+            )
         })
         .unwrap_or_else(|| {
             (
@@ -360,15 +397,23 @@ fn StatusBar(ws_id: WorkspaceId) -> Element {
 
     rsx! {
         div { class: "res-statusbar",
-            span { class: "res-dot {dot}" }
-            span { class: "res-stat", "{label}" }
+            StatusDot {
+                status: match dot {
+                    "run" => DotStatus::Run,
+                    "err" => DotStatus::Err,
+                    "plan" => DotStatus::Plan,
+                    "ok" => DotStatus::Ok,
+                    _ => DotStatus::Idle,
+                },
+            }
+            Meta { class: "res-stat", "{label}" }
             if !sub.is_empty() {
-                span { class: "res-stat-sub", "· {sub}" }
+                Path { class: "res-stat-sub", "· {sub}" }
             }
             if let Some(ago) = snap {
-                span { class: "res-snap", {icons::clock(12)} "snapshot {ago}" }
+                Path { class: "res-snap", Icon { name: IconName::Clock, size: IconSize::Xs } "snapshot {ago}" }
             }
-            div { class: "spacer" }
+            Spacer {}
             if has_result && view == ResultsView::Grid {
                 {pager_controls(state, total, page, page_size)}
             }
@@ -378,12 +423,7 @@ fn StatusBar(ws_id: WorkspaceId) -> Element {
 
 /// The pager cluster on the right of the status bar (grid-only): page-size dropdown
 /// (opens upward) + first/prev/page-input `of M`/next/last.
-fn pager_controls(
-    state: Signal<AppState>,
-    total: usize,
-    page: usize,
-    page_size: usize,
-) -> Element {
+fn pager_controls(state: Signal<AppState>, total: usize, page: usize, page_size: usize) -> Element {
     let page_count = ((total as f64) / (page_size as f64)).ceil().max(1.0) as usize;
     rsx! {
         Select {
@@ -401,16 +441,10 @@ fn pager_controls(
             },
         }
         div { style: "width:1px;height:18px;background:var(--line);" }
-        div { class: "row", style: "gap:3px;",
-            button { class: "pg-btn", title: "First", onclick: move |_| dispatch(state, Action::FetchPage(1)), {icons::first(15)} }
-            button { class: "pg-btn", title: "Previous", onclick: move |_| { if page > 1 { dispatch(state, Action::FetchPage(page - 1)); } }, {icons::prev(15)} }
-            div { class: "row", style: "gap:6px;padding:0 6px;",
-                input { class: "page-input", value: "{page}",
-                    onchange: move |e| { if let Ok(p) = e.value().parse::<usize>() { dispatch(state, Action::FetchPage(p.clamp(1, page_count))); } } }
-                span { class: "meta", "of {page_count}" }
-            }
-            button { class: "pg-btn", title: "Next", onclick: move |_| { if page < page_count { dispatch(state, Action::FetchPage(page + 1)); } }, {icons::next(15)} }
-            button { class: "pg-btn", title: "Last", onclick: move |_| dispatch(state, Action::FetchPage(page_count)), {icons::last(15)} }
+        Pager {
+            page: page as u32,
+            page_count: page_count as u32,
+            on_jump: move |n: u32| dispatch(state, Action::FetchPage(n as usize)),
         }
     }
 }

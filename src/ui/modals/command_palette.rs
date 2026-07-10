@@ -3,8 +3,8 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
-use crate::ui::components::Dialog;
-use crate::ui::icons;
+use crate::ui::components::{Dialog, Eyebrow, Icon, Meta, Path, Prose, Spacer, TextInput};
+use crate::ui::icons::{IconName, IconSize};
 
 // ---------------------------------------------------------------------------
 // Command palette
@@ -110,19 +110,20 @@ pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
             top: true,
             has_input: true,
             div { class: "cmdk-head",
-                {icons::search(17)}
-                input {
-                    class: "cmdk-input",
+                Icon { name: IconName::Search, size: IconSize::Md }
+                TextInput {
+                    bare: true,
+                    grow: true,
                     autofocus: true,
                     placeholder: "Search tables, columns, views — or run a command…",
                     value: "{cmdk_q}",
-                    oninput: move |e| query.set(e.value()),
+                    oninput: move |v| query.set(v),
                 }
-                span { class: "kbd", "ESC" }
+                Eyebrow { class: "kbd", "ESC" }
             }
             div { class: "cmdk-list",
                 if filtered.is_empty() {
-                    div { style: "padding:40px;text-align:center;color:var(--dim3);", "No matches" }
+                    Prose { style: "padding:40px;text-align:center;color:var(--dim3);", "No matches" }
                 }
                 for (label, sub, effect) in filtered {
                     div {
@@ -134,15 +135,15 @@ pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
                             }
                             on_close.call(());
                         },
-                        span { style: "display:flex;color:var(--dim);", {icons::table(15)} }
-                        span { class: "lbl", "{label}" }
-                        div { class: "spacer" }
-                        span { class: "sub", "{sub}" }
+                        Icon { name: IconName::Table, size: IconSize::Sm, color: "var(--dim)" }
+                        Prose { class: "lbl", "{label}" }
+                        Spacer {}
+                        Path { class: "sub", "{sub}" }
                     }
                 }
             }
             div { class: "cmdk-foot",
-                span { "↑↓ navigate" } span { "↵ select" } span { "esc close" }
+                Meta { "↑↓ navigate" } Meta { "↵ select" } Meta { "esc close" }
             }
         }
     }

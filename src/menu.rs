@@ -37,6 +37,9 @@ pub enum MenuCmd {
     Settings,
     /// Open a specific recent project (payload = its `.strata` path).
     OpenRecent(String),
+    /// Dev-only: open the S28/S29 component gallery window (Help menu, debug builds).
+    #[cfg(debug_assertions)]
+    OpenGallery,
 }
 
 const RECENT_PREFIX: &str = "file.recent:";
@@ -51,6 +54,8 @@ impl MenuCmd {
             MenuCmd::SaveAll => "file.save_all".into(),
             MenuCmd::Settings => "file.settings".into(),
             MenuCmd::OpenRecent(path) => format!("{RECENT_PREFIX}{path}"),
+            #[cfg(debug_assertions)]
+            MenuCmd::OpenGallery => "help.gallery".into(),
         }
     }
 
@@ -63,6 +68,8 @@ impl MenuCmd {
             "file.close_project" => MenuCmd::CloseProject,
             "file.save_all" => MenuCmd::SaveAll,
             "file.settings" => MenuCmd::Settings,
+            #[cfg(debug_assertions)]
+            "help.gallery" => MenuCmd::OpenGallery,
             other => MenuCmd::OpenRecent(other.strip_prefix(RECENT_PREFIX)?.to_string()),
         })
     }
@@ -149,6 +156,17 @@ pub fn app_menu() -> Menu {
 
     // On macOS the root menu accepts only submenus.
     let _ = menu.append_items(&[&app, &file, &edit, &window]);
+
+    // Help — dev-only: a single "Component Gallery" entry (S28/S29 preview).
+    // Compiled out of release builds, so the menu simply has no Help submenu there.
+    #[cfg(debug_assertions)]
+    {
+        let help = Submenu::new("Help", true);
+        let gallery = MenuItem::with_id(MenuCmd::OpenGallery, "Component Gallery", true, None);
+        let _ = help.append_items(&[&gallery]);
+        let _ = menu.append_items(&[&help]);
+    }
+
     menu
 }
 
@@ -190,5 +208,7 @@ pub fn run_project_command(state: Signal<AppState>, id: &str) {
         MenuCmd::SaveAll => dispatch(state, Action::SaveProject),
         MenuCmd::Settings => crate::overlays::toggle_settings(),
         MenuCmd::OpenRecent(path) => dispatch(state, Action::OpenRecent(path)),
+        #[cfg(debug_assertions)]
+        MenuCmd::OpenGallery => crate::window::spawn_gallery_window(),
     }
 }

@@ -59,6 +59,20 @@ impl Kind {
         }
     }
 
+    /// CSS colour for the type swatch/dot (`var(--t-num)`, ...) — for the `Dot` component's
+    /// `color` prop (inline fill, so it beats the base dot styling).
+    pub fn dot_color(self) -> &'static str {
+        match self {
+            Kind::Str => "var(--t-str)",
+            Kind::Num => "var(--t-num)",
+            Kind::Bool => "var(--t-bool)",
+            Kind::Ts => "var(--t-ts)",
+            Kind::Struct => "var(--t-struct)",
+            Kind::List => "var(--t-list)",
+            Kind::Map => "var(--t-map)",
+        }
+    }
+
     /// CSS class for coloured type text (`t-num`, ...).
     pub fn text_class(self) -> &'static str {
         match self {

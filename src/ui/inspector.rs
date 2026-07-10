@@ -7,7 +7,10 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
-use crate::ui::icons;
+use crate::ui::components::{
+    Dot, Eyebrow, IconButton, IconButtonVariant, Meta, MonoValue, Path, Prose, Readout,
+};
+use crate::ui::icons::{IconName, IconSize};
 use crate::util::Kind;
 
 #[component]
@@ -20,11 +23,11 @@ pub fn Inspector() -> Element {
         return rsx! {
             aside { class: "ps-inspector", style: "width:{width}px;",
                 div { class: "insp-head",
-                    span { class: "sec-label", "COLUMN INSPECTOR" }
-                    button { class: "icon-btn plain", style: "width:24px;height:24px;",
-                        onclick: move |_| dispatch(state, Action::CloseInspector), {icons::close(12)} }
+                    Eyebrow { class: "sec-label", "COLUMN INSPECTOR" }
+                    IconButton { icon: IconName::Close, icon_size: IconSize::Xs, variant: IconButtonVariant::Ghost, title: "Close inspector",
+                        onclick: move |_| dispatch(state, Action::CloseInspector), }
                 }
-                div { style: "padding:24px 14px;color:var(--dim2);font-size:12px;", "Select a column to inspect." }
+                Prose { style: "padding:24px 14px;color:var(--dim2);", "Select a column to inspect." }
             }
         };
     };
@@ -96,26 +99,26 @@ pub fn Inspector() -> Element {
         )
     };
 
-    let dot = kind.dot_class();
+    let dot = kind.dot_color();
     let tcls = kind.text_class();
     let nested = kind.is_nested();
 
     rsx! {
         aside { class: "ps-inspector ps-scroll", style: "width:{width}px;",
             div { class: "insp-head",
-                span { class: "sec-label", "COLUMN INSPECTOR" }
-                button { class: "icon-btn plain", style: "width:24px;height:24px;",
-                    onclick: move |_| dispatch(state, Action::CloseInspector), {icons::close(12)} }
+                Eyebrow { class: "sec-label", "COLUMN INSPECTOR" }
+                IconButton { icon: IconName::Close, icon_size: IconSize::Xs, variant: IconButtonVariant::Ghost, title: "Close inspector",
+                    onclick: move |_| dispatch(state, Action::CloseInspector), }
             }
 
             div { class: "insp-title",
                 div { class: "row", style: "gap:8px;",
-                    span { class: "dot {dot}", style: "width:9px;height:9px;border-radius:3px;" }
-                    span { class: "insp-name", "{colname}" }
+                    Dot { color: "{dot}", square: true, size: 8 }
+                    MonoValue { class: "insp-name", "{colname}" }
                 }
                 div { class: "row", style: "gap:8px;margin-top:6px;",
-                    span { class: "mono {tcls}", style: "font-size:10.5px;background:rgba(255,255,255,.05);padding:2px 7px;border-radius:5px;", "{dtype}" }
-                    span { class: "mono", style: "font-size:11px;color:var(--dim2);", "from {table}" }
+                    Meta { class: "{tcls} insp-dtype", "{dtype}" }
+                    Path { "from {table}" }
                 }
             }
 
@@ -127,16 +130,16 @@ pub fn Inspector() -> Element {
             }
 
             if nested {
-                div { class: "insp-note", "Nested column — expand values in the results grid (click a cell) or use get_field / unnest to project fields." }
+                div { class: "insp-note", Path { "Nested column — expand values in the results grid (click a cell) or use get_field / unnest to project fields." } }
                 if !children.is_empty() {
                     div { class: "insp-section",
-                        div { class: "sec-label", style: "margin-bottom:8px;", "NESTED FIELDS" }
+                        Eyebrow { class: "sec-label", style: "margin-bottom:8px;", "NESTED FIELDS" }
                         div { class: "nested-box",
                             for f in children.iter() {
                                 div { class: "nested-field",
-                                    span { class: "dot {f.kind.dot_class()}" }
-                                    span { class: "fname", "{f.name}" }
-                                    span { class: "ftype {f.kind.text_class()}", "{f.dtype}" }
+                                    Dot { color: "{f.kind.dot_color()}", square: true, size: 6 }
+                                    Readout { class: "fname", "{f.name}" }
+                                    Meta { class: "ftype {f.kind.text_class()}", "{f.dtype}" }
                                 }
                             }
                         }
@@ -146,8 +149,8 @@ pub fn Inspector() -> Element {
 
             div { class: "insp-section",
                 div { class: "row", style: "justify-content:space-between;margin-bottom:6px;",
-                    span { class: "mono", style: "font-size:10.5px;color:var(--dim);", "Completeness" }
-                    span { class: "mono", style: "font-size:10.5px;color:var(--text2);", "{fill}%" }
+                    Meta { style: "color:var(--dim);", "Completeness" }
+                    Meta { style: "color:var(--text2);", "{fill}%" }
                 }
                 div { class: "fill-track", div { class: "fill-bar", style: "width:{fill}%;" } }
             }
@@ -155,9 +158,9 @@ pub fn Inspector() -> Element {
             if is_num && !nums.is_empty() {
                 div { style: "padding:8px 14px 18px;",
                     div { style: "height:4px;border-radius:2px;background:linear-gradient(90deg,var(--line),var(--accent),var(--line));margin:8px 0 6px;" }
-                    div { class: "row mono", style: "justify-content:space-between;font-size:10px;color:var(--dim2);",
-                        span { "min {min}" }
-                        span { "max {max}" }
+                    div { class: "row", style: "justify-content:space-between;",
+                        Meta { "min {min}" }
+                        Meta { "max {max}" }
                     }
                 }
             }
@@ -168,8 +171,8 @@ pub fn Inspector() -> Element {
 fn stat(label: &str, value: &str, color: &str) -> Element {
     rsx! {
         div { class: "insp-stat",
-            div { class: "k", "{label}" }
-            div { class: "v", style: "color:{color};", "{value}" }
+            Meta { class: "k", "{label}" }
+            MonoValue { class: "v", style: "color:{color};", "{value}" }
         }
     }
 }

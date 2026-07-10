@@ -8,6 +8,9 @@
 
 use dioxus::prelude::*;
 
+use super::{Path, Title};
+use crate::ui::icons::{IconName, IconSize};
+
 /// A floating window's geometry in client pixels (top-left corner + size).
 #[derive(Clone, Copy, PartialEq)]
 pub struct WinGeom {
@@ -43,8 +46,11 @@ pub fn Window(
     title: String,
     /// Small muted line under the title (e.g. "appearance & behavior").
     subtitle: Option<String>,
-    /// Leading titlebar icon.
-    icon: Option<Element>,
+    /// Leading titlebar icon (a typed [`IconName`]).
+    icon: Option<IconName>,
+    /// Titlebar-icon size (default `IconSize::Md`, 16px).
+    #[props(default = IconSize::Md)]
+    icon_size: IconSize,
     /// Opening geometry (default: 720×560 at 220,96).
     init: Option<WinGeom>,
     /// Minimum size while resizing (defaults 360×240).
@@ -84,12 +90,12 @@ pub fn Window(
                     drag.set(Some(Drag { resize: false, px: c.x, py: c.y, orig: geom() }));
                 },
                 if let Some(ic) = icon {
-                    div { class: "modal-ico", {ic} }
+                    div { class: "modal-ico", {ic.el(icon_size)} }
                 }
                 div { style: "flex:1;min-width:0;",
-                    div { class: "modal-title", "{title}" }
+                    Title { class: "modal-title", "{title}" }
                     if let Some(sub) = subtitle {
-                        div { class: "modal-sub", "{sub}" }
+                        Path { class: "modal-sub", "{sub}" }
                     }
                 }
                 button {
@@ -98,7 +104,7 @@ pub fn Window(
                     // Clicking the close button must not begin a titlebar drag.
                     onmousedown: move |e| e.stop_propagation(),
                     onclick: move |_| on_close.call(()),
-                    {crate::ui::icons::close(14)}
+                    {IconName::Close.el(IconSize::Sm)}
                 }
             }
             // Body (caller supplies its own padding).

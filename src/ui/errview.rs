@@ -7,6 +7,7 @@
 use dioxus::prelude::*;
 
 use crate::query_error::QueryError;
+use crate::ui::components::{Caption, Readout};
 
 /// Render `message → code frame → hint` for `err`, using the `.err-*` classes.
 pub fn error_detail(err: &QueryError) -> Element {
@@ -14,18 +15,18 @@ pub fn error_detail(err: &QueryError) -> Element {
     let frame = err.frame.clone();
     let message = err.message.clone();
     rsx! {
-        div { class: "err-msg mono", "{message}" }
+        Readout { class: "err-msg mono", "{message}" }
         {
             match frame {
                 Some(frame) => rsx! {
                     div { class: "err-frame",
                         div { class: "err-frame-row",
-                            span { class: "err-ln mono", "{frame.line_no}" }
-                            span { class: "err-code mono", "{frame.line_text}" }
+                            Readout { class: "err-ln mono", "{frame.line_no}" }
+                            Readout { class: "err-code mono", "{frame.line_text}" }
                         }
                         div { class: "err-frame-row",
-                            span { class: "err-ln mono", style: "color:transparent;", "{frame.line_no}" }
-                            span { class: "err-caret mono", "{frame.caret_pad}{frame.caret}" }
+                            Readout { class: "err-ln mono", style: "color:transparent;", "{frame.line_no}" }
+                            Readout { class: "err-caret mono", "{frame.caret_pad}{frame.caret}" }
                         }
                     }
                 },
@@ -33,7 +34,7 @@ pub fn error_detail(err: &QueryError) -> Element {
             }
         }
         if !hint.is_empty() {
-            div { class: "err-hint", "{hint}" }
+            Caption { class: "err-hint", "{hint}" }
         }
     }
 }

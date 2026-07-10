@@ -89,6 +89,30 @@ pub fn chevron_down(sz: u32) -> Element {
 pub fn chevron_right(sz: u32) -> Element {
     stroke(sz, "2.2", rsx! { path { d: "m9 6 6 6-6 6" } })
 }
+/// Upward chevron — the `NumberStepper` increment caret (pairs with `chevron_down`).
+pub fn chevron_up(sz: u32) -> Element {
+    stroke(sz, "2.2", rsx! { path { d: "m6 15 6-6 6 6" } })
+}
+/// Three left-aligned rules — the plan's Raw/Tree "show text" toggle.
+pub fn lines(sz: u32) -> Element {
+    stroke(sz, "1.8", rsx! { path { d: "M4 7h16M4 12h10M4 17h13" } })
+}
+/// Corner arrows pointing out — expand a panel to full height (drawer).
+pub fn maximize(sz: u32) -> Element {
+    stroke(
+        sz,
+        "2",
+        rsx! { path { d: "M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4" } },
+    )
+}
+/// Corner arrows pointing in — collapse a panel back to its default (drawer).
+pub fn minimize(sz: u32) -> Element {
+    stroke(
+        sz,
+        "2",
+        rsx! { path { d: "M8 3v4H4M16 3v4h4M8 21v-4H4M16 21v-4h4" } },
+    )
+}
 pub fn gear(sz: u32) -> Element {
     stroke(
         sz,
@@ -377,4 +401,222 @@ pub fn reopen(sz: u32) -> Element {
 }
 pub fn brackets(sz: u32) -> Element {
     stroke(sz, "1.7", rsx! { path { d: "m8 8-4 4 4 4M16 8l4 4-4 4" } })
+}
+
+/// The full icon library as `(name, constructor)` pairs — used by the dev component
+/// gallery (design-system §11) and handy for any future icon picker. Every entry is a
+/// `fn(u32) -> Element`, so they can be stored and called uniformly.
+pub fn catalog() -> &'static [(&'static str, fn(u32) -> Element)] {
+    const CATALOG: &[(&str, fn(u32) -> Element)] = &[
+        ("strata_logo", strata_logo),
+        ("folder", folder),
+        ("pin", pin),
+        ("external", external),
+        ("cube_lines", cube_lines),
+        ("search", search),
+        ("plus", plus),
+        ("minus", minus),
+        ("close", close),
+        ("chevron_down", chevron_down),
+        ("chevron_right", chevron_right),
+        ("chevron_up", chevron_up),
+        ("lines", lines),
+        ("maximize", maximize),
+        ("minimize", minimize),
+        ("gear", gear),
+        ("clock", clock),
+        ("format", format),
+        ("save", save),
+        ("palette", palette),
+        ("grid", grid),
+        ("sliders", sliders),
+        ("keyboard", keyboard),
+        ("info", info),
+        ("download", download),
+        ("eye", eye),
+        ("pencil", pencil),
+        ("play", play),
+        ("stop", stop),
+        ("warning", warning),
+        ("logout", logout),
+        ("problems", problems),
+        ("events", events),
+        ("file", file),
+        ("collapse_left", collapse_left),
+        ("expand_right", expand_right),
+        ("branch", branch),
+        ("check", check),
+        ("alert", alert),
+        ("table", table),
+        ("refresh", refresh),
+        ("chart", chart),
+        ("err_circle", err_circle),
+        ("rows", rows),
+        ("spinner", spinner),
+        ("first", first),
+        ("prev", prev),
+        ("next", next),
+        ("last", last),
+        ("trash", trash),
+        ("dots", dots),
+        ("database", database),
+        ("reopen", reopen),
+        ("brackets", brackets),
+    ];
+    CATALOG
+}
+
+/// Typed identifier for every glyph in this module. The `Icon` component and the
+/// controls' `icon:` props take an `IconName` (not a bare `fn` or a string), so a
+/// typo is a compile error. `el()` renders the raw SVG at `sz`; wrapping/alignment
+/// belongs to the caller (the `Icon` component, or a control's own icon slot).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IconName {
+    Alert,
+    Brackets,
+    Branch,
+    Chart,
+    Check,
+    ChevronDown,
+    ChevronRight,
+    ChevronUp,
+    Clock,
+    Close,
+    CollapseLeft,
+    CubeLines,
+    Database,
+    Dots,
+    Download,
+    ErrCircle,
+    Events,
+    ExpandRight,
+    External,
+    Eye,
+    File,
+    First,
+    Folder,
+    Format,
+    Gear,
+    Grid,
+    Info,
+    Keyboard,
+    Last,
+    Lines,
+    Logout,
+    Maximize,
+    Minimize,
+    Minus,
+    Next,
+    Palette,
+    Pencil,
+    Pin,
+    Play,
+    Plus,
+    Prev,
+    Problems,
+    Refresh,
+    Reopen,
+    Rows,
+    Save,
+    Search,
+    Sliders,
+    Spinner,
+    Stop,
+    StrataLogo,
+    Table,
+    Trash,
+    Warning,
+}
+
+impl IconName {
+    /// The raw SVG element at the given [`IconSize`] (stroke style, `currentColor`).
+    pub fn el(self, sz: IconSize) -> Element {
+        let sz = sz.px();
+        match self {
+            IconName::Alert => alert(sz),
+            IconName::Brackets => brackets(sz),
+            IconName::Branch => branch(sz),
+            IconName::Chart => chart(sz),
+            IconName::Check => check(sz),
+            IconName::ChevronDown => chevron_down(sz),
+            IconName::ChevronRight => chevron_right(sz),
+            IconName::ChevronUp => chevron_up(sz),
+            IconName::Clock => clock(sz),
+            IconName::Close => close(sz),
+            IconName::CollapseLeft => collapse_left(sz),
+            IconName::CubeLines => cube_lines(sz),
+            IconName::Database => database(sz),
+            IconName::Dots => dots(sz),
+            IconName::Download => download(sz),
+            IconName::ErrCircle => err_circle(sz),
+            IconName::Events => events(sz),
+            IconName::ExpandRight => expand_right(sz),
+            IconName::External => external(sz),
+            IconName::Eye => eye(sz),
+            IconName::File => file(sz),
+            IconName::First => first(sz),
+            IconName::Folder => folder(sz),
+            IconName::Format => format(sz),
+            IconName::Gear => gear(sz),
+            IconName::Grid => grid(sz),
+            IconName::Info => info(sz),
+            IconName::Keyboard => keyboard(sz),
+            IconName::Last => last(sz),
+            IconName::Lines => lines(sz),
+            IconName::Logout => logout(sz),
+            IconName::Maximize => maximize(sz),
+            IconName::Minimize => minimize(sz),
+            IconName::Minus => minus(sz),
+            IconName::Next => next(sz),
+            IconName::Palette => palette(sz),
+            IconName::Pencil => pencil(sz),
+            IconName::Pin => pin(sz),
+            IconName::Play => play(sz),
+            IconName::Plus => plus(sz),
+            IconName::Prev => prev(sz),
+            IconName::Problems => problems(sz),
+            IconName::Refresh => refresh(sz),
+            IconName::Reopen => reopen(sz),
+            IconName::Rows => rows(sz),
+            IconName::Save => save(sz),
+            IconName::Search => search(sz),
+            IconName::Sliders => sliders(sz),
+            IconName::Spinner => spinner(sz),
+            IconName::Stop => stop(sz),
+            IconName::StrataLogo => strata_logo(sz),
+            IconName::Table => table(sz),
+            IconName::Trash => trash(sz),
+            IconName::Warning => warning(sz),
+        }
+    }
+}
+
+/// The design-system icon size scale (§07). `px()` resolves to the raw pixel edge.
+/// The named steps are the UI ramp; `Px(n)` is the escape hatch for illustration /
+/// brand one-offs (empty-state art, spinner, launcher logo) that sit outside it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum IconSize {
+    /// 12px — micro affordances (carets, chip / inline close).
+    Xs,
+    /// 14px — the workhorse: menu rows, dense toolbars, sidebar, inline glyphs.
+    Sm,
+    /// 16px — standard standalone icons, window titlebar, primary actions.
+    Md,
+    /// 18px — the activity rail.
+    Lg,
+    /// Arbitrary px — an illustration / brand one-off outside the ramp.
+    Px(u32),
+}
+
+impl IconSize {
+    /// The pixel edge length for this step.
+    pub fn px(self) -> u32 {
+        match self {
+            IconSize::Xs => 12,
+            IconSize::Sm => 14,
+            IconSize::Md => 16,
+            IconSize::Lg => 18,
+            IconSize::Px(n) => n,
+        }
+    }
 }

@@ -9,7 +9,8 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 
 use super::popup::{Backdrop, Popup, Rect, RectAlign};
-use crate::ui::icons;
+use super::Icon;
+use crate::ui::icons::{IconName, IconSize};
 
 /// One option in a [`Select`]: the stored `value` + its display `label`.
 #[derive(Clone, PartialEq)]
@@ -71,7 +72,7 @@ pub fn Select(
                 });
             },
             span { class: "ds-select-val", "{current}" }
-            {icons::chevron_down(12)}
+            Icon { name: IconName::ChevronDown, size: IconSize::Xs }
         }
         if open() {
             Backdrop { on_close: move |_| open.set(false),
@@ -95,7 +96,7 @@ pub fn Select(
                                     },
                                     span { class: "ds-mi-label", "{opt.label}" }
                                     if selected {
-                                        span { class: "ds-mi-check", {icons::check(13)} }
+                                        span { class: "ds-mi-check", Icon { name: IconName::Check, size: IconSize::Sm } }
                                     }
                                 }
                             }

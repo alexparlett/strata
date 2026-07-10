@@ -9,6 +9,11 @@ use crate::action::{dispatch, Action};
 use crate::plan::PlanTab;
 use crate::session::WorkspaceId;
 use crate::state::AppState;
+use crate::ui::components::{
+    Badge, Dot, IconButton, IconButtonVariant, Meta, Micro, MonoValue, Path, Readout, Segment,
+    SegmentOption, Spacer,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
@@ -52,44 +57,44 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
 
     // (The "N operators · mode" summary lives in the results status bar now, not the
     // plan header — matches the design.)
-    let phys_cls = if eff_physical {
-        "seg-btn on"
-    } else {
-        "seg-btn"
-    };
-    let log_cls = if !eff_physical {
-        "seg-btn on"
-    } else {
-        "seg-btn"
-    };
     // Icon-only Raw/Tree toggle (consistent with the results toolbar's icon buttons);
     // the title carries the action since there's no label.
-    let raw_title = if raw { "Show the plan tree" } else { "Show the raw plan text" };
+    let raw_title = if raw {
+        "Show the plan tree"
+    } else {
+        "Show the raw plan text"
+    };
 
     rsx! {
         div { class: "res-plan",
             div { class: "plan-tb",
                 if show_tabs {
-                    div { class: "seg-row seg-toggle",
-                        button { class: "{phys_cls}", onclick: move |_| dispatch(state, Action::SetPlanTab(PlanTab::Physical)), "Physical" }
-                        button { class: "{log_cls}", onclick: move |_| dispatch(state, Action::SetPlanTab(PlanTab::Logical)), "Logical" }
+                    Segment {
+                        value: if eff_physical { "physical" } else { "logical" },
+                        compact: true,
+                        on_select: move |v: String| dispatch(state, Action::SetPlanTab(
+                            if v == "logical" { PlanTab::Logical } else { PlanTab::Physical },
+                        )),
+                        options: vec![
+                            SegmentOption::new("physical", "Physical"),
+                            SegmentOption::new("logical", "Logical"),
+                        ],
                     }
                 }
                 if analyze && eff_physical {
-                    span { class: "plan-analyze mono", "ANALYZE" }
+                    Badge { color: "var(--t-map)", "ANALYZE" }
                 }
-                div { class: "spacer" }
-                button { class: if raw { "icon-btn plain on" } else { "icon-btn plain" }, title: "{raw_title}",
+                Spacer {}
+                IconButton { icon: IconName::Lines,
+                    variant: IconButtonVariant::Toggle,
+                    on: raw,
+                    title: "{raw_title}",
                     onclick: move |_| dispatch(state, Action::TogglePlanRaw),
-                    svg { width: "15", height: "15", "viewBox": "0 0 24 24", fill: "none",
-                        stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round",
-                        path { d: "M4 7h16M4 12h10M4 17h13" }
-                    }
                 }
             }
             if raw {
                 div { class: "plan-body ps-scroll",
-                    pre { class: "plan-raw mono", "{raw_text}" }
+                    Readout { class: "plan-raw mono", "{raw_text}" }
                 }
             } else {
                 div { class: "plan-body ps-scroll",
@@ -121,22 +126,22 @@ fn plan_node_card(n: &crate::plan::PlanNode, idx: usize, analyze: bool, max_ms: 
         div { key: "p{idx}", class: "plan-row", style: "padding-left:{indent}px;",
             div { class: "plan-card", style: "border-left-color:{color};",
                 div { class: "plan-card-head",
-                    span { class: "plan-sq", style: "background:{color};" }
-                    span { class: "plan-name mono", style: "color:{color};", "{n.name}" }
+                    Dot { color: "{color}", square: true, size: 6 }
+                    MonoValue { class: "plan-name mono", style: "color:{color};", "{n.name}" }
                     if hot {
-                        span { class: "plan-hot mono", "HOTSPOT" }
+                        Micro { class: "plan-hot mono", "HOTSPOT" }
                     }
                 }
                 if !n.detail.is_empty() {
-                    div { class: "plan-detail mono", "{n.detail}" }
+                    Path { class: "plan-detail mono", "{n.detail}" }
                 }
                 if has_metrics {
                     div { class: "plan-metrics",
                         div { class: "plan-metrics-row",
-                            span { class: "plan-rows mono", "{rows_label} rows" }
-                            span { class: "plan-ms mono", "{n.ms_label}" }
+                            Meta { class: "plan-rows mono", "{rows_label} rows" }
+                            Meta { class: "plan-ms mono", "{n.ms_label}" }
                             if !n.extra.is_empty() {
-                                span { class: "plan-extra mono", "{n.extra}" }
+                                Meta { class: "plan-extra mono", "{n.extra}" }
                             }
                         }
                         div { class: "plan-bar",

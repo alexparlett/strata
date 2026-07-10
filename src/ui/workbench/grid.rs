@@ -8,8 +8,11 @@ use dioxus_code::{Code, SourceCode};
 use crate::engine::Cell;
 use crate::session::WorkspaceId;
 use crate::state::AppState;
-use crate::ui::components::Dialog;
-use crate::ui::icons;
+use crate::ui::components::{
+    Badge, BadgeVariant, Dialog, Eyebrow, IconButton, IconButtonVariant, Meta, MonoValue, Path,
+    Readout, Spacer,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 /// A nested-cell view target (struct/list/map cell), opened from a grid cell and
 /// shown in a `CellDialog`. Workspace-local to the grid.
@@ -73,17 +76,17 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
         div { class: "grid-scroll ps-scroll",
             div { class: "grid-inner",
                 div { class: "grid-head",
-                    div { class: "hnum", "#" }
+                    Eyebrow { class: "hnum", "#" }
                     for (cn, ct, tcls, _cc, _nested) in cols.iter().cloned() {
                         div { class: "hcol", style: "width:150px;",
-                            span { class: "cn", "{cn}" }
-                            span { class: "ct {tcls}", "{ct}" }
+                            MonoValue { class: "cn", "{cn}" }
+                            Meta { class: "ct {tcls}", "{ct}" }
                         }
                     }
                 }
                 for (rownum, cells) in rows_page {
                     div { class: if zebra && rownum % 2 == 0 { "grid-row zebra" } else { "grid-row" },
-                        div { class: "rnum", "{rownum}" }
+                        Path { class: "rnum", "{rownum}" }
                         for (ci, cell) in cells.iter().enumerate() {
                             {render_cell(cols.get(ci).cloned(), cell.clone(), cell_view, type_color)}
                         }
@@ -132,7 +135,7 @@ fn render_cell(
                     }));
                 }
             },
-            "{cell.text}"
+            Readout { style: "display:inline;", "{cell.text}" }
         }
     }
 }
@@ -145,10 +148,10 @@ pub(crate) fn CellDialog(cell_view: Signal<Option<CellView>>, view: CellView) ->
     rsx! {
         Dialog { on_close: move |_| cell_view.set(None), card_class: "modal cell-modal".to_string(), z: 64,
             div { class: "row", style: "gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);",
-                span { class: "mono", style: "font-weight:600;font-size:13px;", "{view.name}" }
-                span { class: "mono", style: "font-size:10px;color:var(--t-list);background:var(--accent-soft);padding:2px 7px;border-radius:5px;", "{view.type_label}" }
-                div { class: "spacer" }
-                button { class: "icon-btn plain", style: "width:28px;height:28px;", onclick: move |_| cell_view.set(None), {icons::close(13)} }
+                MonoValue { style: "color:var(--text);", "{view.name}" }
+                Badge { variant: BadgeVariant::Accent, "{view.type_label}" }
+                Spacer {}
+                IconButton { icon: IconName::Close, variant: IconButtonVariant::Ghost, title: "Close", onclick: move |_| cell_view.set(None), }
             }
             div { style: "overflow:auto;max-height:70vh;",
                 Code {

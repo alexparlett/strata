@@ -219,6 +219,63 @@ pub fn launcher_window_config() -> Config {
         .with_background_color((10, 13, 18, 255))
 }
 
+// ---- dev-only component gallery window ----
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The single gallery window, if open. Weak so its context can drop on close.
+    static GALLERY_WINDOW: RefCell<Option<WeakDesktopContext>> = RefCell::new(None);
+}
+
+/// Dev-only: open the S28/S29 component gallery in its own window (Help →
+/// Component Gallery). **Single-instance** — focuses the existing window if one is
+/// already open rather than spawning a second. Compiled out of release builds.
+///
+/// Deliberately a **plain, standalone** window (a normal title bar, *not* a
+/// `with_as_child_window` transparent-titlebar window like the project/launcher
+/// ones): the child-window dance doesn't survive being destroyed and recreated,
+/// which crashed on reopen. A dev tool needs none of it.
+#[cfg(debug_assertions)]
+pub fn spawn_gallery_window() {
+    // Already open → just bring it to the front.
+    if let Some(ctx) = GALLERY_WINDOW.with(|g| g.borrow().as_ref().and_then(|w| w.upgrade())) {
+        ctx.set_focus();
+        return;
+    }
+    let dom = VirtualDom::new(crate::ui::gallery::GalleryRoot);
+    let _ = dioxus::desktop::window().new_window(dom, gallery_window_config());
+}
+
+/// Record the gallery window (called from `GalleryRoot` on mount) so a repeat open
+/// focuses it instead of spawning a duplicate.
+#[cfg(debug_assertions)]
+pub fn register_gallery_window() {
+    let ctx = dioxus::desktop::window();
+    GALLERY_WINDOW.with(|g| *g.borrow_mut() = Some(Rc::downgrade(&ctx)));
+}
+
+/// Clear the gallery-window slot (called from `GalleryRoot` on unmount).
+#[cfg(debug_assertions)]
+pub fn unregister_gallery_window() {
+    GALLERY_WINDOW.with(|g| *g.borrow_mut() = None);
+}
+
+#[cfg(debug_assertions)]
+fn gallery_window_config() -> Config {
+    let win = WindowBuilder::new()
+        .with_title("Strata — Component Gallery")
+        .with_window_icon(strata_window_icon())
+        .with_inner_size(LogicalSize::new(1120.0, 820.0))
+        .with_min_inner_size(LogicalSize::new(720.0, 560.0));
+    Config::new()
+        .with_window(win)
+        // Keep OUR app menu (App / File / Edit / Window / Help): the macOS menu is
+        // app-global, so a window created *without* a menu installs dioxus's default
+        // bar (Edit + dev-tools Help) and clobbers ours until an app restart.
+        .with_menu(crate::menu::app_menu())
+        .with_background_color((11, 14, 19, 255))
+}
+
 /// macOS: paint the NSWindow background dark so a resize doesn't flash white
 /// (the webview repaints a beat behind the frame).
 #[cfg(target_os = "macos")]

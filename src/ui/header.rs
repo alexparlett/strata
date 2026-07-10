@@ -7,8 +7,10 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
-use crate::ui::components::DropdownMenu;
-use crate::ui::icons;
+use crate::ui::components::{
+    Body, Control, DropdownMenu, Eyebrow, Icon, IconButton, IconButtonVariant, Path, Spacer, Title,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub fn Header() -> Element {
@@ -29,8 +31,8 @@ pub fn Header() -> Element {
             ondoubleclick: move |_| dispatch(state, Action::ToggleWindowFill),
 
             div { class: "row", style: "gap:9px;",
-                div { class: "ps-logo", {icons::strata_logo(22)} }
-                span { class: "ps-wordmark", "Strata" }
+                div { class: "ps-logo", Icon { name: IconName::StrataLogo, size: IconSize::Px(22) } }
+                Title { class: "ps-wordmark", "Strata" }
             }
 
             div { class: "hsep" }
@@ -40,31 +42,30 @@ pub fn Header() -> Element {
                 title: "Switch project",
                 width: 328,
                 trigger: rsx! {
-                    {icons::folder(14)}
-                    span { class: "name", "{project}" }
-                    {icons::chevron_down(12)}
+                    Icon { name: IconName::Folder, size: IconSize::Sm }
+                    Control { class: "name", "{project}" }
+                    Icon { name: IconName::ChevronDown, size: IconSize::Xs }
                 },
                 {project_menu_body(state)}
             }
 
-            div { class: "spacer" }
+            Spacer {}
 
+            // Drag-suppress once on the cluster (the child webview covers the native
+            // title bar, so an un-stopped mousedown/dblclick here would drag / fill
+            // the window). The buttons themselves are plain `IconButton`s.
             div { class: "row", style: "gap:8px;",
-                button {
-                    class: "icon-btn",
+                onmousedown: move |e| e.stop_propagation(),
+                ondoubleclick: move |e| e.stop_propagation(),
+                IconButton { icon: IconName::Search,
+                    variant: IconButtonVariant::Toolbar,
                     title: "Search (⌘K)",
-                    onmousedown: move |e| e.stop_propagation(),
-                    ondoubleclick: move |e| e.stop_propagation(),
                     onclick: move |_| crate::overlays::toggle_cmdk(),
-                    {icons::search(15)}
                 }
-                button {
-                    class: "icon-btn",
+                IconButton { icon: IconName::Gear,
+                    variant: IconButtonVariant::Toolbar,
                     title: "Settings (⌘,)",
-                    onmousedown: move |e| e.stop_propagation(),
-                    ondoubleclick: move |e| e.stop_propagation(),
                     onclick: move |_| crate::overlays::toggle_settings(),
-                    {icons::gear(15)}
                 }
             }
         }
@@ -101,23 +102,23 @@ fn project_menu_body(state: Signal<AppState>) -> Element {
         div {
             class: "menu-item",
             onclick: move |_| dispatch(state, Action::OpenProject),
-            {icons::folder(14)}
-            span { "Open folder…" }
+            Icon { name: IconName::Folder, size: IconSize::Sm }
+            Body { "Open folder…" }
         }
         div { class: "menu-sep" }
 
-        div { class: "sec-label", style: "padding:8px 10px 6px;", "OPEN PROJECT" }
+        Eyebrow { class: "sec-label", style: "padding:8px 10px 6px;", "OPEN PROJECT" }
         div { class: "proj-item on",
-            span { class: "avatar", style: "background:var(--accent);", "{active_ini}" }
+            Control { class: "avatar", style: "background:var(--accent);", "{active_ini}" }
             div { class: "meta",
-                div { class: "nm", "{active}" }
-                div { class: "pth mono", "{active_path}" }
+                Body { class: "nm", "{active}" }
+                Path { class: "pth mono", "{active_path}" }
             }
         }
 
         if !recents.is_empty() {
             div { class: "menu-sep" }
-            div { class: "sec-label", style: "padding:8px 10px 6px;", "RECENT PROJECTS" }
+            Eyebrow { class: "sec-label", style: "padding:8px 10px 6px;", "RECENT PROJECTS" }
             for (name, path) in recents {
                 {
                     let ini = initials_of(&name);
@@ -126,10 +127,10 @@ fn project_menu_body(state: Signal<AppState>) -> Element {
                         div {
                             class: "proj-item",
                             onclick: move |_| dispatch(state, Action::OpenRecent(open_path.clone())),
-                            span { class: "avatar", style: "background:#7ee787;", "{ini}" }
+                            Control { class: "avatar", style: "background:#7ee787;", "{ini}" }
                             div { class: "meta",
-                                div { class: "nm", "{name}" }
-                                div { class: "pth mono", "{path}" }
+                                Body { class: "nm", "{name}" }
+                                Path { class: "pth mono", "{path}" }
                             }
                         }
                     }

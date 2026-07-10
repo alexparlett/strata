@@ -3,8 +3,12 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, ExportForm};
-use crate::ui::components::{Select, SelectOption, WinGeom, Window};
-use crate::ui::icons;
+use crate::ui::components::{
+    Body, Button, ButtonVariant, Caption, Control, Eyebrow, Icon, Meta, MonoValue, NumberStepper,
+    Prose, Readout, Segment, SegmentOption, Select, SelectOption, Spacer, TextInput, Toggle,
+    WinGeom, Window,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 // ---------------------------------------------------------------------------
 // Export
@@ -20,6 +24,25 @@ pub fn ExportHost() -> Element {
     }
     rsx! {
         ExportModal { on_close: move |_| crate::overlays::close_export() }
+    }
+}
+
+/// Format selector — a grid of selectable cards (icon + name + blurb). Kept local to the
+/// export modal for now; promote to a shared `CardSelect` if a second card-select appears.
+#[component]
+fn FormatCards(value: String, on_select: EventHandler<String>) -> Element {
+    rsx! {
+        div { class: "fmt-grid",
+            for (id, label, desc) in [("csv", "CSV", "delimited text"), ("json", "JSON", "ndjson records"), ("parquet", "Parquet", "columnar"), ("arrow", "Arrow", "IPC"), ("clipboard", "Clipboard", "copy as text")] {
+                button {
+                    class: if value == id { "fmt-card on" } else { "fmt-card" },
+                    onclick: move |_| on_select.call(id.to_string()),
+                    Icon { name: IconName::Download, size: IconSize::Sm }
+                    Control { class: "fn", "{label}" }
+                    Meta { class: "fd", "{desc}" }
+                }
+            }
+        }
     }
 }
 
@@ -62,68 +85,70 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
             on_close: move |_| on_close.call(()),
             title: "Export results".to_string(),
             subtitle: format!("{total} rows · via COPY … TO"),
-            icon: icons::download(16),
+            icon: IconName::Download, icon_size: IconSize::Md,
             init: WinGeom::new(200.0, 84.0, 820.0, 640.0),
             min_w: 640.0,
             min_h: 420.0,
             footer: rsx! {
-                div { class: "spacer" }
-                button { class: "btn", style: "height:34px;", onclick: move |_| on_close.call(()), "Cancel" }
-                button { class: "btn accent", style: "height:34px;",
+                Spacer {}
+                Button { variant: ButtonVariant::Secondary, onclick: move |_| on_close.call(()), "Cancel" }
+                Button { variant: ButtonVariant::Primary, icon: IconName::Download, icon_size: IconSize::Sm,
                     onclick: move |_| dispatch(state, Action::RunExport(export())),
-                    {icons::download(14)}
                     if is_clip { "Copy" } else { "Export" }
                 }
             },
             div { class: "modal-body ps-scroll",
-                    div { class: "sec-label", style: "margin-bottom:10px;", "FORMAT" }
-                    div { class: "fmt-grid",
-                        for (id, label, desc) in [("csv", "CSV", "delimited text"), ("json", "JSON", "ndjson records"), ("parquet", "Parquet", "columnar"), ("arrow", "Arrow", "IPC"), ("clipboard", "Clipboard", "copy as text")] {
-                            button {
-                                class: if fmt == id { "fmt-card on" } else { "fmt-card" },
-                                onclick: move |_| { export.write().format = id.to_string(); },
-                                {icons::download(15)}
-                                span { class: "fn", "{label}" }
-                                span { class: "fd", "{desc}" }
-                            }
-                        }
-                    }
+                    Eyebrow { class: "sec-label", style: "margin-bottom:10px;", "FORMAT" }
+                    FormatCards { value: fmt.clone(), on_select: move |v| { export.write().format = v; } }
 
                     // ROWS TO EXPORT
-                    div { class: "field-label", style: "margin-top:16px;", "ROWS TO EXPORT" }
-                    div { class: "row", style: "gap:6px;",
-                        for (val, lbl) in [("all", format!("All ({total})")), ("page", "This page".to_string())] {
-                            button { class: if ex.scope == val { "seg on" } else { "seg" },
-                                onclick: move |_| { export.write().scope = val.to_string(); }, "{lbl}" }
-                        }
+                    Eyebrow { class: "field-label", style: "margin-top:16px;", "ROWS TO EXPORT" }
+                    Segment {
+                        value: ex.scope.clone(),
+                        on_select: move |v: String| { export.write().scope = v; },
+                        options: vec![
+                            SegmentOption::new("all", format!("All ({total})")),
+                            SegmentOption::new("page", "This page"),
+                        ],
                     }
 
                     // OPTIONS (format-swapped)
-                    div { class: "field-label", style: "margin-top:16px;", "OPTIONS" }
+                    Eyebrow { class: "field-label", style: "margin-top:16px;", "OPTIONS" }
                     {
                         match fmt.as_str() {
                             "csv" => rsx! {
-                                div { class: "row", style: "gap:11px;cursor:pointer;padding:2px 0 8px;",
-                                    onclick: move |_| { let mut w = export.write(); w.csv_header = !w.csv_header; },
-                                    div { class: if ex.csv_header { "toggle on" } else { "toggle" }, div { class: "knob" } }
-                                    span { style: "font-size:12px;color:var(--text3);", "Include header row" }
+                                div { style: "padding:2px 0 8px;",
+                                    Toggle { on: ex.csv_header, on_toggle: move |v| export.write().csv_header = v, "Include header row" }
                                 }
                                 div { class: "row", style: "gap:8px;margin-bottom:8px;align-items:center;",
-                                    span { class: "opt-lbl", "Delimiter" }
-                                    for (v, l) in [("comma", "Comma"), ("tab", "Tab"), ("semicolon", "Semicolon"), ("pipe", "Pipe")] {
-                                        button { class: if ex.csv_delim == v { "seg on" } else { "seg" }, onclick: move |_| { export.write().csv_delim = v.to_string(); }, "{l}" }
+                                    Caption { class: "opt-lbl", "Delimiter" }
+                                    Segment {
+                                        value: ex.csv_delim.clone(),
+                                        on_select: move |v: String| { export.write().csv_delim = v; },
+                                        options: vec![
+                                            SegmentOption::new("comma", "Comma"),
+                                            SegmentOption::new("tab", "Tab"),
+                                            SegmentOption::new("semicolon", "Semicolon"),
+                                            SegmentOption::new("pipe", "Pipe"),
+                                        ],
                                     }
                                 }
                                 div { class: "row", style: "gap:8px;align-items:center;",
-                                    span { class: "opt-lbl", "Null as" }
-                                    for (v, l) in [("empty", "(empty)"), ("null", "NULL"), ("nan", "NaN")] {
-                                        button { class: if ex.csv_null == v { "seg on" } else { "seg" }, onclick: move |_| { export.write().csv_null = v.to_string(); }, "{l}" }
+                                    Caption { class: "opt-lbl", "Null as" }
+                                    Segment {
+                                        value: ex.csv_null.clone(),
+                                        on_select: move |v: String| { export.write().csv_null = v; },
+                                        options: vec![
+                                            SegmentOption::new("empty", "(empty)"),
+                                            SegmentOption::new("null", "NULL"),
+                                            SegmentOption::new("nan", "NaN"),
+                                        ],
                                     }
                                 }
                             },
                             "parquet" => rsx! {
                                 div { class: "row", style: "gap:8px;align-items:center;",
-                                    span { class: "opt-lbl", "Compression" }
+                                    Caption { class: "opt-lbl", "Compression" }
                                     Select {
                                         value: ex.pq_compression.clone(),
                                         width: 140,
@@ -140,19 +165,26 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                 }
                                 if matches!(ex.pq_compression.as_str(), "zstd" | "gzip" | "brotli") {
                                     div { class: "row", style: "gap:8px;margin-top:8px;align-items:center;",
-                                        span { class: "opt-lbl", "Level" }
-                                        input { class: "input mono", r#type: "number", style: "width:70px;height:28px;padding:0 8px;", value: "{ex.pq_level}",
-                                            oninput: move |e| { if let Ok(n) = e.value().parse::<u32>() { export.write().pq_level = n; } } }
+                                        Caption { class: "opt-lbl", "Level" }
+                                        NumberStepper { value: ex.pq_level as i64, min: 1, max: 22, width: 96,
+                                            on_change: move |v: i64| export.write().pq_level = v as u32 }
                                     }
                                 }
                             },
-                            "json" => rsx! { div { style: "font-size:12px;color:var(--dim2);", "Newline-delimited JSON — one record per line." } },
-                            "arrow" => rsx! { div { style: "font-size:12px;color:var(--dim2);", "Arrow IPC file — no write options." } },
+                            "json" => rsx! { Prose { style: "color:var(--dim2);", "Newline-delimited JSON — one record per line." } },
+                            "arrow" => rsx! { Prose { style: "color:var(--dim2);", "Arrow IPC file — no write options." } },
                             _ => rsx! {
                                 div { class: "row", style: "gap:8px;align-items:center;",
-                                    span { class: "opt-lbl", "Copy as" }
-                                    for (v, l) in [("markdown", "Markdown"), ("tsv", "TSV"), ("csv", "CSV"), ("json", "JSON")] {
-                                        button { class: if ex.clip_format == v { "seg on" } else { "seg" }, onclick: move |_| { export.write().clip_format = v.to_string(); }, "{l}" }
+                                    Caption { class: "opt-lbl", "Copy as" }
+                                    Segment {
+                                        value: ex.clip_format.clone(),
+                                        on_select: move |v: String| { export.write().clip_format = v; },
+                                        options: vec![
+                                            SegmentOption::new("markdown", "Markdown"),
+                                            SegmentOption::new("tsv", "TSV"),
+                                            SegmentOption::new("csv", "CSV"),
+                                            SegmentOption::new("json", "JSON"),
+                                        ],
                                     }
                                 }
                             },
@@ -161,9 +193,9 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
 
                     // PARTITION BY (file formats only)
                     if !is_clip {
-                        div { class: "field-label", style: "margin-top:16px;", "PARTITION BY (optional)" }
+                        Eyebrow { class: "field-label", style: "margin-top:16px;", "PARTITION BY (optional)" }
                         if cols.is_empty() {
-                            div { style: "font-size:12px;color:var(--faint);", "Run a query to choose partition columns." }
+                            Prose { style: "color:var(--faint);", "Run a query to choose partition columns." }
                         } else {
                             div { class: "row", style: "gap:6px;flex-wrap:wrap;",
                                 for col in cols.iter().cloned() {
@@ -186,10 +218,8 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                 }
                             }
                             if !ex.partition_cols.is_empty() {
-                                div { class: "row", style: "gap:11px;cursor:pointer;padding:8px 0 0;",
-                                    onclick: move |_| { let mut w = export.write(); w.keep_partition = !w.keep_partition; },
-                                    div { class: if ex.keep_partition { "toggle on" } else { "toggle" }, div { class: "knob" } }
-                                    span { style: "font-size:12px;color:var(--text3);", "Keep partition columns inside the files" }
+                                div { style: "padding:8px 0 0;",
+                                    Toggle { on: ex.keep_partition, on_toggle: move |v| export.write().keep_partition = v, "Keep partition columns inside the files" }
                                 }
                             }
                         }
@@ -197,21 +227,22 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
 
                     // DESTINATION (file formats only)
                     if !is_clip {
-                        div { class: "field-label", style: "margin-top:16px;", "DESTINATION" }
-                        div { style: "display:flex;align-items:center;height:34px;background:var(--bg);border:1px solid var(--line2);border-radius:9px;overflow:hidden;max-width:360px;",
-                            input { class: "input mono", style: "padding:0 11px;", value: "{ex.name}",
-                                oninput: move |e| export.write().name = e.value() }
-                            span { class: "mono", style: "padding:0 11px;color:var(--accent);border-left:1px solid var(--line2);height:100%;display:flex;align-items:center;",
-                                if ex.partition_cols.is_empty() { "{ext}" } else { "/ (folder)" } }
+                        Eyebrow { class: "field-label", style: "margin-top:16px;", "DESTINATION" }
+                        TextInput { value: "{ex.name}", mono: true, width: 360,
+                            oninput: move |v| export.write().name = v,
+                            trailing: rsx! {
+                                MonoValue { style: "padding:0 11px;color:var(--accent);border-left:1px solid var(--line2);align-self:stretch;display:flex;align-items:center;",
+                                    if ex.partition_cols.is_empty() { "{ext}" } else { "/ (folder)" } }
+                            },
                         }
                     }
 
                     // PREVIEW
                     div { class: "row", style: "margin-top:16px;justify-content:space-between;align-items:baseline;",
-                        span { class: "field-label", "PREVIEW" }
-                        span { class: "mono", style: "font-size:11px;color:var(--dim2);", "est. {size_est}" }
+                        Eyebrow { class: "field-label", "PREVIEW" }
+                        Meta { "est. {size_est}" }
                     }
-                    pre { class: "preview-pre ps-scroll", "{preview}" }
+                    Readout { class: "preview-pre ps-scroll", "{preview}" }
                 }
         }
     }

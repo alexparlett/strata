@@ -13,8 +13,11 @@ use dioxus_stores::*;
 use crate::action::{dispatch, Action};
 use crate::session::{SessionStoreExt, WorkspaceId, WorkspaceStoreExt};
 use crate::state::AppState;
-use crate::ui::components::{ContextMenu, DropdownMenu, MenuItem, MenuSep, Point, RectAlign};
-use crate::ui::icons;
+use crate::ui::components::{
+    Body, Caption, ContextMenu, Dot, DropdownMenu, Icon, IconButton, IconButtonVariant, MenuItem,
+    MenuSep, Point, Prose, RectAlign, TextInput,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub(crate) fn Tabs() -> Element {
@@ -76,7 +79,7 @@ pub(crate) fn Tabs() -> Element {
                                 let c = e.client_coordinates();
                                 tab_menu.set(Some((id, Point { x: c.x, y: c.y })));
                             },
-                            span { class: "tdot" }
+                            Dot { size: 6, color: if dirty { "var(--orange)" } else if id == active { "var(--accent)" } else { "var(--dim2)" } }
                             if is_rename {
                                 input {
                                     class: "tab-rename",
@@ -94,7 +97,7 @@ pub(crate) fn Tabs() -> Element {
                                     onclick: move |e| e.stop_propagation(),
                                 }
                             } else {
-                                span { "{name}" }
+                                Body { "{name}" }
                                 span { class: "close", onclick: move |e| { e.stop_propagation(); dispatch(state, Action::CloseTab(id)); }, "×" }
                             }
                         }
@@ -105,19 +108,21 @@ pub(crate) fn Tabs() -> Element {
 
             // Pinned right cluster (S8): new-tab · show-all-tabs · overflow.
             div { class: "ws-tab-cluster",
-                button { class: "icon-btn plain", style: "width:28px;height:28px;",
-                    title: "New query", onclick: move |_| dispatch(state, Action::NewTab),
-                    {icons::plus(15)} }
+                IconButton { icon: IconName::Plus,
+                    variant: IconButtonVariant::Ghost,
+                    title: "New query",
+                    onclick: move |_| dispatch(state, Action::NewTab),
+                }
                 DropdownMenu {
                     class: "icon-btn plain", style: "width:26px;height:28px;", title: "Show all tabs",
                     align: RectAlign::BOTTOM_END, width: 320, open: tab_list_open,
-                    trigger: rsx! { {icons::chevron_down(14)} },
+                    trigger: rsx! { Icon { name: IconName::ChevronDown, size: IconSize::Sm } },
                     {tab_list_body(state, tab_list_open, tab_list_query, active)}
                 }
                 DropdownMenu {
                     class: "icon-btn plain", style: "width:24px;height:28px;", title: "Tab actions",
                     align: RectAlign::BOTTOM_END,
-                    trigger: rsx! { {icons::dots(15)} },
+                    trigger: rsx! { Icon { name: IconName::Dots, size: IconSize::Sm } },
                     {overflow_menu_items(state, active, !state.read().closed_tabs.is_empty())}
                 }
             }
@@ -228,15 +233,15 @@ fn tab_list_body(
     rsx! {
         // Clicks in the search row must NOT bubble to the DropdownMenu's close-wrapper.
         div { class: "tablist-search", onclick: move |e| e.stop_propagation(),
-            span { class: "tablist-search-ic", {icons::search(13)} }
-            input {
-                class: "tablist-input",
+            span { class: "tablist-search-ic", Icon { name: IconName::Search, size: IconSize::Sm } }
+            TextInput {
+                bare: true,
+                grow: true,
+                autofocus: true,
                 value: "{q}",
                 placeholder: "Find a query tab…",
-                spellcheck: false,
-                onmounted: move |e| { spawn(async move { let _ = e.set_focus(true).await; }); },
-                oninput: move |e| query.set(e.value()),
-                onkeydown: move |e| match e.key() {
+                oninput: move |v| query.set(v),
+                onkeydown: move |e: KeyboardEvent| match e.key() {
                     Key::Enter => {
                         if let Some(id) = first {
                             e.prevent_default();
@@ -251,14 +256,14 @@ fn tab_list_body(
         }
         div { class: "tablist-rows",
             if rows.is_empty() {
-                div { class: "tablist-empty", "No matching tabs" }
+                Prose { class: "tablist-empty", "No matching tabs" }
             }
             for (id, name, is_active, dirty) in rows {
                 div {
                     class: if is_active { "tablist-row active" } else { "tablist-row" },
                     onclick: move |_| dispatch(state, Action::SwitchTab(id)),
-                    span { class: if dirty { "tdot dirty" } else { "tdot" } }
-                    span { class: "tablist-name", "{name}" }
+                    Dot { size: 6, color: if dirty { "var(--orange)" } else if is_active { "var(--accent)" } else { "var(--dim2)" } }
+                    Body { class: "tablist-name", "{name}" }
                     span {
                         class: "tablist-close",
                         onclick: move |e| { e.stop_propagation(); dispatch(state, Action::CloseTab(id)); },
@@ -268,7 +273,7 @@ fn tab_list_body(
             }
         }
         if overflow > 0 {
-            div { class: "tablist-more", "+{overflow} more — keep typing to filter" }
+            Caption { class: "tablist-more", "+{overflow} more — keep typing to filter" }
         }
     }
 }

@@ -6,8 +6,8 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
-use crate::ui::components::Dialog;
-use crate::ui::icons;
+use crate::ui::components::{Button, ButtonVariant, Dialog, Icon, Readout, Title};
+use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub fn CloseConfirmHost() -> Element {
@@ -25,23 +25,23 @@ pub fn CloseConfirmHost() -> Element {
     rsx! {
         Dialog { on_close: move |_| crate::overlays::close_close_confirm(), card_class: "confirm".to_string(), z: 80,
             div { class: "confirm-head",
-                div { class: "confirm-ico", {icons::trash(20)} }
+                div { class: "confirm-ico", Icon { name: IconName::Trash, size: IconSize::Px(20) } }
                 div { style: "flex:1;min-width:0;",
-                    div { class: "confirm-title", "Discard changes to " span { class: "nm", "{name}" } "?" }
-                    div { class: "confirm-body",
+                    Title { class: "confirm-title", "Discard changes to " span { class: "nm", "{name}" } "?" }
+                    Readout { class: "confirm-body",
                         "This tab has unsaved edits. Cancel and press ⌘S to save it, or discard them."
                     }
                 }
             }
             div { class: "confirm-foot",
-                button { class: "btn-ghost", onclick: move |_| crate::overlays::close_close_confirm(), "Cancel" }
-                button {
-                    class: "btn-danger",
+                Button { variant: ButtonVariant::Secondary, onclick: move |_| crate::overlays::close_close_confirm(), "Cancel" }
+                Button {
+                    variant: ButtonVariant::Danger,
+                    icon: IconName::Trash, icon_size: IconSize::Sm,
                     onclick: move |_| {
                         crate::overlays::close_close_confirm();
                         dispatch(state, Action::CloseTabForce(id));
                     },
-                    {icons::trash(14)}
                     "Discard"
                 }
             }

@@ -4,8 +4,12 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind, RemoveTarget};
-use crate::ui::components::{ContextMenu, Dialog, DropdownMenu, MenuItem, MenuSep, Point, RectAlign};
-use crate::ui::icons;
+use crate::ui::components::{
+    Button, ButtonVariant, Caption, ContextMenu, Dialog, Dot, DropdownMenu, Eyebrow, Icon,
+    IconButton, IconButtonVariant, MenuItem, MenuSep, Meta, Micro, MonoValue, Point, Readout,
+    RectAlign, SearchBar, Title,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 /// A catalog row's open context menu (self-contained sidebar state).
 #[derive(Clone)]
@@ -32,30 +36,24 @@ pub fn Sidebar() -> Element {
     rsx! {
         aside { class: "ps-sidebar", style: "width:{width}px;",
             div { class: "filter",
-                div { class: "field", style: "flex:1;",
-                    {icons::search(13)}
-                    input {
-                        class: "input",
-                        placeholder: "Filter catalog…",
-                        value: "{filter}",
-                        oninput: move |e| dispatch(state, Action::SetFilter(e.value())),
-                    }
+                SearchBar {
+                    value: filter.clone(),
+                    oninput: move |v| dispatch(state, Action::SetFilter(v)),
+                    placeholder: "Filter catalog…",
+                    grow: true,
                 }
-                button {
-                    class: "icon-btn",
+                IconButton { icon: IconName::CollapseLeft,
+                    variant: IconButtonVariant::Toolbar,
                     title: "Collapse panel",
                     onclick: move |_| dispatch(state, Action::ToggleSidebar),
-                    {icons::collapse_left(15)}
                 }
             }
 
             div { class: "ps-catalog ps-scroll",
                 // ---- TABLES ----
                 div { class: "cat-head",
-                    span { class: "sec-label", "TABLES · {ntab}" }
-                    button { class: "cat-new", onclick: move |_| dispatch(state, Action::OpenConfigNew),
-                        {icons::plus(11)} "New"
-                    }
+                    Eyebrow { class: "sec-label", "TABLES · {ntab}" }
+                    Button { variant: ButtonVariant::Compact, icon: IconName::Plus, icon_size: IconSize::Xs, onclick: move |_| dispatch(state, Action::OpenConfigNew), "New" }
                 }
 
                 for i in 0..ntab {
@@ -64,7 +62,7 @@ pub fn Sidebar() -> Element {
 
                 // ---- VIEWS ----
                 div { class: "row", style: "gap:6px;padding:14px 6px 6px;",
-                    span { class: "sec-label", "VIEWS · {nview}" }
+                    Eyebrow { class: "sec-label", "VIEWS · {nview}" }
                 }
                 for i in 0..nview {
                     {render_view(state, menu, remove, i)}
@@ -72,10 +70,10 @@ pub fn Sidebar() -> Element {
 
                 // ---- SAVED QUERIES (always shown, like Tables/Views) ----
                 div { class: "row", style: "gap:6px;padding:14px 6px 6px;",
-                    span { class: "sec-label", "QUERIES · {nquery}" }
+                    Eyebrow { class: "sec-label", "QUERIES · {nquery}" }
                 }
                 if nquery == 0 {
-                    div { style: "padding:4px 8px 6px;font:400 11.5px var(--ui);color:var(--faint);",
+                    Caption { style: "display:block;padding:4px 8px 6px;color:var(--faint);",
                         "No saved queries yet" }
                 } else {
                     for i in 0..nquery {
@@ -111,33 +109,33 @@ fn catalog_menu_items(
         CatalogKind::Table => {
             let (n1, n2, n3) = (name.clone(), name.clone(), name.clone());
             rsx! {
-                MenuItem { icon: icons::play(14), label: "View table".to_string(),
+                MenuItem { icon: IconName::Play, icon_size: IconSize::Sm, label: "View table".to_string(),
                     onclick: move |_| dispatch(state, Action::LoadSelectStar(n1.clone())) }
-                MenuItem { icon: icons::gear(14), label: "Configure".to_string(),
+                MenuItem { icon: IconName::Gear, icon_size: IconSize::Sm, label: "Configure".to_string(),
                     onclick: move |_| dispatch(state, Action::OpenConfigEdit(n2.clone())) }
                 MenuSep {}
-                MenuItem { icon: icons::trash(14), label: "Drop table".to_string(), danger: true,
+                MenuItem { icon: IconName::Trash, icon_size: IconSize::Sm, label: "Drop table".to_string(), danger: true,
                     onclick: move |_| remove.set(Some(RemoveTarget { kind: RemoveKind::Table, name: n3.clone() })) }
             }
         }
         CatalogKind::View => {
             let (n1, n2, n3) = (name.clone(), name.clone(), name.clone());
             rsx! {
-                MenuItem { icon: icons::play(14), label: "View view".to_string(),
+                MenuItem { icon: IconName::Play, icon_size: IconSize::Sm, label: "View view".to_string(),
                     onclick: move |_| dispatch(state, Action::LoadSelectStar(n1.clone())) }
-                MenuItem { icon: icons::pencil(14), label: "Edit query".to_string(),
+                MenuItem { icon: IconName::Pencil, icon_size: IconSize::Sm, label: "Edit query".to_string(),
                     onclick: move |_| dispatch(state, Action::EditView(n2.clone())) }
                 MenuSep {}
-                MenuItem { icon: icons::trash(14), label: "Drop view".to_string(), danger: true,
+                MenuItem { icon: IconName::Trash, icon_size: IconSize::Sm, label: "Drop view".to_string(), danger: true,
                     onclick: move |_| remove.set(Some(RemoveTarget { kind: RemoveKind::View, name: n3.clone() })) }
             }
         }
         CatalogKind::Query => {
             let (n1, n2) = (name.clone(), name.clone());
             rsx! {
-                MenuItem { icon: icons::pencil(14), label: "Open in new tab".to_string(),
+                MenuItem { icon: IconName::Pencil, icon_size: IconSize::Sm, label: "Open in new tab".to_string(),
                     onclick: move |_| dispatch(state, Action::OpenSavedQuery(n1.clone())) }
-                MenuItem { icon: icons::trash(14), label: "Delete query".to_string(), danger: true,
+                MenuItem { icon: IconName::Trash, icon_size: IconSize::Sm, label: "Delete query".to_string(), danger: true,
                     onclick: move |_| dispatch(state, Action::DeleteSavedQuery(n2.clone())) }
             }
         }
@@ -170,21 +168,21 @@ fn remove_dialog(
     rsx! {
         Dialog { on_close: move |_| remove.set(None), card_class: "confirm".to_string(), z: 78,
             div { class: "confirm-head",
-                div { class: "confirm-ico", {icons::trash(20)} }
+                div { class: "confirm-ico", Icon { name: IconName::Trash, size: IconSize::Px(20) } }
                 div { style: "flex:1;min-width:0;",
-                    div { class: "confirm-title", "{title} " span { class: "nm", "{name}" } "?" }
-                    div { class: "confirm-body", "{body}" }
+                    Title { class: "confirm-title", "{title} " span { class: "nm", "{name}" } "?" }
+                    Readout { class: "confirm-body", "{body}" }
                 }
             }
             div { class: "confirm-foot",
-                button { class: "btn-ghost", onclick: move |_| remove.set(None), "Cancel" }
-                button {
-                    class: "btn-danger",
+                Button { variant: ButtonVariant::Secondary, onclick: move |_| remove.set(None), "Cancel" }
+                Button {
+                    variant: ButtonVariant::Danger,
+                    icon: IconName::Trash, icon_size: IconSize::Sm,
                     onclick: move |_| {
                         dispatch(state, Action::ConfirmRemove { kind, name: confirm_name.clone() });
                         remove.set(None);
                     },
-                    {icons::trash(14)}
                     "{btn}"
                 }
             }
@@ -219,11 +217,11 @@ fn render_saved_query(
                     let c = e.client_coordinates();
                     menu.set(Some(CtxTarget { kind: CatalogKind::Query, name: nm_ctx.clone(), at: Point { x: c.x, y: c.y } }));
                 },
-                span { style: "color:var(--purple);display:flex;", {icons::brackets(14)} }
-                span { class: "tname", "{name}" }
+                Icon { name: IconName::Brackets, size: IconSize::Sm, color: "var(--purple)" }
+                MonoValue { class: "tname", "{name}" }
                 DropdownMenu {
                     class: "row-menu", title: "Actions", align: RectAlign::BOTTOM_END, width: 180,
-                    trigger: rsx! { {icons::dots(14)} },
+                    trigger: rsx! { Icon { name: IconName::Dots, size: IconSize::Sm } },
                     {catalog_menu_items(state, remove, CatalogKind::Query, nm_menu.clone())}
                 }
             }
@@ -262,7 +260,7 @@ fn render_table(
             (
                 c.name.clone(),
                 c.dtype.clone(),
-                c.kind.dot_class(),
+                c.kind.dot_color(),
                 c.kind.text_class(),
                 is_part,
                 is_sel,
@@ -285,13 +283,13 @@ fn render_table(
                     menu.set(Some(CtxTarget { kind: CatalogKind::Table, name: nm_ctx.clone(), at: Point { x: c.x, y: c.y } }));
                 },
                 span { style: "color:var(--dim2);display:flex;",
-                    if open { {icons::chevron_down(12)} } else { {icons::chevron_right(12)} }
+                    if open { Icon { name: IconName::ChevronDown, size: IconSize::Xs } } else { Icon { name: IconName::ChevronRight, size: IconSize::Xs } }
                 }
-                span { style: "color:var(--dim);display:flex;", {icons::table(14)} }
-                span { class: "tname", "{name}" }
+                Icon { name: IconName::Table, size: IconSize::Sm, color: "var(--dim)" }
+                MonoValue { class: "tname", "{name}" }
                 DropdownMenu {
                     class: "row-menu", title: "Actions", align: RectAlign::BOTTOM_END, width: 180,
-                    trigger: rsx! { {icons::dots(14)} },
+                    trigger: rsx! { Icon { name: IconName::Dots, size: IconSize::Sm } },
                     {catalog_menu_items(state, remove, CatalogKind::Table, nm_menu.clone())}
                 }
             }
@@ -308,10 +306,10 @@ fn render_table(
                                         table: table_nm.clone(),
                                         column: col_nm.clone(),
                                     }),
-                                    span { class: "dot {dot}" }
-                                    span { class: "cname", "{cn}" }
-                                    if is_part { span { class: "pill", "PART" } }
-                                    span { class: "ctype {tcls}", "{ct}" }
+                                    Dot { color: "{dot}", square: true, size: 6 }
+                                    MonoValue { class: "cname", "{cn}" }
+                                    if is_part { Micro { class: "pill", "PART" } }
+                                    Meta { class: "ctype {tcls}", "{ct}" }
                                 }
                             }
                         }
@@ -341,7 +339,7 @@ fn render_view(
             (
                 c.name.clone(),
                 c.dtype.clone(),
-                c.kind.dot_class(),
+                c.kind.dot_color(),
                 c.kind.text_class(),
             )
         })
@@ -362,13 +360,13 @@ fn render_view(
                     menu.set(Some(CtxTarget { kind: CatalogKind::View, name: nm_ctx.clone(), at: Point { x: c.x, y: c.y } }));
                 },
                 span { style: "color:var(--dim2);display:flex;",
-                    if open { {icons::chevron_down(12)} } else { {icons::chevron_right(12)} }
+                    if open { Icon { name: IconName::ChevronDown, size: IconSize::Xs } } else { Icon { name: IconName::ChevronRight, size: IconSize::Xs } }
                 }
-                span { style: "color:var(--purple);display:flex;", {icons::eye(14)} }
-                span { class: "tname", "{name}" }
+                Icon { name: IconName::Eye, size: IconSize::Sm, color: "var(--purple)" }
+                MonoValue { class: "tname", "{name}" }
                 DropdownMenu {
                     class: "row-menu", title: "Actions", align: RectAlign::BOTTOM_END, width: 180,
-                    trigger: rsx! { {icons::dots(14)} },
+                    trigger: rsx! { Icon { name: IconName::Dots, size: IconSize::Sm } },
                     {catalog_menu_items(state, remove, CatalogKind::View, nm_menu.clone())}
                 }
             }
@@ -376,9 +374,9 @@ fn render_view(
                 div { class: "tbl-cols",
                     for (cn, ct, dot, tcls) in cols {
                         div { class: "col-row",
-                            span { class: "dot {dot}" }
-                            span { class: "cname", "{cn}" }
-                            span { class: "ctype {tcls}", "{ct}" }
+                            Dot { color: "{dot}", square: true, size: 6 }
+                            MonoValue { class: "cname", "{cn}" }
+                            Meta { class: "ctype {tcls}", "{ct}" }
                         }
                     }
                 }

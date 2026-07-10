@@ -8,7 +8,8 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, LogTab};
-use crate::ui::icons;
+use crate::ui::components::{IconButton, IconButtonVariant};
+use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub(crate) fn ActivityRail() -> Element {
@@ -26,38 +27,42 @@ pub(crate) fn ActivityRail() -> Element {
     rsx! {
         aside { class: "act-rail",
             // Top group: tool windows.
-            {rail_btn(state, "Catalog", sidebar_open, None, icons::database(18), Action::ToggleSidebar)}
+            {rail_btn(state, "Catalog", sidebar_open, None, IconName::Database, Action::ToggleSidebar)}
 
             div { class: "rail-spacer" }
 
             // Bottom group: diagnostics & activity.
-            {rail_btn(state, "Problems", on(LogTab::Problems), Some(problem_count), icons::problems(18), Action::OpenProblems)}
-            {rail_btn(state, "Events", on(LogTab::Events), None, icons::events(18), Action::OpenEvents)}
-            {rail_btn(state, "History", on(LogTab::History), None, icons::clock(18), Action::OpenHistory)}
+            {rail_btn(state, "Problems", on(LogTab::Problems), Some(problem_count), IconName::Problems, Action::OpenProblems)}
+            {rail_btn(state, "Events", on(LogTab::Events), None, IconName::Events, Action::OpenEvents)}
+            {rail_btn(state, "History", on(LogTab::History), None, IconName::Clock, Action::OpenHistory)}
         }
     }
 }
 
-/// One rail button: active = accent-soft tint + accent icon (per design's
-/// `_railStyle`); an optional red count badge (Problems).
+/// One rail button — the shared **toggle** `IconButton` at the rail size (active =
+/// accent-soft tint + accent icon); an optional red count badge (Problems).
 fn rail_btn(
     state: Signal<AppState>,
     title: &str,
     active: bool,
     badge: Option<usize>,
-    icon: Element,
+    icon: IconName,
     action: Action,
 ) -> Element {
-    let cls = if active { "rail-btn on" } else { "rail-btn" };
     rsx! {
-        button {
-            class: "{cls}",
-            title: "{title}",
-            onclick: move |_| dispatch(state, action.clone()),
-            {icon}
+        div { class: "ds-badge-anchor",
+            IconButton {
+                variant: IconButtonVariant::Toggle,
+                icon: icon,
+                icon_size: IconSize::Lg,
+                class: "act-rail",
+                on: active,
+                title: "{title}",
+                onclick: move |_| dispatch(state, action.clone()),
+            }
             if let Some(n) = badge {
                 if n > 0 {
-                    span { class: "rail-badge", { if n > 99 { "99+".to_string() } else { n.to_string() } } }
+                    span { class: "ds-count-badge err", { if n > 99 { "99+".to_string() } else { n.to_string() } } }
                 }
             }
         }

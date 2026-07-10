@@ -16,8 +16,11 @@ use crate::session::WorkspaceStoreExt;
 use crate::sql::{Catalog, Completion, CompletionKind};
 use crate::state::AppState;
 use crate::ui::code_editor::{CodeEditor, Decoration};
-use crate::ui::components::{Point, Tooltip};
-use crate::ui::icons;
+use crate::ui::components::{
+    Button, ButtonVariant, Caption, Icon, IconButton, IconButtonVariant, Meta, MonoValue, Point,
+    Prose, Spacer, Tooltip,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 /// The open completion popup for this editor.
 #[derive(Clone, PartialEq)]
@@ -39,14 +42,15 @@ struct LintHover {
     y: f64,
 }
 
-/// A 30×30 toolbar icon button that dispatches `action`.
-fn tool_btn(state: Signal<AppState>, action: Action, title: &str, icon: Element) -> Element {
+/// A compact (28px) toolbar icon button that dispatches `action`.
+fn tool_btn(state: Signal<AppState>, action: Action, title: &str, icon: IconName) -> Element {
     rsx! {
-        button {
-            class: "icon-btn",
+        IconButton {
+            variant: IconButtonVariant::Toolbar,
+            icon: icon,
+            compact: true,
             title: "{title}",
             onclick: move |_| dispatch(state, action.clone()),
-            {icon}
         }
     }
 }
@@ -93,37 +97,38 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
         section { style: "flex:none;background:var(--main);",
             div { class: "ed-toolbar",
                 if running {
-                    button {
-                        class: "btn cancel",
-                        style: "height:28px;",
+                    Button {
+                        variant: ButtonVariant::Danger,
+                        small: true,
+                        icon: IconName::Stop, icon_size: IconSize::Xs,
+                        kbd: "Esc",
                         title: "Cancel query (Esc)",
                         onclick: move |_| dispatch(state, Action::CancelQuery),
-                        {icons::stop(12)}
                         "Cancel"
-                        span { class: "kbd", style: "background:rgba(7,16,25,.22);color:inherit;border:none;margin-left:2px;", "Esc" }
                     }
                 } else {
-                    button {
-                        class: "btn accent",
-                        style: "height:28px;",
+                    Button {
+                        variant: ButtonVariant::Primary,
+                        small: true,
                         disabled: block_run,
+                        icon: IconName::Play, icon_size: IconSize::Sm,
+                        kbd: "⌘↵",
                         title: if block_run { "Fix the validation problems to run" } else { "Run query (⌘/Ctrl+Enter)" },
                         onclick: move |_| if !block_run { dispatch(state, Action::RunQuery) },
-                        {icons::play(13)}
                         "Run"
-                        span { class: "kbd", style: "background:rgba(7,16,25,.22);color:inherit;border:none;margin-left:2px;", "⌘↵" }
                     }
                 }
                 div { style: "width:1px;height:18px;background:var(--line);margin:0 2px;" }
-                {tool_btn(state, Action::FormatSql, "Format SQL", icons::format(15))}
-                {tool_btn(state, Action::ClearSql, "Clear editor", icons::trash(15))}
-                div { class: "spacer" }
-                {tool_btn(state, Action::SaveAsView, "Save as view", icons::eye(15))}
-                button {
-                    class: if dirty { "icon-btn dirty" } else { "icon-btn" },
+                {tool_btn(state, Action::FormatSql, "Format SQL", IconName::Format)}
+                {tool_btn(state, Action::ClearSql, "Clear editor", IconName::Trash)}
+                Spacer {}
+                {tool_btn(state, Action::SaveAsView, "Save as view", IconName::Eye)}
+                IconButton { icon: IconName::Save,
+                    variant: IconButtonVariant::Toolbar,
+                    compact: true,
+                    dirty: dirty,
                     title: "Save query (⌘S)",
                     onclick: move |_| dispatch(state, Action::SaveQuery),
-                    {icons::save(15)}
                 }
             }
             div {
@@ -218,10 +223,10 @@ fn completion_menu(
                                 apply_completion(ws, &accept);
                                 comp.set(None);
                             },
-                            span { class: "sql-comp-kind", "{kind_glyph(item.kind)}" }
-                            span { class: "sql-comp-label", "{item.label}" }
+                            Meta { class: "sql-comp-kind", "{kind_glyph(item.kind)}" }
+                            MonoValue { class: "sql-comp-label", "{item.label}" }
                             if let Some(d) = &item.detail {
-                                span { class: "sql-comp-detail", "{d}" }
+                                Caption { class: "sql-comp-detail", "{d}" }
                             }
                         }
                     }
@@ -251,8 +256,8 @@ fn lint_popover(hover: Signal<Option<LintHover>>, comp: Signal<Option<Completing
             at: Point { x, y },
             // Neutral tooltip chrome (§07) with a red icon + neutral message — the design's
             // lint hover, *not* a colored callout.
-            span { class: "ds-tt-ico", style: "color:var(--red2);", {icons::err_circle(13)} }
-            span { class: "ds-tt-msg", "{msg}" }
+            span { class: "ds-tt-ico", style: "color:var(--red2);", Icon { name: IconName::ErrCircle, size: IconSize::Sm } }
+            Prose { class: "ds-tt-msg", "{msg}" }
         }
     }
 }

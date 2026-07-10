@@ -4,8 +4,11 @@ use dioxus::prelude::*;
 use crate::action::{dispatch, Action};
 use crate::overlays::ConfigTarget;
 use crate::state::{AppState, ConfigForm};
-use crate::ui::components::{Select, SelectOption, WinGeom, Window};
-use crate::ui::icons;
+use crate::ui::components::{
+    Button, ButtonVariant, Eyebrow, Icon, IconButton, IconButtonVariant, MonoValue, Path, Prose,
+    Segment, SegmentOption, Select, SelectOption, Spacer, TextInput, Toggle, WinGeom, Window,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 // ---------------------------------------------------------------------------
 // Table config
@@ -302,30 +305,30 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
             on_close: move |_| on_close.call(()),
             title: title.to_string(),
             subtitle: "one table over any mix of files, directories & globs".to_string(),
-            icon: icons::cube_lines(16),
+            icon: IconName::CubeLines, icon_size: IconSize::Md,
             init: WinGeom::new(300.0, 96.0, 620.0, 600.0),
             min_w: 520.0,
             min_h: 420.0,
             footer: rsx! {
-                div { class: "spacer" }
-                button { class: "btn", style: "height:34px;", onclick: move |_| on_close.call(()), "Cancel" }
-                button {
-                    class: "btn accent",
-                    style: "height:34px;",
+                Spacer {}
+                Button { variant: ButtonVariant::Secondary, onclick: move |_| on_close.call(()), "Cancel" }
+                Button {
+                    variant: ButtonVariant::Primary,
                     disabled: !form_ready,
+                    icon: IconName::Check, icon_size: IconSize::Sm,
                     onclick: move |_| { if form_ready { dispatch(state, Action::RegisterTable(draft())); } },
-                    {icons::check(14)} "{confirm_label}"
+                    "{confirm_label}"
                 }
             },
             div { class: "modal-body ps-scroll",
                     div { class: "row", style: "gap:14px;margin-bottom:18px;align-items:flex-end;",
                         div { style: "flex:1;",
-                            div { class: "field-label", "TABLE NAME" }
-                            input { class: "text-input", value: "{name}", placeholder: "my_table",
-                                oninput: move |e| draft.write().name = e.value() }
+                            Eyebrow { class: "field-label", "TABLE NAME" }
+                            TextInput { value: "{name}", placeholder: "my_table", mono: true,
+                                oninput: move |v| draft.write().name = v }
                         }
                         div {
-                            div { class: "field-label", "FORMAT" }
+                            Eyebrow { class: "field-label", "FORMAT" }
                             Select {
                                 value: format.clone(),
                                 width: 128,
@@ -341,116 +344,114 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                     }
 
                     div { class: "row", style: "justify-content:space-between;margin-bottom:8px;",
-                        span { class: "sec-label", "SOURCE PATHS" }
-                        span { class: "mono", style: "font-size:10px;color:var(--faint);", "file · directory · recursive glob" }
+                        Eyebrow { class: "sec-label", "SOURCE PATHS" }
+                        Path { style:"color:var(--faint);", "file · directory · recursive glob" }
                     }
                     div { style: "display:flex;flex-direction:column;gap:7px;",
                         for (idx, src) in sources.iter().cloned().enumerate() {
                             div { class: "src-row",
-                                input { class: "src-input", value: "{src}", placeholder: "/data/2024/  ·  /archive/**/*.parquet",
-                                    oninput: move |e| { let mut w = draft.write(); if let Some(p) = w.sources.get_mut(idx) { *p = e.value(); } },
-                                    onchange: move |_| rescan(draft, state) }
-                                span { class: "src-count", "" }
-                                button { class: "mini-btn", style: "width:30px;height:32px;", title: "Browse — file or folder…",
+                                TextInput { value: "{src}", mono: true, grow: true,
+                                    oninput: move |v| { let mut w = draft.write(); if let Some(p) = w.sources.get_mut(idx) { *p = v; } },
+                                    onchange: move |_v| rescan(draft, state) }
+                                IconButton { icon: IconName::Folder, variant: IconButtonVariant::Toolbar, title: "Browse — file or folder…",
                                     onclick: move |_| browse_source(draft, state, idx),
-                                    {icons::folder(15)}
                                 }
                                 // At least one path is required, so the last remaining
                                 // row has no remove button.
                                 if !single_path {
-                                    button { class: "mini-btn danger", style: "width:28px;height:32px;", title: "Remove path",
+                                    IconButton { icon: IconName::Minus, icon_size: IconSize::Xs, variant: IconButtonVariant::Danger, title: "Remove path",
                                         onclick: move |_| { { let mut w = draft.write(); if w.sources.len() > 1 { w.sources.remove(idx); } } rescan(draft, state); },
-                                        {icons::minus(12)}
                                     }
                                 }
                             }
                         }
                     }
-                    button { class: "add-path", onclick: move |_| { draft.write().sources.push(String::new()); rescan(draft, state); },
-                        {icons::plus(12)} "Add path"
+                    Button { variant: ButtonVariant::Ghost, icon: IconName::Plus, icon_size: IconSize::Xs,
+                        onclick: move |_| { draft.write().sources.push(String::new()); rescan(draft, state); },
+                        "Add path"
                     }
 
                     // validation status
                     if scanning {
                         div { class: "status-run",
-                            span { style: "display:flex;", {icons::clock(15)} }
-                            span { "Scanning source paths…" }
+                            Icon { name: IconName::Clock, size: IconSize::Sm }
+                            Path { "Scanning source paths…" }
                         }
                     } else if let Some(err) = reg_err.clone() {
                         div { class: "status-err",
-                            span { style: "flex:none;color:var(--red2);", {icons::alert(15)} }
+                            Icon { name: IconName::Alert, size: IconSize::Sm, color: "var(--red2)" }
                             div {
-                                div { class: "mono", style: "font-weight:600;color:var(--red);", "Registration failed" }
-                                div { class: "mono", style: "font-size:11px;color:#d99;margin-top:2px;", "{err}" }
+                                MonoValue { style: "display:block;color:var(--red);", "Registration failed" }
+                                Path { style:"display:block;color:#d99;margin-top:2px;", "{err}" }
                             }
                         }
                     } else if let Some(err) = scan_error.clone() {
                         div { class: "status-err",
-                            span { style: "flex:none;color:var(--red2);", {icons::alert(15)} }
+                            Icon { name: IconName::Alert, size: IconSize::Sm, color: "var(--red2)" }
                             div {
-                                div { class: "mono", style: "font-weight:600;color:var(--red);", "Sources don't validate" }
-                                div { class: "mono", style: "font-size:11px;color:#d99;margin-top:2px;", "{err}" }
+                                MonoValue { style: "display:block;color:var(--red);", "Sources don't validate" }
+                                Path { style:"display:block;color:#d99;margin-top:2px;", "{err}" }
                             }
                         }
                     } else if form_ready {
                         div { class: "status-ok",
-                            {icons::check(15)}
-                            span { "{ready_msg}" }
+                            Icon { name: IconName::Check, size: IconSize::Sm }
+                            Path { "{ready_msg}" }
                         }
                     } else {
                         div { class: "status-wait",
-                            span { style: "flex:none;color:var(--dim3);", {icons::info(15)} }
-                            span { "{incomplete_msg}" }
+                            Icon { name: IconName::Info, size: IconSize::Sm, color: "var(--dim3)" }
+                            Path { "{incomplete_msg}" }
                         }
                     }
 
                     // hive partitioning — only available when every path is a directory
                     div { class: "hive-box",
-                        div {
-                            class: "row",
-                            style: if all_dirs { "gap:11px;cursor:pointer;" } else { "gap:11px;opacity:.5;cursor:not-allowed;" },
-                            onclick: move |_| {
+                        Toggle {
+                            on: hive_on,
+                            avail: all_dirs && !hive_on,
+                            disabled: !all_dirs,
+                            sub: "{hive_sub}",
+                            on_toggle: move |v| {
                                 let mut w = draft.write();
                                 if !w.all_dirs { return; }
-                                w.hive_on = !w.hive_on;
-                                if w.hive_on {
+                                w.hive_on = v;
+                                if v {
                                     w.part_cols = w.detected_parts.clone();
                                 } else {
                                     w.part_cols.clear();
                                 }
                             },
-                            div { class: if hive_on { "toggle on" } else if all_dirs { "toggle avail" } else { "toggle" }, div { class: "knob" } }
-                            div { style: "flex:1;",
-                                div { style: if all_dirs { "font-size:12px;color:var(--text);" } else { "font-size:12px;color:var(--text2);" }, "Hive-style partitioning" }
-                                div { class: "mono", style: "font-size:10px;color:var(--dim3);margin-top:1px;", "{hive_sub}" }
-                            }
+                            "Hive-style partitioning"
                         }
                         if hive_on {
                             if part_cols.is_empty() {
-                                div { class: "mono", style: "margin-top:12px;font-size:11px;color:var(--dim2);",
+                                Path { style:"display:block;margin-top:12px;",
                                     "No key=value partition directories were found under these paths."
                                 }
                             } else {
                                 div { style: "margin-top:12px;display:flex;flex-direction:column;gap:7px;",
                                     for (pidx, (pname, ptype)) in part_cols.iter().cloned().enumerate() {
                                         div { class: "row", style: "gap:10px;",
-                                            span { class: "row mono", style: "width:90px;flex:none;gap:6px;color:var(--accent);font-size:12px;", {icons::branch(11)} "{pname}" }
-                                            div { class: "row", style: "gap:3px;padding:3px;background:var(--elev);border:1px solid var(--line2);border-radius:7px;",
-                                                for ty in ["Utf8", "Int32", "Int64", "Date"] {
-                                                    button {
-                                                        class: if ptype == ty { "part-type on" } else { "part-type" },
-                                                        onclick: move |_| { let mut w = draft.write(); if let Some(pc) = w.part_cols.get_mut(pidx) { pc.1 = ty.to_string(); } },
-                                                        "{ty}"
-                                                    }
-                                                }
+                                            span { class: "row", style: "width:90px;flex:none;gap:6px;color:var(--accent);", Icon { name: IconName::Branch, size: IconSize::Xs } MonoValue { style: "color:var(--accent);", "{pname}" } }
+                                            Segment {
+                                                value: ptype.clone(),
+                                                compact: true,
+                                                on_select: move |v: String| { let mut w = draft.write(); if let Some(pc) = w.part_cols.get_mut(pidx) { pc.1 = v; } },
+                                                options: vec![
+                                                    SegmentOption::new("Utf8", "Utf8"),
+                                                    SegmentOption::new("Int32", "Int32"),
+                                                    SegmentOption::new("Int64", "Int64"),
+                                                    SegmentOption::new("Date", "Date"),
+                                                ],
                                             }
                                         }
                                     }
                                 }
                                 if part_warn {
                                     div { class: "part-warn",
-                                        span { style: "flex:none;color:var(--orange);", {icons::alert(12)} }
-                                        span { "Partition values are inferred as strings — WHERE year = 2024 needs a cast unless you set Int/Date." }
+                                        Icon { name: IconName::Alert, size: IconSize::Xs, color: "var(--orange)" }
+                                        Path { "Partition values are inferred as strings — WHERE year = 2024 needs a cast unless you set Int/Date." }
                                     }
                                 }
                             }

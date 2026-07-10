@@ -1,14 +1,14 @@
-//! Running-query close confirm (S14) — one **mode-driven** dialog (v11), two entry
+//! Running-query close confirm (S14) — one **mode-driven** dialogue (v11), two entry
 //! points: a tab whose query is **in flight** (`tab::close` — no threshold; a
 //! finished query has `running == false`, so quick queries never prompt) or the
 //! window / Close Project with any query running (`projects::close`). "Stop & close"
-//! / "Stop & exit" cancels the query and closes; the secondary keeps it open; a
+//! / "Stop & exit" cancels the query and closes; the secondary keeps it open, and
 //! "don't ask again" flips the setting.
 //!
 //! A cancelled query has nowhere to keep running, so there is deliberately no
 //! "detach / keep running" option.
 //!
-//! Split Host/Card so the "don't ask again" checkbox resets each time the dialog
+//! Split Host/Card so the "don't ask again" checkbox resets each time the dialogue
 //! opens (the host is always mounted; the card mounts only while open).
 
 use dioxus::prelude::*;
@@ -16,8 +16,8 @@ use dioxus::prelude::*;
 use crate::action::{dispatch, Action};
 use crate::overlays::RunningCloseTarget;
 use crate::state::AppState;
-use crate::ui::components::{Checkbox, Dialog};
-use crate::ui::icons;
+use crate::ui::components::{Button, ButtonVariant, Checkbox, Dialog, Icon, Prose, Title};
+use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub fn RunningCloseHost() -> Element {
@@ -36,7 +36,7 @@ fn RunningCloseCard(target: RunningCloseTarget) -> Element {
     let state = use_context::<Signal<AppState>>();
     let mut dont_ask = use_signal(|| false);
 
-    // Mode-driven copy (v11): tab close vs project exit.
+    // Mode-driven copy (v11): tab close vs. project exit.
     let (title, name, body, is_project): (&str, String, &str, bool) = match target {
         RunningCloseTarget::Tab(id) => {
             let name = crate::session::snapshot()
@@ -74,21 +74,22 @@ fn RunningCloseCard(target: RunningCloseTarget) -> Element {
         Dialog { on_close: move |_| crate::overlays::close_running_close(), card_class: "confirm".to_string(), z: 80,
             div { class: "confirm-pad",
                 div { class: "confirm-head-row",
-                    div { class: "confirm-ico warn", {icons::warning(18)} }
+                    div { class: "confirm-ico warn", Icon { name: IconName::Warning, size: IconSize::Lg } }
                     div { style: "min-width:0;",
-                        div { class: "confirm-title", "{title}" }
-                        div { class: "confirm-sub", "{name}" }
+                        Title { class: "confirm-title", "{title}" }
+                        Prose { class: "confirm-sub", "{name}" }
                     }
                 }
-                div { class: "confirm-msg", "{body}" }
+                Prose { class: "confirm-msg", "{body}" }
                 div { class: "confirm-check",
                     Checkbox { checked: dont_ask(), on_toggle: move |v| dont_ask.set(v), "Don't ask again" }
                 }
             }
             div { class: "confirm-foot split",
-                button { class: "btn-ghost", onclick: move |_| crate::overlays::close_running_close(), "{keep_label}" }
-                button {
-                    class: "btn-danger",
+                Button { variant: ButtonVariant::Secondary, onclick: move |_| crate::overlays::close_running_close(), "{keep_label}" }
+                Button {
+                    variant: ButtonVariant::Danger,
+                    icon: if is_project { IconName::Logout } else { IconName::Stop },
                     onclick: move |_| {
                         if dont_ask() {
                             crate::settings::set_confirm_close_running(false);
@@ -99,7 +100,6 @@ fn RunningCloseCard(target: RunningCloseTarget) -> Element {
                             RunningCloseTarget::Window => dispatch(state, Action::CloseWindowForce),
                         }
                     },
-                    if is_project { {icons::logout(14)} } else { {icons::stop(14)} }
                     "{stop_label}"
                 }
             }

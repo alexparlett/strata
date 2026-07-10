@@ -33,7 +33,12 @@ pub struct Rect {
 impl Rect {
     /// A zero-sized rect at a point (cursor / caret anchors).
     pub fn point(x: f64, y: f64) -> Self {
-        Self { x, y, w: 0.0, h: 0.0 }
+        Self {
+            x,
+            y,
+            w: 0.0,
+            h: 0.0,
+        }
     }
 }
 
@@ -91,33 +96,81 @@ impl Default for RectAlign {
 
 impl RectAlign {
     // Below the anchor.
-    pub const BOTTOM_START: RectAlign = RectAlign { parent: a2(Align::Min, Align::Max), child: a2(Align::Min, Align::Min) };
-    pub const BOTTOM: RectAlign = RectAlign { parent: a2(Align::Center, Align::Max), child: a2(Align::Center, Align::Min) };
-    pub const BOTTOM_END: RectAlign = RectAlign { parent: a2(Align::Max, Align::Max), child: a2(Align::Max, Align::Min) };
+    pub const BOTTOM_START: RectAlign = RectAlign {
+        parent: a2(Align::Min, Align::Max),
+        child: a2(Align::Min, Align::Min),
+    };
+    pub const BOTTOM: RectAlign = RectAlign {
+        parent: a2(Align::Center, Align::Max),
+        child: a2(Align::Center, Align::Min),
+    };
+    pub const BOTTOM_END: RectAlign = RectAlign {
+        parent: a2(Align::Max, Align::Max),
+        child: a2(Align::Max, Align::Min),
+    };
     // Above the anchor.
-    pub const TOP_START: RectAlign = RectAlign { parent: a2(Align::Min, Align::Min), child: a2(Align::Min, Align::Max) };
-    pub const TOP: RectAlign = RectAlign { parent: a2(Align::Center, Align::Min), child: a2(Align::Center, Align::Max) };
-    pub const TOP_END: RectAlign = RectAlign { parent: a2(Align::Max, Align::Min), child: a2(Align::Max, Align::Max) };
+    pub const TOP_START: RectAlign = RectAlign {
+        parent: a2(Align::Min, Align::Min),
+        child: a2(Align::Min, Align::Max),
+    };
+    pub const TOP: RectAlign = RectAlign {
+        parent: a2(Align::Center, Align::Min),
+        child: a2(Align::Center, Align::Max),
+    };
+    pub const TOP_END: RectAlign = RectAlign {
+        parent: a2(Align::Max, Align::Min),
+        child: a2(Align::Max, Align::Max),
+    };
     // Right of the anchor.
-    pub const RIGHT_START: RectAlign = RectAlign { parent: a2(Align::Max, Align::Min), child: a2(Align::Min, Align::Min) };
-    pub const RIGHT: RectAlign = RectAlign { parent: a2(Align::Max, Align::Center), child: a2(Align::Min, Align::Center) };
-    pub const RIGHT_END: RectAlign = RectAlign { parent: a2(Align::Max, Align::Max), child: a2(Align::Min, Align::Max) };
+    pub const RIGHT_START: RectAlign = RectAlign {
+        parent: a2(Align::Max, Align::Min),
+        child: a2(Align::Min, Align::Min),
+    };
+    pub const RIGHT: RectAlign = RectAlign {
+        parent: a2(Align::Max, Align::Center),
+        child: a2(Align::Min, Align::Center),
+    };
+    pub const RIGHT_END: RectAlign = RectAlign {
+        parent: a2(Align::Max, Align::Max),
+        child: a2(Align::Min, Align::Max),
+    };
     // Left of the anchor.
-    pub const LEFT_START: RectAlign = RectAlign { parent: a2(Align::Min, Align::Min), child: a2(Align::Max, Align::Min) };
-    pub const LEFT: RectAlign = RectAlign { parent: a2(Align::Min, Align::Center), child: a2(Align::Max, Align::Center) };
-    pub const LEFT_END: RectAlign = RectAlign { parent: a2(Align::Min, Align::Max), child: a2(Align::Max, Align::Max) };
+    pub const LEFT_START: RectAlign = RectAlign {
+        parent: a2(Align::Min, Align::Min),
+        child: a2(Align::Max, Align::Min),
+    };
+    pub const LEFT: RectAlign = RectAlign {
+        parent: a2(Align::Min, Align::Center),
+        child: a2(Align::Max, Align::Center),
+    };
+    pub const LEFT_END: RectAlign = RectAlign {
+        parent: a2(Align::Min, Align::Max),
+        child: a2(Align::Max, Align::Max),
+    };
 
     /// Flip along one/both axes — the alternatives tried by [`RectAlign::best`].
     pub fn flip_x(self) -> Self {
         RectAlign {
-            parent: Align2 { x: flip(self.parent.x), y: self.parent.y },
-            child: Align2 { x: flip(self.child.x), y: self.child.y },
+            parent: Align2 {
+                x: flip(self.parent.x),
+                y: self.parent.y,
+            },
+            child: Align2 {
+                x: flip(self.child.x),
+                y: self.child.y,
+            },
         }
     }
     pub fn flip_y(self) -> Self {
         RectAlign {
-            parent: Align2 { x: self.parent.x, y: flip(self.parent.y) },
-            child: Align2 { x: self.child.x, y: flip(self.child.y) },
+            parent: Align2 {
+                x: self.parent.x,
+                y: flip(self.parent.y),
+            },
+            child: Align2 {
+                x: self.child.x,
+                y: flip(self.child.y),
+            },
         }
     }
     pub fn flip(self) -> Self {
@@ -130,7 +183,12 @@ impl RectAlign {
         let gy = gap_sign(self.parent.y, self.child.y);
         let ax = anchor.x + self.parent.x.frac() * anchor.w + gx * gap;
         let ay = anchor.y + self.parent.y.frac() * anchor.h + gy * gap;
-        (ax - self.child.x.frac() * size.0, ay - self.child.y.frac() * size.1, size.0, size.1)
+        (
+            ax - self.child.x.frac() * size.0,
+            ay - self.child.y.frac() * size.1,
+            size.0,
+            size.1,
+        )
     }
 
     fn fits(self, anchor: Rect, size: (f64, f64), vp: (f64, f64), gap: f64) -> bool {

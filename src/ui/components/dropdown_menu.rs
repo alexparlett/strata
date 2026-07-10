@@ -26,10 +26,12 @@ pub fn DropdownMenu(
     /// Menu width in px.
     width: Option<u32>,
     /// Placement of the menu relative to the trigger.
-    #[props(default)] align: RectAlign,
+    #[props(default)]
+    align: RectAlign,
     /// Optional caller-owned open state — pass one when the menu content must dismiss
     /// itself programmatically (e.g. a search box closing on Enter). Defaults to internal.
-    #[props(default)] open: Option<Signal<bool>>,
+    #[props(default)]
+    open: Option<Signal<bool>>,
     /// Menu rows.
     children: Element,
 ) -> Element {

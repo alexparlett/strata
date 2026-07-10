@@ -14,7 +14,11 @@ use crate::action::{dispatch, Action};
 // Lens accessors (`.workspaces()`, `.id()`, `.name()`) for the Problems grouping.
 use crate::session::{SessionStoreExt, WorkspaceStoreExt};
 use crate::state::{AppState, LogEvent, LogKind, LogTab};
-use crate::ui::icons;
+use crate::ui::components::{
+    Button, ButtonVariant, Caption, Dot, Icon, IconButton, IconButtonVariant, Meta, Path, Prose,
+    Spacer, Strong,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 /// Colour for an event row's dot + message, keyed by severity.
 fn event_colors(kind: LogKind) -> (&'static str, &'static str) {
@@ -35,10 +39,10 @@ pub fn Drawer() -> Element {
         (s.log_tab, s.log_h)
     };
     let expanded = log_h > 250.0;
-    let expand_icon = if expanded {
-        "M8 3v4H4M16 3v4h4M8 21v-4H4M16 21v-4h4"
+    let expand_ic = if expanded {
+        IconName::Minimize
     } else {
-        "M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"
+        IconName::Maximize
     };
     let (title, count): (&str, usize) = match tab {
         LogTab::History => ("History", state.read().project.history.len()),
@@ -51,27 +55,17 @@ pub fn Drawer() -> Element {
         div { class: "ps-log", style: "height:{log_h}px;",
             {crate::action::panel::resize_handle(state, crate::state::ResizeTarget::Log)}
             div { class: "ps-log-head",
-                span { class: "title", "{title}" }
-                span { class: "count", "{count}" }
-                div { class: "spacer" }
+                Strong { class: "title", "{title}" }
+                Path { class: "count", "{count}" }
+                Spacer {}
                 // No Clear on Problems — they're live diagnostics that clear
                 // themselves when the SQL is fixed (or the query re-run).
                 if tab != LogTab::Problems {
-                    button { class: "txtbtn", onclick: move |_| dispatch(state, Action::ClearDrawer), "Clear" }
+                    Button { variant: ButtonVariant::Compact, onclick: move |_| dispatch(state, Action::ClearDrawer), "Clear" }
                 }
-                button { class: "iconbtn", title: "Expand / collapse", onclick: move |_| dispatch(state, Action::ToggleLogHeight),
-                    svg {
-                        width: "14", height: "14", "viewBox": "0 0 24 24", fill: "none",
-                        stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round",
-                        path { d: "{expand_icon}" }
-                    }
+                IconButton { icon: expand_ic, variant: IconButtonVariant::Ghost, title: "Expand / collapse", onclick: move |_| dispatch(state, Action::ToggleLogHeight),
                 }
-                button { class: "iconbtn", title: "Close", onclick: move |_| dispatch(state, Action::ToggleLog),
-                    svg {
-                        width: "13", height: "13", "viewBox": "0 0 24 24", fill: "none",
-                        stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round",
-                        path { d: "M6 6l12 12M18 6L6 18" }
-                    }
+                IconButton { icon: IconName::Close, variant: IconButtonVariant::Ghost, title: "Close", onclick: move |_| dispatch(state, Action::ToggleLog),
                 }
             }
             {
@@ -121,7 +115,7 @@ fn history_body(state: Signal<AppState>) -> Element {
     rsx! {
         div { class: "ps-log-body ps-scroll", style: "padding:8px;",
             if history.is_empty() {
-                div { class: "ps-log-empty", "No queries run yet" }
+                Prose { class: "ps-log-empty", "No queries run yet" }
             }
             for (id, sql, ts, ms, rows, lines, dot, meta) in history {
                 {
@@ -135,15 +129,15 @@ fn history_body(state: Signal<AppState>) -> Element {
                             onclick: move |_| dispatch(state, Action::OpenHistoryQuery(sql_load.clone())),
                             ondoubleclick: move |_| dispatch(state, Action::RunHistoryQuery(sql_run.clone())),
                             div { class: "row", style: "gap:8px;margin-bottom:6px;",
-                                span { style: "width:6px;height:6px;border-radius:50%;flex:none;background:{dot};" }
-                                span { class: "mono", style: "font-size:10px;color:{meta};", "{rows} rows · {ms} ms" }
+                                Dot { color: "{dot}", size: 6 }
+                                Meta { style: "color:{meta};", "{rows} rows · {ms} ms" }
                                 if lines > 1 {
-                                    span { class: "hist-lines", "{lines} lines" }
+                                    Meta { class: "hist-lines", "{lines} lines" }
                                 }
-                                div { class: "spacer" }
-                                span { class: "mono", style: "font-size:10px;color:var(--faint);", "{ts}" }
+                                Spacer {}
+                                Meta { style: "color:var(--faint);", "{ts}" }
                             }
-                            div { class: "hist-sql", "{sql}" }
+                            Path { class: "hist-sql", "{sql}" }
                         }
                     }
                 }
@@ -159,7 +153,7 @@ fn events_body(state: Signal<AppState>) -> Element {
     rsx! {
         div { class: "ps-log-body ps-scroll",
             if events.is_empty() {
-                div { class: "ps-log-empty", "No events yet" }
+                Prose { class: "ps-log-empty", "No events yet" }
             }
             for e in events {
                 {
@@ -167,9 +161,9 @@ fn events_body(state: Signal<AppState>) -> Element {
                     rsx! {
                         div { key: "e{e.id}", class: "evt-item",
                             div { class: "ps-log-row",
-                                span { class: "dot", style: "background:{dot};" }
-                                span { class: "msg", style: "color:{fg};", "{e.msg}" }
-                                span { class: "ts", "{e.ts}" }
+                                Dot { color: "{dot}", size: 6, style: "margin-top:5px;" }
+                                Prose { class: "msg", style: "color:{fg};", "{e.msg}" }
+                                Meta { class: "ts", "{e.ts}" }
                             }
                         }
                     }
@@ -201,8 +195,8 @@ fn problems_body(state: Signal<AppState>) -> Element {
     if groups.is_empty() {
         return rsx! {
             div { class: "prob-empty",
-                {icons::check(26)}
-                div { "No problems detected" }
+                Icon { name: IconName::Check, size: IconSize::Px(26) }
+                Prose { "No problems detected" }
             }
         };
     }
@@ -215,16 +209,16 @@ fn problems_body(state: Signal<AppState>) -> Element {
                     let gcount = format!("{n} problem{}", if n == 1 { "" } else { "s" });
                     rsx! {
                         div { class: "prob-group",
-                            {icons::file(14)}
-                            span { class: "prob-gname", "{name}" }
-                            span { class: "prob-gcount", "{gcount}" }
+                            Icon { name: IconName::File, size: IconSize::Sm }
+                            Strong { class: "prob-gname", "{name}" }
+                            Caption { class: "prob-gcount", "{gcount}" }
                         }
                         for (i, d) in diags.into_iter().enumerate() {
                             {
                                 let (row_cls, sev_icon) = match d.severity {
-                                    Severity::Error => ("prob-row err", icons::problems(15)),
-                                    Severity::Warning => ("prob-row warn", icons::warning(15)),
-                                    Severity::Info => ("prob-row info", icons::events(15)),
+                                    Severity::Error => ("prob-row err", IconName::Problems.el(IconSize::Sm)),
+                                    Severity::Warning => ("prob-row warn", IconName::Warning.el(IconSize::Sm)),
+                                    Severity::Info => ("prob-row info", IconName::Events.el(IconSize::Sm)),
                                 };
                                 rsx! {
                                     div {
@@ -233,12 +227,12 @@ fn problems_body(state: Signal<AppState>) -> Element {
                                         title: "Go to source",
                                         onclick: move |_| dispatch(state, Action::SwitchTab(id)),
                                         {sev_icon}
-                                        span { class: "prob-msg", "{d.message}" }
+                                        Prose { class: "prob-msg", "{d.message}" }
                                         if let Some(code) = d.code.clone() {
-                                            span { class: "prob-code", "{code}" }
+                                            Meta { class: "prob-code", "{code}" }
                                         }
                                         if let Some(l) = d.loc.clone() {
-                                            span { class: "prob-loc", "{l}" }
+                                            Path { class: "prob-loc", "{l}" }
                                         }
                                     }
                                 }

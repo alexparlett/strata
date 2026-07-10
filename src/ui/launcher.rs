@@ -6,7 +6,11 @@
 use dioxus::prelude::*;
 
 use crate::config::{self, RecentProject};
-use crate::ui::icons;
+use crate::ui::components::{
+    Button, ButtonVariant, Eyebrow, Icon, IconButton, IconButtonVariant, Path, Prose, SearchBar,
+    Spacer, Strong, Title,
+};
+use crate::ui::icons::{IconName, IconSize};
 
 /// Up-to-two-letter initials for a project avatar (word/`_`/`-` boundaries).
 fn initials(name: &str) -> String {
@@ -79,7 +83,7 @@ pub fn LauncherRoot() -> Element {
                 div {
                     onmousedown: move |e| { e.prevent_default(); dioxus::desktop::window().drag(); },
                     style: "height:46px;flex:none;display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--line);",
-                    span { style: "font:600 13px var(--ui);color:var(--text3);", "Welcome to Strata" }
+                    Strong { style: "color:var(--text3);", "Welcome to Strata" }
                 }
 
                 div { style: "flex:1;display:flex;min-height:0;",
@@ -88,35 +92,35 @@ pub fn LauncherRoot() -> Element {
                     div { style: "width:258px;flex:none;border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;background:var(--bg);",
                         div { style: "display:flex;align-items:center;gap:11px;padding:0 6px 22px;",
                             div { style: "width:40px;height:40px;border-radius:11px;overflow:hidden;display:flex;align-items:center;justify-content:center;",
-                                {icons::strata_logo(40)}
+                                Icon { name: IconName::StrataLogo, size: IconSize::Px(40) }
                             }
                             div {
-                                div { style: "font:700 15px var(--ui);color:var(--text);", "Strata" }
-                                div { style: "font:400 11px var(--mono);color:var(--dim3);margin-top:1px;", {env!("CARGO_PKG_VERSION")} }
+                                Title { "Strata" }
+                                Path { style: "display:block;color:var(--dim3);margin-top:1px;", {env!("CARGO_PKG_VERSION")} }
                             }
                         }
                         div { style: "display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;background:var(--accent-soft);border-left:2px solid var(--accent);color:var(--accent);",
-                            {icons::folder(15)}
-                            span { style: "font:600 12.5px var(--ui);color:var(--text);", "Projects" }
+                            Icon { name: IconName::Folder, size: IconSize::Sm }
+                            Strong { "Projects" }
                         }
-                        div { style: "flex:1;" }
+                        Spacer {}
                     }
 
                     // right pane — search + Open + recents
                     div { style: "flex:1;min-width:0;display:flex;flex-direction:column;",
                         div { style: "display:flex;align-items:center;gap:22px;padding:20px 26px;flex:none;",
-                            div { style: "flex:1;max-width:460px;display:flex;align-items:center;gap:10px;height:40px;padding:0 15px;background:var(--bg);border:1px solid var(--accent);border-radius:20px;color:var(--dim2);",
-                                {icons::search(15)}
-                                input {
+                            div { style: "flex:1;max-width:460px;display:flex;",
+                                SearchBar {
+                                    value: filter(),
+                                    oninput: move |v| filter.set(v),
                                     placeholder: "Search projects",
-                                    value: "{filter}",
-                                    oninput: move |e| filter.set(e.value()),
-                                    style: "flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--text);font-family:inherit;font-size:13px;",
+                                    grow: true,
                                 }
                             }
-                            div { style: "flex:1;" }
-                            button {
-                                class: "launch-open",
+                            Spacer {}
+                            Button {
+                                variant: ButtonVariant::Ghost,
+                                icon: IconName::Folder, icon_size: IconSize::Md,
                                 // Async picker → new project window, then close the launcher.
                                 onclick: move |_| {
                                     spawn(async move {
@@ -127,27 +131,26 @@ pub fn LauncherRoot() -> Element {
                                         }
                                     });
                                 },
-                                {icons::folder(16)}
                                 "Open folder…"
                             }
                         }
 
                         div { class: "ps-scroll", style: "flex:1;overflow-y:auto;padding:0 16px 16px;",
                             if none {
-                                div { style: "padding:60px 20px;text-align:center;color:var(--dim3);font-size:13px;",
+                                Prose { style: "padding:60px 20px;text-align:center;color:var(--dim3);",
                                     "No recent projects — click "
-                                    span { style: "color:var(--accent);font-weight:600;", "Open folder…" }
+                                    Strong { style: "color:var(--accent);", "Open folder…" }
                                     " to choose one."
                                 }
                             }
                             if has_pinned {
-                                div { class: "launch-lbl", "PINNED" }
+                                Eyebrow { class: "launch-lbl", "PINNED" }
                                 for r in pinned {
                                     {project_row(r, recents)}
                                 }
                             }
                             if has_pinned && has_unpinned {
-                                div { class: "launch-lbl", "RECENT" }
+                                Eyebrow { class: "launch-lbl", "RECENT" }
                             }
                             for r in unpinned {
                                 {project_row(r, recents)}
@@ -184,58 +187,59 @@ fn project_row(r: RecentProject, mut recents: Signal<Vec<RecentProject>>) -> Ele
                 crate::window::spawn_project_window(open_path.clone());
                 dioxus::desktop::window().close();
             },
-            span { style: "width:38px;height:38px;flex:none;border-radius:9px;background:{col};display:flex;align-items:center;justify-content:center;font:700 14px var(--ui);color:#08111a;", "{ini}" }
+            span { style: "width:38px;height:38px;flex:none;border-radius:9px;background:{col};display:flex;align-items:center;justify-content:center;", Title { style: "color:#08111a;", "{ini}" } }
             div { style: "flex:1;min-width:0;",
                 div { style: "display:flex;align-items:center;gap:6px;",
-                    span { style: "font:500 14px var(--ui);color:var(--text);", "{name}" }
+                    Title { "{name}" }
                     if pinned {
-                        span { class: "pin-badge", {icons::pin(12)} }
+                        span { class: "pin-badge", Icon { name: IconName::Pin, size: IconSize::Xs } }
                     }
                 }
-                div { style: "font:400 12px var(--mono);color:var(--dim2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", "{path}" }
+                Path { style: "display:block;color:var(--dim2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", "{path}" }
             }
             div { class: "row-actions",
-                button {
-                    class: if pinned { "row-act on" } else { "row-act" },
+                IconButton {
+                    variant: IconButtonVariant::Toggle,
+                    on: pinned,
+                    icon: IconName::Pin,
                     title: if pinned { "Unpin" } else { "Pin" },
-                    onclick: move |e| {
+                    onclick: move |e: MouseEvent | {
                         e.stop_propagation();
                         let mut cfg = config::load();
                         cfg.set_pinned(&pin_path, !pinned);
                         config::save(&cfg);
                         recents.set(cfg.recent_projects);
                     },
-                    {icons::pin(15)}
                 }
-                button {
-                    class: "row-act",
+                IconButton {
+                    variant: IconButtonVariant::Ghost,
+                    icon: IconName::External,
                     title: "Open in new window",
-                    onclick: move |e| {
+                    onclick: move |e: MouseEvent| {
                         e.stop_propagation();
                         crate::window::spawn_project_window(new_path.clone());
                     },
-                    {icons::external(15)}
                 }
-                button {
-                    class: "row-act",
+                IconButton {
+                    variant: IconButtonVariant::Ghost,
+                    icon: IconName::Folder,
                     title: "Reveal on disk",
-                    onclick: move |e| {
+                    onclick: move |e: MouseEvent| {
                         e.stop_propagation();
                         reveal(&rev_path);
                     },
-                    {icons::folder(15)}
                 }
-                button {
-                    class: "row-act",
+                IconButton {
+                    variant: IconButtonVariant::Ghost,
+                    icon: IconName::Trash,
                     title: "Remove from list",
-                    onclick: move |e| {
+                    onclick: move |e: MouseEvent| {
                         e.stop_propagation();
                         let mut cfg = config::load();
                         cfg.remove_recent(&rm_path);
                         config::save(&cfg);
                         recents.set(cfg.recent_projects);
                     },
-                    {icons::trash(15)}
                 }
             }
         }
