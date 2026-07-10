@@ -27,7 +27,7 @@ pub fn Inspector() -> Element {
                     IconButton { icon: IconName::Close, icon_size: IconSize::Xs, variant: IconButtonVariant::Ghost, title: "Close inspector",
                         onclick: move |_| dispatch(state, Action::CloseInspector), }
                 }
-                Prose { style: "padding:24px 14px;color:var(--dim2);", "Select a column to inspect." }
+                Prose { style: "padding:var(--sp-6) var(--sp-4);color:var(--dim2);", "Select a column to inspect." }
             }
         };
     };
@@ -112,11 +112,11 @@ pub fn Inspector() -> Element {
             }
 
             div { class: "insp-title",
-                div { class: "row", style: "gap:8px;",
+                div { class: "row", style: "gap:var(--sp-3);",
                     Dot { color: "{dot}", square: true, size: 8 }
                     MonoValue { class: "insp-name", "{colname}" }
                 }
-                div { class: "row", style: "gap:8px;margin-top:6px;",
+                div { class: "row", style: "gap:var(--sp-3);margin-top:var(--sp-3);",
                     Meta { class: "{tcls} insp-dtype", "{dtype}" }
                     Path { "from {table}" }
                 }
@@ -133,7 +133,7 @@ pub fn Inspector() -> Element {
                 div { class: "insp-note", Path { "Nested column — expand values in the results grid (click a cell) or use get_field / unnest to project fields." } }
                 if !children.is_empty() {
                     div { class: "insp-section",
-                        Eyebrow { class: "sec-label", style: "margin-bottom:8px;", "NESTED FIELDS" }
+                        Eyebrow { class: "sec-label", style: "margin-bottom:var(--sp-3);", "NESTED FIELDS" }
                         div { class: "nested-box",
                             for f in children.iter() {
                                 div { class: "nested-field",
@@ -148,7 +148,7 @@ pub fn Inspector() -> Element {
             }
 
             div { class: "insp-section",
-                div { class: "row", style: "justify-content:space-between;margin-bottom:6px;",
+                div { class: "row", style: "justify-content:space-between;margin-bottom:var(--sp-3);",
                     Meta { style: "color:var(--dim);", "Completeness" }
                     Meta { style: "color:var(--text2);", "{fill}%" }
                 }
@@ -156,8 +156,8 @@ pub fn Inspector() -> Element {
             }
 
             if is_num && !nums.is_empty() {
-                div { style: "padding:8px 14px 18px;",
-                    div { style: "height:4px;border-radius:2px;background:linear-gradient(90deg,var(--line),var(--accent),var(--line));margin:8px 0 6px;" }
+                div { style: "padding:var(--sp-3) var(--sp-4) var(--sp-5);",
+                    div { style: "height:4px;border-radius:var(--r-xs);background:linear-gradient(90deg,var(--line),var(--accent),var(--line));margin:var(--sp-3) 0 var(--sp-3);" }
                     div { class: "row", style: "justify-content:space-between;",
                         Meta { "min {min}" }
                         Meta { "max {max}" }

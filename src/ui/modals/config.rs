@@ -321,7 +321,7 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                 }
             },
             div { class: "modal-body ps-scroll",
-                    div { class: "row", style: "gap:14px;margin-bottom:18px;align-items:flex-end;",
+                    div { class: "row", style: "gap:var(--sp-4);margin-bottom:var(--sp-5);align-items:flex-end;",
                         div { style: "flex:1;",
                             Eyebrow { class: "field-label", "TABLE NAME" }
                             TextInput { value: "{name}", placeholder: "my_table", mono: true,
@@ -343,11 +343,11 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                         }
                     }
 
-                    div { class: "row", style: "justify-content:space-between;margin-bottom:8px;",
+                    div { class: "row", style: "justify-content:space-between;margin-bottom:var(--sp-3);",
                         Eyebrow { class: "sec-label", "SOURCE PATHS" }
                         Path { style:"color:var(--faint);", "file · directory · recursive glob" }
                     }
-                    div { style: "display:flex;flex-direction:column;gap:7px;",
+                    div { style: "display:flex;flex-direction:column;gap:var(--sp-3);",
                         for (idx, src) in sources.iter().cloned().enumerate() {
                             div { class: "src-row",
                                 TextInput { value: "{src}", mono: true, grow: true,
@@ -382,7 +382,7 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                             Icon { name: IconName::Alert, size: IconSize::Sm, color: "var(--red2)" }
                             div {
                                 MonoValue { style: "display:block;color:var(--red);", "Registration failed" }
-                                Path { style:"display:block;color:#d99;margin-top:2px;", "{err}" }
+                                Path { style:"display:block;color:#d99;margin-top:var(--sp-1);", "{err}" }
                             }
                         }
                     } else if let Some(err) = scan_error.clone() {
@@ -390,7 +390,7 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                             Icon { name: IconName::Alert, size: IconSize::Sm, color: "var(--red2)" }
                             div {
                                 MonoValue { style: "display:block;color:var(--red);", "Sources don't validate" }
-                                Path { style:"display:block;color:#d99;margin-top:2px;", "{err}" }
+                                Path { style:"display:block;color:#d99;margin-top:var(--sp-1);", "{err}" }
                             }
                         }
                     } else if form_ready {
@@ -426,14 +426,14 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                         }
                         if hive_on {
                             if part_cols.is_empty() {
-                                Path { style:"display:block;margin-top:12px;",
+                                Path { style:"display:block;margin-top:var(--sp-4);",
                                     "No key=value partition directories were found under these paths."
                                 }
                             } else {
-                                div { style: "margin-top:12px;display:flex;flex-direction:column;gap:7px;",
+                                div { style: "margin-top:var(--sp-4);display:flex;flex-direction:column;gap:var(--sp-3);",
                                     for (pidx, (pname, ptype)) in part_cols.iter().cloned().enumerate() {
-                                        div { class: "row", style: "gap:10px;",
-                                            span { class: "row", style: "width:90px;flex:none;gap:6px;color:var(--accent);", Icon { name: IconName::Branch, size: IconSize::Xs } MonoValue { style: "color:var(--accent);", "{pname}" } }
+                                        div { class: "row", style: "gap:var(--sp-4);",
+                                            span { class: "row", style: "width:90px;flex:none;gap:var(--sp-3);color:var(--accent);", Icon { name: IconName::Branch, size: IconSize::Xs } MonoValue { style: "color:var(--accent);", "{pname}" } }
                                             Segment {
                                                 value: ptype.clone(),
                                                 compact: true,

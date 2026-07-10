@@ -30,7 +30,7 @@ pub fn Header() -> Element {
             // Double-click the title bar to fill the screen / restore.
             ondoubleclick: move |_| dispatch(state, Action::ToggleWindowFill),
 
-            div { class: "row", style: "gap:9px;",
+            div { class: "row", style: "gap:var(--sp-3);",
                 div { class: "ps-logo", Icon { name: IconName::StrataLogo, size: IconSize::Px(22) } }
                 Title { class: "ps-wordmark", "Strata" }
             }
@@ -54,7 +54,7 @@ pub fn Header() -> Element {
             // Drag-suppress once on the cluster (the child webview covers the native
             // title bar, so an un-stopped mousedown/dblclick here would drag / fill
             // the window). The buttons themselves are plain `IconButton`s.
-            div { class: "row", style: "gap:8px;",
+            div { class: "row", style: "gap:var(--sp-3);",
                 onmousedown: move |e| e.stop_propagation(),
                 ondoubleclick: move |e| e.stop_propagation(),
                 IconButton { icon: IconName::Search,
@@ -107,7 +107,7 @@ fn project_menu_body(state: Signal<AppState>) -> Element {
         }
         div { class: "menu-sep" }
 
-        Eyebrow { class: "sec-label", style: "padding:8px 10px 6px;", "OPEN PROJECT" }
+        Eyebrow { class: "sec-label", style: "padding:var(--sp-3) var(--sp-4) var(--sp-3);", "OPEN PROJECT" }
         div { class: "proj-item on",
             Control { class: "avatar", style: "background:var(--accent);", "{active_ini}" }
             div { class: "meta",
@@ -118,7 +118,7 @@ fn project_menu_body(state: Signal<AppState>) -> Element {
 
         if !recents.is_empty() {
             div { class: "menu-sep" }
-            Eyebrow { class: "sec-label", style: "padding:8px 10px 6px;", "RECENT PROJECTS" }
+            Eyebrow { class: "sec-label", style: "padding:var(--sp-3) var(--sp-4) var(--sp-3);", "RECENT PROJECTS" }
             for (name, path) in recents {
                 {
                     let ini = initials_of(&name);

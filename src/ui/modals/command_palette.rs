@@ -123,7 +123,7 @@ pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
             }
             div { class: "cmdk-list",
                 if filtered.is_empty() {
-                    Prose { style: "padding:40px;text-align:center;color:var(--dim3);", "No matches" }
+                    Prose { style: "padding:var(--sp-8);text-align:center;color:var(--dim3);", "No matches" }
                 }
                 for (label, sub, effect) in filtered {
                     div {

@@ -39,9 +39,9 @@ fn OpenPromptCard(path: std::path::PathBuf) -> Element {
 
     rsx! {
         Dialog { on_close: move |_| crate::overlays::close_open_prompt(), card_class: "confirm".to_string(), z: 80,
-            div { style: "padding:22px 24px 16px;",
-                div { style: "display:flex;align-items:center;gap:12px;margin-bottom:14px;",
-                    span { style: "width:38px;height:38px;flex:none;border-radius:9px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;",
+            div { style: "padding:var(--sp-6) var(--sp-6) var(--sp-5);",
+                div { style: "display:flex;align-items:center;gap:var(--sp-4);margin-bottom:var(--sp-4);",
+                    span { style: "width:38px;height:38px;flex:none;border-radius:var(--r-2);background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;",
                         Icon { name: IconName::Folder, size: IconSize::Lg }
                     }
                     div { style: "min-width:0;",
@@ -54,11 +54,11 @@ fn OpenPromptCard(path: std::path::PathBuf) -> Element {
                 Prose { style: "display:block;line-height:1.5;color:var(--text3);",
                     "Open this project in the current window, or in a new window?"
                 }
-                div { style: "margin-top:16px;",
+                div { style: "margin-top:var(--sp-5);",
                     Checkbox { checked: remember(), on_toggle: move |v| remember.set(v), "Remember, don't ask again" }
                 }
             }
-            div { style: "display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:14px 20px;background:var(--panel);border-top:1px solid var(--line);",
+            div { style: "display:flex;align-items:center;justify-content:flex-end;gap:var(--sp-3);padding:var(--sp-4) var(--sp-6);background:var(--panel);border-top:1px solid var(--line);",
                 Button { variant: ButtonVariant::Ghost, onclick: move |_| crate::overlays::close_open_prompt(), "Cancel" }
                 Button {
                     variant: ButtonVariant::Secondary,

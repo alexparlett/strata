@@ -98,11 +98,11 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                 }
             },
             div { class: "modal-body ps-scroll",
-                    Eyebrow { class: "sec-label", style: "margin-bottom:10px;", "FORMAT" }
+                    Eyebrow { class: "sec-label", style: "margin-bottom:var(--sp-4);", "FORMAT" }
                     FormatCards { value: fmt.clone(), on_select: move |v| { export.write().format = v; } }
 
                     // ROWS TO EXPORT
-                    Eyebrow { class: "field-label", style: "margin-top:16px;", "ROWS TO EXPORT" }
+                    Eyebrow { class: "field-label", style: "margin-top:var(--sp-5);", "ROWS TO EXPORT" }
                     Segment {
                         value: ex.scope.clone(),
                         on_select: move |v: String| { export.write().scope = v; },
@@ -113,14 +113,14 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                     }
 
                     // OPTIONS (format-swapped)
-                    Eyebrow { class: "field-label", style: "margin-top:16px;", "OPTIONS" }
+                    Eyebrow { class: "field-label", style: "margin-top:var(--sp-5);", "OPTIONS" }
                     {
                         match fmt.as_str() {
                             "csv" => rsx! {
-                                div { style: "padding:2px 0 8px;",
+                                div { style: "padding:var(--sp-1) 0 var(--sp-3);",
                                     Toggle { on: ex.csv_header, on_toggle: move |v| export.write().csv_header = v, "Include header row" }
                                 }
-                                div { class: "row", style: "gap:8px;margin-bottom:8px;align-items:center;",
+                                div { class: "row", style: "gap:var(--sp-3);margin-bottom:var(--sp-3);align-items:center;",
                                     Caption { class: "opt-lbl", "Delimiter" }
                                     Segment {
                                         value: ex.csv_delim.clone(),
@@ -133,7 +133,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                         ],
                                     }
                                 }
-                                div { class: "row", style: "gap:8px;align-items:center;",
+                                div { class: "row", style: "gap:var(--sp-3);align-items:center;",
                                     Caption { class: "opt-lbl", "Null as" }
                                     Segment {
                                         value: ex.csv_null.clone(),
@@ -147,7 +147,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                 }
                             },
                             "parquet" => rsx! {
-                                div { class: "row", style: "gap:8px;align-items:center;",
+                                div { class: "row", style: "gap:var(--sp-3);align-items:center;",
                                     Caption { class: "opt-lbl", "Compression" }
                                     Select {
                                         value: ex.pq_compression.clone(),
@@ -164,7 +164,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                     }
                                 }
                                 if matches!(ex.pq_compression.as_str(), "zstd" | "gzip" | "brotli") {
-                                    div { class: "row", style: "gap:8px;margin-top:8px;align-items:center;",
+                                    div { class: "row", style: "gap:var(--sp-3);margin-top:var(--sp-3);align-items:center;",
                                         Caption { class: "opt-lbl", "Level" }
                                         NumberStepper { value: ex.pq_level as i64, min: 1, max: 22, width: 96,
                                             on_change: move |v: i64| export.write().pq_level = v as u32 }
@@ -174,7 +174,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                             "json" => rsx! { Prose { style: "color:var(--dim2);", "Newline-delimited JSON — one record per line." } },
                             "arrow" => rsx! { Prose { style: "color:var(--dim2);", "Arrow IPC file — no write options." } },
                             _ => rsx! {
-                                div { class: "row", style: "gap:8px;align-items:center;",
+                                div { class: "row", style: "gap:var(--sp-3);align-items:center;",
                                     Caption { class: "opt-lbl", "Copy as" }
                                     Segment {
                                         value: ex.clip_format.clone(),
@@ -193,11 +193,11 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
 
                     // PARTITION BY (file formats only)
                     if !is_clip {
-                        Eyebrow { class: "field-label", style: "margin-top:16px;", "PARTITION BY (optional)" }
+                        Eyebrow { class: "field-label", style: "margin-top:var(--sp-5);", "PARTITION BY (optional)" }
                         if cols.is_empty() {
                             Prose { style: "color:var(--faint);", "Run a query to choose partition columns." }
                         } else {
-                            div { class: "row", style: "gap:6px;flex-wrap:wrap;",
+                            div { class: "row", style: "gap:var(--sp-3);flex-wrap:wrap;",
                                 for col in cols.iter().cloned() {
                                     {
                                         let order = ex.partition_cols.iter().position(|c| c == &col);
@@ -218,7 +218,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                                 }
                             }
                             if !ex.partition_cols.is_empty() {
-                                div { style: "padding:8px 0 0;",
+                                div { style: "padding:var(--sp-3) 0 0;",
                                     Toggle { on: ex.keep_partition, on_toggle: move |v| export.write().keep_partition = v, "Keep partition columns inside the files" }
                                 }
                             }
@@ -227,18 +227,18 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
 
                     // DESTINATION (file formats only)
                     if !is_clip {
-                        Eyebrow { class: "field-label", style: "margin-top:16px;", "DESTINATION" }
+                        Eyebrow { class: "field-label", style: "margin-top:var(--sp-5);", "DESTINATION" }
                         TextInput { value: "{ex.name}", mono: true, width: 360,
                             oninput: move |v| export.write().name = v,
                             trailing: rsx! {
-                                MonoValue { style: "padding:0 11px;color:var(--accent);border-left:1px solid var(--line2);align-self:stretch;display:flex;align-items:center;",
+                                MonoValue { style: "padding:0 var(--sp-4);color:var(--accent);border-left:1px solid var(--line2);align-self:stretch;display:flex;align-items:center;",
                                     if ex.partition_cols.is_empty() { "{ext}" } else { "/ (folder)" } }
                             },
                         }
                     }
 
                     // PREVIEW
-                    div { class: "row", style: "margin-top:16px;justify-content:space-between;align-items:baseline;",
+                    div { class: "row", style: "margin-top:var(--sp-5);justify-content:space-between;align-items:baseline;",
                         Eyebrow { class: "field-label", "PREVIEW" }
                         Meta { "est. {size_est}" }
                     }

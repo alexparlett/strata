@@ -89,17 +89,17 @@ pub fn LauncherRoot() -> Element {
                 div { style: "flex:1;display:flex;min-height:0;",
 
                     // left rail — branding
-                    div { style: "width:258px;flex:none;border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;background:var(--bg);",
-                        div { style: "display:flex;align-items:center;gap:11px;padding:0 6px 22px;",
-                            div { style: "width:40px;height:40px;border-radius:11px;overflow:hidden;display:flex;align-items:center;justify-content:center;",
+                    div { style: "width:258px;flex:none;border-right:1px solid var(--line);padding:var(--sp-6) var(--sp-4);display:flex;flex-direction:column;background:var(--bg);",
+                        div { style: "display:flex;align-items:center;gap:var(--sp-4);padding:0 var(--sp-3) var(--sp-6);",
+                            div { style: "width:40px;height:40px;border-radius:var(--r-3);overflow:hidden;display:flex;align-items:center;justify-content:center;",
                                 Icon { name: IconName::StrataLogo, size: IconSize::Px(40) }
                             }
                             div {
                                 Title { "Strata" }
-                                Path { style: "display:block;color:var(--dim3);margin-top:1px;", {env!("CARGO_PKG_VERSION")} }
+                                Path { style: "display:block;color:var(--dim3);margin-top:var(--sp-1);", {env!("CARGO_PKG_VERSION")} }
                             }
                         }
-                        div { style: "display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;background:var(--accent-soft);border-left:2px solid var(--accent);color:var(--accent);",
+                        div { style: "display:flex;align-items:center;gap:var(--sp-4);padding:var(--sp-3) var(--sp-4);border-radius:var(--r-2);background:var(--accent-soft);border-left:2px solid var(--accent);color:var(--accent);",
                             Icon { name: IconName::Folder, size: IconSize::Sm }
                             Strong { "Projects" }
                         }
@@ -108,7 +108,7 @@ pub fn LauncherRoot() -> Element {
 
                     // right pane — search + Open + recents
                     div { style: "flex:1;min-width:0;display:flex;flex-direction:column;",
-                        div { style: "display:flex;align-items:center;gap:22px;padding:20px 26px;flex:none;",
+                        div { style: "display:flex;align-items:center;gap:var(--sp-6);padding:var(--sp-6) var(--sp-6);flex:none;",
                             div { style: "flex:1;max-width:460px;display:flex;",
                                 SearchBar {
                                     value: filter(),
@@ -135,9 +135,9 @@ pub fn LauncherRoot() -> Element {
                             }
                         }
 
-                        div { class: "ps-scroll", style: "flex:1;overflow-y:auto;padding:0 16px 16px;",
+                        div { class: "ps-scroll", style: "flex:1;overflow-y:auto;padding:0 var(--sp-5) var(--sp-5);",
                             if none {
-                                Prose { style: "padding:60px 20px;text-align:center;color:var(--dim3);",
+                                Prose { style: "padding:60px var(--sp-6);text-align:center;color:var(--dim3);",
                                     "No recent projects — click "
                                     Strong { style: "color:var(--accent);", "Open folder…" }
                                     " to choose one."
@@ -187,15 +187,15 @@ fn project_row(r: RecentProject, mut recents: Signal<Vec<RecentProject>>) -> Ele
                 crate::window::spawn_project_window(open_path.clone());
                 dioxus::desktop::window().close();
             },
-            span { style: "width:38px;height:38px;flex:none;border-radius:9px;background:{col};display:flex;align-items:center;justify-content:center;", Title { style: "color:#08111a;", "{ini}" } }
+            span { style: "width:38px;height:38px;flex:none;border-radius:var(--r-2);background:{col};display:flex;align-items:center;justify-content:center;", Title { style: "color:#08111a;", "{ini}" } }
             div { style: "flex:1;min-width:0;",
-                div { style: "display:flex;align-items:center;gap:6px;",
+                div { style: "display:flex;align-items:center;gap:var(--sp-3);",
                     Title { "{name}" }
                     if pinned {
                         span { class: "pin-badge", Icon { name: IconName::Pin, size: IconSize::Xs } }
                     }
                 }
-                Path { style: "display:block;color:var(--dim2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", "{path}" }
+                Path { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", "{path}" }
             }
             div { class: "row-actions",
                 IconButton {

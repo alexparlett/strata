@@ -18,13 +18,13 @@ use crate::ui::components::{
 };
 use crate::ui::icons::{self, IconName, IconSize};
 
-const SECTION: &str = "margin-bottom:34px;";
+const SECTION: &str = "margin-bottom:var(--sp-7);";
 const H2: &str =
-    "font:var(--t-eyebrow);letter-spacing:.8px;color:var(--dim3);text-transform:uppercase;margin:0 0 4px;";
-const SUB: &str = "font:var(--t-prose);color:var(--dim);margin:0 0 14px;";
-const ROW: &str = "display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-bottom:14px;";
+    "font:var(--t-eyebrow);letter-spacing:.8px;color:var(--dim3);text-transform:uppercase;margin:0 0 var(--sp-2);";
+const SUB: &str = "font:var(--t-prose);color:var(--dim);margin:0 0 var(--sp-4);";
+const ROW: &str = "display:flex;flex-wrap:wrap;gap:var(--sp-5);align-items:center;margin-bottom:var(--sp-4);";
 const DIS: &str =
-    "font:var(--t-micro);letter-spacing:.8px;color:var(--faint);text-transform:uppercase;margin:2px 0 8px;";
+    "font:var(--t-micro);letter-spacing:.8px;color:var(--faint);text-transform:uppercase;margin:var(--sp-1) 0 var(--sp-3);";
 
 #[component]
 pub fn GalleryRoot() -> Element {
@@ -64,7 +64,7 @@ pub fn GalleryRoot() -> Element {
         div {
             style: "{theme_css}width:100vw;height:100vh;box-sizing:border-box;background:var(--panel);display:flex;flex-direction:column;font-family:var(--ui);color:var(--text);",
 
-            div { style: "flex:1;overflow:auto;padding:24px 34px;",
+            div { style: "flex:1;overflow:auto;padding:var(--sp-6) var(--sp-7);",
 
                 // ---- Buttons ----
                 div { style: "{SECTION}",
@@ -123,7 +123,7 @@ pub fn GalleryRoot() -> Element {
                 div { style: "{SECTION}",
                     div { style: "{H2}", "SplitButton" }
                     div { style: "{SUB}", "Accent face + caret → solid-accent menu (the one coloured menu)." }
-                    div { style: "display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;",
+                    div { style: "display:flex;gap:var(--sp-6);align-items:flex-start;flex-wrap:wrap;",
                         SplitButton {
                             label: "Run", kbd: "⌘↵", icon: IconName::Play, icon_size: IconSize::Sm,
                             on_main: move |_| {},
@@ -210,18 +210,18 @@ pub fn GalleryRoot() -> Element {
                 div { style: "{SECTION}",
                     div { style: "{H2}", "Toggle · Checkbox · Radio" }
                     div { style: "{SUB}", "Switches glow the track on hover; checkboxes/radios glow their border." }
-                    div { style: "display:flex;gap:48px;align-items:flex-start;flex-wrap:wrap;",
-                        div { style: "display:flex;flex-direction:column;gap:12px;",
+                    div { style: "display:flex;gap:var(--sp-9);align-items:flex-start;flex-wrap:wrap;",
+                        div { style: "display:flex;flex-direction:column;gap:var(--sp-4);",
                             Toggle { on: toggle_a(), on_toggle: move |v| toggle_a.set(v), "Reopen on startup" }
                             Toggle { on: toggle_b(), on_toggle: move |v| toggle_b.set(v), "Sync with OS" }
                             Toggle { on: true, on_toggle: move |_| {}, disabled: true, "Disabled" }
                         }
-                        div { style: "display:flex;flex-direction:column;gap:10px;",
+                        div { style: "display:flex;flex-direction:column;gap:var(--sp-4);",
                             Checkbox { checked: checked(), on_toggle: move |v| checked.set(v), "Remember choice" }
                             Checkbox { checked: checked2(), on_toggle: move |v| checked2.set(v), "Verbose logging" }
                             Checkbox { checked: true, on_toggle: move |_| {}, disabled: true, "Disabled" }
                         }
-                        div { style: "display:flex;flex-direction:column;gap:12px;",
+                        div { style: "display:flex;flex-direction:column;gap:var(--sp-4);",
                             RadioGroup {
                                 value: radio_auth(),
                                 on_select: move |v| radio_auth.set(v),
@@ -252,8 +252,8 @@ pub fn GalleryRoot() -> Element {
                 div { style: "{SECTION}",
                     div { style: "{H2}", "Typography" }
                     div { style: "{SUB}", "One component per role (v18 ramp; mono is three-weight)." }
-                    div { style: "display:grid;grid-template-columns:1fr 1fr;gap:26px;max-width:760px;",
-                        div { style: "display:flex;flex-direction:column;gap:14px;align-items:flex-start;",
+                    div { style: "display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-6);max-width:760px;",
+                        div { style: "display:flex;flex-direction:column;gap:var(--sp-4);align-items:flex-start;",
                             Eyebrow { "IBM Plex Sans" }
                             Hero { "Query your data" }
                             Title { "Title / window · 600 · 14.5" }
@@ -263,7 +263,7 @@ pub fn GalleryRoot() -> Element {
                             Prose { "Body regular · 400 · 12.5 — descriptions and secondary prose." }
                             Caption { "Caption · 400 · 11" }
                         }
-                        div { style: "display:flex;flex-direction:column;gap:14px;align-items:flex-start;",
+                        div { style: "display:flex;flex-direction:column;gap:var(--sp-4);align-items:flex-start;",
                             Eyebrow { "JetBrains Mono" }
                             Code { "SELECT * FROM users" }
                             Metric { "1,284,097" }
@@ -287,15 +287,15 @@ pub fn GalleryRoot() -> Element {
                         Badge { variant: BadgeVariant::Error, "Error" }
                         Badge { variant: BadgeVariant::Draft, "Draft" }
                     }
-                    div { style: "display:flex;flex-wrap:wrap;gap:22px;align-items:center;",
-                        span { style: "display:flex;align-items:center;gap:7px;font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Idle } "Idle" }
-                        span { style: "display:flex;align-items:center;gap:7px;font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Run } "Running" }
-                        span { style: "display:flex;align-items:center;gap:7px;font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Ok } "Ok" }
-                        span { style: "display:flex;align-items:center;gap:7px;font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Err } "Error" }
-                        span { style: "display:flex;align-items:center;gap:7px;font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Plan } "Plan" }
+                    div { style: "display:flex;flex-wrap:wrap;gap:var(--sp-6);align-items:center;",
+                        span { style: "display:flex;align-items:center;gap:var(--sp-3);font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Idle } "Idle" }
+                        span { style: "display:flex;align-items:center;gap:var(--sp-3);font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Run } "Running" }
+                        span { style: "display:flex;align-items:center;gap:var(--sp-3);font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Ok } "Ok" }
+                        span { style: "display:flex;align-items:center;gap:var(--sp-3);font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Err } "Error" }
+                        span { style: "display:flex;align-items:center;gap:var(--sp-3);font:var(--t-body);color:var(--text3);", StatusDot { status: DotStatus::Plan } "Plan" }
                     }
                     div { style: "{DIS}", "Dot — colour · square swatch · pulse · size" }
-                    div { style: "display:flex;flex-wrap:wrap;gap:16px;align-items:center;",
+                    div { style: "display:flex;flex-wrap:wrap;gap:var(--sp-5);align-items:center;",
                         Dot {}
                         Dot { color: "var(--accent)" }
                         Dot { color: "var(--green)" }
@@ -311,7 +311,7 @@ pub fn GalleryRoot() -> Element {
                 // ---- Callouts ----
                 div { style: "{SECTION}",
                     div { style: "{H2}", "Callout" }
-                    div { style: "display:flex;flex-direction:column;gap:12px;max-width:420px;margin-top:6px;",
+                    div { style: "display:flex;flex-direction:column;gap:var(--sp-4);max-width:420px;margin-top:var(--sp-3);",
                         Callout { variant: CalloutVariant::Info, "Snapshot is 3 minutes old — refresh to re-run." }
                         Callout { variant: CalloutVariant::Warn, "This query scans 4.2 GB across 180 files." }
                         Callout { variant: CalloutVariant::Error, "Unknown table `bak` — did you register it?" }
@@ -321,11 +321,11 @@ pub fn GalleryRoot() -> Element {
                 // ---- Icon library ----
                 div { style: "{SECTION}",
                     div { style: "{H2}", "Icon library" }
-                    div { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(94px,1fr));gap:10px;margin-top:6px;",
+                    div { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(94px,1fr));gap:var(--sp-4);margin-top:var(--sp-3);",
                         for (name, ic) in icons::catalog().iter().copied() {
                             div {
                                 key: "{name}",
-                                style: "display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 6px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text2);",
+                                style: "display:flex;flex-direction:column;align-items:center;gap:var(--sp-3);padding:var(--sp-4) var(--sp-3);border:1px solid var(--line);border-radius:var(--r-2);background:var(--bg);color:var(--text2);",
                                 {ic(20)}
                                 span { style: "font:var(--t-meta);color:var(--dim2);text-align:center;word-break:break-all;", "{name}" }
                             }

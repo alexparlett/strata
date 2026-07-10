@@ -113,7 +113,7 @@ fn history_body(state: Signal<AppState>) -> Element {
         })
         .collect();
     rsx! {
-        div { class: "ps-log-body ps-scroll", style: "padding:8px;",
+        div { class: "ps-log-body ps-scroll", style: "padding:var(--sp-3);",
             if history.is_empty() {
                 Prose { class: "ps-log-empty", "No queries run yet" }
             }
@@ -128,7 +128,7 @@ fn history_body(state: Signal<AppState>) -> Element {
                             title: "Click to load · double-click to load & run",
                             onclick: move |_| dispatch(state, Action::OpenHistoryQuery(sql_load.clone())),
                             ondoubleclick: move |_| dispatch(state, Action::RunHistoryQuery(sql_run.clone())),
-                            div { class: "row", style: "gap:8px;margin-bottom:6px;",
+                            div { class: "row", style: "gap:var(--sp-3);margin-bottom:var(--sp-3);",
                                 Dot { color: "{dot}", size: 6 }
                                 Meta { style: "color:{meta};", "{rows} rows · {ms} ms" }
                                 if lines > 1 {
@@ -161,7 +161,7 @@ fn events_body(state: Signal<AppState>) -> Element {
                     rsx! {
                         div { key: "e{e.id}", class: "evt-item",
                             div { class: "ps-log-row",
-                                Dot { color: "{dot}", size: 6, style: "margin-top:5px;" }
+                                Dot { color: "{dot}", size: 6, style: "margin-top:var(--sp-2);" }
                                 Prose { class: "msg", style: "color:{fg};", "{e.msg}" }
                                 Meta { class: "ts", "{e.ts}" }
                             }

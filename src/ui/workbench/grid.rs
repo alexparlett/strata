@@ -147,7 +147,7 @@ pub(crate) fn CellDialog(cell_view: Signal<Option<CellView>>, view: CellView) ->
     let mut cell_view = cell_view;
     rsx! {
         Dialog { on_close: move |_| cell_view.set(None), card_class: "modal cell-modal".to_string(), z: 64,
-            div { class: "row", style: "gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);",
+            div { class: "row", style: "gap:var(--sp-4);padding:var(--sp-4) var(--sp-5);border-bottom:1px solid var(--line);",
                 MonoValue { style: "color:var(--text);", "{view.name}" }
                 Badge { variant: BadgeVariant::Accent, "{view.type_label}" }
                 Spacer {}

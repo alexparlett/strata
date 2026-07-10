@@ -142,17 +142,17 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                         }
                         match cat {
                             SettingsCat::Appearance => rsx! {
-                                div { class: "settings-row", style: "margin-bottom:20px;",
+                                div { class: "settings-row", style: "margin-bottom:var(--sp-6);",
                                     div { style: "flex:1;",
                                         Strong { style: "display:block;", "Sync with OS" }
-                                        Caption { style: "display:block;color:var(--dim2);margin-top:3px;", "Match your system light/dark appearance automatically." }
+                                        Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);", "Match your system light/dark appearance automatically." }
                                     }
                                     Toggle { on: sync_os, on_toggle: move |_| crate::settings::toggle_sync_os() }
                                 }
                                 div { class: "settings-divider" }
-                                Strong { style: "display:block;margin:16px 0 12px;", "Theme" }
+                                Strong { style: "display:block;margin:var(--sp-5) 0 var(--sp-4);", "Theme" }
                                 if sync_os {
-                                    Caption { style: "display:block;margin-bottom:12px;", "Following your system appearance ({os_label}). Turn off Sync with OS to choose a theme." }
+                                    Caption { style: "display:block;margin-bottom:var(--sp-4);", "Following your system appearance ({os_label}). Turn off Sync with OS to choose a theme." }
                                 }
                                 div { class: "theme-grid", style: "{grid_style}",
                                     for t in crate::theme::registry() {
@@ -161,7 +161,7 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                 }
                             },
                             SettingsCat::DataDisplay => rsx! {
-                                Strong { style: "display:block;margin-bottom:12px;", "Row density" }
+                                Strong { style: "display:block;margin-bottom:var(--sp-4);", "Row density" }
                                 Segment {
                                     value: if density_compact { "compact" } else { "comfortable" },
                                     on_select: move |v: String| crate::settings::set_density(v == "compact"),
@@ -170,18 +170,18 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                         SegmentOption::new("compact", "Compact"),
                                     ],
                                 }
-                                Caption { style: "display:block;color:var(--dim2);margin-top:10px;", "Controls row height in the results grid and catalog." }
-                                div { class: "settings-divider", style: "margin:22px 0;" }
+                                Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-4);", "Controls row height in the results grid and catalog." }
+                                div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
                                 div { class: "settings-row",
                                     div { style: "flex:1;",
                                         Strong { style: "display:block;", "Alternating row colours" }
-                                        Caption { style: "display:block;color:var(--dim2);margin-top:3px;", "Shade every other row in the results grid for easier scanning." }
+                                        Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);", "Shade every other row in the results grid for easier scanning." }
                                     }
                                     Toggle { on: zebra, on_toggle: move |_| crate::settings::toggle_zebra() }
                                 }
-                                div { class: "settings-divider", style: "margin:22px 0;" }
-                                Strong { style: "display:block;margin-bottom:3px;", "Default row limit" }
-                                Caption { style: "display:block;color:var(--dim2);margin-bottom:12px;", "New query tabs are generated with this LIMIT so a stray SELECT * can't pull a whole file into memory." }
+                                div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
+                                Strong { style: "display:block;margin-bottom:var(--sp-1);", "Default row limit" }
+                                Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);", "New query tabs are generated with this LIMIT so a stray SELECT * can't pull a whole file into memory." }
                                 Segment {
                                     value: row_limit.to_string(),
                                     on_select: move |v: String| { if let Ok(n) = v.parse::<usize>() { crate::settings::set_row_limit(n); } },
@@ -198,15 +198,15 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                 div { class: "settings-row",
                                     div { style: "flex:1;",
                                         Strong { style: "display:block;", "Reopen projects on startup" }
-                                        Caption { style: "display:block;color:var(--dim2);margin-top:3px;", "Reopen the projects you had open when you last quit." }
+                                        Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);", "Reopen the projects you had open when you last quit." }
                                     }
                                     Toggle { on: reopen, on_toggle: move |_| crate::settings::toggle_reopen_startup() }
                                 }
-                                div { class: "settings-divider", style: "margin:22px 0;" }
+                                div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
                                 Eyebrow { class: "settings-sublabel", "PROJECTS" }
-                                Strong { style: "display:block;margin-bottom:3px;", "Default project directory" }
-                                Caption { style: "display:block;color:var(--dim2);margin-bottom:10px;", "Preselected in the Open dialog. Leave blank to use your last location." }
-                                div { class: "row", style: "gap:8px;margin-bottom:22px;",
+                                Strong { style: "display:block;margin-bottom:var(--sp-1);", "Default project directory" }
+                                Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);", "Preselected in the Open dialog. Leave blank to use your last location." }
+                                div { class: "row", style: "gap:var(--sp-3);margin-bottom:var(--sp-6);",
                                     TextInput { value: "{default_dir}", mono: true, grow: true, placeholder: "~/data",
                                         // Commit on blur only (onchange), not per-keystroke — avoids
                                         // persisting a half-typed path. oninput is a no-op; the
@@ -222,8 +222,8 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                         }); },
                                     }
                                 }
-                                Strong { style: "display:block;margin-bottom:4px;", "Opening a project" }
-                                Caption { style: "display:block;color:var(--dim2);margin-bottom:12px;", "When you open a project from a window that already has one, where should it open?" }
+                                Strong { style: "display:block;margin-bottom:var(--sp-2);", "Opening a project" }
+                                Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);", "When you open a project from a window that already has one, where should it open?" }
                                 Segment {
                                     value: match open_pref {
                                         crate::config::OpenPref::Ask => "ask",
@@ -244,26 +244,26 @@ pub fn SettingsModal(on_close: EventHandler<()>) -> Element {
                                         SegmentOption::new("new", "New window"),
                                     ],
                                 }
-                                div { class: "settings-divider", style: "margin:22px 0;" }
+                                div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
                                 Eyebrow { class: "settings-sublabel", "SAFETY" }
                                 div { class: "settings-row",
                                     div { style: "flex:1;",
                                         Strong { style: "display:block;", "Confirm before closing a tab or window with a running query" }
-                                        Caption { style: "display:block;color:var(--dim2);margin-top:3px;", "Asks only when a scan is in flight — silent otherwise." }
+                                        Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);", "Asks only when a scan is in flight — silent otherwise." }
                                     }
                                     Toggle { on: confirm_close, on_toggle: move |_| crate::settings::toggle_confirm_close() }
                                 }
                             },
                             SettingsCat::Keymap => rsx! {
-                                Caption { style: "display:block;color:var(--dim2);margin-bottom:16px;", "Read-only. ⌘ shortcuts also respond to Ctrl." }
+                                Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-5);", "Read-only. ⌘ shortcuts also respond to Ctrl." }
                                 div { class: "keymap-box",
                                     for (label, desc, keys) in KEYMAP {
                                         div { class: "keymap-row",
                                             div { style: "flex:1;min-width:0;",
                                                 Body { style: "display:block;", "{label}" }
-                                                Caption { style: "display:block;color:var(--dim2);margin-top:2px;", "{desc}" }
+                                                Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);", "{desc}" }
                                             }
-                                            div { class: "row", style: "gap:5px;flex:none;",
+                                            div { class: "row", style: "gap:var(--sp-2);flex:none;",
                                                 for cap in keys.iter() {
                                                     Eyebrow { class: "keycap", "{cap}" }
                                                 }
@@ -308,16 +308,16 @@ fn theme_card(t: &crate::theme::ResolvedTheme, active_id: &str) -> Element {
             onclick: move |_| crate::settings::set_theme(id.clone()),
             // mini mockup
             div { style: "height:78px;display:flex;flex-direction:column;background:{p0};",
-                div { style: "height:16px;background:{p1};display:flex;align-items:center;padding:0 8px;gap:4px;",
+                div { style: "height:16px;background:{p1};display:flex;align-items:center;padding:0 var(--sp-3);gap:var(--sp-2);",
                     span { style: "width:5px;height:5px;border-radius:50%;background:{p2};" }
-                    span { style: "width:34px;height:4px;border-radius:2px;background:{p2};" }
+                    span { style: "width:34px;height:4px;border-radius:var(--r-xs);background:{p2};" }
                 }
-                div { style: "flex:1;display:flex;gap:6px;padding:8px;",
-                    div { style: "width:26px;border-radius:4px;background:{p1};" }
-                    div { style: "flex:1;display:flex;flex-direction:column;gap:4px;",
-                        span { style: "width:70%;height:5px;border-radius:3px;background:{p3};" }
-                        span { style: "width:45%;height:5px;border-radius:3px;background:{p2};" }
-                        span { style: "width:55%;height:5px;border-radius:3px;background:{p2};" }
+                div { style: "flex:1;display:flex;gap:var(--sp-3);padding:var(--sp-3);",
+                    div { style: "width:26px;border-radius:var(--r-xs);background:{p1};" }
+                    div { style: "flex:1;display:flex;flex-direction:column;gap:var(--sp-2);",
+                        span { style: "width:70%;height:5px;border-radius:var(--r-xs);background:{p3};" }
+                        span { style: "width:45%;height:5px;border-radius:var(--r-xs);background:{p2};" }
+                        span { style: "width:55%;height:5px;border-radius:var(--r-xs);background:{p2};" }
                     }
                 }
             }

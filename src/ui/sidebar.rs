@@ -61,7 +61,7 @@ pub fn Sidebar() -> Element {
                 }
 
                 // ---- VIEWS ----
-                div { class: "row", style: "gap:6px;padding:14px 6px 6px;",
+                div { class: "row", style: "gap:var(--sp-3);padding:var(--sp-4) var(--sp-3) var(--sp-3);",
                     Eyebrow { class: "sec-label", "VIEWS · {nview}" }
                 }
                 for i in 0..nview {
@@ -69,11 +69,11 @@ pub fn Sidebar() -> Element {
                 }
 
                 // ---- SAVED QUERIES (always shown, like Tables/Views) ----
-                div { class: "row", style: "gap:6px;padding:14px 6px 6px;",
+                div { class: "row", style: "gap:var(--sp-3);padding:var(--sp-4) var(--sp-3) var(--sp-3);",
                     Eyebrow { class: "sec-label", "QUERIES · {nquery}" }
                 }
                 if nquery == 0 {
-                    Caption { style: "display:block;padding:4px 8px 6px;color:var(--faint);",
+                    Caption { style: "display:block;padding:var(--sp-2) var(--sp-3) var(--sp-3);color:var(--faint);",
                         "No saved queries yet" }
                 } else {
                     for i in 0..nquery {
@@ -208,7 +208,7 @@ fn render_saved_query(
     let nm_menu = name.clone();
 
     rsx! {
-        div { style: "margin-bottom:3px;",
+        div { style: "margin-bottom:var(--sp-1);",
             div {
                 class: "tbl-row",
                 onclick: move |_| dispatch(state, Action::OpenSavedQuery(nm_open.clone())),
@@ -273,7 +273,7 @@ fn render_table(
     let nm_menu = name.clone();
 
     rsx! {
-        div { style: "margin-bottom:3px;",
+        div { style: "margin-bottom:var(--sp-1);",
             div {
                 class: "tbl-row",
                 onclick: move |_| dispatch(state, Action::ToggleTableOpen(i)),
@@ -350,7 +350,7 @@ fn render_view(
     let nm_menu = name.clone();
 
     rsx! {
-        div { style: "margin-bottom:3px;",
+        div { style: "margin-bottom:var(--sp-1);",
             div {
                 class: "tbl-row",
                 onclick: move |_| dispatch(state, Action::ToggleViewOpen(i)),

@@ -118,7 +118,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                         "Run"
                     }
                 }
-                div { style: "width:1px;height:18px;background:var(--line);margin:0 2px;" }
+                div { style: "width:1px;height:18px;background:var(--line);margin:0 var(--sp-1);" }
                 {tool_btn(state, Action::FormatSql, "Format SQL", IconName::Format)}
                 {tool_btn(state, Action::ClearSql, "Clear editor", IconName::Trash)}
                 Spacer {}
