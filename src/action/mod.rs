@@ -35,6 +35,9 @@ pub enum Action {
     RunQuery,
     /// Cancel the active tab's in-flight query / explain (S14).
     CancelQuery,
+    /// Run an `EXPLAIN [ANALYZE]` of the active tab's SQL **without** mutating the
+    /// editor buffer (E4) — wraps engine-side only, like Save-as-view. `true` = ANALYZE.
+    RunExplain(bool),
     FetchPage(usize),
     LoadSelectStar(String),
     FormatSql,
@@ -197,6 +200,7 @@ fn run(state: Signal<AppState>, action: Action) {
     match action {
         // query & results
         RunQuery => query::run(state),
+        RunExplain(analyze) => query::run_explain(state, analyze),
         CancelQuery => query::cancel(state),
         FetchPage(page) => query::fetch_page(state, page),
         LoadSelectStar(name) => query::select_star(state, &name),

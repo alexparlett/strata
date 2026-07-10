@@ -17,7 +17,7 @@ use crate::sql::{Catalog, Completion, CompletionKind};
 use crate::state::AppState;
 use crate::ui::code_editor::{CodeEditor, Decoration};
 use crate::ui::components::{
-    Button, ButtonVariant, Caption, Icon, IconButton, IconButtonVariant, Meta, MonoValue, Point,
+    Caption, Icon, IconButton, IconButtonVariant, Meta, MonoValue, Point,
     Prose, Spacer, Tooltip,
 };
 use crate::ui::icons::{IconName, IconSize};
@@ -97,25 +97,41 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
         section { style: "flex:none;background:var(--main);",
             div { class: "ed-toolbar",
                 if running {
-                    Button {
-                        variant: ButtonVariant::Danger,
-                        small: true,
-                        icon: IconName::Stop, icon_size: IconSize::Xs,
-                        kbd: "Esc",
+                    // Running: the primary slot collapses to a red Cancel (E4).
+                    IconButton {
+                        variant: IconButtonVariant::Primary,
+                        class: "stop",
+                        icon: IconName::Stop,
                         title: "Cancel query (Esc)",
                         onclick: move |_| dispatch(state, Action::CancelQuery),
-                        "Cancel"
                     }
                 } else {
-                    Button {
-                        variant: ButtonVariant::Primary,
-                        small: true,
+                    // Run (⌘↵) · Explain plan · Explain analyze — three icon buttons (E4,
+                    // v19; the old split-button is retired). The Explain buttons just
+                    // dispatch `RunExplain`; the wrap-with-EXPLAIN happens engine-side in
+                    // the handler (`query::run_explain`) — the editor buffer is untouched.
+                    IconButton {
+                        variant: IconButtonVariant::Primary,
+                        icon: IconName::Play,
                         disabled: block_run,
-                        icon: IconName::Play, icon_size: IconSize::Sm,
-                        kbd: "⌘↵",
-                        title: if block_run { "Fix the validation problems to run" } else { "Run query (⌘/Ctrl+Enter)" },
+                        title: if block_run { "Fix the validation problems to run" } else { "Run query (⌘↵)" },
                         onclick: move |_| if !block_run { dispatch(state, Action::RunQuery) },
-                        "Run"
+                    }
+                    IconButton {
+                        variant: IconButtonVariant::Toolbar,
+                        compact: true,
+                        icon: IconName::List,
+                        disabled: block_run,
+                        title: "Explain plan",
+                        onclick: move |_| if !block_run { dispatch(state, Action::RunExplain(false)) },
+                    }
+                    IconButton {
+                        variant: IconButtonVariant::Toolbar,
+                        compact: true,
+                        icon: IconName::Stopwatch,
+                        disabled: block_run,
+                        title: "Explain analyze — runs the query and times each operator",
+                        onclick: move |_| if !block_run { dispatch(state, Action::RunExplain(true)) },
                     }
                 }
                 div { style: "width:1px;height:18px;background:var(--line);margin:0 var(--sp-1);" }

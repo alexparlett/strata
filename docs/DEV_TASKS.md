@@ -28,7 +28,7 @@ the structural drift listed.
 | --- | --- | --- | --- |
 | F1 | Type / colour / control / icon / dot tokens + components (S28) | ✅ | `src/ui/components/` fully migrated; ~90 dead legacy CSS rules retired. |
 | F2 | Overlay / menu family (S29) | ✅ | `Popup`/`Backdrop`/`Tooltip` + `Select`/`DropdownMenu`/`ContextMenu`. |
-| F3 | **Spacing & radius token scale (v19 §03)** | ✅ *(unverified — needs Mac build)* | Scale in `:root` (`--sp-1:2…sp-9:48` + `--r-xs:4…r-4:14`); snapped **~430 main.css + ~168 RSX-inline** padding/margin/gap/border-radius decls to tokens (radius uses the r-scale, spacing the sp-scale). Kept literal: 82px mac traffic-light inset + 60px empty-state pad (>52), negative resizer margins, `50%` pills. Off-target props (width/height/box-shadow/letter-spacing/font-size) untouched; braces balanced. ⚠️ snapping *shifts* many values ~1–2px by design (6/7/9→8, 11/13→12) — build + eyeball. |
+| F3 | **Spacing & radius token scale (v19 §03)** | ✅ | Scale in `:root` (`--sp-1:2…sp-9:48` + `--r-xs:4…r-4:14`); snapped **~430 main.css + ~168 RSX-inline** padding/margin/gap/border-radius decls to tokens (radius uses the r-scale, spacing the sp-scale). Kept literal: 82px mac traffic-light inset + 60px empty-state pad (>52), negative resizer margins, `50%` pills. Off-target props (width/height/box-shadow/letter-spacing/font-size) untouched; braces balanced. ⚠️ snapping *shifts* many values ~1–2px by design (6/7/9→8, 11/13→12) — build + eyeball. |
 | F4 | Theme tokens (S2) | ✅ | JSON themes → `--*` vars. Author-friendly restructure = W5. |
 
 ---
@@ -118,7 +118,7 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 | E1 | Validator coverage (S31) | ⬜ | Unknown table/view (reuse S26 context resolver), bad leading keyword, unterminated string; accumulate all. |
 | E2 | Autocomplete follow-ups (S7) | 🟡 | ⌘Space trigger, flip-up, caret-after-accept. Core shipped. |
 | E3 | Undo/redo per tab (C12) | ⬜ | ⌘Z / ⇧⌘Z; `dioxus-code` history vs explicit per-workspace stack. |
-| E4 | Editor Run = three icon buttons (owns U4; supersedes S30 split-button) | ⬜ | Icon-only Run (⌘↵) + Explain-plan + Explain-analyze (rewrite buffer + run); Run→red Cancel while running. |
+| E4 | Editor Run = three icon buttons (owns U4; supersedes S30 split-button) | ✅ | Accent **Run** (⌘↵) + neutral **Explain plan** (list) + **Explain analyze** (stopwatch); Run→red **Cancel** while running. Explain buttons dispatch `Action::RunExplain(analyze)`; the handler `query::run_explain` wraps the SQL via `plan::as_explain` (strip+reapply `EXPLAIN [ANALYZE]`, unit-tested) and routes it through the shared engine explain path — **editor buffer untouched**, like Save-as-view. Added `IconButtonVariant::Primary` (accent-fill, `.stop`=red) + `IconName::List`/`Stopwatch`. |
 
 ### Results & data
 | ID | Task | Status | Notes |

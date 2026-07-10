@@ -97,6 +97,22 @@ pub fn chevron_up(sz: u32) -> Element {
 pub fn lines(sz: u32) -> Element {
     stroke(sz, "1.8", rsx! { path { d: "M4 7h16M4 12h10M4 17h13" } })
 }
+/// Bulleted list — the editor's **Explain plan** button (E4).
+pub fn list(sz: u32) -> Element {
+    stroke(sz, "1.8", rsx! { path { d: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" } })
+}
+/// Stopwatch — the editor's **Explain analyze** button (E4).
+pub fn stopwatch(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.8",
+        rsx! {
+            path { d: "M9 2h6" }
+            circle { cx: "12", cy: "13", r: "8" }
+            path { d: "M12 9v4l2.5 2" }
+        },
+    )
+}
 /// Corner arrows pointing out — expand a panel to full height (drawer).
 pub fn maximize(sz: u32) -> Element {
     stroke(
@@ -421,6 +437,8 @@ pub fn catalog() -> &'static [(&'static str, fn(u32) -> Element)] {
         ("chevron_right", chevron_right),
         ("chevron_up", chevron_up),
         ("lines", lines),
+        ("list", list),
+        ("stopwatch", stopwatch),
         ("maximize", maximize),
         ("minimize", minimize),
         ("gear", gear),
@@ -502,6 +520,7 @@ pub enum IconName {
     Keyboard,
     Last,
     Lines,
+    List,
     Logout,
     Maximize,
     Minimize,
@@ -522,6 +541,7 @@ pub enum IconName {
     Sliders,
     Spinner,
     Stop,
+    Stopwatch,
     StrataLogo,
     Table,
     Trash,
@@ -563,6 +583,8 @@ impl IconName {
             IconName::Keyboard => keyboard(sz),
             IconName::Last => last(sz),
             IconName::Lines => lines(sz),
+            IconName::List => list(sz),
+            IconName::Stopwatch => stopwatch(sz),
             IconName::Logout => logout(sz),
             IconName::Maximize => maximize(sz),
             IconName::Minimize => minimize(sz),

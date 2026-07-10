@@ -144,6 +144,36 @@ pub fn is_explain(sql: &str) -> bool {
         .starts_with("explain")
 }
 
+/// Rewrite `sql` to run under `EXPLAIN` / `EXPLAIN ANALYZE` (E4): strip any existing
+/// leading `EXPLAIN [ANALYZE] [VERBOSE]` keyword sequence, then prepend the requested
+/// prefix. The editor's Explain-plan / Explain-analyze buttons rewrite the buffer with
+/// this so the mode is explicit + user-editable, then run.
+pub fn as_explain(sql: &str, analyze: bool) -> String {
+    // Strip a leading keyword (word-boundary, case-insensitive), returning the rest.
+    fn strip<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
+        s.get(..kw.len())
+            .filter(|h| h.eq_ignore_ascii_case(kw))
+            .filter(|_| s[kw.len()..].chars().next().map_or(true, |c| c.is_whitespace()))
+            .map(|_| s[kw.len()..].trim_start())
+    }
+    let mut body = sql.trim_start();
+    if let Some(rest) = strip(body, "explain") {
+        body = rest;
+        if let Some(rest) = strip(body, "analyze") {
+            body = rest;
+        }
+        if let Some(rest) = strip(body, "verbose") {
+            body = rest;
+        }
+    }
+    let prefix = if analyze { "EXPLAIN ANALYZE" } else { "EXPLAIN" };
+    if body.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix}\n{body}")
+    }
+}
+
 /// Split a `"<Name>: <detail>"` operator line (from DataFusion's `display()` /
 /// `one_line()`) into (name, detail). No colon → all name.
 pub fn split_name_detail(line: &str) -> (String, String) {
@@ -179,6 +209,20 @@ mod tests {
         assert!(is_explain("  explain analyze select * from t"));
         assert!(is_explain("-- plan\nEXPLAIN SELECT 1"));
         assert!(!is_explain("SELECT * FROM explain_table"));
+    }
+
+    #[test]
+    fn as_explain_strips_and_reapplies() {
+        assert_eq!(as_explain("SELECT 1", false), "EXPLAIN\nSELECT 1");
+        assert_eq!(as_explain("SELECT 1", true), "EXPLAIN ANALYZE\nSELECT 1");
+        assert_eq!(as_explain("EXPLAIN SELECT 1", true), "EXPLAIN ANALYZE\nSELECT 1");
+        assert_eq!(as_explain("explain analyze select 1", false), "EXPLAIN\nselect 1");
+        assert_eq!(as_explain("  EXPLAIN VERBOSE select 1", false), "EXPLAIN\nselect 1");
+        // Don't strip an identifier that merely starts with "explain".
+        assert_eq!(
+            as_explain("SELECT * FROM explain_t", false),
+            "EXPLAIN\nSELECT * FROM explain_t"
+        );
     }
 
     #[test]

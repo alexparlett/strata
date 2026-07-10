@@ -98,6 +98,9 @@ pub enum IconButtonVariant {
     /// 32px neutral, bordered — the standard toolbar button.
     #[default]
     Toolbar,
+    /// 28px **accent-filled** — the editor Run action (add `.stop` via `class` for the
+    /// running red Cancel state).
+    Primary,
     /// 28px borderless — dismiss / close / inline.
     Ghost,
     /// 28×26 borderless — pager nav arrows.
@@ -113,6 +116,7 @@ impl IconButtonVariant {
     fn class(self) -> &'static str {
         match self {
             IconButtonVariant::Toolbar => "toolbar",
+            IconButtonVariant::Primary => "primary",
             IconButtonVariant::Ghost => "ghost",
             IconButtonVariant::Pager => "pager",
             IconButtonVariant::Toggle => "toggle",

@@ -661,6 +661,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 /* Destructive icon button (remove / delete row) — reddens on hover. */
 .ds-icon-btn.danger { width: 28px; height: 28px; border-radius: var(--r-1); color: var(--dim); }
 .ds-icon-btn.danger:not(:disabled):hover { background: color-mix(in srgb, var(--red2) 15%, transparent); color: var(--red2); }
+/* Accent-filled primary icon button (editor Run, E4); `.stop` = the running red Cancel. */
+.ds-icon-btn.primary { width: 28px; height: 28px; border-radius: var(--r-1); border: none; background: var(--accent); color: var(--accent-ink); }
+.ds-icon-btn.primary:not(:disabled):hover { filter: brightness(1.08); }
+.ds-icon-btn.primary.stop { background: var(--red2); color: #fff; }
 /* Activity-rail sizing for the toggle icon buttons (40×38, per §10). */
 .ds-icon-btn.act-rail { width: 40px; height: 38px; border-radius: var(--r-2); }
 
