@@ -61,9 +61,9 @@ Builds here → **E4** (Run → three icon buttons — reworks today's single Ru
 Drift: nested-cell popover is a `Dialog`+highlighted `Code` vs the design's centred backdrop modal + `<pre>` (fine as-is — note only). Zebra / type-colour cells / sticky header match.
 Builds here → **Rz3** (selection + aggregate), **Rz6** (column sort), **Rz5** (record view).
 
-### U6 · Results toolbar · status bar · pager — `restyle`
-Drift: find should be **collapsible** (icon toggle → floating panel), currently inline / always-on; Table/Chart toggle is icon+label vs the design's plain text buttons. Status bar + pager match.
-Builds here → **Rz8** (clear-results button), **Rz3** (status selection token).
+### U6 · Results toolbar · status bar · pager — `restyle` ✅
+Done: find is a **collapsible search popover** — a new `SearchDialog` component built on the S29 `Popup`/`Backdrop` base (trigger measures its own rect, anchors `BOTTOM_END`, dismisses via the backdrop which also clears the filter; ✕ + `on` active-state on the toggle). **Table/Chart** is a text-only `Segment`; right-cluster order is now **find · refresh · clear · export**, all bordered `Toolbar` icon buttons. **Rz8** clear-results is wired: `Action::ClearResults` → `query::clear_results` (drops the active tab's result/plan/error + find query → empty state, no-op mid-run) behind a trash button with a destructive red hover. Status bar + pager already matched. New: `SearchDialog` (+ export), `.res-find-panel` is now card-only (Popup owns position), `.ds-icon-btn.toolbar.res-clear`/`.on` rules.
+Builds here → **Rz3** (status selection token). ⌘F-to-open works via the global-hotkey keymap (find state lives in `runs.find_open`; ⌘F → keymap → the active toolbar's `Find` registry owner). See **W4**.
 
 ### U7 · Results — chart view — *not built*
 No align work — the whole surface is a feature → **Rz2** (`CHART_SPEC.md`).
@@ -108,7 +108,7 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 | W1 | Settings → standalone `wry` window + cross-window sync (S22; owns U12 window model + launcher gear) | ⬜ | Own OS window, opened from launcher gear + project windows (one canonical, focus-if-open); mutations broadcast live to every window's `settings` store. |
 | W2 | Engine settings category + SQL escape hatch (S17; owns U12 Engine) | ⬜ | ~11 DataFusion `ConfigOptions` (type-aware rows, MODIFIED badge, reset); editor `SET`/`RESET`/`SHOW datafusion.*`. |
 | W3 | Settings search box + history-limit (S18; owns U12 search + System→History) | ⬜ | Live search index over the nav; query-history-limit 25/50/100/200. |
-| W4 | Keymap rebinding (S24; owns U12 Keymap rebuild) | ⬜ | Click-to-capture chord, conflict detection, per-row + reset-all, `keymapOverrides`; rewire `handle_key`. |
+| W4 | Keymap rebinding (S24; owns U12 Keymap rebuild) | 🟡 | **Foundation shipped:** `crate::keymap` (chord→`Command`, `resolve`/`run` + a context registry for focus-dependent commands like `Find`), persisted overrides (`Settings.keybinds`, `effective_chord` = override ?? default). Global commands are delivered as **OS hotkeys** (`crate::hotkeys::use_shortcuts` → `window().create_shortcut`, registered/removed on window focus so they're not held system-wide; the scope-less callback parks the cmd in a `PENDING` global signal under a `RuntimeGuard`, a scoped effect dispatches it). `handle_key` reduced to non-global keys (Esc). ⌘W freed by dropping the menu's Close Window. **Remaining:** the Settings rebinding UI — click-to-capture chord, conflict detection, per-row + reset-all + **unbind**. Live re-registration is ready by design: `use_shortcuts`'s effect already tears down all `ShortcutHandle`s and rebuilds from `effective_chord` each run, so it only needs to also **subscribe to `Settings.keybinds`** (currently read via `peek`) to re-register on a rebind — no manual refresh. **Unbind** needs an "explicitly unbound" override representation (sentinel/`disabled` set) so `hotkey_for` returns `None`. |
 | W5 | Author-friendly theme files + JSON Schema (S16) | ⬜ | Named groups + `theme.schema.json`; loader flatten; live reload + plugin dirs. |
 | W7 | Connections pane + remote object stores (S21; owns U2 rail button + U3 pane + U14 LOCATION) | ⬜ | Project-scoped connections (S3/GCS/HTTP), no app-managed secrets; Config-table LOCATION toggle. `CONNECTIONS_SPEC.md`. |
 
@@ -128,7 +128,7 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 | Rz4 | Copy affordances (R4) | ⬜ | Right-click cell/row/column/all → CSV/JSON/MD; toast. |
 | Rz5 | Record (row-detail) view (R5; owns U5/U15 record view) | ⬜ | Row as key→value card, prev/next, copy JSON/CSV. |
 | Rz6 | Column sort (R6; owns U5 sort) | ⬜ | Header chevron asc→desc→clear over snapshot, nulls-last. |
-| Rz8 | Clear-results button (R8; owns U6 clear) | ⬜ | Trash in the toolbar right cluster → empty state; guarded mid-run. |
+| Rz8 | Clear-results button (R8; owns U6 clear) | ✅ | `Action::ClearResults` → `query::clear_results`; trash in right cluster → empty state, guarded mid-run. |
 | Rz-plan | Plan view v3 rework (S20; owns U8) | ⬜ | Self-time, 3-tier metrics, connectors, clamp; needs engine to send typed/structured metrics. `EXPLAIN_PLAN_SPEC.md` v3. |
 
 ### Catalog & sources

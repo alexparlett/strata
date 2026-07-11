@@ -13,6 +13,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::action::panel::resize_handle;
 use crate::action::{dispatch, Action};
 use crate::engine::{self, Command, Event};
+use crate::menu::MenuCmd;
 use crate::query_error::QueryError;
 use crate::state::{
     AppState, CatalogTable, CatalogView, HistoryItem, LogKind, RegStatus, ResizeTarget,
@@ -65,6 +66,13 @@ pub fn ProjectRoot(open_path: String) -> Element {
         });
     });
 
+    // Global keyboard commands (⌘F/⌘K/…) are OS hotkeys — the webview swallows key events,
+    // so a DOM handler can't hear them once focus leaves the app subtree. `crate::hotkeys`
+    // registers them while this window is focused; `focused` is relayed from the wry
+    // `Focused` event below.
+    let mut focused = use_signal(|| false);
+    crate::hotkeys::use_shortcuts(state, focused);
+
     // Persist window geometry + save on an OS close-button (the window is still
     // alive here, unlike `use_drop`). Does *not* open the launcher — an OS close
     // never does; that's reserved for the explicit "Close project" action.
@@ -87,10 +95,11 @@ pub fn ProjectRoot(open_path: String) -> Element {
                     use dioxus::desktop::tao::window::Theme;
                     crate::settings::set_os_dark(*theme == Theme::Dark);
                 }
-                // Track focus so the app-global native menu (S11) routes File
-                // commands to this window only when it is the key window.
-                WindowEvent::Focused(focused) => {
-                    crate::window::note_focused(win_id, *focused);
+                // Track focus for menu routing, and relay it so the shortcut effect
+                // (de)registers the global hotkeys — grabbed only while we're focused.
+                WindowEvent::Focused(f) => {
+                    crate::window::note_focused(win_id, *f);
+                    focused.set(*f);
                 }
                 _ => {}
             }
@@ -101,10 +110,10 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // carry only the item id, so act only when this is the focused window; relay the
     // id into a signal a `use_effect` consumes, so the (async) open-folder dialog
     // runs with a reactive scope.
-    let mut menu_cmd = use_signal(|| None::<String>);
+    let mut menu_cmd = use_signal(|| None::<MenuCmd>);
     use_muda_event_handler(move |ev| {
         if crate::window::is_focused_window(win_id) {
-            menu_cmd.set(Some(ev.id.0.clone()));
+            menu_cmd.set(MenuCmd::parse(&ev.id().0));
         }
     });
     use_effect(move || {
@@ -202,60 +211,15 @@ async fn drain_events(state: Signal<AppState>, mut evt_rx: UnboundedReceiver<Eve
     }
 }
 
+// Global commands (⌘F/⌘K/…) arrive via the OS hotkey layer (`crate::hotkeys`), which is
+// focus-independent. This DOM handler runs only the *non*-global commands (Esc → Cancel),
+// so the two layers never double-fire. It's best-effort: Esc-to-cancel-a-query works only
+// when focus is in the app subtree, which is fine — an open overlay dismisses its own Esc.
 fn handle_key(state: Signal<AppState>, e: dioxus_core::Event<dioxus::events::KeyboardData>) {
-    let mods = e.modifiers();
-    let meta = mods.meta() || mods.ctrl();
-    let shift = mods.shift();
-    match e.key() {
-        Key::Character(c) if meta && (c == "k" || c == "K") => {
+    if let Some(cmd) = crate::keymap::resolve(&e) {
+        if !crate::keymap::is_global(cmd) && crate::keymap::run(state, cmd) {
             e.prevent_default();
-            crate::overlays::toggle_cmdk();
         }
-        // ⌘T new tab · ⇧⌘T reopen the last closed tab (as the tab menu advertises).
-        Key::Character(c) if meta && (c == "t" || c == "T") => {
-            e.prevent_default();
-            if shift {
-                dispatch(state, Action::ReopenTab);
-            } else {
-                dispatch(state, Action::NewTab);
-            }
-        }
-        // ⌘W close the current tab.
-        Key::Character(c) if meta && (c == "w" || c == "W") => {
-            e.prevent_default();
-            let active = crate::session::active_id();
-            if active != 0 {
-                dispatch(state, Action::CloseTab(active));
-            }
-        }
-        Key::Character(c) if meta && !shift && (c == "s" || c == "S") => {
-            e.prevent_default();
-            dispatch(state, Action::SaveQuery);
-        }
-        // ⌘, — toggle Settings via the overlay store.
-        Key::Character(c) if meta && c == "," => {
-            e.prevent_default();
-            crate::overlays::toggle_settings();
-        }
-        Key::Enter if meta => {
-            e.prevent_default();
-            dispatch(state, Action::RunQuery);
-        }
-        // ⌘` — cycle focus between open project windows.
-        Key::Character(c) if meta && c == "`" => {
-            e.prevent_default();
-            crate::window::cycle_to_next_window();
-        }
-        // Esc closes an open overlay first; with none open it cancels a running
-        // query (S14) — a no-op when nothing is running.
-        Key::Escape => {
-            if crate::overlays::any_open() {
-                dispatch(state, Action::CloseOverlays);
-            } else {
-                dispatch(state, Action::CancelQuery);
-            }
-        }
-        _ => {}
     }
 }
 

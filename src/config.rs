@@ -40,6 +40,47 @@ pub enum OpenPref {
     New,
 }
 
+/// A logical, rebindable command — the target of a key chord. The *what* (dispatch /
+/// direct call / context handler) lives in `crate::keymap`; this is just the stable,
+/// serializable id a binding points at. Serialized by variant name.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Command {
+    /// Find — context-dependent (results find today). Routed via the keymap registry.
+    Find,
+    NewTab,
+    ReopenTab,
+    CloseActiveTab,
+    SaveQuery,
+    RunQuery,
+    CommandPalette,
+    OpenSettings,
+    CycleWindow,
+    /// Esc — dismiss an open overlay, else cancel a running query.
+    Cancel,
+}
+
+/// A normalized key chord. `primary` folds the platform primary modifier (⌘ on macOS /
+/// Ctrl elsewhere), matching how `handle_key` already treats `meta || ctrl`. `key` is a
+/// normalized key name (lowercased character, or `"Enter"` / `"Escape"`).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyChord {
+    #[serde(default)]
+    pub primary: bool,
+    #[serde(default)]
+    pub shift: bool,
+    #[serde(default)]
+    pub alt: bool,
+    pub key: String,
+}
+
+/// A user override binding a [`Command`] to a [`KeyChord`] (persisted in
+/// [`Settings::keybinds`]). Absent commands fall back to the built-in default chord.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeyBind {
+    pub command: Command,
+    pub chord: KeyChord,
+}
+
 #[derive(Clone, Serialize, Deserialize, dioxus_stores::Store)]
 pub struct Settings {
     /// Active theme id (see `crate::theme`). Persists across sessions/windows.
@@ -61,6 +102,9 @@ pub struct Settings {
     pub open_pref: OpenPref,
     #[serde(default = "default_true")]
     pub confirm_close_running: bool,
+    /// User key-binding overrides (empty = all defaults). Read by `crate::keymap`.
+    #[serde(default)]
+    pub keybinds: Vec<KeyBind>,
 }
 
 fn default_theme() -> String {
@@ -84,6 +128,7 @@ impl Default for Settings {
             default_project_dir: String::new(),
             open_pref: OpenPref::Ask,
             confirm_close_running: true,
+            keybinds: Vec::new(),
         }
     }
 }

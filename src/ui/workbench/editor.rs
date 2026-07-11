@@ -17,8 +17,7 @@ use crate::sql::{Catalog, Completion, CompletionKind};
 use crate::state::AppState;
 use crate::ui::code_editor::{CodeEditor, Decoration};
 use crate::ui::components::{
-    Caption, Icon, IconButton, IconButtonVariant, Meta, MonoValue, Point,
-    Prose, Spacer, Tooltip,
+    Caption, Icon, IconButton, IconButtonVariant, Meta, MonoValue, Point, Prose, Spacer, Tooltip,
 };
 use crate::ui::icons::{IconName, IconSize};
 

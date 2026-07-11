@@ -27,6 +27,11 @@ dioxus-code = { version = "0.1", features = ["runtime", "lang-sql", "lang-json"]
 # Store<Session>, so each tab view binds a sub-store scoped to its own tab.
 dioxus-stores = "0.7"
 
+# OS-level global hotkeys for the app's global commands (⌘F/⌘K/…). Already a
+# transitive dep of dioxus-desktop; pinned to the same 0.7 so the `GlobalHotKeyEvent`
+# it wraps in `UserWindowEvent` unifies with the one we register/read (crate::hotkeys).
+global-hotkey = "0.7"
+
 # Query engine: Apache DataFusion (Arrow-native SQL over parquet)
 # A9: 43 → 54. datafusion is our only DataFusion-family pin (arrow/parquet/
 # sqlparser/object_store come through its re-exports). See docs/A9_DATAFUSION_UPGRADE.md.

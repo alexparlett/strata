@@ -22,7 +22,8 @@ const SECTION: &str = "margin-bottom:var(--sp-7);";
 const H2: &str =
     "font:var(--t-eyebrow);letter-spacing:.8px;color:var(--dim3);text-transform:uppercase;margin:0 0 var(--sp-2);";
 const SUB: &str = "font:var(--t-prose);color:var(--dim);margin:0 0 var(--sp-4);";
-const ROW: &str = "display:flex;flex-wrap:wrap;gap:var(--sp-5);align-items:center;margin-bottom:var(--sp-4);";
+const ROW: &str =
+    "display:flex;flex-wrap:wrap;gap:var(--sp-5);align-items:center;margin-bottom:var(--sp-4);";
 const DIS: &str =
     "font:var(--t-micro);letter-spacing:.8px;color:var(--faint);text-transform:uppercase;margin:var(--sp-1) 0 var(--sp-3);";
 

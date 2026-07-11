@@ -14,6 +14,8 @@ mod config;
 mod ddl;
 mod diagnostics;
 mod engine;
+mod hotkeys;
+mod keymap;
 mod menu;
 mod overlays;
 mod plan;

@@ -6234,6 +6234,7 @@ dependencies = [
  "dioxus-code",
  "dioxus-stores",
  "futures",
+ "global-hotkey",
  "objc",
  "preferences",
  "rfd 0.15.4",

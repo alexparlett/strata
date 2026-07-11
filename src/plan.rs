@@ -153,7 +153,12 @@ pub fn as_explain(sql: &str, analyze: bool) -> String {
     fn strip<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
         s.get(..kw.len())
             .filter(|h| h.eq_ignore_ascii_case(kw))
-            .filter(|_| s[kw.len()..].chars().next().map_or(true, |c| c.is_whitespace()))
+            .filter(|_| {
+                s[kw.len()..]
+                    .chars()
+                    .next()
+                    .map_or(true, |c| c.is_whitespace())
+            })
             .map(|_| s[kw.len()..].trim_start())
     }
     let mut body = sql.trim_start();
@@ -166,7 +171,11 @@ pub fn as_explain(sql: &str, analyze: bool) -> String {
             body = rest;
         }
     }
-    let prefix = if analyze { "EXPLAIN ANALYZE" } else { "EXPLAIN" };
+    let prefix = if analyze {
+        "EXPLAIN ANALYZE"
+    } else {
+        "EXPLAIN"
+    };
     if body.is_empty() {
         prefix.to_string()
     } else {
@@ -215,9 +224,18 @@ mod tests {
     fn as_explain_strips_and_reapplies() {
         assert_eq!(as_explain("SELECT 1", false), "EXPLAIN\nSELECT 1");
         assert_eq!(as_explain("SELECT 1", true), "EXPLAIN ANALYZE\nSELECT 1");
-        assert_eq!(as_explain("EXPLAIN SELECT 1", true), "EXPLAIN ANALYZE\nSELECT 1");
-        assert_eq!(as_explain("explain analyze select 1", false), "EXPLAIN\nselect 1");
-        assert_eq!(as_explain("  EXPLAIN VERBOSE select 1", false), "EXPLAIN\nselect 1");
+        assert_eq!(
+            as_explain("EXPLAIN SELECT 1", true),
+            "EXPLAIN ANALYZE\nSELECT 1"
+        );
+        assert_eq!(
+            as_explain("explain analyze select 1", false),
+            "EXPLAIN\nselect 1"
+        );
+        assert_eq!(
+            as_explain("  EXPLAIN VERBOSE select 1", false),
+            "EXPLAIN\nselect 1"
+        );
         // Don't strip an identifier that merely starts with "explain".
         assert_eq!(
             as_explain("SELECT * FROM explain_t", false),

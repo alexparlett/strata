@@ -49,6 +49,9 @@ pub struct WorkspaceRun {
     pub page: usize,
     pub page_size: usize,
     pub result_search: String,
+    /// Whether the find popover is open for this result-set (U6). Ephemeral UI toggle,
+    /// opened by the toolbar button or the `Find` command; closing clears `result_search`.
+    pub find_open: bool,
     /// Grid vs chart for this result-set (the results toolbar toggle).
     pub view: ResultsView,
     /// When the current result-set landed — drives the "⏱ snapshot Xm ago" chip.
@@ -70,6 +73,7 @@ impl Default for WorkspaceRun {
             page: 1,
             page_size: 100,
             result_search: String::new(),
+            find_open: false,
             view: ResultsView::Grid,
             ran_at: None,
         }

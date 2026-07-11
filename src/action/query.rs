@@ -117,10 +117,47 @@ fn explain(mut state: Signal<AppState>, sql: String) {
 pub fn run_explain(mut state: Signal<AppState>, analyze: bool) {
     let sql = crate::session::active_sql();
     if sql.trim().is_empty() {
-        state.write().set_status(LogKind::Info, "Nothing to explain");
+        state
+            .write()
+            .set_status(LogKind::Info, "Nothing to explain");
         return;
     }
     explain(state, crate::plan::as_explain(&sql, analyze));
+}
+
+/// Clear the active tab's results back to the empty state (Rz8): drop the result / plan /
+/// error and the find query. No-op mid-run, or when there's nothing to clear.
+pub fn clear_results(mut state: Signal<AppState>) {
+    let id = crate::session::active_id();
+    if id == 0 {
+        return;
+    }
+    let mut cleared = false;
+    crate::runs::edit_existing(id, |run| {
+        if run.running || (run.result.is_none() && run.query_error.is_none() && run.plan.is_none())
+        {
+            return;
+        }
+        run.result = None;
+        run.query_error = None;
+        run.plan = None;
+        run.result_search = String::new();
+        cleared = true;
+    });
+    if cleared {
+        state.write().set_status(LogKind::Info, "Cleared results");
+    }
+}
+
+/// Open/close a tab's results find popover (U6). Closing clears its find query so a
+/// stale filter never lingers. No-op if the tab has no run yet.
+pub fn set_results_find(ws: crate::session::WorkspaceId, open: bool) {
+    crate::runs::edit_existing(ws, |r| {
+        r.find_open = open;
+        if !open {
+            r.result_search.clear();
+        }
+    });
 }
 
 /// Cancel the active tab's in-flight query / explain (S14). No-op if nothing is

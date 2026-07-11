@@ -38,6 +38,13 @@ pub enum Action {
     /// Run an `EXPLAIN [ANALYZE]` of the active tab's SQL **without** mutating the
     /// editor buffer (E4) — wraps engine-side only, like Save-as-view. `true` = ANALYZE.
     RunExplain(bool),
+    /// Clear the active tab's results back to the empty state (Rz8).
+    ClearResults,
+    /// Open/close a tab's results find popover (U6). Closing clears its find query.
+    SetResultsFind {
+        ws: crate::session::WorkspaceId,
+        open: bool,
+    },
     FetchPage(usize),
     LoadSelectStar(String),
     FormatSql,
@@ -201,6 +208,8 @@ fn run(state: Signal<AppState>, action: Action) {
         // query & results
         RunQuery => query::run(state),
         RunExplain(analyze) => query::run_explain(state, analyze),
+        ClearResults => query::clear_results(state),
+        SetResultsFind { ws, open } => query::set_results_find(ws, open),
         CancelQuery => query::cancel(state),
         FetchPage(page) => query::fetch_page(state, page),
         LoadSelectStar(name) => query::select_star(state, &name),

@@ -18,7 +18,8 @@
 //! build-time and handle-time sides can't drift.
 
 use dioxus::desktop::muda::{
-    accelerator::Accelerator, IsMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu,
+    accelerator::Accelerator, IsMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem,
+    Submenu,
 };
 use dioxus::prelude::*;
 
@@ -145,13 +146,14 @@ pub fn app_menu() -> Menu {
         &PredefinedMenuItem::select_all(None),
     ]);
 
-    // Window — minimal standard set.
+    // Window — minimal standard set. We deliberately omit the predefined Close Window
+    // (which carries ⌘W): RustRover-style, ⌘W closes the active *tab* (`CloseActiveTab`,
+    // an OS global hotkey), so leaving Close Window here would steal the chord. The window
+    // is still closable via the traffic-light button and File → Close Project.
     let window = Submenu::new("Window", true);
     let _ = window.append_items(&[
         &PredefinedMenuItem::minimize(None),
         &PredefinedMenuItem::maximize(None),
-        &PredefinedMenuItem::separator(),
-        &PredefinedMenuItem::close_window(None),
     ]);
 
     // On macOS the root menu accepts only submenus.
@@ -197,17 +199,14 @@ fn recent_submenu() -> Submenu {
 
 /// Run a File-menu command in the focused project window. Called from a
 /// `use_effect` (reactive scope present, so the open-folder dialog can spawn).
-pub fn run_project_command(state: Signal<AppState>, id: &str) {
-    let Some(cmd) = MenuCmd::parse(id) else {
-        return;
-    };
+pub fn run_project_command(state: Signal<AppState>, cmd: &MenuCmd) {
     match cmd {
         MenuCmd::NewQuery => dispatch(state, Action::NewTab),
         MenuCmd::OpenProject => dispatch(state, Action::OpenProject),
         MenuCmd::CloseProject => dispatch(state, Action::CloseProject),
         MenuCmd::SaveAll => dispatch(state, Action::SaveProject),
         MenuCmd::Settings => crate::overlays::toggle_settings(),
-        MenuCmd::OpenRecent(path) => dispatch(state, Action::OpenRecent(path)),
+        MenuCmd::OpenRecent(path) => dispatch(state, Action::OpenRecent(path.clone())),
         #[cfg(debug_assertions)]
         MenuCmd::OpenGallery => crate::window::spawn_gallery_window(),
     }

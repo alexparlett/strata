@@ -99,7 +99,11 @@ pub fn lines(sz: u32) -> Element {
 }
 /// Bulleted list — the editor's **Explain plan** button (E4).
 pub fn list(sz: u32) -> Element {
-    stroke(sz, "1.8", rsx! { path { d: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" } })
+    stroke(
+        sz,
+        "1.8",
+        rsx! { path { d: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" } },
+    )
 }
 /// Stopwatch — the editor's **Explain analyze** button (E4).
 pub fn stopwatch(sz: u32) -> Element {

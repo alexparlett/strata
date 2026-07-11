@@ -271,14 +271,20 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 /* editor query toolbar (inline, above the code) */
 .ed-toolbar { height: 38px; display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-3); border-bottom: 1px solid var(--line); }
 
-/* results toolbar (R1/R7): tight 38px bar — find (left) · toggle + refresh + download (right) */
+/* results toolbar (R1/R7): tight 38px bar — Table/Chart toggle (left) · find + refresh + clear + export (right) */
 .results-tb { height: 38px; flex: none; display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-3); background: var(--bg); border-bottom: 1px solid var(--line); }
 .results-tb .icon-btn, .plan-tb .icon-btn { width: 28px; height: 28px; }
 /* Active state for an icon-only toggle (e.g. the plan Raw/Tree button) — accent tint,
    matching the segmented toggle's selected look. */
 .icon-btn.plain.on { background: var(--accent-soft); color: var(--accent); }
 .icon-btn.plain.on:hover { background: var(--accent-soft); color: var(--accent); }
-.res-find-count { flex: none; color: var(--dim2); white-space: nowrap; }
+.res-find-count { flex: none; color: var(--accent); white-space: nowrap; }
+/* Find-in-results popover (U6, SearchDialog) — card chrome only; the Popup base owns
+   position + width. */
+.res-find-panel { display: flex; align-items: center; max-width: calc(100vw - 40px); height: 34px; padding: 0 var(--sp-4); background: var(--elev); border: 1px solid var(--line2); border-radius: var(--r-2); box-shadow: 0 10px 28px rgba(0,0,0,.45); }
+.res-find-panel:focus-within { border-color: var(--accent); }
+.res-find-close { display: flex; flex: none; padding: var(--sp-1); border-radius: var(--r-xs); color: var(--dim2); cursor: pointer; }
+.res-find-close:hover { color: var(--text); background: var(--elev3); }
 
 /* results grid */
 .grid-scroll { flex: 1; overflow: auto; min-height: 0; background: var(--main); }
@@ -667,6 +673,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .ds-icon-btn.primary.stop { background: var(--red2); color: #fff; }
 /* Activity-rail sizing for the toggle icon buttons (40×38, per §10). */
 .ds-icon-btn.act-rail { width: 40px; height: 38px; border-radius: var(--r-2); }
+/* U6: results Clear button — bordered toolbar chrome, destructive red hover. */
+.ds-icon-btn.toolbar.res-clear:not(:disabled):hover { background: color-mix(in srgb, var(--red2) 15%, transparent); border-color: color-mix(in srgb, var(--red2) 45%, transparent); color: var(--red2); }
+/* U6: find toggle reads active while its search popover is open. */
+.ds-icon-btn.toolbar.on, .ds-icon-btn.toolbar.on:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
 
 /* Text field (§04) — bordered wrapper carries the shared focus ring; input is bare. */
 .ds-field {

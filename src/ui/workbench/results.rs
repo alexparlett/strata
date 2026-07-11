@@ -16,7 +16,7 @@ use crate::session::WorkspaceId;
 use crate::state::AppState;
 use crate::ui::components::{
     Body, Button, ButtonVariant, DotStatus, Eyebrow, Icon, IconButton, IconButtonVariant, Meta,
-    MonoValue, Pager, Path, Prose, RectAlign, SearchBar, Segment, SegmentOption, Select,
+    MonoValue, Pager, Path, Prose, RectAlign, SearchDialog, Segment, SegmentOption, Select,
     SelectOption, Spacer, StatusDot, Title,
 };
 use crate::ui::icons::{IconName, IconSize};
@@ -230,7 +230,7 @@ pub(crate) fn EmptyState() -> Element {
 #[component]
 fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
     let state = use_context::<Signal<AppState>>();
-    let (search, view, matches, page_rows) = crate::runs::RUNS
+    let (search, view, matches, page_rows, find_open) = crate::runs::RUNS
         .resolve()
         .get(ws_id)
         .map(|e| {
@@ -252,14 +252,36 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
                     (m, pr)
                 })
                 .unwrap_or((0, 0));
-            (r.result_search.clone(), r.view, matches, page_rows)
+            (
+                r.result_search.clone(),
+                r.view,
+                matches,
+                page_rows,
+                r.find_open,
+            )
         })
         .unwrap_or_default();
     let grid = view == ResultsView::Grid;
 
+    // v19 (U6): the find popover's open flag lives in this tab's `runs` (so ⌘F can reach
+    // it), toggled via `Action::SetResultsFind`. While this is the active tab, claim the
+    // `Find` command so ⌘F opens *this* toolbar's find (and nothing when no results show).
+    use_effect(move || {
+        if crate::session::active_id() == ws_id {
+            crate::keymap::register(
+                crate::config::Command::Find,
+                ws_id,
+                crate::keymap::Context::ResultsFind,
+            );
+        } else {
+            crate::keymap::unregister_if(crate::config::Command::Find, ws_id);
+        }
+    });
+    use_drop(move || crate::keymap::unregister_if(crate::config::Command::Find, ws_id));
+
     rsx! {
         div { class: "results-tb",
-            // Table/Chart toggle (left) — always present in a result state.
+            // Table/Chart toggle (left) — text-only segmented (v19).
             Segment {
                 value: if grid { "grid" } else { "chart" },
                 compact: true,
@@ -267,19 +289,23 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
                     if v == "chart" { ResultsView::Chart } else { ResultsView::Grid },
                 )),
                 options: vec![
-                    SegmentOption::with_icon("grid", "Table", IconName::Table),
-                    SegmentOption::with_icon("chart", "Chart", IconName::Chart),
+                    SegmentOption::new("grid", "Table"),
+                    SegmentOption::new("chart", "Chart"),
                 ],
             }
-            // Find-in-results (grid-only) — the shared SearchBar (search icon + clear),
-            // with the match count as extra trailing content.
+            Spacer {}
+            // Right cluster (bordered, 28px): find (grid-only) · refresh · clear · export.
             if grid {
-                SearchBar {
+                SearchDialog {
+                    trigger_class: if find_open { "ds-icon-btn toolbar compact on" } else { "ds-icon-btn toolbar compact" },
+                    title: "Find in results",
+                    open: find_open,
+                    on_open: move |v| dispatch(state, Action::SetResultsFind { ws: ws_id, open: v }),
                     value: search.clone(),
-                    oninput: move |v| dispatch(state, Action::SetResultSearch(v)),
-                    mono: true,
                     placeholder: "Find in results",
-                    width: 320,
+                    width: 340,
+                    oninput: move |v| dispatch(state, Action::SetResultSearch(v)),
+                    trigger: rsx! { Icon { name: IconName::Search, size: IconSize::Md } },
                     trailing: rsx! {
                         if !search.is_empty() {
                             Meta { class: "res-find-count", "{matches} of {page_rows} on page" }
@@ -287,15 +313,22 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
                     },
                 }
             }
-            Spacer {}
-            // Refresh + download (right).
             IconButton { icon: IconName::Refresh,
-                variant: IconButtonVariant::Ghost,
+                variant: IconButtonVariant::Toolbar,
+                compact: true,
                 title: "Refresh — re-run the query",
                 onclick: move |_| dispatch(state, Action::RunQuery),
             }
+            IconButton { icon: IconName::Trash,
+                variant: IconButtonVariant::Toolbar,
+                compact: true,
+                class: "res-clear",
+                title: "Clear results",
+                onclick: move |_| dispatch(state, Action::ClearResults),
+            }
             IconButton { icon: IconName::Download,
-                variant: IconButtonVariant::Ghost,
+                variant: IconButtonVariant::Toolbar,
+                compact: true,
                 title: "Export results",
                 onclick: move |_| crate::overlays::open_export(),
             }
