@@ -142,6 +142,9 @@ pub fn clear_results(mut state: Signal<AppState>) {
         run.query_error = None;
         run.plan = None;
         run.result_search = String::new();
+        run.sel = None;
+        run.sel_anchor = None;
+        run.col_widths.clear();
         cleared = true;
     });
     if cleared {
@@ -216,7 +219,12 @@ pub fn fetch_page(state: Signal<AppState>, page: usize) {
     if !has_result {
         return;
     }
-    crate::runs::edit(ws_id, |run| run.page = page);
+    // Selection is page-local — dropping it avoids stale indices highlighting the new page.
+    crate::runs::edit(ws_id, |run| {
+        run.page = page;
+        run.sel = None;
+        run.sel_anchor = None;
+    });
     let tx = state.read().cmd_tx.clone();
     if let Some(tx) = tx {
         let _ = tx.send(Command::FetchPage {

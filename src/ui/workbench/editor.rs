@@ -148,13 +148,16 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
             }
             div {
                 style: "position:relative;height:{editor_h}px;background:var(--main);border-bottom:1px solid var(--line);overflow:auto;",
+                // The textarea's focus bubbles here (focusin/focusout) → hold the Select All
+                // scope so ⌘A selects the editor text (and the Edit-menu item enables).
+                onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),
+                onfocusout: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None),
                 CodeEditor {
                     value: ws.sql().cloned(),
                     language: crate::ui::lang("sql"),
                     theme: crate::ui::code_theme(),
                     line_numbers: true,
                     spellcheck: false,
-                    placeholder: "SELECT * FROM your_table LIMIT 100;",
                     class: "ps-sql",
                     decorations,
                     oninput: move |v: String| ws.sql().set(v),

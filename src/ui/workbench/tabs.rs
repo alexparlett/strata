@@ -87,6 +87,10 @@ pub(crate) fn Tabs() -> Element {
                                     autofocus: true,
                                     spellcheck: false,
                                     onmounted: move |e| { spawn(async move { let _ = e.set_focus(true).await; }); },
+                                    // Hold the Select All scope so ⌘A selects the rename text (this
+                                    // bespoke input isn't a shared `TextInput`, so it opts in here).
+                                    onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),
+                                    onfocusout: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None),
                                     oninput: move |e| rename_val.set(e.value()),
                                     onkeydown: move |e| match e.key() {
                                         Key::Enter => { e.prevent_default(); commit_rename(state, renaming, rename_val, id); }

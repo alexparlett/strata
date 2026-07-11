@@ -11,7 +11,7 @@ use std::time::Duration;
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::runs::ResultsView;
+use crate::runs::{ResultsView, Selection};
 use crate::session::WorkspaceId;
 use crate::state::AppState;
 use crate::ui::components::{
@@ -446,12 +446,119 @@ fn StatusBar(ws_id: WorkspaceId) -> Element {
             if let Some(ago) = snap {
                 Path { class: "res-snap", Icon { name: IconName::Clock, size: IconSize::Xs } "snapshot {ago}" }
             }
+            if let Some(agg) = selection_agg(ws_id) {
+                {agg_token(agg)}
+            }
             Spacer {}
             if has_result && view == ResultsView::Grid {
                 {pager_controls(state, total, page, page_size)}
             }
         }
     }
+}
+
+/// Live aggregate over the current grid selection (Rz3): cell count, plus Σ / avg / min /
+/// max over the selected **numeric** cells. Page-local — mirrors the grid's filtered
+/// visible rows. `None` when nothing is selected.
+struct AggView {
+    cells: usize,
+    numeric: usize,
+    sum: f64,
+    min: f64,
+    max: f64,
+}
+
+fn selection_agg(ws_id: WorkspaceId) -> Option<AggView> {
+    let entry = crate::runs::RUNS.resolve().get(ws_id)?;
+    let run = entry.read();
+    let sel = run.sel.clone()?;
+    let result = run.result.as_ref()?;
+    let search = run.result_search.to_lowercase();
+    // Same filtered visible page the grid renders (selection indexes into this).
+    let rows: Vec<&Vec<crate::engine::Cell>> = result
+        .rows
+        .iter()
+        .filter(|r| search.is_empty() || r.iter().any(|c| c.text.to_lowercase().contains(&search)))
+        .collect();
+    let numeric_col: Vec<bool> = result
+        .columns
+        .iter()
+        .map(|c| c.kind.cell_class() == "num")
+        .collect();
+    let ncols = result.columns.len();
+
+    let mut coords: Vec<(usize, usize)> = Vec::new();
+    match &sel {
+        Selection::Cell { .. } => {
+            if let Some((minr, maxr, minc, maxc)) = sel.cell_bounds() {
+                for r in minr..=maxr {
+                    for c in minc..=maxc {
+                        coords.push((r, c));
+                    }
+                }
+            }
+        }
+        Selection::Rows(rs) => {
+            for &r in rs {
+                for c in 0..ncols {
+                    coords.push((r, c));
+                }
+            }
+        }
+        Selection::Cols(cs) => {
+            for r in 0..rows.len() {
+                for &c in cs {
+                    coords.push((r, c));
+                }
+            }
+        }
+    }
+
+    let mut cells = 0usize;
+    let mut numeric = 0usize;
+    let mut sum = 0.0f64;
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for (r, c) in coords {
+        let Some(cell) = rows.get(r).and_then(|row| row.get(c)) else {
+            continue;
+        };
+        cells += 1;
+        if numeric_col.get(c).copied().unwrap_or(false) && !cell.null {
+            if let Ok(v) = cell.text.replace(',', "").trim().parse::<f64>() {
+                numeric += 1;
+                sum += v;
+                min = min.min(v);
+                max = max.max(v);
+            }
+        }
+    }
+    (cells > 0).then_some(AggView {
+        cells,
+        numeric,
+        sum,
+        min,
+        max,
+    })
+}
+
+/// Compact number for the aggregate strip — up to 4 dp, trailing zeros trimmed.
+fn fmt_num(v: f64) -> String {
+    let s = format!("{v:.4}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn agg_token(a: AggView) -> Element {
+    let mut parts = vec![format!("{} cells", fmt_int(a.cells as u64))];
+    if a.numeric > 0 {
+        let avg = a.sum / a.numeric as f64;
+        parts.push(format!("Σ {}", fmt_num(a.sum)));
+        parts.push(format!("avg {}", fmt_num(avg)));
+        parts.push(format!("min {}", fmt_num(a.min)));
+        parts.push(format!("max {}", fmt_num(a.max)));
+    }
+    let text = parts.join("  ·  ");
+    rsx! { Meta { class: "res-agg", "{text}" } }
 }
 
 /// The pager cluster on the right of the status bar (grid-only): page-size dropdown

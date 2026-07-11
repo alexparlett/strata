@@ -92,6 +92,10 @@ pub struct Settings {
     pub density_compact: bool,
     #[serde(default = "default_true")]
     pub zebra: bool,
+    /// Default results-grid column width in px (V20). Per-column overrides live on the run
+    /// (session-scoped); this is the starting width. No UI control yet — struct-only.
+    #[serde(default = "default_col_width")]
+    pub default_col_width: f64,
     #[serde(default = "default_row_limit")]
     pub row_limit: usize,
     #[serde(default = "default_true")]
@@ -113,6 +117,9 @@ fn default_theme() -> String {
 fn default_row_limit() -> usize {
     100
 }
+fn default_col_width() -> f64 {
+    150.0
+}
 fn default_true() -> bool {
     true
 }
@@ -123,6 +130,7 @@ impl Default for Settings {
             sync_os: false,
             density_compact: false,
             zebra: true,
+            default_col_width: default_col_width(),
             row_limit: default_row_limit(),
             reopen_on_startup: true,
             default_project_dir: String::new(),

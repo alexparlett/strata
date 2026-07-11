@@ -35,6 +35,39 @@ pub enum ResultsView {
     Chart,
 }
 
+/// An Excel-style grid selection (Rz3), scoped to the current result **page**. Rows and
+/// columns are sets (disjoint multi-select); a cell selection is a single rectangle from
+/// the anchor to the focus.
+#[derive(Clone, PartialEq)]
+pub enum Selection {
+    /// Rectangle from anchor `(ar,ac)` to focus `(fr,fc)` — page-local row + column index.
+    Cell {
+        ar: usize,
+        ac: usize,
+        fr: usize,
+        fc: usize,
+    },
+    /// Whole rows, by page-local index.
+    Rows(Vec<usize>),
+    /// Whole columns, by column index.
+    Cols(Vec<usize>),
+}
+
+impl Selection {
+    /// The inclusive `(min_row, max_row, min_col, max_col)` of a `Cell` rectangle.
+    pub fn cell_bounds(&self) -> Option<(usize, usize, usize, usize)> {
+        match self {
+            Selection::Cell { ar, ac, fr, fc } => Some((
+                (*ar).min(*fr),
+                (*ar).max(*fr),
+                (*ac).min(*fc),
+                (*ac).max(*fc),
+            )),
+            _ => None,
+        }
+    }
+}
+
 /// One tab's live query output — never serialized. The results panel derives its
 /// whole state (grid / plan / error / running / pager) from the active tab's run.
 pub struct WorkspaceRun {
@@ -54,6 +87,17 @@ pub struct WorkspaceRun {
     pub find_open: bool,
     /// Grid vs chart for this result-set (the results toolbar toggle).
     pub view: ResultsView,
+    /// Excel-style grid selection (Rz3), page-local; `None` = nothing selected. Cleared
+    /// on page change / new result / clear.
+    pub sel: Option<Selection>,
+    /// Anchor row/column index for shift-click contiguous range selection (Excel-style).
+    /// Set by a plain / ⌘ click on a row or column header; a shift-click fills from here to
+    /// the clicked index. `None` = no anchor. Reset whenever `sel` is cleared.
+    pub sel_anchor: Option<usize>,
+    /// Per-column width overrides in px, keyed by column index (V20 resizable columns).
+    /// Absent ⇒ the default column width. Session-scoped view state (never persisted);
+    /// survives paging + sort (per result set), reset only on an explicit results clear.
+    pub col_widths: HashMap<usize, f64>,
     /// When the current result-set landed — drives the "⏱ snapshot Xm ago" chip.
     /// `None` until the tab has actually produced a result. Monotonic (`Instant`),
     /// never serialized (like the rest of the run).
@@ -75,6 +119,9 @@ impl Default for WorkspaceRun {
             result_search: String::new(),
             find_open: false,
             view: ResultsView::Grid,
+            sel: None,
+            sel_anchor: None,
+            col_widths: HashMap::new(),
             ran_at: None,
         }
     }

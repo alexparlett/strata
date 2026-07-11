@@ -69,6 +69,8 @@
   --surface-sunk: #0d1119;
   --accent-soft:  rgba(76,198,255,.12);
   --zebra:        rgba(255,255,255,.055);
+  /* Grid selection tint (Rz3) — the app's shared selection tint (theme-overridable). */
+  --c-sel:        var(--accent-soft);
   /* fonts */
   --ui:   'IBM Plex Sans', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -287,18 +289,26 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .res-find-close:hover { color: var(--text); background: var(--elev3); }
 
 /* results grid */
-.grid-scroll { flex: 1; overflow: auto; min-height: 0; background: var(--main); }
+.grid-scroll { flex: 1; overflow: auto; min-height: 0; background: var(--main); user-select: none; -webkit-user-select: none; outline: none; }
 .grid-inner { min-width: max-content; }
 .grid-head { display: flex; position: sticky; top: 0; z-index: 3; background: var(--elev); border-bottom: 1px solid var(--line2); }
-.grid-head .hnum { width: 52px; flex: none; padding: var(--sp-3) 0; text-align: center; color: var(--dim3); border-right: 1px solid var(--line); }
-.grid-head .hcol { flex: none; padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--sp-1); }
+.grid-head .hnum { width: 52px; flex: none; padding: var(--sp-3) 0; text-align: center; color: var(--dim3); border-right: 1px solid var(--line); cursor: pointer; }
+.grid-head .hcol { position: relative; flex: none; padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--sp-1); cursor: pointer; user-select: none; -webkit-user-select: none; }
 .grid-head .hcol .cn { color: var(--text); }
+.grid-head .hcol .cn.sel { color: var(--accent); }
 .grid-head .hcol .ct { }
+/* V20 column-resize grip: 8px hot-zone on the header's right edge; a 2px accent line on
+   hover. Sits above the header (z 6 > sticky head z 3) so it stays grabbable. */
+.grid-head .hcol .col-grip { position: absolute; top: 0; right: -2px; width: 8px; height: 100%; cursor: col-resize; z-index: 6; }
+/* Lit on hover, and held lit for the whole drag via `.resizing` (added to the dragged
+   column's grip while its resize is active). */
+.grid-head .hcol .col-grip:hover, .grid-head .hcol .col-grip.resizing { box-shadow: inset -2px 0 0 var(--accent); }
 .grid-row { display: flex; border-bottom: 1px solid var(--grid-line); }
 .grid-row:hover { background: var(--row-hover); }
 .grid-row.zebra { background: var(--zebra); }
-.grid-row .rnum { width: 52px; flex: none; padding: var(--rowpad); text-align: center; color: var(--faint); border-right: 1px solid var(--grid-line); }
-.cell { flex: none; padding: var(--rowpad); border-right: 1px solid var(--grid-line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--cell); }
+.grid-row .rnum { width: 52px; flex: none; padding: var(--rowpad); text-align: center; color: var(--faint); border-right: 1px solid var(--grid-line); cursor: pointer; user-select: none; -webkit-user-select: none; font-variant-numeric: tabular-nums; }
+.grid-row .rnum.sel { background: var(--c-sel); color: var(--accent); }
+.cell { flex: none; padding: var(--rowpad); border-right: 1px solid var(--grid-line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--cell); user-select: none; -webkit-user-select: none; }
 .cell.num { color: var(--cell-num); }
 .cell.bool { color: var(--purple); }
 .cell.ts { color: var(--cell-ts); }
@@ -319,6 +329,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .res-stat-sub { color: var(--dim2); white-space: nowrap; }
 .res-snap { display: flex; align-items: center; gap: var(--sp-2); color: var(--dim2); white-space: nowrap; }
 .res-snap svg { color: var(--faint); }
+/* Rz3 selection aggregate token — accent, tabular figures. */
+.res-agg { color: var(--accent); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* pagination (embedded in the status bar, grid-only) */
 

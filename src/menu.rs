@@ -17,6 +17,8 @@
 //! builds the item id and [`MenuCmd::parse`] recovers it from the event, so the
 //! build-time and handle-time sides can't drift.
 
+use std::cell::{Cell, RefCell};
+
 use dioxus::desktop::muda::{
     accelerator::Accelerator, IsMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem,
     Submenu,
@@ -25,6 +27,47 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
+
+/// Where ⌘A "Select All" applies right now. Set from `onfocusin`/`onfocusout` on the
+/// focusable text surfaces — the results grid, every `TextInput`, the SQL editor — the
+/// same idea RustRover uses: the command is enabled only in a scope that can answer it and
+/// greyed everywhere else. Drives both the Edit-menu item's enabled state and how
+/// [`run_project_command`] routes the command.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SelectAllScope {
+    /// The results grid is focused → select every cell on the page.
+    Grid,
+    /// A text field / editor is focused → select its text natively.
+    Input,
+    /// Nothing that can Select All → the menu item is greyed.
+    None,
+}
+
+thread_local! {
+    /// Handle to the live Edit-menu Select All item, so focus changes can grey / enable it.
+    /// The macOS menu bar is app-global (the last-created window installs it — see
+    /// [`app_menu`]); this holds that item. Main-thread only, like all menu ops.
+    static SELECT_ALL_ITEM: RefCell<Option<MenuItem>> = RefCell::new(None);
+    /// The current [`SelectAllScope`] — read when ⌘A fires to route the command.
+    static SELECT_ALL_SCOPE: Cell<SelectAllScope> = Cell::new(SelectAllScope::None);
+}
+
+/// Set the active Select All scope and reflect it in the menu item's enabled state (greyed
+/// when [`SelectAllScope::None`]). Called from the text surfaces' focus handlers.
+pub fn set_select_all_scope(scope: SelectAllScope) {
+    SELECT_ALL_SCOPE.with(|s| s.set(scope));
+    let enabled = scope != SelectAllScope::None;
+    SELECT_ALL_ITEM.with(|c| {
+        if let Some(item) = c.borrow().as_ref() {
+            item.set_enabled(enabled);
+        }
+    });
+}
+
+/// The active Select All scope (for routing the ⌘A command).
+pub fn select_all_scope() -> SelectAllScope {
+    SELECT_ALL_SCOPE.with(|s| s.get())
+}
 
 /// A command the native File menu can emit. Serialized to a [`MenuId`] when the
 /// item is built and parsed back from the event id when it fires — one source of
@@ -36,6 +79,11 @@ pub enum MenuCmd {
     CloseProject,
     SaveAll,
     Settings,
+    /// Select All (⌘A). A custom item — not `PredefinedMenuItem::select_all` — so the
+    /// accelerator is intercepted at the AppKit level (before the webview swallows it) and
+    /// routed by [`run_project_command`]: to grid cells when the results grid is focused,
+    /// otherwise to the native web text selection.
+    SelectAll,
     /// Open a specific recent project (payload = its `.strata` path).
     OpenRecent(String),
     /// Dev-only: open the S28/S29 component gallery window (Help menu, debug builds).
@@ -54,6 +102,7 @@ impl MenuCmd {
             MenuCmd::CloseProject => "file.close_project".into(),
             MenuCmd::SaveAll => "file.save_all".into(),
             MenuCmd::Settings => "file.settings".into(),
+            MenuCmd::SelectAll => "edit.select_all".into(),
             MenuCmd::OpenRecent(path) => format!("{RECENT_PREFIX}{path}"),
             #[cfg(debug_assertions)]
             MenuCmd::OpenGallery => "help.gallery".into(),
@@ -69,6 +118,7 @@ impl MenuCmd {
             "file.close_project" => MenuCmd::CloseProject,
             "file.save_all" => MenuCmd::SaveAll,
             "file.settings" => MenuCmd::Settings,
+            "edit.select_all" => MenuCmd::SelectAll,
             #[cfg(debug_assertions)]
             "help.gallery" => MenuCmd::OpenGallery,
             other => MenuCmd::OpenRecent(other.strip_prefix(RECENT_PREFIX)?.to_string()),
@@ -134,7 +184,13 @@ pub fn app_menu() -> Menu {
     ]);
 
     // Edit — rebuilt from predefined items so copy / paste / undo survive replacing
-    // the default menu.
+    // the default menu. Select All is a *custom* item (not the predefined one) so its ⌘A
+    // is intercepted here before the webview and routed by `run_project_command` — the
+    // grid claims it when focused, otherwise it falls back to the native text select-all.
+    // Built disabled; the text surfaces' `onfocusin` handlers enable it while in scope
+    // (RustRover-style). Stash the handle so those focus changes can toggle it.
+    let select_all = MenuItem::with_id(MenuCmd::SelectAll, "Select All", false, accel("CmdOrCtrl+A"));
+    SELECT_ALL_ITEM.with(|c| *c.borrow_mut() = Some(select_all.clone()));
     let edit = Submenu::new("Edit", true);
     let _ = edit.append_items(&[
         &PredefinedMenuItem::undo(None),
@@ -143,7 +199,7 @@ pub fn app_menu() -> Menu {
         &PredefinedMenuItem::cut(None),
         &PredefinedMenuItem::copy(None),
         &PredefinedMenuItem::paste(None),
-        &PredefinedMenuItem::select_all(None),
+        &select_all,
     ]);
 
     // Window — minimal standard set. We deliberately omit the predefined Close Window
@@ -206,6 +262,15 @@ pub fn run_project_command(state: Signal<AppState>, cmd: &MenuCmd) {
         MenuCmd::CloseProject => dispatch(state, Action::CloseProject),
         MenuCmd::SaveAll => dispatch(state, Action::SaveProject),
         MenuCmd::Settings => crate::overlays::toggle_settings(),
+        MenuCmd::SelectAll => match select_all_scope() {
+            SelectAllScope::Grid => crate::ui::workbench::grid::select_all_active_grid(),
+            // The focused element is a text field (that's what set this scope). Re-emit the
+            // native `selectAll:` down the responder chain so it selects the field's own text
+            // — the eval-free equivalent of the system Select All.
+            SelectAllScope::Input => crate::window::send_select_all(),
+            // The item is greyed outside those scopes, so this shouldn't fire — defensive.
+            SelectAllScope::None => {}
+        },
         MenuCmd::OpenRecent(path) => dispatch(state, Action::OpenRecent(path.clone())),
         #[cfg(debug_assertions)]
         MenuCmd::OpenGallery => crate::window::spawn_gallery_window(),

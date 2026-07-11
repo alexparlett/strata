@@ -164,6 +164,9 @@ pub enum ResizeTarget {
     Inspector,
     Editor,
     Log,
+    /// A results-grid column (V20). Carries the workspace + column index so the drag
+    /// writes that run's `col_widths[ci]` instead of an `AppState` field.
+    Column { ws: u64, ci: usize },
 }
 
 /// An in-progress panel drag: axis, direction, the pointer anchor and the size

@@ -15,6 +15,9 @@ pub fn start_resize(mut state: Signal<AppState>, target: ResizeTarget, origin: f
         ResizeTarget::Inspector => (true, -1.0, 220.0, 560.0),
         ResizeTarget::Editor => (false, 1.0, 92.0, 480.0),
         ResizeTarget::Log => (false, -1.0, 120.0, 480.0),
+        // Columns grow rightwards; 56px floor, generous ceiling so the last column can
+        // always widen (rows size to the width sum → horizontal scroll).
+        ResizeTarget::Column { .. } => (true, 1.0, 56.0, 2000.0),
     };
     state.write().resizing = Some(Resizing {
         target,
@@ -35,12 +38,17 @@ pub fn resize_move(mut state: Signal<AppState>, x: f64, y: f64) {
     };
     let cur = if r.axis_x { x } else { y };
     let new = (r.start + (cur - r.origin) * r.sign).clamp(r.min, r.max);
-    let mut s = state.write();
     match r.target {
-        ResizeTarget::Sidebar => s.sidebar_w = new,
-        ResizeTarget::Inspector => s.inspector_w = new,
-        ResizeTarget::Editor => s.editor_h = new,
-        ResizeTarget::Log => s.log_h = new,
+        ResizeTarget::Sidebar => state.write().sidebar_w = new,
+        ResizeTarget::Inspector => state.write().inspector_w = new,
+        ResizeTarget::Editor => state.write().editor_h = new,
+        ResizeTarget::Log => state.write().log_h = new,
+        // Column widths live in the run, not `AppState` — write there directly.
+        ResizeTarget::Column { ws, ci } => {
+            crate::runs::edit(ws, |run| {
+                run.col_widths.insert(ci, new);
+            });
+        }
     }
 }
 
@@ -89,6 +97,8 @@ pub fn resize_handle(state: Signal<AppState>, target: ResizeTarget) -> Element {
                         ResizeTarget::Inspector => (c.x, s.inspector_w),
                         ResizeTarget::Editor => (c.y, s.editor_h),
                         ResizeTarget::Log => (c.y, s.log_h),
+                        // Columns use the grid's own header grip, not this panel handle.
+                        ResizeTarget::Column { .. } => unreachable!(),
                     }
                 };
                 dispatch(state, Action::StartResize { target, origin, start });

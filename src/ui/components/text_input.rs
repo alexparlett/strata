@@ -107,6 +107,10 @@ pub fn TextInput(
                         spawn(async move { let _ = e.set_focus(true).await; });
                     }
                 },
+                // Hold the Select All scope while focused so ⌘A selects this field's text
+                // (and enables the greyed-by-default Edit-menu item). RustRover-style.
+                onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),
+                onfocusout: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None),
                 oninput: move |e| oninput.call(e.value()),
                 onchange: move |e| { if let Some(h) = onchange { h.call(e.value()); } },
                 onkeydown: move |e| { if let Some(h) = onkeydown { h.call(e); } },
@@ -200,6 +204,8 @@ pub fn NumberStepper(
                 value: "{value}",
                 disabled: disabled,
                 spellcheck: false,
+                onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),
+                onfocusout: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None),
                 oninput: move |e| {
                     if let Ok(v) = e.value().trim().parse::<i64>() {
                         on_change.call(clamp(v));

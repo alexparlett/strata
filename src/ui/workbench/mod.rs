@@ -25,7 +25,7 @@ use dioxus_stores::*;
 use crate::session::{SessionStoreExt, WorkspaceStoreExt};
 
 mod editor;
-mod grid;
+pub(crate) mod grid;
 mod plan_view;
 mod results;
 mod tabs;

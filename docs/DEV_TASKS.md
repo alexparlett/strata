@@ -30,6 +30,7 @@ the structural drift listed.
 | F2 | Overlay / menu family (S29) | ✅ | `Popup`/`Backdrop`/`Tooltip` + `Select`/`DropdownMenu`/`ContextMenu`. |
 | F3 | **Spacing & radius token scale (v19 §03)** | ✅ | Scale in `:root` (`--sp-1:2…sp-9:48` + `--r-xs:4…r-4:14`); snapped **~430 main.css + ~168 RSX-inline** padding/margin/gap/border-radius decls to tokens (radius uses the r-scale, spacing the sp-scale). Kept literal: 82px mac traffic-light inset + 60px empty-state pad (>52), negative resizer margins, `50%` pills. Off-target props (width/height/box-shadow/letter-spacing/font-size) untouched; braces balanced. ⚠️ snapping *shifts* many values ~1–2px by design (6/7/9→8, 11/13→12) — build + eyeball. |
 | F4 | Theme tokens (S2) | ✅ | JSON themes → `--*` vars. Author-friendly restructure = W5. |
+| F5 | **Platform shims behind a trait** | ⬜ | Consolidate the scattered macOS `objc` shims (`window::send_select_all` selectAll:, `paint_ns_background`, `ns_window`/traffic-light insets) behind one platform trait + per-OS impls, so the cross-platform seam is explicit and non-mac builds get real (not silently no-op) fallbacks. Today select-all is inline `#[cfg(macos)]` objc + a non-mac **no-op** stub (eval fallback deferred here); other shims are bare `#[cfg(macos)]` fns. macOS-first is fine — this just makes the boundary safe to extend. |
 
 ---
 
@@ -124,8 +125,9 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 | ID | Task | Status | Notes |
 | --- | --- | --- | --- |
 | Rz2 | Chart view (R2; owns U7) | ⬜ | 6 types, canvas, encoder strip, client aggregate, guardrails. `CHART_SPEC.md`. |
-| Rz3 | Grid selection + live aggregate (R3; owns U5 selection + U6 selection token) | ⬜ | Cell/range/row/column, ⌘A/Esc, ⌘C copy, status-bar aggregate. |
-| Rz4 | Copy affordances (R4) | ⬜ | Right-click cell/row/column/all → CSV/JSON/MD; toast. |
+| Rz3 | Grid selection + live aggregate (R3; owns U5 selection + U6 selection token) | ✅ | Cell/range (click + shift-extend + drag-paint) · Excel-style **headers** (plain=select-only, ⌘=toggle one, ⇧=contiguous range via `run.sel_anchor`) · `#` corner=select-all · Esc/click-off clear · status-bar aggregate. ⌘A via a **context-aware Edit-menu item** that greys out of scope (grid/text-input focus tracked → `menu::set_select_all_scope`; input select-all re-emitted natively). Copy = Rz4. |
+| Rz-cols | **Resizable columns (V20)** | ✅ | Per-column drag grip on the header right edge (8px, accent line on hover **and** held lit through the drag), double-click **auto-fit** (clamp 64–520). Widths keyed by col index on the run (`col_widths`, session-scoped, survive paging/sort, reset on clear). Drag via `ResizeTarget::Column` on the existing root move/up driver; default width = `Settings.default_col_width` (struct-only). Rows size to the width-sum (`grid-inner: max-content`) so scroll kicks in + the last column always grows. |
+| Rz4 | Copy affordances (R4) | ⬜ | Right-click cell/row/column/all → CSV/JSON/MD; toast. Includes ⌘C. |
 | Rz5 | Record (row-detail) view (R5; owns U5/U15 record view) | ⬜ | Row as key→value card, prev/next, copy JSON/CSV. |
 | Rz6 | Column sort (R6; owns U5 sort) | ⬜ | Header chevron asc→desc→clear over snapshot, nulls-last. |
 | Rz8 | Clear-results button (R8; owns U6 clear) | ✅ | `Action::ClearResults` → `query::clear_results`; trash in right cluster → empty state, guarded mid-run. |
