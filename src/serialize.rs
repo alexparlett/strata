@@ -106,6 +106,25 @@ fn drive<Wr: RecordBatchWriter>(mut wr: Wr, batch: &RecordBatch) -> Result<(), A
     wr.close()
 }
 
+/// Pretty-print a single cell's value (column `col`, row `row` of `batch`) as JSON — for the
+/// record view's nested (`struct`/`list`/`map`) blocks. Encodes just that value with arrow-json
+/// (type-aware, straight from Arrow) and indents it with serde_json (`preserve_order` keeps field
+/// order, `arbitrary_precision` keeps decimals exact). `None` if the value is null/absent — the
+/// caller shows its own placeholder.
+pub fn cell_pretty_json(batch: &RecordBatch, col: usize, row: usize) -> Option<String> {
+    let one = batch.project(&[col]).ok()?.slice(row, 1);
+    let mut buf = Vec::new();
+    {
+        let mut w = datafusion::arrow::json::ArrayWriter::new(&mut buf);
+        w.write(&one).ok()?;
+        w.finish().ok()?;
+    }
+    // arrow-json emits `[{"<col>": <value>}]`; pull the single value out and indent it.
+    let arr: serde_json::Value = serde_json::from_slice(&buf).ok()?;
+    let val = arr.get(0)?.as_object()?.values().next()?;
+    serde_json::to_string_pretty(val).ok()
+}
+
 /// A `std::io::Write` sink that lands its bytes on the system clipboard (Rz4). Plug it in as
 /// the writer for [`write_batch`], then [`commit`](Self::commit).
 pub struct ClipboardWriter {

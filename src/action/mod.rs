@@ -50,6 +50,9 @@ pub enum Action {
     SortColumn(usize),
     /// Copy the current grid selection to the clipboard in the given format (Rz4).
     CopySelection(crate::serialize::TextFormat),
+    /// Copy a single record — all columns of the page-local filtered row index — to the
+    /// clipboard in the given format (Rz5, the record view's `⋯` menu).
+    CopyRecord(usize, crate::serialize::TextFormat),
     LoadSelectStar(String),
     FormatSql,
     ClearSql,
@@ -218,6 +221,7 @@ fn run(state: Signal<AppState>, action: Action) {
         FetchPage(page) => query::fetch_page(state, page),
         SortColumn(ci) => query::sort_column(state, ci),
         CopySelection(fmt) => query::copy_selection(state, fmt),
+        CopyRecord(row, fmt) => query::copy_record(state, row, fmt),
         LoadSelectStar(name) => query::select_star(state, &name),
         FormatSql => query::format(state),
         ClearSql => query::clear(state),

@@ -1002,4 +1002,18 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 
 /* nested cell popover */
 .cell-modal { width: 460px; max-width: 92vw; max-height: 80vh; }
+
+/* record (row-detail) view — Rz5 */
+.record-modal { width: 560px; max-width: 92vw; max-height: 84vh; }
+.record-head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line); }
+.record-title { color: var(--text); }
+.record-body { overflow-y: auto; max-height: 74vh; }
+.record-row { display: flex; gap: var(--sp-5); align-items: flex-start; padding: var(--sp-5); border-bottom: 1px solid var(--line); }
+.record-row:last-child { border-bottom: none; }
+.record-key { flex: 0 0 34%; display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.record-name { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.record-type { display: block; }
+.record-val { flex: 1 1 0; min-width: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; padding-top: 1px; }
+.record-val.null { color: var(--dim3); font-style: italic; }
+.record-nested { white-space: normal; background: var(--surface-sunk); border: 1px solid var(--line); border-radius: var(--r-3); padding: var(--sp-4); overflow: auto; }
 .jk { color: var(--t-str); } .js { color: var(--syn-string); } .jb { color: var(--t-bool); } .jn { color: var(--t-num); } .jnull { color: var(--dim3); font-style: italic; }

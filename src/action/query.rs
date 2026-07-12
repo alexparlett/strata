@@ -578,3 +578,56 @@ pub fn copy_selection(mut state: Signal<AppState>, fmt: crate::serialize::TextFo
         }
     }
 }
+
+/// Rz5 — copy a single **record** (all columns of the page-local filtered row `row_idx`) to the
+/// clipboard in `fmt`, from the record view's `⋯` menu. Like [`copy_selection`] but one full row:
+/// map the filtered display index → page-`batch` row, `take` it into a one-row `RecordBatch`, and
+/// serialize with a header.
+pub fn copy_record(mut state: Signal<AppState>, row_idx: usize, fmt: crate::serialize::TextFormat) {
+    use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
+
+    let ws_id = crate::session::active_id();
+    let sub: Option<RecordBatch> = crate::runs::RUNS.resolve().get(ws_id).and_then(|e| {
+        let run = e.peek();
+        let result = run.result.as_ref()?;
+        let batch = run.page_batch.as_ref()?;
+        let search = run.result_search.to_lowercase();
+        // The record index is into the *filtered* page; map it back to its batch row (the grid's
+        // find-box filter is page-local, and `result.rows` shares the batch's row order).
+        let batch_row = result
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                search.is_empty() || r.iter().any(|c| c.text.to_lowercase().contains(&search))
+            })
+            .nth(row_idx)
+            .map(|(oi, _)| oi as u32)?;
+        if batch_row as usize >= batch.num_rows() {
+            return None;
+        }
+        let indices = UInt32Array::from(vec![batch_row]);
+        let taken: Vec<ArrayRef> = batch
+            .columns()
+            .iter()
+            .map(|c| datafusion::arrow::compute::take(&**c, &indices, None))
+            .collect::<Result<_, _>>()
+            .ok()?;
+        RecordBatch::try_new(batch.schema(), taken).ok()
+    });
+
+    let mut s = state.write();
+    match sub {
+        None => s.set_status(LogKind::Warn, "No record to copy"),
+        Some(batch) => {
+            let mut clip = crate::serialize::ClipboardWriter::new();
+            let res = crate::serialize::write_batch(fmt, &batch, true, &mut clip)
+                .map_err(|e| e.to_string())
+                .and_then(|_| clip.commit());
+            match res {
+                Ok(()) => s.set_status(LogKind::Ok, "Copied record to clipboard"),
+                Err(e) => s.set_status(LogKind::Error, format!("Clipboard failed · {e}")),
+            }
+        }
+    }
+}
