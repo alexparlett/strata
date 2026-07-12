@@ -1,16 +1,20 @@
-//! The EXPLAIN plan view (S12): a toolbar (Physical/Logical toggle, ANALYZE badge,
-//! icon-only Raw/Tree toggle) over an indented tree of operator cards — or the raw
-//! plan text. ANALYZE forces the physical "Plan with Metrics" and adds per-node
-//! rows/time, a time-share bar, and a HOTSPOT badge for the slowest operators.
+//! The EXPLAIN plan view (S12, v3 — matches the v19 design mock): a toolbar
+//! (Physical/Logical tabs, ANALYZE badge, icon-only Raw/Tree toggle) over an
+//! indented tree of operator cards — or the raw plan text. Each card parses the
+//! operator's one-line `detail` into a key→value definition grid, and under
+//! `EXPLAIN ANALYZE` carries a three-tier metrics block (EXPLAIN_PLAN_SPEC §6):
+//! headline (rows · self-time · bytes · time-share bar) → non-zero insight
+//! callouts → a collapsed, grouped metrics box. All values arrive pre-typed and
+//! pre-labelled from the engine (`crate::plan`) — the view does no unit math.
 
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::plan::PlanTab;
+use crate::plan::{PlanKind, PlanTab};
 use crate::session::WorkspaceId;
 use crate::state::AppState;
 use crate::ui::components::{
-    Badge, Dot, IconButton, IconButtonVariant, Meta, Micro, MonoValue, Path, Readout, Segment,
+    Badge, Dot, Icon, IconButton, IconButtonVariant, Micro, MonoValue, Readout, Segment,
     SegmentOption, Spacer,
 };
 use crate::ui::icons::{IconName, IconSize};
@@ -55,10 +59,9 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
     };
     let max_ms = plan.max_ms();
 
-    // (The "N operators · mode" summary lives in the results status bar now, not the
-    // plan header — matches the design.)
     // Icon-only Raw/Tree toggle (consistent with the results toolbar's icon buttons);
-    // the title carries the action since there's no label.
+    // the title carries the action since there's no label. The operator-count summary
+    // lives in the results status bar, not this header.
     let raw_title = if raw {
         "Show the plan tree"
     } else {
@@ -99,7 +102,12 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
             } else {
                 div { class: "plan-body ps-scroll",
                     for (i, n) in nodes.iter().enumerate() {
-                        {plan_node_card(n, i, analyze, max_ms)}
+                        PlanNodeCard {
+                            key: "{i}",
+                            node: n.clone(),
+                            rails: crate::plan::guide_rails(nodes, i),
+                            max_ms,
+                        }
                     }
                 }
             }
@@ -107,64 +115,181 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
     }
 }
 
-/// One operator card in the plan tree, indented by depth and coloured by kind.
-/// A plain fn (called once per node) — no hooks, so no need for a component.
-fn plan_node_card(n: &crate::plan::PlanNode, idx: usize, analyze: bool, max_ms: f64) -> Element {
-    let color = n.kind.color();
-    let indent = n.depth * 22;
-    let has_metrics = analyze && n.ms_val.is_some();
-    let ms = n.ms_val.unwrap_or(0.0);
-    let hot = analyze && ms >= max_ms * 0.6;
-    let bar_pct = if has_metrics {
-        ((ms / max_ms) * 100.0).round().max(3.0)
+/// One operator card: tree rails + a kind-coloured card with a parsed-detail grid
+/// and (under ANALYZE) the three-tier metrics block. A component (not a plain fn)
+/// so each card owns its detail-expand / metrics-collapse / show-zeros state.
+#[component]
+fn PlanNodeCard(node: crate::plan::PlanNode, rails: Vec<bool>, max_ms: f64) -> Element {
+    let mut detail_open = use_signal(|| false);
+    let mut full_open = use_signal(|| false);
+    let mut show_zeros = use_signal(|| false);
+
+    let color = node.kind.color();
+    let show_metrics = !node.metrics.is_empty();
+    let self_ms = node.self_ms.unwrap_or(0.0);
+    let hot = show_metrics && self_ms >= max_ms * 0.6;
+    let bar_pct = if show_metrics && max_ms > 0.0 {
+        ((self_ms / max_ms) * 100.0).round().clamp(3.0, 100.0)
     } else {
         0.0
     };
-    let rows_label = n.rows.map(fmt_int).unwrap_or_default();
+    let rows_label = node.rows.map(crate::plan::fmt_int);
+    // Bytes headline is a source concept only.
+    let bytes_label = if node.kind == PlanKind::Source {
+        node.metrics
+            .iter()
+            .find(|m| m.name == "bytes_scanned")
+            .map(|m| m.label.clone())
+    } else {
+        None
+    };
+    // (text, colour) — resolve the tone colour here; rsx interpolation can't call it.
+    let ins: Vec<(String, &'static str)> = crate::plan::insights(&node.metrics)
+        .into_iter()
+        .map(|i| (i.text, i.tone.color()))
+        .collect();
+    let metric_total = node.metrics.len();
+    let zero_count = node.metrics.iter().filter(|m| m.zero).count();
+
+    // Detail → key/value parts; collapsed shows the first two (design rule).
+    let all_parts = crate::plan::detail_parts(&node.detail);
+    let detail_long = all_parts.len() > 2 || node.detail.chars().count() > 110;
+    let detail_shown: Vec<crate::plan::DetailPart> = if detail_long && !detail_open() {
+        all_parts.iter().take(2).cloned().collect()
+    } else {
+        all_parts.clone()
+    };
+    let detail_caret = if detail_open() { "▾" } else { "▸" };
+
+    // Tier-3 grouped grid — pre-format each row (rsx interpolation is a format
+    // string; can't call helpers inline). Fixed group order from the design.
+    let show_all = show_zeros();
+    let groups: Vec<(&'static str, &'static str, Vec<(String, String, &'static str, bool)>)> =
+        crate::plan::METRIC_GROUPS
+            .iter()
+            .filter_map(|g| {
+                let rows: Vec<(String, String, &'static str, bool)> = node
+                    .metrics
+                    .iter()
+                    .filter(|m| show_all || !m.zero)
+                    .filter(|m| crate::plan::metric_group(&m.name) == *g)
+                    .map(|m| (m.name.clone(), m.label.clone(), m.kind.color(), m.zero))
+                    .collect();
+                (!rows.is_empty()).then_some((*g, crate::plan::group_color(g), rows))
+            })
+            .collect();
+    let metrics_caret = if full_open() { "▾" } else { "▸" };
+    let zeros_label = if show_all {
+        "hide zeros".to_string()
+    } else {
+        format!("show zeros ({zero_count})")
+    };
 
     rsx! {
-        div { key: "p{idx}", class: "plan-row", style: "padding-left:{indent}px;",
+        div { class: "plan-row",
+            for (l, on) in rails.iter().enumerate() {
+                div { key: "{l}", class: if *on { "plan-guide on" } else { "plan-guide" } }
+            }
             div { class: "plan-card", style: "border-left-color:{color};",
                 div { class: "plan-card-head",
                     Dot { color: "{color}", square: true, size: 6 }
-                    MonoValue { class: "plan-name mono", style: "color:{color};", "{n.name}" }
+                    MonoValue { class: "plan-name mono", style: "color:{color};", "{node.name}" }
                     if hot {
                         Micro { class: "plan-hot mono", "HOTSPOT" }
                     }
                 }
-                if !n.detail.is_empty() {
-                    Path { class: "plan-detail mono", "{n.detail}" }
+                // Parsed detail — a key/value definition grid.
+                if !detail_shown.is_empty() {
+                    div { class: "plan-detail-grid",
+                        for (di, dp) in detail_shown.iter().enumerate() {
+                            if dp.has_key {
+                                span { key: "k{di}", class: "plan-dk mono", "{dp.key}" }
+                                span { key: "v{di}", class: "plan-dv mono", "{dp.val}" }
+                            } else {
+                                span { key: "f{di}", class: "plan-dv-full mono", "{dp.val}" }
+                            }
+                        }
+                    }
+                    if detail_long {
+                        button {
+                            class: "plan-link plan-detail-toggle",
+                            onclick: move |_| { let v = !detail_open(); detail_open.set(v); },
+                            span { class: "plan-caret", "{detail_caret}" }
+                            "Detail"
+                        }
+                    }
                 }
-                if has_metrics {
-                    div { class: "plan-metrics",
-                        div { class: "plan-metrics-row",
-                            Meta { class: "plan-rows mono", "{rows_label} rows" }
-                            Meta { class: "plan-ms mono", "{n.ms_label}" }
-                            if !n.extra.is_empty() {
-                                Meta { class: "plan-extra mono", "{n.extra}" }
+                if show_metrics {
+                    // Tier 1 — headline: rows · self-time · bytes · time-share bar.
+                    div { class: "plan-tier1",
+                        div { class: "plan-stats",
+                            if let Some(r) = rows_label.clone() {
+                                span { class: "plan-stat",
+                                    span { class: "mono plan-stat-v", "{r}" }
+                                    " rows"
+                                }
+                            }
+                            span { class: "plan-stat plan-stat-time",
+                                Icon { name: IconName::Clock, size: IconSize::Xs }
+                                span { class: "mono plan-stat-v", "{node.self_label}" }
+                            }
+                            if let Some(b) = bytes_label.clone() {
+                                span { class: "plan-stat plan-stat-bytes mono", "{b}" }
                             }
                         }
                         div { class: "plan-bar",
                             div { class: "plan-bar-fill", style: "width:{bar_pct}%;background:{color};" }
                         }
                     }
+                    // Tier 2 — insight callouts (non-zero signal only), tone-coloured.
+                    if !ins.is_empty() {
+                        div { class: "plan-insights",
+                            for (k, (itext, icolor)) in ins.iter().enumerate() {
+                                span {
+                                    key: "{k}",
+                                    class: "plan-insight mono",
+                                    style: "color:{icolor};",
+                                    "{itext}"
+                                }
+                            }
+                        }
+                    }
+                    // Tier 3 — full metrics, grouped + collapsed by default.
+                    div { class: "plan-metrics-wrap",
+                        button {
+                            class: "plan-link plan-metrics-toggle",
+                            onclick: move |_| { let v = !full_open(); full_open.set(v); },
+                            span { class: "plan-caret", "{metrics_caret}" }
+                            "Metrics ({metric_total})"
+                        }
+                        if full_open() {
+                            div { class: "plan-metrics-box",
+                                for (g, gcolor, rows) in groups.iter() {
+                                    div { key: "h{g}", class: "plan-grp-head",
+                                        span { class: "plan-grp-bar", style: "background:{gcolor};" }
+                                        span { class: "plan-grp-name mono", "{g}" }
+                                    }
+                                    for (mname, mlabel, mcolor, mzero) in rows.iter() {
+                                        div {
+                                            key: "{mname}",
+                                            class: if *mzero { "plan-mrow zero" } else { "plan-mrow" },
+                                            span { class: "plan-mname mono", "{mname}" }
+                                            span { class: "plan-mval mono", style: "color:{mcolor};", "{mlabel}" }
+                                        }
+                                    }
+                                }
+                                if zero_count > 0 {
+                                    button {
+                                        class: "plan-zeros mono",
+                                        onclick: move |_| { let v = !show_zeros(); show_zeros.set(v); },
+                                        "{zeros_label}"
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-}
-
-/// Group a non-negative integer with thin thousands separators (e.g. 48213 →
-/// "48,213") for the plan's row counts.
-fn fmt_int(n: u64) -> String {
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
 }

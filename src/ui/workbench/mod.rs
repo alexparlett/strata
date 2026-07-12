@@ -8,8 +8,8 @@
 //! cell view, the rename draft) stay component-local. Submodules: `tabs` (`Tabs`),
 //! `workspace` (`Workspace` = editor + results), `editor` (`Editor`), `results`
 //! (`Results` switch + toolbar + pager + placeholders), `grid` (`ResultsGrid` +
-//! nested-cell view), `plan_view` (`PlanView`). The per-item render helpers
-//! (`grid::render_cell`, `plan_view::plan_node_card`) stay plain fns.
+//! nested-cell view), `plan_view` (`PlanView` + per-node `PlanNodeCard`). The
+//! per-item cell render helper (`grid::render_cell`) stays a plain fn.
 //!
 //! Note the two `Workspace`s: `crate::session::Workspace` is a *tab's data*; the
 //! `workspace::Workspace` component here is that tab's *view*.

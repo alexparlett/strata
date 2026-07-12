@@ -24,6 +24,7 @@ use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::*;
 use futures::StreamExt;
@@ -863,9 +864,9 @@ fn walk_logical(root: &LogicalPlan) -> Vec<PlanNode> {
             detail,
             depth,
             rows: None,
-            ms_val: None,
-            ms_label: String::new(),
-            extra: String::new(),
+            self_ms: None,
+            self_label: String::new(),
+            metrics: Vec::new(),
         });
         for c in p.inputs() {
             go(c, depth + 1, out);
@@ -882,16 +883,21 @@ fn walk_physical(root: &dyn ExecutionPlan) -> Vec<PlanNode> {
     fn go(p: &dyn ExecutionPlan, depth: usize, out: &mut Vec<PlanNode>) {
         let line = displayable(p).one_line().to_string();
         let (name, detail) = crate::plan::split_name_detail(line.trim());
-        let (rows, ms_val, ms_label, extra) = node_metrics(p);
+        let kind = PlanKind::classify(&name);
+        let (rows, metrics) = node_metrics(p);
+        // Derive the one comparable per-node time (EXPLAIN_PLAN_SPEC §7) from the
+        // typed metrics — logic lives in `crate::plan`, pure over `Metric`.
+        let self_ms = crate::plan::self_time_ms(kind, &metrics);
+        let self_label = self_ms.map(crate::plan::fmt_ms).unwrap_or_default();
         out.push(PlanNode {
-            kind: PlanKind::classify(&name),
+            kind,
             name,
             detail,
             depth,
             rows,
-            ms_val,
-            ms_label,
-            extra,
+            self_ms,
+            self_label,
+            metrics,
         });
         for c in p.children() {
             go(c.as_ref(), depth + 1, out);
@@ -902,27 +908,60 @@ fn walk_physical(root: &dyn ExecutionPlan) -> Vec<PlanNode> {
     out
 }
 
-/// Read a physical operator's metrics: output rows, compute time (ns → ms), and
-/// every other named metric formatted via its `MetricValue` (units preserved).
-fn node_metrics(p: &dyn ExecutionPlan) -> (Option<u64>, Option<f64>, String, String) {
+/// Read a physical operator's metrics: output rows (the `rows` field) plus every
+/// other named metric as a typed, pre-labelled [`crate::plan::Metric`] — classified
+/// by `MetricValue` variant so the UI can format + group without unit math. The raw
+/// `elapsed_compute` timestamps are dropped; `output_rows` becomes `rows`.
+fn node_metrics(p: &dyn ExecutionPlan) -> (Option<u64>, Vec<crate::plan::Metric>) {
     let Some(ms) = p.metrics() else {
-        return (None, None, String::new(), String::new());
+        return (None, Vec::new());
     };
     let ms = ms.aggregate_by_name();
     let rows = ms.output_rows().map(|r| r as u64);
-    let ms_val = ms.elapsed_compute().map(|ns| ns as f64 / 1_000_000.0);
-    let ms_label = ms_val.map(crate::plan::fmt_ms).unwrap_or_default();
 
-    let mut extras = Vec::new();
+    let mut metrics = Vec::new();
     for m in ms.iter() {
-        let v = m.value();
-        match v.name() {
-            // Shown separately (rows/time) or noise.
-            "output_rows" | "elapsed_compute" | "start_timestamp" | "end_timestamp" => {}
-            name => extras.push(format!("{name}={v}")),
+        let mv = m.value();
+        // `output_rows` is *also* kept in the list (tier-3 "Output" group) — it just
+        // additionally surfaces as the headline `rows`. Timestamps aren't metrics.
+        if mv.is_timestamp() {
+            continue;
         }
+        let kind = metric_kind(mv);
+        let value = mv.as_usize() as u64;
+        // Ratio/pruning have no single scalar unit → keep DataFusion's own display
+        // string; everything else gets our unit-aware label.
+        let label = match kind {
+            crate::plan::MetricKind::Ratio => mv.to_string(),
+            k => k.format(value),
+        };
+        metrics.push(crate::plan::Metric {
+            name: mv.name().to_string(),
+            value,
+            kind,
+            label,
+            zero: value == 0,
+        });
     }
-    (rows, ms_val, ms_label, extras.join(" · "))
+    (rows, metrics)
+}
+
+/// Classify a DataFusion `MetricValue` into the UI's [`crate::plan::MetricKind`],
+/// by variant first (robust — `elapsed_compute`'s name has no "time" in it), then a
+/// name heuristic for the generic operator-defined `Count`/`Gauge` metrics.
+fn metric_kind(v: &MetricValue) -> crate::plan::MetricKind {
+    use crate::plan::MetricKind as K;
+    match v {
+        MetricValue::ElapsedCompute(_) | MetricValue::Time { .. } => K::Time,
+        MetricValue::SpilledBytes(_) | MetricValue::OutputBytes(_) => K::Bytes,
+        MetricValue::CurrentMemoryUsage(_) => K::Memory,
+        MetricValue::Gauge { name, .. } if name.contains("mem") => K::Memory,
+        MetricValue::Ratio { .. } | MetricValue::PruningMetrics { .. } => K::Ratio,
+        MetricValue::Count { name, .. } if name.contains("bytes") => K::Bytes,
+        MetricValue::Count { name, .. } if name.contains("mem") => K::Memory,
+        MetricValue::Count { name, .. } if name.contains("time") => K::Time,
+        _ => K::Count,
+    }
 }
 
 fn truncate_cell(s: &str) -> String {

@@ -42,6 +42,7 @@
   --red:       #ff9aa2;
   --red2:      #f87171;
   --orange:    #ffa657;
+  --warm:      #e2b98c;
   /* type colours */
   --t-str:    #7ee787;
   --t-num:    #79c0ff;
@@ -376,19 +377,50 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .plan-tb { height: 38px; flex: none; display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-3); background: var(--bg); border-bottom: 1px solid var(--line); }
 .plan-body { flex: 1; overflow: auto; min-height: 0; padding: var(--sp-5) var(--sp-5); }
 .plan-raw { margin: 0; color: var(--text2); white-space: pre; width: max-content; }
-.plan-row { display: flex; margin-bottom: var(--sp-3); }
+/* Plan tree — v3 (EXPLAIN_PLAN_SPEC §6, v19 mock): tree-railed cards, kind-coloured,
+   with a parsed-detail grid and a three-tier metrics block under ANALYZE. */
+.plan-row { display: flex; align-items: stretch; margin-bottom: var(--sp-3); }
+/* One 22px column per ancestor level; a faint rail is painted only where the tree
+   continues (via plan::guide_rails), so depth-0 rows have no dangling connectors. */
+.plan-guide { flex: none; width: 22px; align-self: stretch; }
+.plan-guide.on { background: linear-gradient(to right, transparent 10px, var(--line) 10px, var(--line) 11px, transparent 11px); }
 .plan-card { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r-2); padding: var(--sp-3) var(--sp-4); }
 .plan-card-head { display: flex; align-items: center; gap: var(--sp-3); }
-.plan-name { }
 .plan-hot { letter-spacing: .4px; color: var(--orange); background: color-mix(in srgb, var(--orange) 16%, transparent); padding: var(--sp-1) var(--sp-2); border-radius: var(--r-xs); }
-.plan-detail { display: block; color: var(--dim); margin-top: var(--sp-2); word-break: break-word; }
-.plan-metrics { margin-top: var(--sp-3); }
-.plan-metrics-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); margin-bottom: var(--sp-2); }
-.plan-rows { color: var(--text2); flex: none; }
-.plan-ms { color: var(--orange); flex: none; }
-.plan-extra { color: var(--dim2); word-break: break-word; min-width: 0; }
+/* Parsed detail — a key/value definition grid; bare fragments span both columns. */
+.plan-detail-grid { margin-top: var(--sp-2); display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-1) var(--sp-4); }
+.plan-dk { font-size: 11px; line-height: 1.5; color: var(--faint2); white-space: nowrap; }
+.plan-dv { font-size: 11px; line-height: 1.5; color: var(--dim); word-break: break-word; min-width: 0; }
+.plan-dv-full { grid-column: 1 / -1; font-size: 11px; line-height: 1.5; color: var(--dim); word-break: break-word; }
+/* Small inline text-buttons: Detail, "Metrics ▸". */
+.plan-link { display: inline-flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-3); padding: 0; background: none; border: 0; color: var(--dim2); font-size: 10px; cursor: pointer; }
+.plan-link:hover { color: var(--accent); }
+.plan-caret { font-size: 9px; }
+/* Tier 1 — headline (rows · self-time · bytes · time-share bar). */
+.plan-tier1 { margin-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
+.plan-stats { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3) var(--sp-4); font-size: 10px; }
+.plan-stat { color: var(--dim); flex: none; }
+.plan-stat-v { color: var(--text); }
+.plan-stat-time { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--warm); }
+.plan-stat-time .plan-stat-v { color: var(--warm); font-weight: 600; }
+.plan-stat-bytes { color: var(--dim2); }
 .plan-bar { height: 4px; border-radius: var(--r-xs); background: var(--line); overflow: hidden; }
 .plan-bar-fill { height: 100%; }
+/* Tier 2 — non-zero insight callouts (tone colour set inline). */
+.plan-insights { margin-top: var(--sp-3); display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.plan-insight { font-size: 10px; background: var(--elev); padding: var(--sp-1) var(--sp-3); border-radius: var(--r-xs); }
+/* Tier 3 — grouped metrics box. */
+.plan-metrics-wrap { margin-top: var(--sp-3); }
+.plan-metrics-box { margin-top: var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-1); overflow: hidden; }
+.plan-grp-head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); background: var(--bg); }
+.plan-grp-bar { width: 2px; height: 10px; border-radius: var(--r-xs); flex: none; }
+.plan-grp-name { font-size: 9px; letter-spacing: .7px; text-transform: uppercase; color: var(--dim2); }
+.plan-mrow { display: grid; grid-template-columns: 1fr auto; gap: var(--sp-5); align-items: baseline; padding: var(--sp-2) var(--sp-4); border-top: 1px solid var(--line); }
+.plan-mname { font-size: 10px; color: var(--dim); word-break: break-word; }
+.plan-mval { font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; justify-self: end; }
+.plan-mrow.zero { opacity: .55; }
+.plan-zeros { display: block; width: 100%; text-align: left; padding: var(--sp-3) var(--sp-4); border: 0; border-top: 1px solid var(--line); background: var(--bg); color: var(--dim2); font-size: 10px; cursor: pointer; }
+.plan-zeros:hover { color: var(--accent); }
 
 /* ---------- inspector ---------- */
 .ps-inspector { width: 292px; flex: none; background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; }

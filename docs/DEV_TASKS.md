@@ -59,9 +59,8 @@ Builds here → **W7** (Connections pane), **D5** (rescan button).
 Drift: tab close should be a **dot that becomes × on hover** (plain × now). Editor / autocomplete / lint-hover / tab menus / inline rename all aligned.
 Builds here → **E4** (Run → three icon buttons — reworks today's single Run/Cancel).
 
-### U5 · Results grid — `restyle`
-Drift: nested-cell popover is a `Dialog`+highlighted `Code` vs the design's centred backdrop modal + `<pre>` (fine as-is — note only). Zebra / type-colour cells / sticky header match.
-Builds here → **Rz3** (selection + aggregate), **Rz6** (column sort), **Rz5** (record view).
+### U5 · Results grid — `restyle` ✅
+Zebra / type-colour cells / sticky header match, and all builds shipped — **Rz3** (selection + live aggregate), **Rz6** (column sort), **Rz5** (record / row-detail view). Only remaining drift is note-only: the nested-cell popover is a `Dialog`+highlighted `Code` vs the design's centred backdrop modal + `<pre>` (accepted as-is).
 
 ### U6 · Results toolbar · status bar · pager — `restyle` ✅
 Done: find is a **collapsible search popover** — a new `SearchDialog` component built on the S29 `Popup`/`Backdrop` base (trigger measures its own rect, anchors `BOTTOM_END`, dismisses via the backdrop which also clears the filter; ✕ + `on` active-state on the toggle). **Table/Chart** is a text-only `Segment`; right-cluster order is now **find · refresh · clear · export**, all bordered `Toolbar` icon buttons. **Rz8** clear-results is wired: `Action::ClearResults` → `query::clear_results` (drops the active tab's result/plan/error + find query → empty state, no-op mid-run) behind a trash button with a destructive red hover. Status bar + pager already matched. New: `SearchDialog` (+ export), `.res-find-panel` is now card-only (Popup owns position), `.ds-icon-btn.toolbar.res-clear`/`.on` rules.
@@ -70,8 +69,13 @@ Builds here → **Rz3** (status selection token). ⌘F-to-open works via the glo
 ### U7 · Results — chart view — *not built*
 No align work — the whole surface is a feature → **Rz2** (`CHART_SPEC.md`).
 
-### U8 · Results — query-plan view — built v1; v3 is a rebuild feature
-The built view is the old S12 shape; the v19/v3 shape (self-time, 3-tier metrics, connector rails) is a feature that also needs an engine change to emit typed metrics → **Rz-plan** (`EXPLAIN_PLAN_SPEC.md` v3). Only standalone drift: ANALYZE badge colour (purple → amber).
+### U8 · Results — query-plan view — ✅ v3 rebuilt (Rz-plan)
+Rebuilt to the `EXPLAIN_PLAN_SPEC.md` v3 shape: engine emits typed, pre-labelled
+metrics + derived per-node self-time (`crate::plan::{Metric, MetricKind, self_time_ms,
+insights, metric_group}`; engine classifies each `MetricValue` by variant); UI is a
+three-tier card (headline rows·self-time·bytes·time-share bar → non-zero insight
+callouts → collapsed grouped grid w/ hide-zeros), depth guide-rails, 2-line detail
+clamp, amber ANALYZE badge, active-tab summary. ⏳ awaiting Alex's green build on Mac.
 
 ### U9 · Column inspector — `partial-rebuild`
 Drift (built content that's structurally wrong): metadata **fixed 2-col grid → bordered box of dynamic key/value rows** (label-left uppercase mono / value-right, per-row borders, only real facts); drop the bespoke numeric min/max strip (not in design); add the title **source-format badge**; indent nested-field rows by depth. Completeness bar + nested-fields tree match.
@@ -96,7 +100,7 @@ Builds here → **W7** (LOCATION toggle + object-store branch), **D8** (import-r
 
 ### U15 · Dialogs — `restyle`
 Open-prompt / close-while-running / nested-cell popover are faithful (token-level).
-Builds here → **Rz5** (record / row-detail view), **D4** (profile-cost-confirm) — both don't exist yet.
+Builds here → **Rz5** (record / row-detail view) ✅ shipped, **D4** (profile-cost-confirm) — not yet.
 
 ---
 
@@ -132,7 +136,7 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 | Rz5 | Record (row-detail) view (R5; owns U5/U15 record view) | ✅ | Double-click the row-number gutter → centred modal (`RecordDialog`): the row as a **key→value** card — column name over its type-coloured Arrow type, scalar values grid-coloured, **nested struct/list/map as pretty JSON** (`serialize::cell_pretty_json`) in a recessed block. `Row n of total` header, ↑/↓ prev/next (page-local, clamped), `⋯` menu → Copy as TSV/CSV/JSON/Markdown (`Action::CopyRecord` → `query::copy_record`, single-row batch through the Rz4 serializer). |
 | Rz6 | Column sort (R6; owns U5 sort) | ✅ | Header sort chevron cycles asc→desc→clear; applied as an `ORDER BY` over the on-disk snapshot at page-read time (`FetchPage.sort`, DataFrame `.sort()`), nulls always last, real Arrow-type ordering. `run.sort` per result set (survives paging, reset on new result); sort re-fetches page 1. |
 | Rz8 | Clear-results button (R8; owns U6 clear) | ✅ | `Action::ClearResults` → `query::clear_results`; trash in right cluster → empty state, guarded mid-run. |
-| Rz-plan | Plan view v3 rework (S20; owns U8) | ⬜ | Self-time, 3-tier metrics, connectors, clamp; needs engine to send typed/structured metrics. `EXPLAIN_PLAN_SPEC.md` v3. |
+| Rz-plan | Plan view v3 rework (S20; owns U8) | ✅ | Engine emits a typed, pre-labelled `Vec<Metric>` (classified by `MetricValue` variant) + derived per-node **self-time** (`crate::plan::self_time_ms`, §7); UI = three-tier card (headline rows·self-time·bytes·time-share bar → non-zero `insights()` callouts → collapsed `metric_group()` grid w/ hide-zeros), depth guide-rails, 2-line detail clamp, amber ANALYZE badge, active-tab summary. `EXPLAIN_PLAN_SPEC.md` v3. ⏳ awaiting green build on Mac. |
 
 ### Catalog & sources
 | ID | Task | Status | Notes |
