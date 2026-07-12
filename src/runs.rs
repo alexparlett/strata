@@ -68,6 +68,15 @@ impl Selection {
     }
 }
 
+/// A column sort over the snapshot (Rz6): the sorted column index + direction. Nulls always
+/// sort last. `None` on the run = unsorted; a header click cycles asc → desc → clear. Applied
+/// at page-read time (`ORDER BY` over the snapshot) so the snapshot itself is never re-spooled.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ColSort {
+    pub col: usize,
+    pub asc: bool,
+}
+
 /// One tab's live query output — never serialized. The results panel derives its
 /// whole state (grid / plan / error / running / pager) from the active tab's run.
 pub struct WorkspaceRun {
@@ -98,6 +107,9 @@ pub struct WorkspaceRun {
     /// Absent ⇒ the default column width. Session-scoped view state (never persisted);
     /// survives paging + sort (per result set), reset only on an explicit results clear.
     pub col_widths: HashMap<usize, f64>,
+    /// Active column sort over the snapshot (Rz6). `None` = unsorted. Survives paging (each
+    /// page fetch re-applies it); reset on a new query result.
+    pub sort: Option<ColSort>,
     /// When the current result-set landed — drives the "⏱ snapshot Xm ago" chip.
     /// `None` until the tab has actually produced a result. Monotonic (`Instant`),
     /// never serialized (like the rest of the run).
@@ -122,6 +134,7 @@ impl Default for WorkspaceRun {
             sel: None,
             sel_anchor: None,
             col_widths: HashMap::new(),
+            sort: None,
             ran_at: None,
         }
     }

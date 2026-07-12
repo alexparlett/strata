@@ -144,6 +144,7 @@ pub fn clear_results(mut state: Signal<AppState>) {
         run.result_search = String::new();
         run.sel = None;
         run.sel_anchor = None;
+        run.sort = None;
         run.col_widths.clear();
         cleared = true;
     });
@@ -208,14 +209,22 @@ pub fn toggle_plan_raw(_state: Signal<AppState>) {
 /// Fetch a specific page from the active workspace's snapshot (bounded LIMIT/OFFSET).
 pub fn fetch_page(state: Signal<AppState>, page: usize) {
     let ws_id = crate::session::active_id();
-    let (page_size, has_result) = crate::runs::RUNS
+    // Resolve the active sort (if any) to `(column name, ascending)` so the engine can
+    // ORDER BY it over the snapshot; the name comes from the result schema at that index.
+    let (page_size, has_result, sort) = crate::runs::RUNS
         .resolve()
         .get(ws_id)
         .map(|e| {
             let run = e.peek();
-            (run.page_size, run.result.is_some())
+            let sort = run.sort.and_then(|s| {
+                run.result
+                    .as_ref()
+                    .and_then(|r| r.columns.get(s.col))
+                    .map(|c| (c.name.clone(), s.asc))
+            });
+            (run.page_size, run.result.is_some(), sort)
         })
-        .unwrap_or((100, false));
+        .unwrap_or((100, false, None));
     if !has_result {
         return;
     }
@@ -231,8 +240,28 @@ pub fn fetch_page(state: Signal<AppState>, page: usize) {
             ws_id,
             page,
             page_size,
+            sort,
         });
     }
+}
+
+/// Cycle the active tab's column sort (Rz6): unsorted → `ci` asc → `ci` desc → clear, then
+/// re-fetch page 1. Sort is applied over the whole snapshot at page-read time.
+pub fn sort_column(state: Signal<AppState>, ci: usize) {
+    let ws_id = crate::session::active_id();
+    if ws_id == 0 {
+        return;
+    }
+    crate::runs::edit(ws_id, |run| {
+        run.sort = match run.sort {
+            Some(crate::runs::ColSort { col, asc: true }) if col == ci => {
+                Some(crate::runs::ColSort { col: ci, asc: false })
+            }
+            Some(crate::runs::ColSort { col, asc: false }) if col == ci => None,
+            _ => Some(crate::runs::ColSort { col: ci, asc: true }),
+        };
+    });
+    fetch_page(state, 1);
 }
 
 /// Update the find-in-results query.

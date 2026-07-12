@@ -96,11 +96,14 @@ pub enum Command {
         ws_id: u64,
         req_id: u64,
     },
-    /// Read a page from the workspace's existing snapshot (no recompute).
+    /// Read a page from the workspace's existing snapshot (no recompute). `sort` =
+    /// `(column name, ascending)` applied as an `ORDER BY` over the snapshot before the
+    /// page window; `None` = snapshot order (Rz6).
     FetchPage {
         ws_id: u64,
         page: usize,
         page_size: usize,
+        sort: Option<(String, bool)>,
     },
     /// Drop one workspace's snapshot (table + temp file) — e.g. on tab close.
     CleanupWorkspace {
@@ -367,8 +370,9 @@ async fn engine_loop(
                 ws_id,
                 page,
                 page_size,
+                sort,
             } => {
-                let result = fetch_page(&ctx, ws_id, page, page_size).await;
+                let result = fetch_page(&ctx, ws_id, page, page_size, sort).await;
                 let _ = evt_tx.send(Event::PageResult {
                     ws_id,
                     page,
@@ -703,10 +707,11 @@ async fn fetch_page(
     ws_id: u64,
     page: usize,
     page_size: usize,
+    sort: Option<(String, bool)>,
 ) -> Result<Vec<Vec<Cell>>, String> {
     let snap = snapshot_name(ws_id);
     let offset = page.saturating_sub(1) * page_size;
-    read_page(ctx, &snap, offset, page_size).await
+    read_page(ctx, &snap, offset, page_size, sort).await
 }
 
 async fn read_page(
@@ -714,11 +719,17 @@ async fn read_page(
     snap: &str,
     offset: usize,
     limit: usize,
+    sort: Option<(String, bool)>,
 ) -> Result<Vec<Vec<Cell>>, String> {
-    let batches = ctx
-        .table(snap)
-        .await
-        .map_err(|e| e.to_string())?
+    let mut df = ctx.table(snap).await.map_err(|e| e.to_string())?;
+    if let Some((name, asc)) = sort {
+        // ORDER BY the chosen column over the whole snapshot, then take the page window.
+        // `Column::from_name` avoids identifier parsing on odd column names; `nulls_first =
+        // false` ⇒ nulls always sort last, both directions (Rz6).
+        let expr = col(datafusion::common::Column::from_name(name)).sort(asc, false);
+        df = df.sort(vec![expr]).map_err(|e| e.to_string())?;
+    }
+    let batches = df
         .limit(offset, Some(limit))
         .map_err(|e| e.to_string())?
         .collect()

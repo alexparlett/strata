@@ -297,6 +297,14 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .grid-head .hcol .cn { color: var(--text); }
 .grid-head .hcol .cn.sel { color: var(--accent); }
 .grid-head .hcol .ct { }
+/* Rz6 sort: name + chevron on one row; chevron faint, revealed on header hover, accent when
+   this column is the active sort. Long names truncate before the chevron. */
+.grid-head .hcol .hcol-top { display: flex; align-items: center; gap: var(--sp-2); }
+.grid-head .hcol .hcol-top .cn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.grid-head .hcol .col-sort { margin-left: auto; flex: none; display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: none; background: transparent; color: var(--dim3); cursor: pointer; border-radius: var(--r-xs); opacity: 0; }
+.grid-head .hcol:hover .col-sort { opacity: 1; }
+.grid-head .hcol .col-sort:hover { color: var(--text); }
+.grid-head .hcol .col-sort.active { opacity: 1; color: var(--accent); }
 /* V20 column-resize grip: 8px hot-zone on the header's right edge; a 2px accent line on
    hover. Sits above the header (z 6 > sticky head z 3) so it stays grabbable. */
 .grid-head .hcol .col-grip { position: absolute; top: 0; right: -2px; width: 8px; height: 100%; cursor: col-resize; z-index: 6; }

@@ -18,7 +18,7 @@ use crate::ui::components::{
     Badge, BadgeVariant, Dialog, Eyebrow, IconButton, IconButtonVariant, Meta, MonoValue, Readout,
     Spacer,
 };
-use crate::ui::icons::IconName;
+use crate::ui::icons::{IconName, IconSize};
 
 thread_local! {
     /// Set by a cell / row-number / column-header `onmousedown`; read (and reset) by the
@@ -79,6 +79,7 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
     let search = run.result_search.to_lowercase();
     let sel = run.sel.clone();
     let col_widths = run.col_widths.clone();
+    let sort = run.sort;
     drop(run);
 
     // (name, type, type-text-class, cell-class, nested)
@@ -182,7 +183,11 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
                         Eyebrow { class: "hnum", "#" }
                     }
                     for (ci, col) in cols.iter().cloned().enumerate() {
-                        {render_hcol(state, drag_sel, ws_id, ci, col, col_ws[ci], sel_cols.contains(&ci))}
+                        {render_hcol(
+                            state, drag_sel, ws_id, ci, col, col_ws[ci],
+                            sel_cols.contains(&ci),
+                            sort.filter(|s| s.col == ci).map(|s| s.asc),
+                        )}
                     }
                 }
                 for (i, (rownum, cells)) in rows_page.iter().cloned().enumerate() {
@@ -482,8 +487,10 @@ fn cell_sel_style(
     format!("background:{bg};box-shadow:{shadow};")
 }
 
-/// A column header — click selects the whole column (⌘/Ctrl-click adds). (Sort chevron is
-/// Rz6.)
+/// A column header — click selects the whole column (⌘/Ctrl toggles one, ⇧ a range). Carries
+/// the V20 resize grip and the Rz6 sort chevron. `sort_dir`: `Some(true)` = this column sorts
+/// ascending, `Some(false)` = descending, `None` = unsorted.
+#[allow(clippy::too_many_arguments)]
 fn render_hcol(
     state: Signal<AppState>,
     mut drag_sel: Signal<bool>,
@@ -492,6 +499,7 @@ fn render_hcol(
     col: (String, String, &'static str, &'static str, bool),
     w: f64,
     selected: bool,
+    sort_dir: Option<bool>,
 ) -> Element {
     let (cn, ct, tcls, _cc, _nested) = col;
     // Always emit `background` (see `cell_sel_style`) so the tint clears on deselect.
@@ -503,6 +511,17 @@ fn render_hcol(
         Some(Resizing { target: ResizeTarget::Column { ws: rws, ci: rci }, .. }) if rws == ws && rci == ci
     );
     let grip_cls = if grip_active { "col-grip resizing" } else { "col-grip" };
+    // Sort chevron: up = asc, down = desc / unsorted (unsorted is faint, revealed on hover).
+    let sort_icon = if sort_dir == Some(true) {
+        IconName::ChevronUp
+    } else {
+        IconName::ChevronDown
+    };
+    let sort_cls = if sort_dir.is_some() {
+        "col-sort active"
+    } else {
+        "col-sort"
+    };
     rsx! {
         div {
             class: "hcol",
@@ -512,7 +531,18 @@ fn render_hcol(
                 let m = e.modifiers();
                 sel_col(ws, ci, m.meta() || m.ctrl(), m.shift());
             },
-            MonoValue { class: "{cn_cls}", "{cn}" }
+            div { class: "hcol-top",
+                MonoValue { class: "{cn_cls}", "{cn}" }
+                // Sort toggle (Rz6, asc→desc→clear). `stop_propagation` so grabbing it never
+                // selects the column; the click re-fetches page 1 sorted over the snapshot.
+                button {
+                    class: "{sort_cls}",
+                    title: "Sort by this column",
+                    onmousedown: move |e: MouseEvent| e.stop_propagation(),
+                    onclick: move |_| dispatch(state, Action::SortColumn(ci)),
+                    {sort_icon.el(IconSize::Sm)}
+                }
+            }
             Meta { class: "ct {tcls}", "{ct}" }
             // V20 drag-to-resize grip on the right edge. `stop_propagation` so a grab never
             // triggers column-select (or sort). Drag → StartResize with this column's current

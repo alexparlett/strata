@@ -288,6 +288,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         run.result = Some(out);
                         run.sel = None;
                         run.sel_anchor = None;
+                        run.sort = None;
                         run.ran_at = Some(std::time::Instant::now());
                     });
                 }

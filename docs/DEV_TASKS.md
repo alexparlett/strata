@@ -129,7 +129,7 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 | Rz-cols | **Resizable columns (V20)** | ✅ | Per-column drag grip on the header right edge (8px, accent line on hover **and** held lit through the drag), double-click **auto-fit** (clamp 64–520). Widths keyed by col index on the run (`col_widths`, session-scoped, survive paging/sort, reset on clear). Drag via `ResizeTarget::Column` on the existing root move/up driver; default width = `Settings.default_col_width` (struct-only). Rows size to the width-sum (`grid-inner: max-content`) so scroll kicks in + the last column always grows. |
 | Rz4 | Copy affordances (R4) | ⬜ | Right-click cell/row/column/all → CSV/JSON/MD; toast. Includes ⌘C. |
 | Rz5 | Record (row-detail) view (R5; owns U5/U15 record view) | ⬜ | Row as key→value card, prev/next, copy JSON/CSV. |
-| Rz6 | Column sort (R6; owns U5 sort) | ⬜ | Header chevron asc→desc→clear over snapshot, nulls-last. |
+| Rz6 | Column sort (R6; owns U5 sort) | ✅ | Header sort chevron cycles asc→desc→clear; applied as an `ORDER BY` over the on-disk snapshot at page-read time (`FetchPage.sort`, DataFrame `.sort()`), nulls always last, real Arrow-type ordering. `run.sort` per result set (survives paging, reset on new result); sort re-fetches page 1. |
 | Rz8 | Clear-results button (R8; owns U6 clear) | ✅ | `Action::ClearResults` → `query::clear_results`; trash in right cluster → empty state, guarded mid-run. |
 | Rz-plan | Plan view v3 rework (S20; owns U8) | ⬜ | Self-time, 3-tier metrics, connectors, clamp; needs engine to send typed/structured metrics. `EXPLAIN_PLAN_SPEC.md` v3. |
 

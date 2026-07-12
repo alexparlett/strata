@@ -46,6 +46,8 @@ pub enum Action {
         open: bool,
     },
     FetchPage(usize),
+    /// Cycle sort on results column `usize` (asc → desc → clear); re-fetches page 1 (Rz6).
+    SortColumn(usize),
     LoadSelectStar(String),
     FormatSql,
     ClearSql,
@@ -212,6 +214,7 @@ fn run(state: Signal<AppState>, action: Action) {
         SetResultsFind { ws, open } => query::set_results_find(ws, open),
         CancelQuery => query::cancel(state),
         FetchPage(page) => query::fetch_page(state, page),
+        SortColumn(ci) => query::sort_column(state, ci),
         LoadSelectStar(name) => query::select_star(state, &name),
         FormatSql => query::format(state),
         ClearSql => query::clear(state),
