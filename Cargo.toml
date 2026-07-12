@@ -50,7 +50,8 @@ serde = { version = "1", features = ["derive"] }
 # (crate::serialize::PrettyJsonWriter) reflect arrow's column / struct-field order instead of
 # alphabetizing (indexmap is already in the tree via arrow-json). `arbitrary_precision` keeps
 # Decimal128/256 exact — arrow emits them as raw number tokens; without it serde_json would parse
-# them through f64 and reformat high-precision decimals.
+# them through f64 and reformat high-precision decimals. NB: `arbitrary_precision` is incompatible
+# with `#[serde(flatten)]`, so `AppConfig` keeps `settings` a plain nested field (never flatten it).
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 
 # Global config (recent projects + prefs) → JSON in the OS user-config dir.

@@ -25,8 +25,8 @@ pub struct RecentProject {
     pub pinned: bool,
 }
 
-/// The user's settings. Persisted **flat** inside [`AppConfig`] via
-/// `#[serde(flatten)]` (so existing config files stay compatible), and held at
+/// The user's settings. A plain nested field in [`AppConfig`] (a `"settings"` object in the
+/// config JSON — deliberately **not** `#[serde(flatten)]`, see [`AppConfig::settings`]), held at
 /// runtime in the per-window [`crate::settings`] store.
 /// Where "Open Project" opens a project when invoked from a window that already
 /// has one: ask each time (the This/New prompt — B10), reuse this window, or a new
@@ -151,7 +151,10 @@ pub struct AppConfig {
     /// added on open, removed on any window close.
     #[serde(default)]
     pub open_projects: Vec<String>,
-    #[serde(flatten)]
+    /// A plain nested field — **not** `#[serde(flatten)]`: flatten is incompatible with
+    /// serde_json's `arbitrary_precision` (which we enable for exact decimals in JSON copies),
+    /// and a broken flatten deserialize silently reset recents + settings to defaults on load.
+    #[serde(default)]
     pub settings: Settings,
 }
 
