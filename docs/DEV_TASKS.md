@@ -55,9 +55,9 @@ Builds here → **W7** (Connections rail button + pane), **W1** (cross-window se
 Drift (built content that's structurally wrong): section headers should be **collapsible chevron rows** (currently static); table-column rows need an **indent + expand chevron for `struct` columns** (currently flat dot+name+type).
 Builds here → **W7** (Connections pane), **D5** (rescan button).
 
-### U4 · SQL editor + workspace tabs — `restyle`
-Drift: tab close should be a **dot that becomes × on hover** (plain × now). Editor / autocomplete / lint-hover / tab menus / inline rename all aligned.
-Builds here → **E4** (Run → three icon buttons — reworks today's single Run/Cancel).
+### U4 · SQL editor + workspace tabs — `restyle` 🟡 (restyle aligned; tab features open)
+The **restyle** is aligned: editor / autocomplete / lint-hover / tab menus / inline rename match, the tab-close **dot→× on hover** drift is fixed (**T4**), and the Run control is the three-icon toolbar (**E4**). **Not done** — the tab *feature* builds below: **T1 drag-to-reorder** (no pointer-drag handler yet) and **T2** OS-close intercept.
+Builds here → **E4** (Run → three icon buttons) ✅ · **T4** (tab-close dot→× hover) ✅ · **T1** (tab drag-to-reorder) ✅ · **T2** (intercept OS-triggered closes) ⬜ **not built**.
 
 ### U5 · Results grid — `restyle` ✅
 Zebra / type-colour cells / sticky header match, and all builds shipped — **Rz3** (selection + live aggregate), **Rz6** (column sort), **Rz5** (record / row-detail view). Only remaining drift is note-only: the nested-cell popover is a `Dialog`+highlighted `Code` vs the design's centred backdrop modal + `<pre>` (accepted as-is).
@@ -151,10 +151,10 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 ### Tabs, windows & misc
 | ID | Task | Status | Notes |
 | --- | --- | --- | --- |
-| T1 | Tab drag-to-reorder (S19) | ⬜ | Pointer-drag floating clone + insertion line; identity-tracked active tab. |
+| T1 | Tab drag-to-reorder (S19) | ✅ | Mousedown arms a drag; the root pointer-driver promotes it past a threshold (`AppState.tab_drag`, mirrors the resize driver). JetBrains-style bespoke visuals: the dragged tab is **lifted out** of the strip (not rendered), a floating `.ws-tab-ghost` rides the cursor, and a `.ws-tab-slot` gap opens at the drop point. The drop index is computed in **visible (post-removal) order** from the hovered tab's midpoint (per-tab `onmousemove` + measured widths), so every slot — including the origin — is reachable. **Edge auto-scroll**: a spawned loop scrolls the track (`MountedData::scroll`) while the pointer sits near either edge. Reorder = `session::move_workspace` (active stays active by id); autosaves the session. |
 | T2 | Intercept OS-triggered closes (A8) | ⬜ | Red-button / ⌘Q / dock → themed RunningClose (unsafe objc; iterate-together). |
 | T3 | Command palette depth (C5; owns U11) | 🟡 | Grouping, keyboard nav, per-item icons + shortcut hints, columns group. |
-| T4 | Tab close dot→× hover-swap (U4 nicety) | ⬜ | Small: tab dot becomes the close × on hover, per the canvas. |
+| T4 | Tab close dot→× hover-swap (U4 nicety) | ✅ | Close slot shows × on a clean tab, and on a dirty tab an unsaved dot that becomes × on hover (CSS off `.ws-tab.dirty` / `:hover`); the dirty marker moved off the leading status dot into the close slot, per the canvas. |
 
 ---
 
@@ -180,11 +180,11 @@ config/register-table (C3) · saved queries · native File/Edit/Window menu · t
 ## Rough order
 
 1. **F3 spacing/radius tokens** app-wide — the v19 headline; cheap, high-impact.
-2. **Restyle aligns** (built-but-wrong, cheap): U4 → **E4** Run buttons + T4 tab-close · U6
-   collapsible-find + **Rz8** clear · U1/U2/U12/U14 surface polish · U10. Makes the built app *feel* v19.
+2. **Restyle aligns** (built-but-wrong, cheap): U4 restyle done (**E4** Run buttons + **T4** tab-close; tab *features* **T1**/**T2** still open) · U6 ✅
+   (collapsible-find + **Rz8** clear) · U1/U2/U12/U14 surface polish · U10. Makes the built app *feel* v19.
 3. **Rebuilds of built surfaces:** U9 inspector metadata (grid → dynamic key/value box) ·
    U3 sidebar (collapsible sections + nested-column expand) · **D6** export modal (full UI rebuild, backend kept).
 4. **Feature builds** (Part 2 — these *are* the "missing" surfaces): **W1** Settings window ·
    **W7** connections (lands the U2 rail button + U3 pane + U14 LOCATION) · **Rz2** chart ·
    **Rz3–Rz6** grid selection/copy/record/sort · **Rz-plan** plan v3 · **D4** profiling · **T3** palette depth.
-5. **Functional polish:** E1 validator · E3 undo/redo · W2–W5 settings/theme · T1 drag-reorder · T2 OS-close.
+5. **Functional polish:** E1 validator · E3 undo/redo · W2–W5 settings/theme · T2 OS-close.

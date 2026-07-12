@@ -157,12 +157,25 @@ pub fn ProjectRoot(open_path: String) -> Element {
             "data-density": if crate::settings::SETTINGS.resolve().read().density_compact { "compact" } else { "comfortable" },
             onkeydown: move |e| handle_key(state, e),
             onmousemove: move |e| {
-                if state.read().resizing.is_some() {
+                // The root drives both panel-resize and tab drag-to-reorder (T1);
+                // events bubble up here from anywhere in the window.
+                let (resizing, dragging) = {
+                    let s = state.read();
+                    (s.resizing.is_some(), s.tab_drag.is_some())
+                };
+                if resizing {
                     let c = e.client_coordinates();
                     dispatch(state, Action::ResizeMove { x: c.x, y: c.y });
+                } else if dragging {
+                    let c = e.client_coordinates();
+                    dispatch(state, Action::TabDragMove { x: c.x, y: c.y });
                 }
             },
-            onmouseup: move |_| dispatch(state, Action::EndResize),
+            onmouseup: move |_| {
+                // Both handlers are no-ops when their drag isn't active.
+                dispatch(state, Action::EndResize);
+                dispatch(state, Action::EndTabDrag);
+            },
 
             ui::header::Header {}
 

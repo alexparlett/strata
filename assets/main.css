@@ -244,8 +244,26 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 /* Unsaved / diverged from a bound view or saved query (A6). Wins over active. */
 /* Header Save button, emphasised while the active tab has unsaved changes. */
 .icon-btn.dirty { color: var(--orange); }
-.ws-tab .close { color: var(--faint); font-size: 13px; padding-left: var(--sp-1); }
-.ws-tab .close:hover { color: var(--text); }
+.ws-tab .close { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; padding-left: var(--sp-1); }
+.ws-tab .close-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--orange); }
+.ws-tab .close-x { color: var(--faint); font-size: 13px; line-height: 1; }
+.ws-tab .close:hover .close-x { color: var(--text); }
+/* T4 (per canvas): a clean tab shows × always; a dirty tab shows an unsaved dot
+   that becomes × on hover. The `.dirty` class is set on the tab in tabs.rs. */
+.ws-tab .close-dot { display: none; }
+.ws-tab.dirty .close-dot { display: inline-block; }
+.ws-tab.dirty .close-x { display: none; }
+.ws-tab.dirty:hover .close-dot { display: none; }
+.ws-tab.dirty:hover .close-x { display: inline; }
+/* T1 drag-to-reorder — bespoke drag affordances (the design system has no drag
+   primitives). A lifted tab collapses out of the strip; a floating clone rides the
+   cursor; a ghost slot opens a gap where it will drop. */
+/* The dragged tab is lifted out of the strip (not rendered); the ghost rides the
+   cursor and a ghost slot opens a gap where it will drop — incl. its origin. */
+.ws-tab-ghost { position: fixed; left: 0; top: 0; z-index: 9000; pointer-events: none; display: flex; align-items: center; gap: var(--sp-3); height: 30px; max-width: 220px; padding: 0 var(--sp-4); border-radius: var(--r-2); background: var(--surface); border: 1px solid var(--accent); box-shadow: 0 10px 28px rgba(0, 0, 0, .45); color: var(--text); white-space: nowrap; }
+.ws-tab-slot { flex: none; align-self: stretch; display: flex; align-items: center; height: 30px; padding: 0 var(--sp-4); border-radius: var(--r-2) var(--r-2) 0 0; border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent); background: var(--accent-soft); }
+/* Invisible content sizes the gap to (roughly) the dragged tab's width. */
+.ws-tab-slot-fill { visibility: hidden; font: var(--t-body); white-space: nowrap; }
 /* S8 tab-bar controls: pinned right cluster + "show all tabs" popover. */
 .ws-tab-cluster { flex: none; align-self: flex-end; display: flex; align-items: center; gap: var(--sp-1); margin-left: var(--sp-1); padding-left: var(--sp-1); margin-bottom: var(--sp-1); border-left: 1px solid var(--line); }
 .tablist-search { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-1) var(--sp-3) var(--sp-3); margin-bottom: var(--sp-2); border-bottom: 1px solid var(--line); }

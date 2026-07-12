@@ -7,6 +7,12 @@
 //! Tabs are addressed by their stable `crate::session::WorkspaceId`; the strip is
 //! built from the ordered `crate::session::snapshot()`.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use dioxus::html::geometry::PixelsVector2D;
+use dioxus::html::input_data::MouseButton;
+use dioxus::html::ScrollBehavior;
 use dioxus::prelude::*;
 use dioxus_stores::*;
 
@@ -30,6 +36,11 @@ pub(crate) fn Tabs() -> Element {
     // Inline-rename mode: which workspace (by id) is being renamed, and its draft.
     let mut renaming = use_signal(|| None::<WorkspaceId>);
     let mut rename_val = use_signal(String::new);
+    // The scrollable tab track — measured during a drag so dragging to the edge
+    // auto-scrolls it (T1 edge-scroll).
+    let mut scroll_ref = use_signal(|| None::<Rc<MountedData>>);
+    // Per-tab widths (measured on mount) so a drag can hit-test each tab's midpoint.
+    let mut widths = use_signal(|| HashMap::<WorkspaceId, f64>::new());
 
     // Read the active id + each entry through their lenses, so a `switch`
     // (`.active().set`) or a structural / per-field write re-renders the strip —
@@ -42,6 +53,32 @@ pub(crate) fn Tabs() -> Element {
     for w in sess.workspaces().iter() {
         ws.push((w.id().cloned(), w.name().cloned(), w.read().is_dirty()));
     }
+    // Live tab-drag state (T1). Reading it here re-renders the strip as the pointer
+    // moves, so the floating ghost follows the cursor and the drop gap tracks the
+    // insertion point. Only set once the drag has *started* (past the click threshold),
+    // so a plain mousedown-select never disturbs the strip.
+    let drag = state.read().tab_drag.clone();
+    let dragging = drag.as_ref().map_or(false, |d| d.started);
+    let drag_id = if dragging { drag.as_ref().map(|d| d.id) } else { None };
+    // Drop index in *visible* (post-removal) order — a gap can open at any slot,
+    // including the origin.
+    let insert = if dragging { drag.as_ref().map(|d| d.insert) } else { None };
+    let ghost_name = drag.as_ref().map(|d| d.name.clone()).unwrap_or_default();
+    let ghost = if dragging { drag } else { None };
+
+    // The tabs actually rendered. While a drag is live the dragged tab is lifted *out*
+    // of the strip (JetBrains-style), and the rest are tagged with a visible index used
+    // for gap placement + drop hit-testing.
+    let mut render: Vec<(usize, usize, WorkspaceId, String, bool)> = Vec::new();
+    let mut vis = 0usize;
+    for (oi, (id, name, dirty)) in ws.iter().enumerate() {
+        if drag_id == Some(*id) {
+            continue;
+        }
+        render.push((oi, vis, *id, name.clone(), *dirty));
+        vis += 1;
+    }
+    let visible_len = vis;
 
     rsx! {
         div {
@@ -53,11 +90,15 @@ pub(crate) fn Tabs() -> Element {
                 tab_menu.set(Some((active, Point { x: c.x, y: c.y })));
             },
             div { class: "ws-tabs-scroll",
-            for (id, name, dirty) in ws {
+            onmounted: move |e| scroll_ref.set(Some(e.data())),
+            for (oi, vi, id, name, dirty) in render.into_iter() {
                 {
                     let is_rename = renaming_now == Some(id);
                     let rv = rename_draft.clone();
                     let name_seed = name.clone();
+                    let md_name = name.clone();
+                    let show_slot = insert == Some(vi);
+                    let slot_name = ghost_name.clone();
                     let tab_class = match (id == active, dirty) {
                         (true, true) => "ws-tab active dirty",
                         (true, false) => "ws-tab active",
@@ -65,9 +106,95 @@ pub(crate) fn Tabs() -> Element {
                         (false, false) => "ws-tab",
                     };
                     rsx! {
+                        // Drop gap: opens where the dragged tab will land (incl. the origin).
+                        if show_slot {
+                            div { class: "ws-tab-slot",
+                                span { class: "ws-tab-slot-fill", "{slot_name}" }
+                            }
+                        }
                         div {
+                            key: "{id}",
                             class: "{tab_class}",
-                            onclick: move |_| dispatch(state, Action::SwitchTab(id)),
+                            // Measure the tab so drag hit-testing knows its midpoint.
+                            onmounted: move |e| {
+                                let data = e.data();
+                                spawn(async move {
+                                    if let Ok(r) = data.get_client_rect().await {
+                                        widths.write().insert(id, r.size.width);
+                                    }
+                                });
+                            },
+                            // Mousedown selects the tab and arms a drag (the root pointer-driver
+                            // promotes it to a real reorder past the threshold). No onclick, so a
+                            // drag never doubles as a switch.
+                            onmousedown: move |e| {
+                                if is_rename { return; }
+                                if e.trigger_button() != Some(MouseButton::Primary) { return; }
+                                e.prevent_default();
+                                let c = e.client_coordinates();
+                                let el = e.element_coordinates();
+                                if id != active { dispatch(state, Action::SwitchTab(id)); }
+                                dispatch(state, Action::StartTabDrag {
+                                    id,
+                                    from: oi,
+                                    name: md_name.clone(),
+                                    off_x: el.x,
+                                    off_y: el.y,
+                                    x: c.x,
+                                    y: c.y,
+                                });
+                                // Edge auto-scroll for this drag (T1): while the pointer sits
+                                // near the track's left/right edge, keep scrolling the strip so
+                                // off-screen tabs become reachable. Self-terminates on drop.
+                                spawn(async move {
+                                    loop {
+                                        let Some(d) = state.peek().tab_drag.clone() else { break };
+                                        let track = scroll_ref.peek().clone();
+                                        if d.started {
+                                            if let Some(track) = track {
+                                                if let Ok(r) = track.get_client_rect().await {
+                                                    let left = r.origin.x;
+                                                    let right = r.origin.x + r.size.width;
+                                                    let dir = if d.x < left + 52.0 {
+                                                        -1.0
+                                                    } else if d.x > right - 52.0 {
+                                                        1.0
+                                                    } else {
+                                                        0.0
+                                                    };
+                                                    if dir != 0.0 {
+                                                        if let Ok(cur) = track.get_scroll_offset().await {
+                                                            let _ = track
+                                                                .scroll(
+                                                                    PixelsVector2D::new(cur.x + dir * 16.0, cur.y),
+                                                                    ScrollBehavior::Instant,
+                                                                )
+                                                                .await;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                                    }
+                                });
+                            },
+                            // While a drag is live, the pointer's half within this tab picks the
+                            // drop slot in visible space: left half → before it, right half → after.
+                            onmousemove: move |e| {
+                                // Copy out of the signal first — holding a read guard across the
+                                // `dispatch` (which writes state) would panic (already borrowed).
+                                let d = state.peek().tab_drag.clone();
+                                if let Some(d) = d {
+                                    if d.started {
+                                        let w = widths.peek().get(&id).copied().unwrap_or(140.0);
+                                        let want = if e.element_coordinates().x < w / 2.0 { vi } else { vi + 1 };
+                                        if d.insert != want {
+                                            dispatch(state, Action::TabDragOver(want));
+                                        }
+                                    }
+                                }
+                            },
                             ondoubleclick: move |e| {
                                 e.stop_propagation();
                                 rename_val.set(name_seed.clone());
@@ -79,7 +206,9 @@ pub(crate) fn Tabs() -> Element {
                                 let c = e.client_coordinates();
                                 tab_menu.set(Some((id, Point { x: c.x, y: c.y })));
                             },
-                            Dot { size: 6, color: if dirty { "var(--orange)" } else if id == active { "var(--accent)" } else { "var(--dim2)" } }
+                            // Leading dot = active status only; the dirty marker lives in
+                            // the trailing close slot (T4, per the canvas).
+                            Dot { size: 6, color: if id == active { "var(--accent)" } else { "var(--dim2)" } }
                             if is_rename {
                                 input {
                                     class: "tab-rename",
@@ -102,10 +231,26 @@ pub(crate) fn Tabs() -> Element {
                                 }
                             } else {
                                 Body { "{name}" }
-                                span { class: "close", onclick: move |e| { e.stop_propagation(); dispatch(state, Action::CloseTab(id)); }, "×" }
+                                // Close affordance (T4): clean tab shows ×; a dirty tab shows
+                                // an unsaved dot that becomes × on hover (CSS-driven off `.dirty`).
+                                span {
+                                    class: "close",
+                                    title: if dirty { "Unsaved changes — click to close" } else { "Close tab" },
+                                    // Don't let a mousedown on × arm a tab drag / re-select.
+                                    onmousedown: move |e| e.stop_propagation(),
+                                    onclick: move |e| { e.stop_propagation(); dispatch(state, Action::CloseTab(id)); },
+                                    span { class: "close-dot" }
+                                    span { class: "close-x", "×" }
+                                }
                             }
                         }
                     }
+                }
+            }
+            // Trailing gap when dropping past the last visible tab.
+            if dragging && insert == Some(visible_len) {
+                div { class: "ws-tab-slot",
+                    span { class: "ws-tab-slot-fill", "{ghost_name}" }
                 }
             }
             }
@@ -135,6 +280,25 @@ pub(crate) fn Tabs() -> Element {
             if let Some((id, at)) = tab_menu() {
                 ContextMenu { on_close: move |_| tab_menu.set(None), at: Some(at),
                     {tab_menu_items(state, tab_menu, renaming, rename_val, id)}
+                }
+            }
+
+            // Floating ghost tab that rides the cursor during a drag (T1). Fixed-
+            // positioned, so its place in the DOM doesn't matter; `pointer-events:none`
+            // keeps it from stealing the mouseenter events that track the drop slot.
+            if let Some(g) = ghost {
+                {
+                    let gx = g.x - g.off_x;
+                    let gy = g.y - g.off_y;
+                    let gname = g.name.clone();
+                    rsx! {
+                        div {
+                            class: "ws-tab-ghost",
+                            style: "transform: translate({gx}px, {gy}px);",
+                            Dot { size: 6, color: "var(--accent)" }
+                            Body { "{gname}" }
+                        }
+                    }
                 }
             }
         }

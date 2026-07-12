@@ -331,6 +331,34 @@ pub fn switch(id: WorkspaceId) {
     set_active(SESSION.resolve(), id);
 }
 
+/// Drag-to-reorder (T1): move workspace `id` to `insert` — the target slot in the
+/// *post-removal* (visible) order, i.e. the index among the other tabs once the
+/// dragged one is lifted out of the strip. Dropping at `from` is the origin (order
+/// unchanged → a no-op). The active tab is identity-tracked (by id), so it stays
+/// active across the reorder. Writes the `workspaces` lens (never a coarse root write).
+pub fn move_workspace(id: WorkspaceId, insert: usize) {
+    let store = SESSION.resolve();
+    let from = {
+        let s = store.read();
+        match s.workspaces.iter().position(|w| w.id == id) {
+            Some(p) => p,
+            None => return,
+        }
+    };
+    // Dropping back at the origin leaves the order unchanged.
+    if insert == from {
+        return;
+    }
+    let mut store_ = store.workspaces();
+    let mut list = store_.write();
+    if from >= list.len() {
+        return;
+    }
+    let moved = list.remove(from);
+    let to = insert.min(list.len());
+    list.insert(to, moved);
+}
+
 /// Rename workspace `id` (an empty name is ignored by the caller).
 pub fn rename(id: WorkspaceId, name: String) {
     let store = SESSION.resolve();

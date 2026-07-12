@@ -180,6 +180,26 @@ pub struct Resizing {
     pub max: f64,
 }
 
+/// An in-progress tab drag-to-reorder (T1). The tab strip owns the geometry; this
+/// carries only what the root pointer-driver + the floating ghost need. `insert`
+/// is the target slot in the *pre-removal* order (canvas `_moveTab` semantics); the
+/// active tab is identity-tracked, so the dragged tab stays active across the move.
+#[derive(Clone)]
+pub struct TabDrag {
+    pub id: crate::session::WorkspaceId,
+    pub from: usize,
+    /// Ghost label + the grab offset within the tab, and the live pointer position.
+    pub name: String,
+    pub off_x: f64,
+    pub off_y: f64,
+    pub x: f64,
+    pub y: f64,
+    pub start_x: f64,
+    /// True once the pointer crossed the start threshold (a real drag, not a click).
+    pub started: bool,
+    pub insert: usize,
+}
+
 /// Left-nav category in the Settings modal.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SettingsCat {
@@ -226,6 +246,8 @@ pub struct AppState {
     pub editor_h: f64,
     pub log_h: f64,
     pub resizing: Option<Resizing>,
+    /// An in-progress tab drag-to-reorder (T1), or `None` when idle.
+    pub tab_drag: Option<TabDrag>,
     pub closed_tabs: Vec<ClosedTab>,
     /// The engine's registered SQL functions (built-ins + UDFs), pushed once on
     /// startup (`engine::Event::Functions`, A9/F5). Read by the SQL language
@@ -269,6 +291,7 @@ impl AppState {
             editor_h: 240.0,
             log_h: 188.0,
             resizing: None,
+            tab_drag: None,
             closed_tabs: Vec::new(),
             functions: crate::sql::FunctionCatalog::default(),
         }
