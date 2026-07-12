@@ -12,11 +12,12 @@ use std::rc::Rc;
 use crate::action::{dispatch, Action};
 use crate::engine::Cell;
 use crate::runs::Selection;
+use crate::serialize::TextFormat;
 use crate::session::WorkspaceId;
 use crate::state::{AppState, ResizeTarget, Resizing};
 use crate::ui::components::{
-    Badge, BadgeVariant, Dialog, Eyebrow, IconButton, IconButtonVariant, Meta, MonoValue, Readout,
-    Spacer,
+    Badge, BadgeVariant, ContextMenu, Dialog, Eyebrow, IconButton, IconButtonVariant, MenuItem,
+    Meta, MonoValue, Point, Readout, Spacer,
 };
 use crate::ui::icons::{IconName, IconSize};
 
@@ -61,6 +62,8 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
     // mouse-up ends it). The drag-paint (`onmouseenter`) extends the rectangle only while
     // this holds, so a button held for a column-resize grip never paints cells.
     let mut drag_sel = use_signal(|| false);
+    // Right-click copy menu anchor (Rz4); `None` = closed.
+    let mut ctx_menu = use_signal(|| None::<Point>);
 
     let zebra = crate::settings::SETTINGS.resolve().read().zebra;
     // Default column width (V20) from settings; per-column overrides on the run win over it.
@@ -138,26 +141,39 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
             onmounted: move |e| grid_ref.set(Some(e.data())),
             // Focus on any press inside the grid so its onkeydown receives Esc, and so ⌘A —
             // routed via the Edit menu — knows to target cells (the grid holds Select All scope).
-            onmousedown: move |_| {
+            onmousedown: move |e: MouseEvent| {
                 if let Some(el) = grid_ref.peek().clone() {
                     spawn(async move { let _ = el.set_focus(true).await; });
                 }
-                // Bubbles *after* any cell/row/col press. If none claimed it, the press hit
-                // the empty background (e.g. below the last row) → clear the selection and
-                // end any cell-drag intent.
-                if !take_pressed_target() {
+                // Bubbles *after* any cell/row/col press. Always consume the "a target claimed
+                // it" flag; clear only on a *primary* press of the empty background (right-click
+                // keeps the selection so the copy menu can act on it).
+                let claimed = take_pressed_target();
+                if e.trigger_button() == Some(MouseButton::Primary) && !claimed {
                     sel_clear(ws_id);
                     drag_sel.set(false);
                 }
             },
             // Mouse-up anywhere over the grid ends a cell-selection drag.
             onmouseup: move |_| drag_sel.set(false),
+            // Right-click → copy menu, but only when there's a selection to copy (Rz4).
+            oncontextmenu: move |e: MouseEvent| {
+                e.prevent_default();
+                if has_sel {
+                    let c = e.client_coordinates();
+                    ctx_menu.set(Some(Point { x: c.x, y: c.y }));
+                }
+            },
             onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Grid),
             // Clicking anywhere off the grid (it loses focus) clears the selection — so a
             // selection only ever exists while the grid is focused (Esc always reaches it).
+            // Exception: opening the copy context menu pulls focus off the grid, but the menu
+            // needs the selection to act on — so keep it while the menu is open.
             onfocusout: move |_| {
                 crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None);
-                sel_clear(ws_id);
+                if ctx_menu.peek().is_none() {
+                    sel_clear(ws_id);
+                }
             },
             // Esc clears the selection (context-tier — stopped so it doesn't also hit the
             // global Cancel). ⌘A is owned by the Edit menu: it intercepts the accelerator at
@@ -196,6 +212,9 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
                             class: if sel_rows.contains(&i) { "rnum sel" } else { "rnum" },
                             onmousedown: move |e: MouseEvent| {
                                 mark_pressed_target();
+                                if e.trigger_button() != Some(MouseButton::Primary) {
+                                    return;
+                                }
                                 let m = e.modifiers();
                                 sel_row(ws_id, i, m.meta() || m.ctrl(), m.shift());
                             },
@@ -216,6 +235,36 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
         }
         if let Some(c) = cell_view() {
             CellDialog { view: c, cell_view }
+        }
+        // Right-click copy menu (Rz4). Operates on the current selection.
+        if let Some(at) = ctx_menu() {
+            ContextMenu { on_close: move |_| ctx_menu.set(None), at: Some(at), width: 200,
+                {copy_menu_items(state, ctx_menu)}
+            }
+        }
+    }
+}
+
+/// Rows for the results right-click copy menu (Rz4). Four peer "Copy as …" formats over the
+/// same selection; TSV is also the ⌘C default (hence its keyboard hint).
+fn copy_menu_items(state: Signal<AppState>, mut ctx_menu: Signal<Option<Point>>) -> Element {
+    rsx! {
+        MenuItem {
+            label: "Copy as TSV".to_string(),
+            meta: "⌘C".to_string(),
+            onclick: move |_| { ctx_menu.set(None); dispatch(state, Action::CopySelection(TextFormat::Tsv)); },
+        }
+        MenuItem {
+            label: "Copy as CSV".to_string(),
+            onclick: move |_| { ctx_menu.set(None); dispatch(state, Action::CopySelection(TextFormat::Csv)); },
+        }
+        MenuItem {
+            label: "Copy as JSON".to_string(),
+            onclick: move |_| { ctx_menu.set(None); dispatch(state, Action::CopySelection(TextFormat::Json)); },
+        }
+        MenuItem {
+            label: "Copy as Markdown".to_string(),
+            onclick: move |_| { ctx_menu.set(None); dispatch(state, Action::CopySelection(TextFormat::Markdown)); },
         }
     }
 }
@@ -528,6 +577,9 @@ fn render_hcol(
             style: "width:{w}px;background:{bg};",
             onmousedown: move |e: MouseEvent| {
                 mark_pressed_target();
+                if e.trigger_button() != Some(MouseButton::Primary) {
+                    return;
+                }
                 let m = e.modifiers();
                 sel_col(ws, ci, m.meta() || m.ctrl(), m.shift());
             },
@@ -611,6 +663,11 @@ fn render_cell(
             // ⌘A/Esc wouldn't fire). Text-selection is suppressed via `user-select:none`.
             onmousedown: move |e: MouseEvent| {
                 mark_pressed_target();
+                // Right/middle-click keeps the current selection (for the copy menu); only
+                // primary starts/moves a cell selection.
+                if e.trigger_button() != Some(MouseButton::Primary) {
+                    return;
+                }
                 drag_sel.set(true);
                 if e.modifiers().shift() {
                     sel_cell_to(ws, i, ci);

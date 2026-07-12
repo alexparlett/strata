@@ -252,7 +252,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             let hid = s.project.next_hist;
             s.project.next_hist += 1;
             match result {
-                Ok(out) => {
+                Ok((out, batch)) => {
                     let total = out.total;
                     let elapsed = out.elapsed_ms;
                     let page = out.page;
@@ -286,6 +286,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         run.page = page;
                         run.query_error = None;
                         run.result = Some(out);
+                        run.page_batch = Some(batch);
                         run.sel = None;
                         run.sel_anchor = None;
                         run.sort = None;
@@ -429,12 +430,13 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             page,
             result,
         } => match result {
-            Ok(rows) => {
+            Ok((rows, batch)) => {
                 crate::runs::edit_existing(ws_id, |run| {
                     if let Some(res) = &mut run.result {
                         res.rows = rows;
                         res.page = page;
                     }
+                    run.page_batch = Some(batch);
                     run.page = page;
                 });
             }

@@ -315,3 +315,26 @@ pub fn send_select_all() {
 /// concern; text-field select-all elsewhere would go through the webview's own handling.
 #[cfg(not(target_os = "macos"))]
 pub fn send_select_all() {}
+
+/// macOS: fire the native `copy:` action down the responder chain, so the focused text field
+/// *inside the webview* copies its own selection — the eval-free equivalent of the system
+/// Edit ▸ Copy. Used by the Edit menu's custom ⌘C when a text input (not the results grid)
+/// holds focus: our custom item owns the chord (to also serve the grid), so the predefined
+/// `copy` no longer fires natively, and we re-emit it here.
+#[cfg(target_os = "macos")]
+pub fn send_copy() {
+    use objc::runtime::{Object, BOOL};
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        // `to: nil` routes the action to the key window's first responder (the WKWebView,
+        // which forwards `copy:` to its focused DOM editable).
+        let nil: *mut Object = std::ptr::null_mut();
+        let _: BOOL = msg_send![app, sendAction: sel!(copy:) to: nil from: nil];
+    }
+}
+
+/// Non-macOS: no-op — matches [`send_select_all`]; text-field copy elsewhere flows through
+/// the webview's own handling.
+#[cfg(not(target_os = "macos"))]
+pub fn send_copy() {}

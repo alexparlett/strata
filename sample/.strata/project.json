@@ -49,6 +49,14 @@
         "regions.csv"
       ],
       "partition_cols": []
+    },
+    {
+      "name": "products",
+      "format": "parquet",
+      "sources": [
+        "products.parquet"
+      ],
+      "partition_cols": []
     }
   ],
   "views": [

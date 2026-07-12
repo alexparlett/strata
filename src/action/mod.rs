@@ -48,6 +48,8 @@ pub enum Action {
     FetchPage(usize),
     /// Cycle sort on results column `usize` (asc → desc → clear); re-fetches page 1 (Rz6).
     SortColumn(usize),
+    /// Copy the current grid selection to the clipboard in the given format (Rz4).
+    CopySelection(crate::serialize::TextFormat),
     LoadSelectStar(String),
     FormatSql,
     ClearSql,
@@ -215,6 +217,7 @@ fn run(state: Signal<AppState>, action: Action) {
         CancelQuery => query::cancel(state),
         FetchPage(page) => query::fetch_page(state, page),
         SortColumn(ci) => query::sort_column(state, ci),
+        CopySelection(fmt) => query::copy_selection(state, fmt),
         LoadSelectStar(name) => query::select_star(state, &name),
         FormatSql => query::format(state),
         ClearSql => query::clear(state),

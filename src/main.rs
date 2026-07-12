@@ -22,6 +22,7 @@ mod plan;
 mod project;
 mod query_error;
 mod runs;
+mod serialize;
 mod session;
 mod settings;
 mod sql;

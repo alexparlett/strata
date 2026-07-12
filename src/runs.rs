@@ -81,6 +81,10 @@ pub struct ColSort {
 /// whole state (grid / plan / error / running / pager) from the active tab's run.
 pub struct WorkspaceRun {
     pub result: Option<QueryOutput>,
+    /// The current page as an Arrow `RecordBatch` — the type-aware source for Copy / Export
+    /// (Rz4). Parallel to `result.rows`; kept *off* `QueryOutput` so the grid's per-render
+    /// `result.clone()` never touches it (it's Arc-cheap to hold).
+    pub page_batch: Option<datafusion::arrow::array::RecordBatch>,
     pub query_error: Option<QueryError>,
     pub plan: Option<QueryPlan>,
     pub plan_tab: PlanTab,
@@ -120,6 +124,7 @@ impl Default for WorkspaceRun {
     fn default() -> Self {
         Self {
             result: None,
+            page_batch: None,
             query_error: None,
             plan: None,
             plan_tab: PlanTab::default(),

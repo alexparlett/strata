@@ -46,7 +46,12 @@ sqlformat = "0.3"
 
 # Serde for project (.psproj) + app-config persistence
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` keeps object keys in insertion order so pretty-printed JSON copies
+# (crate::serialize::PrettyJsonWriter) reflect arrow's column / struct-field order instead of
+# alphabetizing (indexmap is already in the tree via arrow-json). `arbitrary_precision` keeps
+# Decimal128/256 exact — arrow emits them as raw number tokens; without it serde_json would parse
+# them through f64 and reformat high-precision decimals.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 
 # Global config (recent projects + prefs) → JSON in the OS user-config dir.
 # serde-based, no Dioxus coupling.

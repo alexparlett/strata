@@ -148,7 +148,10 @@ pub enum Event {
     QueryResult {
         req_id: u64,
         ws_id: u64,
-        result: Result<QueryOutput, String>,
+        /// `(display page, page `RecordBatch`)` — the batch is the type-aware source for the
+        /// results Copy / Export-to-clipboard (Rz4). Kept out of `QueryOutput` so the grid's
+        /// per-render clone never touches it (it's Arc-cheap to carry).
+        result: Result<(QueryOutput, RecordBatch), String>,
     },
     /// Result of an `EXPLAIN [ANALYZE]` — a parsed plan tree or an error.
     ExplainResult {
@@ -165,7 +168,8 @@ pub enum Event {
     PageResult {
         ws_id: u64,
         page: usize,
-        result: Result<Vec<Vec<Cell>>, String>,
+        /// `(display rows, page `RecordBatch`)` — see `QueryResult`.
+        result: Result<(Vec<Vec<Cell>>, RecordBatch), String>,
     },
     /// Result of an export: `Ok((path, rows_written))` or an error message.
     Exported {
@@ -600,7 +604,7 @@ async fn run_and_snapshot(
     ws_id: u64,
     sql: &str,
     page_size: usize,
-) -> Result<QueryOutput, String> {
+) -> Result<(QueryOutput, RecordBatch), String> {
     let start = Instant::now();
     let snap = snapshot_name(ws_id);
     let file = snapshot_file(engine_id, ws_id);
@@ -628,12 +632,16 @@ async fn run_and_snapshot(
         .iter()
         .map(|f| column_info(f))
         .collect();
+    // Arrow schema of the result — captured before the DataFrame is consumed by the stream,
+    // for concatenating page 1 into its `RecordBatch`.
+    let arrow_schema = df.schema().inner().clone();
     let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
 
     let opts = FormatOptions::default();
     let mut writer: Option<ArrowWriter<std::fs::File>> = None;
     let mut total = 0usize;
     let mut page1: Vec<Vec<Cell>> = Vec::new();
+    let mut page1_batches: Vec<RecordBatch> = Vec::new();
     while let Some(batch) = stream.next().await {
         let batch = batch.map_err(|e| e.to_string())?;
         total += batch.num_rows();
@@ -645,7 +653,7 @@ async fn run_and_snapshot(
         if let Some(w) = writer.as_mut() {
             w.write(&batch).map_err(|e| e.to_string())?;
         }
-        append_batch_capped(&batch, &mut page1, page_size, &opts)?;
+        append_batch_capped(&batch, &mut page1, &mut page1_batches, page_size, &opts)?;
     }
 
     // Only register a snapshot if the query produced rows; an empty result has
@@ -657,36 +665,42 @@ async fn run_and_snapshot(
             .map_err(|e| e.to_string())?;
     }
 
-    Ok(QueryOutput {
-        columns,
-        rows: page1,
-        total,
-        page: 1,
-        page_size,
-        elapsed_ms: start.elapsed().as_millis(),
-    })
+    let page1_batch = datafusion::arrow::compute::concat_batches(&arrow_schema, &page1_batches)
+        .map_err(|e| e.to_string())?;
+    Ok((
+        QueryOutput {
+            columns,
+            rows: page1,
+            total,
+            page: 1,
+            page_size,
+            elapsed_ms: start.elapsed().as_millis(),
+        },
+        page1_batch,
+    ))
 }
 
-/// Append up to `cap` rows of `batch` (as display cells) to `out`.
+/// Append up to `cap` rows of `batch` to `out` (display cells), collecting the sliced batch
+/// into `batches_out` (concatenated later into the page's type-aware `RecordBatch`).
 fn append_batch_capped(
     batch: &RecordBatch,
     out: &mut Vec<Vec<Cell>>,
+    batches_out: &mut Vec<RecordBatch>,
     cap: usize,
     opts: &FormatOptions,
 ) -> Result<(), String> {
     if out.len() >= cap {
         return Ok(());
     }
+    let take = (cap - out.len()).min(batch.num_rows());
+    let batch = batch.slice(0, take);
     let cols = batch.columns();
     let fmts = cols
         .iter()
         .map(|c| ArrayFormatter::try_new(&**c, opts))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    for r in 0..batch.num_rows() {
-        if out.len() >= cap {
-            break;
-        }
+    for r in 0..take {
         let mut row = Vec::with_capacity(fmts.len());
         for (ci, f) in fmts.iter().enumerate() {
             let null = cols[ci].is_null(r);
@@ -699,6 +713,7 @@ fn append_batch_capped(
         }
         out.push(row);
     }
+    batches_out.push(batch.clone());
     Ok(())
 }
 
@@ -708,7 +723,7 @@ async fn fetch_page(
     page: usize,
     page_size: usize,
     sort: Option<(String, bool)>,
-) -> Result<Vec<Vec<Cell>>, String> {
+) -> Result<Page, String> {
     let snap = snapshot_name(ws_id);
     let offset = page.saturating_sub(1) * page_size;
     read_page(ctx, &snap, offset, page_size, sort).await
@@ -720,8 +735,10 @@ async fn read_page(
     offset: usize,
     limit: usize,
     sort: Option<(String, bool)>,
-) -> Result<Vec<Vec<Cell>>, String> {
+) -> Result<Page, String> {
     let mut df = ctx.table(snap).await.map_err(|e| e.to_string())?;
+    // Arrow schema of the page (sort/limit preserve it) — for concatenating the page batch.
+    let schema = df.schema().inner().clone();
     if let Some((name, asc)) = sort {
         // ORDER BY the chosen column over the whole snapshot, then take the page window.
         // `Column::from_name` avoids identifier parsing on odd column names; `nulls_first =
@@ -735,8 +752,15 @@ async fn read_page(
         .collect()
         .await
         .map_err(|e| e.to_string())?;
-    batches_to_rows(&batches)
+    let batch =
+        datafusion::arrow::compute::concat_batches(&schema, &batches).map_err(|e| e.to_string())?;
+    let rows = batches_to_rows(&batches)?;
+    Ok((rows, batch))
 }
+
+/// A page of results: display cells for the grid + the page `RecordBatch` (type-aware source
+/// for Copy/Export, Rz4).
+type Page = (Vec<Vec<Cell>>, RecordBatch);
 
 fn batches_to_rows(batches: &[RecordBatch]) -> Result<Vec<Vec<Cell>>, String> {
     let opts = FormatOptions::default();

@@ -84,6 +84,10 @@ pub enum MenuCmd {
     /// routed by [`run_project_command`]: to grid cells when the results grid is focused,
     /// otherwise to the native web text selection.
     SelectAll,
+    /// Copy (⌘C). Custom for the same reason as [`SelectAll`](MenuCmd::SelectAll): when the
+    /// results grid is focused we copy the grid *selection* (Rz4, TSV), otherwise we re-emit
+    /// the native `copy:` so text fields copy their own selection.
+    Copy,
     /// Open a specific recent project (payload = its `.strata` path).
     OpenRecent(String),
     /// Dev-only: open the S28/S29 component gallery window (Help menu, debug builds).
@@ -103,6 +107,7 @@ impl MenuCmd {
             MenuCmd::SaveAll => "file.save_all".into(),
             MenuCmd::Settings => "file.settings".into(),
             MenuCmd::SelectAll => "edit.select_all".into(),
+            MenuCmd::Copy => "edit.copy".into(),
             MenuCmd::OpenRecent(path) => format!("{RECENT_PREFIX}{path}"),
             #[cfg(debug_assertions)]
             MenuCmd::OpenGallery => "help.gallery".into(),
@@ -119,6 +124,7 @@ impl MenuCmd {
             "file.save_all" => MenuCmd::SaveAll,
             "file.settings" => MenuCmd::Settings,
             "edit.select_all" => MenuCmd::SelectAll,
+            "edit.copy" => MenuCmd::Copy,
             #[cfg(debug_assertions)]
             "help.gallery" => MenuCmd::OpenGallery,
             other => MenuCmd::OpenRecent(other.strip_prefix(RECENT_PREFIX)?.to_string()),
@@ -191,13 +197,17 @@ pub fn app_menu() -> Menu {
     // (RustRover-style). Stash the handle so those focus changes can toggle it.
     let select_all = MenuItem::with_id(MenuCmd::SelectAll, "Select All", false, accel("CmdOrCtrl+A"));
     SELECT_ALL_ITEM.with(|c| *c.borrow_mut() = Some(select_all.clone()));
+    // Copy is likewise custom (not `PredefinedMenuItem::copy`) so ⌘C is intercepted before the
+    // webview and routed by `run_project_command`: the grid copies its selection, text fields
+    // re-emit native `copy:`. Always enabled (copy is valid in any focus).
+    let copy = MenuItem::with_id(MenuCmd::Copy, "Copy", true, accel("CmdOrCtrl+C"));
     let edit = Submenu::new("Edit", true);
     let _ = edit.append_items(&[
         &PredefinedMenuItem::undo(None),
         &PredefinedMenuItem::redo(None),
         &PredefinedMenuItem::separator(),
         &PredefinedMenuItem::cut(None),
-        &PredefinedMenuItem::copy(None),
+        &copy,
         &PredefinedMenuItem::paste(None),
         &select_all,
     ]);
@@ -270,6 +280,14 @@ pub fn run_project_command(state: Signal<AppState>, cmd: &MenuCmd) {
             SelectAllScope::Input => crate::window::send_select_all(),
             // The item is greyed outside those scopes, so this shouldn't fire — defensive.
             SelectAllScope::None => {}
+        },
+        // ⌘C routes on the same focus scope: grid → copy the selection (TSV, the paste-friendly
+        // default); anywhere else → re-emit native `copy:` for the focused text field.
+        MenuCmd::Copy => match select_all_scope() {
+            SelectAllScope::Grid => {
+                dispatch(state, Action::CopySelection(crate::serialize::TextFormat::Tsv))
+            }
+            SelectAllScope::Input | SelectAllScope::None => crate::window::send_copy(),
         },
         MenuCmd::OpenRecent(path) => dispatch(state, Action::OpenRecent(path.clone())),
         #[cfg(debug_assertions)]

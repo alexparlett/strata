@@ -57,7 +57,7 @@ impl Default for ConfigForm {
 
 #[derive(Clone)]
 pub struct ExportForm {
-    pub format: String, // csv / json / parquet / arrow / clipboard
+    pub format: String, // csv / json / parquet / arrow
     pub name: String,
     pub scope: String,     // "all" | "page"
     pub csv_delim: String, // comma | tab | semicolon | pipe
@@ -65,7 +65,6 @@ pub struct ExportForm {
     pub csv_null: String,            // empty | null | nan
     pub pq_compression: String,      // zstd | snappy | gzip | brotli | lz4 | none
     pub pq_level: u32,               // compression level (codec-dependent)
-    pub clip_format: String,         // markdown | tsv | csv | json
     pub partition_cols: Vec<String>, // ordered columns → Hive dir export
     pub keep_partition: bool,        // keep partition columns inside the files
     pub adv_open: bool,              // advanced-options disclosure
@@ -82,7 +81,6 @@ impl Default for ExportForm {
             csv_null: "empty".into(),
             pq_compression: "zstd".into(),
             pq_level: 3,
-            clip_format: "markdown".into(),
             partition_cols: Vec::new(),
             keep_partition: false,
             adv_open: false,

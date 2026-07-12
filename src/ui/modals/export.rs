@@ -33,7 +33,7 @@ pub fn ExportHost() -> Element {
 fn FormatCards(value: String, on_select: EventHandler<String>) -> Element {
     rsx! {
         div { class: "fmt-grid",
-            for (id, label, desc) in [("csv", "CSV", "delimited text"), ("json", "JSON", "ndjson records"), ("parquet", "Parquet", "columnar"), ("arrow", "Arrow", "IPC"), ("clipboard", "Clipboard", "copy as text")] {
+            for (id, label, desc) in [("csv", "CSV", "delimited text"), ("json", "JSON", "ndjson records"), ("parquet", "Parquet", "columnar"), ("arrow", "Arrow", "IPC")] {
                 button {
                     class: if value == id { "fmt-card on" } else { "fmt-card" },
                     onclick: move |_| on_select.call(id.to_string()),
@@ -71,7 +71,6 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
     };
     let (preview, size_est) = export_preview(state, &ex);
     let fmt = ex.format.clone();
-    let is_clip = fmt == "clipboard";
     let ext = match fmt.as_str() {
         "csv" => ".csv",
         "json" => ".json",
@@ -94,7 +93,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                 Button { variant: ButtonVariant::Secondary, onclick: move |_| on_close.call(()), "Cancel" }
                 Button { variant: ButtonVariant::Primary, icon: IconName::Download, icon_size: IconSize::Sm,
                     onclick: move |_| dispatch(state, Action::RunExport(export())),
-                    if is_clip { "Copy" } else { "Export" }
+                    "Export"
                 }
             },
             div { class: "modal-body ps-scroll",
@@ -173,68 +172,50 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                             },
                             "json" => rsx! { Prose { style: "color:var(--dim2);", "Newline-delimited JSON — one record per line." } },
                             "arrow" => rsx! { Prose { style: "color:var(--dim2);", "Arrow IPC file — no write options." } },
-                            _ => rsx! {
-                                div { class: "row", style: "gap:var(--sp-3);align-items:center;",
-                                    Caption { class: "opt-lbl", "Copy as" }
-                                    Segment {
-                                        value: ex.clip_format.clone(),
-                                        on_select: move |v: String| { export.write().clip_format = v; },
-                                        options: vec![
-                                            SegmentOption::new("markdown", "Markdown"),
-                                            SegmentOption::new("tsv", "TSV"),
-                                            SegmentOption::new("csv", "CSV"),
-                                            SegmentOption::new("json", "JSON"),
-                                        ],
-                                    }
-                                }
-                            },
+                            _ => rsx! {},
                         }
                     }
 
-                    // PARTITION BY (file formats only)
-                    if !is_clip {
-                        Eyebrow { class: "field-label", style: "margin-top:var(--sp-5);", "PARTITION BY (optional)" }
-                        if cols.is_empty() {
-                            Prose { style: "color:var(--faint);", "Run a query to choose partition columns." }
-                        } else {
-                            div { class: "row", style: "gap:var(--sp-3);flex-wrap:wrap;",
-                                for col in cols.iter().cloned() {
-                                    {
-                                        let order = ex.partition_cols.iter().position(|c| c == &col);
-                                        let label = match order { Some(i) => format!("{}  {}", i + 1, col), None => col.clone() };
-                                        let on = order.is_some();
-                                        let colc = col.clone();
-                                        rsx! {
-                                            button { class: if on { "seg on" } else { "seg" },
-                                                onclick: move |_| {
-                                                    let mut w = export.write();
-                                                    let pc = &mut w.partition_cols;
-                                                    if let Some(i) = pc.iter().position(|c| c == &colc) { pc.remove(i); } else { pc.push(colc.clone()); }
-                                                },
-                                                "{label}"
-                                            }
+                    // PARTITION BY
+                    Eyebrow { class: "field-label", style: "margin-top:var(--sp-5);", "PARTITION BY (optional)" }
+                    if cols.is_empty() {
+                        Prose { style: "color:var(--faint);", "Run a query to choose partition columns." }
+                    } else {
+                        div { class: "row", style: "gap:var(--sp-3);flex-wrap:wrap;",
+                            for col in cols.iter().cloned() {
+                                {
+                                    let order = ex.partition_cols.iter().position(|c| c == &col);
+                                    let label = match order { Some(i) => format!("{}  {}", i + 1, col), None => col.clone() };
+                                    let on = order.is_some();
+                                    let colc = col.clone();
+                                    rsx! {
+                                        button { class: if on { "seg on" } else { "seg" },
+                                            onclick: move |_| {
+                                                let mut w = export.write();
+                                                let pc = &mut w.partition_cols;
+                                                if let Some(i) = pc.iter().position(|c| c == &colc) { pc.remove(i); } else { pc.push(colc.clone()); }
+                                            },
+                                            "{label}"
                                         }
                                     }
                                 }
                             }
-                            if !ex.partition_cols.is_empty() {
-                                div { style: "padding:var(--sp-3) 0 0;",
-                                    Toggle { on: ex.keep_partition, on_toggle: move |v| export.write().keep_partition = v, "Keep partition columns inside the files" }
-                                }
+                        }
+                        if !ex.partition_cols.is_empty() {
+                            div { style: "padding:var(--sp-3) 0 0;",
+                                Toggle { on: ex.keep_partition, on_toggle: move |v| export.write().keep_partition = v, "Keep partition columns inside the files" }
                             }
                         }
                     }
 
-                    // DESTINATION (file formats only)
-                    if !is_clip {
-                        Eyebrow { class: "field-label", style: "margin-top:var(--sp-5);", "DESTINATION" }
-                        TextInput { value: "{ex.name}", mono: true, width: 360,
-                            oninput: move |v| export.write().name = v,
-                            trailing: rsx! {
-                                MonoValue { style: "padding:0 var(--sp-4);color:var(--accent);border-left:1px solid var(--line2);align-self:stretch;display:flex;align-items:center;",
-                                    if ex.partition_cols.is_empty() { "{ext}" } else { "/ (folder)" } }
-                            },
-                        }
+                    // DESTINATION
+                    Eyebrow { class: "field-label", style: "margin-top:var(--sp-5);", "DESTINATION" }
+                    TextInput { value: "{ex.name}", mono: true, width: 360,
+                        oninput: move |v| export.write().name = v,
+                        trailing: rsx! {
+                            MonoValue { style: "padding:0 var(--sp-4);color:var(--accent);border-left:1px solid var(--line2);align-self:stretch;display:flex;align-items:center;",
+                                if ex.partition_cols.is_empty() { "{ext}" } else { "/ (folder)" } }
+                        },
                     }
 
                     // PREVIEW
@@ -258,12 +239,7 @@ fn export_preview(_state: Signal<AppState>, ex: &ExportForm) -> (String, String)
     let Some(res) = run.result.as_ref() else {
         return (String::new(), String::new());
     };
-    // Effective format for preview (clipboard uses its sub-format).
-    let eff = if ex.format == "clipboard" {
-        ex.clip_format.as_str()
-    } else {
-        ex.format.as_str()
-    };
+    let eff = ex.format.as_str();
     let cols: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
     let est = estimate_size(res, eff, ex);
 

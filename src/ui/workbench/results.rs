@@ -568,13 +568,14 @@ fn pager_controls(state: Signal<AppState>, total: usize, page: usize, page_size:
     rsx! {
         Select {
             value: page_size.to_string(),
-            width: 118,
+            width: 128,
             align: RectAlign::TOP_START,
             options: vec![
-                SelectOption::new("50", "50 / page"),
                 SelectOption::new("100", "100 / page"),
                 SelectOption::new("500", "500 / page"),
                 SelectOption::new("1000", "1,000 / page"),
+                SelectOption::new("5000", "5,000 / page"),
+                SelectOption::new("10000", "10,000 / page"),
             ],
             on_select: move |v: String| {
                 if let Ok(n) = v.parse::<usize>() { dispatch(state, Action::SetPageSize(n)); }

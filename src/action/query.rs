@@ -139,6 +139,7 @@ pub fn clear_results(mut state: Signal<AppState>) {
             return;
         }
         run.result = None;
+        run.page_batch = None;
         run.query_error = None;
         run.plan = None;
         run.result_search = String::new();
@@ -419,10 +420,11 @@ pub fn delete_saved(mut state: Signal<AppState>, name: &str) {
     s.set_status(LogKind::Info, format!("Deleted query '{name}'"));
 }
 
-/// `Action::RunExport` — file formats pick a destination (native save dialog, or
-/// a folder for a partitioned export) and export the snapshot via the engine's
-/// `COPY … TO`; the "clipboard" format copies the loaded result as text.
-pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
+/// `Action::RunExport` — pick a destination (native save dialog, or a folder for a
+/// partitioned export) and export the snapshot to a file via the engine's `COPY … TO`.
+/// Copying results to the clipboard is handled entirely by the grid's Copy (bounded to
+/// the current page), so export is file-only and streams to disk — safe at any size.
+pub fn run_export(state: Signal<AppState>, ex: crate::state::ExportForm) {
     let (ws_id, page, page_size, tx) = {
         let s = state.read();
         let ws_id = crate::session::active_id();
@@ -436,39 +438,6 @@ pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
             .unwrap_or((1, 100));
         (ws_id, page, page_size, s.cmd_tx.clone())
     };
-
-    // Clipboard: copy the loaded result in the chosen text format (no file dialog).
-    if ex.format == "clipboard" {
-        let (text, n) = {
-            let id = crate::session::active_id();
-            crate::runs::RUNS
-                .resolve()
-                .get(id)
-                .map(|e| {
-                    let run = e.peek();
-                    match run.result.as_ref() {
-                        Some(r) => (result_to_clipboard(r, &ex.clip_format), r.rows.len()),
-                        None => (String::new(), 0),
-                    }
-                })
-                .unwrap_or((String::new(), 0))
-        };
-        let mut s = state.write();
-        if text.is_empty() {
-            s.set_status(LogKind::Warn, "Nothing to copy — run a query first");
-        } else {
-            match arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
-                Ok(()) => {
-                    s.push_log(LogKind::Ok, format!("Copied {n} rows to clipboard"));
-                    s.set_status(LogKind::Ok, format!("Copied {n} rows to clipboard"));
-                }
-                Err(e) => s.set_status(LogKind::Error, format!("Clipboard failed · {e}")),
-            }
-        }
-        drop(s);
-        crate::overlays::close_export();
-        return;
-    }
 
     let ext = match ex.format.as_str() {
         "json" => "json",
@@ -523,110 +492,89 @@ pub fn run_export(mut state: Signal<AppState>, ex: crate::state::ExportForm) {
     });
 }
 
-/// Render the loaded result for the clipboard in the chosen text format.
-fn result_to_clipboard(res: &crate::engine::QueryOutput, fmt: &str) -> String {
-    match fmt {
-        "tsv" => delimited(res, '\t'),
-        "csv" => delimited(res, ','),
-        "json" => result_to_json(res),
-        _ => result_to_markdown(res),
-    }
-}
-
-/// Delimited text (header + rows), quoting fields that contain the separator,
-/// a quote, or a newline.
-fn delimited(res: &crate::engine::QueryOutput, sep: char) -> String {
-    let q = |s: &str| -> String {
-        if s.contains(sep) || s.contains('"') || s.contains('\n') || s.contains('\r') {
-            format!("\"{}\"", s.replace('"', "\"\""))
-        } else {
-            s.to_string()
-        }
-    };
-    let sep = sep.to_string();
-    let mut out = String::new();
-    out.push_str(
-        &res.columns
-            .iter()
-            .map(|c| q(&c.name))
-            .collect::<Vec<_>>()
-            .join(&sep),
-    );
-    out.push('\n');
-    for row in &res.rows {
-        let line: Vec<String> = row
-            .iter()
-            .map(|c| if c.null { String::new() } else { q(&c.text) })
-            .collect();
-        out.push_str(&line.join(&sep));
-        out.push('\n');
-    }
-    out
-}
-
-/// JSON array of row objects (`col: value`); nulls as JSON null, values as text.
-fn result_to_json(res: &crate::engine::QueryOutput) -> String {
-    use serde_json::{Map, Value};
-    let cols: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-    let arr: Vec<Value> = res
-        .rows
-        .iter()
-        .map(|row| {
-            let mut obj = Map::new();
-            for (i, cell) in row.iter().enumerate() {
-                let key = cols.get(i).copied().unwrap_or("").to_string();
-                let v = if cell.null {
-                    Value::Null
-                } else {
-                    Value::String(cell.text.clone())
-                };
-                obj.insert(key, v);
-            }
-            Value::Object(obj)
-        })
-        .collect();
-    serde_json::to_string_pretty(&Value::Array(arr)).unwrap_or_default()
-}
-
-/// Render the loaded result page as a GitHub-flavoured markdown table.
-fn result_to_markdown(res: &crate::engine::QueryOutput) -> String {
-    let mut out = String::new();
-    out.push('|');
-    for c in &res.columns {
-        out.push(' ');
-        out.push_str(&md_escape(&c.name));
-        out.push_str(" |");
-    }
-    out.push('\n');
-    out.push('|');
-    for _ in &res.columns {
-        out.push_str(" --- |");
-    }
-    out.push('\n');
-    for row in &res.rows {
-        out.push('|');
-        for cell in row {
-            out.push(' ');
-            if !cell.null {
-                out.push_str(&md_escape(&cell.text));
-            }
-            out.push_str(" |");
-        }
-        out.push('\n');
-    }
-    out
-}
-
-/// Escape pipes / newlines so cell text can't break the markdown table.
-fn md_escape(s: &str) -> String {
-    s.replace('|', "\\|").replace(['\n', '\r'], " ")
-}
-
 fn delim_char(d: &str) -> char {
     match d {
         "tab" => '\t',
         "semicolon" => ';',
         "pipe" => '|',
         _ => ',',
+    }
+}
+
+/// Rz4 — copy the current grid selection to the clipboard. Builds a sub-`RecordBatch` (project
+/// the selected columns + take the selected rows over the page batch), then serializes it via
+/// [`crate::serialize`] into a [`ClipboardWriter`]. `Tsv` (default: ⌘C) carries no header; the
+/// rest do. Page-local: selection indices are into the grid's filtered visible page.
+pub fn copy_selection(mut state: Signal<AppState>, fmt: crate::serialize::TextFormat) {
+    use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
+
+    let ws_id = crate::session::active_id();
+    let sub: Option<(RecordBatch, usize, usize)> =
+        crate::runs::RUNS.resolve().get(ws_id).and_then(|e| {
+            let run = e.peek();
+            let sel = run.sel.clone()?;
+            let result = run.result.as_ref()?;
+            let batch = run.page_batch.as_ref()?;
+            let search = run.result_search.to_lowercase();
+            // Map each filtered *display* row index → its page-`batch` row index (the grid's
+            // search filter is page-local; `result.rows` and the batch share row order).
+            let filtered_to_batch: Vec<usize> = result
+                .rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    search.is_empty() || r.iter().any(|c| c.text.to_lowercase().contains(&search))
+                })
+                .map(|(oi, _)| oi)
+                .collect();
+            let ncols = result.columns.len();
+            let (mut frows, mut cols): (Vec<usize>, Vec<usize>) = match &sel {
+                crate::runs::Selection::Cell { .. } => {
+                    let (minr, maxr, minc, maxc) = sel.cell_bounds()?;
+                    ((minr..=maxr).collect(), (minc..=maxc).collect())
+                }
+                crate::runs::Selection::Rows(rs) => (rs.clone(), (0..ncols).collect()),
+                crate::runs::Selection::Cols(cs) => {
+                    ((0..filtered_to_batch.len()).collect(), cs.clone())
+                }
+            };
+            frows.sort_unstable();
+            frows.dedup();
+            frows.retain(|&r| r < filtered_to_batch.len());
+            cols.sort_unstable();
+            cols.dedup();
+            cols.retain(|&c| c < ncols && c < batch.num_columns());
+            if frows.is_empty() || cols.is_empty() {
+                return None;
+            }
+            let batch_rows: Vec<u32> = frows.iter().map(|&i| filtered_to_batch[i] as u32).collect();
+            let projected = batch.project(&cols).ok()?;
+            let indices = UInt32Array::from(batch_rows);
+            let taken: Vec<ArrayRef> = projected
+                .columns()
+                .iter()
+                .map(|c| datafusion::arrow::compute::take(&**c, &indices, None))
+                .collect::<Result<_, _>>()
+                .ok()?;
+            let sub = RecordBatch::try_new(projected.schema(), taken).ok()?;
+            Some((sub, frows.len(), cols.len()))
+        });
+
+    let mut s = state.write();
+    match sub {
+        None => s.set_status(LogKind::Warn, "Nothing selected to copy"),
+        Some((batch, r, c)) => {
+            // All formats carry a header row / keys — consistent across TSV/CSV/JSON/Markdown so
+            // a copied selection is always self-describing.
+            let header = true;
+            let mut clip = crate::serialize::ClipboardWriter::new();
+            let res = crate::serialize::write_batch(fmt, &batch, header, &mut clip)
+                .map_err(|e| e.to_string())
+                .and_then(|_| clip.commit());
+            match res {
+                Ok(()) => s.set_status(LogKind::Ok, format!("Copied {r}×{c} to clipboard")),
+                Err(e) => s.set_status(LogKind::Error, format!("Clipboard failed · {e}")),
+            }
+        }
     }
 }
