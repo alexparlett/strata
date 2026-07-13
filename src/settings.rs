@@ -155,6 +155,12 @@ pub fn keybinds() -> Vec<KeyBind> {
     shared().applied.read().keybinds.clone()
 }
 
+/// The engine config overrides (only non-default `datafusion.*` keys). Read by
+/// `crate::engine` at spawn and re-sent live on change (W2). Reactive.
+pub fn engine_overrides() -> std::collections::BTreeMap<String, String> {
+    shared().applied.read().engine.clone()
+}
+
 /// A one-shot snapshot of the committed settings (a clone), used to seed the
 /// Settings window's local draft. Peeks — the draft owns its copy from there on.
 pub fn snapshot() -> Settings {

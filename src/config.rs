@@ -109,6 +109,11 @@ pub struct Settings {
     /// User key-binding overrides (empty = all defaults). Read by `crate::keymap`.
     #[serde(default)]
     pub keybinds: Vec<KeyBind>,
+    /// Curated DataFusion engine option overrides (only non-default keys), applied to
+    /// each window's `SessionContext` (W2). Keyed by `datafusion.*` option name; see
+    /// [`crate::engine_config`].
+    #[serde(default)]
+    pub engine: std::collections::BTreeMap<String, String>,
 }
 
 fn default_theme() -> String {
@@ -137,6 +142,7 @@ impl Default for Settings {
             open_pref: OpenPref::Ask,
             confirm_close_running: true,
             keybinds: Vec::new(),
+            engine: std::collections::BTreeMap::new(),
         }
     }
 }

@@ -1015,7 +1015,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
+ "wasm-bindgen",
  "windows-link 0.2.1",
 ]
 
@@ -6242,9 +6244,28 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlformat",
+ "strata-forms",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "strata-forms"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dioxus",
+ "strata-forms-macro",
+]
+
+[[package]]
+name = "strata-forms-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]

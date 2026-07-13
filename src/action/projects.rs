@@ -213,6 +213,24 @@ fn write_files(state: Signal<AppState>, defs: bool) {
     }
 }
 
+/// Restart this window for the same project — to apply a `datafusion.runtime.*`
+/// engine change (the engine's `RuntimeEnv` is fixed at build, W2). Persists the
+/// project, spawns a fresh window for the same path (whose new engine picks up the
+/// config), then closes this one. Session tabs are already kept current by
+/// `use_persist_session`; an untitled project (`project_path == None`) just opens a
+/// fresh window.
+pub fn restart_window(state: Signal<AppState>) {
+    let path = state
+        .read()
+        .project_path
+        .clone()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    write_files(state, true);
+    crate::window::spawn_project_window(path);
+    dioxus::desktop::window().close();
+}
+
 /// Autosave after a durable change that touched **definitions** — both files.
 pub fn autosave(mut state: Signal<AppState>) {
     if state.read().project_path.is_none() {

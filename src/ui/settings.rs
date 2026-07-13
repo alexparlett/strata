@@ -15,14 +15,19 @@
 //! Categories: Appearance / Data display / System / Keymap (Engine +
 //! settings-search + keymap rebinding are W2/W3/W4).
 
-use dioxus::desktop::{use_window, use_wry_event_handler};
+use dioxus::desktop::{use_muda_event_handler, use_window, use_wry_event_handler};
 use dioxus::prelude::*;
 
 use crate::config::Settings;
 use crate::state::SettingsCat;
+use std::collections::BTreeMap;
+
+use strata_forms::{use_form, validators, Form};
+
 use crate::ui::components::{
-    Body, Button, ButtonVariant, Caption, Eyebrow, Icon, IconButton, IconButtonVariant, Micro,
-    Prose, Segment, SegmentOption, Spacer, Strong, TextInput, Toggle,
+    Body, Button, ButtonVariant, Caption, Eyebrow, FieldKind, FormField, FormState, Icon,
+    IconButton, IconButtonVariant, Micro, Prose, Segment, SegmentOption, SelectOption, Spacer,
+    Strong, TextInput, Toggle,
 };
 use crate::ui::icons::{IconName, IconSize};
 
@@ -39,6 +44,7 @@ fn settings_cat_icon(name: &str) -> Element {
         "palette" => IconName::Palette.el(IconSize::Sm),
         "grid" => IconName::Grid.el(IconSize::Sm),
         "sliders" => IconName::Sliders.el(IconSize::Sm),
+        "engine" => IconName::Engine.el(IconSize::Sm),
         "keyboard" => IconName::Keyboard.el(IconSize::Sm),
         _ => rsx! {},
     }
@@ -87,6 +93,25 @@ pub fn SettingsRoot() -> Element {
         }
     });
 
+    // The Edit menu's custom Select All / Copy (⌘A / ⌘C) are app-global menu commands
+    // that only the focused window should act on. The Settings window has no grid, so
+    // route them straight to the focused text field. Cut/Paste are predefined and
+    // handled natively. Without this, ⌘A does nothing in a Settings text field.
+    use_muda_event_handler(move |ev| {
+        if !crate::window::is_focused_window(win_id) {
+            return;
+        }
+        match crate::menu::MenuCmd::parse(&ev.id().0) {
+            Some(crate::menu::MenuCmd::SelectAll) => {
+                if crate::menu::select_all_scope() == crate::menu::SelectAllScope::Input {
+                    crate::window::send_select_all();
+                }
+            }
+            Some(crate::menu::MenuCmd::Copy) => crate::window::send_copy(),
+            _ => {}
+        }
+    });
+
     // On close (Cancel button, OS close button, or app quit) discard any live theme
     // preview — a no-op after Save, which already committed the theme. Also release
     // the single-window slot.
@@ -116,6 +141,25 @@ pub fn SettingsRoot() -> Element {
     drop(d);
     let os_dark = *crate::settings::OS_DARK.read();
 
+    // Engine settings are their own form: `FormState` owns the `EngineForm` draft
+    // (seeded once from the committed overrides), validates just the edited key on each
+    // change, and gates Save on `is_valid()`. On Save its map is merged back into the
+    // `Settings` snapshot, so persistence stays a single struct.
+    let engine = use_form(
+        move || engine_form_from(&draft.peek().engine),
+        {
+            // On a valid submit: merge the form's overrides back into the Settings
+            // snapshot, persist it, and close the window.
+            let win_close = win.clone();
+            move |form: EngineForm| {
+                let mut s = draft.peek().clone();
+                s.engine = engine_form_to(&form);
+                crate::settings::save_draft(s);
+                win_close.close();
+            }
+        },
+    );
+
     // The window's own chrome follows the LIVE theme (via `use_settings` above, so a
     // preview shows here too); the theme grid's active card follows the draft.
     let density = if density_compact { "compact" } else { "comfortable" };
@@ -127,6 +171,7 @@ pub fn SettingsRoot() -> Element {
         SettingsCat::Appearance => "Appearance",
         SettingsCat::DataDisplay => "Data display",
         SettingsCat::System => "System",
+        SettingsCat::Engine => "Engine",
         SettingsCat::Keymap => "Keymap",
     };
     let grid_style = if sync_os {
@@ -136,10 +181,9 @@ pub fn SettingsRoot() -> Element {
     };
     let os_label = if os_dark { "dark" } else { "light" };
 
-    // Footer actions. Cancel just closes (the drop handler reverts the preview);
-    // Save commits + persists the draft, then closes.
+    // Footer actions. Cancel just closes (the drop handler reverts the preview); Save
+    // runs `engine.submit()`, which persists + closes via the form's `on_submit`.
     let win_cancel = win.clone();
-    let win_save = win.clone();
 
     rsx! {
         style { dangerous_inner_html: crate::CSS }
@@ -163,6 +207,7 @@ pub fn SettingsRoot() -> Element {
                         (SettingsCat::Appearance, "Appearance", "palette"),
                         (SettingsCat::DataDisplay, "Data display", "grid"),
                         (SettingsCat::System, "System", "sliders"),
+                        (SettingsCat::Engine, "Engine", "engine"),
                         (SettingsCat::Keymap, "Keymap", "keyboard"),
                     ] {
                         button {
@@ -305,6 +350,27 @@ pub fn SettingsRoot() -> Element {
                                 }
                             }
                         },
+                        SettingsCat::Engine => rsx! {
+                            div { class: "engine-note",
+                                span { class: "engine-note-ic", Icon { name: IconName::Info, size: IconSize::Sm } }
+                                Caption { "A curated subset of DataFusion's ConfigOptions, applied to every query. Execution, parser, optimizer & result-format changes take effect on the open window; memory & spill limits apply after reopening it." }
+                            }
+                            if !engine_form_to(&engine.data()).is_empty() {
+                                div { class: "row", style: "justify-content:flex-end;margin-bottom:var(--sp-4);",
+                                    Button {
+                                        variant: ButtonVariant::Ghost,
+                                        onclick: move |_| engine.reset(engine_form_from(&BTreeMap::new())),
+                                        "Reset all ({engine_form_to(&engine.data()).len()})"
+                                    }
+                                }
+                            }
+                            for (group, opts) in crate::engine_config::groups() {
+                                Eyebrow { class: "settings-sublabel engine-group", "{group}" }
+                                for opt in opts {
+                                    {engine_row(opt, engine)}
+                                }
+                            }
+                        },
                         SettingsCat::Keymap => rsx! {
                             Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-5);", "Read-only. ⌘ shortcuts also respond to Ctrl." }
                             div { class: "keymap-box",
@@ -323,15 +389,114 @@ pub fn SettingsRoot() -> Element {
                 Button { variant: ButtonVariant::Ghost, onclick: move |_| win_cancel.close(), "Cancel" }
                 Button {
                     variant: ButtonVariant::Primary,
-                    onclick: move |_| {
-                        crate::settings::save_draft(draft.peek().clone());
-                        win_save.close();
-                    },
+                    onclick: move |_| engine.submit(),
                     "Save"
                 }
             }
         }
     }
+}
+
+/// One row in the Engine category — label + description + key on the left, the
+/// type-aware control on the right. The control is a [`FormField`] bound to the engine
+/// [`FormState`] by the option's key: it reads/writes the value, validates that one key
+/// on change, draws the red border + inline caption, and blocks Save via the form.
+fn engine_row(
+    opt: &'static crate::engine_config::EngineOption,
+    form: FormState<EngineForm>,
+) -> Element {
+    rsx! {
+        div { class: "engine-row",
+            div { class: "engine-row-main",
+                Strong { style: "display:block;", "{opt.label}" }
+                Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);max-width:420px;", "{opt.desc}" }
+                Micro { class: "engine-key", "{opt.key}" }
+            }
+            div { class: "engine-row-ctl",
+                FormField { field: form.field(opt.key), kind: engine_field_kind(opt) }
+            }
+        }
+    }
+}
+
+/// Map an engine option's [`crate::engine_config::EngineKind`] to the styled
+/// [`FieldKind`] the [`FormField`] renders (toggle / dropdown / stepper / text).
+fn engine_field_kind(opt: &'static crate::engine_config::EngineOption) -> FieldKind {
+    use crate::engine_config::EngineKind;
+    match opt.kind {
+        EngineKind::Bool => FieldKind::Bool,
+        EngineKind::Enum(choices) => {
+            FieldKind::Select(choices.iter().map(|c| SelectOption::new(*c, *c)).collect())
+        }
+        EngineKind::Int { min, max, step } => FieldKind::Int { min, max, step },
+        EngineKind::Text { placeholder, .. } => FieldKind::Text {
+            placeholder: placeholder.to_string(),
+            mono: true,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Engine form model (UI layer)
+// ---------------------------------------------------------------------------
+
+/// The **UI-only** form for the engine settings — a well-defined set of inputs, one
+/// field per DataFusion option, deliberately distinct from the persisted
+/// `Settings.engine`. `#[derive(Form)]` generates the validation impl from the fields;
+/// each field's id is its config key (via `#[field(id = ..)]`), which is also how the
+/// UI binds rows and how [`engine_form_to`] writes the overrides back on Save. Ints and
+/// enums are held as strings (matching the control boundary); the toggle as a `bool`.
+#[derive(Clone, PartialEq, Default, Form)]
+struct EngineForm {
+    // 0 = one partition per core, so any whole number is valid (usize enforces ≥ 0).
+    #[field(id = "datafusion.execution.target_partitions")]
+    target_partitions: usize,
+    #[field(id = "datafusion.execution.batch_size", validate = validators::at_least_one)]
+    batch_size: usize,
+    #[field(id = "datafusion.execution.time_zone", validate = validators::non_empty)]
+    time_zone: String,
+    // Blank = unlimited, so `size` allows empty; a non-empty value must be a byte size.
+    #[field(id = "datafusion.runtime.memory_limit", validate = validators::size)]
+    memory_limit: String,
+    #[field(id = "datafusion.runtime.max_temp_directory_size", validate = validators::size)]
+    max_temp_directory_size: String,
+    #[field(id = "datafusion.sql_parser.dialect", validate = validators::non_empty)]
+    sql_dialect: String,
+    #[field(id = "datafusion.sql_parser.default_null_ordering", validate = validators::non_empty)]
+    default_null_ordering: String,
+    // The NULL-display text may be blank (renders nulls as empty), so no validator.
+    #[field(id = "datafusion.format.null")]
+    format_null: String,
+    #[field(id = "datafusion.format.date_format", validate = validators::strftime)]
+    date_format: String,
+    #[field(id = "datafusion.format.timestamp_format", validate = validators::strftime)]
+    timestamp_format: String,
+    #[field(id = "datafusion.optimizer.prefer_hash_join")]
+    prefer_hash_join: bool,
+}
+
+/// Seed the form from the persisted overrides: each field starts at its *effective*
+/// value (override or catalog default), keyed by config id.
+fn engine_form_from(overrides: &BTreeMap<String, String>) -> EngineForm {
+    let mut form = EngineForm::default();
+    for opt in crate::engine_config::OPTIONS {
+        if let Some(value) = crate::engine_config::effective(overrides, opt.key) {
+            form.set_field(opt.key, &value);
+        }
+    }
+    form
+}
+
+/// Map the form back to the persisted overrides map — `set_override` drops any value
+/// equal to its default, so the map holds only real overrides.
+fn engine_form_to(form: &EngineForm) -> BTreeMap<String, String> {
+    let mut overrides = BTreeMap::new();
+    for opt in crate::engine_config::OPTIONS {
+        if let Some(value) = form.get_field(opt.key) {
+            crate::engine_config::set_override(&mut overrides, opt.key, value);
+        }
+    }
+    overrides
 }
 
 /// One read-only row in the Keymap category — a command's label + description and

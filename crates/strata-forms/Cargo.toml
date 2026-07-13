@@ -1,0 +1,18 @@
+[package]
+name = "strata-forms"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Headless form validation-state layer for Dioxus (Form trait, FormState, #[derive(Form)])."
+
+[features]
+# `chrono` enables `validators::strftime` (date/time format-pattern validation).
+chrono = ["dep:chrono"]
+
+[dependencies]
+# Signals / hooks / Callback only — no renderer. Matches the app's dioxus 0.7 so the
+# Signal<T> types unify across the crate boundary.
+dioxus = { version = "0.7", features = ["hooks", "signals"] }
+strata-forms-macro = { path = "../strata-forms-macro" }
+# Optional — only for `validators::strftime`.
+chrono = { version = "0.4", optional = true }

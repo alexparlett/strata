@@ -30,6 +30,12 @@ pub fn TextInput(
     /// decides what each key does.
     onkeydown: Option<EventHandler<KeyboardEvent>>,
     #[props(default)] disabled: bool,
+    /// Draw the field in its invalid (red-border) state. A pure visual flag — the value
+    /// stays fully controlled and commits normally via `onchange`. Typically driven by
+    /// a [`super::Form`] (the validation-state layer) that owns the errors; set it
+    /// directly for a one-off field.
+    #[props(default)]
+    invalid: bool,
     /// Render the value in the monospace family (paths, numbers, keys).
     #[props(default)]
     mono: bool,
@@ -71,6 +77,9 @@ pub fn TextInput(
         }
         if disabled {
             c.push_str(" disabled");
+        }
+        if invalid {
+            c.push_str(" invalid");
         }
         c
     };
@@ -199,14 +208,28 @@ pub fn NumberStepper(
             style: "width:{width}px;",
             input {
                 class: "ds-stepper-input",
-                r#type: "text",
-                "inputmode": "numeric",
+                r#type: "number",
                 value: "{value}",
                 disabled: disabled,
                 spellcheck: false,
                 onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),
                 onfocusout: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None),
-                oninput: move |e| {
+                // Numeric-only: WKWebView's `type=number` still *shows* typed letters
+                // (its `.value` just reads back empty), so block non-digit character
+                // keystrokes here. Digits, `-`, navigation/edit keys and ⌘/⌃ shortcuts
+                // (copy / paste / select-all) pass through.
+                onkeydown: move |e| {
+                    let typing_bad = matches!(
+                        e.key(),
+                        Key::Character(c) if !c.chars().all(|ch| ch.is_ascii_digit() || ch == '-')
+                    );
+                    if typing_bad && !(e.modifiers().meta() || e.modifiers().ctrl()) {
+                        e.prevent_default();
+                    }
+                },
+                // Commit on blur / Enter, not per keystroke — so you can select-all and
+                // retype a value freely; parse + clamp on commit.
+                onchange: move |e| {
                     if let Ok(v) = e.value().trim().parse::<i64>() {
                         on_change.call(clamp(v));
                     }

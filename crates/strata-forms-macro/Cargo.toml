@@ -1,0 +1,14 @@
+[package]
+name = "strata-forms-macro"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "#[derive(Form)] for strata-forms."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

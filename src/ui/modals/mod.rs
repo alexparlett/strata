@@ -7,6 +7,7 @@
 mod close_confirm;
 mod command_palette;
 mod config;
+mod engine_restart;
 mod export;
 mod open_prompt;
 mod running_close;
@@ -14,6 +15,7 @@ mod running_close;
 pub use close_confirm::CloseConfirmHost;
 pub use command_palette::CmdkHost;
 pub use config::ConfigHost;
+pub use engine_restart::EngineRestartHost;
 pub use export::ExportHost;
 pub use open_prompt::OpenPromptHost;
 pub use running_close::RunningCloseHost;

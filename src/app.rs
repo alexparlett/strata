@@ -45,9 +45,10 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // project" knows whether it's the last one.
     let win_id = use_hook(crate::window::register_current_window);
 
-    // Spawn the engine, drain its events, and load the assigned project.
+    // Spawn the engine (seeded with the current engine config overrides, W2), drain
+    // its events, and load the assigned project.
     use_hook(move || {
-        let engine::Handle { cmd_tx, evt_rx } = engine::spawn();
+        let engine::Handle { cmd_tx, evt_rx } = engine::spawn(crate::settings::engine_overrides());
         state.write().cmd_tx = Some(cmd_tx);
         spawn(drain_events(state, evt_rx));
         // Recents stay on `AppState` — a separate concern from settings. The shared
@@ -61,6 +62,18 @@ pub fn ProjectRoot(open_path: String) -> Element {
         spawn(async move {
             crate::spawn_startup_rest();
         });
+    });
+
+    // Live-apply engine config (W2): re-send the overrides to this window's engine
+    // whenever the applied settings change (a Settings ▸ Engine Save), so
+    // execution / parser / optimizer / format options take effect without a reopen.
+    // `runtime.*` changes emit a Notice from the engine (they need a reopen). Reading
+    // `engine_overrides()` subscribes this effect to the shared settings.
+    use_effect(move || {
+        let overrides = crate::settings::engine_overrides();
+        if let Some(tx) = state.peek().cmd_tx.clone() {
+            let _ = tx.send(Command::SetEngineConfig(overrides));
+        }
     });
 
     // Global keyboard commands (⌘F/⌘K/…) are OS hotkeys — the webview swallows key events,
@@ -209,6 +222,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             ui::modals::CloseConfirmHost {}
             ui::modals::RunningCloseHost {}
             ui::modals::OpenPromptHost {}
+            ui::modals::EngineRestartHost {}
             // Catalog + tab context menus, the remove-confirm dialog, and the
             // nested-cell view are now self-contained containers rendered by the
             // sidebar / workspace (see `ui::components`).
@@ -608,6 +622,11 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             tracing::warn!("{m}");
             s.push_log(LogKind::Info, m.clone());
             s.set_status(LogKind::Info, m);
+        }
+        Event::EngineRestartRequired => {
+            // A saved `datafusion.runtime.*` change can't apply to the running engine
+            // (W2) — offer a window restart via the prompt.
+            crate::overlays::open_engine_restart();
         }
     }
     drop(s);

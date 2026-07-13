@@ -206,6 +206,7 @@ pub enum SettingsCat {
     Appearance,
     DataDisplay,
     System,
+    Engine,
     Keymap,
 }
 

@@ -9,7 +9,7 @@
 //! UI → engine: `tokio::mpsc::unbounded` of [`Command`]. engine → UI:
 //! `tokio::mpsc::unbounded` of [`Event`], drained by a Dioxus coroutine.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -112,6 +112,11 @@ pub enum Command {
     },
     /// Remove all snapshots (e.g. on app exit).
     CleanupAll,
+    /// Apply new engine config overrides live (W2). The `ConfigOptions` keys take
+    /// effect on the running context immediately; the two `datafusion.runtime.*`
+    /// keys can't change on a live `RuntimeEnv`, so a change there emits a `Notice`
+    /// (they apply when the window is reopened).
+    SetEngineConfig(BTreeMap<String, String>),
     /// Write a workspace's snapshot to a file (or, with `partition_cols`, a
     /// Hive-partitioned directory) via `COPY … TO`.
     Export {
@@ -185,6 +190,9 @@ pub enum Event {
         window: Vec<String>,
     },
     Notice(String),
+    /// A saved `datafusion.runtime.*` change can't be applied to the running engine
+    /// (its `RuntimeEnv` is fixed at build) — the UI offers a window restart (W2).
+    EngineRestartRequired,
 }
 
 pub struct Handle {
@@ -196,7 +204,10 @@ pub struct Handle {
 /// snapshot files so windows never collide.
 static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
 
-pub fn spawn() -> Handle {
+/// Spawn an engine, seeded with the current `datafusion.*` config `overrides` (W2);
+/// they're applied to the `SessionContext` at build (`build_context`). Later changes
+/// arrive as [`Command::SetEngineConfig`].
+pub fn spawn(overrides: BTreeMap<String, String>) -> Handle {
     let (cmd_tx, cmd_rx) = unbounded_channel::<Command>();
     let (evt_tx, evt_rx) = unbounded_channel::<Event>();
     let engine_id = ENGINE_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -208,10 +219,75 @@ pub fn spawn() -> Handle {
                 .enable_all()
                 .build()
                 .expect("tokio runtime");
-            rt.block_on(engine_loop(cmd_rx, evt_tx, engine_id));
+            rt.block_on(engine_loop(cmd_rx, evt_tx, engine_id, overrides));
         })
         .expect("spawn engine");
     Handle { cmd_tx, evt_rx }
+}
+
+/// Build a `SessionContext` honouring the engine config `overrides`: the nine
+/// `ConfigOptions` keys go on the `SessionConfig`; the two `datafusion.runtime.*`
+/// keys build a `RuntimeEnv` (parsed via `parse_capacity_limit`). Bad values are
+/// logged and skipped rather than failing the whole engine.
+fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
+    let mut config = SessionConfig::new();
+    for (key, value) in overrides {
+        if key.starts_with("datafusion.runtime.") {
+            continue; // runtime.* live on the RuntimeEnv, not ConfigOptions
+        }
+        if let Err(e) = config.options_mut().set(key, value) {
+            tracing::warn!("engine config: skipping {key}={value}: {e}");
+        }
+    }
+    match build_runtime(overrides) {
+        Ok(Some(rt)) => SessionContext::new_with_config_rt(config, rt),
+        Ok(None) => SessionContext::new_with_config(config),
+        Err(e) => {
+            tracing::warn!("engine runtime config invalid ({e}); using defaults");
+            SessionContext::new_with_config(config)
+        }
+    }
+}
+
+/// A `RuntimeEnv` from the `datafusion.runtime.*` overrides, or `None` when none are
+/// set (default runtime). Sizes ("2G", "100G") parse via `parse_capacity_limit`.
+fn build_runtime(
+    overrides: &BTreeMap<String, String>,
+) -> Result<Option<Arc<datafusion::execution::runtime_env::RuntimeEnv>>, String> {
+    use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+    let val = |k: &str| {
+        overrides
+            .get(k)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let mem = val("datafusion.runtime.memory_limit");
+    let tmp = val("datafusion.runtime.max_temp_directory_size");
+    if mem.is_none() && tmp.is_none() {
+        return Ok(None);
+    }
+    let mut b = RuntimeEnvBuilder::new();
+    if let Some(m) = mem {
+        let bytes = SessionContext::parse_capacity_limit("datafusion.runtime.memory_limit", &m)
+            .map_err(|e| e.to_string())?;
+        b = b.with_memory_limit(bytes, 1.0);
+    }
+    if let Some(t) = tmp {
+        let bytes =
+            SessionContext::parse_capacity_limit("datafusion.runtime.max_temp_directory_size", &t)
+                .map_err(|e| e.to_string())?;
+        b = b.with_max_temp_directory_size(bytes as u64);
+    }
+    b.build_arc().map(Some).map_err(|e| e.to_string())
+}
+
+/// The two `datafusion.runtime.*` values (memory limit, spill dir cap), for detecting
+/// a change that the running engine can't apply live.
+fn runtime_keys(o: &BTreeMap<String, String>) -> (Option<String>, Option<String>) {
+    (
+        o.get("datafusion.runtime.memory_limit").cloned(),
+        o.get("datafusion.runtime.max_temp_directory_size").cloned(),
+    )
 }
 
 /// An in-flight Query/Explain task for one workspace (S14). Keyed by `ws_id` in
@@ -227,11 +303,15 @@ async fn engine_loop(
     mut cmd_rx: UnboundedReceiver<Command>,
     evt_tx: UnboundedSender<Event>,
     engine_id: u64,
+    mut overrides: BTreeMap<String, String>,
 ) {
     // Leftover snapshots from a previous run are cleared once at process start
     // (`purge_snapshot_root`), not here — wiping the shared root at runtime would
     // clobber other windows' engines.
-    let ctx = SessionContext::new();
+    let ctx = build_context(&overrides);
+    // The runtime.* config this engine's `RuntimeEnv` was built with — a later Save
+    // that leaves the saved runtime.* differing from this needs a window restart.
+    let built_runtime = runtime_keys(&overrides);
     // Enumerate the full function registry (built-ins + any UDFs) once, so the UI's
     // SQL language service (S26/S7/S25) can offer + validate real function names.
     // `udafs`/`udwfs` name-set enumerators are DataFusion 54 (part of why A9 gates S26).
@@ -314,8 +394,10 @@ async fn engine_loop(
                 }
                 let ctx = ctx.clone();
                 let tx = evt_tx.clone();
+                let fmt = CellFormat::new(&overrides);
                 let task = tokio::spawn(async move {
-                    let result = run_and_snapshot(&ctx, engine_id, ws_id, &sql, page_size).await;
+                    let result =
+                        run_and_snapshot(&ctx, engine_id, ws_id, &sql, page_size, &fmt).await;
                     let _ = tx.send(Event::QueryResult {
                         req_id,
                         ws_id,
@@ -377,7 +459,8 @@ async fn engine_loop(
                 page_size,
                 sort,
             } => {
-                let result = fetch_page(&ctx, ws_id, page, page_size, sort).await;
+                let fmt = CellFormat::new(&overrides);
+                let result = fetch_page(&ctx, ws_id, page, page_size, sort, &fmt).await;
                 let _ = evt_tx.send(Event::PageResult {
                     ws_id,
                     page,
@@ -399,6 +482,42 @@ async fn engine_loop(
                 }
                 // Only this engine's (this window's) snapshots.
                 let _ = std::fs::remove_dir_all(snapshot_dir(engine_id));
+            }
+            Command::SetEngineConfig(new_overrides) => {
+                let old_rt = runtime_keys(&overrides);
+                let new_rt = runtime_keys(&new_overrides);
+                // Set every live-settable option to its effective value (so a cleared
+                // override resets to the default), through the shared state so
+                // registered tables survive. runtime.* handled by the restart prompt.
+                // Collect any DataFusion rejections (a value that slipped past the UI
+                // validator, e.g. a hand-edited config) to surface below.
+                let mut rejected = Vec::new();
+                {
+                    let state = ctx.state_ref();
+                    let mut w = state.write();
+                    let opts = w.config_mut().options_mut();
+                    for o in crate::engine_config::OPTIONS {
+                        if o.key.starts_with("datafusion.runtime.") {
+                            continue;
+                        }
+                        let val = new_overrides.get(o.key).map(String::as_str).unwrap_or(o.default);
+                        if let Err(e) = opts.set(o.key, val) {
+                            tracing::warn!("engine config: {}={val}: {e}", o.key);
+                            rejected.push(format!("{} ({val})", o.label));
+                        }
+                    }
+                }
+                overrides = new_overrides;
+                for label in rejected {
+                    let _ = evt_tx.send(Event::Notice(format!(
+                        "Engine setting ignored — invalid value for {label}."
+                    )));
+                }
+                // Runtime.* changed *and* now differs from what this engine was built
+                // with → the running engine is stale; ask the UI to offer a restart.
+                if new_rt != old_rt && new_rt != built_runtime {
+                    let _ = evt_tx.send(Event::EngineRestartRequired);
+                }
             }
             Command::Export {
                 ws_id,
@@ -605,6 +724,7 @@ async fn run_and_snapshot(
     ws_id: u64,
     sql: &str,
     page_size: usize,
+    fmt: &CellFormat,
 ) -> Result<(QueryOutput, RecordBatch), String> {
     let start = Instant::now();
     let snap = snapshot_name(ws_id);
@@ -638,7 +758,6 @@ async fn run_and_snapshot(
     let arrow_schema = df.schema().inner().clone();
     let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
 
-    let opts = FormatOptions::default();
     let mut writer: Option<ArrowWriter<std::fs::File>> = None;
     let mut total = 0usize;
     let mut page1: Vec<Vec<Cell>> = Vec::new();
@@ -654,7 +773,7 @@ async fn run_and_snapshot(
         if let Some(w) = writer.as_mut() {
             w.write(&batch).map_err(|e| e.to_string())?;
         }
-        append_batch_capped(&batch, &mut page1, &mut page1_batches, page_size, &opts)?;
+        append_batch_capped(&batch, &mut page1, &mut page1_batches, page_size, fmt)?;
     }
 
     // Only register a snapshot if the query produced rows; an empty result has
@@ -681,6 +800,39 @@ async fn run_and_snapshot(
     ))
 }
 
+/// Display formatting for grid cells, derived from the engine's `datafusion.format.*`
+/// overrides (W2). Owns the format strings so an arrow [`FormatOptions`] can borrow
+/// them; `null` is the literal shown for NULL cells (which stay flagged `null: true`
+/// for the grid's own dimmed styling, so only the text changes).
+struct CellFormat {
+    null: String,
+    date: String,
+    ts: String,
+}
+
+impl CellFormat {
+    fn new(overrides: &BTreeMap<String, String>) -> Self {
+        let eff = |k: &str| crate::engine_config::effective(overrides, k).unwrap_or_default();
+        Self {
+            null: eff("datafusion.format.null"),
+            date: eff("datafusion.format.date_format"),
+            ts: eff("datafusion.format.timestamp_format"),
+        }
+    }
+
+    /// An arrow [`FormatOptions`] borrowing this config's date/timestamp patterns.
+    fn opts(&self) -> FormatOptions<'_> {
+        let mut o = FormatOptions::default();
+        if !self.date.is_empty() {
+            o = o.with_date_format(Some(&self.date));
+        }
+        if !self.ts.is_empty() {
+            o = o.with_timestamp_format(Some(&self.ts));
+        }
+        o
+    }
+}
+
 /// Append up to `cap` rows of `batch` to `out` (display cells), collecting the sliced batch
 /// into `batches_out` (concatenated later into the page's type-aware `RecordBatch`).
 fn append_batch_capped(
@@ -688,7 +840,7 @@ fn append_batch_capped(
     out: &mut Vec<Vec<Cell>>,
     batches_out: &mut Vec<RecordBatch>,
     cap: usize,
-    opts: &FormatOptions,
+    fmt: &CellFormat,
 ) -> Result<(), String> {
     if out.len() >= cap {
         return Ok(());
@@ -696,9 +848,10 @@ fn append_batch_capped(
     let take = (cap - out.len()).min(batch.num_rows());
     let batch = batch.slice(0, take);
     let cols = batch.columns();
+    let opts = fmt.opts();
     let fmts = cols
         .iter()
-        .map(|c| ArrayFormatter::try_new(&**c, opts))
+        .map(|c| ArrayFormatter::try_new(&**c, &opts))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
     for r in 0..take {
@@ -706,7 +859,7 @@ fn append_batch_capped(
         for (ci, f) in fmts.iter().enumerate() {
             let null = cols[ci].is_null(r);
             let text = if null {
-                "null".to_string()
+                fmt.null.clone()
             } else {
                 truncate_cell(&f.value(r).to_string())
             };
@@ -724,10 +877,11 @@ async fn fetch_page(
     page: usize,
     page_size: usize,
     sort: Option<(String, bool)>,
+    fmt: &CellFormat,
 ) -> Result<Page, String> {
     let snap = snapshot_name(ws_id);
     let offset = page.saturating_sub(1) * page_size;
-    read_page(ctx, &snap, offset, page_size, sort).await
+    read_page(ctx, &snap, offset, page_size, sort, fmt).await
 }
 
 async fn read_page(
@@ -736,6 +890,7 @@ async fn read_page(
     offset: usize,
     limit: usize,
     sort: Option<(String, bool)>,
+    fmt: &CellFormat,
 ) -> Result<Page, String> {
     let mut df = ctx.table(snap).await.map_err(|e| e.to_string())?;
     // Arrow schema of the page (sort/limit preserve it) — for concatenating the page batch.
@@ -755,7 +910,7 @@ async fn read_page(
         .map_err(|e| e.to_string())?;
     let batch =
         datafusion::arrow::compute::concat_batches(&schema, &batches).map_err(|e| e.to_string())?;
-    let rows = batches_to_rows(&batches)?;
+    let rows = batches_to_rows(&batches, fmt)?;
     Ok((rows, batch))
 }
 
@@ -763,8 +918,8 @@ async fn read_page(
 /// for Copy/Export, Rz4).
 type Page = (Vec<Vec<Cell>>, RecordBatch);
 
-fn batches_to_rows(batches: &[RecordBatch]) -> Result<Vec<Vec<Cell>>, String> {
-    let opts = FormatOptions::default();
+fn batches_to_rows(batches: &[RecordBatch], fmt: &CellFormat) -> Result<Vec<Vec<Cell>>, String> {
+    let opts = fmt.opts();
     let mut rows = Vec::new();
     for batch in batches {
         let cols = batch.columns();
@@ -778,7 +933,7 @@ fn batches_to_rows(batches: &[RecordBatch]) -> Result<Vec<Vec<Cell>>, String> {
             for (ci, f) in fmts.iter().enumerate() {
                 let null = cols[ci].is_null(r);
                 let text = if null {
-                    "null".to_string()
+                    fmt.null.clone()
                 } else {
                     truncate_cell(&f.value(r).to_string())
                 };

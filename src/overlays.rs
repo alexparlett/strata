@@ -62,6 +62,9 @@ pub struct OverlayState {
     /// `Some` when `open_pref == "ask"` and a project is being opened from a
     /// project window; the prompt host reads it.
     pub open_prompt: Option<std::path::PathBuf>,
+    /// The engine-restart prompt (W2): a saved `datafusion.runtime.*` change can't be
+    /// applied to the running engine; `true` = the "restart now?" dialog is up.
+    pub engine_restart: bool,
 }
 
 /// The per-window overlay store. Hosts read it (`OVERLAYS.resolve().read().cmdk`)
@@ -80,6 +83,7 @@ pub fn any_open() -> bool {
         || s.close_confirm.is_some()
         || s.close_running_confirm.is_some()
         || s.open_prompt.is_some()
+        || s.engine_restart
 }
 
 pub fn toggle_cmdk() {
@@ -174,4 +178,15 @@ pub fn open_open_prompt(path: std::path::PathBuf) {
 /// Dismiss the open-target prompt.
 pub fn close_open_prompt() {
     OVERLAYS.resolve().open_prompt().set(None);
+}
+
+/// Show the engine-restart prompt (W2) — a saved `datafusion.runtime.*` change needs
+/// a window restart. Callable from the non-component engine-event reducer.
+pub fn open_engine_restart() {
+    OVERLAYS.resolve().engine_restart().set(true);
+}
+
+/// Dismiss the engine-restart prompt.
+pub fn close_engine_restart() {
+    OVERLAYS.resolve().engine_restart().set(false);
 }

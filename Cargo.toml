@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/strata-forms", "crates/strata-forms-macro"]
+resolver = "2"
+
 [package]
 name = "strata"
 version = "0.2.0"
@@ -26,6 +30,11 @@ dioxus-code = { version = "0.1", features = ["runtime", "lang-sql", "lang-json"]
 # Reactive stores (per-entry reactivity + field lenses) — the tab model is a
 # Store<Session>, so each tab view binds a sub-store scoped to its own tab.
 dioxus-stores = "0.7"
+
+# Headless form layer (validation-state + #[derive(Form)]) — workspace sub-crates.
+# The styled field components live app-side (they render our controls); the crate is
+# renderer-agnostic. `chrono` feature enables `validators::strftime`. See crates/strata-forms.
+strata-forms = { path = "crates/strata-forms", features = ["chrono"] }
 
 # OS-level global hotkeys for the app's global commands (⌘F/⌘K/…). Already a
 # transitive dep of dioxus-desktop; pinned to the same 0.7 so the `GlobalHotKeyEvent`

@@ -150,6 +150,17 @@ pub fn clock(sz: u32) -> Element {
         rsx! { circle { cx: "12", cy: "12", r: "9" } path { d: "M12 7v5l3 2" } },
     )
 }
+/// Radiating hub — the Settings ▸ Engine category glyph (design19 Settings.dc.html).
+pub fn engine(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.6",
+        rsx! {
+            path { d: "M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" }
+            circle { cx: "12", cy: "12", r: "4" }
+        },
+    )
+}
 pub fn format(sz: u32) -> Element {
     stroke(sz, "1.8", rsx! { path { d: "M4 6h16M4 12h10M4 18h13" } })
 }
@@ -446,6 +457,7 @@ pub fn catalog() -> &'static [(&'static str, fn(u32) -> Element)] {
         ("maximize", maximize),
         ("minimize", minimize),
         ("gear", gear),
+        ("engine", engine),
         ("clock", clock),
         ("format", format),
         ("save", save),
@@ -509,6 +521,7 @@ pub enum IconName {
     Database,
     Dots,
     Download,
+    Engine,
     ErrCircle,
     Events,
     ExpandRight,
@@ -572,6 +585,7 @@ impl IconName {
             IconName::Database => database(sz),
             IconName::Dots => dots(sz),
             IconName::Download => download(sz),
+            IconName::Engine => engine(sz),
             IconName::ErrCircle => err_circle(sz),
             IconName::Events => events(sz),
             IconName::ExpandRight => expand_right(sz),
