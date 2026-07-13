@@ -50,11 +50,8 @@ pub fn ProjectRoot(open_path: String) -> Element {
         let engine::Handle { cmd_tx, evt_rx } = engine::spawn();
         state.write().cmd_tx = Some(cmd_tx);
         spawn(drain_events(state, evt_rx));
-        // Seed this window's settings store from the app config, and detect the
-        // OS appearance (kept live afterwards by the `ThemeChanged` handler
-        // below). Recents stay on `AppState` — a separate concern from settings.
-        crate::settings::load();
-        crate::settings::set_os_dark(crate::theme::os_is_dark());
+        // Recents stay on `AppState` — a separate concern from settings. The shared
+        // settings context + OS appearance are seeded by `use_settings` below.
         state.write().recent_projects = crate::config::load().recent_projects;
         if !open_path.is_empty() {
             crate::action::projects::load_current(state, std::path::PathBuf::from(open_path));
@@ -142,8 +139,10 @@ pub fn ProjectRoot(open_path: String) -> Element {
     } else {
         ROOT_CLASS.to_string()
     };
-    // Active theme tokens (honouring Sync-with-OS), injected on the root below.
-    let theme_css = crate::theme::css_for(&crate::settings::effective_theme());
+    // Seed the shared settings context + OS appearance (once) and read the effective
+    // theme reactively — injected on the root below, so a theme preview / OS switch
+    // re-themes this window.
+    let theme_css = crate::settings::use_settings();
 
     rsx! {
         style { dangerous_inner_html: crate::CSS }
@@ -154,7 +153,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             // overriding the stylesheet `:root` defaults for the whole app
             // subtree. Unknown id → empty string → `:root` still applies.
             style: "{theme_css}",
-            "data-density": if crate::settings::SETTINGS.resolve().read().density_compact { "compact" } else { "comfortable" },
+            "data-density": if crate::settings::density_compact() { "compact" } else { "comfortable" },
             onkeydown: move |e| handle_key(state, e),
             onmousemove: move |e| {
                 // The root drives both panel-resize and tab drag-to-reorder (T1);
@@ -205,7 +204,6 @@ pub fn ProjectRoot(open_path: String) -> Element {
             // App-global overlays are always-mounted hosts reading the per-window
             // overlay store (see `crate::overlays`); they render nothing until open.
             ui::modals::CmdkHost {}
-            ui::modals::SettingsHost {}
             ui::modals::ExportHost {}
             ui::modals::ConfigHost {}
             ui::modals::CloseConfirmHost {}

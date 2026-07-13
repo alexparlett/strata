@@ -58,11 +58,8 @@ pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
 /// configured **default project directory** when one is set. Async, because a
 /// blocking `rfd` dialog would re-enter the renderer and panic.
 pub fn open_dir(state: Signal<AppState>) {
-    let (open_pref, default_dir) = {
-        let store = crate::settings::SETTINGS.resolve();
-        let s = store.peek();
-        (s.open_pref, s.default_project_dir.clone())
-    };
+    let open_pref = crate::settings::open_pref();
+    let default_dir = crate::settings::default_project_dir();
     spawn(async move {
         let mut dialog = rfd::AsyncFileDialog::new();
         if let Some(dir) = expand_tilde(default_dir.trim()) {
@@ -78,7 +75,7 @@ pub fn open_dir(state: Signal<AppState>) {
 /// `Action::OpenRecent` — open a recent project, honouring the open preference
 /// (This window / New window / Ask), like [`open_dir`].
 pub fn open_recent(state: Signal<AppState>, path: String) {
-    let pref = crate::settings::SETTINGS.resolve().peek().open_pref;
+    let pref = crate::settings::open_pref();
     open_with_pref(state, PathBuf::from(path), pref);
 }
 

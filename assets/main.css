@@ -1012,6 +1012,19 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .keymap-row + .keymap-row { border-top: 1px solid var(--line); }
 .keycap { min-width: 22px; height: 24px; padding: 0 var(--sp-3); display: inline-flex; align-items: center; justify-content: center; color: var(--text2); background: var(--panel); border: 1px solid var(--line3); border-bottom-width: 2px; border-radius: var(--r-1); }
 
+/* Settings — standalone OS window (W1): shell + titlebar + footer. The nav / pane /
+   theme-grid / keymap classes above are shared with the settings content. */
+.settings-root { height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font: var(--t-body); overflow: hidden; }
+.settings-titlebar { flex: none; height: 48px; display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-5); border-bottom: 1px solid var(--line); }
+/* macOS transparent titlebar → clear the native traffic lights on the left. */
+.settings-root.mac .settings-titlebar { padding-left: 82px; }
+.settings-tb-badge { width: 26px; height: 26px; flex: none; border-radius: var(--r-2); background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; justify-content: center; }
+.settings-tb-title { font: var(--t-strong); color: var(--text); }
+.settings-foot { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-4); padding: var(--sp-4) var(--sp-5); border-top: 1px solid var(--line); background: var(--surface); }
+/* Launcher settings gear (W1). */
+.launcher-gear { display: flex; align-items: center; gap: var(--sp-4); width: 100%; padding: var(--sp-3) var(--sp-4); border: none; background: transparent; border-radius: var(--r-2); color: var(--dim); font: var(--t-body); cursor: pointer; text-align: left; }
+.launcher-gear:hover { background: var(--elev); color: var(--text); }
+
 /* config sources */
 .src-row { display: flex; align-items: center; gap: var(--sp-3); }
 .status-ok { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-5); padding: var(--sp-4) var(--sp-4); background: rgba(74,222,128,.06); border: 1px solid rgba(74,222,128,.22); border-radius: var(--r-2); color: var(--green); }

@@ -71,9 +71,9 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
     // Right-click copy menu anchor (Rz4); `None` = closed.
     let mut ctx_menu = use_signal(|| None::<Point>);
 
-    let zebra = crate::settings::SETTINGS.resolve().read().zebra;
+    let zebra = crate::settings::zebra();
     // Default column width (V20) from settings; per-column overrides on the run win over it.
-    let default_w = crate::settings::SETTINGS.resolve().read().default_col_width;
+    let default_w = crate::settings::default_col_width();
     let type_color = state.read().type_color_cells;
     // Rendered only alongside a result, so the `else` arms are defensive.
     let Some(entry) = crate::runs::RUNS.resolve().get(ws_id) else {

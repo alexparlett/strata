@@ -46,7 +46,6 @@ pub enum RunningCloseTarget {
 /// Which overlays are currently open in this window.
 #[derive(Clone, Default, Store)]
 pub struct OverlayState {
-    pub settings: bool,
     pub cmdk: bool,
     pub export: bool,
     /// The table-config window's target (`Some` = open).
@@ -65,7 +64,7 @@ pub struct OverlayState {
     pub open_prompt: Option<std::path::PathBuf>,
 }
 
-/// The per-window overlay store. Hosts read it (`OVERLAYS.resolve().read().settings`)
+/// The per-window overlay store. Hosts read it (`OVERLAYS.resolve().read().cmdk`)
 /// and re-render when it changes; triggers mutate it through the lens helpers below
 /// (callable from components *and* plain functions).
 pub static OVERLAYS: GlobalStore<OverlayState> = Global::new(|| OverlayState::default());
@@ -75,23 +74,12 @@ pub static OVERLAYS: GlobalStore<OverlayState> = Global::new(|| OverlayState::de
 pub fn any_open() -> bool {
     let store = OVERLAYS.resolve();
     let s = store.read();
-    s.settings
-        || s.cmdk
+    s.cmdk
         || s.export
         || s.config.is_some()
         || s.close_confirm.is_some()
         || s.close_running_confirm.is_some()
         || s.open_prompt.is_some()
-}
-
-pub fn toggle_settings() {
-    let s = OVERLAYS.resolve();
-    let open = s.settings().cloned();
-    s.settings().set(!open);
-}
-
-pub fn set_settings(open: bool) {
-    OVERLAYS.resolve().settings().set(open);
 }
 
 pub fn toggle_cmdk() {

@@ -10,6 +10,9 @@
 //! per-window global signal; a signal write needs only the runtime, which we re-enter with
 //! a `RuntimeGuard` — and a scoped effect drains it through the keymap.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use dioxus::core::{Runtime, RuntimeGuard};
 use dioxus::desktop::{window, ShortcutHandle};
 use dioxus::prelude::*;
@@ -38,34 +41,53 @@ pub fn use_shortcuts(state: Signal<AppState>, focused: Signal<bool>) {
         }
     });
 
-    // (Re)register on focus; remove on blur.
-    let mut handles = use_signal(Vec::<ShortcutHandle>::new);
-    use_effect(move || {
-        let win = window();
-        let rt = Runtime::current();
-        for h in handles.write().drain(..) {
-            win.remove_shortcut(h);
-        }
-        if focused() {
-            for &cmd in crate::keymap::GLOBAL {
-                let Some(hk) = hotkey_for(cmd) else {
-                    continue;
-                };
-                // Registered only while focused (this effect gate), so the callback needs
-                // no focus check — the register/remove lifecycle is the gate.
-                let rt = rt.clone();
-                let registered = win.create_shortcut(hk, move |st| {
-                    if st == HotKeyState::Pressed {
-                        // Re-enter the runtime so the global-signal write is valid; the
-                        // scoped effect above then dispatches it.
-                        let _guard = RuntimeGuard::new(rt.clone());
-                        *PENDING.write() = Some(cmd);
+    // (Re)register on focus; remove on blur. Handles live in a plain `Rc<RefCell>`
+    // (not a signal) so the `use_drop` below can safely touch them during teardown,
+    // when a `use_signal`'s backing box may already be freed.
+    let handles: Rc<RefCell<Vec<ShortcutHandle>>> = use_hook(|| Rc::new(RefCell::new(Vec::new())));
+    use_effect({
+        let handles = handles.clone();
+        move || {
+            let win = window();
+            let rt = Runtime::current();
+            for h in handles.borrow_mut().drain(..) {
+                win.remove_shortcut(h);
+            }
+            if focused() {
+                for &cmd in crate::keymap::GLOBAL {
+                    let Some(hk) = hotkey_for(cmd) else {
+                        continue;
+                    };
+                    // Registered only while focused (this effect gate), so the callback
+                    // needs no focus check — the register/remove lifecycle is the gate.
+                    let rt = rt.clone();
+                    let registered = win.create_shortcut(hk, move |st| {
+                        if st == HotKeyState::Pressed {
+                            // Re-enter the runtime so the global-signal write is valid; the
+                            // scoped effect above then dispatches it.
+                            let _guard = RuntimeGuard::new(rt.clone());
+                            *PENDING.write() = Some(cmd);
+                        }
+                    });
+                    if let Ok(h) = registered {
+                        handles.borrow_mut().push(h);
                     }
-                });
-                if let Ok(h) = registered {
-                    handles.write().push(h);
                 }
             }
+        }
+    });
+
+    // Remove this window's OS hotkeys when it closes. The shortcut registry is
+    // app-global (shared across windows), so a handle left registered after the
+    // window's `VirtualDom` is dropped would fire its callback under this window's
+    // now-dead runtime and panic on the `PENDING` global-signal write. Blur usually
+    // clears them, but a close *while focused* races the teardown — so drop them
+    // deterministically here. `win` is captured (not looked up via context) so it's
+    // valid during unmount.
+    let win = use_hook(window);
+    use_drop(move || {
+        for h in handles.borrow_mut().drain(..) {
+            win.remove_shortcut(h);
         }
     });
 }

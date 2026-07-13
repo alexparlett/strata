@@ -43,18 +43,10 @@ pub fn LauncherRoot() -> Element {
     // Recents live in a signal so pin / remove update the list in place; each
     // mutation writes the config store then reloads this signal from it.
     let recents = use_signal(|| crate::config::load().recent_projects);
-    // The launcher has no project, so it reads the persisted theme from the
-    // machine-global config (honouring Sync-with-OS) and injects it like a
-    // project window does.
-    let theme_css = use_hook(|| {
-        let cfg = crate::config::load();
-        let id = crate::theme::effective_id(
-            &cfg.settings.theme,
-            cfg.settings.sync_os,
-            crate::theme::os_is_dark(),
-        );
-        crate::theme::css_for(&id)
-    });
+    // The launcher has no project, so it wires into the shared `crate::settings`
+    // context like a project window — a live theme preview from the Settings window
+    // re-themes it too.
+    let theme_css = crate::settings::use_settings();
 
     let mut filter = use_signal(String::new);
     let f = filter.read().to_lowercase();
@@ -104,6 +96,13 @@ pub fn LauncherRoot() -> Element {
                             Strong { "Projects" }
                         }
                         Spacer {}
+                        // Settings gear (W1) — opens the standalone Settings window.
+                        button {
+                            class: "launcher-gear",
+                            onclick: move |_| crate::window::spawn_settings_window(),
+                            Icon { name: IconName::Gear, size: IconSize::Sm }
+                            Strong { "Settings" }
+                        }
                     }
 
                     // right pane — search + Open + recents

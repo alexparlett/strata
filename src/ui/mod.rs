@@ -15,6 +15,7 @@ pub mod icons;
 pub mod inspector;
 pub mod launcher;
 pub mod modals;
+pub mod settings;
 pub mod sidebar;
 // `statusbar` retired by S23 (the activity rail carries Events/History; run state
 // lives in the results panel). The file is kept but no longer compiled.

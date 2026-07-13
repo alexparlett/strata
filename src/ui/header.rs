@@ -65,7 +65,7 @@ pub fn Header() -> Element {
                 IconButton { icon: IconName::Gear,
                     variant: IconButtonVariant::Toolbar,
                     title: "Settings (⌘,)",
-                    onclick: move |_| crate::overlays::toggle_settings(),
+                    onclick: move |_| crate::window::spawn_settings_window(),
                 }
             }
         }

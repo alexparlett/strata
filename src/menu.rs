@@ -271,7 +271,7 @@ pub fn run_project_command(state: Signal<AppState>, cmd: &MenuCmd) {
         MenuCmd::OpenProject => dispatch(state, Action::OpenProject),
         MenuCmd::CloseProject => dispatch(state, Action::CloseProject),
         MenuCmd::SaveAll => dispatch(state, Action::SaveProject),
-        MenuCmd::Settings => crate::overlays::toggle_settings(),
+        MenuCmd::Settings => crate::window::spawn_settings_window(),
         MenuCmd::SelectAll => match select_all_scope() {
             SelectAllScope::Grid => crate::ui::workbench::grid::select_all_active_grid(),
             // The focused element is a text field (that's what set this scope). Re-emit the

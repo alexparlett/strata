@@ -1,53 +1,230 @@
-//! Per-window **settings store** — the user's [`crate::config::Settings`] held in a
-//! `dioxus-stores` `GlobalStore`, mirroring [`crate::overlays`].
+//! Shared, cross-window **settings** — the user's [`crate::config::Settings`], held
+//! in owner-independent (leaked) `Signal`s in a thread-local.
 //!
-//! Deliberately *not* on `AppState`: settings are a cross-cutting concern read from
-//! both components (the grid's zebra/density, the header/theme) and the
-//! non-component action layer (`row_limit` in `query::select_star`, `open_pref` /
-//! `default_project_dir` in `projects::open_dir`) — a per-window `GlobalStore` is
-//! reachable from both; a context provider would not be. Each project window is its
-//! own `VirtualDom`, so the store is per-window; mutations persist back to the
-//! machine-global app config immediately.
+//! Every window runs on the one UI thread, so a `thread_local!` is effectively
+//! process-global: the *same* signals are shared by all windows. Reads inside a
+//! component subscribe reactively (a change re-renders every window); the
+//! non-component action layer (`row_limit` in `query::saved`, `open_pref` in
+//! `projects::open_dir`, `keybinds` in `keymap`) reads the very same signals — a
+//! plain context provider would not reach it, which is why this stays a global.
 //!
-//! **Mutators write through field lenses** (`SETTINGS.resolve().theme().set(..)`),
-//! never a coarse `.write()` — see [[workbench-and-runs]] for why a lens write is
-//! what actually notifies lens subscribers.
+//! The state is split into **two** shared signals by *when* a change lands in the
+//! other windows:
+//!
+//! - [`Shared::theme`] — the **live** display theme. The Settings window writes it
+//!   the instant a theme is picked, so every window re-themes immediately (a live
+//!   preview). It is **never** written to disk here; Save commits it, Cancel
+//!   reverts it.
+//! - [`Shared::applied`] — the **committed** settings (behaviour: density / zebra /
+//!   row-limit / open-pref / …), read by every window. Changes only on the Settings
+//!   window's Save, or via an explicit immediate mutator (a dialog "don't ask
+//!   again").
+//!
+//! Persistence to the machine-global app config happens **only** on Save (all
+//! fields, theme included) or from those immediate mutators. See [[settings-store]].
+
+use std::cell::Cell;
 
 use dioxus::prelude::*;
-use dioxus_stores::*;
 
-use crate::config::{Settings, SettingsStoreExt};
+use crate::config::{KeyBind, OpenPref, Settings};
 
-/// This window's live settings. Seeded from the app config on window startup
-/// ([`load`]); every mutation below writes through to the config.
-pub static SETTINGS: GlobalStore<Settings> = Global::new(|| Settings::default());
+/// The live display-theme selection: the chosen theme id + whether to follow the
+/// OS. The *effective* theme (honouring Sync-with-OS and the OS appearance) is
+/// derived in [`effective_theme`].
+#[derive(Clone, PartialEq)]
+pub struct ThemeSel {
+    pub id: String,
+    pub sync_os: bool,
+}
 
-/// The OS appearance (dark), detected at startup and updated live by the window's
-/// `ThemeChanged` handler. Runtime-only (never persisted); a bare bool, so it stays
-/// a `GlobalSignal` (nothing to lens).
+impl ThemeSel {
+    fn of(s: &Settings) -> Self {
+        Self {
+            id: s.theme.clone(),
+            sync_os: s.sync_os,
+        }
+    }
+}
+
+/// The shared, cross-window settings handles. Both are **leaked** signals (no owner
+/// scope), so they survive any window closing and are safe to share by value.
+#[derive(Clone, Copy)]
+struct Shared {
+    /// Committed settings — the behaviour source of truth for every window.
+    applied: Signal<Settings>,
+    /// Live display theme — previews across all windows; committed on Save.
+    theme: Signal<ThemeSel>,
+}
+
+thread_local! {
+    /// The one shared settings context. Created lazily on first access (see
+    /// [`shared`]) and then reused by every window on this (the only) UI thread.
+    static SHARED: Cell<Option<Shared>> = Cell::new(None);
+}
+
+/// The OS appearance (dark), detected at startup and updated live by each window's
+/// `ThemeChanged` handler. Per-window is correct here — it's the same OS value in
+/// every window — so it stays a per-window `GlobalSignal` (runtime-only, a bare
+/// bool with nothing to lens).
 pub static OS_DARK: GlobalSignal<bool> = Signal::global(|| true);
 
-/// Seed the store from the app config (called once per window at startup).
-pub fn load() {
-    *SETTINGS.resolve().write() = crate::config::load().settings;
+/// Get — creating on first call — the shared context. The first caller leaks the
+/// two signals from the current app config; every later caller, including other
+/// windows, receives the same handles. Reading a leaked signal needs no runtime,
+/// but the first call happens from a window render (the root reads the theme on
+/// mount), so a reactive scope is live to subscribe.
+fn shared() -> Shared {
+    SHARED.with(|c| {
+        if let Some(s) = c.get() {
+            return s;
+        }
+        let cfg = crate::config::load().settings;
+        let loc = std::panic::Location::caller();
+        let s = Shared {
+            applied: Signal::leak_with_caller(cfg.clone(), loc),
+            theme: Signal::leak_with_caller(ThemeSel::of(&cfg), loc),
+        };
+        c.set(Some(s));
+        s
+    })
 }
 
-/// Persist the current settings back to the app config, preserving recents.
-fn persist() {
-    let mut cfg = crate::config::load();
-    cfg.settings = SETTINGS.resolve().peek().clone();
-    crate::config::save(&cfg);
+/// Ensure the shared context exists — called once from each window root's mount so
+/// a later non-component read never races a cold init. Idempotent.
+pub fn init() {
+    let _ = shared();
 }
+
+/// Component hook: the single place a window root wires itself into the shared
+/// settings. Seeds the shared context + current OS appearance **once**, then returns
+/// the effective theme's CSS-variable string — read **reactively** (subscribes), so
+/// a theme preview or OS light/dark switch re-themes this window. Called by every
+/// window root (`ProjectRoot`, `SettingsRoot`, `LauncherRoot`); the returned string
+/// is injected as the root element's `style`.
+pub fn use_settings() -> String {
+    use_hook(|| {
+        init();
+        set_os_dark(crate::theme::os_is_dark());
+    });
+    crate::theme::css_for(&effective_theme())
+}
+
+// ---- reactive reads (subscribe in a component, plain read elsewhere) ----------
 
 /// The theme id that should actually apply right now (honours Sync-with-OS).
+/// Subscribes to the live theme and the OS appearance, so a preview or an OS switch
+/// re-themes the reader.
 pub fn effective_theme() -> String {
-    let s = SETTINGS.resolve();
-    let theme = s.theme().cloned();
-    let sync = s.sync_os().cloned();
-    crate::theme::effective_id(&theme, sync, *OS_DARK.read())
+    let shared_ = shared();
+    let t = shared_.theme.read();
+    crate::theme::effective_id(&t.id, t.sync_os, *OS_DARK.read())
 }
 
-/// Record the OS appearance (from the window's `ThemeChanged` event / startup
+pub fn density_compact() -> bool {
+    shared().applied.read().density_compact
+}
+
+pub fn zebra() -> bool {
+    shared().applied.read().zebra
+}
+
+pub fn default_col_width() -> f64 {
+    shared().applied.read().default_col_width
+}
+
+pub fn row_limit() -> usize {
+    shared().applied.read().row_limit
+}
+
+pub fn open_pref() -> OpenPref {
+    shared().applied.read().open_pref
+}
+
+pub fn default_project_dir() -> String {
+    shared().applied.read().default_project_dir.clone()
+}
+
+/// Whether to confirm before closing a tab/window with a running query (S14).
+pub fn confirm_close_running() -> bool {
+    shared().applied.read().confirm_close_running
+}
+
+/// The user's key-binding overrides (empty = all defaults). Read by `crate::keymap`.
+pub fn keybinds() -> Vec<KeyBind> {
+    shared().applied.read().keybinds.clone()
+}
+
+/// A one-shot snapshot of the committed settings (a clone), used to seed the
+/// Settings window's local draft. Peeks — the draft owns its copy from there on.
+pub fn snapshot() -> Settings {
+    shared().applied.peek().clone()
+}
+
+// ---- live theme preview (Settings window; immediate across windows, no persist) -
+
+/// Preview `id` as the live theme across **every** window. Not persisted — the
+/// Settings window's Save commits it; Cancel reverts via [`revert_theme_preview`].
+pub fn preview_theme(id: String) {
+    let mut theme = shared().theme;
+    theme.write().id = id;
+}
+
+/// Preview the Sync-with-OS toggle live across every window (no persist).
+pub fn preview_sync_os(on: bool) {
+    let mut theme = shared().theme;
+    theme.write().sync_os = on;
+}
+
+// ---- save / cancel (Settings window) -----------------------------------------
+
+/// Commit the Settings window's `draft`: publish it as the applied settings (all
+/// windows pick up the new behaviour), keep the live theme in lockstep, and persist
+/// to the app config. This is the **only** place the Settings window writes to disk.
+pub fn save_draft(draft: Settings) {
+    let sh = shared();
+    let sel = ThemeSel::of(&draft);
+    let mut applied = sh.applied;
+    let mut theme = sh.theme;
+    applied.set(draft.clone());
+    if *theme.peek() != sel {
+        theme.set(sel);
+    }
+    persist(draft);
+}
+
+/// Discard a live theme preview, reverting to the committed theme — called when the
+/// Settings window is cancelled/closed without saving.
+pub fn revert_theme_preview() {
+    let sh = shared();
+    let saved = ThemeSel::of(&sh.applied.peek());
+    let mut theme = sh.theme;
+    if *theme.peek() != saved {
+        theme.set(saved);
+    }
+}
+
+// ---- immediate mutators (dialogs; write applied + persist now) -----------------
+
+/// Set + persist the confirm-close-running preference immediately (a running-close
+/// dialog's "don't ask again" — not part of the Settings window draft).
+pub fn set_confirm_close_running(v: bool) {
+    let mut applied = shared().applied;
+    applied.write().confirm_close_running = v;
+    persist(applied.peek().clone());
+}
+
+/// Set + persist the open preference immediately (the open-target prompt's
+/// "remember my choice").
+pub fn set_open_pref(pref: OpenPref) {
+    let mut applied = shared().applied;
+    applied.write().open_pref = pref;
+    persist(applied.peek().clone());
+}
+
+// ---- OS appearance ------------------------------------------------------------
+
+/// Record the OS appearance (from a window's `ThemeChanged` event / startup
 /// detection). Reactive, so a Sync-with-OS window re-themes live.
 pub fn set_os_dark(dark: bool) {
     if *OS_DARK.peek() != dark {
@@ -55,68 +232,11 @@ pub fn set_os_dark(dark: bool) {
     }
 }
 
-// ---- mutators (each writes the store via a lens, then persists to the config) ----
+// ---- persistence --------------------------------------------------------------
 
-pub fn set_theme(id: String) {
-    SETTINGS.resolve().theme().set(id);
-    persist();
-}
-
-pub fn toggle_sync_os() {
-    let s = SETTINGS.resolve();
-    let v = s.sync_os().cloned();
-    s.sync_os().set(!v);
-    persist();
-}
-
-pub fn set_density(compact: bool) {
-    SETTINGS.resolve().density_compact().set(compact);
-    persist();
-}
-
-pub fn toggle_zebra() {
-    let s = SETTINGS.resolve();
-    let v = s.zebra().cloned();
-    s.zebra().set(!v);
-    persist();
-}
-
-pub fn set_row_limit(limit: usize) {
-    SETTINGS.resolve().row_limit().set(limit);
-    persist();
-}
-
-pub fn toggle_reopen_startup() {
-    let s = SETTINGS.resolve();
-    let v = s.reopen_on_startup().cloned();
-    s.reopen_on_startup().set(!v);
-    persist();
-}
-
-pub fn set_default_project_dir(dir: String) {
-    SETTINGS.resolve().default_project_dir().set(dir);
-    persist();
-}
-
-pub fn set_open_pref(pref: crate::config::OpenPref) {
-    SETTINGS.resolve().open_pref().set(pref);
-    persist();
-}
-
-pub fn toggle_confirm_close() {
-    let s = SETTINGS.resolve();
-    let v = s.confirm_close_running().cloned();
-    s.confirm_close_running().set(!v);
-    persist();
-}
-
-/// Whether to confirm before closing a tab/window with a running query (S14).
-pub fn confirm_close_running() -> bool {
-    SETTINGS.resolve().peek().confirm_close_running
-}
-
-/// Set the confirm-close-running preference (a dialog's "don't ask again").
-pub fn set_confirm_close_running(v: bool) {
-    SETTINGS.resolve().confirm_close_running().set(v);
-    persist();
+/// Write `s` back to the machine-global app config, preserving recents / open-set.
+fn persist(s: Settings) {
+    let mut cfg = crate::config::load();
+    cfg.settings = s;
+    crate::config::save(&cfg);
 }

@@ -25,7 +25,7 @@ pub fn save_as_view(mut state: Signal<AppState>) {
 /// Load `SELECT * FROM t LIMIT <row_limit>` into the active tab (does not run).
 /// The LIMIT comes from the "Default row limit" setting (0 = no limit).
 pub fn select_star(mut state: Signal<AppState>, table: &str) {
-    let limit = crate::settings::SETTINGS.resolve().peek().row_limit;
+    let limit = crate::settings::row_limit();
     let sql = if limit > 0 {
         format!("SELECT *\nFROM {table}\nLIMIT {limit};")
     } else {

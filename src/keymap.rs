@@ -66,15 +66,18 @@ pub fn is_global(cmd: Command) -> bool {
     GLOBAL.contains(&cmd)
 }
 
-/// Every command, so [`resolve`] can scan their effective chords.
-const ALL: [Command; 10] = [
-    Command::Find,
+/// Every command, in display order. [`resolve`] scans their effective chords, and
+/// the Settings ▸ Keymap list renders from this — so that list always reflects the
+/// real, override-aware bindings ([`effective_chord`]) rather than a parallel
+/// hardcoded copy.
+pub const ALL_COMMANDS: [Command; 10] = [
+    Command::CommandPalette,
     Command::NewTab,
     Command::ReopenTab,
     Command::CloseActiveTab,
     Command::SaveQuery,
     Command::RunQuery,
-    Command::CommandPalette,
+    Command::Find,
     Command::OpenSettings,
     Command::CycleWindow,
     Command::Cancel,
@@ -105,14 +108,65 @@ fn default_chord(cmd: Command) -> KeyChord {
 
 /// The chord bound to `cmd` right now — a user override if present, else the default.
 pub fn effective_chord(cmd: Command) -> KeyChord {
-    crate::settings::SETTINGS
-        .resolve()
-        .peek()
-        .keybinds
+    crate::settings::keybinds()
         .iter()
         .find(|b| b.command == cmd)
         .map(|b| b.chord.clone())
         .unwrap_or_else(|| default_chord(cmd))
+}
+
+/// A short label + description for `cmd` — the single source for the Settings ▸
+/// Keymap list (and, later, the command palette).
+pub fn describe(cmd: Command) -> (&'static str, &'static str) {
+    use Command::*;
+    match cmd {
+        CommandPalette => ("Command palette", "Search tables, columns & commands"),
+        NewTab => ("New query tab", "Open a fresh SQL tab"),
+        ReopenTab => ("Reopen closed tab", "Restore the last tab you closed"),
+        CloseActiveTab => ("Close tab", "Close the active query tab"),
+        SaveQuery => ("Save query", "Save the active query to the project"),
+        RunQuery => ("Run query", "Execute the current SQL"),
+        Find => ("Find in results", "Search within the results grid"),
+        OpenSettings => ("Settings", "Open the Settings window"),
+        CycleWindow => ("Cycle windows", "Focus the next project window"),
+        Cancel => ("Dismiss", "Close overlays & menus, or cancel a running query"),
+    }
+}
+
+/// The primary modifier's cap symbol — ⌘ on macOS, `Ctrl` elsewhere (matches how a
+/// chord's `primary` resolves from `meta || ctrl`).
+#[cfg(target_os = "macos")]
+const PRIMARY_CAP: &str = "⌘";
+#[cfg(not(target_os = "macos"))]
+const PRIMARY_CAP: &str = "Ctrl";
+
+/// The display key-caps for `chord` — modifiers (primary / ⇧ / ⌥) then the key,
+/// e.g. `["⌘", "⇧", "T"]`. Drives the read-only Keymap list; rebinding (W4) writes
+/// back through [`effective_chord`] so the display stays in lockstep.
+pub fn chord_caps(chord: &KeyChord) -> Vec<String> {
+    let mut caps = Vec::new();
+    if chord.primary {
+        caps.push(PRIMARY_CAP.to_string());
+    }
+    if chord.shift {
+        caps.push("⇧".to_string());
+    }
+    if chord.alt {
+        caps.push("⌥".to_string());
+    }
+    caps.push(key_cap(&chord.key));
+    caps
+}
+
+/// Display form of a normalized key name (`Enter` → `↵`, single chars upper-cased).
+fn key_cap(key: &str) -> String {
+    match key {
+        "Enter" => "↵".to_string(),
+        "Escape" => "Esc".to_string(),
+        "Tab" => "⇥".to_string(),
+        k if k.chars().count() == 1 => k.to_uppercase(),
+        k => k.to_string(),
+    }
 }
 
 /// Normalize a key event into a chord (folding ⌘/Ctrl into `primary`, matching the old
@@ -141,7 +195,9 @@ fn normalize_key(k: &Key) -> String {
 /// The command currently bound to this key event, if any.
 pub fn resolve(e: &KeyboardEvent) -> Option<Command> {
     let chord = chord_from_event(e);
-    ALL.into_iter().find(|&cmd| effective_chord(cmd) == chord)
+    ALL_COMMANDS
+        .into_iter()
+        .find(|&cmd| effective_chord(cmd) == chord)
 }
 
 /// Execute `cmd`. Returns whether it did anything — so `handle_key` only calls
@@ -180,7 +236,7 @@ pub fn run(state: Signal<AppState>, cmd: Command) -> bool {
             true
         }
         OpenSettings => {
-            crate::overlays::toggle_settings();
+            crate::window::spawn_settings_window();
             true
         }
         CycleWindow => {
