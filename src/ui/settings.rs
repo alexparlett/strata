@@ -181,7 +181,7 @@ pub fn SettingsRoot() -> Element {
     };
     let os_label = if os_dark { "dark" } else { "light" };
 
-    // Footer actions. Cancel just closes (the drop handler reverts the preview); Save
+    // Footer actions. Cancel just closes (the drop handler reverts the preview); Apply
     // runs `engine.submit()`, which persists + closes via the form's `on_submit`.
     let win_cancel = win.clone();
 
@@ -390,7 +390,7 @@ pub fn SettingsRoot() -> Element {
                 Button {
                     variant: ButtonVariant::Primary,
                     onclick: move |_| engine.submit(),
-                    "Save"
+                    "Apply"
                 }
             }
         }
