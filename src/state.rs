@@ -200,16 +200,6 @@ pub struct TabDrag {
     pub insert: usize,
 }
 
-/// Left-nav category in the Settings modal.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum SettingsCat {
-    Appearance,
-    DataDisplay,
-    System,
-    Engine,
-    Keymap,
-}
-
 pub struct AppState {
     // engine
     pub cmd_tx: Option<UnboundedSender<Command>>,

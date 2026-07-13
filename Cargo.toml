@@ -19,7 +19,7 @@ sample-data = []
 
 [dependencies]
 # UI: Dioxus desktop (RSX in a webview, so the Strata CSS ports faithfully)
-dioxus = { version = "0.7", features = ["desktop"] }
+dioxus = { version = "0.7", features = ["desktop", "router"] }
 
 # Syntax highlighter for the SQL query view (tree-sitter based). We vendor the
 # editor *component* into src/ui/code_editor (S26a) to add caret/keydown/decoration

@@ -1018,7 +1018,22 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .settings-body { display: flex; flex: 1; min-height: 0; }
 .settings-nav { width: 176px; flex: none; border-right: 1px solid var(--line); padding: var(--sp-4) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-1); }
 .settings-navlabel { letter-spacing: .08em; color: var(--dim3); text-transform: uppercase; padding: var(--sp-3) var(--sp-4) var(--sp-3); }
-.settings-nav-item { display: flex; align-items: center; gap: var(--sp-3); width: 100%; text-align: left; padding: var(--sp-3) var(--sp-4); border: none; background: transparent; border-radius: var(--r-1); color: var(--text3); font: var(--t-body); cursor: pointer; }
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  background: transparent;
+  border-radius: var(--r-1);
+  color: var(--text3);
+  font: var(--t-body);
+  cursor: pointer;
+  text-decoration: none;
+}
 .settings-nav-item:hover { background: var(--elev); color: var(--text); }
 .settings-nav-item.on { background: var(--elev3); color: var(--text); }
 .settings-nav-item .sn-ic { display: flex; color: var(--dim); }
