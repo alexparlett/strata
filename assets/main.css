@@ -1038,6 +1038,14 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .settings-nav-item.on { background: var(--elev3); color: var(--text); }
 .settings-nav-item .sn-ic { display: flex; color: var(--dim); }
 .settings-nav-item.on .sn-ic { color: var(--accent); }
+/* Grouped nav (design24): collapsible group headers + indented leaf items. */
+.settings-nav-group { display: flex; align-items: center; gap: var(--sp-2); width: 100%; text-align: left; padding: var(--sp-3) var(--sp-4); border: none; background: transparent; border-radius: var(--r-1); cursor: pointer; }
+.settings-nav-group:hover { background: var(--elev); }
+.settings-nav-grouplabel { font: var(--t-strong); color: var(--text2); }
+.settings-nav-chev { display: flex; color: var(--dim); transition: transform .14s ease; }
+.settings-nav-chev.open { transform: rotate(90deg); }
+.settings-nav-item.leaf { padding-left: 30px; }
+.settings-nav-item.top { padding-left: calc(var(--sp-4) + var(--sp-2) + 10px); }
 .settings-pane { flex: 1; padding: var(--sp-5) var(--sp-6); overflow-y: auto; }
 .settings-crumb { color: var(--dim2); margin-bottom: var(--sp-6); }
 .settings-sublabel { letter-spacing: .08em; color: var(--dim2); text-transform: uppercase; margin-bottom: var(--sp-4); }

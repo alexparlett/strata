@@ -1,8 +1,10 @@
-//! Settings ▸ Data display page — row density, zebra striping, default row limit.
+//! Settings ▸ Data display page — row density, zebra striping, default column width,
+//! default row limit. Width + row limit are free-form numeric fields (design24): the
+//! audience is engineers who'd rather type the exact value than pick an adjective.
 
 use dioxus::prelude::*;
 
-use crate::ui::components::{Caption, Segment, SegmentOption, Strong, Toggle};
+use crate::ui::components::{Caption, Segment, SegmentOption, Strong, TextInput, Toggle};
 
 #[component]
 pub(super) fn DataDisplay() -> Element {
@@ -11,6 +13,7 @@ pub(super) fn DataDisplay() -> Element {
     let density_compact = d.density_compact;
     let zebra = d.zebra;
     let row_limit = d.row_limit;
+    let col_width = d.default_col_width as i64;
     drop(d);
     rsx! {
         Strong { style: "display:block;margin-bottom:var(--sp-4);", "Row density" }
@@ -23,10 +26,11 @@ pub(super) fn DataDisplay() -> Element {
             ],
         }
         Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-4);", "Controls row height in the results grid and catalog." }
+
         div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
         div { class: "settings-row",
             div { style: "flex:1;",
-                Strong { style: "display:block;", "Alternating row colours" }
+                Strong { style: "display:block;", "Alternating row colors" }
                 Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);", "Shade every other row in the results grid for easier scanning." }
             }
             Toggle {
@@ -34,18 +38,41 @@ pub(super) fn DataDisplay() -> Element {
                 on_toggle: move |_| { let v = !zebra; draft.write().zebra = v; },
             }
         }
+
+        div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
+        Strong { style: "display:block;margin-bottom:var(--sp-1);", "Default column width" }
+        Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);max-width:460px;", "Starting width for result-grid columns before you resize them. Drag a column's edge to override it for that column, or double-click the edge to auto-fit." }
+        div { class: "row", style: "gap:var(--sp-3);align-items:center;",
+            TextInput {
+                value: "{col_width}",
+                mono: true,
+                width: 130,
+                oninput: move |_| {},
+                onchange: move |v: String| {
+                    if let Ok(n) = v.trim().parse::<f64>() {
+                        draft.write().default_col_width = n.max(40.0);
+                    }
+                },
+            }
+            Caption { style: "color:var(--dim2);", "px" }
+        }
+
         div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
         Strong { style: "display:block;margin-bottom:var(--sp-1);", "Default row limit" }
-        Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);", "New query tabs are generated with this LIMIT so a stray SELECT * can't pull a whole file into memory." }
-        Segment {
-            value: row_limit.to_string(),
-            on_select: move |v: String| { if let Ok(n) = v.parse::<usize>() { draft.write().row_limit = n; } },
-            options: vec![
-                SegmentOption::new("100", "100"),
-                SegmentOption::new("1000", "1,000"),
-                SegmentOption::new("10000", "10,000"),
-                SegmentOption::new("0", "No limit"),
-            ],
+        Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);max-width:460px;", "New queries are generated with this LIMIT so a stray SELECT * can't pull a whole file into memory. Set to 0 for no limit." }
+        div { class: "row", style: "gap:var(--sp-3);align-items:center;",
+            TextInput {
+                value: "{row_limit}",
+                mono: true,
+                width: 130,
+                oninput: move |_| {},
+                onchange: move |v: String| {
+                    if let Ok(n) = v.trim().parse::<usize>() {
+                        draft.write().row_limit = n;
+                    }
+                },
+            }
+            Caption { style: "color:var(--dim2);", "rows" }
         }
     }
 }

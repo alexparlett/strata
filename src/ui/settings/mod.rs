@@ -23,7 +23,7 @@ use dioxus::prelude::*;
 use strata_forms::{use_form, FormState};
 
 use crate::config::Settings;
-use crate::ui::components::{Body, Button, ButtonVariant, Eyebrow, Icon, Prose, Spacer};
+use crate::ui::components::{Body, Button, ButtonVariant, Icon, Prose, Spacer};
 use crate::ui::icons::{IconName, IconSize};
 
 use appearance::Appearance;
@@ -172,13 +172,11 @@ pub fn SettingsRoot() -> Element {
 fn SettingsChrome() -> Element {
     let route = use_route::<SettingsRoute>();
     let ctx = use_context::<SettingsCtx>();
-    let crumb = match &route {
-        SettingsRoute::Appearance {} => "Appearance",
-        SettingsRoute::DataDisplay {} => "Data display",
-        SettingsRoute::System {} => "System",
-        SettingsRoute::Engine {} => "Engine",
-        SettingsRoute::Keymap {} => "Keymap",
-    };
+    // Disclosure-group open state — local to the layout, so it survives page navigation
+    // (the layout stays mounted). Both groups start open.
+    let ap_open = use_signal(|| true);
+    let eng_open = use_signal(|| true);
+    let (group, leaf) = crumb_of(&route);
     rsx! {
         // Titlebar (native traffic lights sit to the left of this on macOS). The webview
         // covers the native title bar, so drag from the titlebar background.
@@ -189,17 +187,24 @@ fn SettingsChrome() -> Element {
         }
         div { class: "settings-body",
             div { class: "settings-nav",
-                Eyebrow { class: "settings-navlabel", "SETTINGS" }
-                {nav_link(&route, SettingsRoute::Appearance {}, IconName::Palette, "Appearance")}
-                {nav_link(&route, SettingsRoute::DataDisplay {}, IconName::Grid, "Data display")}
-                {nav_link(&route, SettingsRoute::System {}, IconName::Sliders, "System")}
-                {nav_link(&route, SettingsRoute::Engine {}, IconName::Engine, "Engine")}
-                {nav_link(&route, SettingsRoute::Keymap {}, IconName::Keyboard, "Keymap")}
+                {nav_group(ap_open, "Appearance & behaviour")}
+                if ap_open() {
+                    {nav_leaf(&route, SettingsRoute::Appearance {}, "Theme")}
+                    {nav_leaf(&route, SettingsRoute::System {}, "System")}
+                    {nav_leaf(&route, SettingsRoute::DataDisplay {}, "Data display")}
+                }
+                {nav_top(&route, SettingsRoute::Keymap {}, "Keymap")}
+                {nav_group(eng_open, "Engine")}
+                if eng_open() {
+                    {nav_leaf(&route, SettingsRoute::Engine {}, "Properties")}
+                }
             }
             div { class: "settings-pane ps-scroll",
                 Prose { class: "settings-crumb",
-                    "Settings " span { style: "color:var(--faint2);", "›" } " "
-                    span { style: "color:var(--text3);", "{crumb}" }
+                    if let Some(g) = group {
+                        "{g} " span { style: "color:var(--faint2);", "›" } " "
+                    }
+                    span { style: "color:var(--text3);", "{leaf}" }
                 }
                 Outlet::<SettingsRoute> {}
             }
@@ -214,18 +219,49 @@ fn SettingsChrome() -> Element {
     }
 }
 
-/// One left-nav entry — a router `Link` styled as a nav item, marked active when it
-/// targets the current route.
-fn nav_link(current: &SettingsRoute, to: SettingsRoute, icon: IconName, label: &str) -> Element {
-    let cls = if *current == to {
-        "settings-nav-item on"
-    } else {
-        "settings-nav-item"
-    };
+/// The (group, leaf) breadcrumb labels for a route — Keymap has no parent group.
+fn crumb_of(route: &SettingsRoute) -> (Option<&'static str>, &'static str) {
+    match route {
+        SettingsRoute::Appearance {} => (Some("Appearance & behaviour"), "Theme"),
+        SettingsRoute::System {} => (Some("Appearance & behaviour"), "System"),
+        SettingsRoute::DataDisplay {} => (Some("Appearance & behaviour"), "Data display"),
+        SettingsRoute::Keymap {} => (None, "Keymap"),
+        SettingsRoute::Engine {} => (Some("Engine"), "Properties"),
+    }
+}
+
+/// A collapsible nav group header — rotating chevron + label; clicking toggles `open`.
+fn nav_group(mut open: Signal<bool>, label: &str) -> Element {
+    let is_open = open();
     rsx! {
-        Link { to, class: cls,
-            span { class: "sn-ic", {icon.el(IconSize::Sm)} }
-            Body { "{label}" }
+        button {
+            class: "settings-nav-group",
+            onclick: move |_| open.set(!open()),
+            span {
+                class: if is_open { "settings-nav-chev open" } else { "settings-nav-chev" },
+                Icon { name: IconName::ChevronRight, size: IconSize::Xs }
+            }
+            span { class: "settings-nav-grouplabel", "{label}" }
         }
     }
+}
+
+/// A nav leaf indented under a group — a router `Link`, active on the current route.
+fn nav_leaf(current: &SettingsRoute, to: SettingsRoute, label: &str) -> Element {
+    let cls = if *current == to {
+        "settings-nav-item leaf on"
+    } else {
+        "settings-nav-item leaf"
+    };
+    rsx! { Link { to, class: cls, Body { "{label}" } } }
+}
+
+/// A standalone top-level nav item (aligned with the group headers), e.g. Keymap.
+fn nav_top(current: &SettingsRoute, to: SettingsRoute, label: &str) -> Element {
+    let cls = if *current == to {
+        "settings-nav-item top on"
+    } else {
+        "settings-nav-item top"
+    };
+    rsx! { Link { to, class: cls, Body { "{label}" } } }
 }
