@@ -7,10 +7,12 @@ use crate::ui::components::{Body, Caption, Eyebrow};
 #[component]
 pub(super) fn Keymap() -> Element {
     rsx! {
-        Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-5);", "Read-only. ⌘ shortcuts also respond to Ctrl." }
-        div { class: "keymap-box",
-            for cmd in crate::keymap::ALL_COMMANDS {
-                {keymap_row(cmd)}
+        super::Anchor { id: "keymap",
+            Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-5);", "Read-only. ⌘ shortcuts also respond to Ctrl." }
+            div { class: "keymap-box",
+                for cmd in crate::keymap::ALL_COMMANDS {
+                    {keymap_row(cmd)}
+                }
             }
         }
     }

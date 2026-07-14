@@ -98,6 +98,10 @@ pub struct Settings {
     pub default_col_width: f64,
     #[serde(default = "default_row_limit")]
     pub row_limit: usize,
+    /// Query-history cap (design24 System ▸ History): oldest runs drop off once the count
+    /// exceeds this. Surfaced as a 25/50/100/200 segmented control.
+    #[serde(default = "default_max_history")]
+    pub max_history: usize,
     #[serde(default = "default_true")]
     pub reopen_on_startup: bool,
     #[serde(default)]
@@ -122,6 +126,9 @@ fn default_theme() -> String {
 fn default_row_limit() -> usize {
     100
 }
+fn default_max_history() -> usize {
+    100
+}
 fn default_col_width() -> f64 {
     150.0
 }
@@ -137,6 +144,7 @@ impl Default for Settings {
             zebra: true,
             default_col_width: default_col_width(),
             row_limit: default_row_limit(),
+            max_history: default_max_history(),
             reopen_on_startup: true,
             default_project_dir: String::new(),
             open_pref: OpenPref::Ask,

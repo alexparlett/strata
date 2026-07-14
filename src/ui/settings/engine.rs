@@ -365,20 +365,22 @@ pub(super) fn Engine() -> Element {
                 },
             }
         }
-        div { class: "engine-table",
-            div { class: "engine-thead",
-                div { class: "engine-th name", Control { style: "color:var(--text2);", "Name" } }
-                div { class: "engine-th", Control { style: "color:var(--text2);", "Value" } }
-            }
-            div { class: "engine-tbody ps-scroll",
-                if rows.is_empty() {
-                    div { class: "engine-empty",
-                        Icon { name: IconName::Lines, size: IconSize::Md }
-                        Caption { style: "color:var(--faint2);", "No properties — the engine uses its defaults." }
-                    }
+        super::Anchor { id: "engine",
+            div { class: "engine-table",
+                div { class: "engine-thead",
+                    div { class: "engine-th name", Control { style: "color:var(--text2);", "Name" } }
+                    div { class: "engine-th", Control { style: "color:var(--text2);", "Value" } }
                 }
-                for row in rows.iter().cloned() {
-                    {engine_row_view(st, row, sel, &errs, show_errors, &touched)}
+                div { class: "engine-tbody ps-scroll",
+                    if rows.is_empty() {
+                        div { class: "engine-empty",
+                            Icon { name: IconName::Lines, size: IconSize::Md }
+                            Caption { style: "color:var(--faint2);", "No properties — the engine uses its defaults." }
+                        }
+                    }
+                    for row in rows.iter().cloned() {
+                        {engine_row_view(st, row, sel, &errs, show_errors, &touched)}
+                    }
                 }
             }
         }

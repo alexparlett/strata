@@ -269,7 +269,7 @@ pub fn unregister_settings_window() {
 /// for an as-child window (project windows recreate the same way).
 fn settings_window_config() -> Config {
     Config::new()
-        .with_window(base_window(760.0, 600.0, 640.0, 440.0))
+        .with_window(base_window(880.0, 660.0, 740.0, 480.0))
         .with_menu(crate::menu::app_menu())
         .with_as_child_window()
         .with_background_color((11, 14, 19, 255))

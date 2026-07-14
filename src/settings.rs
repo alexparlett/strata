@@ -136,6 +136,9 @@ pub fn default_col_width() -> f64 {
 pub fn row_limit() -> usize {
     shared().applied.read().row_limit
 }
+pub fn max_history() -> usize {
+    shared().applied.read().max_history
+}
 
 pub fn open_pref() -> OpenPref {
     shared().applied.read().open_pref

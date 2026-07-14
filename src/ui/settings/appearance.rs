@@ -25,28 +25,32 @@ pub(super) fn Appearance() -> Element {
         ""
     };
     rsx! {
-        div { class: "settings-row", style: "margin-bottom:var(--sp-6);",
-            div { style: "flex:1;",
-                Strong { style: "display:block;", "Sync with OS" }
-                Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);", "Match your system light/dark appearance automatically." }
-            }
-            Toggle {
-                on: sync_os,
-                on_toggle: move |_| {
-                    let v = !sync_os;
-                    draft.write().sync_os = v;
-                    crate::settings::preview_sync_os(v);
-                },
+        super::Anchor { id: "sync-os",
+            div { class: "settings-row", style: "margin-bottom:var(--sp-6);",
+                div { style: "flex:1;",
+                    Strong { style: "display:block;", "Sync with OS" }
+                    Caption { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);", "Match your system light/dark appearance automatically." }
+                }
+                Toggle {
+                    on: sync_os,
+                    on_toggle: move |_| {
+                        let v = !sync_os;
+                        draft.write().sync_os = v;
+                        crate::settings::preview_sync_os(v);
+                    },
+                }
             }
         }
         div { class: "settings-divider" }
-        Strong { style: "display:block;margin:var(--sp-5) 0 var(--sp-4);", "Theme" }
-        if sync_os {
-            Caption { style: "display:block;margin-bottom:var(--sp-4);", "Following your system appearance ({os_label}). Turn off Sync with OS to choose a theme." }
-        }
-        div { class: "theme-grid", style: "{grid_style}",
-            for t in crate::theme::registry() {
-                {theme_card(t, &active_id, draft)}
+        super::Anchor { id: "theme",
+            Strong { style: "display:block;margin:var(--sp-5) 0 var(--sp-4);", "Theme" }
+            if sync_os {
+                Caption { style: "display:block;margin-bottom:var(--sp-4);", "Following your system appearance ({os_label}). Turn off Sync with OS to choose a theme." }
+            }
+            div { class: "theme-grid", style: "{grid_style}",
+                for t in crate::theme::registry() {
+                    {theme_card(t, &active_id, draft)}
+                }
             }
         }
     }

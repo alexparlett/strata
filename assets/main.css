@@ -1021,7 +1021,16 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 
 /* ---------- settings ---------- */
 .settings-body { display: flex; flex: 1; min-height: 0; }
-.settings-nav { width: 176px; flex: none; border-right: 1px solid var(--line); padding: var(--sp-4) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-1); }
+
+.settings-nav {
+  width: 224px;
+  flex: none;
+  border-right: 1px solid var(--line);
+  padding: var(--sp-4) var(--sp-4) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
 .settings-navlabel { letter-spacing: .08em; color: var(--dim3); text-transform: uppercase; padding: var(--sp-3) var(--sp-4) var(--sp-3); }
 
 .settings-nav-item {
@@ -1051,6 +1060,67 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .settings-nav-chev.open { transform: rotate(90deg); }
 .settings-nav-item.leaf { padding-left: var(--sp-8); }
 .settings-nav-item.top { padding-left: calc(var(--sp-4) + var(--sp-2) + 10px); }
+
+/* Settings search (W3): search box in the nav → flat results list; jump flashes the field. */
+.settings-nav .ds-field {
+  margin-bottom: var(--sp-3);
+}
+
+.settings-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.settings-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  background: transparent;
+  border-radius: var(--r-1);
+  cursor: pointer;
+}
+
+.settings-search-result:hover {
+  background: var(--elev);
+}
+
+.settings-search-cat {
+  color: var(--dim2);
+}
+
+.settings-search-empty {
+  padding: var(--sp-4);
+  color: var(--dim2);
+}
+
+/* Jump-to-field flash: a one-shot accent wash + ring, cleared on animationend. */
+.settings-anchor {
+  display: block;
+  border-radius: var(--r-2);
+  scroll-margin: var(--sp-6);
+}
+
+.settings-anchor.lit {
+  animation: settings-flash 1.1s ease;
+}
+
+@keyframes settings-flash {
+  0% {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
 .settings-pane { flex: 1; padding: var(--sp-5) var(--sp-6); overflow-y: auto; }
 .settings-crumb { color: var(--dim2); margin-bottom: var(--sp-6); }
 .settings-sublabel { letter-spacing: .08em; color: var(--dim2); text-transform: uppercase; margin-bottom: var(--sp-4); }

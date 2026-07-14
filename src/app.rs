@@ -286,6 +286,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                             cancelled: false,
                         },
                     );
+                    s.project.history.truncate(crate::settings::max_history().max(1));
                     s.set_status(
                         LogKind::Ok,
                         format!(
@@ -337,6 +338,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                             cancelled: false,
                         },
                     );
+                    s.project.history.truncate(crate::settings::max_history().max(1));
                     crate::runs::edit_existing(ws_id, |run| {
                         run.running = false;
                         run.pending_req = None;
@@ -375,6 +377,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     cancelled: true,
                 },
             );
+            s.project.history.truncate(crate::settings::max_history().max(1));
             s.set_status(LogKind::Warn, format!("Query cancelled · {elapsed_ms} ms"));
             s.push_log(LogKind::Warn, format!("Query cancelled · {elapsed_ms} ms"));
             crate::runs::edit_existing(ws_id, |run| {
