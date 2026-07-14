@@ -3,6 +3,7 @@
 //! projects straight from the per-machine config store; "Open" / a recent row
 //! spawns a project window and closes the launcher.
 
+use dioxus::desktop::{use_muda_event_handler, use_window};
 use dioxus::prelude::*;
 
 use crate::config::{self, RecentProject};
@@ -48,8 +49,29 @@ pub fn LauncherRoot() -> Element {
     // re-themes it too.
     let theme_css = crate::settings::use_settings();
 
+    // ⌘A / ⌘C are app-global menu commands; route them to the focused search field when
+    // the launcher is focused (mirrors the Settings window — no grid here). Without this
+    // handler the launcher window would ignore both, since the menu is app-global and
+    // each window must consume its own events.
+    let win_id = use_window().id();
+    use_muda_event_handler(move |ev| {
+        if !crate::window::is_focused_window(win_id) {
+            return;
+        }
+        match crate::menu::MenuCmd::parse(&ev.id().0) {
+            Some(crate::menu::MenuCmd::SelectAll) => {
+                if crate::menu::select_all_scope() == crate::menu::SelectAllScope::Input {
+                    crate::window::send_select_all();
+                }
+            }
+            Some(crate::menu::MenuCmd::Copy) => crate::window::send_copy(),
+            _ => {}
+        }
+    });
+
     let mut filter = use_signal(String::new);
-    let f = filter.read().to_lowercase();
+    let q = filter();
+    let f = q.to_lowercase();
     let matched: Vec<RecentProject> = recents
         .read()
         .iter()
@@ -91,7 +113,9 @@ pub fn LauncherRoot() -> Element {
                                 Path { style: "display:block;color:var(--dim3);margin-top:var(--sp-1);", {env!("CARGO_PKG_VERSION")} }
                             }
                         }
-                        div { style: "display:flex;align-items:center;gap:var(--sp-4);padding:var(--sp-3) var(--sp-4);border-radius:var(--r-2);background:var(--accent-soft);border-left:2px solid var(--accent);color:var(--accent);",
+                        // Active nav pill: accent-tinted background only — no left accent
+                        // bar, text-coloured label/icon (V26).
+                        div { style: "display:flex;align-items:center;gap:var(--sp-4);padding:var(--sp-3) var(--sp-4);border-radius:var(--r-2);background:var(--accent-soft);color:var(--text);",
                             Icon { name: IconName::Folder, size: IconSize::Sm }
                             Strong { "Projects" }
                         }
@@ -119,7 +143,7 @@ pub fn LauncherRoot() -> Element {
                             Spacer {}
                             Button {
                                 variant: ButtonVariant::Ghost,
-                                icon: IconName::Folder, icon_size: IconSize::Md,
+                                icon: IconName::Folder, icon_size: IconSize::Sm,
                                 // Async picker → new project window, then close the launcher.
                                 onclick: move |_| {
                                     spawn(async move {
@@ -130,16 +154,24 @@ pub fn LauncherRoot() -> Element {
                                         }
                                     });
                                 },
-                                "Open folder…"
+                                // Uppercase, letter-spaced ghost action (V26) — DS eyebrow
+                                // typography owns the casing + tracking (no inline values).
+                                Eyebrow { "Open" }
                             }
                         }
 
                         div { class: "ps-scroll", style: "flex:1;overflow-y:auto;padding:0 var(--sp-5) var(--sp-5);",
                             if none {
-                                Prose { style: "padding:60px var(--sp-6);text-align:center;color:var(--dim3);",
-                                    "No recent projects — click "
-                                    Strong { style: "color:var(--accent);", "Open folder…" }
-                                    " to choose one."
+                                if q.is_empty() {
+                                    Prose { style: "padding:var(--sp-6) var(--sp-4);color:var(--dim2);",
+                                        "No recent projects — click "
+                                        Strong { style: "color:var(--accent);", "OPEN" }
+                                        " to choose one."
+                                    }
+                                } else {
+                                    Prose { style: "padding:var(--sp-6) var(--sp-4);color:var(--dim2);",
+                                        "No projects match \u{201c}{q}\u{201d}."
+                                    }
                                 }
                             }
                             if has_pinned {
@@ -148,7 +180,9 @@ pub fn LauncherRoot() -> Element {
                                     {project_row(r, recents)}
                                 }
                             }
-                            if has_pinned && has_unpinned {
+                            // RECENT always heads the recents (V26), whether or not
+                            // anything is pinned above it.
+                            if has_unpinned {
                                 Eyebrow { class: "launch-lbl", "RECENT" }
                             }
                             for r in unpinned {
@@ -162,23 +196,18 @@ pub fn LauncherRoot() -> Element {
     }
 }
 
-/// One recent-project row: avatar + name (+ pin badge when pinned) + path, plus the
-/// hover actions (pin / open-in-new-window / reveal / remove). Each action
-/// `stop_propagation`s so it doesn't also fire the row's open-and-close click. Pin
-/// and remove write the config store, then reload the `recents` signal from it.
+/// One recent-project row: avatar + name + path, plus the hover actions (pin /
+/// reveal / remove — V26's three). Each action `stop_propagation`s so it doesn't
+/// also fire the row's open-and-close click. Pin and remove write the config store,
+/// then reload the `recents` signal from it.
 fn project_row(r: RecentProject, mut recents: Signal<Vec<RecentProject>>) -> Element {
     let RecentProject {
         name, path, pinned, ..
     } = r;
     let ini = initials(&name);
     let col = avatar_color(&name);
-    let (open_path, new_path, pin_path, rev_path, rm_path) = (
-        path.clone(),
-        path.clone(),
-        path.clone(),
-        path.clone(),
-        path.clone(),
-    );
+    let (open_path, pin_path, rev_path, rm_path) =
+        (path.clone(), path.clone(), path.clone(), path.clone());
     rsx! {
         div {
             class: "launch-row",
@@ -188,12 +217,9 @@ fn project_row(r: RecentProject, mut recents: Signal<Vec<RecentProject>>) -> Ele
             },
             span { style: "width:38px;height:38px;flex:none;border-radius:var(--r-2);background:{col};display:flex;align-items:center;justify-content:center;", Title { style: "color:#08111a;", "{ini}" } }
             div { style: "flex:1;min-width:0;",
-                div { style: "display:flex;align-items:center;gap:var(--sp-3);",
-                    Title { "{name}" }
-                    if pinned {
-                        span { class: "pin-badge", Icon { name: IconName::Pin, size: IconSize::Xs } }
-                    }
-                }
+                // No inline pin badge (V26): pin state reads from the PINNED grouping and
+                // the pin action's active tint.
+                Title { "{name}" }
                 Path { style: "display:block;color:var(--dim2);margin-top:var(--sp-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", "{path}" }
             }
             div { class: "row-actions",
@@ -208,15 +234,6 @@ fn project_row(r: RecentProject, mut recents: Signal<Vec<RecentProject>>) -> Ele
                         cfg.set_pinned(&pin_path, !pinned);
                         config::save(&cfg);
                         recents.set(cfg.recent_projects);
-                    },
-                }
-                IconButton {
-                    variant: IconButtonVariant::Ghost,
-                    icon: IconName::External,
-                    title: "Open in new window",
-                    onclick: move |e: MouseEvent| {
-                        e.stop_propagation();
-                        crate::window::spawn_project_window(new_path.clone());
                     },
                 }
                 IconButton {

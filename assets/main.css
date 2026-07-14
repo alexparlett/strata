@@ -998,7 +998,6 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .launch-lbl { letter-spacing: .8px; color: var(--dim3); padding: var(--sp-4) var(--sp-4) var(--sp-2); }
 .launch-row .row-actions { display: flex; gap: var(--sp-1); flex: none; opacity: 0; transition: opacity .12s; }
 .launch-row:hover .row-actions { opacity: 1; }
-.pin-badge { display: flex; align-items: center; color: var(--accent); flex: none; }
 
 /* segmented option pills (export modal — still used; retire in C17 when export
    moves onto the `Segment` / `Select` components) */
