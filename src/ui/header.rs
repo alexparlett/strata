@@ -59,12 +59,12 @@ pub fn Header() -> Element {
                 ondoubleclick: move |e| e.stop_propagation(),
                 IconButton { icon: IconName::Search,
                     variant: IconButtonVariant::Toolbar,
-                    title: "Search (⌘K)",
+                    title: format!("Search ({})", crate::keymap::hint(crate::config::Command::CommandPalette)),
                     onclick: move |_| crate::overlays::toggle_cmdk(),
                 }
                 IconButton { icon: IconName::Gear,
                     variant: IconButtonVariant::Toolbar,
-                    title: "Settings (⌘,)",
+                    title: format!("Settings ({})", crate::keymap::hint(crate::config::Command::OpenSettings)),
                     onclick: move |_| crate::window::spawn_settings_window(),
                 }
             }

@@ -357,7 +357,7 @@ fn tab_menu_items(
         MenuItem { label: "Close all".to_string(),
             onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseAllTabs); } }
         MenuSep {}
-        MenuItem { label: "Reopen closed tab".to_string(), meta: "⇧⌘T".to_string(), disabled: !can_reopen,
+        MenuItem { label: "Reopen closed tab".to_string(), meta: crate::keymap::hint(crate::config::Command::ReopenTab), disabled: !can_reopen,
             onclick: move |_| { tab_menu.set(None); dispatch(state, Action::ReopenTab); } }
     }
 }
@@ -370,7 +370,7 @@ fn overflow_menu_items(state: Signal<AppState>, active: WorkspaceId, can_reopen:
         MenuItem { label: "Close other tabs".to_string(),
             onclick: move |_| dispatch(state, Action::CloseOtherTabs(active)) }
         MenuSep {}
-        MenuItem { label: "Reopen closed tab".to_string(), meta: "⇧⌘T".to_string(), disabled: !can_reopen,
+        MenuItem { label: "Reopen closed tab".to_string(), meta: crate::keymap::hint(crate::config::Command::ReopenTab), disabled: !can_reopen,
             onclick: move |_| dispatch(state, Action::ReopenTab) }
     }
 }

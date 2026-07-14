@@ -113,7 +113,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                         variant: IconButtonVariant::Primary,
                         icon: IconName::Play,
                         disabled: block_run,
-                        title: if block_run { "Fix the validation problems to run" } else { "Run query (⌘↵)" },
+                        title: if block_run { "Fix the validation problems to run".to_string() } else { format!("Run query ({})", crate::keymap::hint(crate::config::Command::RunQuery)) },
                         onclick: move |_| if !block_run { dispatch(state, Action::RunQuery) },
                     }
                     IconButton {
@@ -142,7 +142,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     variant: IconButtonVariant::Toolbar,
                     compact: true,
                     dirty: dirty,
-                    title: "Save query (⌘S)",
+                    title: format!("Save query ({})", crate::keymap::hint(crate::config::Command::SaveQuery)),
                     onclick: move |_| dispatch(state, Action::SaveQuery),
                 }
             }

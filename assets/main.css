@@ -1131,9 +1131,96 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .theme-cardfoot { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--line); }
 .theme-src { letter-spacing: .04em; text-transform: uppercase; color: var(--dim2); background: var(--elev2); padding: var(--sp-1) var(--sp-3); border-radius: var(--r-xs); }
 .keymap-box { border: 1px solid var(--line2); border-radius: var(--r-3); overflow: hidden; }
-.keymap-row { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-4) var(--sp-5); }
+
+.keymap-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
+}
 .keymap-row + .keymap-row { border-top: 1px solid var(--line); }
 .keycap { min-width: 22px; height: 24px; padding: 0 var(--sp-3); display: inline-flex; align-items: center; justify-content: center; color: var(--text2); background: var(--panel); border: 1px solid var(--line3); border-bottom-width: 2px; border-radius: var(--r-1); }
+
+/* Keymap rebinding (W4): head, per-row controls, capture / add / conflict affordances. */
+.keymap-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-5);
+}
+
+.keymap-rowmain {
+    flex: 1;
+    min-width: 0;
+}
+
+.keymap-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    flex: none;
+    padding-top: var(--sp-1);
+}
+
+.keymap-caps {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-3);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--r-2);
+    cursor: pointer;
+}
+
+.keymap-caps:hover {
+    border-color: var(--line3);
+    background: var(--elev);
+}
+
+.keymap-caps .ds-ico {
+    color: var(--faint);
+}
+
+.keymap-add {
+    height: 24px;
+    padding: 0 var(--sp-4);
+    background: transparent;
+    border: 1px dashed var(--line-hi);
+    border-radius: var(--r-1);
+    color: var(--dim);
+    font: var(--t-caption);
+    cursor: pointer;
+}
+
+.keymap-add:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.keymap-capture {
+    height: 24px;
+    padding: 0 var(--sp-4);
+    display: inline-flex;
+    align-items: center;
+    border: 1px dashed var(--accent);
+    border-radius: var(--r-1);
+    color: var(--accent);
+    font: var(--t-caption);
+    outline: none;
+}
+
+.keymap-conflict {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--sp-3);
+    margin-top: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    background: color-mix(in srgb, var(--red2) 8%, var(--panel));
+    border: 1px solid color-mix(in srgb, var(--red2) 30%, transparent);
+    border-radius: var(--r-2);
+}
 
 /* Settings — Engine ▸ Properties editor (design24): a free-form key/value table with
    name autocomplete + a selection inspector. Layout-only classes; text uses the DS

@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use dioxus::core::{Runtime, RuntimeGuard};
-use dioxus::desktop::{use_window, window, ShortcutHandle};
+use dioxus::desktop::{use_window, use_wry_event_handler, window, ShortcutHandle};
 use dioxus::prelude::*;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::HotKeyState;
@@ -42,7 +42,26 @@ pub fn use_shortcuts(state: Signal<AppState>) {
     });
 
     let win = use_window();
-    let focused = use_signal(|| win.is_focused());
+    let win_id = win.id();
+    // Reactive focus for *this* window (local hotkey lifecycle — not the app-global menu
+    // routing). Driven by the window's own `Focused` event so the register effect below
+    // re-runs on every focus change: it removes the OS hotkeys on blur, and on regaining
+    // focus (re)registers them from the *current* `effective_chord` — which is how a rebind
+    // in the (blurring) Settings window takes effect once you return to the project window.
+    let mut focused = use_signal(|| win.is_focused());
+    use_wry_event_handler(move |event, _| {
+        use dioxus::desktop::tao::event::{Event as TaoEvent, WindowEvent};
+        if let TaoEvent::WindowEvent {
+            window_id,
+            event: WindowEvent::Focused(f),
+            ..
+        } = event
+        {
+            if *window_id == win_id {
+                focused.set(*f);
+            }
+        }
+    });
 
     // (Re)register on focus; remove on blur. Handles live in a plain `Rc<RefCell>`
     // (not a signal) so the `use_drop` below can safely touch them during teardown,
@@ -57,7 +76,7 @@ pub fn use_shortcuts(state: Signal<AppState>) {
                 win.remove_shortcut(h);
             }
             if focused() {
-                for &cmd in crate::keymap::GLOBAL {
+                for cmd in crate::keymap::global_commands() {
                     let Some(hk) = hotkey_for(cmd) else {
                         continue;
                     };
@@ -98,7 +117,7 @@ pub fn use_shortcuts(state: Signal<AppState>) {
 /// The OS hotkey for `cmd`, from its effective (possibly rebound) chord — `None` if the
 /// key doesn't map to a `Code`.
 fn hotkey_for(cmd: Command) -> Option<HotKey> {
-    let chord = crate::keymap::effective_chord(cmd);
+    let chord = crate::keymap::effective_chord(cmd)?;
     let mut mods = Modifiers::empty();
     if chord.primary {
         // The platform primary modifier: ⌘ on macOS, Ctrl elsewhere.

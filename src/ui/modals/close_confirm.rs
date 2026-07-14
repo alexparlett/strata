@@ -29,7 +29,7 @@ pub fn CloseConfirmHost() -> Element {
                 div { style: "flex:1;min-width:0;",
                     Title { class: "confirm-title", "Discard changes to " span { class: "nm", "{name}" } "?" }
                     Readout { class: "confirm-body",
-                        "This tab has unsaved edits. Cancel and press ⌘S to save it, or discard them."
+                        {format!("This tab has unsaved edits. Cancel and press {} to save it, or discard them.", crate::keymap::hint(crate::config::Command::SaveQuery))}
                     }
                 }
             }

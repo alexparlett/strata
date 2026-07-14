@@ -34,7 +34,10 @@ pub fn select_star(mut state: Signal<AppState>, table: &str) {
     crate::session::open_named(table, sql, crate::state::Origin::Scratch);
     state.write().set_status(
         LogKind::Info,
-        format!("Loaded SELECT * for '{table}' — press ⌘/Ctrl+Enter to run"),
+        format!(
+            "Loaded SELECT * for '{table}' — press {} to run",
+            crate::keymap::hint(crate::config::Command::RunQuery)
+        ),
     );
 }
 

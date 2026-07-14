@@ -191,7 +191,7 @@ pub(crate) fn EmptyState() -> Element {
                 Button {
                     variant: ButtonVariant::Primary,
                     icon: IconName::Plus, icon_size: IconSize::Sm,
-                    kbd: "⌘N",
+                    kbd: crate::keymap::hint(crate::config::Command::NewTab),
                     onclick: move |_| dispatch(state, Action::NewTab),
                     "New query"
                 }
@@ -394,7 +394,7 @@ fn StatusBar(ws_id: WorkspaceId) -> Element {
                     format!("{elapsed} ms"),
                 )
             } else {
-                ("idle", "No query run".to_string(), "⌘↵ to run".to_string())
+                ("idle", "No query run".to_string(), format!("{} to run", crate::keymap::hint(crate::config::Command::RunQuery)))
             };
             // Snapshot chip only once the tab has actually produced a result.
             let snap = if has_result {
@@ -418,7 +418,7 @@ fn StatusBar(ws_id: WorkspaceId) -> Element {
             (
                 "idle",
                 "No query run".to_string(),
-                "⌘↵ to run".to_string(),
+                format!("{} to run", crate::keymap::hint(crate::config::Command::RunQuery)),
                 None,
                 false,
                 ResultsView::Grid,

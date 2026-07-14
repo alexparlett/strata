@@ -92,19 +92,21 @@ pub(super) fn System() -> Element {
         div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
         Eyebrow { class: "settings-sublabel", "HISTORY" }
         super::Anchor { id: "max-history",
-            Strong { style: "display:block;margin-bottom:var(--sp-2);", "Query history limit" }
-            Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);", "How many past runs to keep in the history panel. Older entries drop off once the cap is reached." }
-            Segment {
-                value: "{max_history}",
-                on_select: move |v: String| {
-                    if let Ok(n) = v.parse::<usize>() { draft.write().max_history = n; }
-                },
-                options: vec![
-                    SegmentOption::new("25", "25"),
-                    SegmentOption::new("50", "50"),
-                    SegmentOption::new("100", "100"),
-                    SegmentOption::new("200", "200"),
-                ],
+            Strong { style: "display:block;margin-bottom:var(--sp-1);", "Query history limit" }
+            Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);max-width:460px;", "How many past runs to keep in the history panel. Older entries drop off once the cap is reached." }
+            div { class: "row", style: "gap:var(--sp-3);align-items:center;",
+                TextInput {
+                    value: "{max_history}",
+                    mono: true,
+                    width: 130,
+                    oninput: move |_| {},
+                    onchange: move |v: String| {
+                        if let Ok(n) = v.trim().parse::<usize>() {
+                            draft.write().max_history = n.max(1);
+                        }
+                    },
+                }
+                Caption { style: "color:var(--dim2);", "runs" }
             }
         }
     }

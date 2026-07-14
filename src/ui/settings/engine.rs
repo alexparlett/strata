@@ -323,17 +323,6 @@ pub(super) fn Engine() -> Element {
     let has_sel = sel.map(|id| rows.iter().any(|r| r.id == id)).unwrap_or(false);
 
     rsx! {
-        div { class: "engine-hd",
-            Spacer {}
-            if dirty {
-                Button {
-                    variant: ButtonVariant::Ghost,
-                    onclick: move |_| st.revert(),
-                    Icon { name: IconName::Refresh, size: IconSize::Xs }
-                    "Revert changes"
-                }
-            }
-        }
         div { class: "engine-note",
             span { class: "engine-note-ic", Icon { name: IconName::Info, size: IconSize::Sm } }
             Caption { "DataFusion ConfigOptions applied to every new session. Enter any datafusion.* property — names autocomplete. Runtime properties (datafusion.runtime.*) take effect on engine restart." }

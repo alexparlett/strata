@@ -4,9 +4,13 @@
 //!
 //! Two layers, kept separate (VS Code-style):
 //! - **keymap** ([`resolve`]): which chord triggers which command — user-overridable,
-//!   persisted in [`crate::config::Settings::keybinds`] (empty = the [`default_chord`] table).
+//!   persisted in [`crate::config::Settings::keybinds`] (empty = the [`COMMANDS`] defaults).
 //! - **dispatch** ([`run`]): what a command *does* — a fixed action / direct call, or, for a
 //!   context-dependent command (⌘F `Find`), whatever mounted context [`register`]ed for it.
+//!
+//! Command metadata (order, label, description, default chord, whether it's an OS global
+//! hotkey) lives in the single [`COMMANDS`] table; only the *action* is a per-command arm,
+//! in [`run`]. Adding or rebinding a command touches the table + one `run` arm.
 
 use std::collections::HashMap;
 
@@ -45,91 +49,91 @@ pub fn unregister_if(cmd: Command, owner: WorkspaceId) {
     }
 }
 
-/// Commands eligible for an OS global hotkey — everything except the context keys
+/// Per-command metadata — the **single source of truth** for order, label, description, the
+/// built-in default chord (stored as primitives since `KeyChord` isn't const-constructible),
+/// and whether the command is delivered via the OS global-hotkey layer. [`all_commands`] /
+/// [`describe`] / [`default_chord`] / [`is_global`] all derive from it; the *action* stays a
+/// per-command arm in [`run`].
+struct CommandMeta {
+    command: Command,
+    label: &'static str,
+    desc: &'static str,
+    primary: bool,
+    shift: bool,
+    alt: bool,
+    key: &'static str,
+    /// Delivered via the OS global-hotkey layer (`crate::hotkeys`) rather than the
+    /// focused-component / DOM layer (`Cancel` = Esc).
+    global: bool,
+}
+
+/// The command table, in display order. Edited to add / retune a command (its *action* is
+/// the matching arm in [`run`]).
+const COMMANDS: &[CommandMeta] = &[
+    CommandMeta { command: Command::CommandPalette, label: "Command palette", desc: "Search tables, columns & commands", primary: true, shift: false, alt: false, key: "k", global: true },
+    CommandMeta { command: Command::NewTab, label: "New query tab", desc: "Open a fresh SQL tab", primary: true, shift: false, alt: false, key: "t", global: true },
+    CommandMeta { command: Command::ReopenTab, label: "Reopen closed tab", desc: "Restore the last tab you closed", primary: true, shift: true, alt: false, key: "t", global: true },
+    CommandMeta { command: Command::CloseActiveTab, label: "Close tab", desc: "Close the active query tab", primary: true, shift: false, alt: false, key: "w", global: true },
+    CommandMeta { command: Command::SaveQuery, label: "Save query", desc: "Save the active query to the project", primary: true, shift: false, alt: false, key: "s", global: true },
+    CommandMeta { command: Command::RunQuery, label: "Run query", desc: "Execute the current SQL", primary: true, shift: false, alt: false, key: "Enter", global: true },
+    CommandMeta { command: Command::Find, label: "Find in results", desc: "Search within the results grid", primary: true, shift: false, alt: false, key: "f", global: true },
+    CommandMeta { command: Command::OpenSettings, label: "Settings", desc: "Open the Settings window", primary: true, shift: false, alt: false, key: ",", global: true },
+    CommandMeta { command: Command::CycleWindow, label: "Cycle windows", desc: "Focus the next project window", primary: true, shift: false, alt: false, key: "`", global: true },
+    CommandMeta { command: Command::Cancel, label: "Dismiss", desc: "Close overlays & menus, or cancel a running query", primary: false, shift: false, alt: false, key: "Escape", global: false },
+];
+
+/// The metadata for `cmd` (every [`Command`] variant is listed in [`COMMANDS`]).
+fn meta(cmd: Command) -> &'static CommandMeta {
+    COMMANDS
+        .iter()
+        .find(|m| m.command == cmd)
+        .expect("every Command is listed in COMMANDS")
+}
+
+/// Every command, in display order. [`resolve`] scans their effective chords, and the
+/// Settings ▸ Keymap list renders from this — so the list always reflects the real,
+/// override-aware bindings ([`effective_chord`]) rather than a parallel hardcoded copy.
+pub fn all_commands() -> impl Iterator<Item=Command> {
+    COMMANDS.iter().map(|m| m.command)
+}
+
+/// The commands eligible for an OS global hotkey — everything except the context keys
 /// (`Cancel`/Esc, which stay on the focused component). The `hotkeys` module registers
 /// these; `handle_key` runs only the *non*-global ones so the two layers never double-fire.
-pub const GLOBAL: &[Command] = &[
-    Command::Find,
-    Command::NewTab,
-    Command::ReopenTab,
-    Command::CloseActiveTab,
-    Command::SaveQuery,
-    Command::RunQuery,
-    Command::CommandPalette,
-    Command::OpenSettings,
-    Command::CycleWindow,
-];
+pub fn global_commands() -> impl Iterator<Item=Command> {
+    COMMANDS.iter().filter(|m| m.global).map(|m| m.command)
+}
 
 /// Whether `cmd` is delivered by the global-hotkey layer (vs the focused-component / DOM
 /// layer — i.e. `Cancel`).
 pub fn is_global(cmd: Command) -> bool {
-    GLOBAL.contains(&cmd)
+    meta(cmd).global
 }
 
-/// Every command, in display order. [`resolve`] scans their effective chords, and
-/// the Settings ▸ Keymap list renders from this — so that list always reflects the
-/// real, override-aware bindings ([`effective_chord`]) rather than a parallel
-/// hardcoded copy.
-pub const ALL_COMMANDS: [Command; 10] = [
-    Command::CommandPalette,
-    Command::NewTab,
-    Command::ReopenTab,
-    Command::CloseActiveTab,
-    Command::SaveQuery,
-    Command::RunQuery,
-    Command::Find,
-    Command::OpenSettings,
-    Command::CycleWindow,
-    Command::Cancel,
-];
+/// A short label + description for `cmd` — the single source for the Settings ▸ Keymap list
+/// (and, later, the command palette).
+pub fn describe(cmd: Command) -> (&'static str, &'static str) {
+    let m = meta(cmd);
+    (m.label, m.desc)
+}
 
 /// The built-in default chord for `cmd` (used when no user override binds it).
-fn default_chord(cmd: Command) -> KeyChord {
-    use Command::*;
-    let c = |primary: bool, shift: bool, key: &str| KeyChord {
-        primary,
-        shift,
-        alt: false,
-        key: key.to_string(),
-    };
-    match cmd {
-        Find => c(true, false, "f"),
-        NewTab => c(true, false, "t"),
-        ReopenTab => c(true, true, "t"),
-        CloseActiveTab => c(true, false, "w"),
-        SaveQuery => c(true, false, "s"),
-        RunQuery => c(true, false, "Enter"),
-        CommandPalette => c(true, false, "k"),
-        OpenSettings => c(true, false, ","),
-        CycleWindow => c(true, false, "`"),
-        Cancel => c(false, false, "Escape"),
+pub fn default_chord(cmd: Command) -> KeyChord {
+    let m = meta(cmd);
+    KeyChord {
+        primary: m.primary,
+        shift: m.shift,
+        alt: m.alt,
+        key: m.key.to_string(),
     }
 }
 
-/// The chord bound to `cmd` right now — a user override if present, else the default.
-pub fn effective_chord(cmd: Command) -> KeyChord {
-    crate::settings::keybinds()
-        .iter()
-        .find(|b| b.command == cmd)
-        .map(|b| b.chord.clone())
-        .unwrap_or_else(|| default_chord(cmd))
-}
-
-/// A short label + description for `cmd` — the single source for the Settings ▸
-/// Keymap list (and, later, the command palette).
-pub fn describe(cmd: Command) -> (&'static str, &'static str) {
-    use Command::*;
-    match cmd {
-        CommandPalette => ("Command palette", "Search tables, columns & commands"),
-        NewTab => ("New query tab", "Open a fresh SQL tab"),
-        ReopenTab => ("Reopen closed tab", "Restore the last tab you closed"),
-        CloseActiveTab => ("Close tab", "Close the active query tab"),
-        SaveQuery => ("Save query", "Save the active query to the project"),
-        RunQuery => ("Run query", "Execute the current SQL"),
-        Find => ("Find in results", "Search within the results grid"),
-        OpenSettings => ("Settings", "Open the Settings window"),
-        CycleWindow => ("Cycle windows", "Focus the next project window"),
-        Cancel => ("Dismiss", "Close overlays & menus, or cancel a running query"),
+/// The chord bound to `cmd` right now — a user override if present (which may be an
+/// **explicit unbind** → `None`), else the default. `None` means the command has no shortcut.
+pub fn effective_chord(cmd: Command) -> Option<KeyChord> {
+    match crate::settings::keybinds().into_iter().find(|b| b.command == cmd) {
+        Some(b) => b.chord,
+        None => Some(default_chord(cmd)),
     }
 }
 
@@ -141,8 +145,7 @@ const PRIMARY_CAP: &str = "⌘";
 const PRIMARY_CAP: &str = "Ctrl";
 
 /// The display key-caps for `chord` — modifiers (primary / ⇧ / ⌥) then the key,
-/// e.g. `["⌘", "⇧", "T"]`. Drives the read-only Keymap list; rebinding (W4) writes
-/// back through [`effective_chord`] so the display stays in lockstep.
+/// e.g. `["⌘", "⇧", "T"]`. Drives the Keymap list; [`hint`] joins them for tooltips.
 pub fn chord_caps(chord: &KeyChord) -> Vec<String> {
     let mut caps = Vec::new();
     if chord.primary {
@@ -158,6 +161,16 @@ pub fn chord_caps(chord: &KeyChord) -> Vec<String> {
     caps
 }
 
+/// The compact display of `cmd`'s current chord for tooltips / kbd chips, e.g. `"⌘K"` /
+/// `"⌘⇧T"` / `"⌘↵"` — or an **empty string** if `cmd` is unbound (so a `kbd` chip vanishes
+/// and a `title` can drop it). Tracks the live, override-aware binding.
+pub fn hint(cmd: Command) -> String {
+    match effective_chord(cmd) {
+        Some(c) => chord_caps(&c).join(""),
+        None => String::new(),
+    }
+}
+
 /// Display form of a normalized key name (`Enter` → `↵`, single chars upper-cased).
 fn key_cap(key: &str) -> String {
     match key {
@@ -170,8 +183,9 @@ fn key_cap(key: &str) -> String {
 }
 
 /// Normalize a key event into a chord (folding ⌘/Ctrl into `primary`, matching the old
-/// `meta || ctrl` treatment).
-fn chord_from_event(e: &KeyboardEvent) -> KeyChord {
+/// `meta || ctrl` treatment). Public so the Settings ▸ Keymap rebinding capture can turn a
+/// keypress into a chord.
+pub fn chord_from_event(e: &KeyboardEvent) -> KeyChord {
     let m = e.modifiers();
     KeyChord {
         primary: m.meta() || m.ctrl(),
@@ -179,6 +193,12 @@ fn chord_from_event(e: &KeyboardEvent) -> KeyChord {
         alt: m.alt(),
         key: normalize_key(&e.key()),
     }
+}
+
+/// Whether a key event is a bare modifier press (⌘ / ⇧ / ⌥ / Ctrl, no other key) — chord
+/// capture ignores these and waits for the real key.
+pub fn is_modifier_key(e: &KeyboardEvent) -> bool {
+    matches!(e.key(), Key::Meta | Key::Shift | Key::Alt | Key::Control)
 }
 
 /// A canonical key name: lowercased character, or a named key we bind (`Enter`/`Escape`).
@@ -195,9 +215,7 @@ fn normalize_key(k: &Key) -> String {
 /// The command currently bound to this key event, if any.
 pub fn resolve(e: &KeyboardEvent) -> Option<Command> {
     let chord = chord_from_event(e);
-    ALL_COMMANDS
-        .into_iter()
-        .find(|&cmd| effective_chord(cmd) == chord)
+    all_commands().find(|&cmd| effective_chord(cmd).as_ref() == Some(&chord))
 }
 
 /// Execute `cmd`. Returns whether it did anything — so `handle_key` only calls

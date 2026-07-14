@@ -73,12 +73,14 @@ pub struct KeyChord {
     pub key: String,
 }
 
-/// A user override binding a [`Command`] to a [`KeyChord`] (persisted in
-/// [`Settings::keybinds`]). Absent commands fall back to the built-in default chord.
+/// A user override for a [`Command`] (persisted in [`Settings::keybinds`]). A command with
+/// no entry falls back to its built-in default chord; an entry with `chord: None` is an
+/// **explicit unbind** (the command has no shortcut — e.g. its chord was reassigned away).
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct KeyBind {
     pub command: Command,
-    pub chord: KeyChord,
+    #[serde(default)]
+    pub chord: Option<KeyChord>,
 }
 
 #[derive(Clone, Serialize, Deserialize, dioxus_stores::Store)]
