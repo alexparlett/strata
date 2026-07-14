@@ -13,34 +13,35 @@
   --sp-1: 2px; --sp-2: 4px; --sp-3: 8px; --sp-4: 12px; --sp-5: 16px; --sp-6: 24px; --sp-7: 32px; --sp-8: 40px; --sp-9: 48px;
   --r-xs: 4px; --r-1: 6px; --r-2: 8px; --r-3: 10px; --r-4: 14px;
 
-  /* surfaces */
-  --bg:        #0b0e13;
-  --panel:     #0e121a;
-  --main:      #090c11;
-  --elev:      #12161f;
-  --elev2:     #161b25;
-  --elev3:     #1b212c;
+    /* surfaces — defaults = Midnight (themes/midnight.json); kept in sync so the
+       unthemed :root paints the same as the applied default theme. */
+    --bg: #15181e;
+    --panel: #191d24;
+    --main: #101319;
+    --elev: #232831;
+    --elev2: #2a313c;
+    --elev3: #333d4b;
   /* borders */
-  --line:      #1c222c;
-  --line2:     #262e39;
-  --line3:     #2a3340;
-  --line-hi:   #37424f;
+    --line: #23272f;
+    --line2: #2c333d;
+    --line3: #363e4a;
+    --line-hi: #414a57;
   /* text */
-  --text:      #e7ebf1;
-  --text2:     #c3cbd6;
-  --text3:     #aeb6c2;
-  --dim:       #8b95a3;
-  --dim2:      #6a7482;
-  --dim3:      #5a6472;
-  --faint:     #4a5462;
-  --faint2:    #3f4854;
+    --text: #edf0f5;
+    --text2: #cfd6e0;
+    --text3: #b6bfcb;
+    --dim: #909aa9;
+    --dim2: #6f7988;
+    --dim3: #5d6775;
+    --faint: #4d5765;
+    --faint2: #424c5a;
   /* accents */
   --accent:    #4cc6ff;
-  --accent-ink:#071019;
-  --green:     #4ade80;
+    --accent-ink: #08111a;
+    --green: #9fe6b4;
   --purple:    #d2a8ff;
-  --red:       #ff9aa2;
-  --red2:      #f87171;
+    --red: #ff8a8a;
+    --red2: #f8a5a5;
   --orange:    #ffa657;
   --warm:      #e2b98c;
   /* type colours */
@@ -56,20 +57,20 @@
   --syn-function:   #d2a8ff;
   --syn-string:     #a5d6ff;
   --syn-number:     #79c0ff;
-  --syn-comment:    #6a7482;
-  --syn-identifier: #e7ebf1;
-  --syn-punct:      #8b95a3;
+    --syn-comment: #6f7988;
+    --syn-identifier: #edf0f5;
+    --syn-punct: #909aa9;
   /* results grid / cells */
-  --cell:      #dbe3ec;
+    --cell: #cfd6e0;
   --cell-num:  #9fc6ff;
   --cell-ts:   #e2b98c;
-  --grid-line: #12161c;
-  --row-hover: #141a24;
+    --grid-line: #23272f;
+    --row-hover: #2a323e;
   /* elevated surfaces (modals / popovers / panels) + accent tint + zebra */
-  --surface:      #0f141d;
-  --surface-sunk: #0d1119;
-  --accent-soft:  rgba(76,198,255,.12);
-  --zebra:        rgba(255,255,255,.055);
+    --surface: #1e232b;
+    --surface-sunk: #14171d;
+    --accent-soft: rgba(76, 198, 255, .14);
+    --zebra: rgba(255, 255, 255, .025);
   /* Grid selection tint (Rz3) — the app's shared selection tint (theme-overridable). */
   --c-sel:        var(--accent-soft);
   /* fonts */
@@ -311,8 +312,29 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .grid-scroll { flex: 1; overflow: auto; min-height: 0; background: var(--main); user-select: none; -webkit-user-select: none; outline: none; }
 .grid-inner { min-width: max-content; }
 .grid-head { display: flex; position: sticky; top: 0; z-index: 3; background: var(--elev); border-bottom: 1px solid var(--line2); }
-.grid-head .hnum { width: 52px; flex: none; padding: var(--sp-3) 0; text-align: center; color: var(--dim3); border-right: 1px solid var(--line); cursor: pointer; }
-.grid-head .hcol { position: relative; flex: none; padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--sp-1); cursor: pointer; user-select: none; -webkit-user-select: none; }
+
+.grid-head .hnum {
+    width: 52px;
+    flex: none;
+    padding: var(--sp-3) 0;
+    text-align: center;
+    color: var(--dim3);
+    border-right: 1px solid var(--line2);
+    cursor: pointer;
+}
+
+.grid-head .hcol {
+    position: relative;
+    flex: none;
+    padding: var(--sp-3) var(--sp-4);
+    border-right: 1px solid var(--line2);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
 .grid-head .hcol .cn { color: var(--text); }
 .grid-head .hcol .cn.sel { color: var(--accent); }
 .grid-head .hcol .ct { }

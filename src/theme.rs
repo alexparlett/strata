@@ -1,22 +1,22 @@
 //! Theme system — JSON theme files → CSS-variable injection.
 //!
-//! A **theme is a JSON file** ([`Theme`]) carrying colour tokens keyed by the
-//! same names the stylesheet uses as CSS variables (`bg`, `accent`, `t-str`,
-//! `syn-keyword`, …). Themes come from three sources — **bundled built-ins**, a
-//! **user themes dir**, and **plugin-contributed** dirs — and may `extends` a
-//! base theme (token maps merge onto the base). At apply time the resolved
-//! tokens are rendered to a `--name: value;` string and set on the app root
-//! element, overriding the stylesheet `:root` defaults.
-//!
-//! Starting point (S2): built-ins (`Midnight`/`Daylight`) load + resolve + inject.
-//! User/plugin discovery and the Settings grid are wired next; the token set the
-//! CSS actually *consumes* is still being widened from the hardcoded palette.
+//! A **theme is a JSON file** ([`Theme`]) whose colours are authored in **named
+//! groups** (`surface`, `border`, `text`, `accent`, `status`, `dataType`,
+//! `syntax`, `grid`) plus a `fonts` block — an author-friendly layout validated
+//! by `themes/theme.schema.json`. The group names are presentational only: the
+//! loader **flattens** every leaf into one token map keyed by the same names the
+//! stylesheet uses as CSS variables (`bg`, `accent`, `t-str`, `syn-keyword`, …).
+//! Themes come from **bundled built-ins**, a **user themes dir**, and
+//! **plugin-contributed** dirs, and may `extends` a base theme (flattened token
+//! maps merge onto the base). At apply time the resolved tokens are rendered to a
+//! `--name: value;` string set on the app root element, overriding the stylesheet
+//! `:root` defaults.
 
-use dioxus::html::completions::CompleteWithBraces::base;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use dioxus::html::completions::CompleteWithBraces::base;
 
 /// Light/dark grouping — used for the "Sync with OS" split and per-mode fallback.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -34,9 +34,11 @@ pub enum Source {
     Plugin,
 }
 
-/// A theme file exactly as authored. `tokens` may be partial when `extends` is
-/// set (only the overrides need listing); anything still missing after
-/// resolution is filled from the mode's default built-in.
+/// A theme file exactly as authored: colours in named groups plus a `fonts`
+/// block. Any group may be partial when `extends` is set (only the overrides need
+/// listing); anything still missing after resolution is filled from the mode's
+/// default built-in. `#[serde(rename = "$schema")]` lets files point their editor
+/// at the schema without the loader caring.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Theme {
     pub id: String,
@@ -46,8 +48,34 @@ pub struct Theme {
     #[serde(default)]
     pub extends: Option<String>,
     pub mode: Mode,
+    /// Colour tokens grouped for readability — `{ "surface": { "bg": "#…" }, … }`.
+    /// Group names are cosmetic; the loader flattens every leaf into the token map.
     #[serde(default)]
-    pub tokens: BTreeMap<String, String>,
+    pub colors: BTreeMap<String, BTreeMap<String, String>>,
+    /// Font stacks (`ui`, `mono`) — flattened alongside the colours.
+    #[serde(default)]
+    pub fonts: BTreeMap<String, String>,
+    /// Accepted + ignored so a file can carry `"$schema": "./theme.schema.json"`.
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+}
+
+impl Theme {
+    /// Flatten the authored groups into the single flat token map the rest of the
+    /// pipeline (`extends`, fallback, CSS render) uses. Group names are dropped;
+    /// every colour leaf plus each font stack becomes a `name → value` entry.
+    fn flatten(&self) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        for group in self.colors.values() {
+            for (k, v) in group {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+        for (k, v) in &self.fonts {
+            out.insert(k.clone(), v.clone());
+        }
+        out
+    }
 }
 
 /// A fully-resolved theme ready to apply: every required token present, and the
@@ -106,6 +134,7 @@ pub const REQUIRED_TOKENS: &[&str] = &[
     "red",
     "red2",
     "orange",
+    "warm",
     // arrow-type colours
     "t-str",
     "t-num",
@@ -266,18 +295,18 @@ fn load_all() -> Vec<(Theme, Source)> {
 fn build_registry() -> Vec<ResolvedTheme> {
     let authored = load_all();
 
-    // Authored token maps by id — for `extends` resolution.
+    // Flattened token maps by id — for `extends` resolution.
     let by_id: BTreeMap<String, BTreeMap<String, String>> = authored
         .iter()
-        .map(|(t, _)| (t.id.clone(), t.tokens.clone()))
+        .map(|(t, _)| (t.id.clone(), t.flatten()))
         .collect();
 
-    // Per-mode fallback = the matching built-in's tokens.
+    // Per-mode fallback = the matching built-in's flattened tokens.
     let fallback = |mode: Mode| -> BTreeMap<String, String> {
         authored
             .iter()
             .find(|(t, s)| *s == Source::Builtin && t.mode == mode)
-            .map(|(t, _)| t.tokens.clone())
+            .map(|(t, _)| t.flatten())
             .unwrap_or_default()
     };
 
@@ -290,8 +319,8 @@ fn build_registry() -> Vec<ResolvedTheme> {
                 .as_ref()
                 .and_then(|base| by_id.get(base).cloned())
                 .unwrap_or_default();
-            for (k, v) in &t.tokens {
-                tokens.insert(k.clone(), v.clone());
+            for (k, v) in t.flatten() {
+                tokens.insert(k, v);
             }
             // Fill any missing / invalid required token from the mode default.
             let fb = fallback(t.mode);
