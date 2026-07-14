@@ -3,8 +3,7 @@
 use dioxus::prelude::*;
 
 use crate::ui::components::{
-    Caption, Eyebrow, IconButton, IconButtonVariant, Segment, SegmentOption, Strong, TextInput,
-    Toggle,
+    Caption, IconButton, IconButtonVariant, Segment, SegmentOption, Strong, TextInput, Toggle,
 };
 use crate::ui::icons::IconName;
 
@@ -19,7 +18,6 @@ pub(super) fn System() -> Element {
     let max_history = d.max_history;
     drop(d);
     rsx! {
-        Eyebrow { class: "settings-sublabel", "STARTUP" }
         super::Anchor { id: "reopen",
             div { class: "settings-row",
                 div { style: "flex:1;",
@@ -33,7 +31,6 @@ pub(super) fn System() -> Element {
             }
         }
         div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
-        Eyebrow { class: "settings-sublabel", "PROJECTS" }
         super::Anchor { id: "default-dir",
             Strong { style: "display:block;margin-bottom:var(--sp-1);", "Default project directory" }
             Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);", "Preselected in the Open dialog. Leave blank to use your last location." }
@@ -76,7 +73,6 @@ pub(super) fn System() -> Element {
             }
         }
         div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
-        Eyebrow { class: "settings-sublabel", "SAFETY" }
         super::Anchor { id: "confirm-close",
             div { class: "settings-row",
                 div { style: "flex:1;",
@@ -90,7 +86,6 @@ pub(super) fn System() -> Element {
             }
         }
         div { class: "settings-divider", style: "margin:var(--sp-6) 0;" }
-        Eyebrow { class: "settings-sublabel", "HISTORY" }
         super::Anchor { id: "max-history",
             Strong { style: "display:block;margin-bottom:var(--sp-1);", "Query history limit" }
             Caption { style: "display:block;color:var(--dim2);margin-bottom:var(--sp-4);max-width:460px;", "How many past runs to keep in the history panel. Older entries drop off once the cap is reached." }

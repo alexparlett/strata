@@ -11,7 +11,7 @@ use dioxus::prelude::*;
 
 use crate::ui::components::{
     Badge, BadgeVariant, Button, ButtonVariant, Caption, Control, Icon, IconButton,
-    IconButtonVariant, Input, Meta, MonoValue, Popup, Rect, RectAlign, Spacer, Strong, Tooltip,
+    IconButtonVariant, Input, Meta, MonoValue, Popup, Rect, RectAlign, Spacer, Tooltip,
 };
 use crate::ui::icons::{IconName, IconSize};
 
@@ -323,11 +323,15 @@ pub(super) fn Engine() -> Element {
     let has_sel = sel.map(|id| rows.iter().any(|r| r.id == id)).unwrap_or(false);
 
     rsx! {
-        div { class: "engine-note",
-            span { class: "engine-note-ic", Icon { name: IconName::Info, size: IconSize::Sm } }
-            Caption { "DataFusion ConfigOptions applied to every new session. Enter any datafusion.* property — names autocomplete. Runtime properties (datafusion.runtime.*) take effect on engine restart." }
+        Caption { class: "engine-note",
+            "DataFusion "
+            span { class: "engine-code", "ConfigOptions" }
+            " applied to every new session. Enter any "
+            span { class: "engine-code", "datafusion.*" }
+            " property — names autocomplete. Runtime properties ("
+            span { class: "engine-code warm", "datafusion.runtime.*" }
+            ") take effect on engine restart."
         }
-        Strong { style: "display:block;margin-bottom:var(--sp-3);", "Configuration properties" }
         div { class: "engine-toolbar",
             IconButton {
                 variant: IconButtonVariant::Toolbar, compact: true, class: "engine-add",
@@ -424,6 +428,14 @@ fn engine_row_view(
                         onmounted: move |e: Event<MountedData>| st.set_ref(id, e.data()),
                         onfocusin: move |_| st.open_name_menu(id),
                         oninput: move |v: String| st.set_name(id, v),
+                        // Esc dismisses the autocomplete first (stop it reaching the window's
+                        // Esc-to-close); with no menu open it falls through and closes Settings.
+                        onkeydown: move |e: KeyboardEvent| {
+                            if e.key() == Key::Escape && st.name_menu.peek().is_some() {
+                                e.stop_propagation();
+                                st.close_name_menu();
+                            }
+                        },
                         onfocusout: move |_| { st.close_name_menu(); st.touch(id); },
                     }
                     if restart_badge {

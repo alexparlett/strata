@@ -1123,7 +1123,6 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 
 .settings-pane { flex: 1; padding: var(--sp-5) var(--sp-6); overflow-y: auto; }
 .settings-crumb { color: var(--dim2); margin-bottom: var(--sp-6); }
-.settings-sublabel { letter-spacing: .08em; color: var(--dim2); text-transform: uppercase; margin-bottom: var(--sp-4); }
 .settings-divider { height: 1px; background: var(--line); }
 .settings-row { display: flex; align-items: center; gap: var(--sp-4); }
 .theme-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
@@ -1227,12 +1226,30 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
    typography roles and the toolbar/badges use IconButton / Badge. */
 .engine-hd { display: flex; align-items: center; gap: var(--sp-3); min-height: 26px; margin-bottom: var(--sp-3); }
 
+/* Engine explainer — plain muted subtext (keymap-style), not a boxed callout. */
 .engine-note {
-  display: flex; align-items: flex-start; gap: var(--sp-3);
-  max-width: 620px; padding: var(--sp-4) var(--sp-5); margin-bottom: var(--sp-5);
-  background: var(--surface-sunk); border: 1px solid var(--line); border-radius: var(--r-2);
+    display: block;
+    max-width: 620px;
+    margin-bottom: var(--sp-5);
+    line-height: 1.6;
+    color: var(--dim2);
 }
-.engine-note-ic { flex: none; margin-top: 1px; display: flex; color: var(--dim); }
+
+.engine-code {
+    font: var(--t-meta);
+    color: var(--text2);
+    background: var(--elev);
+    border: 1px solid var(--line2);
+    border-radius: var(--r-xs);
+    padding: var(--sp-1) var(--sp-2);
+    white-space: nowrap;
+}
+
+.engine-code.warm {
+    color: var(--warm);
+    background: color-mix(in srgb, var(--warm) 12%, transparent);
+    border-color: transparent;
+}
 
 .engine-toolbar { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .ds-icon-btn.engine-add, .ds-icon-btn.engine-add:hover { color: var(--accent); }
@@ -1311,7 +1328,16 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 
 /* Settings — standalone OS window (W1): shell + titlebar + footer. The nav / pane /
    theme-grid / keymap classes above are shared with the settings content. */
-.settings-root { height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font: var(--t-body); overflow: hidden; }
+.settings-root {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    font: var(--t-body);
+    overflow: hidden;
+    outline: none;
+}
 .settings-titlebar { flex: none; height: 48px; display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-5); border-bottom: 1px solid var(--line); }
 /* macOS transparent titlebar → clear the native traffic lights on the left. */
 .settings-root.mac .settings-titlebar { padding-left: 82px; }

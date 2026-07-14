@@ -88,9 +88,10 @@ In sync (S23/S25). Only nits: an extra `prob-code` chip the design lacks + empty
 ### U11 · Command palette (⌘K) — core built; depth is a feature
 The palette works; grouping, keyboard nav, per-item type-icons + shortcut hints are the "depth" feature → **T3**. (The footer already advertises "↑↓ navigate" — wire it under T3.) No standalone drift beyond that.
 
-### U12 · Settings — `restyle` (built parts)
+### U12 · Settings — `restyle` (built parts) ✅
 Drift on the built overlay: drop the "appearance & behavior" subtitle; tooltip-vs-caption affordance; theme-card source badge. Appearance / Data-display / System match structurally.
 Builds here → **W1** (standalone window + Cancel/Save footer, draft/save + live theme), **W2** (Engine category), **W3** (search box + History-limit), **W4** (rebindable Keymap).
+**Design alignment (done):** System page ALL-CAPS section labels removed (uniform divider-separated list, matching Data-display); Engine ▸ Properties "Configuration properties" heading dropped and the explainer info-box flattened to plain muted subtext with inline `.engine-code` chips (matching the Keymap subtext); History limit is a numeric input like the data-display fields; dead `.settings-sublabel`/`.engine-note-ic` CSS retired. **Esc closes the Settings window** (focusable + autofocused root `onkeydown` → `window().close()` = Cancel; the keymap capture and open engine-autocomplete `stop_propagation` so Esc dismisses them first). Theme-window restyle deferred to a separate task.
 
 ### U13 · Export modal — `rebuild`
 Functionally correct, but the UI has drifted so far from v19 that it's a **complete rebuild**, not a patch. One task → **D6** (rebuild the modal to the canvas; keep the export/backend logic).

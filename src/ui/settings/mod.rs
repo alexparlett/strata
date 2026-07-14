@@ -253,6 +253,18 @@ pub fn SettingsRoot() -> Element {
         style { dangerous_inner_html: crate::CSS }
         div {
             class: "{SETTINGS_CLASS}",
+            // Focusable + focused on mount so Esc is caught immediately (webview keydowns
+            // land on / bubble to this root). Esc closes the window — same as Cancel; the
+            // drop handler reverts any live theme preview. A child that owns Esc (the keymap
+            // capture) stops propagation, so it won't reach here.
+            tabindex: "0",
+            onmounted: move |e| { spawn(async move { let _ = e.set_focus(true).await; }); },
+            onkeydown: move |e| {
+                if e.key() == Key::Escape {
+                    e.prevent_default();
+                    dioxus::desktop::window().close();
+                }
+            },
             style: "{theme_css}",
             "data-density": "{density}",
             Router::<SettingsRoute> {}
