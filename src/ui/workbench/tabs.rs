@@ -41,12 +41,27 @@ pub(crate) fn Tabs() -> Element {
     let mut scroll_ref = use_signal(|| None::<Rc<MountedData>>);
     // Per-tab widths (measured on mount) so a drag can hit-test each tab's midpoint.
     let mut widths = use_signal(|| HashMap::<WorkspaceId, f64>::new());
+    // Per-tab element handles, so activating a tab (new tab, switch, or a jump from
+    // the Problems view) can scroll it into view within the horizontal strip.
+    let mut tab_refs = use_signal(|| HashMap::<WorkspaceId, Rc<MountedData>>::new());
 
     // Read the active id + each entry through their lenses, so a `switch`
     // (`.active().set`) or a structural / per-field write re-renders the strip —
     // matching how `session` mutates the store.
     let sess = crate::session::store();
     let active = sess.active().cloned();
+    // Keep the active tab visible: when the active id changes (switch, new tab, or a
+    // Problems jump) scroll its element into view. Reads `active` *inside* the effect so
+    // it re-runs on change; a fresh tab whose ref isn't stored yet is covered by the
+    // per-tab `onmounted` scroll below.
+    use_effect(move || {
+        let a = crate::session::store().active().cloned();
+        if let Some(m) = tab_refs.peek().get(&a).cloned() {
+            spawn(async move {
+                let _ = m.scroll_to(ScrollBehavior::Instant).await;
+            });
+        }
+    });
     let renaming_now = renaming();
     let rename_draft = rename_val();
     let mut ws: Vec<(WorkspaceId, String, bool)> = Vec::new();
@@ -115,9 +130,18 @@ pub(crate) fn Tabs() -> Element {
                         div {
                             key: "{id}",
                             class: "{tab_class}",
-                            // Measure the tab so drag hit-testing knows its midpoint.
+                            // Store the handle (for scroll-into-view) + measure the tab so
+                            // drag hit-testing knows its midpoint. If this tab mounts already
+                            // active (freshly created), scroll it into view straight away.
                             onmounted: move |e| {
                                 let data = e.data();
+                                tab_refs.write().insert(id, data.clone());
+                                if id == active {
+                                    let d = data.clone();
+                                    spawn(async move {
+                                        let _ = d.scroll_to(ScrollBehavior::Instant).await;
+                                    });
+                                }
                                 spawn(async move {
                                     if let Ok(r) = data.get_client_rect().await {
                                         widths.write().insert(id, r.size.width);
