@@ -8,6 +8,8 @@
 
 use dioxus::prelude::*;
 
+use super::tooltip::Tooltip;
+
 /// Status-pill variants (§07). The label text is `children` (rendered uppercase).
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum BadgeVariant {
@@ -38,21 +40,24 @@ impl BadgeVariant {
 
 /// A status pill. `children` is the (short, uppercased-by-CSS) label. Pass a
 /// `color` token (e.g. `"var(--t-map)"`) to render a custom-colour tint outside the
-/// semantic palette (a `color-mix` of it) — overrides `variant`.
+/// semantic palette (a `color-mix` of it) — overrides `variant`. `title` renders as the
+/// app-themed hover tooltip (via [`Tooltip`]), not a native `title=`.
 #[component]
 pub fn Badge(
     #[props(default)] variant: BadgeVariant,
     #[props(into, default)] color: String,
+    #[props(into, default)] title: String,
     children: Element,
 ) -> Element {
-    if color.is_empty() {
+    let pill = if color.is_empty() {
         let cls = format!("ds-badge {}", variant.class());
         rsx! { span { class: "{cls}", {children} } }
     } else {
         let style =
             format!("background: color-mix(in srgb, {color} 15%, transparent); color: {color};");
         rsx! { span { class: "ds-badge", style: "{style}", {children} } }
-    }
+    };
+    rsx! { Tooltip { message: title, {pill} } }
 }
 
 /// The 8px state dot (§07). `Run` pulses; the rest are static colours.

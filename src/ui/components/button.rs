@@ -11,6 +11,7 @@
 
 use dioxus::prelude::*;
 
+use super::tooltip::Tooltip;
 use crate::ui::icons::{IconName, IconSize};
 
 /// Text-button variants (§03). See the design-system table for the exact palette.
@@ -74,19 +75,21 @@ pub fn Button(
         variant.class(),
         if small { " sm" } else { "" }
     );
+    // `title` renders as the app-themed hover tooltip (via `Tooltip`), not a native `title=`.
     rsx! {
-        button {
-            r#type: "button",
-            class: "{cls}",
-            disabled: disabled,
-            title: "{title}",
-            onclick: move |e| { if !disabled { onclick.call(e); } },
-            if let Some(ic) = icon {
-                span { class: "ds-btn-ico", {ic.el(icon_size)} }
-            }
-            span { class: "ds-btn-label", {children} }
-            if !kbd.is_empty() {
-                span { class: "ds-btn-kbd", "{kbd}" }
+        Tooltip { message: title,
+            button {
+                r#type: "button",
+                class: "{cls}",
+                disabled: disabled,
+                onclick: move |e| { if !disabled { onclick.call(e); } },
+                if let Some(ic) = icon {
+                    span { class: "ds-btn-ico", {ic.el(icon_size)} }
+                }
+                span { class: "ds-btn-label", {children} }
+                if !kbd.is_empty() {
+                    span { class: "ds-btn-kbd", "{kbd}" }
+                }
             }
         }
     }
@@ -171,15 +174,17 @@ pub fn IconButton(
     } else {
         ""
     };
+    // `title` renders as the app-themed hover tooltip (via `Tooltip`), not a native `title=`.
     rsx! {
-        button {
-            r#type: "button",
-            class: "{cls}",
-            disabled: disabled,
-            title: "{title}",
-            "aria-pressed": "{pressed}",
-            onclick: move |e| { if !disabled { onclick.call(e); } },
-            {icon.el(icon_size)}
+        Tooltip { message: title,
+            button {
+                r#type: "button",
+                class: "{cls}",
+                disabled: disabled,
+                "aria-pressed": "{pressed}",
+                onclick: move |e| { if !disabled { onclick.call(e); } },
+                {icon.el(icon_size)}
+            }
         }
     }
 }

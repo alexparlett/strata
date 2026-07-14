@@ -7,8 +7,9 @@
 //! opens on Appearance.
 //!
 //! **Draft / save model.** [`SettingsRoot`] owns a *local* `draft` copy of the settings
-//! + the engine sub-form, provided to the pages via [`SettingsCtx`]. Controls edit the
-//! draft; **Apply** (`engine.submit()`) merges + persists the whole draft and closes;
+//! + the Engine Properties editor's row state, provided to the pages via [`SettingsCtx`].
+//! Controls edit the draft; **Apply** validates the Properties editor, merges its rows in,
+//! and persists the whole draft (or jumps to the Engine page on error) then closes;
 //! **Cancel** / close discards. **Theme previews live** (see [`crate::settings`]).
 
 mod appearance;
@@ -20,15 +21,13 @@ mod system;
 use dioxus::desktop::{use_muda_event_handler, use_window, use_wry_event_handler};
 use dioxus::prelude::*;
 
-use strata_forms::{use_form, FormState};
-
 use crate::config::Settings;
 use crate::ui::components::{Body, Button, ButtonVariant, Icon, Prose, Spacer};
 use crate::ui::icons::{IconName, IconSize};
 
 use appearance::Appearance;
 use data_display::DataDisplay;
-use engine::{engine_form_from, engine_form_to, Engine, EngineForm};
+use engine::{use_engine_state, Engine, EngineState};
 use keymap::Keymap;
 use system::System;
 
@@ -41,11 +40,11 @@ const SETTINGS_CLASS: &str = "settings-root";
 
 /// Shared state for the settings pages — provided by [`SettingsRoot`], read by each page
 /// + the chrome via `use_context`. `draft` is the local editable copy of the settings;
-/// `engine` is the engine sub-form whose `on_submit` persists the whole draft.
+/// `engine` is the Properties editor's row/selection state, merged into `draft` on Apply.
 #[derive(Clone, Copy)]
 struct SettingsCtx {
     draft: Signal<Settings>,
-    engine: FormState<EngineForm>,
+    engine: EngineState,
 }
 
 /// The settings pages, routed. Each variant maps to the page component of the same name,
@@ -96,8 +95,6 @@ pub fn SettingsRoot() -> Element {
                     use dioxus::desktop::tao::window::Theme;
                     crate::settings::set_os_dark(*theme == Theme::Dark);
                 }
-                // Track focus so app-menu commands don't misroute to a background window.
-                WindowEvent::Focused(f) => crate::window::note_focused(win_id, *f),
                 _ => {}
             }
         }
@@ -129,22 +126,10 @@ pub fn SettingsRoot() -> Element {
     // The local editable draft, seeded from the committed settings.
     let draft = use_signal(crate::settings::snapshot);
 
-    // The engine sub-form owns its own working copy (seeded from the committed
-    // overrides). Apply is a single `engine.submit()`: on a valid form its `on_submit`
-    // merges the overrides back into the draft, persists the whole `Settings`, and
-    // closes the window.
-    let engine = use_form(
-        move || engine_form_from(&draft.peek().engine),
-        {
-            let win_close = win.clone();
-            move |form: EngineForm| {
-                let mut s = draft.peek().clone();
-                s.engine = engine_form_to(&form);
-                crate::settings::save_draft(s);
-                win_close.close();
-            }
-        },
-    );
+    // The Properties editor's row state, seeded from the committed overrides. On Apply
+    // (in the footer) it validates + normalizes into the draft; nothing is persisted
+    // until then.
+    let engine = use_engine_state(draft.peek().engine.clone());
 
     use_context_provider(|| SettingsCtx { draft, engine });
 
@@ -209,12 +194,27 @@ fn SettingsChrome() -> Element {
                 Outlet::<SettingsRoute> {}
             }
         }
-        // Footer — Cancel discards (the drop handler reverts the live theme preview);
-        // Apply runs `engine.submit()`, which persists the whole draft + closes.
+        // Footer — Cancel discards (the drop handler reverts the live theme preview).
+        // Apply validates the Properties editor: on error it reveals the messages and
+        // jumps to the Engine page; otherwise it merges the rows into the draft, persists
+        // the whole `Settings`, and closes.
         div { class: "settings-foot",
             Spacer {}
             Button { variant: ButtonVariant::Ghost, onclick: move |_| dioxus::desktop::window().close(), "Cancel" }
-            Button { variant: ButtonVariant::Primary, onclick: move |_| ctx.engine.submit(), "Apply" }
+            Button {
+                variant: ButtonVariant::Primary,
+                onclick: move |_| {
+                    if ctx.engine.validate_and_show() {
+                        let mut s = ctx.draft.peek().clone();
+                        s.engine = ctx.engine.to_map();
+                        crate::settings::save_draft(s);
+                        dioxus::desktop::window().close();
+                    } else {
+                        navigator().push(SettingsRoute::Engine {});
+                    }
+                },
+                "Apply"
+            }
         }
     }
 }

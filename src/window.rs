@@ -8,7 +8,7 @@
 //! The launcher is a separate window, opened *only* when "Close project" closes
 //! the last project window — never from an OS close-button.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -24,26 +24,11 @@ thread_local! {
     /// Live project windows in creation order. Weak so a closed window's
     /// `DesktopService` can actually drop.
     static WINDOWS: RefCell<Vec<WeakDesktopContext>> = RefCell::new(Vec::new());
-    /// The currently key/focused window (any window, incl. the launcher). The macOS
-    /// menu is app-global, so a window handles a menu command only when it's this
-    /// one (S11). Updated from each `ProjectRoot`'s `WindowEvent::Focused` handler.
-    static FOCUSED: Cell<Option<WindowId>> = Cell::new(None);
-}
-
-/// Record the OS focus state for `id` — drives native-menu routing (S11).
-pub fn note_focused(id: WindowId, focused: bool) {
-    FOCUSED.with(|f| {
-        if focused {
-            f.set(Some(id));
-        } else if f.get() == Some(id) {
-            f.set(None);
-        }
-    });
 }
 
 /// Whether `id` is the currently focused window (a menu command should act here).
 pub fn is_focused_window(id: WindowId) -> bool {
-    FOCUSED.with(|f| f.get() == Some(id))
+    dioxus::desktop::window().is_focused()
 }
 
 /// Register the current window as a project window; returns its id so it can be

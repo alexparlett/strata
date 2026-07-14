@@ -150,6 +150,28 @@ pub fn clock(sz: u32) -> Element {
         rsx! { circle { cx: "12", cy: "12", r: "9" } path { d: "M12 7v5l3 2" } },
     )
 }
+/// Copy / duplicate — two overlapping rounded rects (design24 engine toolbar).
+pub fn copy(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.9",
+        rsx! {
+            rect { x: "9", y: "9", width: "11", height: "11", rx: "2" }
+            path { d: "M5 15V5a2 2 0 0 1 2-2h10" }
+        },
+    )
+}
+/// Clipboard / paste (design24 engine toolbar).
+pub fn clipboard(sz: u32) -> Element {
+    stroke(
+        sz,
+        "1.9",
+        rsx! {
+            rect { x: "8", y: "2", width: "8", height: "4", rx: "1" }
+            path { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }
+        },
+    )
+}
 /// Radiating hub — the Settings ▸ Engine category glyph (design19 Settings.dc.html).
 pub fn engine(sz: u32) -> Element {
     stroke(
@@ -458,6 +480,8 @@ pub fn catalog() -> &'static [(&'static str, fn(u32) -> Element)] {
         ("minimize", minimize),
         ("gear", gear),
         ("engine", engine),
+        ("copy", copy),
+        ("clipboard", clipboard),
         ("clock", clock),
         ("format", format),
         ("save", save),
@@ -516,7 +540,9 @@ pub enum IconName {
     ChevronUp,
     Clock,
     Close,
+    Clipboard,
     CollapseLeft,
+    Copy,
     CubeLines,
     Database,
     Dots,
@@ -580,7 +606,9 @@ impl IconName {
             IconName::ChevronUp => chevron_up(sz),
             IconName::Clock => clock(sz),
             IconName::Close => close(sz),
+            IconName::Clipboard => clipboard(sz),
             IconName::CollapseLeft => collapse_left(sz),
+            IconName::Copy => copy(sz),
             IconName::CubeLines => cube_lines(sz),
             IconName::Database => database(sz),
             IconName::Dots => dots(sz),

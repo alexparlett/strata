@@ -496,14 +496,32 @@ async fn engine_loop(
                     let state = ctx.state_ref();
                     let mut w = state.write();
                     let opts = w.config_mut().options_mut();
-                    for o in crate::engine_config::OPTIONS {
-                        if o.key.starts_with("datafusion.runtime.") {
+                    // Known keys: set each to its override, else reset to the default so a
+                    // cleared override reverts. runtime.* is RuntimeEnv-level (restart).
+                    for e in crate::engine_config::ENGINE_KEYS {
+                        if crate::engine_config::is_restart_key(e.key) {
                             continue;
                         }
-                        let val = new_overrides.get(o.key).map(String::as_str).unwrap_or(o.default);
-                        if let Err(e) = opts.set(o.key, val) {
-                            tracing::warn!("engine config: {}={val}: {e}", o.key);
-                            rejected.push(format!("{} ({val})", o.label));
+                        let val = new_overrides
+                            .get(e.key)
+                            .map(String::as_str)
+                            .unwrap_or(e.default);
+                        if let Err(err) = opts.set(e.key, val) {
+                            tracing::warn!("engine config: {}={val}: {err}", e.key);
+                            rejected.push(format!("{} ({val})", e.key));
+                        }
+                    }
+                    // Custom (non-catalog) overrides: best-effort — DataFusion rejects any
+                    // key it doesn't recognise.
+                    for (k, val) in &new_overrides {
+                        if crate::engine_config::is_restart_key(k)
+                            || crate::engine_config::key_def(k).is_some()
+                        {
+                            continue;
+                        }
+                        if let Err(err) = opts.set(k, val) {
+                            tracing::warn!("engine config: {k}={val}: {err}");
+                            rejected.push(format!("{k} ({val})"));
                         }
                     }
                 }

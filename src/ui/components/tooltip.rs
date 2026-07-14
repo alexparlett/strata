@@ -1,33 +1,47 @@
-//! `Tooltip` — a floating, non-dismissing hover card. It **is a [`Popup`]** (the base
-//! positioner) plus the `ds-float` class, which makes the card pointer-transparent so it
-//! never steals focus or swallows the `mousemove`/`mouseleave` on the surface underneath
-//! that drive it. No backdrop, no dismissal — the caller mounts it conditionally and
-//! unmounts on leave. Default chrome is the neutral `.ds-tooltip` (§07). Used by the SQL
-//! lint hover popover (S27).
+//! `Tooltip` — the app-themed hover tooltip: a wrapper that gives its `children` (any
+//! trigger) a floating message card while the pointer is over them. It composes [`Popup`]
+//! (the base positioner) with the neutral `.ds-tooltip` chrome (§07) + the pointer-transparent
+//! `ds-float` class, anchored just below the cursor. Backs the `title` prop on [`Button`],
+//! [`IconButton`], and [`Badge`], and wraps bespoke triggers directly.
+//!
+//! A tooltip *card pinned at a computed point* — not hovering a trigger, e.g. the editor's
+//! lint hover — uses `Popup { card_class: "ds-tooltip ds-float", … }` directly, not this.
 
 use dioxus::prelude::*;
 
-use super::popup::{Point, Popup, Rect, RectAlign};
+use super::popup::{Point, Popup, Rect};
+use super::typography::Prose;
 
-/// A pointer-transparent floating card anchored at `at`, placed by `align` (default
-/// `BOTTOM_START` — just below/right of the point). `card_class` styles it (default the
-/// neutral `ds-tooltip`); `children` is the body.
+/// A hover wrapper that gives its `children` an app-themed tooltip (never a native `title=`),
+/// shown just below the cursor while hovered. When `message` is empty it renders `children`
+/// untouched — no wrapper element, no behaviour — so controls can pass it through
+/// unconditionally (an empty `title` costs nothing). Backs the `title` prop on [`Button`],
+/// [`IconButton`], and [`Badge`], and can wrap any bespoke trigger directly.
 #[component]
-pub fn Tooltip(
-    at: Point,
-    #[props(default)] align: RectAlign,
-    #[props(into, default)] card_class: String,
-    width: Option<u32>,
-    children: Element,
-) -> Element {
-    let base = if card_class.is_empty() {
-        "ds-tooltip"
-    } else {
-        card_class.as_str()
-    };
-    // `ds-float` = pointer-events:none — the only thing that makes this a tooltip vs a menu.
-    let card = format!("{base} ds-float");
+pub fn Tooltip(#[props(into)] message: String, children: Element) -> Element {
+    let mut at = use_signal(|| None::<Point>);
+    if message.is_empty() {
+        return rsx! { {children} };
+    }
     rsx! {
-        Popup { anchor: Rect::point(at.x, at.y), align, card_class: card, width, {children} }
+        span {
+            class: "ds-tt-anchor",
+            onmouseenter: move |e| {
+                let c = e.client_coordinates();
+                at.set(Some(Point { x: c.x, y: c.y + 16.0 }));
+            },
+            onmouseleave: move |_| at.set(None),
+            {children}
+        }
+        if let Some(p) = at() {
+            // `ds-float` (pointer-events:none) is what makes the card a tooltip vs a menu —
+            // it never steals the hover that drives it. Placement defaults to BOTTOM_START
+            // (below/right of the cursor), auto-flipping near an edge (see `Popup`).
+            Popup {
+                anchor: Rect::point(p.x, p.y),
+                card_class: "ds-tooltip ds-float",
+                Prose { class: "ds-tt-msg", "{message}" }
+            }
+        }
     }
 }

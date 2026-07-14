@@ -5,15 +5,16 @@
 //! The **overlay** family (A3, egui-style — see `docs/OVERLAY_ARCHITECTURE.md`). The base
 //! is [`Popup`]: a dumb fixed-position card. Everything composes it:
 //! - **menu / dropdown** = [`Backdrop`] `{ Popup { … } }` (backdrop owns dismiss + Esc + focus);
-//! - **tooltip** = [`Tooltip`] = `Popup` + the pointer-transparent `ds-float` class.
+//! - **hover tooltip** = [`Tooltip`]: wraps a trigger and, on hover, shows a `Popup` with the
+//!   pointer-transparent `ds-float` class (a point-pinned tooltip card is a raw `Popup`).
 //!
 //! [`Dialog`] (centred, scrimmed) + [`Window`] (non-modal floating panel) are the other
 //! containers; [`MenuItem`] / [`MenuSep`] are the shared menu rows.
 //!
 //! On the base (S29, design system — see `docs/DESIGN_SYSTEM.md`): [`Select`] (single-
 //! select dropdown, trigger + `.ds-menu` card) and [`ContextMenu`] (right-click menu),
-//! both `Backdrop { Popup }` internally. The S27 lint hover is a `Tooltip` (neutral
-//! `.ds-tooltip` chrome + a red icon).
+//! both `Backdrop { Popup }` internally. The S27 lint hover is a point-pinned `Popup`
+//! (neutral `.ds-tooltip` chrome + `ds-float` + a red icon).
 //!
 //! The **form-control** family (S28, design system §03/§04/§06): [`Button`] /
 //! [`IconButton`], [`TextInput`] / [`NumberStepper`], [`Segment`] (single-select
@@ -58,18 +59,18 @@ pub use checkbox::Checkbox;
 pub use context_menu::ContextMenu;
 pub use dialog::Dialog;
 pub use dropdown_menu::DropdownMenu;
-pub use form::{FieldKind, Form, FormField, FormState};
+pub use form::Form;
 pub use icon::Icon;
 pub use menu::{MenuItem, MenuSep};
 pub use pager::Pager;
-pub use popup::{Backdrop, Point, Popup, RectAlign};
+pub use popup::{Backdrop, Point, Popup, Rect, RectAlign};
 pub use radio::{Radio, RadioGroup, RadioOption};
 pub use search_dialog::SearchDialog;
 pub use segmented::{Segment, SegmentOption};
 pub use select::{Select, SelectOption};
 pub use spacer::Spacer;
 pub use split_button::SplitButton;
-pub use text_input::{NumberStepper, SearchBar, TextInput};
+pub use text_input::{Input, NumberStepper, SearchBar, TextInput};
 pub use toggle::Toggle;
 pub use tooltip::Tooltip;
 pub use typography::{

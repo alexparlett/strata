@@ -632,13 +632,18 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .ds-callout .ds-callout-msg { font: var(--t-prose); line-height: 1.5; word-break: break-word; }
 /* Pointer-transparent floating card — the only thing that makes a `Popup` a `Tooltip`. */
 .ds-float { pointer-events: none; }
+/* Tooltip hover-anchor — hugs its trigger so the tooltip anchors without disturbing layout. */
+.ds-tt-anchor { display: inline-flex; }
 
 /* ---------- Design system: tooltip (S29 · Canvas §07) ---------- */
 /* Neutral chrome shared with menus (elev bg, border3, r9, shadow). Colored chrome (e.g.
    an error's red left bar) is a *callout* (§08), not a tooltip — the lint hover is a
    tooltip with a red icon + neutral message, per the design. */
 .ds-tooltip {
-  display: flex; align-items: flex-start; gap: var(--sp-3); max-width: 340px;
+  /* `max-content` so the card sizes to its text instead of shrink-to-fitting into the
+     space left of the viewport edge (which would wrap it one glyph per line near a
+     corner). `max-width` still caps long messages; the Popup auto-flip keeps it on-screen. */
+  display: flex; align-items: flex-start; gap: var(--sp-3); width: max-content; max-width: 340px;
   padding: var(--sp-3) var(--sp-4); background: var(--elev); border: 1px solid var(--line3);
   border-radius: var(--r-2); box-shadow: 0 12px 30px rgba(0,0,0,.4);
 }
@@ -1044,7 +1049,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .settings-nav-grouplabel { font: var(--t-strong); color: var(--text2); }
 .settings-nav-chev { display: flex; color: var(--dim); transition: transform .14s ease; }
 .settings-nav-chev.open { transform: rotate(90deg); }
-.settings-nav-item.leaf { padding-left: 30px; }
+.settings-nav-item.leaf { padding-left: var(--sp-8); }
 .settings-nav-item.top { padding-left: calc(var(--sp-4) + var(--sp-2) + 10px); }
 .settings-pane { flex: 1; padding: var(--sp-5) var(--sp-6); overflow-y: auto; }
 .settings-crumb { color: var(--dim2); margin-bottom: var(--sp-6); }
@@ -1060,62 +1065,77 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .keymap-row + .keymap-row { border-top: 1px solid var(--line); }
 .keycap { min-width: 22px; height: 24px; padding: 0 var(--sp-3); display: inline-flex; align-items: center; justify-content: center; color: var(--text2); background: var(--panel); border: 1px solid var(--line3); border-bottom-width: 2px; border-radius: var(--r-1); }
 
-/* Settings — Engine category (W2): info banner + grouped type-aware config rows. */
+/* Settings — Engine ▸ Properties editor (design24): a free-form key/value table with
+   name autocomplete + a selection inspector. Layout-only classes; text uses the DS
+   typography roles and the toolbar/badges use IconButton / Badge. */
+.engine-hd { display: flex; align-items: center; gap: var(--sp-3); min-height: 26px; margin-bottom: var(--sp-3); }
+
 .engine-note {
-  display: flex;
-  gap: var(--sp-4);
-  align-items: flex-start;
-  padding: var(--sp-4) var(--sp-5);
-  margin-bottom: var(--sp-6);
-  max-width: 640px;
-  background: var(--accent-soft);
-  border: 1px solid var(--line-hi);
-  border-radius: var(--r-3);
+  display: flex; align-items: flex-start; gap: var(--sp-3);
+  max-width: 620px; padding: var(--sp-4) var(--sp-5); margin-bottom: var(--sp-5);
+  background: var(--surface-sunk); border: 1px solid var(--line); border-radius: var(--r-2);
+}
+.engine-note-ic { flex: none; margin-top: 1px; display: flex; color: var(--dim); }
+
+.engine-toolbar { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.ds-icon-btn.engine-add, .ds-icon-btn.engine-add:hover { color: var(--accent); }
+
+.engine-table {
+  display: flex; flex-direction: column; min-height: 132px;
+  border: 1px solid var(--line2); border-radius: var(--r-2); overflow: hidden; background: var(--panel);
+}
+.engine-thead { display: flex; flex: none; height: 32px; background: var(--surface); border-bottom: 1px solid var(--line2); }
+.engine-th { flex: 1; min-width: 0; display: flex; align-items: center; padding: 0 var(--sp-4); }
+.engine-th.name { border-right: 1px solid var(--line2); }
+.engine-tbody { flex: 1; min-height: 0; max-height: 320px; overflow-x: hidden; overflow-y: auto; }
+
+.engine-empty {
+  min-height: 130px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-2); color: var(--line-hi);
 }
 
-.engine-note-ic {
-  flex: none;
-  margin-top: var(--sp-1);
-  display: flex;
-  color: var(--accent);
+.engine-rowgroup { display: contents; }
+.engine-row { display: flex; border-bottom: 1px solid var(--line); }
+.engine-row.sel { background: var(--c-sel); }
+.engine-cell { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-3); }
+.engine-cell.name { border-right: 1px solid var(--line); }
+
+.engine-name-in, .engine-val-in {
+  width: 100%; height: 34px; min-width: 0;
+  background: transparent; border: none; outline: none;
+  font: var(--t-mono); color: var(--text);
+}
+.engine-name-in::placeholder, .engine-val-in::placeholder { color: var(--faint2); }
+
+.engine-restart-badge {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  color: var(--warm); background: color-mix(in srgb, var(--warm) 15%, transparent);
 }
 
-.engine-group {
-  margin-top: var(--sp-5);
+.engine-err-strip {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--red2) 8%, var(--panel)); color: var(--red2);
 }
+.engine-err-strip .ds-ico { flex: none; }
 
-.engine-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-5);
-  padding: 0 0 var(--sp-5);
-  margin-bottom: var(--sp-5);
-  border-bottom: 1px solid var(--line);
+/* autocomplete popup — composes `.ds-menu` via the Popup `card_class`. */
+.engine-ac { padding: var(--sp-2); max-height: 260px; overflow: auto; }
+.engine-ac-item {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-1); cursor: pointer;
 }
+.engine-ac-item:hover { background: var(--c-sel); }
+.engine-ac-key { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.engine-ac-def { flex: none; }
 
-.engine-row-main {
-  flex: 1;
-  min-width: 0;
+.engine-inspector {
+  flex: none; margin-top: var(--sp-4); padding: var(--sp-4) var(--sp-5);
+  background: var(--surface-sunk); border: 1px solid var(--line); border-radius: var(--r-2);
 }
-
-.engine-key {
-  display: block;
-  color: var(--faint2);
-  margin-top: var(--sp-3);
-}
-
-.engine-badge {
-  color: var(--accent);
-  background: var(--accent-soft);
-  padding: var(--sp-1) var(--sp-3);
-  border-radius: var(--r-xs);
-  letter-spacing: .05em;
-}
-
-.engine-row-ctl {
-  flex: none;
-  padding-top: var(--sp-1);
-}
+.engine-insp-hd { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.engine-insp-def { margin-top: var(--sp-2); }
 
 /* A styled form field (control + inline error caption), stacked right-aligned so the
    validation message sits directly under the control (strata-forms FormField/Field). */

@@ -1,19 +1,86 @@
-//! `TextInput` + `NumberStepper` — the text-entry controls of the design system
+//! `Input` + `TextInput` + `NumberStepper` — the text-entry controls of the design system
 //! (`docs/DESIGN_SYSTEM.md` §04). Part of the **S28** control library.
 //!
-//! `TextInput` is a bordered **field wrapper** (`.ds-field`) around a borderless
-//! `<input>` (`.ds-input`) so the wrapper can carry the shared focus ring and an
-//! optional leading icon slot (the search variant). `NumberStepper` adds the
-//! up/down chevron column.
+//! [`Input`] is the **raw, un-opinionated** `<input>` at the base: no chrome, no default
+//! classes — it owns only the behaviour every field must share (the ⌘A/⌘C Select-All scope
+//! wiring + autofocus) and passes everything else through. `TextInput` wraps it in a bordered
+//! **field** (`.ds-field`) with the shared focus ring + optional leading icon; `NumberStepper`
+//! wraps it with the up/down chevron column. Bespoke inputs (e.g. the settings Properties
+//! table) use `Input` directly so they inherit the menu behaviour without the chrome.
 //!
-//! Both are **controlled**: the caller owns `value` and reacts to the change
-//! callback. [`SearchBar`] is a `TextInput` preset (baked search icon + clear).
-//! Additive `.ds-*` classes — see `button.rs` for the migration note.
+//! All are **controlled**: the caller owns `value` and reacts to the change callback.
+//! [`SearchBar`] is a `TextInput` preset (baked search icon + clear). Additive `.ds-*`
+//! classes — see `button.rs` for the migration note.
 
 use dioxus::prelude::*;
 
 use super::Icon;
 use crate::ui::icons::{IconName, IconSize};
+
+/// The raw `<input>` primitive — **not** style-opinionated (looks come entirely from the
+/// caller's `class` / `style`). It owns the cross-cutting behaviour every text field in the
+/// app needs: holding the ⌘A Select-All *scope* while focused (so the Edit-menu commands
+/// reach the field — see [`crate::menu`]) and optional autofocus. Every other input hook
+/// (`oninput` / `onchange` / `onkeydown` / `onfocusin` / `onfocusout` / `onmounted`) passes
+/// straight through. [`TextInput`] and [`NumberStepper`] delegate to it.
+#[component]
+pub fn Input(
+    #[props(into)] value: String,
+    #[props(into, default)] class: String,
+    #[props(into, default)] style: String,
+    #[props(into, default)] placeholder: String,
+    /// Render as `type=number` (numeric steppers) rather than `type=text`.
+    #[props(default)]
+    numeric: bool,
+    #[props(default)] disabled: bool,
+    /// `autocomplete` attribute value (default `"off"` — these are values, not prose).
+    #[props(into, default = String::from("off"))]
+    autocomplete: String,
+    #[props(default)] autofocus: bool,
+    /// Per-keystroke value passthrough.
+    oninput: Option<EventHandler<String>>,
+    /// Commit-on-blur / change value passthrough.
+    onchange: Option<EventHandler<String>>,
+    onkeydown: Option<EventHandler<KeyboardEvent>>,
+    onfocusin: Option<EventHandler<FocusEvent>>,
+    onfocusout: Option<EventHandler<FocusEvent>>,
+    onmounted: Option<EventHandler<Event<MountedData>>>,
+) -> Element {
+    let ty = if numeric { "number" } else { "text" };
+    rsx! {
+        input {
+            class: "{class}",
+            style: "{style}",
+            r#type: "{ty}",
+            value: "{value}",
+            disabled: disabled,
+            placeholder: "{placeholder}",
+            autocomplete: "{autocomplete}",
+            autofocus: autofocus,
+            spellcheck: false,
+            onmounted: move |e| {
+                if autofocus {
+                    let e2 = e.clone();
+                    spawn(async move { let _ = e2.set_focus(true).await; });
+                }
+                if let Some(h) = onmounted { h.call(e); }
+            },
+            // Hold the Select All scope while focused so ⌘A / ⌘C reach this field. RustRover-
+            // style — applies to every input in the app for free, since they all bottom out here.
+            onfocusin: move |e| {
+                crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input);
+                if let Some(h) = onfocusin { h.call(e); }
+            },
+            onfocusout: move |e| {
+                crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None);
+                if let Some(h) = onfocusout { h.call(e); }
+            },
+            oninput: move |e: FormEvent| { if let Some(h) = oninput { h.call(e.value()); } },
+            onchange: move |e: FormEvent| { if let Some(h) = onchange { h.call(e.value()); } },
+            onkeydown: move |e| { if let Some(h) = onkeydown { h.call(e); } },
+        }
+    }
+}
 
 /// A single-line text field. Pass `icon` for the search-style leading slot; pass
 /// `mono` to render the value in the monospace family. `onkeydown` is an optional
@@ -103,26 +170,17 @@ pub fn TextInput(
             if let Some(ic) = icon {
                 span { class: "ds-field-ico", {ic.el(icon_size)} }
             }
-            input {
-                class: "{input_cls}",
-                r#type: "text",
-                value: "{value}",
+            // The borderless `<input>` behaviour lives in `Input` (Select-All scope,
+            // autofocus); this wrapper adds the field chrome.
+            Input {
+                class: input_cls,
+                value: value,
                 disabled: disabled,
-                placeholder: "{placeholder}",
+                placeholder: placeholder,
                 autofocus: autofocus,
-                spellcheck: false,
-                onmounted: move |e| {
-                    if autofocus {
-                        spawn(async move { let _ = e.set_focus(true).await; });
-                    }
-                },
-                // Hold the Select All scope while focused so ⌘A selects this field's text
-                // (and enables the greyed-by-default Edit-menu item). RustRover-style.
-                onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),
-                onfocusout: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None),
-                oninput: move |e| oninput.call(e.value()),
-                onchange: move |e| { if let Some(h) = onchange { h.call(e.value()); } },
-                onkeydown: move |e| { if let Some(h) = onkeydown { h.call(e); } },
+                oninput: move |v: String| oninput.call(v),
+                onchange: move |v: String| { if let Some(h) = onchange { h.call(v); } },
+                onkeydown: move |e: KeyboardEvent| { if let Some(h) = onkeydown { h.call(e); } },
             }
             if let Some(tr) = trailing {
                 {tr}
@@ -206,19 +264,18 @@ pub fn NumberStepper(
         div {
             class: if disabled { "ds-stepper disabled" } else { "ds-stepper" },
             style: "width:{width}px;",
-            input {
+            // The `<input>` behaviour (Select-All scope) lives in `Input`; this adds the
+            // numeric chrome + digit filtering + commit-on-blur.
+            Input {
                 class: "ds-stepper-input",
-                r#type: "number",
+                numeric: true,
                 value: "{value}",
                 disabled: disabled,
-                spellcheck: false,
-                onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),
-                onfocusout: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None),
                 // Numeric-only: WKWebView's `type=number` still *shows* typed letters
                 // (its `.value` just reads back empty), so block non-digit character
                 // keystrokes here. Digits, `-`, navigation/edit keys and ⌘/⌃ shortcuts
                 // (copy / paste / select-all) pass through.
-                onkeydown: move |e| {
+                onkeydown: move |e: KeyboardEvent| {
                     let typing_bad = matches!(
                         e.key(),
                         Key::Character(c) if !c.chars().all(|ch| ch.is_ascii_digit() || ch == '-')
@@ -229,9 +286,9 @@ pub fn NumberStepper(
                 },
                 // Commit on blur / Enter, not per keystroke — so you can select-all and
                 // retype a value freely; parse + clamp on commit.
-                onchange: move |e| {
-                    if let Ok(v) = e.value().trim().parse::<i64>() {
-                        on_change.call(clamp(v));
+                onchange: move |v: String| {
+                    if let Ok(n) = v.trim().parse::<i64>() {
+                        on_change.call(clamp(n));
                     }
                 },
             }

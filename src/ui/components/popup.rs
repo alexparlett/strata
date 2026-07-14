@@ -254,11 +254,11 @@ fn viewport() -> (f64, f64) {
 pub fn Popup(
     anchor: Rect,
     #[props(default)] align: RectAlign,
-    card_class: Option<String>,
+    card_class: Option<&'static str>,
     width: Option<u32>,
     children: Element,
 ) -> Element {
-    let card = card_class.unwrap_or_else(|| "ds-menu".to_string());
+    let card = card_class.unwrap_or_else(|| "ds-menu");
     let wstyle = width.map(|w| format!("width:{w}px;")).unwrap_or_default();
     // Effective alignment: starts at `align`, then auto-flips after measuring the card if
     // the requested placement would overflow the viewport (egui `find_best_align`).

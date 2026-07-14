@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use dioxus::core::{Runtime, RuntimeGuard};
-use dioxus::desktop::{window, ShortcutHandle};
+use dioxus::desktop::{use_window, window, ShortcutHandle};
 use dioxus::prelude::*;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::HotKeyState;
@@ -30,7 +30,7 @@ static PENDING: GlobalSignal<Option<Command>> = Signal::global(|| None);
 /// component. `focused` is the window's focus state (set from the wry `Focused` event):
 /// shortcuts are (re)registered while focused and removed on blur, so they aren't held
 /// system-wide while Strata is backgrounded.
-pub fn use_shortcuts(state: Signal<AppState>, focused: Signal<bool>) {
+pub fn use_shortcuts(state: Signal<AppState>) {
     // Drain parked commands in-scope: dispatch may call `window()`, which the callback's
     // bare runtime can't satisfy, but this effect runs inside the component scope.
     use_effect(move || {
@@ -40,6 +40,9 @@ pub fn use_shortcuts(state: Signal<AppState>, focused: Signal<bool>) {
             crate::keymap::run(state, cmd);
         }
     });
+
+    let win = use_window();
+    let focused = use_signal(|| win.is_focused());
 
     // (Re)register on focus; remove on blur. Handles live in a plain `Rc<RefCell>`
     // (not a signal) so the `use_drop` below can safely touch them during teardown,

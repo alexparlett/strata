@@ -80,8 +80,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // so a DOM handler can't hear them once focus leaves the app subtree. `crate::hotkeys`
     // registers them while this window is focused; `focused` is relayed from the wry
     // `Focused` event below.
-    let mut focused = use_signal(|| false);
-    crate::hotkeys::use_shortcuts(state, focused);
+    crate::hotkeys::use_shortcuts(state);
 
     // Persist window geometry + save on an OS close-button (the window is still
     // alive here, unlike `use_drop`). Does *not* open the launcher — an OS close
@@ -104,12 +103,6 @@ pub fn ProjectRoot(open_path: String) -> Element {
                 WindowEvent::ThemeChanged(theme) => {
                     use dioxus::desktop::tao::window::Theme;
                     crate::settings::set_os_dark(*theme == Theme::Dark);
-                }
-                // Track focus for menu routing, and relay it so the shortcut effect
-                // (de)registers the global hotkeys — grabbed only while we're focused.
-                WindowEvent::Focused(f) => {
-                    crate::window::note_focused(win_id, *f);
-                    focused.set(*f);
                 }
                 _ => {}
             }

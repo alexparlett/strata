@@ -79,7 +79,7 @@ pub fn Select(
                 Popup {
                     anchor: anchor(),
                     align,
-                    card_class: "ds-menu".to_string(),
+                    card_class: "ds-menu",
                     width,
                     for opt in options.iter().cloned() {
                         {

@@ -51,12 +51,12 @@ pub fn SearchDialog(
     align: RectAlign,
     /// Popover card class (default the `.res-find-panel` search chrome).
     #[props(into, default)]
-    card_class: String,
+    card_class: &'static str,
 ) -> Element {
     let mut anchor = use_signal(|| Rect::point(0.0, 0.0));
     let mut trigger_ref = use_signal(|| None::<Rc<MountedData>>);
     let card = if card_class.is_empty() {
-        "res-find-panel".to_string()
+        "res-find-panel"
     } else {
         card_class
     };

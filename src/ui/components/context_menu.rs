@@ -23,7 +23,7 @@ pub fn ContextMenu(
             Backdrop { on_close: move |_| on_close.call(()),
                 Popup {
                     anchor: Rect::point(p.x, p.y),
-                    card_class: "ds-menu".to_string(),
+                    card_class: "ds-menu",
                     width: if width > 0 { Some(width) } else { None },
                     // Any bubbled inner click dismisses (action rows just do their thing).
                     div { onclick: move |_| on_close.call(()), {children} }

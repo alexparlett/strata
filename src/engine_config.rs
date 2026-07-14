@@ -1,268 +1,220 @@
-//! Catalog of the curated DataFusion engine options surfaced in **Settings ▸ Engine**
-//! (W2). Pure metadata — no `datafusion` types — so both the Settings UI (which
-//! renders the rows) and [`crate::engine`] (which applies them) depend on it without
-//! pulling datafusion into the UI layer.
+//! Catalog of DataFusion engine config keys surfaced in **Settings ▸ Engine ▸
+//! Properties** (design24). A flat, datafusion-free list of known keys — name +
+//! built-in default (as the string we store/apply) + a value [`Kind`] (for validation)
+//! + a one-line description — used by the Properties editor's autocomplete, inspector,
+//! and value validation, and by [`crate::engine`] to apply the overrides.
 //!
-//! Values are stored as strings in [`crate::config::Settings::engine`], a
-//! `BTreeMap<key, value>` that holds **only overrides** — a key absent from the map
-//! means "use the built-in default". Setting a value back to its default clears the
-//! key (see [`set_override`]), so the MODIFIED badge = "key present in the map".
+//! It is **not** a whitelist: any `datafusion.*` key may be entered in the editor;
+//! unknown keys are applied best-effort (DataFusion rejects the ones it doesn't know).
+//! Overrides live in [`crate::config::Settings::engine`], a `name → value` map.
 //!
-//! Which keys apply how (DataFusion 54): the nine `execution.*` / `sql_parser.*` /
-//! `format.*` / `optimizer.*` keys are real `ConfigOptions` entries (live-settable);
-//! the two `datafusion.runtime.*` keys live on the `RuntimeEnv` and only take effect
-//! when the engine is (re)built. `crate::engine` owns that split.
+//! `datafusion.runtime.*` keys reconfigure the `RuntimeEnv` (fixed at engine start), so
+//! changing them requires an engine restart — see [`is_restart_key`]. Runtime keys are
+//! *not* applied to the live `ConfigOptions` (so DataFusion never gets a chance to reject
+//! a bad one until restart) — which is exactly why [`value_error`] validates values in the
+//! editor, before Apply, rather than relying on the engine to complain.
 
 use std::collections::BTreeMap;
 
-/// How an option is edited and displayed.
-#[derive(Clone, Copy, PartialEq)]
-pub enum EngineKind {
-    /// Integer, rendered as a `NumberStepper` (numeric-only input + ± buttons).
-    /// `min`/`max` clamp; `step` sizes the buttons.
-    Int {
-        min: i64,
-        max: Option<i64>,
-        step: i64,
-    },
-    /// Free text. `placeholder` hints the field; `empty` (if any) is the label shown
-    /// when blank; `allow_empty` keeps an explicit blank as a real override.
-    Text {
-        placeholder: &'static str,
-        empty: Option<&'static str>,
-        allow_empty: bool,
-    },
+/// The value shape of a known key — drives editor-side validation ([`value_error`]).
+/// Deliberately lenient: DataFusion does the final, authoritative validation when the
+/// value is applied; this only catches the clearly-wrong so Apply can flag it inline.
+#[derive(Clone, Copy)]
+pub enum Kind {
+    /// Free-form string — not validated (names, formats, paths, codecs).
+    Text,
+    /// `true` or `false` (lower-case, as DataFusion parses it).
     Bool,
+    /// A whole number `>= min`.
+    Int { min: i64 },
+    /// A byte size: a number with an optional K/M/G/T (i)(B) suffix, or blank.
+    Bytes,
+    /// A duration: a number with an optional s/m/h suffix, or blank.
+    Duration,
+    /// A time zone: a `±HH:MM` offset (e.g. `+00:00`) or a named zone.
+    TimeZone,
+    /// One of a fixed set of values (compared case-insensitively).
     Enum(&'static [&'static str]),
 }
 
-/// One engine option's metadata.
-pub struct EngineOption {
+/// One known engine config key: DataFusion name, built-in default (string form), value
+/// [`Kind`], and a one-line description.
+pub struct EngineKey {
     pub key: &'static str,
-    pub group: &'static str,
-    pub label: &'static str,
-    pub desc: &'static str,
-    pub kind: EngineKind,
-    /// The built-in default, as the string we store/apply.
     pub default: &'static str,
+    pub kind: Kind,
+    pub desc: &'static str,
 }
 
-/// The curated set, in display order — grouped by `group`, groups in first-seen order.
-pub const OPTIONS: &[EngineOption] = &[
-    EngineOption {
-        key: "datafusion.execution.target_partitions",
-        group: "Execution",
-        label: "Target partitions",
-        desc: "Parallelism for query execution. 0 uses one partition per CPU core; set to 1 for tiny data to skip repartition overhead.",
-        kind: EngineKind::Int {
-            min: 0,
-            max: None,
-            step: 1,
-        },
-        default: "0",
-    },
-    EngineOption {
-        key: "datafusion.execution.batch_size",
-        group: "Execution",
-        label: "Batch size",
-        desc: "Rows per in-memory batch. Lower it under a tight memory limit; raise it for vectorized throughput on wide scans.",
-        kind: EngineKind::Int {
-            min: 1,
-            max: None,
-            step: 512,
-        },
-        default: "8192",
-    },
-    EngineOption {
-        key: "datafusion.execution.time_zone",
-        group: "Execution",
-        label: "Session time zone",
-        desc: "Time zone used by now() and timestamp functions.",
-        kind: EngineKind::Text {
-            placeholder: "+00:00",
-            empty: None,
-            allow_empty: false,
-        },
-        default: "+00:00",
-    },
-    EngineOption {
-        key: "datafusion.runtime.memory_limit",
-        group: "Memory & spill",
-        label: "Memory limit",
-        desc: "Cap on execution memory before spilling to disk. Suffixes K / M / G, e.g. 2G. Blank means unlimited.",
-        kind: EngineKind::Text {
-            placeholder: "unlimited",
-            empty: Some("unlimited"),
-            allow_empty: true,
-        },
-        default: "",
-    },
-    EngineOption {
-        key: "datafusion.runtime.max_temp_directory_size",
-        group: "Memory & spill",
-        label: "Max spill directory size",
-        desc: "Ceiling on temporary spill files on disk. Suffixes K / M / G.",
-        kind: EngineKind::Text {
-            placeholder: "100G",
-            empty: None,
-            allow_empty: false,
-        },
-        default: "100G",
-    },
-    EngineOption {
-        key: "datafusion.sql_parser.dialect",
-        group: "SQL parser",
-        label: "SQL dialect",
-        desc: "Parser dialect — affects identifier quoting, functions and cast behaviour.",
-        kind: EngineKind::Enum(&[
-            "generic",
-            "postgresql",
-            "mysql",
-            "sqlite",
-            "duckdb",
-            "snowflake",
-            "bigquery",
-            "ansi",
-        ]),
-        default: "generic",
-    },
-    EngineOption {
-        key: "datafusion.sql_parser.default_null_ordering",
-        group: "SQL parser",
-        label: "Default NULL ordering",
-        desc: "Where NULLs land when ORDER BY doesn't specify. nulls_max matches Postgres.",
-        kind: EngineKind::Enum(&["nulls_max", "nulls_min", "nulls_first", "nulls_last"]),
-        default: "nulls_max",
-    },
-    EngineOption {
-        key: "datafusion.format.null",
-        group: "Result format",
-        label: "NULL display",
-        desc: "How NULL values render in the results grid.",
-        kind: EngineKind::Text {
-            placeholder: "(empty)",
-            empty: None,
-            allow_empty: true,
-        },
-        default: "NULL",
-    },
-    EngineOption {
-        key: "datafusion.format.date_format",
-        group: "Result format",
-        label: "Date format",
-        desc: "strftime pattern applied to Date columns.",
-        kind: EngineKind::Text {
-            placeholder: "%Y-%m-%d",
-            empty: None,
-            allow_empty: false,
-        },
-        default: "%Y-%m-%d",
-    },
-    EngineOption {
-        key: "datafusion.format.timestamp_format",
-        group: "Result format",
-        label: "Timestamp format",
-        desc: "strftime pattern applied to Timestamp columns.",
-        kind: EngineKind::Text {
-            placeholder: "%Y-%m-%dT%H:%M:%S%.f",
-            empty: None,
-            allow_empty: false,
-        },
-        default: "%Y-%m-%dT%H:%M:%S%.f",
-    },
-    EngineOption {
-        key: "datafusion.optimizer.prefer_hash_join",
-        group: "Optimizer",
-        label: "Prefer hash join",
-        desc: "Favour HashJoin over SortMergeJoin. Faster when memory allows; disable to prefer the more memory-efficient sort-merge join.",
-        kind: EngineKind::Bool,
-        default: "true",
-    },
+/// The curated catalog — the DataFusion `ConfigOptions` + `runtime.*` keys we document,
+/// in display order (grouped by namespace).
+pub const ENGINE_KEYS: &[EngineKey] = &[
+    // catalog
+    EngineKey { key: "datafusion.catalog.default_catalog", default: "datafusion", kind: Kind::Text, desc: "Default catalog name used when a query doesn't specify one." },
+    EngineKey { key: "datafusion.catalog.default_schema", default: "public", kind: Kind::Text, desc: "Default schema name used when a query doesn't specify one." },
+    EngineKey { key: "datafusion.catalog.information_schema", default: "false", kind: Kind::Bool, desc: "Expose information_schema virtual tables for schema introspection." },
+    EngineKey { key: "datafusion.catalog.newlines_in_values", default: "false", kind: Kind::Bool, desc: "Allow newlines inside quoted CSV values (may reduce scan performance)." },
+    // execution
+    EngineKey { key: "datafusion.execution.batch_size", default: "8192", kind: Kind::Int { min: 1 }, desc: "Rows per in-memory batch. Lower under tight memory; raise for vectorized throughput." },
+    EngineKey { key: "datafusion.execution.target_partitions", default: "0", kind: Kind::Int { min: 0 }, desc: "Parallelism for execution. 0 = one partition per CPU core; 1 for tiny data." },
+    EngineKey { key: "datafusion.execution.time_zone", default: "+00:00", kind: Kind::TimeZone, desc: "Session time zone used by now() and timestamp functions." },
+    EngineKey { key: "datafusion.execution.coalesce_batches", default: "true", kind: Kind::Bool, desc: "Coalesce small batches between operators into larger ones." },
+    EngineKey { key: "datafusion.execution.collect_statistics", default: "true", kind: Kind::Bool, desc: "Collect statistics when a table is first created." },
+    EngineKey { key: "datafusion.execution.planning_concurrency", default: "0", kind: Kind::Int { min: 0 }, desc: "Fan-out during physical planning. 0 = number of CPU cores." },
+    EngineKey { key: "datafusion.execution.spill_compression", default: "uncompressed", kind: Kind::Enum(&["uncompressed", "lz4_frame", "zstd"]), desc: "Codec for spill files: uncompressed, lz4_frame, or zstd." },
+    EngineKey { key: "datafusion.execution.sort_spill_reservation_bytes", default: "10485760", kind: Kind::Int { min: 0 }, desc: "Memory reserved for each spillable sort's in-memory merge." },
+    EngineKey { key: "datafusion.execution.sort_in_place_threshold_bytes", default: "1048576", kind: Kind::Int { min: 0 }, desc: "Below this size, sort in a single RecordBatch rather than merging." },
+    EngineKey { key: "datafusion.execution.meta_fetch_concurrency", default: "32", kind: Kind::Int { min: 1 }, desc: "Files read in parallel when inferring schema and statistics." },
+    EngineKey { key: "datafusion.execution.enable_recursive_ctes", default: "true", kind: Kind::Bool, desc: "Support recursive common table expressions." },
+    EngineKey { key: "datafusion.execution.keep_partition_by_columns", default: "false", kind: Kind::Bool, desc: "Keep partition_by columns in the output RecordBatches." },
+    EngineKey { key: "datafusion.execution.parquet.pruning", default: "true", kind: Kind::Bool, desc: "Skip row groups using predicate + min/max metadata." },
+    EngineKey { key: "datafusion.execution.parquet.enable_page_index", default: "true", kind: Kind::Bool, desc: "Use the Parquet Page Index to reduce I/O and rows decoded." },
+    EngineKey { key: "datafusion.execution.parquet.pushdown_filters", default: "false", kind: Kind::Bool, desc: "Apply filters during Parquet decoding (late materialization)." },
+    EngineKey { key: "datafusion.execution.parquet.reorder_filters", default: "false", kind: Kind::Bool, desc: "Reorder pushed-down filters heuristically to cut evaluation cost." },
+    EngineKey { key: "datafusion.execution.parquet.metadata_size_hint", default: "524288", kind: Kind::Int { min: 0 }, desc: "Bytes fetched optimistically for the Parquet footer + metadata." },
+    EngineKey { key: "datafusion.execution.parquet.compression", default: "zstd(3)", kind: Kind::Text, desc: "(writing) Default codec: snappy, gzip(level), zstd(level), lz4, lz4_raw." },
+    EngineKey { key: "datafusion.execution.parquet.max_row_group_size", default: "1048576", kind: Kind::Int { min: 1 }, desc: "(writing) Target max rows per row group." },
+    EngineKey { key: "datafusion.execution.parquet.statistics_enabled", default: "page", kind: Kind::Enum(&["none", "chunk", "page"]), desc: "(writing) Statistics level: none, chunk, or page." },
+    // optimizer
+    EngineKey { key: "datafusion.optimizer.prefer_hash_join", default: "true", kind: Kind::Bool, desc: "Prefer HashJoin over SortMergeJoin (faster, more memory)." },
+    EngineKey { key: "datafusion.optimizer.repartition_joins", default: "true", kind: Kind::Bool, desc: "Repartition on join keys to run joins in parallel." },
+    EngineKey { key: "datafusion.optimizer.repartition_aggregations", default: "true", kind: Kind::Bool, desc: "Repartition on aggregate keys to run aggregates in parallel." },
+    EngineKey { key: "datafusion.optimizer.repartition_sorts", default: "true", kind: Kind::Bool, desc: "Sort per-partition then merge, rather than coalescing first." },
+    EngineKey { key: "datafusion.optimizer.repartition_file_scans", default: "true", kind: Kind::Bool, desc: "Repartition data-source partitions for maximum parallelism." },
+    EngineKey { key: "datafusion.optimizer.repartition_file_min_size", default: "10485760", kind: Kind::Int { min: 0 }, desc: "Minimum total file size (bytes) to repartition a file scan." },
+    EngineKey { key: "datafusion.optimizer.enable_round_robin_repartition", default: "true", kind: Kind::Bool, desc: "Add round-robin repartitioning to use more CPU cores." },
+    EngineKey { key: "datafusion.optimizer.enable_topk_aggregation", default: "true", kind: Kind::Bool, desc: "Perform TopK during aggregations where possible." },
+    EngineKey { key: "datafusion.optimizer.enable_dynamic_filter_pushdown", default: "true", kind: Kind::Bool, desc: "Push operator-generated dynamic filters into the scan phase." },
+    EngineKey { key: "datafusion.optimizer.skip_failed_rules", default: "false", kind: Kind::Bool, desc: "Warn and continue when an optimizer rule errors, instead of failing." },
+    EngineKey { key: "datafusion.optimizer.max_passes", default: "3", kind: Kind::Int { min: 1 }, desc: "How many times the optimizer re-runs over the plan." },
+    EngineKey { key: "datafusion.optimizer.default_filter_selectivity", default: "20", kind: Kind::Int { min: 0 }, desc: "Default filter selectivity (0-100) when none can be determined." },
+    EngineKey { key: "datafusion.optimizer.hash_join_single_partition_threshold", default: "1048576", kind: Kind::Int { min: 0 }, desc: "Max bytes of one HashJoin side collected into a single partition." },
+    // explain
+    EngineKey { key: "datafusion.explain.logical_plan_only", default: "false", kind: Kind::Bool, desc: "EXPLAIN prints only the logical plan." },
+    EngineKey { key: "datafusion.explain.physical_plan_only", default: "false", kind: Kind::Bool, desc: "EXPLAIN prints only the physical plan." },
+    EngineKey { key: "datafusion.explain.show_statistics", default: "false", kind: Kind::Bool, desc: "EXPLAIN prints operator statistics for physical plans." },
+    EngineKey { key: "datafusion.explain.show_sizes", default: "true", kind: Kind::Bool, desc: "EXPLAIN prints partition sizes." },
+    EngineKey { key: "datafusion.explain.format", default: "indent", kind: Kind::Enum(&["indent", "tree"]), desc: "EXPLAIN display format: indent or tree." },
+    // sql_parser
+    EngineKey { key: "datafusion.sql_parser.dialect", default: "generic", kind: Kind::Text, desc: "Parser dialect: generic, postgresql, mysql, sqlite, duckdb, snowflake, bigquery, ansi." },
+    EngineKey { key: "datafusion.sql_parser.default_null_ordering", default: "nulls_max", kind: Kind::Enum(&["nulls_max", "nulls_min", "nulls_first", "nulls_last"]), desc: "Default NULL ordering: nulls_max, nulls_min, nulls_first, nulls_last." },
+    EngineKey { key: "datafusion.sql_parser.enable_ident_normalization", default: "true", kind: Kind::Bool, desc: "Lower-case unquoted identifiers." },
+    EngineKey { key: "datafusion.sql_parser.parse_float_as_decimal", default: "false", kind: Kind::Bool, desc: "Parse float literals as DECIMAL." },
+    EngineKey { key: "datafusion.sql_parser.support_varchar_with_length", default: "true", kind: Kind::Bool, desc: "Permit VARCHAR(n) lengths (ignored) instead of erroring." },
+    EngineKey { key: "datafusion.sql_parser.map_string_types_to_utf8view", default: "true", kind: Kind::Bool, desc: "Map string types to Utf8View during planning." },
+    EngineKey { key: "datafusion.sql_parser.recursion_limit", default: "50", kind: Kind::Int { min: 1 }, desc: "Recursion depth limit when parsing complex SQL." },
+    // format
+    EngineKey { key: "datafusion.format.null", default: "NULL", kind: Kind::Text, desc: "How NULL values render in the results grid." },
+    EngineKey { key: "datafusion.format.date_format", default: "%Y-%m-%d", kind: Kind::Text, desc: "strftime pattern for Date columns." },
+    EngineKey { key: "datafusion.format.datetime_format", default: "%Y-%m-%dT%H:%M:%S%.f", kind: Kind::Text, desc: "strftime pattern for DateTime columns." },
+    EngineKey { key: "datafusion.format.timestamp_format", default: "%Y-%m-%dT%H:%M:%S%.f", kind: Kind::Text, desc: "strftime pattern for Timestamp columns." },
+    EngineKey { key: "datafusion.format.time_format", default: "%H:%M:%S%.f", kind: Kind::Text, desc: "strftime pattern for Time columns." },
+    EngineKey { key: "datafusion.format.duration_format", default: "pretty", kind: Kind::Enum(&["pretty", "iso8601"]), desc: "Duration rendering: pretty or ISO8601." },
+    // runtime (restart-required — configure the RuntimeEnv, fixed at engine start)
+    EngineKey { key: "datafusion.runtime.memory_limit", default: "", kind: Kind::Bytes, desc: "Cap on execution memory before spilling. Suffixes K/M/G, e.g. 2G. Blank = unlimited." },
+    EngineKey { key: "datafusion.runtime.max_temp_directory_size", default: "100G", kind: Kind::Bytes, desc: "Ceiling on temporary spill files on disk. Suffixes K/M/G." },
+    EngineKey { key: "datafusion.runtime.temp_directory", default: "", kind: Kind::Text, desc: "Path to the temporary spill directory." },
+    EngineKey { key: "datafusion.runtime.metadata_cache_limit", default: "50M", kind: Kind::Bytes, desc: "Memory for the file-metadata cache (e.g. Parquet metadata)." },
+    EngineKey { key: "datafusion.runtime.list_files_cache_limit", default: "1M", kind: Kind::Bytes, desc: "Memory for the list-files cache. Suffixes K/M/G." },
+    EngineKey { key: "datafusion.runtime.list_files_cache_ttl", default: "", kind: Kind::Duration, desc: "TTL of list-files cache entries. Units m/s, e.g. 2m." },
 ];
 
-/// Look up an option's metadata by key.
-pub fn option(key: &str) -> Option<&'static EngineOption> {
-    OPTIONS.iter().find(|o| o.key == key)
+/// Look up a known key's metadata, or `None` for a custom key.
+pub fn key_def(name: &str) -> Option<&'static EngineKey> {
+    let name = name.trim();
+    ENGINE_KEYS.iter().find(|e| e.key == name)
 }
 
-/// The effective value for `key` given the overrides map — the override if present,
-/// else the built-in default. `None` if `key` isn't a known option.
+/// Whether `name` is a runtime-level key — these reconfigure the `RuntimeEnv` (fixed at
+/// engine start), so changing them requires a restart.
+pub fn is_restart_key(name: &str) -> bool {
+    name.trim().starts_with("datafusion.runtime.")
+}
+
+/// The effective value for `key` given the overrides map — the override if present, else
+/// the known built-in default. `None` for a custom key with no override.
 pub fn effective(overrides: &BTreeMap<String, String>, key: &str) -> Option<String> {
-    let opt = option(key)?;
-    Some(
-        overrides
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| opt.default.to_string()),
-    )
-}
-
-/// Set `key` to `value` in `overrides`, clearing it when `value` equals the built-in
-/// default — the design's "== default → not an override" rule. Unknown keys ignored.
-pub fn set_override(overrides: &mut BTreeMap<String, String>, key: &str, value: String) {
-    match option(key) {
-        Some(opt) if value == opt.default => {
-            overrides.remove(key);
-        }
-        Some(_) => {
-            overrides.insert(key.to_string(), value);
-        }
-        None => {}
+    if let Some(v) = overrides.get(key) {
+        return Some(v.clone());
     }
+    key_def(key).map(|e| e.default.to_string())
 }
 
-/// Validate a candidate `value` for `key` before it's committed to the overrides.
-/// `Ok(())` = acceptable; `Err(msg)` is a short user-facing reason. A blank is always
-/// allowed (means "use the default"); free-text options (time zone, strftime formats,
-/// NULL display) accept anything; ints, runtime capacities and enums are checked.
-pub fn validate(key: &str, value: &str) -> Result<(), String> {
-    let Some(opt) = option(key) else {
-        return Ok(());
-    };
+/// Validate `value` against the known `key`'s [`Kind`]. Returns an error message for a
+/// clearly-invalid value, or `None` if it's acceptable — including a blank value (which
+/// means "unset / use the default") and any custom (non-catalog) key. Lenient by design:
+/// DataFusion does the final validation when the value is applied.
+pub fn value_error(key: &str, value: &str) -> Option<String> {
     let v = value.trim();
     if v.is_empty() {
-        return Ok(());
+        return None;
     }
-    // The runtime capacities take a size string (2G / 512M / a byte count).
-    if key == "datafusion.runtime.memory_limit"
-        || key == "datafusion.runtime.max_temp_directory_size"
-    {
-        return validate_size(v);
-    }
-    match opt.kind {
-        EngineKind::Int { .. } => v
-            .parse::<u64>()
-            .map(|_| ())
-            .map_err(|_| "Enter a whole number (0 or more).".to_string()),
-        EngineKind::Enum(choices) => {
-            if choices.contains(&v) {
-                Ok(())
-            } else {
-                Err("Choose one of the listed options.".to_string())
-            }
+    match key_def(key)?.kind {
+        Kind::Text => None,
+        Kind::Bool => (v != "true" && v != "false").then(|| "Expected true or false.".to_string()),
+        Kind::Int { min } => match v.parse::<i64>() {
+            Ok(n) if n >= min => None,
+            Ok(_) if min == 0 => Some("Expected a non-negative whole number.".to_string()),
+            Ok(_) if min == 1 => Some("Expected a positive whole number.".to_string()),
+            Ok(_) => Some(format!("Expected a whole number ≥ {min}.")),
+            Err(_) => Some("Expected a whole number.".to_string()),
+        },
+        Kind::Bytes => (!is_byte_size(v))
+            .then(|| "Expected a size like 512M, 2G, or a number of bytes.".to_string()),
+        Kind::Duration => {
+            (!is_duration(v)).then(|| "Expected a duration like 30s or 2m.".to_string())
         }
-        EngineKind::Text { .. } | EngineKind::Bool => Ok(()),
+        Kind::TimeZone => (!is_time_zone(v))
+            .then(|| "Expected a ±HH:MM offset (e.g. +00:00) or a named zone.".to_string()),
+        Kind::Enum(opts) => (!opts.iter().any(|o| o.eq_ignore_ascii_case(v)))
+            .then(|| format!("Expected one of: {}.", opts.join(", "))),
     }
 }
 
-/// A capacity string: a non-negative number with an optional `K` / `M` / `G` suffix.
-fn validate_size(v: &str) -> Result<(), String> {
-    let num = v.strip_suffix(|c: char| "KMGkmg".contains(c)).unwrap_or(v);
-    match num.trim().parse::<f64>() {
-        Ok(n) if n >= 0.0 => Ok(()),
-        _ => Err("Use a size like 2G, 512M, or a plain byte count.".to_string()),
-    }
+/// Split `"1.5G"` → `("1.5", "G")` — the leading numeric run and the trailing unit.
+fn split_num_unit(s: &str) -> (&str, &str) {
+    let idx = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
+    (s[..idx].trim(), s[idx..].trim())
 }
 
-/// Groups in display order, each carrying its options (preserves [`OPTIONS`] order).
-pub fn groups() -> Vec<(&'static str, Vec<&'static EngineOption>)> {
-    let mut out: Vec<(&'static str, Vec<&'static EngineOption>)> = Vec::new();
-    for o in OPTIONS {
-        if let Some(g) = out.iter_mut().find(|(name, _)| *name == o.group) {
-            g.1.push(o);
-        } else {
-            out.push((o.group, vec![o]));
-        }
+/// A number with an optional byte-size unit (K/M/G/T, optionally `i`/`B`).
+fn is_byte_size(v: &str) -> bool {
+    let (num, unit) = split_num_unit(v);
+    if num.parse::<f64>().is_err() {
+        return false;
     }
-    out
+    unit.is_empty()
+        || matches!(
+            unit.chars().next().map(|c| c.to_ascii_lowercase()),
+            Some('k') | Some('m') | Some('g') | Some('t') | Some('b')
+        )
+}
+
+/// A number with an optional duration unit (s/m/h).
+fn is_duration(v: &str) -> bool {
+    let (num, unit) = split_num_unit(v);
+    if num.parse::<f64>().is_err() {
+        return false;
+    }
+    unit.is_empty()
+        || matches!(
+            unit.chars().next().map(|c| c.to_ascii_lowercase()),
+            Some('s') | Some('m') | Some('h')
+        )
+}
+
+/// A `±HH:MM` offset (hours 00-14, minutes 00-59) or a named zone (letters, digits, `/_+-`).
+fn is_time_zone(v: &str) -> bool {
+    if let Some(rest) = v.strip_prefix(['+', '-']) {
+        let b = rest.as_bytes();
+        return rest.len() == 5
+            && b[2] == b':'
+            && matches!(
+                (rest[0..2].parse::<u32>(), rest[3..5].parse::<u32>()),
+                (Ok(h), Ok(m)) if h <= 14 && m <= 59
+            );
+    }
+    v.chars().any(|c| c.is_ascii_alphabetic())
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '+' | '-'))
 }
