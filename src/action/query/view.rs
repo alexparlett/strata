@@ -3,15 +3,14 @@
 
 use dioxus::prelude::*;
 
-use crate::state::{AppState, LogKind};
+use crate::state::AppState;
 
 /// Clear the active tab's results back to the empty state (Rz8).
-pub fn clear_results(mut state: Signal<AppState>) {
+pub fn clear_results(_state: Signal<AppState>) {
     let id = crate::session::active_id();
     if id == 0 {
         return;
     }
-    let mut cleared = false;
     crate::runs::edit_existing(id, |run| {
         if run.running || (run.result.is_none() && run.query_error.is_none() && run.plan.is_none())
         {
@@ -26,11 +25,7 @@ pub fn clear_results(mut state: Signal<AppState>) {
         run.sel_anchor = None;
         run.sort = None;
         run.col_widths.clear();
-        cleared = true;
     });
-    if cleared {
-        state.write().set_status(LogKind::Info, "Cleared results");
-    }
 }
 /// Open/close a tab's results find popover (U6). Closing clears its find query so a
 /// stale filter never lingers. No-op if the tab has no run yet.

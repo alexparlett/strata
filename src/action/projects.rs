@@ -16,7 +16,7 @@ use dioxus::desktop::tao::window::WindowId;
 use crate::config;
 use crate::engine::{Command, TableSpec};
 use crate::project::Project;
-use crate::state::{AppState, LogKind};
+use crate::state::AppState;
 
 /// Load a project into *this* window (startup / freshly-spawned window). A
 /// missing file becomes a new project scaffolded from the folder name.
@@ -26,9 +26,6 @@ pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
             Ok(p) => p,
             Err(e) => {
                 tracing::error!("open project {}: {e}", path.display());
-                state
-                    .write()
-                    .set_status(LogKind::Error, format!("Couldn't open project: {e}"));
                 return;
             }
         }
@@ -363,7 +360,6 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
         // previous project's runs so a reused id can't inherit stale results.
         crate::runs::clear();
         crate::diagnostics::clear();
-        s.set_status(LogKind::Ok, format!("Opened project '{name}'"));
     }
 
     if let Some(tx) = &tx {

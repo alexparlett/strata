@@ -4,14 +4,13 @@ use dioxus::prelude::*;
 
 use crate::ddl::{self, Decision};
 use crate::engine::Command;
-use crate::state::{AppState, LogKind};
+use crate::state::AppState;
 
 /// Run the active tab's SQL (DDL-classified: run / capture-view / drop-view / block).
 pub fn run(mut state: Signal<AppState>) {
     let sql = crate::session::active_sql();
     let trimmed = sql.trim().to_string();
     if trimmed.is_empty() {
-        state.write().set_status(LogKind::Info, "Nothing to run");
         return;
     }
     // `EXPLAIN [ANALYZE]` takes a dedicated path: the engine runs it and returns
@@ -30,16 +29,12 @@ pub fn run(mut state: Signal<AppState>) {
                 });
             }
             tracing::warn!("blocked statement: {reason}");
-            state
-                .write()
-                .set_status(LogKind::Warn, format!("Blocked · {reason}"));
         }
         Decision::CaptureView { name, sql } => {
             let tx = state.read().cmd_tx.clone();
             if let Some(tx) = tx {
                 let _ = tx.send(Command::CreateView { name, sql });
             }
-            state.write().set_status(LogKind::Info, "Saving view…");
         }
         Decision::DropView { name } => {
             let tx = state.read().cmd_tx.clone();
@@ -76,7 +71,6 @@ pub fn run(mut state: Signal<AppState>) {
                     page_size,
                 });
             }
-            state.write().set_status(LogKind::Run, "Running…");
         }
     }
 }
@@ -106,19 +100,15 @@ fn explain(mut state: Signal<AppState>, sql: String) {
             sql,
         });
     }
-    state.write().set_status(LogKind::Run, "Explaining…");
 }
 
 /// Run an `EXPLAIN [ANALYZE]` of the active tab's SQL **without mutating the editor
 /// buffer** (E4): wrap the current SQL with the prefix (stripping any existing one) and
 /// route it through the engine's explain path. Like Save-as-view, the change lives in
 /// the engine, not the editor — the user's query in the editor stays untouched.
-pub fn run_explain(mut state: Signal<AppState>, analyze: bool) {
+pub fn run_explain(state: Signal<AppState>, analyze: bool) {
     let sql = crate::session::active_sql();
     if sql.trim().is_empty() {
-        state
-            .write()
-            .set_status(LogKind::Info, "Nothing to explain");
         return;
     }
     explain(state, crate::plan::as_explain(&sql, analyze));

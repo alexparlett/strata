@@ -5,7 +5,7 @@
 use dioxus::prelude::*;
 
 use crate::engine::{self, Command};
-use crate::state::{AppState, LogKind, RemoveKind};
+use crate::state::{AppState, RemoveKind};
 
 /// Open the Table Config modal for a new external table.
 pub fn open_config_new(_state: Signal<AppState>) {
@@ -90,7 +90,7 @@ pub fn confirm_remove(mut state: Signal<AppState>, kind: RemoveKind, name: Strin
 /// Load a view's SQL into the active tab (catalog menu → "Edit query").
 /// Open a view's SQL in its **own** tab (named after the view), reusing an
 /// existing tab of that name rather than overwriting whatever tab is active.
-pub fn edit_view(mut state: Signal<AppState>, name: &str) {
+pub fn edit_view(state: Signal<AppState>, name: &str) {
     let sql = state
         .read()
         .project
@@ -102,9 +102,6 @@ pub fn edit_view(mut state: Signal<AppState>, name: &str) {
         return;
     };
     crate::session::open_named(name, sql, crate::project::Origin::View(name.to_string()));
-    state
-        .write()
-        .set_status(LogKind::Info, format!("Editing view '{name}'"));
 }
 
 // ---- catalog interactions ----

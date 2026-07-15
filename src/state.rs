@@ -166,10 +166,6 @@ pub struct AppState {
     pub next_req: u64,
     pub page_size_open: bool,
     pub selected_col: Option<(String, String)>,
-    // status (ephemeral) — `status_kind` drives the status-bar dot colour and
-    // must stay in step with `status_text` (set both via `set_status`).
-    pub status_text: String,
-    pub status_kind: LogKind,
     // bottom drawer (History + Events tabs)
     pub log: Vec<LogEvent>,
     pub log_open: bool,
@@ -203,8 +199,6 @@ impl AppState {
             next_req: 1,
             page_size_open: false,
             selected_col: None,
-            status_text: "Ready · DataFusion 54 · open a project or add a table to begin".into(),
-            status_kind: LogKind::Ok,
             log: Vec::new(),
             log_open: false,
             log_tab: LogTab::History,
@@ -214,13 +208,6 @@ impl AppState {
     }
 
     /// Append an entry to the Event Log (newest first, capped at 200).
-    /// Set the status-bar text + its severity together (keeps the status dot in
-    /// step with the text — see `status_kind`).
-    pub fn set_status(&mut self, kind: LogKind, text: impl Into<String>) {
-        self.status_kind = kind;
-        self.status_text = text.into();
-    }
-
     pub fn push_log(&mut self, kind: LogKind, msg: impl Into<String>) {
         self.push_log_err(kind, msg, None, None);
     }

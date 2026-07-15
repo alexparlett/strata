@@ -2,12 +2,12 @@
 
 use dioxus::prelude::*;
 
-use crate::state::{AppState, LogKind};
+use crate::state::AppState;
 
 /// Rz4 — copy the current grid selection to the clipboard: project the selected columns + take
 /// the selected rows into a sub-`RecordBatch`, then serialize it via `crate::serialize`. TSV
 /// (the ⌘C default) and the other formats all carry a header; indices are page-local.
-pub fn copy_selection(mut state: Signal<AppState>, fmt: crate::serialize::TextFormat) {
+pub fn copy_selection(_state: Signal<AppState>, fmt: crate::serialize::TextFormat) {
     use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
 
     let ws_id = crate::session::active_id();
@@ -62,22 +62,14 @@ pub fn copy_selection(mut state: Signal<AppState>, fmt: crate::serialize::TextFo
             Some((sub, frows.len(), cols.len()))
         });
 
-    let mut s = state.write();
-    match sub {
-        None => s.set_status(LogKind::Warn, "Nothing selected to copy"),
-        Some((batch, r, c)) => {
-            // All formats carry a header row / keys — consistent across TSV/CSV/JSON/Markdown so
-            // a copied selection is always self-describing.
-            let header = true;
-            let mut clip = crate::serialize::ClipboardWriter::new();
-            let res = crate::serialize::write_batch(fmt, &batch, header, &mut clip)
-                .map_err(|e| e.to_string())
-                .and_then(|_| clip.commit());
-            match res {
-                Ok(()) => s.set_status(LogKind::Ok, format!("Copied {r}×{c} to clipboard")),
-                Err(e) => s.set_status(LogKind::Error, format!("Clipboard failed · {e}")),
-            }
-        }
+    if let Some((batch, _, _)) = sub {
+        // All formats carry a header row / keys — consistent across TSV/CSV/JSON/Markdown so
+        // a copied selection is always self-describing.
+        let header = true;
+        let mut clip = crate::serialize::ClipboardWriter::new();
+        let _ = crate::serialize::write_batch(fmt, &batch, header, &mut clip)
+            .map_err(|e| e.to_string())
+            .and_then(|_| clip.commit());
     }
 }
 
@@ -85,7 +77,7 @@ pub fn copy_selection(mut state: Signal<AppState>, fmt: crate::serialize::TextFo
 /// clipboard in `fmt`, from the record view's `⋯` menu. Like [`copy_selection`] but one full row:
 /// map the filtered display index → page-`batch` row, `take` it into a one-row `RecordBatch`, and
 /// serialize with a header.
-pub fn copy_record(mut state: Signal<AppState>, row_idx: usize, fmt: crate::serialize::TextFormat) {
+pub fn copy_record(_state: Signal<AppState>, row_idx: usize, fmt: crate::serialize::TextFormat) {
     use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
 
     let ws_id = crate::session::active_id();
@@ -118,18 +110,10 @@ pub fn copy_record(mut state: Signal<AppState>, row_idx: usize, fmt: crate::seri
         RecordBatch::try_new(batch.schema(), taken).ok()
     });
 
-    let mut s = state.write();
-    match sub {
-        None => s.set_status(LogKind::Warn, "No record to copy"),
-        Some(batch) => {
-            let mut clip = crate::serialize::ClipboardWriter::new();
-            let res = crate::serialize::write_batch(fmt, &batch, true, &mut clip)
-                .map_err(|e| e.to_string())
-                .and_then(|_| clip.commit());
-            match res {
-                Ok(()) => s.set_status(LogKind::Ok, "Copied record to clipboard"),
-                Err(e) => s.set_status(LogKind::Error, format!("Clipboard failed · {e}")),
-            }
-        }
+    if let Some(batch) = sub {
+        let mut clip = crate::serialize::ClipboardWriter::new();
+        let _ = crate::serialize::write_batch(fmt, &batch, true, &mut clip)
+            .map_err(|e| e.to_string())
+            .and_then(|_| clip.commit());
     }
 }

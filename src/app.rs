@@ -255,14 +255,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         },
                     );
                     s.project.history.truncate(crate::settings::max_history().max(1));
-                    s.set_status(
-                        LogKind::Ok,
-                        format!(
-                            "{total} row{} · {} ms",
-                            if total == 1 { "" } else { "s" },
-                            elapsed,
-                        ),
-                    );
                     s.push_log(
                         LogKind::Ok,
                         format!("Query executed · {total} rows · {} ms", elapsed),
@@ -284,10 +276,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     tracing::error!("query failed: {e}");
                     let raw = format!("{e}");
                     let qe = QueryError::parse(&raw, &sql);
-                    // Surface a one-line status; the full structured error goes to
-                    // the results-pane error view and the (expandable) event row.
-                    let head = raw.lines().next().unwrap_or(raw.as_str());
-                    s.set_status(LogKind::Error, format!("Query failed · {head}"));
                     s.push_log_err(
                         LogKind::Error,
                         format!("Query failed · {}", qe.etype),
@@ -346,7 +334,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 },
             );
             s.project.history.truncate(crate::settings::max_history().max(1));
-            s.set_status(LogKind::Warn, format!("Query cancelled · {elapsed_ms} ms"));
             s.push_log(LogKind::Warn, format!("Query cancelled · {elapsed_ms} ms"));
             crate::runs::edit_existing(ws_id, |run| {
                 run.running = false;
@@ -364,13 +351,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             }
             match result {
                 Ok(plan) => {
-                    let ops = plan.physical.len().max(plan.logical.len());
-                    let kind = if plan.analyze {
-                        "Plan with metrics"
-                    } else {
-                        "Query plan"
-                    };
-                    s.set_status(LogKind::Ok, format!("{kind} · {ops} operators"));
                     s.push_log(
                         LogKind::Ok,
                         format!(
@@ -396,8 +376,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         .map(|w| w.sql.clone())
                         .unwrap_or_default();
                     let qe = QueryError::parse(&e, &sql);
-                    let head = e.lines().next().unwrap_or(e.as_str());
-                    s.set_status(LogKind::Error, format!("Explain failed · {head}"));
                     s.push_log_err(
                         LogKind::Error,
                         format!("Explain failed · {}", qe.etype),
@@ -432,7 +410,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             Err(e) => {
                 tracing::error!("page load failed: {e}");
                 s.push_log(LogKind::Error, format!("Page load failed: {e}"));
-                s.set_status(LogKind::Error, format!("Page load failed · {e}"));
             }
         },
         Event::Registered {
@@ -493,7 +470,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     LogKind::Ok,
                     format!("Registered table '{table}' · {n} cols · schema validated"),
                 );
-                s.set_status(LogKind::Ok, format!("Registered '{table}'"));
             }
             Err(e) => {
                 // A config-originated register that failed → keep the window open
@@ -508,7 +484,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 }
                 tracing::error!("register table '{table}' failed: {e}");
                 s.push_log(LogKind::Error, format!("Register '{table}' failed: {e}"));
-                s.set_status(LogKind::Error, format!("Register failed · {e}"));
             }
         },
         Event::ViewChanged {
@@ -521,7 +496,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 s.project.views.retain(|v| v.name != name);
                 autosave_after = true;
                 s.push_log(LogKind::Info, format!("Dropped view '{name}'"));
-                s.set_status(LogKind::Info, format!("Dropped view '{name}'"));
             } else {
                 match result {
                     Ok(cols) => {
@@ -538,13 +512,11 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                             });
                         }
                         s.push_log(LogKind::Ok, format!("Saved view '{name}'"));
-                        s.set_status(LogKind::Ok, format!("Saved view '{name}'"));
                         autosave_after = true;
                     }
                     Err(e) => {
                         tracing::error!("view '{name}' failed: {e}");
                         s.push_log(LogKind::Error, format!("View '{name}' failed: {e}"));
-                        s.set_status(LogKind::Error, format!("View failed · {e}"));
                     }
                 }
             }
@@ -561,13 +533,11 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 } else {
                     format!("Exported → {path}")
                 };
-                s.push_log(LogKind::Ok, msg.clone());
-                s.set_status(LogKind::Ok, msg);
+                s.push_log(LogKind::Ok, msg);
             }
             Err(e) => {
                 tracing::error!("export failed: {e}");
                 s.push_log(LogKind::Error, format!("Export failed: {e}"));
-                s.set_status(LogKind::Error, format!("Export failed · {e}"));
             }
         },
         Event::Functions {
@@ -584,8 +554,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
         }
         Event::Notice(m) => {
             tracing::warn!("{m}");
-            s.push_log(LogKind::Info, m.clone());
-            s.set_status(LogKind::Info, m);
+            s.push_log(LogKind::Info, m);
         }
         Event::EngineRestartRequired => {
             // A saved `datafusion.runtime.*` change can't apply to the running engine
