@@ -170,7 +170,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
                             ui::inspector::Inspector {}
                         }
                     }
-                    if state.read().log_open { ui::drawer::Drawer {} }
+                    ui::drawer::BottomDraw {}
                 }
             }
 
@@ -255,7 +255,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         },
                     );
                     s.project.history.truncate(crate::settings::max_history().max(1));
-                    s.push_log(
+                    crate::events::push(
                         LogKind::Ok,
                         format!("Query executed · {total} rows · {} ms", elapsed),
                     );
@@ -276,7 +276,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     tracing::error!("query failed: {e}");
                     let raw = format!("{e}");
                     let qe = QueryError::parse(&raw, &sql);
-                    s.push_log_err(
+                    crate::events::push_err(
                         LogKind::Error,
                         format!("Query failed · {}", qe.etype),
                         Some(qe.clone()),
@@ -334,7 +334,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 },
             );
             s.project.history.truncate(crate::settings::max_history().max(1));
-            s.push_log(LogKind::Warn, format!("Query cancelled · {elapsed_ms} ms"));
+            crate::events::push(LogKind::Warn, format!("Query cancelled · {elapsed_ms} ms"));
             crate::runs::edit_existing(ws_id, |run| {
                 run.running = false;
                 run.pending_req = None;
@@ -351,7 +351,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             }
             match result {
                 Ok(plan) => {
-                    s.push_log(
+                    crate::events::push(
                         LogKind::Ok,
                         format!(
                             "EXPLAIN · {} physical / {} logical operators",
@@ -376,7 +376,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         .map(|w| w.sql.clone())
                         .unwrap_or_default();
                     let qe = QueryError::parse(&e, &sql);
-                    s.push_log_err(
+                    crate::events::push_err(
                         LogKind::Error,
                         format!("Explain failed · {}", qe.etype),
                         Some(qe.clone()),
@@ -409,7 +409,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             }
             Err(e) => {
                 tracing::error!("page load failed: {e}");
-                s.push_log(LogKind::Error, format!("Page load failed: {e}"));
+                crate::events::push(LogKind::Error, format!("Page load failed: {e}"));
             }
         },
         Event::Registered {
@@ -466,7 +466,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         error: None,
                     });
                 }
-                s.push_log(
+                crate::events::push(
                     LogKind::Ok,
                     format!("Registered table '{table}' · {n} cols · schema validated"),
                 );
@@ -483,7 +483,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     s.project.tables[pos].error = Some(e.clone());
                 }
                 tracing::error!("register table '{table}' failed: {e}");
-                s.push_log(LogKind::Error, format!("Register '{table}' failed: {e}"));
+                crate::events::push(LogKind::Error, format!("Register '{table}' failed: {e}"));
             }
         },
         Event::ViewChanged {
@@ -495,7 +495,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             if dropped {
                 s.project.views.retain(|v| v.name != name);
                 autosave_after = true;
-                s.push_log(LogKind::Info, format!("Dropped view '{name}'"));
+                crate::events::push(LogKind::Info, format!("Dropped view '{name}'"));
             } else {
                 match result {
                     Ok(cols) => {
@@ -511,12 +511,12 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                                 open: false,
                             });
                         }
-                        s.push_log(LogKind::Ok, format!("Saved view '{name}'"));
+                        crate::events::push(LogKind::Ok, format!("Saved view '{name}'"));
                         autosave_after = true;
                     }
                     Err(e) => {
                         tracing::error!("view '{name}' failed: {e}");
-                        s.push_log(LogKind::Error, format!("View '{name}' failed: {e}"));
+                        crate::events::push(LogKind::Error, format!("View '{name}' failed: {e}"));
                     }
                 }
             }
@@ -524,7 +524,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
         Event::Deregistered { table } => {
             s.project.tables.retain(|t| t.name != table);
             autosave_after = true;
-            s.push_log(LogKind::Info, format!("Removed table '{table}'"));
+            crate::events::push(LogKind::Info, format!("Removed table '{table}'"));
         }
         Event::Exported { result } => match result {
             Ok((path, rows)) => {
@@ -533,11 +533,11 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 } else {
                     format!("Exported → {path}")
                 };
-                s.push_log(LogKind::Ok, msg);
+                crate::events::push(LogKind::Ok, msg);
             }
             Err(e) => {
                 tracing::error!("export failed: {e}");
-                s.push_log(LogKind::Error, format!("Export failed: {e}"));
+                crate::events::push(LogKind::Error, format!("Export failed: {e}"));
             }
         },
         Event::Functions {
@@ -554,7 +554,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
         }
         Event::Notice(m) => {
             tracing::warn!("{m}");
-            s.push_log(LogKind::Info, m);
+            crate::events::push(LogKind::Info, m);
         }
         Event::EngineRestartRequired => {
             // A saved `datafusion.runtime.*` change can't apply to the running engine

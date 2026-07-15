@@ -73,7 +73,7 @@ pub fn save(mut state: Signal<AppState>) {
         false
     };
     let verb = if updated { "Updated" } else { "Saved" };
-    s.push_log(LogKind::Ok, format!("{verb} query '{name}' to project"));
+    crate::events::push(LogKind::Ok, format!("{verb} query '{name}' to project"));
     drop(s);
     // The tab is now bound to (and in sync with) this saved query.
     crate::session::set_origin(w.id, crate::state::Origin::SavedQuery(name.clone()));
@@ -102,5 +102,5 @@ pub fn open_saved(state: Signal<AppState>, name: &str) {
 pub fn delete_saved(mut state: Signal<AppState>, name: &str) {
     let mut s = state.write();
     s.project.saved_queries.retain(|q| q.name != name);
-    s.push_log(LogKind::Info, format!("Deleted query '{name}'"));
+    crate::events::push(LogKind::Info, format!("Deleted query '{name}'"));
 }

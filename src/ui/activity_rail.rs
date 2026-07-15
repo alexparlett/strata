@@ -15,15 +15,13 @@ use crate::ui::icons::{IconName, IconSize};
 pub(crate) fn ActivityRail() -> Element {
     let state = use_context::<Signal<AppState>>();
     let sidebar_open = crate::layout::sidebar_open();
-    let (log_open, log_tab) = {
-        let s = state.read();
-        (s.log_open, s.log_tab)
-    };
+    let drawer_open = crate::layout::drawer_open();
+    let drawer_tab = crate::layout::drawer_tab();
     // Live error-diagnostic count across all tabs (validation ∪ execution). Reads
     // the session + diagnostics + runs stores reactively, so the badge tracks
     // problems as they appear and clear — no query run required.
     let problem_count = crate::diagnostics::total_problems();
-    let on = |t: LogTab| log_open && log_tab == t;
+    let on = |t: LogTab| drawer_open && drawer_tab == t;
 
     rsx! {
         aside { class: "act-rail",

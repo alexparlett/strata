@@ -32,10 +32,23 @@ fn event_colors(kind: LogKind) -> (&'static str, &'static str) {
     }
 }
 
+/// The bottom-drawer host — always mounted, renders the drawer body only while it's
+/// open (`crate::layout::drawer_open`). Mirrors the side panels: the activity rail
+/// toggles the open flag in `crate::layout`, and this decides whether the drawer
+/// exists (so a closed drawer costs nothing).
+#[component]
+pub fn BottomDraw() -> Element {
+    if crate::layout::drawer_open() {
+        rsx! { Drawer {} }
+    } else {
+        rsx! {}
+    }
+}
+
 #[component]
 pub fn Drawer() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let tab = state.read().log_tab;
+    let tab = crate::layout::drawer_tab();
     // The drawer owns its own height — a local reactive signal, not global state.
     let mut height = use_signal(|| 188.0);
     let expanded = height() > 250.0;
@@ -46,7 +59,7 @@ pub fn Drawer() -> Element {
     };
     let (title, count): (&str, usize) = match tab {
         LogTab::History => ("History", state.read().project.history.len()),
-        LogTab::Events => ("Events", state.read().log.len()),
+        LogTab::Events => ("Events", crate::events::len()),
         // Problems counts live error diagnostics (validation ∪ execution), not log rows.
         LogTab::Problems => ("Problems", crate::diagnostics::total_problems()),
     };
@@ -71,7 +84,7 @@ pub fn Drawer() -> Element {
             {
                 match tab {
                     LogTab::History => history_body(state),
-                    LogTab::Events => events_body(state),
+                    LogTab::Events => events_body(),
                     LogTab::Problems => problems_body(state),
                 }
             }
@@ -148,8 +161,8 @@ fn history_body(state: Signal<AppState>) -> Element {
 
 /// Events tab: a flat log (dot + message + timestamp). No expand — the rich
 /// diagnostics live in Problems (S23).
-fn events_body(state: Signal<AppState>) -> Element {
-    let events: Vec<LogEvent> = state.read().log.clone();
+fn events_body() -> Element {
+    let events: Vec<LogEvent> = crate::events::items();
     rsx! {
         div { class: "ps-log-body ps-scroll",
             if events.is_empty() {

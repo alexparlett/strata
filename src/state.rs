@@ -166,11 +166,6 @@ pub struct AppState {
     pub next_req: u64,
     pub page_size_open: bool,
     pub selected_col: Option<(String, String)>,
-    // bottom drawer (History + Events tabs)
-    pub log: Vec<LogEvent>,
-    pub log_open: bool,
-    pub log_tab: LogTab,
-    pub next_log: u64,
     /// The engine's registered SQL functions (built-ins + UDFs), pushed once on
     /// startup (`engine::Event::Functions`, A9/F5). Read by the SQL language
     /// service (`crate::sql`) for completion + validation.
@@ -199,49 +194,13 @@ impl AppState {
             next_req: 1,
             page_size_open: false,
             selected_col: None,
-            log: Vec::new(),
-            log_open: false,
-            log_tab: LogTab::History,
-            next_log: 1,
             functions: crate::sql::FunctionCatalog::default(),
         }
-    }
-
-    /// Append an entry to the Event Log (newest first, capped at 200).
-    pub fn push_log(&mut self, kind: LogKind, msg: impl Into<String>) {
-        self.push_log_err(kind, msg, None, None);
-    }
-
-    /// Like `push_log`, but attaches a structured error (the Events-row detail /
-    /// results error view) and the owning query tab `ws` (Problems grouping + jump,
-    /// S23).
-    pub fn push_log_err(
-        &mut self,
-        kind: LogKind,
-        msg: impl Into<String>,
-        err: Option<QueryError>,
-        ws: Option<u64>,
-    ) {
-        let id = self.next_log;
-        self.next_log += 1;
-        self.log.insert(
-            0,
-            LogEvent {
-                id,
-                kind,
-                msg: msg.into(),
-                ts: now_hms(),
-                err,
-                open: false,
-                ws,
-            },
-        );
-        self.log.truncate(200);
     }
 }
 
 /// Wall-clock `HH:MM:SS` (UTC) for log timestamps — avoids a chrono dependency.
-fn now_hms() -> String {
+pub(crate) fn now_hms() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

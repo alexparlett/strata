@@ -18,43 +18,25 @@ pub fn close_all(mut state: Signal<AppState>) {
 
 /// Open the bottom drawer on the **History** tab (status-bar History button).
 /// Toggles closed if it's already open on History.
-pub fn open_history(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    if s.log_open && s.log_tab == LogTab::History {
-        s.log_open = false;
-    } else {
-        s.log_open = true;
-        s.log_tab = LogTab::History;
-    }
+pub fn open_history(_state: Signal<AppState>) {
+    crate::layout::toggle_drawer(LogTab::History);
 }
 
 /// Open the bottom drawer on the **Events** tab (status-bar Events button).
 /// Toggles closed if it's already open on Events.
-pub fn open_events(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    if s.log_open && s.log_tab == LogTab::Events {
-        s.log_open = false;
-    } else {
-        s.log_open = true;
-        s.log_tab = LogTab::Events;
-    }
+pub fn open_events(_state: Signal<AppState>) {
+    crate::layout::toggle_drawer(LogTab::Events);
 }
 
 /// Open the bottom drawer on the **Problems** tab (rail Problems button, S23).
 /// Toggles closed if it's already open on Problems.
-pub fn open_problems(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    if s.log_open && s.log_tab == LogTab::Problems {
-        s.log_open = false;
-    } else {
-        s.log_open = true;
-        s.log_tab = LogTab::Problems;
-    }
+pub fn open_problems(_state: Signal<AppState>) {
+    crate::layout::toggle_drawer(LogTab::Problems);
 }
 
 /// Switch the drawer's active tab (History / Events tab buttons).
-pub fn set_log_tab(mut state: Signal<AppState>, tab: LogTab) {
-    state.write().log_tab = tab;
+pub fn set_log_tab(_state: Signal<AppState>, tab: LogTab) {
+    crate::layout::set_drawer_tab(tab);
 }
 
 /// Re-open a past query (from the History tab) into a tab, keeping the drawer
@@ -66,16 +48,14 @@ pub fn open_history_query(_state: Signal<AppState>, sql: String) {
 }
 
 /// Toggle the bottom drawer open/closed (drawer close button).
-pub fn toggle_log(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.log_open = !s.log_open;
+pub fn toggle_log(_state: Signal<AppState>) {
+    crate::layout::toggle_drawer_open();
 }
 
-/// Clear the active drawer tab.
+/// Clear the active drawer tab (Events → the events store; History → project history).
 pub fn clear_drawer(mut state: Signal<AppState>) {
-    let tab = state.read().log_tab;
-    match tab {
-        LogTab::Events => state.write().log.clear(),
+    match crate::layout::drawer_tab() {
+        LogTab::Events => crate::events::clear(),
         LogTab::History => state.write().project.history.clear(),
         // Problems has no Clear button (they're live diagnostics — a fixed problem
         // clears itself). Kept as an exhaustive no-op arm.
@@ -85,10 +65,7 @@ pub fn clear_drawer(mut state: Signal<AppState>) {
 
 /// Toggle an Events-tab error row's expanded detail (message + code frame +
 /// hint). No-op for non-error rows, which carry no structured error.
-pub fn toggle_log_row(mut state: Signal<AppState>, id: u64) {
-    let mut s = state.write();
-    if let Some(e) = s.log.iter_mut().find(|e| e.id == id) {
-        e.open = !e.open;
-    }
+pub fn toggle_log_row(_state: Signal<AppState>, id: u64) {
+    crate::events::toggle_row(id);
 }
 

@@ -15,6 +15,7 @@ mod ddl;
 mod diagnostics;
 mod engine;
 mod engine_config;
+mod events;
 mod hotkeys;
 mod keymap;
 mod layout;
