@@ -2,6 +2,7 @@
 
 use dioxus::prelude::*;
 
+use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
 use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind, RemoveTarget};
 use crate::ui::components::{
@@ -29,16 +30,18 @@ pub fn Sidebar() -> Element {
     let ntab = state.read().project.tables.len();
     let nview = state.read().project.views.len();
     let nquery = state.read().project.saved_queries.len();
-    let filter = state.read().filter.clone();
+    // Catalog filter is pure sidebar UI — kept local (F7), not in AppState.
+    let mut filter = use_signal(String::new);
     let selected = state.read().selected_col.clone();
-    let width = state.read().sidebar_w;
+    // The sidebar owns its own width — a local reactive signal, not global state.
+    let width = use_signal(|| 288.0);
 
     rsx! {
         aside { class: "ps-sidebar", style: "width:{width}px;",
             div { class: "filter",
                 SearchBar {
-                    value: filter.clone(),
-                    oninput: move |v| dispatch(state, Action::SetFilter(v)),
+                    value: filter(),
+                    oninput: move |v| filter.set(v),
                     placeholder: "Filter catalog…",
                     grow: true,
                 }
@@ -57,7 +60,7 @@ pub fn Sidebar() -> Element {
                 }
 
                 for i in 0..ntab {
-                    {render_table(state, menu, remove, i, &filter, &selected)}
+                    {render_table(state, menu, remove, i, &filter(), &selected)}
                 }
 
                 // ---- VIEWS ----
@@ -93,6 +96,8 @@ pub fn Sidebar() -> Element {
                 {remove_dialog(state, remove, t)}
             }
         }
+        // Right-edge resize handle — owns nothing but the sidebar's width signal.
+        Resizer { axis_x: true, sign: 1.0, min: 210.0, max: 520.0, size: width }
     }
 }
 

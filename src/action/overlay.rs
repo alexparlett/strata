@@ -92,8 +92,3 @@ pub fn toggle_log_row(mut state: Signal<AppState>, id: u64) {
     }
 }
 
-/// Toggle the drawer between its compact and expanded heights.
-pub fn toggle_log_height(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.log_h = if s.log_h > 250.0 { 168.0 } else { 360.0 };
-}

@@ -11,10 +11,10 @@
 // the prelude also exports an `Action`, which would collide with our enum and
 // break `use Action::*` in `dispatch`.
 use crate::plan::PlanTab;
-use crate::state::{AppState, LogTab, RemoveKind, ResizeTarget};
+use crate::state::{AppState, LogTab, RemoveKind};
 use dioxus::prelude::Signal;
 
-// Domain handler modules. `panel` (the shared `resize_handle` component),
+// Domain handler modules. `panel` (the `Resizer` handle + window-fill toggle),
 // `projects` (window startup), and `catalog` (the modal's source scan,
 // `scan_sources`) are reached from outside the action layer; the rest are
 // private — reachable only through `dispatch`.
@@ -94,7 +94,6 @@ pub enum Action {
         name: String,
     },
     EditView(String),
-    SetFilter(String),
     ToggleTableOpen(usize),
     ToggleViewOpen(usize),
     SelectColumn {
@@ -102,33 +101,15 @@ pub enum Action {
         column: String,
     },
 
-    // ── panels ──
-    StartResize {
-        target: ResizeTarget,
-        origin: f64,
-        start: f64,
-    },
-    ResizeMove {
-        x: f64,
-        y: f64,
-    },
-    EndResize,
     // ── tab drag-to-reorder (T1) ──
-    StartTabDrag {
+    /// Commit a tab reorder: move workspace `id` to the post-removal slot `insert`.
+    /// The live drag (ghost + drop slot) is component-local to `Tabs` via HTML5 drag
+    /// events; only this durable commit crosses the action layer, so the new order
+    /// autosaves.
+    MoveTab {
         id: crate::session::WorkspaceId,
-        from: usize,
-        name: String,
-        off_x: f64,
-        off_y: f64,
-        x: f64,
-        y: f64,
+        insert: usize,
     },
-    TabDragMove {
-        x: f64,
-        y: f64,
-    },
-    TabDragOver(usize),
-    EndTabDrag,
     ToggleSidebar,
     CloseInspector,
     ToggleWindowFill,
@@ -145,7 +126,6 @@ pub enum Action {
     ToggleLog,
     ClearDrawer,
     ToggleLogRow(u64),
-    ToggleLogHeight,
     RunExport(crate::state::ExportForm),
     // Settings prefs now write the `crate::settings` store directly from the
     // Settings modal — they are no longer dispatched through here.
@@ -206,6 +186,7 @@ fn is_durable(a: &Action) -> bool {
             | ReopenTab
             | RenameTab(..)
             | DuplicateTab(_)
+            | MoveTab { .. }
             | RegisterTable(_)
             | ConfirmRemove { .. }
             | EditView(_)
@@ -271,33 +252,13 @@ fn run(state: Signal<AppState>, action: Action) {
         RegisterTable(draft) => catalog::register_table(state, draft),
         ConfirmRemove { kind, name } => catalog::confirm_remove(state, kind, name),
         EditView(name) => catalog::edit_view(state, &name),
-        SetFilter(f) => catalog::set_filter(state, f),
         ToggleTableOpen(i) => catalog::toggle_table_open(state, i),
         ToggleViewOpen(i) => catalog::toggle_view_open(state, i),
         SelectColumn { table, column } => catalog::select_column(state, table, column),
 
-        // panels
-        StartResize {
-            target,
-            origin,
-            start,
-        } => panel::start_resize(state, target, origin, start),
-        ResizeMove { x, y } => panel::resize_move(state, x, y),
-        EndResize => panel::end_resize(state),
-        StartTabDrag {
-            id,
-            from,
-            name,
-            off_x,
-            off_y,
-            x,
-            y,
-        } => tab::start_drag(state, id, from, name, off_x, off_y, x, y),
-        TabDragMove { x, y } => tab::drag_move(state, x, y),
-        TabDragOver(over) => tab::drag_over(state, over),
-        EndTabDrag => tab::end_drag(state),
-        ToggleSidebar => panel::toggle_sidebar(state),
-        CloseInspector => panel::close_inspector(state),
+        MoveTab { id, insert } => tab::move_tab(state, id, insert),
+        ToggleSidebar => crate::layout::toggle_sidebar(),
+        CloseInspector => crate::layout::set_inspector_open(false),
         ToggleWindowFill => panel::toggle_window_fill(state),
 
         // overlays
@@ -314,7 +275,6 @@ fn run(state: Signal<AppState>, action: Action) {
         ToggleLog => overlay::toggle_log(state),
         ClearDrawer => overlay::clear_drawer(state),
         ToggleLogRow(id) => overlay::toggle_log_row(state, id),
-        ToggleLogHeight => overlay::toggle_log_height(state),
         RunExport(opts) => query::run_export(state, opts),
 
         // project (open/recent spawn new windows; close closes this window)

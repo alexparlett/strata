@@ -169,7 +169,7 @@ fn ChartPlaceholder() -> Element {
 #[component]
 pub(crate) fn EmptyState() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let has_closed = !state.read().closed_tabs.is_empty();
+    let has_closed = crate::session::has_closed();
     let saved: Vec<String> = state
         .read()
         .project

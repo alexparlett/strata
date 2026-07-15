@@ -10,6 +10,7 @@ use dioxus::prelude::*;
 // `.iter()` over the session store's workspaces collection.
 use dioxus_stores::*;
 
+use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
 // Lens accessors (`.workspaces()`, `.id()`, `.name()`) for the Problems grouping.
 use crate::session::{SessionStoreExt, WorkspaceStoreExt};
@@ -34,11 +35,10 @@ fn event_colors(kind: LogKind) -> (&'static str, &'static str) {
 #[component]
 pub fn Drawer() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let (tab, log_h) = {
-        let s = state.read();
-        (s.log_tab, s.log_h)
-    };
-    let expanded = log_h > 250.0;
+    let tab = state.read().log_tab;
+    // The drawer owns its own height — a local reactive signal, not global state.
+    let mut height = use_signal(|| 188.0);
+    let expanded = height() > 250.0;
     let expand_ic = if expanded {
         IconName::Minimize
     } else {
@@ -52,8 +52,8 @@ pub fn Drawer() -> Element {
     };
 
     rsx! {
-        div { class: "ps-log", style: "height:{log_h}px;",
-            {crate::action::panel::resize_handle(state, crate::state::ResizeTarget::Log)}
+        div { class: "ps-log", style: "height:{height}px;",
+            Resizer { axis_x: false, sign: -1.0, min: 120.0, max: 480.0, size: height }
             div { class: "ps-log-head",
                 Strong { class: "title", "{title}" }
                 Path { class: "count", "{count}" }
@@ -63,7 +63,7 @@ pub fn Drawer() -> Element {
                 if tab != LogTab::Problems {
                     Button { variant: ButtonVariant::Compact, onclick: move |_| dispatch(state, Action::ClearDrawer), "Clear" }
                 }
-                IconButton { icon: expand_ic, variant: IconButtonVariant::Ghost, title: "Expand / collapse", onclick: move |_| dispatch(state, Action::ToggleLogHeight),
+                IconButton { icon: expand_ic, variant: IconButtonVariant::Ghost, title: "Expand / collapse", onclick: move |_| height.set(if height() > 250.0 { 168.0 } else { 360.0 }),
                 }
                 IconButton { icon: IconName::Close, variant: IconButtonVariant::Ghost, title: "Close", onclick: move |_| dispatch(state, Action::ToggleLog),
                 }

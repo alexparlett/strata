@@ -16,7 +16,7 @@ pub(super) fn Appearance() -> Element {
     let sync_os = d.sync_os;
     let theme_id = d.theme.clone();
     drop(d);
-    let os_dark = *crate::settings::OS_DARK.read();
+    let os_dark = crate::settings::os_dark();
     let active_id = crate::theme::effective_id(&theme_id, sync_os, os_dark);
     let os_label = if os_dark { "dark" } else { "light" };
     let grid_style = if sync_os {

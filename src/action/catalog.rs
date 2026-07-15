@@ -109,11 +109,6 @@ pub fn edit_view(mut state: Signal<AppState>, name: &str) {
 
 // ---- catalog interactions ----
 
-/// Update the catalog filter text.
-pub fn set_filter(mut state: Signal<AppState>, filter: String) {
-    state.write().filter = filter;
-}
-
 /// Expand/collapse a table row's schema.
 pub fn toggle_table_open(mut state: Signal<AppState>, i: usize) {
     let mut w = state.write();
@@ -132,9 +127,8 @@ pub fn toggle_view_open(mut state: Signal<AppState>, i: usize) {
 
 /// Select a column for the inspector (and open the inspector).
 pub fn select_column(mut state: Signal<AppState>, table: String, column: String) {
-    let mut w = state.write();
-    w.selected_col = Some((table, column));
-    w.inspector_open = true;
+    state.write().selected_col = Some((table, column));
+    crate::layout::set_inspector_open(true);
 }
 
 // ---- source scanning (validation + partition detection) ----

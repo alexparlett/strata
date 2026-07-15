@@ -149,71 +149,15 @@ pub enum CatalogKind {
     Query,
 }
 
-/// A closed query tab, retained so it can be reopened (⇧⌘T). Capped at 20.
-pub struct ClosedTab {
-    pub name: String,
-    pub sql: String,
-}
-
-/// A panel edge the user can drag to resize.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ResizeTarget {
-    Sidebar,
-    Inspector,
-    Editor,
-    Log,
-    /// A results-grid column (V20). Carries the workspace + column index so the drag
-    /// writes that run's `col_widths[ci]` instead of an `AppState` field.
-    Column { ws: u64, ci: usize },
-}
-
-/// An in-progress panel drag: axis, direction, the pointer anchor and the size
-/// captured when the drag began.
-#[derive(Clone)]
-pub struct Resizing {
-    pub target: ResizeTarget,
-    pub axis_x: bool,
-    pub sign: f64,
-    pub origin: f64,
-    pub start: f64,
-    pub min: f64,
-    pub max: f64,
-}
-
-/// An in-progress tab drag-to-reorder (T1). The tab strip owns the geometry; this
-/// carries only what the root pointer-driver + the floating ghost need. `insert`
-/// is the target slot in the *pre-removal* order (canvas `_moveTab` semantics); the
-/// active tab is identity-tracked, so the dragged tab stays active across the move.
-#[derive(Clone)]
-pub struct TabDrag {
-    pub id: crate::session::WorkspaceId,
-    pub from: usize,
-    /// Ghost label + the grab offset within the tab, and the live pointer position.
-    pub name: String,
-    pub off_x: f64,
-    pub off_y: f64,
-    pub x: f64,
-    pub y: f64,
-    pub start_x: f64,
-    /// True once the pointer crossed the start threshold (a real drag, not a click).
-    pub started: bool,
-    pub insert: usize,
-}
-
 pub struct AppState {
     // engine
     pub cmd_tx: Option<UnboundedSender<Command>>,
     // the open project (catalog, workspaces, history — the persisted part)
     pub project: Project,
     pub type_color_cells: bool,
-    // layout
-    pub sidebar_open: bool,
-    pub inspector_open: bool,
     // project management (where the open project lives on disk + recents)
     pub project_path: Option<std::path::PathBuf>,
     pub recent_projects: Vec<crate::config::RecentProject>,
-    // catalog filter (ephemeral UI)
-    pub filter: String,
     // results — the per-tab query output (grid / plan / error / running / pager)
     // lives in the `crate::runs::RUNS` store, keyed by workspace id (the active
     // one from `crate::session::active_id`). Only these window-global bits stay
@@ -231,15 +175,6 @@ pub struct AppState {
     pub log_open: bool,
     pub log_tab: LogTab,
     pub next_log: u64,
-    // resizable panels (px)
-    pub sidebar_w: f64,
-    pub inspector_w: f64,
-    pub editor_h: f64,
-    pub log_h: f64,
-    pub resizing: Option<Resizing>,
-    /// An in-progress tab drag-to-reorder (T1), or `None` when idle.
-    pub tab_drag: Option<TabDrag>,
-    pub closed_tabs: Vec<ClosedTab>,
     /// The engine's registered SQL functions (built-ins + UDFs), pushed once on
     /// startup (`engine::Event::Functions`, A9/F5). Read by the SQL language
     /// service (`crate::sql`) for completion + validation.
@@ -263,11 +198,8 @@ impl AppState {
             cmd_tx: None,
             project: Project::empty(),
             type_color_cells: true,
-            sidebar_open: true,
-            inspector_open: true,
             project_path: None,
             recent_projects: Vec::new(),
-            filter: String::new(),
             next_req: 1,
             page_size_open: false,
             selected_col: None,
@@ -277,13 +209,6 @@ impl AppState {
             log_open: false,
             log_tab: LogTab::History,
             next_log: 1,
-            sidebar_w: 288.0,
-            inspector_w: 292.0,
-            editor_h: 240.0,
-            log_h: 188.0,
-            resizing: None,
-            tab_drag: None,
-            closed_tabs: Vec::new(),
             functions: crate::sql::FunctionCatalog::default(),
         }
     }

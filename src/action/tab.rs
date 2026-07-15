@@ -9,8 +9,8 @@ use std::collections::HashSet;
 use dioxus::prelude::*;
 
 use crate::engine::Command;
-use crate::session::WorkspaceId;
-use crate::state::{AppState, ClosedTab};
+use crate::session::{ClosedTab, WorkspaceId};
+use crate::state::AppState;
 
 /// Open a new blank query tab and focus it.
 pub fn add(_state: Signal<AppState>) {
@@ -81,19 +81,15 @@ pub fn close_all(state: Signal<AppState>) {
 }
 
 /// Reopen the most recently closed tab (⇧⌘T).
-pub fn reopen(mut state: Signal<AppState>) {
-    let closed = state.write().closed_tabs.pop();
-    let Some(c) = closed else {
-        return;
-    };
-    crate::session::reopen(c.name, c.sql);
+pub fn reopen(_state: Signal<AppState>) {
+    crate::session::reopen_last();
 }
 
 /// Core tab-removal: records the removed workspaces on the closed-tab stack
 /// (capped 20), removes them from the session (which re-picks a neighbour focus),
 /// reaps their runs, and tells the engine to drop their scopes. A no-op on an
 /// empty id set.
-fn close_ids(mut state: Signal<AppState>, ids: &HashSet<WorkspaceId>) {
+fn close_ids(state: Signal<AppState>, ids: &HashSet<WorkspaceId>) {
     if ids.is_empty() {
         return;
     }
@@ -107,20 +103,11 @@ fn close_ids(mut state: Signal<AppState>, ids: &HashSet<WorkspaceId>) {
     if removed.is_empty() {
         return;
     }
-    let tx = {
-        let mut s = state.write();
-        for (_, name, sql) in &removed {
-            s.closed_tabs.push(ClosedTab {
-                name: name.clone(),
-                sql: sql.clone(),
-            });
-        }
-        let overflow = s.closed_tabs.len().saturating_sub(20);
-        if overflow > 0 {
-            s.closed_tabs.drain(0..overflow);
-        }
-        s.cmd_tx.clone()
-    };
+    crate::session::push_closed(removed.iter().map(|(_, name, sql)| ClosedTab {
+        name: name.clone(),
+        sql: sql.clone(),
+    }));
+    let tx = state.read().cmd_tx.clone();
     crate::session::remove_ids(ids);
     crate::runs::drop_ids(ids);
     crate::diagnostics::drop_ids(ids);
@@ -146,77 +133,10 @@ pub fn rename_tab(_state: Signal<AppState>, id: WorkspaceId, name: String) {
 
 // ---- drag-to-reorder (T1) ----
 
-/// Arm a tab drag: record the dragged tab, the grab offset within it, and the
-/// pointer anchor. Not yet "started" — the root pointer-driver flips `started` once
-/// the pointer crosses the threshold, so a plain mousedown-select never reorders.
-#[allow(clippy::too_many_arguments)]
-pub fn start_drag(
-    mut state: Signal<AppState>,
-    id: WorkspaceId,
-    from: usize,
-    name: String,
-    off_x: f64,
-    off_y: f64,
-    x: f64,
-    y: f64,
-) {
-    state.write().tab_drag = Some(crate::state::TabDrag {
-        id,
-        from,
-        name,
-        off_x,
-        off_y,
-        x,
-        y,
-        start_x: x,
-        started: false,
-        insert: from,
-    });
-}
-
-/// Track the pointer during a drag (from the root `onmousemove`): move the ghost,
-/// and once past the threshold mark the drag as started (so the click that armed it
-/// isn't mistaken for a reorder).
-pub fn drag_move(mut state: Signal<AppState>, x: f64, y: f64) {
-    let mut s = state.write();
-    if let Some(d) = s.tab_drag.as_mut() {
-        d.x = x;
-        d.y = y;
-        if !d.started && (x - d.start_x).abs() > 4.0 {
-            d.started = true;
-        }
-    }
-}
-
-/// Update the drop slot as the pointer crosses tab `over` (its strip index). Insert
-/// is in pre-removal order: land before `over` when it's left of the source, after
-/// it when it's right — so the placeholder gap opens on the side you're dragging
-/// toward.
-pub fn drag_over(mut state: Signal<AppState>, insert: usize) {
-    let mut s = state.write();
-    if let Some(d) = s.tab_drag.as_mut() {
-        if d.started {
-            // `insert` is already in *visible* (post-removal) order — the tab strip
-            // computed it from the hovered tab's index + which half the pointer is in.
-            // `insert == from` is the origin (a valid no-op "drop in place").
-            d.insert = insert;
-        }
-    }
-}
-
-/// Finish a drag (root `onmouseup`): commit the reorder iff it actually started,
-/// then clear the drag state. The root fires this on every mouseup, so bail early
-/// when no drag is armed (avoids a needless state write per click).
-pub fn end_drag(mut state: Signal<AppState>) {
-    if state.read().tab_drag.is_none() {
-        return;
-    }
-    let drag = state.write().tab_drag.take();
-    if let Some(d) = drag {
-        if d.started {
-            crate::session::move_workspace(d.id, d.insert);
-            // Tab order is session-durable → persist it, like the other tab actions.
-            super::projects::autosave_session(state);
-        }
-    }
+/// Commit a tab reorder (from the tab strip's HTML5 drag-end): move workspace `id`
+/// to the post-removal slot `insert`. The live drag — the ghost (the webview's native
+/// drag image) and the drop slot — is component-local to `Tabs`; only this durable
+/// move crosses the action layer, so `dispatch` autosaves the new order.
+pub fn move_tab(_state: Signal<AppState>, id: WorkspaceId, insert: usize) {
+    crate::session::move_workspace(id, insert);
 }

@@ -454,3 +454,67 @@ fn normalize(s: &mut Session) {
         s.active = s.workspaces[0].id;
     }
 }
+
+// --- runtime tab state: closed-tab stack -----------------------------------
+//
+// The reopen stack (⇧⌘T) — transient, never persisted. Kept out of `Session`
+// (which is pure serde) so `session.json` stays durable-only, exactly as a
+// workspace's live query output lives apart in `crate::runs`. A tiny per-window
+// `Store` gives the reopen menu its reactivity. (The live drag-to-reorder is
+// component-local to the `Tabs` strip — HTML5 drag events, no shared state.)
+
+/// A closed query tab, retained so it can be reopened (⇧⌘T). Capped at [`CLOSED_CAP`].
+#[derive(Clone, PartialEq)]
+pub struct ClosedTab {
+    pub name: String,
+    pub sql: String,
+}
+
+/// Cap on the reopen stack.
+const CLOSED_CAP: usize = 20;
+
+/// Per-window runtime tab state — never serialized.
+#[derive(Store, Clone, PartialEq, Default)]
+pub struct TabRuntime {
+    /// Recently-closed tabs (oldest first); the tail is reopened first.
+    pub closed: Vec<ClosedTab>,
+}
+
+/// This window's runtime tab state (per-window, like [`SESSION`]).
+pub static TAB_RUNTIME: GlobalStore<TabRuntime> = Global::new(|| TabRuntime::default());
+
+fn tab_runtime() -> Store<TabRuntime> {
+    TAB_RUNTIME.resolve()
+}
+
+// -- closed-tab stack (⇧⌘T) --
+
+/// Whether any closed tab can be reopened (drives the ⇧⌘T menu-enable + reopen button).
+pub fn has_closed() -> bool {
+    let store = tab_runtime();
+    let c = store.closed();
+    let closed = c.read();
+    !closed.is_empty()
+}
+
+/// Push closed tabs onto the reopen stack (newest last), capped at [`CLOSED_CAP`].
+pub fn push_closed(tabs: impl IntoIterator<Item=ClosedTab>) {
+    let store = tab_runtime();
+    let mut closed = store.closed();
+    let mut g = closed.write();
+    g.extend(tabs);
+    let overflow = g.len().saturating_sub(CLOSED_CAP);
+    if overflow > 0 {
+        g.drain(0..overflow);
+    }
+}
+
+/// Pop the most recently closed tab and reopen it (⇧⌘T). No-op if the stack is empty.
+pub fn reopen_last() {
+    let store = tab_runtime();
+    let mut closed = store.closed();
+    let popped = closed.write().pop();
+    if let Some(c) = popped {
+        reopen(c.name, c.sql);
+    }
+}

@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 use dioxus::prelude::*;
 
+use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
 use crate::state::AppState;
 use crate::ui::components::{
@@ -17,10 +18,12 @@ use crate::util::Kind;
 pub fn Inspector() -> Element {
     let state = use_context::<Signal<AppState>>();
     let s = state.read();
-    let width = s.inspector_w;
+    // The inspector owns its own width — a local reactive signal, not global state.
+    let width = use_signal(|| 292.0);
 
     let Some((table, colname)) = s.selected_col.clone() else {
         return rsx! {
+            Resizer { axis_x: true, sign: -1.0, min: 220.0, max: 560.0, size: width }
             aside { class: "ps-inspector", style: "width:{width}px;",
                 div { class: "insp-head",
                     Eyebrow { class: "sec-label", "COLUMN INSPECTOR" }
@@ -104,6 +107,7 @@ pub fn Inspector() -> Element {
     let nested = kind.is_nested();
 
     rsx! {
+        Resizer { axis_x: true, sign: -1.0, min: 220.0, max: 560.0, size: width }
         aside { class: "ps-inspector ps-scroll", style: "width:{width}px;",
             div { class: "insp-head",
                 Eyebrow { class: "sec-label", "COLUMN INSPECTOR" }

@@ -11,6 +11,7 @@
 use dioxus::prelude::*;
 use dioxus_stores::Store;
 
+use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
 use crate::session::WorkspaceStoreExt;
 use crate::sql::{Catalog, Completion, CompletionKind};
@@ -57,7 +58,8 @@ fn tool_btn(state: Signal<AppState>, action: Action, title: &str, icon: IconName
 #[component]
 pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
     let state = use_context::<Signal<AppState>>();
-    let editor_h = state.read().editor_h;
+    // The editor owns its own height — a local reactive signal, not global state.
+    let height = use_signal(|| 240.0);
     let dirty = ws.read().is_dirty();
     let ws_id = ws.id().cloned();
     let running = crate::runs::RUNS
@@ -147,7 +149,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                 }
             }
             div {
-                style: "position:relative;height:{editor_h}px;background:var(--main);border-bottom:1px solid var(--line);overflow:auto;",
+                style: "position:relative;height:{height}px;background:var(--main);border-bottom:1px solid var(--line);overflow:auto;",
                 // The textarea's focus bubbles here (focusin/focusout) → hold the Select All
                 // scope so ⌘A selects the editor text (and the Edit-menu item enables).
                 onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),
@@ -203,6 +205,8 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
             // lives at section level rather than in the editor's text coordinate system.
             {lint_popover(hover, comp)}
         }
+        // Bottom-edge resize handle — owns the editor's height (vs the results below).
+        Resizer { axis_x: false, sign: 1.0, min: 92.0, max: 480.0, size: height }
     }
 }
 

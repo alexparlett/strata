@@ -10,14 +10,10 @@ use dioxus::desktop::{use_muda_event_handler, use_wry_event_handler};
 use dioxus::prelude::*;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::action::panel::resize_handle;
-use crate::action::{dispatch, Action};
 use crate::engine::{self, Command, Event};
 use crate::menu::MenuCmd;
 use crate::query_error::QueryError;
-use crate::state::{
-    AppState, CatalogTable, CatalogView, HistoryItem, LogKind, RegStatus, ResizeTarget,
-};
+use crate::state::{AppState, CatalogTable, CatalogView, HistoryItem, LogKind, RegStatus};
 use crate::ui;
 
 /// Root class. On macOS the transparent title bar means the traffic-light
@@ -138,13 +134,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
         crate::window::unregister_window(win_id);
     });
 
-    // Suffix the root class while a panel drag is active so we can suppress text
-    // selection and hold the resize cursor window-wide.
-    let root_class = if state.read().resizing.is_some() {
-        format!("{ROOT_CLASS} resizing")
-    } else {
-        ROOT_CLASS.to_string()
-    };
+    let root_class = ROOT_CLASS;
     // Seed the shared settings context + OS appearance (once) and read the effective
     // theme reactively — injected on the root below, so a theme preview / OS switch
     // re-themes this window.
@@ -161,26 +151,6 @@ pub fn ProjectRoot(open_path: String) -> Element {
             style: "{theme_css}",
             "data-density": if crate::settings::density_compact() { "compact" } else { "comfortable" },
             onkeydown: move |e| handle_key(state, e),
-            onmousemove: move |e| {
-                // The root drives both panel-resize and tab drag-to-reorder (T1);
-                // events bubble up here from anywhere in the window.
-                let (resizing, dragging) = {
-                    let s = state.read();
-                    (s.resizing.is_some(), s.tab_drag.is_some())
-                };
-                if resizing {
-                    let c = e.client_coordinates();
-                    dispatch(state, Action::ResizeMove { x: c.x, y: c.y });
-                } else if dragging {
-                    let c = e.client_coordinates();
-                    dispatch(state, Action::TabDragMove { x: c.x, y: c.y });
-                }
-            },
-            onmouseup: move |_| {
-                // Both handlers are no-ops when their drag isn't active.
-                dispatch(state, Action::EndResize);
-                dispatch(state, Action::EndTabDrag);
-            },
 
             ui::header::Header {}
 
@@ -192,13 +162,11 @@ pub fn ProjectRoot(open_path: String) -> Element {
                 ui::activity_rail::ActivityRail {}
                 div { class: "ps-right",
                     div { class: "ps-panes",
-                        if state.read().sidebar_open {
+                        if crate::layout::sidebar_open() {
                             ui::sidebar::Sidebar {}
-                            {resize_handle(state, ResizeTarget::Sidebar)}
                         }
                         ui::workbench::Workbench {}
-                        if state.read().inspector_open {
-                            {resize_handle(state, ResizeTarget::Inspector)}
+                        if crate::layout::inspector_open() {
                             ui::inspector::Inspector {}
                         }
                     }

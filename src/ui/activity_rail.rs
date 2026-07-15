@@ -14,9 +14,10 @@ use crate::ui::icons::{IconName, IconSize};
 #[component]
 pub(crate) fn ActivityRail() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let (sidebar_open, log_open, log_tab) = {
+    let sidebar_open = crate::layout::sidebar_open();
+    let (log_open, log_tab) = {
         let s = state.read();
-        (s.sidebar_open, s.log_open, s.log_tab)
+        (s.log_open, s.log_tab)
     };
     // Live error-diagnostic count across all tabs (validation ∪ execution). Reads
     // the session + diagnostics + runs stores reactively, so the badge tracks

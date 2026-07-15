@@ -10,9 +10,8 @@
 use dioxus::prelude::*;
 use dioxus_stores::Store;
 
-use crate::action::panel::resize_handle;
 use crate::session::WorkspaceStoreExt;
-use crate::state::{AppState, ResizeTarget};
+use crate::state::AppState;
 
 #[component]
 pub(crate) fn Workspace(ws: Store<crate::session::Workspace>, active: bool) -> Element {
@@ -29,7 +28,6 @@ pub(crate) fn Workspace(ws: Store<crate::session::Workspace>, active: bool) -> E
     rsx! {
         div { style: "{style}",
             super::editor::Editor { ws }
-            {resize_handle(state, ResizeTarget::Editor)}
             super::results::Results { ws_id }
         }
     }

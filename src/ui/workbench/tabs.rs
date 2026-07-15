@@ -25,6 +25,16 @@ use crate::ui::components::{
 };
 use crate::ui::icons::{IconName, IconSize};
 
+/// Live tab drag-to-reorder state — component-local to [`Tabs`], never global. The
+/// dragged tab, its original strip index, and the current drop slot (both in full
+/// strip order). The floating ghost is the webview's native drag image.
+#[derive(Clone, PartialEq)]
+struct TabDrag {
+    id: WorkspaceId,
+    from: usize,
+    insert: usize,
+}
+
 #[component]
 pub(crate) fn Tabs() -> Element {
     let state = use_context::<Signal<AppState>>();
@@ -44,6 +54,11 @@ pub(crate) fn Tabs() -> Element {
     // Per-tab element handles, so activating a tab (new tab, switch, or a jump from
     // the Problems view) can scroll it into view within the horizontal strip.
     let mut tab_refs = use_signal(|| HashMap::<WorkspaceId, Rc<MountedData>>::new());
+    // Live drag-to-reorder (T1) — Tabs-local, never global. `drag` holds the render-
+    // affecting drop slot; `drag_x` is the high-frequency pointer x for edge auto-
+    // scroll, kept separate so updating it doesn't re-render the strip.
+    let mut drag = use_signal(|| None::<TabDrag>);
+    let mut drag_x = use_signal(|| 0.0_f64);
 
     // Read the active id + each entry through their lenses, so a `switch`
     // (`.active().set`) or a structural / per-field write re-renders the strip —
@@ -68,32 +83,25 @@ pub(crate) fn Tabs() -> Element {
     for w in sess.workspaces().iter() {
         ws.push((w.id().cloned(), w.name().cloned(), w.read().is_dirty()));
     }
-    // Live tab-drag state (T1). Reading it here re-renders the strip as the pointer
-    // moves, so the floating ghost follows the cursor and the drop gap tracks the
-    // insertion point. Only set once the drag has *started* (past the click threshold),
-    // so a plain mousedown-select never disturbs the strip.
-    let drag = state.read().tab_drag.clone();
-    let dragging = drag.as_ref().map_or(false, |d| d.started);
-    let drag_id = if dragging { drag.as_ref().map(|d| d.id) } else { None };
-    // Drop index in *visible* (post-removal) order — a gap can open at any slot,
-    // including the origin.
-    let insert = if dragging { drag.as_ref().map(|d| d.insert) } else { None };
-    let ghost_name = drag.as_ref().map(|d| d.name.clone()).unwrap_or_default();
-    let ghost = if dragging { drag } else { None };
+    // Live drag-to-reorder (T1). Reading the local `drag` signal here re-renders the
+    // strip as the drop slot changes, so the insertion gap tracks the pointer. The
+    // dragged tab stays in place (the floating ghost is the webview's native drag
+    // image); the gap shows where it will land.
+    let dragc = drag();
+    let dragging = dragc.is_some();
+    let drag_id = dragc.as_ref().map(|d| d.id);
+    let insert = dragc.as_ref().map(|d| d.insert);
+    let ghost_name = drag_id
+        .and_then(|did| ws.iter().find(|(i, _, _)| *i == did).map(|(_, n, _)| n.clone()))
+        .unwrap_or_default();
 
-    // The tabs actually rendered. While a drag is live the dragged tab is lifted *out*
-    // of the strip (JetBrains-style), and the rest are tagged with a visible index used
-    // for gap placement + drop hit-testing.
+    // Every tab renders in strip order — the dragged one stays put (its native drag
+    // image is the ghost), so `vi == oi` and nothing is lifted out.
     let mut render: Vec<(usize, usize, WorkspaceId, String, bool)> = Vec::new();
-    let mut vis = 0usize;
     for (oi, (id, name, dirty)) in ws.iter().enumerate() {
-        if drag_id == Some(*id) {
-            continue;
-        }
-        render.push((oi, vis, *id, name.clone(), *dirty));
-        vis += 1;
+        render.push((oi, oi, *id, name.clone(), *dirty));
     }
-    let visible_len = vis;
+    let visible_len = ws.len();
 
     rsx! {
         div {
@@ -111,7 +119,6 @@ pub(crate) fn Tabs() -> Element {
                     let is_rename = renaming_now == Some(id);
                     let rv = rename_draft.clone();
                     let name_seed = name.clone();
-                    let md_name = name.clone();
                     let show_slot = insert == Some(vi);
                     let slot_name = ghost_name.clone();
                     let tab_class = match (id == active, dirty) {
@@ -130,6 +137,9 @@ pub(crate) fn Tabs() -> Element {
                         div {
                             key: "{id}",
                             class: "{tab_class}",
+                            // Draggable enables HTML5 drag events for the reorder. Off while
+                            // renaming so the inline input keeps normal text interaction.
+                            draggable: !is_rename,
                             // Store the handle (for scroll-into-view) + measure the tab so
                             // drag hit-testing knows its midpoint. If this tab mounts already
                             // active (freshly created), scroll it into view straight away.
@@ -148,53 +158,47 @@ pub(crate) fn Tabs() -> Element {
                                     }
                                 });
                             },
-                            // Mousedown selects the tab and arms a drag (the root pointer-driver
-                            // promotes it to a real reorder past the threshold). No onclick, so a
-                            // drag never doubles as a switch.
+                            // Mousedown just selects the tab; the reorder runs on the HTML5 drag
+                            // events below, so the tab keeps receiving move/end events even once
+                            // the pointer leaves the strip. No `prevent_default` — it would block
+                            // the native drag from starting.
                             onmousedown: move |e| {
                                 if is_rename { return; }
                                 if e.trigger_button() != Some(MouseButton::Primary) { return; }
-                                e.prevent_default();
-                                let c = e.client_coordinates();
-                                let el = e.element_coordinates();
                                 if id != active { dispatch(state, Action::SwitchTab(id)); }
-                                dispatch(state, Action::StartTabDrag {
-                                    id,
-                                    from: oi,
-                                    name: md_name.clone(),
-                                    off_x: el.x,
-                                    off_y: el.y,
-                                    x: c.x,
-                                    y: c.y,
-                                });
-                                // Edge auto-scroll for this drag (T1): while the pointer sits
-                                // near the track's left/right edge, keep scrolling the strip so
-                                // off-screen tabs become reachable. Self-terminates on drop.
+                            },
+                            // Arm the Tabs-local drag and start edge auto-scroll: while the pointer
+                            // sits near the track's left/right edge, keep scrolling the strip so
+                            // off-screen tabs stay reachable. Self-terminates when the drag clears.
+                            ondragstart: move |e| {
+                                drag.set(Some(TabDrag { id, from: oi, insert: oi }));
+                                drag_x.set(e.client_coordinates().x);
                                 spawn(async move {
                                     loop {
-                                        let Some(d) = state.peek().tab_drag.clone() else { break };
+                                        if drag.peek().is_none() {
+                                            break;
+                                        }
                                         let track = scroll_ref.peek().clone();
-                                        if d.started {
-                                            if let Some(track) = track {
-                                                if let Ok(r) = track.get_client_rect().await {
-                                                    let left = r.origin.x;
-                                                    let right = r.origin.x + r.size.width;
-                                                    let dir = if d.x < left + 52.0 {
-                                                        -1.0
-                                                    } else if d.x > right - 52.0 {
-                                                        1.0
-                                                    } else {
-                                                        0.0
-                                                    };
-                                                    if dir != 0.0 {
-                                                        if let Ok(cur) = track.get_scroll_offset().await {
-                                                            let _ = track
-                                                                .scroll(
-                                                                    PixelsVector2D::new(cur.x + dir * 16.0, cur.y),
-                                                                    ScrollBehavior::Instant,
-                                                                )
-                                                                .await;
-                                                        }
+                                        let x = drag_x.peek().clone();
+                                        if let Some(track) = track {
+                                            if let Ok(r) = track.get_client_rect().await {
+                                                let left = r.origin.x;
+                                                let right = r.origin.x + r.size.width;
+                                                let dir = if x < left + 52.0 {
+                                                    -1.0
+                                                } else if x > right - 52.0 {
+                                                    1.0
+                                                } else {
+                                                    0.0
+                                                };
+                                                if dir != 0.0 {
+                                                    if let Ok(cur) = track.get_scroll_offset().await {
+                                                        let _ = track
+                                                            .scroll(
+                                                                PixelsVector2D::new(cur.x + dir * 16.0, cur.y),
+                                                                ScrollBehavior::Instant,
+                                                            )
+                                                            .await;
                                                     }
                                                 }
                                             }
@@ -203,19 +207,35 @@ pub(crate) fn Tabs() -> Element {
                                     }
                                 });
                             },
-                            // While a drag is live, the pointer's half within this tab picks the
-                            // drop slot in visible space: left half → before it, right half → after.
-                            onmousemove: move |e| {
-                                // Copy out of the signal first — holding a read guard across the
-                                // `dispatch` (which writes state) would panic (already borrowed).
-                                let d = state.peek().tab_drag.clone();
-                                if let Some(d) = d {
-                                    if d.started {
-                                        let w = widths.peek().get(&id).copied().unwrap_or(140.0);
-                                        let want = if e.element_coordinates().x < w / 2.0 { vi } else { vi + 1 };
-                                        if d.insert != want {
-                                            dispatch(state, Action::TabDragOver(want));
-                                        }
+                            // `ondrag` fires on the source tab window-wide — feed the live pointer
+                            // x to the auto-scroll loop (kept off `drag` so it doesn't re-render
+                            // the strip). The final drag event reports 0, so skip it.
+                            ondrag: move |e| {
+                                let x = e.client_coordinates().x;
+                                if x != 0.0 {
+                                    drag_x.set(x);
+                                }
+                            },
+                            // Dragging over this tab picks the drop slot: left half → before it,
+                            // right half → after. `prevent_default` keeps the drag a valid move.
+                            ondragover: move |e| {
+                                e.prevent_default();
+                                let Some(d) = drag.peek().clone() else { return };
+                                let w = widths.peek().get(&id).copied().unwrap_or(140.0);
+                                let want = if e.element_coordinates().x < w / 2.0 { vi } else { vi + 1 };
+                                if d.insert != want {
+                                    if let Some(dd) = drag.write().as_mut() {
+                                        dd.insert = want;
+                                    }
+                                }
+                            },
+                            // Drop: commit the reorder (durable → autosaves) unless it landed back
+                            // in place, then clear the local drag.
+                            ondragend: move |_| {
+                                if let Some(d) = drag.write().take() {
+                                    let target = if d.insert > d.from { d.insert - 1 } else { d.insert };
+                                    if target != d.from {
+                                        dispatch(state, Action::MoveTab { id: d.id, insert: target });
                                     }
                                 }
                             },
@@ -296,7 +316,7 @@ pub(crate) fn Tabs() -> Element {
                     class: "icon-btn plain", style: "width:24px;height:28px;", title: "Tab actions",
                     align: RectAlign::BOTTOM_END,
                     trigger: rsx! { Icon { name: IconName::Dots, size: IconSize::Sm } },
-                    {overflow_menu_items(state, active, !state.read().closed_tabs.is_empty())}
+                    {overflow_menu_items(state, active, crate::session::has_closed())}
                 }
             }
 
@@ -307,24 +327,6 @@ pub(crate) fn Tabs() -> Element {
                 }
             }
 
-            // Floating ghost tab that rides the cursor during a drag (T1). Fixed-
-            // positioned, so its place in the DOM doesn't matter; `pointer-events:none`
-            // keeps it from stealing the mouseenter events that track the drop slot.
-            if let Some(g) = ghost {
-                {
-                    let gx = g.x - g.off_x;
-                    let gy = g.y - g.off_y;
-                    let gname = g.name.clone();
-                    rsx! {
-                        div {
-                            class: "ws-tab-ghost",
-                            style: "transform: translate({gx}px, {gy}px);",
-                            Dot { size: 6, color: "var(--accent)" }
-                            Body { "{gname}" }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -355,7 +357,7 @@ fn tab_menu_items(
     mut rename_val: Signal<String>,
     id: WorkspaceId,
 ) -> Element {
-    let can_reopen = !state.read().closed_tabs.is_empty();
+    let can_reopen = crate::session::has_closed();
     rsx! {
         MenuItem { label: "Rename".to_string(),
             onclick: move |_| {

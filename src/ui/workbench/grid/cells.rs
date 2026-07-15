@@ -8,7 +8,7 @@ use dioxus_code::{Code, SourceCode};
 use crate::action::{dispatch, Action};
 use crate::engine::Cell;
 use crate::session::WorkspaceId;
-use crate::state::{AppState, ResizeTarget, Resizing};
+use crate::state::AppState;
 use crate::ui::components::{
     Badge, BadgeVariant, Dialog, IconButton, IconButtonVariant, Meta, MonoValue, Readout, Spacer,
 };
@@ -36,11 +36,6 @@ pub(super) fn render_hcol(
     let bg = if selected { "var(--c-sel)" } else { "transparent" };
     let cn_cls = if selected { "cn sel" } else { "cn" };
     // This column's grip stays lit while *it* is the one being resized (not just on hover).
-    let grip_active = matches!(
-        state.read().resizing,
-        Some(Resizing { target: ResizeTarget::Column { ws: rws, ci: rci }, .. }) if rws == ws && rci == ci
-    );
-    let grip_cls = if grip_active { "col-grip resizing" } else { "col-grip" };
     // Sort chevron: up = asc, down = desc / unsorted (unsorted is faint, revealed on hover).
     let sort_icon = if sort_dir == Some(true) {
         IconName::ChevronUp
@@ -77,32 +72,57 @@ pub(super) fn render_hcol(
                 }
             }
             Meta { class: "ct {tcls}", "{ct}" }
-            // V20 drag-to-resize grip on the right edge. `stop_propagation` so a grab never
-            // triggers column-select (or sort). Drag → StartResize with this column's current
-            // width as `start`; the root's move/up handlers drive it. Double-click → auto-fit.
-            div {
-                class: "{grip_cls}",
-                title: "Drag to resize · double-click to auto-fit",
-                onmousedown: move |e: MouseEvent| {
-                    if e.trigger_button() != Some(MouseButton::Primary) {
+            // V20 drag-to-resize grip (right edge) — a self-contained component that owns
+            // its own drag and writes this column's width directly. Double-click auto-fits.
+            ColGrip { ws, ci, w, drag_sel }
+        }
+    }
+}
+
+/// The right-edge column resize grip — self-contained: owns its drag in a local
+/// signal and writes this column's width (`runs::col_widths`) on move, so there's no
+/// shared resize state. Double-click auto-fits.
+#[component]
+fn ColGrip(ws: WorkspaceId, ci: usize, w: f64, drag_sel: Signal<bool>) -> Element {
+    let mut drag_sel = drag_sel;
+    // (pointer origin x, column width at grab) while dragging, else None.
+    let mut drag = use_signal(|| None::<(f64, f64)>);
+    let cls = if drag().is_some() { "col-grip resizing" } else { "col-grip" };
+    rsx! {
+        div {
+            class: cls,
+            title: "Drag to resize · double-click to auto-fit",
+            draggable: true,
+            // Swallow the header's column-select (and don't let a grip grab paint a
+            // cell selection) — the actual resize runs off the native drag below.
+            onmousedown: move |e: MouseEvent| {
+                if e.trigger_button() != Some(MouseButton::Primary) {
+                    return;
+                }
+                e.stop_propagation();
+                drag_sel.set(false);
+            },
+            ondragstart: move |e| {
+                drag.set(Some((e.client_coordinates().x, w)));
+            },
+            ondrag: move |e| {
+                if let Some((origin, start)) = drag() {
+                    let x = e.client_coordinates().x;
+                    // The final drag event reports 0 — skip it so the column doesn't jump.
+                    if x == 0.0 {
                         return;
                     }
-                    e.prevent_default();
-                    e.stop_propagation();
-                    // A grip grab is never a cell-selection drag — cancel any in-progress one.
-                    drag_sel.set(false);
-                    let origin = e.client_coordinates().x;
-                    dispatch(state, Action::StartResize {
-                        target: ResizeTarget::Column { ws, ci },
-                        origin,
-                        start: w,
+                    let new = (start + (x - origin)).clamp(56.0, 2000.0);
+                    crate::runs::edit(ws, |run| {
+                        run.col_widths.insert(ci, new);
                     });
-                },
-                ondoubleclick: move |e: MouseEvent| {
-                    e.stop_propagation();
-                    col_autofit(ws, ci);
-                },
-            }
+                }
+            },
+            ondragend: move |_| drag.set(None),
+            ondoubleclick: move |e: MouseEvent| {
+                e.stop_propagation();
+                col_autofit(ws, ci);
+            },
         }
     }
 }

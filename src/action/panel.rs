@@ -1,73 +1,17 @@
-//! Panel-resize action handlers + the shared drag-handle component. Called from
-//! `action::dispatch`; the handle itself dispatches `Action::StartResize`.
+//! The reusable resize handle + the window-fill toggle.
+//!
+//! `Resizer` is fully **self-contained**: it owns its drag in a component-local
+//! `use_signal` and mutates the `size` signal it's handed. It uses HTML5 **drag**
+//! events (`draggable` + `ondragstart`/`ondrag`/`ondragend`) rather than raw mouse
+//! events: the webview does *not* capture the mouse to the mousedown element, so
+//! `onmousemove` stops firing the moment the pointer leaves the thin handle — but a
+//! native drag keeps delivering `ondrag` to the source element for the whole gesture,
+//! wherever the pointer goes. No root driver and no shared resize state are needed —
+//! the component that owns the panel owns its size (a local `Signal<f64>`).
 
 use dioxus::prelude::*;
 
-use crate::action::{dispatch, Action};
-use crate::state::{AppState, ResizeTarget, Resizing};
-
-/// Begin a panel drag. `origin` is the pointer's client coordinate on the drag
-/// axis; `start` is the panel's current size. Axis, direction and min/max clamp
-/// are derived from the target.
-pub fn start_resize(mut state: Signal<AppState>, target: ResizeTarget, origin: f64, start: f64) {
-    let (axis_x, sign, min, max) = match target {
-        ResizeTarget::Sidebar => (true, 1.0, 210.0, 520.0),
-        ResizeTarget::Inspector => (true, -1.0, 220.0, 560.0),
-        ResizeTarget::Editor => (false, 1.0, 92.0, 480.0),
-        ResizeTarget::Log => (false, -1.0, 120.0, 480.0),
-        // Columns grow rightwards; 56px floor, generous ceiling so the last column can
-        // always widen (rows size to the width sum → horizontal scroll).
-        ResizeTarget::Column { .. } => (true, 1.0, 56.0, 2000.0),
-    };
-    state.write().resizing = Some(Resizing {
-        target,
-        axis_x,
-        sign,
-        origin,
-        start,
-        min,
-        max,
-    });
-}
-
-/// Apply a pointer move during an active drag (no-op otherwise).
-pub fn resize_move(mut state: Signal<AppState>, x: f64, y: f64) {
-    let r = state.read().resizing.clone();
-    let Some(r) = r else {
-        return;
-    };
-    let cur = if r.axis_x { x } else { y };
-    let new = (r.start + (cur - r.origin) * r.sign).clamp(r.min, r.max);
-    match r.target {
-        ResizeTarget::Sidebar => state.write().sidebar_w = new,
-        ResizeTarget::Inspector => state.write().inspector_w = new,
-        ResizeTarget::Editor => state.write().editor_h = new,
-        ResizeTarget::Log => state.write().log_h = new,
-        // Column widths live in the run, not `AppState` — write there directly.
-        ResizeTarget::Column { ws, ci } => {
-            crate::runs::edit(ws, |run| {
-                run.col_widths.insert(ci, new);
-            });
-        }
-    }
-}
-
-pub fn end_resize(mut state: Signal<AppState>) {
-    if state.read().resizing.is_some() {
-        state.write().resizing = None;
-    }
-}
-
-/// Toggle the catalog sidebar.
-pub fn toggle_sidebar(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.sidebar_open = !s.sidebar_open;
-}
-
-/// Close the column inspector.
-pub fn close_inspector(mut state: Signal<AppState>) {
-    state.write().inspector_open = false;
-}
+use crate::state::AppState;
 
 /// Toggle the window between filling the screen work area and its previous size
 /// (OS "zoom" — RustRover-style double-click-title-bar). Restores to the last
@@ -76,33 +20,40 @@ pub fn toggle_window_fill(_state: Signal<AppState>) {
     dioxus::desktop::window().toggle_maximized();
 }
 
-/// A draggable resize handle for `target`, placed between/at the edge of panels.
-/// Captures the pointer anchor + current size on mousedown and emits
-/// `Action::StartResize`; the root's `onmousemove`/`onmouseup` drive the rest.
-pub fn resize_handle(state: Signal<AppState>, target: ResizeTarget) -> Element {
-    let axis_x = matches!(target, ResizeTarget::Sidebar | ResizeTarget::Inspector);
-    let cls = if axis_x { "resizer col" } else { "resizer row" };
+/// A self-contained resize handle. Drags the `size` signal within `[min, max]`;
+/// `axis_x` picks the tracked axis and `sign` its direction. Owns its drag locally —
+/// no dispatch, no shared state. Render it as a sibling of the panel whose size it
+/// controls (the panel owns `size`).
+#[component]
+pub fn Resizer(axis_x: bool, sign: f64, min: f64, max: f64, size: Signal<f64>) -> Element {
+    let mut size = size;
+    // (pointer origin on the drag axis, size at grab) while dragging, else None.
+    let mut drag = use_signal(|| None::<(f64, f64)>);
+    let axis = if axis_x { "col" } else { "row" };
+    // Held lit for the whole drag (not just on hover) — matches the grid column grip.
+    let dragging = if drag().is_some() { " resizing" } else { "" };
     rsx! {
         div {
-            class: cls,
+            class: "resizer {axis}{dragging}",
             title: "Drag to resize",
-            onmousedown: move |e| {
-                // Stop the webview from starting a text-selection drag.
-                e.prevent_default();
+            draggable: true,
+            ondragstart: move |e| {
                 let c = e.client_coordinates();
-                let (origin, start) = {
-                    let s = state.read();
-                    match target {
-                        ResizeTarget::Sidebar => (c.x, s.sidebar_w),
-                        ResizeTarget::Inspector => (c.x, s.inspector_w),
-                        ResizeTarget::Editor => (c.y, s.editor_h),
-                        ResizeTarget::Log => (c.y, s.log_h),
-                        // Columns use the grid's own header grip, not this panel handle.
-                        ResizeTarget::Column { .. } => unreachable!(),
-                    }
-                };
-                dispatch(state, Action::StartResize { target, origin, start });
+                drag.set(Some((if axis_x { c.x } else { c.y }, size())));
             },
+            ondrag: move |e| {
+                if let Some((origin, start)) = drag() {
+                    let c = e.client_coordinates();
+                    let cur = if axis_x { c.x } else { c.y };
+                    // The final drag event (and the odd stray one) reports 0 — ignore it
+                    // so the panel doesn't snap to its clamp on release.
+                    if cur == 0.0 {
+                        return;
+                    }
+                    size.set((start + (cur - origin) * sign).clamp(min, max));
+                }
+            },
+            ondragend: move |_| drag.set(None),
         }
     }
 }

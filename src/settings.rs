@@ -8,8 +8,8 @@
 //! `projects::open_dir`, `keybinds` in `keymap`) reads the very same signals — a
 //! plain context provider would not reach it, which is why this stays a global.
 //!
-//! The state is split into **two** shared signals by *when* a change lands in the
-//! other windows:
+//! The state is split into **three** shared signals by *when* a change lands in the
+//! other windows and *whether* it persists:
 //!
 //! - [`Shared::theme`] — the **live** display theme. The Settings window writes it
 //!   the instant a theme is picked, so every window re-themes immediately (a live
@@ -19,9 +19,14 @@
 //!   row-limit / open-pref / …), read by every window. Changes only on the Settings
 //!   window's Save, or via an explicit immediate mutator (a dialog "don't ask
 //!   again").
+//! - [`Shared::os_dark`] — the **OS appearance**, a programme-wide *runtime* fact
+//!   (never persisted). It feeds the same [`effective_theme`] as `theme`, so it
+//!   shares this tier rather than living in a per-window global; any window's
+//!   `ThemeChanged` updates it once and every window re-themes.
 //!
 //! Persistence to the machine-global app config happens **only** on Save (all
-//! fields, theme included) or from those immediate mutators. See [[settings-store]].
+//! fields, theme included) or from those immediate mutators — `os_dark` is never
+//! persisted. See [[settings-store]].
 
 use std::cell::Cell;
 
@@ -47,7 +52,7 @@ impl ThemeSel {
     }
 }
 
-/// The shared, cross-window settings handles. Both are **leaked** signals (no owner
+/// The shared, cross-window settings handles. All **leaked** signals (no owner
 /// scope), so they survive any window closing and are safe to share by value.
 #[derive(Clone, Copy)]
 struct Shared {
@@ -55,6 +60,12 @@ struct Shared {
     applied: Signal<Settings>,
     /// Live display theme — previews across all windows; committed on Save.
     theme: Signal<ThemeSel>,
+    /// OS appearance (`true` = dark). Programme-wide + **runtime-only** (never
+    /// persisted): it's a system fact, the same in every window, and feeds the same
+    /// [`effective_theme`] as `theme` — so it lives in this shared tier, not a
+    /// per-window global (F7). Any window's `ThemeChanged` writes it once and every
+    /// window re-themes.
+    os_dark: Signal<bool>,
 }
 
 thread_local! {
@@ -63,11 +74,12 @@ thread_local! {
     static SHARED: Cell<Option<Shared>> = Cell::new(None);
 }
 
-/// The OS appearance (dark), detected at startup and updated live by each window's
-/// `ThemeChanged` handler. Per-window is correct here — it's the same OS value in
-/// every window — so it stays a per-window `GlobalSignal` (runtime-only, a bare
-/// bool with nothing to lens).
-pub static OS_DARK: GlobalSignal<bool> = Signal::global(|| true);
+/// The current OS appearance (`true` = dark). Reactive — reading it in a component
+/// subscribes, so a Sync-with-OS window re-themes on an OS light/dark switch. Backed
+/// by the cross-window [`Shared::os_dark`] signal.
+pub fn os_dark() -> bool {
+    *shared().os_dark.read()
+}
 
 /// Get — creating on first call — the shared context. The first caller leaks the
 /// two signals from the current app config; every later caller, including other
@@ -84,6 +96,9 @@ fn shared() -> Shared {
         let s = Shared {
             applied: Signal::leak_with_caller(cfg.clone(), loc),
             theme: Signal::leak_with_caller(ThemeSel::of(&cfg), loc),
+            // Detect the OS appearance once, here — every window then reads this same
+            // value (and its `ThemeChanged` handler keeps it current via `set_os_dark`).
+            os_dark: Signal::leak_with_caller(crate::theme::os_is_dark(), loc),
         };
         c.set(Some(s));
         s
@@ -116,9 +131,10 @@ pub fn use_settings() -> String {
 /// Subscribes to the live theme and the OS appearance, so a preview or an OS switch
 /// re-themes the reader.
 pub fn effective_theme() -> String {
-    let shared_ = shared();
-    let t = shared_.theme.read();
-    crate::theme::effective_id(&t.id, t.sync_os, *OS_DARK.read())
+    let s = shared();
+    let t = s.theme.read();
+    let x = crate::theme::effective_id(&t.id, t.sync_os, *s.os_dark.read());
+    x
 }
 
 pub fn density_compact() -> bool {
@@ -236,8 +252,9 @@ pub fn set_open_pref(pref: OpenPref) {
 /// Record the OS appearance (from a window's `ThemeChanged` event / startup
 /// detection). Reactive, so a Sync-with-OS window re-themes live.
 pub fn set_os_dark(dark: bool) {
-    if *OS_DARK.peek() != dark {
-        *OS_DARK.write() = dark;
+    let mut sig = shared().os_dark;
+    if *sig.peek() != dark {
+        *sig.write() = dark;
     }
 }
 

@@ -960,9 +960,16 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .resizer { flex: none; z-index: 8; background: transparent; }
 .resizer.col { width: 6px; margin: 0 -3px; cursor: col-resize; }
 .resizer.row { height: 6px; margin: -3px 0; cursor: row-resize; }
-.resizer:hover { background: rgba(76,198,255,.28); }
-.ps-app.resizing { cursor: default; user-select: none; }
-.ps-app.resizing * { user-select: none !important; }
+
+/* Lit on hover, and held lit for the whole drag via `.resizing` (added while the handle
+   owns an active drag) — an accent line matching the grid column grip, not a fill. */
+.resizer.col:hover, .resizer.col.resizing {
+    box-shadow: inset -2px 0 0 var(--accent);
+}
+
+.resizer.row:hover, .resizer.row.resizing {
+    box-shadow: inset 0 -2px 0 var(--accent);
+}
 
 /* ============ EMPTY WORKSPACE STATE ============ */
 .ws-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--sp-8); background: var(--main); }
