@@ -262,9 +262,9 @@ pub fn run(state: Signal<AppState>, cmd: Command) -> bool {
             true
         }
         Cancel => {
-            if crate::overlays::any_open() {
-                dispatch(state, Action::CloseOverlays);
-            } else {
+            // Overlays self-close on Esc (Dialog / Backdrop own their own handler); this
+            // guard just stops Esc from *also* cancelling a running query while one is open.
+            if !crate::overlays::any_open() {
                 dispatch(state, Action::CancelQuery);
             }
             true

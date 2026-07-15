@@ -46,7 +46,7 @@ pub fn Dialog(
             onkeydown: move |e| {
                 if e.key() == Key::Escape {
                     e.prevent_default();
-                    // Don't let the root's Escape handler also fire (CloseOverlays).
+                    // Don't let the root's Escape (query-cancel) handler also fire.
                     e.stop_propagation();
                     on_close.call(());
                 }

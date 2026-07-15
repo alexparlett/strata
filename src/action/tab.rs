@@ -13,17 +13,17 @@ use crate::session::{ClosedTab, WorkspaceId};
 use crate::state::AppState;
 
 /// Open a new blank query tab and focus it.
-pub fn add(_state: Signal<AppState>) {
+pub fn add() {
     crate::session::new_blank();
 }
 
 /// Duplicate workspace `id` into a new "<name> copy" tab to its right, and focus it.
-pub fn duplicate(_state: Signal<AppState>, id: WorkspaceId) {
+pub fn duplicate(id: WorkspaceId) {
     crate::session::duplicate(id);
 }
 
 /// Focus workspace `id`.
-pub fn switch(_state: Signal<AppState>, id: WorkspaceId) {
+pub fn switch(id: WorkspaceId) {
     crate::session::switch(id);
 }
 
@@ -81,7 +81,7 @@ pub fn close_all(state: Signal<AppState>) {
 }
 
 /// Reopen the most recently closed tab (⇧⌘T).
-pub fn reopen(_state: Signal<AppState>) {
+pub fn reopen() {
     crate::session::reopen_last();
 }
 
@@ -123,7 +123,7 @@ fn close_ids(state: Signal<AppState>, ids: &HashSet<WorkspaceId>) {
 /// Commit an inline tab rename: set the tab's name (an empty draft is a no-op).
 /// Start / draft / cancel are transient UI owned by the `Tabs` component; only
 /// this durable commit is an action, so it autosaves via `dispatch`.
-pub fn rename_tab(_state: Signal<AppState>, id: WorkspaceId, name: String) {
+pub fn rename_tab(id: WorkspaceId, name: String) {
     let v = name.trim().to_string();
     if v.is_empty() {
         return;
@@ -137,6 +137,6 @@ pub fn rename_tab(_state: Signal<AppState>, id: WorkspaceId, name: String) {
 /// to the post-removal slot `insert`. The live drag — the ghost (the webview's native
 /// drag image) and the drop slot — is component-local to `Tabs`; only this durable
 /// move crosses the action layer, so `dispatch` autosaves the new order.
-pub fn move_tab(_state: Signal<AppState>, id: WorkspaceId, insert: usize) {
+pub fn move_tab(id: WorkspaceId, insert: usize) {
     crate::session::move_workspace(id, insert);
 }

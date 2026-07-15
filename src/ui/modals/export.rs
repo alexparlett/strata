@@ -69,7 +69,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
             })
             .unwrap_or((0, Vec::new()))
     };
-    let (preview, size_est) = export_preview(state, &ex);
+    let (preview, size_est) = export_preview(&ex);
     let fmt = ex.format.clone();
     let ext = match fmt.as_str() {
         "csv" => ".csv",
@@ -230,7 +230,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
 }
 
 /// Preview text (first few rows in the chosen format) + an estimated file size.
-fn export_preview(_state: Signal<AppState>, ex: &ExportForm) -> (String, String) {
+fn export_preview(ex: &ExportForm) -> (String, String) {
     let id = crate::session::active_id();
     let Some(entry) = crate::runs::RUNS.resolve().get(id) else {
         return (String::new(), String::new());

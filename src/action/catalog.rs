@@ -8,13 +8,13 @@ use crate::engine::{self, Command};
 use crate::state::{AppState, RemoveKind};
 
 /// Open the Table Config modal for a new external table.
-pub fn open_config_new(_state: Signal<AppState>) {
+pub fn open_config_new() {
     // The modal seeds a blank draft from the target — nothing to set up here.
     crate::overlays::open_config(crate::overlays::ConfigTarget::New);
 }
 
 /// Open the Table Config modal editing an existing table.
-pub fn open_config_edit(_state: Signal<AppState>, table: &str) {
+pub fn open_config_edit(table: &str) {
     // The modal loads the existing table into its local draft from the target.
     crate::overlays::open_config(crate::overlays::ConfigTarget::Edit(table.to_string()));
 }
@@ -123,8 +123,8 @@ pub fn toggle_view_open(mut state: Signal<AppState>, i: usize) {
 }
 
 /// Select a column for the inspector (and open the inspector).
-pub fn select_column(mut state: Signal<AppState>, table: String, column: String) {
-    state.write().selected_col = Some((table, column));
+pub fn select_column(table: String, column: String) {
+    crate::inspector::select(table, column);
     crate::layout::set_inspector_open(true);
 }
 

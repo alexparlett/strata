@@ -160,12 +160,10 @@ pub struct AppState {
     pub recent_projects: Vec<crate::config::RecentProject>,
     // results — the per-tab query output (grid / plan / error / running / pager)
     // lives in the `crate::runs::RUNS` store, keyed by workspace id (the active
-    // one from `crate::session::active_id`). Only these window-global bits stay
-    // here: the request-id source, the
-    // pager-dropdown open flag, and the column-inspector selection.
+    // one from `crate::session::active_id`). Only the request-id source stays here
+    // (the inspector selection moved to `crate::inspector`; the pager dropdown owns
+    // its own open state via the `Select` component).
     pub next_req: u64,
-    pub page_size_open: bool,
-    pub selected_col: Option<(String, String)>,
     /// The engine's registered SQL functions (built-ins + UDFs), pushed once on
     /// startup (`engine::Event::Functions`, A9/F5). Read by the SQL language
     /// service (`crate::sql`) for completion + validation.
@@ -192,8 +190,6 @@ impl AppState {
             project_path: None,
             recent_projects: Vec::new(),
             next_req: 1,
-            page_size_open: false,
-            selected_col: None,
             functions: crate::sql::FunctionCatalog::default(),
         }
     }

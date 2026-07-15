@@ -32,7 +32,7 @@ pub fn Sidebar() -> Element {
     let nquery = state.read().project.saved_queries.len();
     // Catalog filter is pure sidebar UI — kept local (F7), not in AppState.
     let mut filter = use_signal(String::new);
-    let selected = state.read().selected_col.clone();
+    let selected = crate::inspector::selected();
     // The sidebar owns its own width — a local reactive signal, not global state.
     let width = use_signal(|| 288.0);
 

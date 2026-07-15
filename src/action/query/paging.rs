@@ -62,14 +62,8 @@ pub fn sort_column(state: Signal<AppState>, ci: usize) {
     });
     fetch_page(state, 1);
 }
-/// Toggle the page-size dropdown.
-pub fn toggle_page_size_menu(mut state: Signal<AppState>) {
-    let mut s = state.write();
-    s.page_size_open = !s.page_size_open;
-}
 /// Set the page size and reload the first page.
-pub fn set_page_size(mut state: Signal<AppState>, size: usize) {
-    state.write().page_size_open = false;
+pub fn set_page_size(state: Signal<AppState>, size: usize) {
     let id = crate::session::active_id();
     if id != 0 {
         crate::runs::edit(id, |run| run.page_size = size);

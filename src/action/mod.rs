@@ -64,7 +64,6 @@ pub enum Action {
     DismissQueryError,
     SetPlanTab(PlanTab),
     TogglePlanRaw,
-    TogglePageSizeMenu,
     SetPageSize(usize),
     SetResultsView(crate::runs::ResultsView),
 
@@ -114,9 +113,7 @@ pub enum Action {
     CloseInspector,
     ToggleWindowFill,
 
-    // ── overlays ──
-    CloseOverlays,
-    // Bottom drawer (History + Events tabs).
+    // ── bottom drawer (History + Events tabs) ──
     OpenHistory,
     OpenEvents,
     OpenProblems,
@@ -212,69 +209,67 @@ fn run(state: Signal<AppState>, action: Action) {
         // query & results
         RunQuery => query::run(state),
         RunExplain(analyze) => query::run_explain(state, analyze),
-        ClearResults => query::clear_results(state),
+        ClearResults => query::clear_results(),
         SetResultsFind { ws, open } => query::set_results_find(ws, open),
         CancelQuery => query::cancel(state),
         FetchPage(page) => query::fetch_page(state, page),
         SortColumn(ci) => query::sort_column(state, ci),
-        CopySelection(fmt) => query::copy_selection(state, fmt),
-        CopyRecord(row, fmt) => query::copy_record(state, row, fmt),
-        LoadSelectStar(name) => query::select_star(state, &name),
-        FormatSql => query::format(state),
-        ClearSql => query::clear(state),
+        CopySelection(fmt) => query::copy_selection(fmt),
+        CopyRecord(row, fmt) => query::copy_record(row, fmt),
+        LoadSelectStar(name) => query::select_star(&name),
+        FormatSql => query::format(),
+        ClearSql => query::clear(),
         SaveAsView => query::save_as_view(state),
         SaveQuery => query::save(state),
         OpenSavedQuery(name) => query::open_saved(state, &name),
         DeleteSavedQuery(name) => query::delete_saved(state, &name),
-        SetResultSearch(q) => query::set_result_search(state, q),
-        DismissQueryError => query::dismiss_error(state),
-        SetPlanTab(tab) => query::set_plan_tab(state, tab),
-        TogglePlanRaw => query::toggle_plan_raw(state),
-        TogglePageSizeMenu => query::toggle_page_size_menu(state),
+        SetResultSearch(q) => query::set_result_search(q),
+        DismissQueryError => query::dismiss_error(),
+        SetPlanTab(tab) => query::set_plan_tab(tab),
+        TogglePlanRaw => query::toggle_plan_raw(),
         SetPageSize(sz) => query::set_page_size(state, sz),
         SetResultsView(v) => query::set_results_view(v),
 
         // tabs
-        NewTab => tab::add(state),
-        SwitchTab(id) => tab::switch(state, id),
+        NewTab => tab::add(),
+        SwitchTab(id) => tab::switch(id),
         CloseTab(id) => tab::close(state, id),
         CloseTabForce(id) => tab::close_force(state, id),
         CloseOtherTabs(id) => tab::close_others(state, id),
         CloseTabsRight(id) => tab::close_right(state, id),
         CloseAllTabs => tab::close_all(state),
-        ReopenTab => tab::reopen(state),
-        RenameTab(id, name) => tab::rename_tab(state, id, name),
-        DuplicateTab(id) => tab::duplicate(state, id),
+        ReopenTab => tab::reopen(),
+        RenameTab(id, name) => tab::rename_tab(id, name),
+        DuplicateTab(id) => tab::duplicate(id),
 
         // catalog
-        OpenConfigNew => catalog::open_config_new(state),
-        OpenConfigEdit(name) => catalog::open_config_edit(state, &name),
+        OpenConfigNew => catalog::open_config_new(),
+        OpenConfigEdit(name) => catalog::open_config_edit(&name),
         RegisterTable(draft) => catalog::register_table(state, draft),
         ConfirmRemove { kind, name } => catalog::confirm_remove(state, kind, name),
         EditView(name) => catalog::edit_view(state, &name),
         ToggleTableOpen(i) => catalog::toggle_table_open(state, i),
         ToggleViewOpen(i) => catalog::toggle_view_open(state, i),
-        SelectColumn { table, column } => catalog::select_column(state, table, column),
+        SelectColumn { table, column } => catalog::select_column(table, column),
 
-        MoveTab { id, insert } => tab::move_tab(state, id, insert),
+        MoveTab { id, insert } => tab::move_tab(id, insert),
         ToggleSidebar => crate::layout::toggle_sidebar(),
         CloseInspector => crate::layout::set_inspector_open(false),
-        ToggleWindowFill => panel::toggle_window_fill(state),
+        ToggleWindowFill => panel::toggle_window_fill(),
 
-        // overlays
-        CloseOverlays => overlay::close_all(state),
-        OpenHistory => overlay::open_history(state),
-        OpenEvents => overlay::open_events(state),
-        OpenProblems => overlay::open_problems(state),
-        SetLogTab(tab) => overlay::set_log_tab(state, tab),
-        OpenHistoryQuery(sql) => overlay::open_history_query(state, sql),
+        // bottom drawer
+        OpenHistory => overlay::open_history(),
+        OpenEvents => overlay::open_events(),
+        OpenProblems => overlay::open_problems(),
+        SetLogTab(tab) => overlay::set_log_tab(tab),
+        OpenHistoryQuery(sql) => overlay::open_history_query(sql),
         RunHistoryQuery(sql) => {
-            overlay::open_history_query(state, sql);
+            overlay::open_history_query(sql);
             query::run(state);
         }
-        ToggleLog => overlay::toggle_log(state),
+        ToggleLog => overlay::toggle_log(),
         ClearDrawer => overlay::clear_drawer(state),
-        ToggleLogRow(id) => overlay::toggle_log_row(state, id),
+        ToggleLogRow(id) => overlay::toggle_log_row(id),
         RunExport(opts) => query::run_export(state, opts),
 
         // project (open/recent spawn new windows; close closes this window)

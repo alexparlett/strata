@@ -21,7 +21,7 @@ pub fn Inspector() -> Element {
     // The inspector owns its own width — a local reactive signal, not global state.
     let width = use_signal(|| 292.0);
 
-    let Some((table, colname)) = s.selected_col.clone() else {
+    let Some((table, colname)) = crate::inspector::selected() else {
         return rsx! {
             Resizer { axis_x: true, sign: -1.0, min: 220.0, max: 560.0, size: width }
             aside { class: "ps-inspector", style: "width:{width}px;",

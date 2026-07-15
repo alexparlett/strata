@@ -17,6 +17,7 @@ mod engine;
 mod engine_config;
 mod events;
 mod hotkeys;
+mod inspector;
 mod keymap;
 mod layout;
 mod menu;

@@ -11,12 +11,10 @@
 
 use dioxus::prelude::*;
 
-use crate::state::AppState;
-
 /// Toggle the window between filling the screen work area and its previous size
 /// (OS "zoom" — RustRover-style double-click-title-bar). Restores to the last
 /// manual size; a manually screen-filled window is a no-op toggle.
-pub fn toggle_window_fill(_state: Signal<AppState>) {
+pub fn toggle_window_fill() {
     dioxus::desktop::window().toggle_maximized();
 }
 

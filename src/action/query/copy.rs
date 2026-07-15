@@ -2,12 +2,10 @@
 
 use dioxus::prelude::*;
 
-use crate::state::AppState;
-
 /// Rz4 — copy the current grid selection to the clipboard: project the selected columns + take
 /// the selected rows into a sub-`RecordBatch`, then serialize it via `crate::serialize`. TSV
 /// (the ⌘C default) and the other formats all carry a header; indices are page-local.
-pub fn copy_selection(_state: Signal<AppState>, fmt: crate::serialize::TextFormat) {
+pub fn copy_selection(fmt: crate::serialize::TextFormat) {
     use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
 
     let ws_id = crate::session::active_id();
@@ -77,7 +75,7 @@ pub fn copy_selection(_state: Signal<AppState>, fmt: crate::serialize::TextForma
 /// clipboard in `fmt`, from the record view's `⋯` menu. Like [`copy_selection`] but one full row:
 /// map the filtered display index → page-`batch` row, `take` it into a one-row `RecordBatch`, and
 /// serialize with a header.
-pub fn copy_record(_state: Signal<AppState>, row_idx: usize, fmt: crate::serialize::TextFormat) {
+pub fn copy_record(row_idx: usize, fmt: crate::serialize::TextFormat) {
     use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
 
     let ws_id = crate::session::active_id();

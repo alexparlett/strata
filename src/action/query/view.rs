@@ -1,12 +1,8 @@
 //! Results / plan view state — clear, find popover, error dismiss, plan-tab/raw toggles,
 //! result-search text, grid↔chart view. Split out of the action::query module.
 
-use dioxus::prelude::*;
-
-use crate::state::AppState;
-
 /// Clear the active tab's results back to the empty state (Rz8).
-pub fn clear_results(_state: Signal<AppState>) {
+pub fn clear_results() {
     let id = crate::session::active_id();
     if id == 0 {
         return;
@@ -39,7 +35,7 @@ pub fn set_results_find(ws: crate::session::WorkspaceId, open: bool) {
 }
 /// Dismiss the results-pane error view (falls back to the grid if a prior
 /// result is still loaded, otherwise the "no results yet" empty state).
-pub fn dismiss_error(_state: Signal<AppState>) {
+pub fn dismiss_error() {
     let id = crate::session::active_id();
     if id != 0 {
         crate::runs::edit_existing(id, |run| run.query_error = None);
@@ -47,7 +43,7 @@ pub fn dismiss_error(_state: Signal<AppState>) {
 }
 
 /// Switch the EXPLAIN plan view between the physical and logical trees.
-pub fn set_plan_tab(_state: Signal<AppState>, tab: crate::plan::PlanTab) {
+pub fn set_plan_tab(tab: crate::plan::PlanTab) {
     let id = crate::session::active_id();
     if id != 0 {
         crate::runs::edit_existing(id, |run| run.plan_tab = tab);
@@ -55,14 +51,14 @@ pub fn set_plan_tab(_state: Signal<AppState>, tab: crate::plan::PlanTab) {
 }
 
 /// Toggle the EXPLAIN plan view between the operator-card tree and raw text.
-pub fn toggle_plan_raw(_state: Signal<AppState>) {
+pub fn toggle_plan_raw() {
     let id = crate::session::active_id();
     if id != 0 {
         crate::runs::edit_existing(id, |run| run.plan_raw = !run.plan_raw);
     }
 }
 /// Update the find-in-results query.
-pub fn set_result_search(_state: Signal<AppState>, q: String) {
+pub fn set_result_search(q: String) {
     let id = crate::session::active_id();
     if id != 0 {
         crate::runs::edit(id, |run| run.result_search = q);
