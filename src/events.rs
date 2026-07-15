@@ -82,3 +82,40 @@ pub fn toggle_row(id: u64) {
         e.open = !e.open;
     }
 }
+
+// ---- `event_<kind>!` sugar ----------------------------------------------------
+//
+// `event_ok!("done {n}")` etc. — level-per-macro sugar for [`push`] + `format!`,
+// mirroring the `tracing` macros. `#[macro_export]` puts them at the crate root, so
+// call them fully-qualified: `crate::event_ok!(…)`. For an event carrying a
+// structured error, call [`push_err`] directly.
+
+/// `LogKind::Ok` event — `crate::event_ok!("…")`.
+#[macro_export]
+macro_rules! event_ok {
+    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Ok, format!($($arg)*)) };
+}
+
+/// `LogKind::Info` event — `crate::event_info!("…")`.
+#[macro_export]
+macro_rules! event_info {
+    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Info, format!($($arg)*)) };
+}
+
+/// `LogKind::Run` event — `crate::event_run!("…")`.
+#[macro_export]
+macro_rules! event_run {
+    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Run, format!($($arg)*)) };
+}
+
+/// `LogKind::Warn` event — `crate::event_warn!("…")`.
+#[macro_export]
+macro_rules! event_warn {
+    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Warn, format!($($arg)*)) };
+}
+
+/// `LogKind::Error` event — `crate::event_error!("…")`.
+#[macro_export]
+macro_rules! event_error {
+    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Error, format!($($arg)*)) };
+}
