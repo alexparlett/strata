@@ -11,6 +11,8 @@
 use std::fs;
 use std::path::Path;
 
+use dioxus::prelude::*;
+use dioxus_stores::*;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::ColumnInfo;
@@ -52,7 +54,7 @@ where
 }
 
 /// One logical table (a DataFusion `ListingTable` over many source paths).
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct CatalogTable {
     pub name: String,
     #[serde(skip)]
@@ -74,7 +76,7 @@ pub struct CatalogTable {
 }
 
 /// A saved, query-backed catalog view (a real DataFusion `CREATE VIEW`).
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct CatalogView {
     pub name: String,
     pub sql: String,
@@ -99,7 +101,7 @@ pub enum Origin {
 }
 
 /// One past query run. `id` is runtime (reassigned on load).
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct HistoryItem {
     #[serde(skip)]
     pub id: u64,
@@ -116,7 +118,7 @@ pub struct HistoryItem {
 /// A named SQL snippet stored in the project — distinct from a `CatalogView`
 /// (which is a real DataFusion view). Re-opened in a query tab, not queryable
 /// by name.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct SavedQuery {
     pub name: String,
     pub sql: String,
@@ -125,7 +127,7 @@ pub struct SavedQuery {
 
 /// Saved window geometry (physical pixels) so a project reopens where it was
 /// last left. Restored *before* the window is created (see `crate::window`).
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct WindowGeom {
     pub x: i32,
     pub y: i32,
@@ -135,6 +137,7 @@ pub struct WindowGeom {
 
 /// The open project — the durable core serialized to `<name>.psproj`. Global
 /// prefs and ephemeral UI live on `AppState`, not here.
+#[derive(Store, Clone, PartialEq)]
 pub struct Project {
     pub name: String,
     // catalog
@@ -308,4 +311,178 @@ impl Project {
             .ok()
             .and_then(|s| s.window)
     }
+}
+
+// === This window's reactive project store (F7 B11) =========================
+//
+// `Project` derives `Store`, so — exactly like `crate::session` — the UI reads the
+// catalog through field lenses (`store().tables()`, …) and every mutation writes
+// through a lens, never a coarse root `.write()` (which wouldn't notify lens
+// readers). Per-window: a `GlobalStore` resolves to one instance per Dioxus app,
+// and each project window is its own app (cf. `crate::session::SESSION`).
+
+/// This window's open project.
+pub static PROJECT: GlobalStore<Project> = Global::new(|| Project::empty());
+
+/// This window's project store (components read/iterate the catalog through it).
+pub fn store() -> Store<Project> {
+    PROJECT.resolve()
+}
+
+/// A clone of the whole project (action-layer reads + persistence snapshots).
+pub fn snapshot() -> Project {
+    PROJECT.resolve().read().clone()
+}
+
+/// The project's display name (reactive).
+pub fn name() -> String {
+    store().name().cloned()
+}
+
+// --- mutations (lens writes; the caller autosaves) -------------------------
+
+/// Replace the whole project (opening one into this window). Writes each field lens
+/// so every catalog / history / name reader is notified — a coarse root write would
+/// leave lens subscribers stale.
+pub fn open(project: Project) {
+    let s = store();
+    s.name().set(project.name);
+    s.tables().set(project.tables);
+    s.views().set(project.views);
+    s.saved_queries().set(project.saved_queries);
+    s.history().set(project.history);
+    s.next_hist().set(project.next_hist);
+    s.window().set(project.window);
+}
+
+/// Insert-or-replace a table by name (engine (re)registration / config save).
+pub fn upsert_table(table: CatalogTable) {
+    let s = store();
+    let mut tables = s.tables();
+    let mut t = tables.write();
+    t.retain(|x| x.name != table.name);
+    t.push(table);
+}
+
+/// Drop the table named `name` (deregister / remove-confirm).
+pub fn remove_table(name: &str) {
+    store().tables().write().retain(|t| t.name != name);
+}
+
+/// Insert-or-replace a view by name.
+pub fn upsert_view(view: CatalogView) {
+    let s = store();
+    let mut views = s.views();
+    let mut v = views.write();
+    v.retain(|x| x.name != view.name);
+    v.push(view);
+}
+
+/// Drop the view named `name`.
+pub fn remove_view(name: &str) {
+    store().views().write().retain(|v| v.name != name);
+}
+
+/// Upsert a saved query by name (case-insensitive). Returns `true` if it replaced
+/// an existing one, `false` if it was newly added.
+pub fn upsert_saved_query(name: String, sql: String, meta: String) -> bool {
+    let s = store();
+    let mut saved = s.saved_queries();
+    let mut q = saved.write();
+    if let Some(existing) = q.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
+        existing.sql = sql;
+        existing.meta = meta;
+        true
+    } else {
+        q.push(SavedQuery { name, sql, meta });
+        false
+    }
+}
+
+/// Drop the saved query named `name`.
+pub fn remove_saved_query(name: &str) {
+    store().saved_queries().write().retain(|q| q.name != name);
+}
+
+/// Toggle a table row's schema-expanded flag (sidebar disclosure; runtime-only).
+pub fn toggle_table_open(i: usize) {
+    let s = store();
+    let mut tables = s.tables();
+    let mut t = tables.write();
+    if let Some(row) = t.get_mut(i) {
+        row.open = !row.open;
+    }
+}
+
+/// Toggle a view row's schema-expanded flag.
+pub fn toggle_view_open(i: usize) {
+    let s = store();
+    let mut views = s.views();
+    let mut v = views.write();
+    if let Some(row) = v.get_mut(i) {
+        row.open = !row.open;
+    }
+}
+
+/// Record a successful run at the front of history.
+pub fn record_run(sql: String, elapsed_ms: u128, rows: usize) {
+    push_history(HistoryItem {
+        id: 0,
+        sql,
+        ts_label: "just now".into(),
+        ms: elapsed_ms,
+        rows,
+        ok: true,
+        cancelled: false,
+    });
+}
+
+/// Record a failed run at the front of history.
+pub fn record_fail(sql: String) {
+    push_history(HistoryItem {
+        id: 0,
+        sql,
+        ts_label: "just now".into(),
+        ms: 0,
+        rows: 0,
+        ok: false,
+        cancelled: false,
+    });
+}
+
+/// Record a cancelled run at the front of history.
+pub fn record_cancel(sql: String, elapsed_ms: u128) {
+    push_history(HistoryItem {
+        id: 0,
+        sql,
+        ts_label: "just now".into(),
+        ms: elapsed_ms,
+        rows: 0,
+        ok: false,
+        cancelled: true,
+    });
+}
+
+/// Prepend `item` to history, assigning its runtime id and trimming to the
+/// `max_history` cap (the passed `item`'s `id` is overwritten).
+fn push_history(mut item: HistoryItem) {
+    let s = store();
+    let hid = s.next_hist().cloned();
+    s.next_hist().set(hid + 1);
+    item.id = hid;
+    let cap = crate::settings::max_history().max(1);
+    let mut history = s.history();
+    let mut h = history.write();
+    h.insert(0, item);
+    h.truncate(cap);
+}
+
+/// Clear the history list (the History tab's trash button).
+pub fn clear_history() {
+    store().history().write().clear();
+}
+
+/// Remember this window's last geometry (persisted into `session.json`).
+pub fn set_window(geom: WindowGeom) {
+    store().window().set(Some(geom));
 }

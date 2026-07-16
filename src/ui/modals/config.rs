@@ -5,7 +5,7 @@ use crate::action::{dispatch, Action};
 use crate::overlays::ConfigTarget;
 use crate::state::{AppState, ConfigForm};
 use crate::ui::components::{
-    Button, ButtonVariant, Eyebrow, Icon, IconButton, IconButtonVariant, MonoValue, Path, Prose,
+    Button, ButtonVariant, Eyebrow, Icon, IconButton, IconButtonVariant, MonoValue, Path,
     Segment, SegmentOption, Select, SelectOption, Spacer, TextInput, Toggle, WinGeom, Window,
 };
 use crate::ui::icons::{IconName, IconSize};
@@ -201,12 +201,13 @@ pub fn ConfigHost() -> Element {
 
 /// Seed a fresh working draft from the target: blank for `New`, a *copy* of the
 /// project table for `Edit`. The project store is never touched.
-fn seed_draft(state: Signal<AppState>, target: &ConfigTarget) -> ConfigForm {
+fn seed_draft(target: &ConfigTarget) -> ConfigForm {
     match target {
         ConfigTarget::New => ConfigForm::default(),
         ConfigTarget::Edit(name) => {
-            let s = state.read();
-            match s.project.tables.iter().find(|t| &t.name == name) {
+            let store = crate::project::store();
+            let p = store.read();
+            match p.tables.iter().find(|t| &t.name == name) {
                 Some(t) => ConfigForm {
                     editing: Some(t.name.clone()),
                     name: t.name.clone(),
@@ -231,7 +232,7 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
     let state = use_context::<Signal<AppState>>();
     // The working copy is component-local; the project store stays immutable until
     // a successful register. Seed it from the target once, on mount.
-    let mut draft = use_signal(move || seed_draft(state, &target));
+    let mut draft = use_signal(move || seed_draft(&target));
     let d = draft.read();
     let editing = d.editing.is_some();
     let name = d.name.clone();

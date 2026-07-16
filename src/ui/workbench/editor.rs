@@ -163,7 +163,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                     class: "ps-sql",
                     decorations,
                     oninput: move |v: String| ws.sql().set(v),
-                    oncaret: move |caret: usize| refresh_completion(state, ws, comp, comp_gen, caret),
+                    oncaret: move |caret: usize| refresh_completion(ws, comp, comp_gen, caret),
                     onkeydown: move |e: KeyboardEvent| handle_completion_key(ws, comp, comp_gen, e),
                     onblur: move |_| close_completion(comp, comp_gen),
                     // Clicking in the editor to move the caret keeps focus (no blur) — close too.
@@ -327,7 +327,6 @@ fn hovered_lint(
 /// Recompute completions at `caret`, **debounced 500ms** (like validation) so the
 /// popup doesn't flash on every keystroke. Shows only while typing a word.
 fn refresh_completion(
-    state: Signal<AppState>,
     ws: Store<crate::session::Workspace>,
     mut comp: Signal<Option<Completing>>,
     mut comp_gen: Signal<u64>,
@@ -347,8 +346,9 @@ fn refresh_completion(
         return;
     }
     let catalog = {
-        let st = state.peek();
-        Catalog::build(&st.project.tables, &st.project.views, crate::engine::Engine::functions())
+        let store = crate::project::store();
+        let st = store.peek();
+        Catalog::build(&st.tables, &st.views, crate::engine::Engine::functions())
     };
     let g = {
         let mut w = comp_gen.write();

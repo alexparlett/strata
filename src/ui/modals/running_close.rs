@@ -54,7 +54,7 @@ fn RunningCloseCard(target: RunningCloseTarget) -> Element {
         }
         RunningCloseTarget::Window => (
             "Confirm exit",
-            state.read().project.name.clone(),
+            crate::project::name(),
             "Queries are running. Are you sure you want to stop them and exit?",
             true,
         ),

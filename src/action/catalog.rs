@@ -64,17 +64,17 @@ pub fn register_table(state: Signal<AppState>, draft: crate::state::ConfigForm) 
 /// deregister the table. The engine's `Deregistered` / `ViewChanged{dropped}`
 /// event logs the outcome. The dialog's open state is a sidebar-local signal, so
 /// there's nothing to close here.
-pub fn confirm_remove(mut state: Signal<AppState>, kind: RemoveKind, name: String) {
+pub fn confirm_remove(kind: RemoveKind, name: String) {
     match kind {
         RemoveKind::Table => {
             crate::command!(Deregister {
                 table: name.clone(),
             });
-            state.write().project.tables.retain(|x| x.name != name);
+            crate::project::remove_table(&name);
         }
         RemoveKind::View => {
             crate::command!(DropView { name: name.clone() });
-            state.write().project.views.retain(|x| x.name != name);
+            crate::project::remove_view(&name);
         }
     }
 }
@@ -82,14 +82,15 @@ pub fn confirm_remove(mut state: Signal<AppState>, kind: RemoveKind, name: Strin
 /// Load a view's SQL into the active tab (catalog menu → "Edit query").
 /// Open a view's SQL in its **own** tab (named after the view), reusing an
 /// existing tab of that name rather than overwriting whatever tab is active.
-pub fn edit_view(state: Signal<AppState>, name: &str) {
-    let sql = state
-        .read()
-        .project
-        .views
-        .iter()
-        .find(|v| v.name == name)
-        .map(|v| v.sql.clone());
+pub fn edit_view(name: &str) {
+    let sql = {
+        let store = crate::project::store();
+        let p = store.read();
+        p.views
+         .iter()
+         .find(|v| v.name == name)
+         .map(|v| v.sql.clone())
+    };
     let Some(sql) = sql else {
         return;
     };
@@ -97,22 +98,6 @@ pub fn edit_view(state: Signal<AppState>, name: &str) {
 }
 
 // ---- catalog interactions ----
-
-/// Expand/collapse a table row's schema.
-pub fn toggle_table_open(mut state: Signal<AppState>, i: usize) {
-    let mut w = state.write();
-    if let Some(t) = w.project.tables.get_mut(i) {
-        t.open = !t.open;
-    }
-}
-
-/// Expand/collapse a view row's schema.
-pub fn toggle_view_open(mut state: Signal<AppState>, i: usize) {
-    let mut w = state.write();
-    if let Some(v) = w.project.views.get_mut(i) {
-        v.open = !v.open;
-    }
-}
 
 /// Select a column for the inspector (and open the inspector).
 pub fn select_column(table: String, column: String) {

@@ -5,7 +5,7 @@
 // The project domain model lives in `crate::project`; re-exported here so the
 // familiar `crate::state::{CatalogTable, Project, …}` paths keep working.
 pub use crate::project::{
-    CatalogTable, CatalogView, HistoryItem, Origin, Project, RegStatus, SavedQuery,
+    CatalogTable, CatalogView, Origin, RegStatus,
 };
 // A tab's data now lives in the reactive session store; re-exported so the
 // familiar `crate::state::Workspace` path keeps working.
@@ -147,10 +147,10 @@ pub enum CatalogKind {
 }
 
 pub struct AppState {
-    // The open project (catalog, workspaces, history — the persisted part). Per-tab
-    // runs live in `crate::runs`; the per-window engine session (command channel,
-    // request-id source, SQL functions) in `crate::engine`.
-    pub project: Project,
+    // Global prefs + project-management pointers. The open project itself now lives
+    // in the per-window `crate::project` store (catalog + history), the reactive
+    // session in `crate::session`, per-tab runs in `crate::runs`, and the per-window
+    // engine session in `crate::engine`.
     pub type_color_cells: bool,
     // project management (where the open project lives on disk + recents)
     pub project_path: Option<std::path::PathBuf>,
@@ -158,20 +158,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn existing_table_names(&self) -> std::collections::BTreeSet<String> {
-        self.project
-            .tables
-            .iter()
-            .map(|t| t.name.clone())
-            .chain(self.project.views.iter().map(|v| v.name.clone()))
-            .collect()
-    }
-
-    /// The base, empty workspace: no catalog, one blank query tab, no results.
+    /// The base app state: no project backing on disk, default prefs.
     /// Dev builds replace this by opening the bundled `sample/` project.
     pub fn empty() -> Self {
         AppState {
-            project: Project::empty(),
             type_color_cells: true,
             project_path: None,
             recent_projects: Vec::new(),

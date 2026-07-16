@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 
-use crate::state::{AppState, LogTab};
+use crate::state::LogTab;
 
 /// Open the bottom drawer on the **History** tab (status-bar History button).
 /// Toggles closed if it's already open on History.
@@ -43,10 +43,10 @@ pub fn toggle_log() {
 }
 
 /// Clear the active drawer tab (Events → the events store; History → project history).
-pub fn clear_drawer(mut state: Signal<AppState>) {
+pub fn clear_drawer() {
     match crate::layout::drawer_tab() {
         LogTab::Events => crate::events::clear(),
-        LogTab::History => state.write().project.history.clear(),
+        LogTab::History => crate::project::clear_history(),
         // Problems has no Clear button (they're live diagnostics — a fixed problem
         // clears itself). Kept as an exhaustive no-op arm.
         LogTab::Problems => {}

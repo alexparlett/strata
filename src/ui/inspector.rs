@@ -7,6 +7,7 @@ use dioxus::prelude::*;
 
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
+use crate::project::ProjectStoreExt;
 use crate::state::AppState;
 use crate::ui::components::{
     Dot, Eyebrow, IconButton, IconButtonVariant, Meta, MonoValue, Path, Prose, Readout,
@@ -17,7 +18,11 @@ use crate::util::Kind;
 #[component]
 pub fn Inspector() -> Element {
     let state = use_context::<Signal<AppState>>();
-    let s = state.read();
+    let store = crate::project::store();
+    let tables_lens = store.tables();
+    let views_lens = store.views();
+    let tables = tables_lens.read();
+    let views = views_lens.read();
     // The inspector owns its own width — a local reactive signal, not global state.
     let width = use_signal(|| 292.0);
 
@@ -36,15 +41,12 @@ pub fn Inspector() -> Element {
     };
 
     // column meta from catalog
-    let colinfo = s
-        .project
-        .tables
+    let colinfo = tables
         .iter()
         .find(|t| t.name == table)
         .and_then(|t| t.columns.iter().find(|c| c.name == colname).cloned())
         .or_else(|| {
-            s.project
-                .views
+            views
                 .iter()
                 .find(|v| v.name == table)
                 .and_then(|v| v.columns.iter().find(|c| c.name == colname).cloned())
@@ -83,7 +85,6 @@ pub fn Inspector() -> Element {
             }
         }
     }
-    drop(s);
 
     let ndist = distinct.len();
     let null_pct = if rows > 0 {

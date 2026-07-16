@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
+use crate::project::ProjectStoreExt;
 use crate::state::{AppState, CatalogKind, RegStatus, RemoveKind, RemoveTarget};
 use crate::ui::components::{
     Button, ButtonVariant, Caption, ContextMenu, Dialog, Dot, DropdownMenu, Eyebrow, Icon,
@@ -27,9 +28,9 @@ pub fn Sidebar() -> Element {
     let mut menu = use_signal(|| None::<CtxTarget>);
     // The remove-confirm dialog is likewise sidebar-local, opened from a row menu.
     let remove = use_signal(|| None::<RemoveTarget>);
-    let ntab = state.read().project.tables.len();
-    let nview = state.read().project.views.len();
-    let nquery = state.read().project.saved_queries.len();
+    let ntab = crate::project::store().tables().read().len();
+    let nview = crate::project::store().views().read().len();
+    let nquery = crate::project::store().saved_queries().read().len();
     // Catalog filter is pure sidebar UI — kept local (F7), not in AppState.
     let mut filter = use_signal(String::new);
     let selected = crate::inspector::selected();
@@ -201,8 +202,10 @@ fn render_saved_query(
     remove: Signal<Option<RemoveTarget>>,
     i: usize,
 ) -> Element {
-    let s = state.read();
-    let Some(q) = s.project.saved_queries.get(i) else {
+    let store = crate::project::store();
+    let sq = store.saved_queries();
+    let s = sq.read();
+    let Some(q) = s.get(i) else {
         return rsx! {};
     };
     let name = q.name.clone();
@@ -242,8 +245,10 @@ fn render_table(
     filter: &str,
     selected: &Option<(String, String)>,
 ) -> Element {
-    let s = state.read();
-    let Some(t) = s.project.tables.get(i) else {
+    let store = crate::project::store();
+    let tl = store.tables();
+    let s = tl.read();
+    let Some(t) = s.get(i) else {
         return rsx! {};
     };
     if !filter.is_empty() && !t.name.to_lowercase().contains(&filter.to_lowercase()) {
@@ -331,8 +336,10 @@ fn render_view(
     remove: Signal<Option<RemoveTarget>>,
     i: usize,
 ) -> Element {
-    let s = state.read();
-    let Some(v) = s.project.views.get(i) else {
+    let store = crate::project::store();
+    let vl = store.views();
+    let s = vl.read();
+    let Some(v) = s.get(i) else {
         return rsx! {};
     };
     let name = v.name.clone();

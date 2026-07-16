@@ -18,7 +18,7 @@ pub fn Header() -> Element {
     // The command palette + Settings are app-global overlays: the header buttons
     // toggle them through the per-window overlay store (⌘K / ⌘, do the same).
     // Self-contained: the project switcher dropdown lives here, not in `AppState`.
-    let project = state.read().project.name.clone();
+    let project = crate::project::name();
 
     rsx! {
         header {
@@ -77,7 +77,7 @@ pub fn Header() -> Element {
 /// items just dispatch; the async open-picker is spawned on the Header scope so it
 /// survives the unmount.
 fn project_menu_body(state: Signal<AppState>) -> Element {
-    let active = state.read().project.name.clone();
+    let active = crate::project::name();
     let active_ini = initials_of(&active);
     let active_path = state
         .read()

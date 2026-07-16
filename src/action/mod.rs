@@ -219,10 +219,10 @@ fn run(state: Signal<AppState>, action: Action) {
         LoadSelectStar(name) => query::select_star(&name),
         FormatSql => query::format(),
         ClearSql => query::clear(),
-        SaveAsView => query::save_as_view(state),
-        SaveQuery => query::save(state),
-        OpenSavedQuery(name) => query::open_saved(state, &name),
-        DeleteSavedQuery(name) => query::delete_saved(state, &name),
+        SaveAsView => query::save_as_view(),
+        SaveQuery => query::save(),
+        OpenSavedQuery(name) => query::open_saved(&name),
+        DeleteSavedQuery(name) => query::delete_saved(&name),
         SetResultSearch(q) => query::set_result_search(q),
         DismissQueryError => query::dismiss_error(),
         SetPlanTab(tab) => query::set_plan_tab(tab),
@@ -246,10 +246,10 @@ fn run(state: Signal<AppState>, action: Action) {
         OpenConfigNew => catalog::open_config_new(),
         OpenConfigEdit(name) => catalog::open_config_edit(&name),
         RegisterTable(draft) => catalog::register_table(state, draft),
-        ConfirmRemove { kind, name } => catalog::confirm_remove(state, kind, name),
-        EditView(name) => catalog::edit_view(state, &name),
-        ToggleTableOpen(i) => catalog::toggle_table_open(state, i),
-        ToggleViewOpen(i) => catalog::toggle_view_open(state, i),
+        ConfirmRemove { kind, name } => catalog::confirm_remove(kind, name),
+        EditView(name) => catalog::edit_view(&name),
+        ToggleTableOpen(i) => crate::project::toggle_table_open(i),
+        ToggleViewOpen(i) => crate::project::toggle_view_open(i),
         SelectColumn { table, column } => catalog::select_column(table, column),
 
         MoveTab { id, insert } => tab::move_tab(id, insert),
@@ -268,7 +268,7 @@ fn run(state: Signal<AppState>, action: Action) {
             query::run();
         }
         ToggleLog => overlay::toggle_log(),
-        ClearDrawer => overlay::clear_drawer(state),
+        ClearDrawer => overlay::clear_drawer(),
         ToggleLogRow(id) => overlay::toggle_log_row(id),
         RunExport(opts) => query::run_export(opts),
 

@@ -2,6 +2,7 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
+use crate::project::ProjectStoreExt;
 use crate::state::AppState;
 use crate::ui::components::{Dialog, Eyebrow, Icon, Meta, Path, Prose, Spacer, TextInput};
 use crate::ui::icons::{IconName, IconSize};
@@ -78,15 +79,17 @@ pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
     // Each row is (label, sub, effect) — selecting it runs the effect.
     let mut items: Vec<(String, String, Effect)> = Vec::new();
     {
-        let s = state.read();
-        for t in &s.project.tables {
+        let store = crate::project::store();
+        let tables = store.tables();
+        let views = store.views();
+        for t in tables.read().iter() {
             items.push((
                 format!("Query {}", t.name),
                 t.meta.clone(),
                 Effect::Dispatch(Action::LoadSelectStar(t.name.clone())),
             ));
         }
-        for v in &s.project.views {
+        for v in views.read().iter() {
             items.push((
                 format!("Query {}", v.name),
                 "view".into(),

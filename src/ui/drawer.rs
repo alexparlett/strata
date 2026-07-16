@@ -12,6 +12,7 @@ use dioxus_stores::*;
 
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
+use crate::project::ProjectStoreExt;
 // Lens accessors (`.workspaces()`, `.id()`, `.name()`) for the Problems grouping.
 use crate::session::{SessionStoreExt, WorkspaceStoreExt};
 use crate::state::{AppState, LogEvent, LogKind, LogTab};
@@ -58,7 +59,7 @@ pub fn Drawer() -> Element {
         IconName::Maximize
     };
     let (title, count): (&str, usize) = match tab {
-        LogTab::History => ("History", state.read().project.history.len()),
+        LogTab::History => ("History", crate::project::store().history().read().len()),
         LogTab::Events => ("Events", crate::events::len()),
         // Problems counts live error diagnostics (validation ∪ execution), not log rows.
         LogTab::Problems => ("Problems", crate::diagnostics::total_problems()),
@@ -104,10 +105,9 @@ fn history_body(state: Signal<AppState>) -> Element {
         usize,
         &'static str,
         &'static str,
-    )> = state
+    )> = crate::project::store()
+        .history()
         .read()
-        .project
-        .history
         .iter()
         .map(|h| {
             let dot = if h.ok { "var(--green)" } else { "var(--red2)" };

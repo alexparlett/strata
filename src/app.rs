@@ -10,10 +10,11 @@ use dioxus::desktop::{use_muda_event_handler, use_wry_event_handler};
 use dioxus::prelude::*;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::engine::{self, Event};
+use crate::engine::{self, Engine, EngineStoreExt, Event};
 use crate::menu::MenuCmd;
+use crate::project::ProjectStoreExt;
 use crate::query_error::QueryError;
-use crate::state::{AppState, CatalogTable, CatalogView, HistoryItem, LogKind, RegStatus};
+use crate::state::{AppState, CatalogTable, CatalogView, LogKind, RegStatus};
 use crate::ui;
 
 /// Root class. On macOS the transparent title bar means the traffic-light
@@ -44,8 +45,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // Spawn the engine (seeded with the current engine config overrides, W2), drain
     // its events, and load the assigned project.
     use_hook(move || {
-        let evt_rx = engine::Engine::spawn(crate::settings::engine_overrides());
-        spawn(drain_events(state, evt_rx));
+        spawn(drain_events(state));
         // Recents stay on `AppState` — a separate concern from settings. The shared
         // settings context + OS appearance are seeded by `use_settings` below.
         state.write().recent_projects = crate::config::load().recent_projects;
@@ -186,7 +186,8 @@ pub fn ProjectRoot(open_path: String) -> Element {
     }
 }
 
-async fn drain_events(state: Signal<AppState>, mut evt_rx: UnboundedReceiver<Event>) {
+async fn drain_events(state: Signal<AppState>) {
+    let mut evt_rx = crate::engine::Engine::take_evt_rx();
     while let Some(ev) = evt_rx.recv().await {
         apply_event(state, ev);
     }
@@ -206,8 +207,7 @@ fn handle_key(state: Signal<AppState>, e: dioxus_core::Event<dioxus::events::Key
 
 /// The engine→state reducer: fold an engine [`Event`] into the shared state.
 /// This is not a UI action — it's driven by [`drain_events`].
-pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
-    let mut s = state.write();
+pub fn apply_event(state: Signal<AppState>, ev: Event) {
     // Set when an engine event durably changes the project (a config register
     // adds/edits a table). Engine events aren't dispatched, so they don't hit the
     // normal autosave path — we persist explicitly at the end.
@@ -230,26 +230,12 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 .find(|w| w.id == ws_id)
                 .map(|w| w.sql.clone())
                 .unwrap_or_default();
-            let hid = s.project.next_hist;
-            s.project.next_hist += 1;
             match result {
                 Ok((out, batch)) => {
                     let total = out.total;
                     let elapsed = out.elapsed_ms;
                     let page = out.page;
-                    s.project.history.insert(
-                        0,
-                        HistoryItem {
-                            id: hid,
-                            sql,
-                            ts_label: "just now".into(),
-                            ms: elapsed,
-                            rows: total,
-                            ok: true,
-                            cancelled: false,
-                        },
-                    );
-                    s.project.history.truncate(crate::settings::max_history().max(1));
+                    crate::project::record_run(sql, elapsed, total);
                     crate::event_ok!("Query executed · {total} rows · {} ms", elapsed);
                     crate::runs::edit_existing(ws_id, |run| {
                         run.running = false;
@@ -274,19 +260,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         Some(qe.clone()),
                         Some(ws_id),
                     );
-                    s.project.history.insert(
-                        0,
-                        HistoryItem {
-                            id: hid,
-                            sql,
-                            ts_label: "just now".into(),
-                            ms: 0,
-                            rows: 0,
-                            ok: false,
-                            cancelled: false,
-                        },
-                    );
-                    s.project.history.truncate(crate::settings::max_history().max(1));
+                    crate::project::record_fail(sql);
                     crate::runs::edit_existing(ws_id, |run| {
                         run.running = false;
                         run.pending_req = None;
@@ -311,21 +285,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 .find(|w| w.id == ws_id)
                 .map(|w| w.sql.clone())
                 .unwrap_or_default();
-            let hid = s.project.next_hist;
-            s.project.next_hist += 1;
-            s.project.history.insert(
-                0,
-                HistoryItem {
-                    id: hid,
-                    sql,
-                    ts_label: "just now".into(),
-                    ms: elapsed_ms,
-                    rows: 0,
-                    ok: false,
-                    cancelled: true,
-                },
-            );
-            s.project.history.truncate(crate::settings::max_history().max(1));
+            crate::project::record_cancel(sql, elapsed_ms);
             crate::event_warn!("Query cancelled · {elapsed_ms} ms");
             crate::runs::edit_existing(ws_id, |run| {
                 run.running = false;
@@ -418,8 +378,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                         format!("{n} cols · {} partitions", p.partition_cols.len())
                     };
                     // Replace any existing row of this name (an edit re-register).
-                    s.project.tables.retain(|t| t.name != table);
-                    s.project.tables.push(CatalogTable {
+                    crate::project::upsert_table(CatalogTable {
                         name: table.clone(),
                         meta,
                         format: p.format,
@@ -432,28 +391,33 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                     });
                     crate::overlays::close_config();
                     autosave_after = true;
-                } else if let Some(t) = s.project.tables.iter_mut().find(|t| t.name == table) {
-                    let meta = if t.partition_cols.is_empty() {
-                        format!("{n} cols")
-                    } else {
-                        format!("{n} cols · {} partitions", t.partition_cols.len())
-                    };
-                    t.columns = cols;
-                    t.meta = meta;
-                    t.status = RegStatus::Ready;
-                    t.error = None;
                 } else {
-                    s.project.tables.push(CatalogTable {
-                        name: table.clone(),
-                        meta: format!("{n} cols"),
-                        format: "parquet".into(),
-                        sources: vec![path],
-                        partition_cols: vec![],
-                        columns: cols,
-                        open: false,
-                        status: RegStatus::Ready,
-                        error: None,
-                    });
+                    let store = crate::project::store();
+                    let mut t = store.tables();
+                    let mut tables = t.write();
+                    if let Some(t) = tables.iter_mut().find(|t| t.name == table) {
+                        let meta = if t.partition_cols.is_empty() {
+                            format!("{n} cols")
+                        } else {
+                            format!("{n} cols · {} partitions", t.partition_cols.len())
+                        };
+                        t.columns = cols;
+                        t.meta = meta;
+                        t.status = RegStatus::Ready;
+                        t.error = None;
+                    } else {
+                        tables.push(CatalogTable {
+                            name: table.clone(),
+                            meta: format!("{n} cols"),
+                            format: "parquet".into(),
+                            sources: vec![path],
+                            partition_cols: vec![],
+                            columns: cols,
+                            open: false,
+                            status: RegStatus::Ready,
+                            error: None,
+                        });
+                    }
                 }
                 crate::event_ok!("Registered table '{table}' · {n} cols · schema validated");
             }
@@ -464,9 +428,14 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                 // failed so its definition survives and its path can be fixed.
                 if crate::overlays::take_pending_register(&table).is_some() {
                     crate::overlays::set_config_err(e.clone());
-                } else if let Some(pos) = s.project.tables.iter().position(|t| t.name == table) {
-                    s.project.tables[pos].status = RegStatus::Failed;
-                    s.project.tables[pos].error = Some(e.clone());
+                } else {
+                    let store = crate::project::store();
+                    let mut t = store.tables();
+                    let mut tables = t.write();
+                    if let Some(t) = tables.iter_mut().find(|t| t.name == table) {
+                        t.status = RegStatus::Failed;
+                        t.error = Some(e.clone());
+                    }
                 }
                 tracing::error!("register table '{table}' failed: {e}");
                 crate::event_error!("Register '{table}' failed: {e}");
@@ -479,17 +448,20 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             result,
         } => {
             if dropped {
-                s.project.views.retain(|v| v.name != name);
+                crate::project::remove_view(&name);
                 autosave_after = true;
                 crate::event_info!("Dropped view '{name}'");
             } else {
                 match result {
                     Ok(cols) => {
-                        if let Some(v) = s.project.views.iter_mut().find(|v| v.name == name) {
+                        let store = crate::project::store();
+                        let mut v = store.views();
+                        let mut views = v.write();
+                        if let Some(v) = views.iter_mut().find(|v| v.name == name) {
                             v.columns = cols;
                             v.sql = sql;
                         } else {
-                            s.project.views.push(CatalogView {
+                            views.push(CatalogView {
                                 name: name.clone(),
                                 sql,
                                 meta: "view".into(),
@@ -497,6 +469,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
                                 open: false,
                             });
                         }
+                        drop(views);
                         crate::event_ok!("Saved view '{name}'");
                         autosave_after = true;
                     }
@@ -508,7 +481,7 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             }
         }
         Event::Deregistered { table } => {
-            s.project.tables.retain(|t| t.name != table);
+            crate::project::remove_table(&table);
             autosave_after = true;
             crate::event_info!("Removed table '{table}'");
         }
@@ -548,7 +521,6 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             crate::overlays::open_engine_restart();
         }
     }
-    drop(s);
     if autosave_after {
         crate::action::projects::autosave(state);
     }

@@ -11,13 +11,11 @@ use dioxus::prelude::*;
 use dioxus_stores::Store;
 
 use crate::session::WorkspaceStoreExt;
-use crate::state::AppState;
 
 #[component]
 pub(crate) fn Workspace(ws: Store<crate::session::Workspace>, active: bool) -> Element {
-    let state = use_context::<Signal<AppState>>();
     // Keep this tab's Problems diagnostics in step with *its* SQL.
-    use_revalidate(state, ws);
+    use_revalidate(ws);
     // Hidden (but mounted) when this isn't the active tab.
     let style = if active {
         "display:flex;flex:1;flex-direction:column;min-height:0"
@@ -39,7 +37,7 @@ pub(crate) fn Workspace(ws: Store<crate::session::Workspace>, active: bool) -> E
 /// and a programmatic edit to a background tab still revalidates it). The catalog is
 /// read non-reactively (`peek`) so the effect isn't woken by unrelated `AppState`
 /// changes. Runs `crate::sql::analyze` and stores the result; no query is executed.
-fn use_revalidate(state: Signal<AppState>, ws: Store<crate::session::Workspace>) {
+fn use_revalidate(ws: Store<crate::session::Workspace>) {
     let mut generation = use_signal(|| 0u64);
     use_effect(move || {
         // Subscribe to the session store so this fires on *every* edit — the proven
@@ -50,8 +48,9 @@ fn use_revalidate(state: Signal<AppState>, ws: Store<crate::session::Workspace>)
         let id = ws.id().cloned();
         let sql = ws.sql().cloned();
         let catalog = {
-            let st = state.peek();
-            crate::sql::Catalog::build(&st.project.tables, &st.project.views, crate::engine::Engine::functions())
+            let store = crate::project::store();
+            let st = store.peek();
+            crate::sql::Catalog::build(&st.tables, &st.views, crate::engine::Engine::functions())
         };
         let g = {
             let mut w = generation.write();

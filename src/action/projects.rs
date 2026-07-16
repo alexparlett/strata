@@ -125,15 +125,14 @@ pub fn open_in_current(state: Signal<AppState>, path: PathBuf) {
         crate::config::mark_closed(&old.to_string_lossy());
     }
     let (tables, views) = {
-        let s = state.read();
+        let store = crate::project::store();
+        let p = store.read();
         (
-            s.project
-                .tables
+            p.tables
                 .iter()
                 .map(|t| t.name.clone())
                 .collect::<Vec<String>>(),
-            s.project
-                .views
+            p.views
                 .iter()
                 .map(|v| v.name.clone())
                 .collect::<Vec<String>>(),
@@ -164,9 +163,9 @@ fn expand_tilde(p: &str) -> Option<PathBuf> {
 /// Save the current project to its file (no-op if it isn't backed by one yet).
 /// Captures the window's current size + position first so the project reopens
 /// where it was left.
-pub fn save(mut state: Signal<AppState>) {
+pub fn save(state: Signal<AppState>) {
     if let Some(geom) = crate::window::current_window_geom() {
-        state.write().project.window = Some(geom);
+        crate::project::set_window(geom);
     }
     write_files(state, true);
 }
@@ -174,9 +173,9 @@ pub fn save(mut state: Signal<AppState>) {
 /// Save from the window-close handler (`CloseRequested`), where the dioxus scope
 /// isn't available — geometry is read from the window registry *by id* rather
 /// than `window()`. Does not open the launcher (an OS close never does).
-pub fn save_on_close(mut state: Signal<AppState>, win_id: WindowId) {
+pub fn save_on_close(state: Signal<AppState>, win_id: WindowId) {
     if let Some(geom) = crate::window::window_geom_by_id(win_id) {
-        state.write().project.window = Some(geom);
+        crate::project::set_window(geom);
     }
     write_files(state, true);
     if let Some(dir) = state.read().project_path.clone() {
@@ -188,22 +187,17 @@ pub fn save_on_close(mut state: Signal<AppState>, win_id: WindowId) {
 /// changed), else only `session.json` (a tab/history/geometry change — keeps the
 /// committed `project.json` quiet). No-op if no project is backed on disk.
 fn write_files(state: Signal<AppState>, defs: bool) {
-    let (path, result) = {
-        let s = state.read();
-        match &s.project_path {
-            Some(dir) => (
-                Some(dir.clone()),
-                if defs {
-                    s.project.save_all(dir)
-                } else {
-                    s.project.save_session(dir)
-                },
-            ),
-            None => (None, Ok(())),
-        }
+    let Some(dir) = state.read().project_path.clone() else {
+        return;
     };
-    if let (Some(path), Err(e)) = (path, result) {
-        tracing::error!("save project {}: {e}", path.display());
+    let project = crate::project::snapshot();
+    let result = if defs {
+        project.save_all(&dir)
+    } else {
+        project.save_session(&dir)
+    };
+    if let Err(e) = result {
+        tracing::error!("save project {}: {e}", dir.display());
     }
 }
 
@@ -226,24 +220,24 @@ pub fn restart_window(state: Signal<AppState>) {
 }
 
 /// Autosave after a durable change that touched **definitions** — both files.
-pub fn autosave(mut state: Signal<AppState>) {
+pub fn autosave(state: Signal<AppState>) {
     if state.read().project_path.is_none() {
         return;
     }
     if let Some(geom) = crate::window::current_window_geom() {
-        state.write().project.window = Some(geom);
+        crate::project::set_window(geom);
     }
     write_files(state, true);
 }
 
 /// Autosave after a **session-only** durable change (tabs / history) — writes just
 /// `session.json`, leaving the committed `project.json` untouched.
-pub fn autosave_session(mut state: Signal<AppState>) {
+pub fn autosave_session(state: Signal<AppState>) {
     if state.read().project_path.is_none() {
         return;
     }
     if let Some(geom) = crate::window::current_window_geom() {
-        state.write().project.window = Some(geom);
+        crate::project::set_window(geom);
     }
     write_files(state, false);
 }
@@ -346,16 +340,13 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
         .collect();
     let name = project.name.clone();
 
-    {
-        let mut s = state.write();
-        s.project = project;
-        s.project_path = Some(path.clone());
-        // The workspaces for the incoming project were already loaded into the
-        // reactive session store (`load_from_dir` / `reset_blank`); drop the
-        // previous project's runs so a reused id can't inherit stale results.
-        crate::runs::clear();
-        crate::diagnostics::clear();
-    }
+    crate::project::open(project);
+    state.write().project_path = Some(path.clone());
+    // The workspaces for the incoming project were already loaded into the reactive
+    // session store (`load_from_dir` / `reset_blank`); drop the previous project's
+    // runs so a reused id can't inherit stale results.
+    crate::runs::clear();
+    crate::diagnostics::clear();
 
     for spec in specs {
         crate::command!(Register(spec));

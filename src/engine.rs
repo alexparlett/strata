@@ -19,6 +19,7 @@ use dioxus::prelude::{Global, ReadableExt, WritableExt};
 use dioxus_stores::*;
 
 use crate::plan::{PlanKind, PlanNode, QueryPlan};
+use crate::session::{Session, SESSION};
 use crate::sql::FunctionCatalog;
 use crate::util::Kind;
 use datafusion::arrow::array::Array;
@@ -32,11 +33,12 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::*;
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 const MAX_CELL_LEN: usize = 400;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ColumnInfo {
     pub name: String,
     pub dtype: String,
@@ -210,8 +212,14 @@ static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
 /// below (Dioxus per-window state must be a `Global`; `cmd_tx` also isn't `PartialEq`,
 /// so `Engine` can't derive `Store` and instead rides whole in an `Option`, like the
 /// whole-value stores in `crate::events`).
+#[derive(Store)]
 pub struct Engine {
     cmd_tx: UnboundedSender<Command>,
+    /// This window's event stream — `Some` until the single drain task takes it
+    /// (`take_evt_rx`). A receiver is single-consumer, so it can't stay a live store
+    /// borrow: holding one across the async drain loop collides with any other engine
+    /// write (e.g. `set_functions`) on the same signal.
+    evt_rx: Option<UnboundedReceiver<Event>>,
     /// Monotonic request-id source — an `AtomicU64` so `next_req` mutates it through a
     /// *read* borrow of the store (no store write ⇒ it never notifies `functions` readers).
     next_req: AtomicU64,
@@ -223,13 +231,18 @@ pub struct Engine {
 /// `GlobalStore` needs a `Store`-able type and `Engine` holds a non-`PartialEq`
 /// `Sender`, so it rides whole in an `Option` (accessed as one value, cf. the
 /// whole-value stores in `crate::events`) rather than deriving `Store` per field.
-static ENGINE: GlobalStore<Option<Engine>> = Global::new(|| None);
+static ENGINE: GlobalStore<Engine> = Global::new(|| Engine::spawn());
+
+pub fn store() -> Store<Engine> {
+    ENGINE.resolve()
+}
 
 impl Engine {
     /// Start this window's engine worker (seeded with the current `datafusion.*`
     /// `overrides`, W2), stash the instance, and return the event stream for the caller
     /// to drain. Later config changes arrive as [`Command::SetEngineConfig`].
-    pub fn spawn(overrides: BTreeMap<String, String>) -> UnboundedReceiver<Event> {
+    pub fn spawn() -> Engine {
+        let overrides = crate::settings::engine_overrides();
         let (cmd_tx, cmd_rx) = unbounded_channel::<Command>();
         let (evt_tx, evt_rx) = unbounded_channel::<Event>();
         let engine_id = ENGINE_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -244,48 +257,51 @@ impl Engine {
                 rt.block_on(engine_loop(cmd_rx, evt_tx, engine_id, overrides));
             })
             .expect("spawn engine");
-        let mut store = ENGINE.resolve();
-        let mut g = store.write();
-        g.insert(Engine {
+        Engine {
             cmd_tx,
+            evt_rx: Some(evt_rx),
             next_req: AtomicU64::new(1),
             functions: FunctionCatalog::default(),
-        });
-        evt_rx
+        }
     }
 
     /// Send a command to this window's engine (no-op if it isn't up yet).
     pub fn send(cmd: Command) {
         let store = ENGINE.resolve();
-        let generational_ref = store.peek();
-        if let Some(e) = generational_ref.as_ref() {
-            let _ = e.cmd_tx.send(cmd);
-        }
+        let e = store.peek();
+        let _ = e.cmd_tx.send(cmd);
     }
 
     /// Allocate the next request id (monotonic).
     pub fn next_req() -> u64 {
         let store = ENGINE.resolve();
         let g = store.peek();
-        g.as_ref()
-         .map(|e| e.next_req.fetch_add(1, Ordering::Relaxed))
-         .unwrap_or(0)
+
+        g.next_req.fetch_add(1, Ordering::Relaxed)
     }
 
     /// A clone of the registered SQL functions — reactive (the editor's language catalog).
     pub fn functions() -> FunctionCatalog {
         let store = ENGINE.resolve();
         let g = store.read();
-        g.as_ref().map(|e| e.functions.clone()).unwrap_or_default()
+        g.functions.clone()
     }
 
     /// Replace the registered SQL functions (`Event::Functions`).
     pub fn set_functions(functions: FunctionCatalog) {
         let mut store = ENGINE.resolve();
         let mut g = store.write();
-        if let Some(e) = g.as_mut() {
-            e.functions = functions;
-        }
+        g.functions = functions;
+    }
+
+    /// Take this window's event stream for the single drain task. A receiver is
+    /// single-consumer, so it leaves the store (`None` after) rather than being held
+    /// as a live borrow across the drain loop — which would collide with any other
+    /// engine write. Panics if taken twice.
+    pub fn take_evt_rx() -> UnboundedReceiver<Event> {
+        let mut store = ENGINE.resolve();
+        let mut g = store.write();
+        g.evt_rx.take().expect("engine event stream already taken")
     }
 }
 

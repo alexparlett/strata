@@ -11,6 +11,7 @@ use std::time::Duration;
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
+use crate::project::ProjectStoreExt;
 use crate::runs::{ResultsView, Selection};
 use crate::session::WorkspaceId;
 use crate::state::AppState;
@@ -170,10 +171,9 @@ fn ChartPlaceholder() -> Element {
 pub(crate) fn EmptyState() -> Element {
     let state = use_context::<Signal<AppState>>();
     let has_closed = crate::session::has_closed();
-    let saved: Vec<String> = state
+    let saved: Vec<String> = crate::project::store()
+        .saved_queries()
         .read()
-        .project
-        .saved_queries
         .iter()
         .take(4)
         .map(|q| q.name.clone())
