@@ -2,7 +2,6 @@
 
 use dioxus::prelude::*;
 
-use crate::engine::Command;
 use crate::state::{AppState, SavedQuery};
 
 /// Save the active SELECT as a named catalog view (auto-named `saved_view_N`).
@@ -15,10 +14,7 @@ pub fn save_as_view(state: Signal<AppState>) {
         crate::session::active_id(),
         crate::state::Origin::View(name.clone()),
     );
-    let tx = state.read().cmd_tx.clone();
-    if let Some(tx) = tx {
-        let _ = tx.send(Command::CreateView { name, sql });
-    }
+    crate::command!(CreateView { name, sql });
 }
 
 /// Load `SELECT * FROM t LIMIT <row_limit>` into the active tab (does not run).

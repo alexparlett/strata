@@ -2,9 +2,6 @@
 //! state and its empty constructor; the durable project model lives in
 //! `crate::project`. Dev builds open the bundled `sample/` project on launch.
 
-use tokio::sync::mpsc::UnboundedSender;
-
-use crate::engine::Command;
 // The project domain model lives in `crate::project`; re-exported here so the
 // familiar `crate::state::{CatalogTable, Project, …}` paths keep working.
 pub use crate::project::{
@@ -150,24 +147,14 @@ pub enum CatalogKind {
 }
 
 pub struct AppState {
-    // engine
-    pub cmd_tx: Option<UnboundedSender<Command>>,
-    // the open project (catalog, workspaces, history — the persisted part)
+    // The open project (catalog, workspaces, history — the persisted part). Per-tab
+    // runs live in `crate::runs`; the per-window engine session (command channel,
+    // request-id source, SQL functions) in `crate::engine`.
     pub project: Project,
     pub type_color_cells: bool,
     // project management (where the open project lives on disk + recents)
     pub project_path: Option<std::path::PathBuf>,
     pub recent_projects: Vec<crate::config::RecentProject>,
-    // results — the per-tab query output (grid / plan / error / running / pager)
-    // lives in the `crate::runs::RUNS` store, keyed by workspace id (the active
-    // one from `crate::session::active_id`). Only the request-id source stays here
-    // (the inspector selection moved to `crate::inspector`; the pager dropdown owns
-    // its own open state via the `Select` component).
-    pub next_req: u64,
-    /// The engine's registered SQL functions (built-ins + UDFs), pushed once on
-    /// startup (`engine::Event::Functions`, A9/F5). Read by the SQL language
-    /// service (`crate::sql`) for completion + validation.
-    pub functions: crate::sql::FunctionCatalog,
 }
 
 impl AppState {
@@ -184,13 +171,10 @@ impl AppState {
     /// Dev builds replace this by opening the bundled `sample/` project.
     pub fn empty() -> Self {
         AppState {
-            cmd_tx: None,
             project: Project::empty(),
             type_color_cells: true,
             project_path: None,
             recent_projects: Vec::new(),
-            next_req: 1,
-            functions: crate::sql::FunctionCatalog::default(),
         }
     }
 }

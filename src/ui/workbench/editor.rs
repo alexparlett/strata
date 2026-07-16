@@ -348,7 +348,7 @@ fn refresh_completion(
     }
     let catalog = {
         let st = state.peek();
-        Catalog::build(&st.project.tables, &st.project.views, st.functions.clone())
+        Catalog::build(&st.project.tables, &st.project.views, crate::engine::Engine::functions())
     };
     let g = {
         let mut w = comp_gen.write();

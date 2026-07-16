@@ -10,7 +10,7 @@ use dioxus::desktop::{use_muda_event_handler, use_wry_event_handler};
 use dioxus::prelude::*;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::engine::{self, Command, Event};
+use crate::engine::{self, Event};
 use crate::menu::MenuCmd;
 use crate::query_error::QueryError;
 use crate::state::{AppState, CatalogTable, CatalogView, HistoryItem, LogKind, RegStatus};
@@ -44,8 +44,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // Spawn the engine (seeded with the current engine config overrides, W2), drain
     // its events, and load the assigned project.
     use_hook(move || {
-        let engine::Handle { cmd_tx, evt_rx } = engine::spawn(crate::settings::engine_overrides());
-        state.write().cmd_tx = Some(cmd_tx);
+        let evt_rx = engine::Engine::spawn(crate::settings::engine_overrides());
         spawn(drain_events(state, evt_rx));
         // Recents stay on `AppState` — a separate concern from settings. The shared
         // settings context + OS appearance are seeded by `use_settings` below.
@@ -67,9 +66,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // `engine_overrides()` subscribes this effect to the shared settings.
     use_effect(move || {
         let overrides = crate::settings::engine_overrides();
-        if let Some(tx) = state.peek().cmd_tx.clone() {
-            let _ = tx.send(Command::SetEngineConfig(overrides));
-        }
+        crate::command!(SetEngineConfig(overrides));
     });
 
     // Global keyboard commands (⌘F/⌘K/…) are OS hotkeys — the webview swallows key events,
@@ -128,9 +125,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
 
     // Drop snapshots + de-register this window on close.
     use_drop(move || {
-        if let Some(tx) = state.read().cmd_tx.clone() {
-            let _ = tx.send(Command::CleanupAll);
-        }
+        crate::command!(CleanupAll);
         crate::window::unregister_window(win_id);
     });
 
@@ -537,11 +532,11 @@ pub fn apply_event(mut state: Signal<AppState>, ev: Event) {
             window,
         } => {
             // The engine's registered functions (A9/F5) — feed the SQL language service.
-            s.functions = crate::sql::FunctionCatalog {
+            crate::engine::Engine::set_functions(crate::sql::FunctionCatalog {
                 scalar,
                 aggregate,
                 window,
-            };
+            });
         }
         Event::Notice(m) => {
             tracing::warn!("{m}");

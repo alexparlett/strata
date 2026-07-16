@@ -25,7 +25,8 @@ pub use validate::analyze;
 
 /// The engine's registered functions (built-ins + any UDFs), by category — names
 /// only. Pushed once from the engine on startup (`engine::Event::Functions`, F5)
-/// and held on `AppState`; folded into a [`Catalog`] for completion + validation.
+/// and held on the per-window [`Engine`](crate::engine::Engine); folded into a
+/// [`Catalog`] for completion + validation.
 #[derive(Clone, Default, PartialEq)]
 pub struct FunctionCatalog {
     pub scalar: Vec<String>,

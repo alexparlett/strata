@@ -15,7 +15,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use dioxus::prelude::{Global, ReadableExt, WritableExt};
+use dioxus_stores::*;
+
 use crate::plan::{PlanKind, PlanNode, QueryPlan};
+use crate::sql::FunctionCatalog;
 use crate::util::Kind;
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType, Field};
@@ -195,34 +199,107 @@ pub enum Event {
     EngineRestartRequired,
 }
 
-pub struct Handle {
-    pub cmd_tx: UnboundedSender<Command>,
-    pub evt_rx: UnboundedReceiver<Event>,
-}
-
 /// Process-unique id per spawned engine (one per project window), used to scope
 /// snapshot files so windows never collide.
 static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Spawn an engine, seeded with the current `datafusion.*` config `overrides` (W2);
-/// they're applied to the `SessionContext` at build (`build_context`). Later changes
-/// arrive as [`Command::SetEngineConfig`].
-pub fn spawn(overrides: BTreeMap<String, String>) -> Handle {
-    let (cmd_tx, cmd_rx) = unbounded_channel::<Command>();
-    let (evt_tx, evt_rx) = unbounded_channel::<Event>();
-    let engine_id = ENGINE_SEQ.fetch_add(1, Ordering::Relaxed);
-    std::thread::Builder::new()
-        .name(format!("df-engine-{engine_id}"))
-        .spawn(move || {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .expect("tokio runtime");
-            rt.block_on(engine_loop(cmd_rx, evt_tx, engine_id, overrides));
-        })
-        .expect("spawn engine");
-    Handle { cmd_tx, evt_rx }
+/// This window's engine — the UI-side owner of the connection: the command channel
+/// (`send`), the request-id counter (`next_req`), and the registered SQL functions.
+/// [`Engine::spawn`] starts the worker thread and stashes the inbox, handing back the
+/// event stream for the caller to drain. The instance lives in the private `Global`
+/// below (Dioxus per-window state must be a `Global`; `cmd_tx` also isn't `PartialEq`,
+/// so `Engine` can't derive `Store` and instead rides whole in an `Option`, like the
+/// whole-value stores in `crate::events`).
+pub struct Engine {
+    cmd_tx: UnboundedSender<Command>,
+    /// Monotonic request-id source — an `AtomicU64` so `next_req` mutates it through a
+    /// *read* borrow of the store (no store write ⇒ it never notifies `functions` readers).
+    next_req: AtomicU64,
+    /// The engine's registered SQL functions — read reactively by the language service.
+    functions: FunctionCatalog,
+}
+
+/// This window's single engine — `None` until [`Engine::spawn`], then `Some`. A
+/// `GlobalStore` needs a `Store`-able type and `Engine` holds a non-`PartialEq`
+/// `Sender`, so it rides whole in an `Option` (accessed as one value, cf. the
+/// whole-value stores in `crate::events`) rather than deriving `Store` per field.
+static ENGINE: GlobalStore<Option<Engine>> = Global::new(|| None);
+
+impl Engine {
+    /// Start this window's engine worker (seeded with the current `datafusion.*`
+    /// `overrides`, W2), stash the instance, and return the event stream for the caller
+    /// to drain. Later config changes arrive as [`Command::SetEngineConfig`].
+    pub fn spawn(overrides: BTreeMap<String, String>) -> UnboundedReceiver<Event> {
+        let (cmd_tx, cmd_rx) = unbounded_channel::<Command>();
+        let (evt_tx, evt_rx) = unbounded_channel::<Event>();
+        let engine_id = ENGINE_SEQ.fetch_add(1, Ordering::Relaxed);
+        std::thread::Builder::new()
+            .name(format!("df-engine-{engine_id}"))
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .expect("tokio runtime");
+                rt.block_on(engine_loop(cmd_rx, evt_tx, engine_id, overrides));
+            })
+            .expect("spawn engine");
+        let mut store = ENGINE.resolve();
+        let mut g = store.write();
+        g.insert(Engine {
+            cmd_tx,
+            next_req: AtomicU64::new(1),
+            functions: FunctionCatalog::default(),
+        });
+        evt_rx
+    }
+
+    /// Send a command to this window's engine (no-op if it isn't up yet).
+    pub fn send(cmd: Command) {
+        let store = ENGINE.resolve();
+        let generational_ref = store.peek();
+        if let Some(e) = generational_ref.as_ref() {
+            let _ = e.cmd_tx.send(cmd);
+        }
+    }
+
+    /// Allocate the next request id (monotonic).
+    pub fn next_req() -> u64 {
+        let store = ENGINE.resolve();
+        let g = store.peek();
+        g.as_ref()
+         .map(|e| e.next_req.fetch_add(1, Ordering::Relaxed))
+         .unwrap_or(0)
+    }
+
+    /// A clone of the registered SQL functions — reactive (the editor's language catalog).
+    pub fn functions() -> FunctionCatalog {
+        let store = ENGINE.resolve();
+        let g = store.read();
+        g.as_ref().map(|e| e.functions.clone()).unwrap_or_default()
+    }
+
+    /// Replace the registered SQL functions (`Event::Functions`).
+    pub fn set_functions(functions: FunctionCatalog) {
+        let mut store = ENGINE.resolve();
+        let mut g = store.write();
+        if let Some(e) = g.as_mut() {
+            e.functions = functions;
+        }
+    }
+}
+
+/// Send a [`Command`] to this window's engine — sugar for [`Engine::send`] that
+/// prefixes `Command::`, mirroring the `crate::event_*!` log macros. `#[macro_export]`
+/// puts it at the crate root, so call it fully-qualified: `crate::command!(…)`.
+/// Everything after the name is the variant, so struct / tuple / unit variants all
+/// work: `crate::command!(CleanupAll)`, `crate::command!(Cancel { ws_id, req_id })`,
+/// `crate::command!(Register(spec))`.
+#[macro_export]
+macro_rules! command {
+    ($($variant:tt)+) => {
+        $crate::engine::Engine::send($crate::engine::Command::$($variant)+)
+    };
 }
 
 /// Build a `SessionContext` honouring the engine config `overrides`: the nine

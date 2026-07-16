@@ -51,7 +51,7 @@ fn use_revalidate(state: Signal<AppState>, ws: Store<crate::session::Workspace>)
         let sql = ws.sql().cloned();
         let catalog = {
             let st = state.peek();
-            crate::sql::Catalog::build(&st.project.tables, &st.project.views, st.functions.clone())
+            crate::sql::Catalog::build(&st.project.tables, &st.project.views, crate::engine::Engine::functions())
         };
         let g = {
             let mut w = generation.write();

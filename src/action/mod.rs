@@ -207,13 +207,13 @@ fn run(state: Signal<AppState>, action: Action) {
     use Action::*;
     match action {
         // query & results
-        RunQuery => query::run(state),
-        RunExplain(analyze) => query::run_explain(state, analyze),
+        RunQuery => query::run(),
+        RunExplain(analyze) => query::run_explain(analyze),
         ClearResults => query::clear_results(),
         SetResultsFind { ws, open } => query::set_results_find(ws, open),
-        CancelQuery => query::cancel(state),
-        FetchPage(page) => query::fetch_page(state, page),
-        SortColumn(ci) => query::sort_column(state, ci),
+        CancelQuery => query::cancel(),
+        FetchPage(page) => query::fetch_page(page),
+        SortColumn(ci) => query::sort_column(ci),
         CopySelection(fmt) => query::copy_selection(fmt),
         CopyRecord(row, fmt) => query::copy_record(row, fmt),
         LoadSelectStar(name) => query::select_star(&name),
@@ -227,17 +227,17 @@ fn run(state: Signal<AppState>, action: Action) {
         DismissQueryError => query::dismiss_error(),
         SetPlanTab(tab) => query::set_plan_tab(tab),
         TogglePlanRaw => query::toggle_plan_raw(),
-        SetPageSize(sz) => query::set_page_size(state, sz),
+        SetPageSize(sz) => query::set_page_size(sz),
         SetResultsView(v) => query::set_results_view(v),
 
         // tabs
         NewTab => tab::add(),
         SwitchTab(id) => tab::switch(id),
-        CloseTab(id) => tab::close(state, id),
-        CloseTabForce(id) => tab::close_force(state, id),
-        CloseOtherTabs(id) => tab::close_others(state, id),
-        CloseTabsRight(id) => tab::close_right(state, id),
-        CloseAllTabs => tab::close_all(state),
+        CloseTab(id) => tab::close(id),
+        CloseTabForce(id) => tab::close_force(id),
+        CloseOtherTabs(id) => tab::close_others(id),
+        CloseTabsRight(id) => tab::close_right(id),
+        CloseAllTabs => tab::close_all(),
         ReopenTab => tab::reopen(),
         RenameTab(id, name) => tab::rename_tab(id, name),
         DuplicateTab(id) => tab::duplicate(id),
@@ -265,12 +265,12 @@ fn run(state: Signal<AppState>, action: Action) {
         OpenHistoryQuery(sql) => overlay::open_history_query(sql),
         RunHistoryQuery(sql) => {
             overlay::open_history_query(sql);
-            query::run(state);
+            query::run();
         }
         ToggleLog => overlay::toggle_log(),
         ClearDrawer => overlay::clear_drawer(state),
         ToggleLogRow(id) => overlay::toggle_log_row(id),
-        RunExport(opts) => query::run_export(state, opts),
+        RunExport(opts) => query::run_export(opts),
 
         // project (open/recent spawn new windows; close closes this window)
         OpenProject => projects::open_dir(state),

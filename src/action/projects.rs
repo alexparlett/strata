@@ -14,7 +14,7 @@ use dioxus::prelude::*;
 use dioxus::desktop::tao::window::WindowId;
 
 use crate::config;
-use crate::engine::{Command, TableSpec};
+use crate::engine::TableSpec;
 use crate::project::Project;
 use crate::state::AppState;
 
@@ -124,10 +124,9 @@ pub fn open_in_current(state: Signal<AppState>, path: PathBuf) {
     if let Some(old) = state.read().project_path.clone() {
         crate::config::mark_closed(&old.to_string_lossy());
     }
-    let (tx, tables, views) = {
+    let (tables, views) = {
         let s = state.read();
         (
-            s.cmd_tx.clone(),
             s.project
                 .tables
                 .iter()
@@ -140,13 +139,11 @@ pub fn open_in_current(state: Signal<AppState>, path: PathBuf) {
                 .collect::<Vec<String>>(),
         )
     };
-    if let Some(tx) = &tx {
-        for name in views {
-            let _ = tx.send(Command::DropView { name });
-        }
-        for table in tables {
-            let _ = tx.send(Command::Deregister { table });
-        }
+    for name in views {
+        crate::command!(DropView { name });
+    }
+    for table in tables {
+        crate::command!(Deregister { table });
     }
     load_current(state, path);
 }
@@ -323,8 +320,6 @@ pub fn close_now(state: Signal<AppState>) {
 /// Install `project` into this window's state and register its catalog with the
 /// window's (fresh) engine, then record it in recents.
 fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
-    let tx = state.read().cmd_tx.clone();
-
     // Registration commands for the incoming catalog (built before the move).
     // Stored sources may be relative to the project dir; resolve to absolute for
     // the engine.
@@ -362,16 +357,14 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
         crate::diagnostics::clear();
     }
 
-    if let Some(tx) = &tx {
-        for spec in specs {
-            let _ = tx.send(Command::Register(spec));
-        }
-        for (view_name, sql) in views {
-            let _ = tx.send(Command::CreateView {
-                name: view_name,
-                sql,
-            });
-        }
+    for spec in specs {
+        crate::command!(Register(spec));
+    }
+    for (view_name, sql) in views {
+        crate::command!(CreateView {
+            name: view_name,
+            sql,
+        });
     }
 
     // Record it in recents (per-machine app config). The file already exists on

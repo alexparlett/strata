@@ -2,26 +2,19 @@
 
 use dioxus::prelude::*;
 
-use crate::engine::Command;
-use crate::state::AppState;
-
 /// `Action::RunExport` — pick a destination (native save dialog, or a folder for a partitioned
 /// export) and export the snapshot to a file via the engine's `COPY … TO`. Clipboard copy is the
 /// grid's Copy (page-bounded), so export is file-only and streams to disk — safe at any size.
-pub fn run_export(state: Signal<AppState>, ex: crate::state::ExportForm) {
-    let (ws_id, page, page_size, tx) = {
-        let s = state.read();
-        let ws_id = crate::session::active_id();
-        let (page, page_size) = crate::runs::RUNS
-            .resolve()
-            .get(ws_id)
-            .map(|e| {
-                let run = e.peek();
-                (run.page, run.page_size)
-            })
-            .unwrap_or((1, 100));
-        (ws_id, page, page_size, s.cmd_tx.clone())
-    };
+pub fn run_export(ex: crate::state::ExportForm) {
+    let ws_id = crate::session::active_id();
+    let (page, page_size) = crate::runs::RUNS
+        .resolve()
+        .get(ws_id)
+        .map(|e| {
+            let run = e.peek();
+            (run.page, run.page_size)
+        })
+        .unwrap_or((1, 100));
 
     let ext = match ex.format.as_str() {
         "json" => "json",
@@ -55,8 +48,8 @@ pub fn run_export(state: Signal<AppState>, ex: crate::state::ExportForm) {
                     p
                 })
         };
-        if let (Some(path), Some(tx)) = (dest, tx) {
-            let _ = tx.send(Command::Export {
+        if let Some(path) = dest {
+            crate::command!(Export {
                 ws_id,
                 path,
                 format: ex.format,

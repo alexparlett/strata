@@ -3,11 +3,8 @@
 
 use dioxus::prelude::*;
 
-use crate::engine::Command;
-use crate::state::AppState;
-
 /// Fetch a specific page from the active workspace's snapshot (bounded LIMIT/OFFSET).
-pub fn fetch_page(state: Signal<AppState>, page: usize) {
+pub fn fetch_page(page: usize) {
     let ws_id = crate::session::active_id();
     // Resolve the active sort (if any) to `(column name, ascending)` so the engine can
     // ORDER BY it over the snapshot; the name comes from the result schema at that index.
@@ -34,19 +31,16 @@ pub fn fetch_page(state: Signal<AppState>, page: usize) {
         run.sel = None;
         run.sel_anchor = None;
     });
-    let tx = state.read().cmd_tx.clone();
-    if let Some(tx) = tx {
-        let _ = tx.send(Command::FetchPage {
-            ws_id,
-            page,
-            page_size,
-            sort,
-        });
-    }
+    crate::command!(FetchPage {
+        ws_id,
+        page,
+        page_size,
+        sort,
+    });
 }
 /// Cycle the active tab's column sort (Rz6): unsorted → `ci` asc → `ci` desc → clear, then
 /// re-fetch page 1. Sort is applied over the whole snapshot at page-read time.
-pub fn sort_column(state: Signal<AppState>, ci: usize) {
+pub fn sort_column(ci: usize) {
     let ws_id = crate::session::active_id();
     if ws_id == 0 {
         return;
@@ -60,13 +54,13 @@ pub fn sort_column(state: Signal<AppState>, ci: usize) {
             _ => Some(crate::runs::ColSort { col: ci, asc: true }),
         };
     });
-    fetch_page(state, 1);
+    fetch_page(1);
 }
 /// Set the page size and reload the first page.
-pub fn set_page_size(state: Signal<AppState>, size: usize) {
+pub fn set_page_size(size: usize) {
     let id = crate::session::active_id();
     if id != 0 {
         crate::runs::edit(id, |run| run.page_size = size);
     }
-    fetch_page(state, 1);
+    fetch_page(1);
 }

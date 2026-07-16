@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 
-use crate::engine::{self, Command};
+use crate::engine;
 use crate::state::{AppState, RemoveKind};
 
 /// Open the Table Config modal for a new external table.
@@ -55,10 +55,7 @@ pub fn register_table(state: Signal<AppState>, draft: crate::state::ConfigForm) 
         sources: rel_paths,
         partition_cols: partitions,
     });
-    let tx = state.read().cmd_tx.clone();
-    if let Some(tx) = tx {
-        let _ = tx.send(Command::Register(spec));
-    }
+    crate::command!(Register(spec));
 }
 
 // ---- remove-confirmation flow ----
@@ -68,20 +65,15 @@ pub fn register_table(state: Signal<AppState>, draft: crate::state::ConfigForm) 
 /// event logs the outcome. The dialog's open state is a sidebar-local signal, so
 /// there's nothing to close here.
 pub fn confirm_remove(mut state: Signal<AppState>, kind: RemoveKind, name: String) {
-    let tx = state.read().cmd_tx.clone();
     match kind {
         RemoveKind::Table => {
-            if let Some(tx) = tx {
-                let _ = tx.send(Command::Deregister {
-                    table: name.clone(),
-                });
-            }
+            crate::command!(Deregister {
+                table: name.clone(),
+            });
             state.write().project.tables.retain(|x| x.name != name);
         }
         RemoveKind::View => {
-            if let Some(tx) = tx {
-                let _ = tx.send(Command::DropView { name: name.clone() });
-            }
+            crate::command!(DropView { name: name.clone() });
             state.write().project.views.retain(|x| x.name != name);
         }
     }

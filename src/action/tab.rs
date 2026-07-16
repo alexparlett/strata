@@ -6,11 +6,7 @@
 
 use std::collections::HashSet;
 
-use dioxus::prelude::*;
-
-use crate::engine::Command;
 use crate::session::{ClosedTab, WorkspaceId};
-use crate::state::AppState;
 
 /// Open a new blank query tab and focus it.
 pub fn add() {
@@ -31,7 +27,7 @@ pub fn switch(id: WorkspaceId) {
 /// tab with a query **in flight** confirms (S14 running dialog, no threshold — a
 /// finished query has `running == false`, so quick queries never prompt); otherwise
 /// it closes straight away.
-pub fn close(state: Signal<AppState>, id: WorkspaceId) {
+pub fn close(id: WorkspaceId) {
     if crate::session::is_dirty(id) {
         crate::overlays::open_close_confirm(id);
         return;
@@ -40,44 +36,44 @@ pub fn close(state: Signal<AppState>, id: WorkspaceId) {
         crate::overlays::open_running_close(crate::overlays::RunningCloseTarget::Tab(id));
         return;
     }
-    close_ids(state, &HashSet::from([id]));
+    close_ids(&HashSet::from([id]));
 }
 
 /// Close workspace `id` unconditionally — from the discard-confirm dialog (A6).
-pub fn close_force(state: Signal<AppState>, id: WorkspaceId) {
-    close_ids(state, &HashSet::from([id]));
+pub fn close_force(id: WorkspaceId) {
+    close_ids(&HashSet::from([id]));
 }
 
 /// Close every tab except `id`.
-pub fn close_others(state: Signal<AppState>, id: WorkspaceId) {
+pub fn close_others(id: WorkspaceId) {
     let ids: HashSet<WorkspaceId> = crate::session::snapshot()
         .workspaces
         .iter()
         .map(|w| w.id)
         .filter(|&i| i != id)
         .collect();
-    close_ids(state, &ids);
+    close_ids(&ids);
 }
 
 /// Close every tab to the right of `id` (in strip order).
-pub fn close_right(state: Signal<AppState>, id: WorkspaceId) {
+pub fn close_right(id: WorkspaceId) {
     let workspaces = crate::session::snapshot().workspaces;
     let pos = workspaces.iter().position(|w| w.id == id);
     let ids: HashSet<WorkspaceId> = match pos {
         Some(p) => workspaces.iter().skip(p + 1).map(|w| w.id).collect(),
         None => HashSet::new(),
     };
-    close_ids(state, &ids);
+    close_ids(&ids);
 }
 
 /// Close every tab, leaving the workspace empty (center pane shows the empty state).
-pub fn close_all(state: Signal<AppState>) {
+pub fn close_all() {
     let ids: HashSet<WorkspaceId> = crate::session::snapshot()
         .workspaces
         .iter()
         .map(|w| w.id)
         .collect();
-    close_ids(state, &ids);
+    close_ids(&ids);
 }
 
 /// Reopen the most recently closed tab (⇧⌘T).
@@ -89,7 +85,7 @@ pub fn reopen() {
 /// (capped 20), removes them from the session (which re-picks a neighbour focus),
 /// reaps their runs, and tells the engine to drop their scopes. A no-op on an
 /// empty id set.
-fn close_ids(state: Signal<AppState>, ids: &HashSet<WorkspaceId>) {
+fn close_ids(ids: &HashSet<WorkspaceId>) {
     if ids.is_empty() {
         return;
     }
@@ -107,14 +103,11 @@ fn close_ids(state: Signal<AppState>, ids: &HashSet<WorkspaceId>) {
         name: name.clone(),
         sql: sql.clone(),
     }));
-    let tx = state.read().cmd_tx.clone();
     crate::session::remove_ids(ids);
     crate::runs::drop_ids(ids);
     crate::diagnostics::drop_ids(ids);
-    if let Some(tx) = tx {
-        for (id, ..) in &removed {
-            let _ = tx.send(Command::CleanupWorkspace { ws_id: *id });
-        }
+    for (id, ..) in &removed {
+        crate::command!(CleanupWorkspace { ws_id: *id });
     }
 }
 
