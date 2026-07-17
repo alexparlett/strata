@@ -49,9 +49,10 @@ Drift: "Open folder…" → design's ghost **"Open"** (uppercase); project row h
 Builds here → **W1** (rail Settings gear).
 **Done (V26 align, no theme):** "Open folder…" → uppercase ghost **Open** (DS `Eyebrow` typography, no inline tracking); project rows dropped the open-in-new-window action (4→3: Pin · Reveal · Remove) + the inline pin badge (state reads from PINNED grouping + pin tint); Projects nav pill lost the accent left-bar (text-coloured over accent-tinted bg only); empty state splits into no-match (`No projects match "q".`) vs no-recents, left/muted placement; RECENT header always heads recents. Also wired ⌘A/⌘C on the launcher search via a `use_muda_event_handler` shim (mirrors settings) — works ~99%; the residual muda-menu crash is tracked in **F8**. Theme-window restyle deferred (separate task).
 
-### U2 · App shell — header · macOS title bar · activity rail — `restyle`
+### U2 · App shell — header · macOS title bar · activity rail — `restyle` ✅
 Rail active-state = the standard **toggle-button** treatment (accent tint) — our `IconButtonVariant::Toggle` already matches, **no drift** (the 2.5px edge-bar still in `Strata.dc.html` is stale, superseded by the toggle-button design).
 Drift: Problems badge sits top-right of the icon with a 2px ring (reposition); header recent-rows lack the branch glyph. Two-window model + macOS title bar (inset 13/21) are faithful.
+**Done (2026-07-17):** Problems badge repositioned to the handoff-29 spec — `.ds-count-badge` `top/right: 1px` (tucked into the button's top-right over the icon; was `top:-5px/right:-5px`, which overhung and clipped the 48px rail's edge). The rest already matched the design (15px · `--t-micro` = 600/9px mono · red fill · 2px surface ring). **Header recent-row branch glyph deferred** — no git integration yet. Toggle-button active state, macOS title-bar insets, and the two-window model were already faithful. Connections rail button/pane left for **W7**.
 Builds here → **W7** (Connections rail button + pane), **W1** (cross-window settings sync).
 
 ### U3 · Sidebar / catalog — `partial-rebuild`

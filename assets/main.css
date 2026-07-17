@@ -924,7 +924,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 /* Count badge riding the top-right of a button/icon (§10). Wrap the target in
    `.ds-badge-anchor`. Accent by default; `.err` for problem counts. */
 .ds-badge-anchor { position: relative; display: inline-flex; }
-.ds-count-badge { position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 var(--sp-1); box-sizing: border-box; border-radius: var(--r-2); background: var(--accent); color: var(--accent-ink); font: var(--t-micro); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--panel); }
+.ds-count-badge { position: absolute; top: 1px; right: 1px; min-width: 15px; height: 15px; padding: 0 var(--sp-1); box-sizing: border-box; border-radius: var(--r-2); background: var(--accent); color: var(--accent-ink); font: var(--t-micro); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--panel); }
 .ds-count-badge.err { background: var(--red2); color: #fff; }
 /* §07 Icon — inline-flex so the glyph aligns optically with adjacent text with no
    wrapper span; flex:none so it never shrinks in a flex row. Colour = currentColor. */
