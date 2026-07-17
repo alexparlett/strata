@@ -13,7 +13,6 @@ use dioxus::prelude::*;
 
 use dioxus::desktop::tao::window::WindowId;
 
-use crate::config;
 use crate::engine::TableSpec;
 use crate::project::Project;
 use crate::state::AppState;
@@ -360,9 +359,8 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
 
     // Record it in recents (per-machine app config). The file already exists on
     // disk; later durable edits autosave through `dispatch`.
-    let mut cfg = config::load();
+    let mut cfg = crate::config::load();
     cfg.push_recent(&name, &path.to_string_lossy());
     cfg.add_open(&path.to_string_lossy());
-    config::save(&cfg);
-    state.write().recent_projects = cfg.recent_projects;
+    crate::config::save(&cfg);
 }

@@ -193,3 +193,17 @@ config/register-table (C3) · saved queries · native File/Edit/Window menu · t
    **W7** connections (lands the U2 rail button + U3 pane + U14 LOCATION) · **Rz2** chart ·
    **Rz3–Rz6** grid selection/copy/record/sort · **Rz-plan** plan v3 · **D4** profiling · **T3** palette depth.
 5. **Functional polish:** E1 validator · E3 undo/redo · W2–W5 settings/theme · T2 OS-close.
+
+---
+
+## Known bugs
+
+- **Re-opening the *already-open* project via File ▸ Open Recent corrupts its saved
+  paths.** Picking the recent that's the project currently open in the window (an
+  in-place re-open of itself) mangles the table's **relative source paths** and
+  **partition columns** on the next save (repro: `sample/signups.json`). Re-opening a
+  *different* project — or the same project from the header switcher — is fine; only
+  the same-project entry in the native recent submenu triggers it. Surfaced during F7
+  B12. Likely in the `open_in_current` / re-`install` path when the incoming path
+  equals the live project (paths get re-resolved/relativised against the wrong base
+  before the outgoing project is torn down). Deferred — revisit later.

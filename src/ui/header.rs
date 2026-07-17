@@ -90,12 +90,11 @@ fn project_menu_body(state: Signal<AppState>) -> Element {
         .project_path
         .as_ref()
         .map(|p| p.to_string_lossy().into_owned());
-    let recents: Vec<(String, String)> = state
-        .read()
+    let recents: Vec<(String, String)> = crate::config::load()
         .recent_projects
-        .iter()
+        .into_iter()
         .filter(|r| Some(&r.path) != current.as_ref())
-        .map(|r| (r.name.clone(), r.path.clone()))
+        .map(|r| (r.name, r.path))
         .collect();
 
     rsx! {

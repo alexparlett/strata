@@ -241,6 +241,8 @@ pub fn app_menu() -> Menu {
 /// The **Open Recent** submenu, from the app config's recents (capped at 10).
 fn recent_submenu() -> Submenu {
     let recent = Submenu::new("Open Recent", true);
+    // Recents come straight from the app config, read at build time. The native menu
+    // is imperative and can't live-update anyway (muda app-global — see F8).
     let recents = crate::config::load().recent_projects;
     if recents.is_empty() {
         let _ = recent.append(&MenuItem::new("No Recent Projects", false, None));

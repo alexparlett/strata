@@ -36,7 +36,6 @@ pub(super) fn RecordDialog(ws_id: WorkspaceId, idx: Signal<Option<usize>>) -> El
     let base = run.page.saturating_sub(1) * run.page_size;
     drop(run);
 
-    let type_color = state.read().type_color_cells;
     let total = result.total;
     // (name, arrow dtype, type-text class, value cell class, nested?). The key shows the name over
     // its type (type-coloured); values are coloured like the grid, nested ones shown as a block.
@@ -104,7 +103,7 @@ pub(super) fn RecordDialog(ws_id: WorkspaceId, idx: Signal<Option<usize>>) -> El
                     div { class: "record-row",
                         div { class: "record-key",
                             MonoValue { class: "record-name", "{name}" }
-                            Meta { class: if type_color { format!("record-type {tclass}") } else { "record-type".to_string() }, "{dtype}" }
+                            Meta { class: format!("record-type {tclass}"), "{dtype}" }
                         }
                         {
                             match cells.get(ci) {
@@ -128,7 +127,7 @@ pub(super) fn RecordDialog(ws_id: WorkspaceId, idx: Signal<Option<usize>>) -> El
                                 },
                                 Some(c) => rsx! {
                                     Readout {
-                                        class: if type_color { format!("record-val {cclass}") } else { "record-val".to_string() },
+                                        class: format!("record-val {cclass}"),
                                         "{c.text}"
                                     }
                                 },

@@ -147,14 +147,12 @@ pub enum CatalogKind {
 }
 
 pub struct AppState {
-    // Global prefs + project-management pointers. The open project itself now lives
-    // in the per-window `crate::project` store (catalog + history), the reactive
-    // session in `crate::session`, per-tab runs in `crate::runs`, and the per-window
-    // engine session in `crate::engine`.
-    pub type_color_cells: bool,
-    // project management (where the open project lives on disk + recents)
+    // The last window-level pointer not yet relocated: where the open project lives on
+    // disk. Everything else moved to focused stores — the project itself to
+    // `crate::project`, the session to `crate::session`, per-tab runs to `crate::runs`,
+    // the engine to `crate::engine`, prefs to `crate::settings`; recents are read
+    // straight from `crate::config`.
     pub project_path: Option<std::path::PathBuf>,
-    pub recent_projects: Vec<crate::config::RecentProject>,
 }
 
 impl AppState {
@@ -162,9 +160,7 @@ impl AppState {
     /// Dev builds replace this by opening the bundled `sample/` project.
     pub fn empty() -> Self {
         AppState {
-            type_color_cells: true,
             project_path: None,
-            recent_projects: Vec::new(),
         }
     }
 }

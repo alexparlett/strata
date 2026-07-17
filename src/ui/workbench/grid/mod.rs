@@ -74,7 +74,6 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
     let zebra = crate::settings::zebra();
     // Default column width (V20) from settings; per-column overrides on the run win over it.
     let default_w = crate::settings::default_col_width();
-    let type_color = state.read().type_color_cells;
     // Rendered only alongside a result, so the `else` arms are defensive.
     let Some(entry) = crate::runs::RUNS.resolve().get(ws_id) else {
         return rsx! { super::results::Empty { ws_id } };
@@ -233,7 +232,7 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
                             {render_cell(
                                 ws_id, i, ci,
                                 cols.get(ci).cloned(), cell.clone(),
-                                cell_view, drag_sel, type_color,
+                                cell_view, drag_sel,
                                 col_ws.get(ci).copied().unwrap_or(default_w),
                                 cell_sel_style(&sel_bounds, &sel_rows, &sel_cols, i, ci, last_row, last_col),
                             )}

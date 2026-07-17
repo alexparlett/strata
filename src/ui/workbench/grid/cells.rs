@@ -139,7 +139,6 @@ pub(super) fn render_cell(
     cell: Cell,
     mut cell_view: Signal<Option<CellView>>,
     mut drag_sel: Signal<bool>,
-    type_color: bool,
     w: f64,
     sel_style: String,
 ) -> Element {
@@ -150,7 +149,7 @@ pub(super) fn render_cell(
     let mut class = String::from("cell");
     if cell.null {
         class.push_str(" null");
-    } else if type_color && !cell_cls.is_empty() {
+    } else if !cell_cls.is_empty() {
         class.push(' ');
         class.push_str(cell_cls);
     }

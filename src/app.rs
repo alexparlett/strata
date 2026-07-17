@@ -46,9 +46,6 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // its events, and load the assigned project.
     use_hook(move || {
         spawn(drain_events(state));
-        // Recents stay on `AppState` — a separate concern from settings. The shared
-        // settings context + OS appearance are seeded by `use_settings` below.
-        state.write().recent_projects = crate::config::load().recent_projects;
         if !open_path.is_empty() {
             crate::action::projects::load_current(state, std::path::PathBuf::from(open_path));
         }
