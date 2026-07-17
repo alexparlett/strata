@@ -23,6 +23,7 @@ mod layout;
 mod menu;
 mod overlays;
 mod plan;
+mod profile;
 mod project;
 mod query_error;
 mod runs;

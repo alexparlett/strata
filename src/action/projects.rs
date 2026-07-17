@@ -273,14 +273,19 @@ pub fn use_persist_session() {
     });
 }
 
-/// `Action::CloseProject` — save, then close this window. If any tab has a running
-/// query and the confirm-close setting is on, ask first (S14); otherwise close
-/// straight away via [`close_now`].
+/// `Action::CloseProject` — save, then close this window. If work is in flight and the
+/// confirm-close setting is on, ask first (S14); otherwise close straight away via
+/// [`close_now`].
+///
+/// "In flight" counts a running **profile** as well as a running query (D4): a full
+/// scan is the longest thing this app does, and closing the window throws it away
+/// exactly as it would a query.
 pub fn close() {
     let any_running = crate::session::snapshot()
         .workspaces
         .iter()
-        .any(|w| crate::runs::is_running(w.id));
+        .any(|w| crate::runs::is_running(w.id))
+        || crate::project::profiling_any();
     if any_running && crate::settings::confirm_close_running() {
         crate::overlays::open_running_close(crate::overlays::RunningCloseTarget::Window);
         return;

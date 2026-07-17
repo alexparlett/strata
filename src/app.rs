@@ -7,9 +7,8 @@
 
 use dioxus::desktop::{use_muda_event_handler, use_wry_event_handler};
 use dioxus::prelude::*;
-use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::engine::{self, Engine, EngineStoreExt, Event};
+use crate::engine::{Event, TableMeta};
 use crate::menu::MenuCmd;
 use crate::project::ProjectStoreExt;
 use crate::query_error::QueryError;
@@ -169,6 +168,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             ui::modals::ExportHost {}
             ui::modals::ConfigHost {}
             ui::modals::CloseConfirmHost {}
+            ui::modals::ProfileConfirmHost {}
             ui::modals::RunningCloseHost {}
             ui::modals::OpenPromptHost {}
             ui::modals::EngineRestartHost {}
@@ -354,12 +354,25 @@ pub fn apply_event(ev: Event) {
                 crate::event_error!("Page load failed: {e}");
             }
         },
+        Event::Profiled { table, result } => match result {
+            Ok(p) => {
+                let n = p.rows;
+                crate::project::end_profile(&table, Some(p));
+                crate::event_ok!("Profiled '{table}' · {n} rows scanned");
+            }
+            Err(e) => {
+                // Clear the flag but keep any previous profile — a failed re-scan
+                // shouldn't throw away numbers that were valid a moment ago.
+                crate::project::end_profile(&table, None);
+                crate::event_error!("Profile of '{table}' failed: {e}");
+            }
+        },
         Event::Registered {
             table,
             path,
             result,
         } => match result {
-            Ok(cols) => {
+            Ok(TableMeta { columns: cols, rows }) => {
                 let n = cols.len();
                 // A config-originated register finalizes from the stashed row data
                 // (the project was untouched until now); otherwise it's a load-time
@@ -378,6 +391,11 @@ pub fn apply_event(ev: Event) {
                         sources: p.sources,
                         partition_cols: p.partition_cols,
                         columns: cols,
+                        rows,
+                        // A fresh registration profiles nothing — and replacing the row
+                        // is what drops any profile the old one held.
+                        profile: None,
+                        profiling: false,
                         open: false,
                         status: RegStatus::Ready,
                         error: None,
@@ -395,9 +413,19 @@ pub fn apply_event(ev: Event) {
                             format!("{n} cols · {} partitions", t.partition_cols.len())
                         };
                         t.columns = cols;
+                        t.rows = rows;
                         t.meta = meta;
                         t.status = RegStatus::Ready;
                         t.error = None;
+                        // This branch updates the row *in place* rather than replacing
+                        // it — and it's the path `RefreshCatalog` takes — so the profile
+                        // has to be dropped explicitly. Re-registering means the files
+                        // may have moved under it, which is precisely when a cached
+                        // scan becomes a lie. Clearing `profiling` also makes
+                        // `end_profile` discard a scan still in flight against the old
+                        // data.
+                        t.profile = None;
+                        t.profiling = false;
                     } else {
                         tables.push(CatalogTable {
                             name: table.clone(),
@@ -406,6 +434,9 @@ pub fn apply_event(ev: Event) {
                             sources: vec![path],
                             partition_cols: vec![],
                             columns: cols,
+                            rows,
+                            profile: None,
+                            profiling: false,
                             open: false,
                             status: RegStatus::Ready,
                             error: None,

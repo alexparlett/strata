@@ -10,6 +10,7 @@ mod config;
 mod engine_restart;
 mod export;
 mod open_prompt;
+mod profile_confirm;
 mod running_close;
 
 pub use close_confirm::CloseConfirmHost;
@@ -18,4 +19,5 @@ pub use config::ConfigHost;
 pub use engine_restart::EngineRestartHost;
 pub use export::ExportHost;
 pub use open_prompt::OpenPromptHost;
+pub use profile_confirm::ProfileConfirmHost;
 pub use running_close::RunningCloseHost;

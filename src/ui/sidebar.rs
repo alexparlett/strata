@@ -11,7 +11,7 @@ use crate::state::{CatalogKind, RemoveKind, RemoveTarget};
 use crate::ui::components::{
     Button, ButtonVariant, Caption, ContextMenu, Dialog, Dot, DropdownMenu, Eyebrow, Icon,
     IconButton, IconButtonVariant, MenuItem, MenuSep, Meta, Micro, MonoValue, Point, Readout,
-    RectAlign, SearchBar, Title,
+    RectAlign, SearchBar, Title, Tooltip,
 };
 use crate::ui::icons::{IconName, IconSize};
 
@@ -153,10 +153,18 @@ fn catalog_menu_items(
 ) -> Element {
     match kind {
         CatalogKind::Table => {
-            let (n1, n2, n3) = (name.clone(), name.clone(), name.clone());
+            let (n1, n2, n3, n4) = (name.clone(), name.clone(), name.clone(), name.clone());
+            // A scan already running for this table can't be started again (the engine
+            // drops the duplicate anyway) — so say so rather than offer a no-op.
+            let scanning = crate::project::is_profiling(&name);
             rsx! {
                 MenuItem { icon: IconName::Play, icon_size: IconSize::Sm, label: "View table".to_string(),
                     onclick: move |_| dispatch(Action::LoadSelectStar(n1.clone())) }
+                // Asks first, like the inspector's button — a full scan (D4).
+                MenuItem { icon: IconName::Chart, icon_size: IconSize::Sm,
+                    label: if scanning { "Profiling…".to_string() } else { "Profile".to_string() },
+                    disabled: scanning,
+                    onclick: move |_| dispatch(Action::AskProfileTable(n4.clone())) }
                 MenuItem { icon: IconName::Gear, icon_size: IconSize::Sm, label: "Configure".to_string(),
                     onclick: move |_| dispatch(Action::OpenConfigEdit(n2.clone())) }
                 MenuSep {}
@@ -284,6 +292,9 @@ fn render_saved_query(
 struct ColRow {
     key: String,
     name: String,
+    /// The column's path within the table (`["address", "city"]`) — what identifies it
+    /// to the inspector. A `Vec`, not a dotted string: a column name may contain dots.
+    path: Vec<String>,
     dtype: String,
     dot: &'static str,
     tcls: &'static str,
@@ -298,21 +309,20 @@ struct ColRow {
 /// plus the children of any expanded struct column, depth-first.
 fn flatten_cols(
     table: &str,
-    parent_path: &str,
+    parent: &[String],
     depth: usize,
     cols: &[crate::engine::ColumnInfo],
     parts: &[(String, String)],
-    selected: &Option<(String, String)>,
+    selected: &Option<(String, Vec<String>)>,
     expanded: &HashSet<String>,
     out: &mut Vec<ColRow>,
 ) {
     for c in cols {
-        let path = if parent_path.is_empty() {
-            c.name.clone()
-        } else {
-            format!("{parent_path}.{}", c.name)
-        };
-        let key = format!("{table}::{path}");
+        let mut path = parent.to_vec();
+        path.push(c.name.clone());
+        // The expand key stays a display string — it only has to be unique per row, and
+        // a collision would merely expand the wrong twig.
+        let key = format!("{table}::{}", path.join("."));
         let has_children = !c.children.is_empty();
         let is_expanded = has_children && expanded.contains(&key);
         out.push(ColRow {
@@ -323,15 +333,28 @@ fn flatten_cols(
             tcls: c.kind.text_class(),
             // Partition columns are a top-level concept only.
             is_part: depth == 0 && parts.iter().any(|(n, _)| n == &c.name),
+            // Compare the whole path: by name alone, selecting `city` lit up every
+            // `city` at any depth in the table.
             is_sel: selected
                 .as_ref()
-                .map_or(false, |(tn, cn)| tn == table && cn == &c.name),
+                .is_some_and(|(tn, p)| tn == table && p == &path),
             depth,
             has_children,
             is_expanded,
+            path,
         });
         if is_expanded {
-            flatten_cols(table, &path, depth + 1, &c.children, parts, selected, expanded, out);
+            let child_parent = out.last().map(|r| r.path.clone()).unwrap_or_default();
+            flatten_cols(
+                table,
+                &child_parent,
+                depth + 1,
+                &c.children,
+                parts,
+                selected,
+                expanded,
+                out,
+            );
         }
     }
 }
@@ -341,7 +364,7 @@ fn render_table(
     remove: Signal<Option<RemoveTarget>>,
     i: usize,
     filter: &str,
-    selected: &Option<(String, String)>,
+    selected: &Option<(String, Vec<String>)>,
     mut expanded: Signal<HashSet<String>>,
 ) -> Element {
     let store = crate::project::store();
@@ -356,12 +379,18 @@ fn render_table(
     let name = t.name.clone();
     let open = t.open;
     let parts = t.partition_cols.clone();
+    // Scans are per-table and concurrent (D4), so the inspector's PROFILE spinner only
+    // ever speaks for the *selected* column's table — start one on `orders`, click to
+    // `users`, and it vanishes. The row is the only place a scan is always visible.
+    // (Not from the canvas: it runs one profile at a time and force-selects the table
+    // it profiled, so it can't lose one.)
+    let profiling = t.profiling;
     // Flatten the (possibly nested) columns into the visible rows, expanding only
     // the struct columns whose key is in `expanded`.
     let rows: Vec<ColRow> = {
         let exp = expanded();
         let mut out = Vec::new();
-        flatten_cols(&name, "", 0, &t.columns, &parts, selected, &exp, &mut out);
+        flatten_cols(&name, &[], 0, &t.columns, &parts, selected, &exp, &mut out);
         out
     };
     drop(s);
@@ -384,6 +413,11 @@ fn render_table(
                 }
                 Icon { name: IconName::Table, size: IconSize::Sm, color: "var(--dim)" }
                 MonoValue { class: "tname", "{name}" }
+                if profiling {
+                    Tooltip { message: "Profiling...",
+                        span { class: "tbl-spin ps-spin", Icon { name: IconName::Spinner, size: IconSize::Xs } }
+                    }
+                }
                 DropdownMenu {
                     class: "row-menu", title: "Actions", align: RectAlign::BOTTOM_END, width: 180,
                     trigger: rsx! { Icon { name: IconName::Dots, size: IconSize::Sm } },
@@ -395,7 +429,7 @@ fn render_table(
                     for r in rows {
                         {
                             let table_nm = name.clone();
-                            let col_nm = r.name.clone();
+                            let col_path = r.path.clone();
                             let key = r.key.clone();
                             let indent = r.depth * 12;
                             rsx! {
@@ -403,7 +437,7 @@ fn render_table(
                                     class: if r.is_sel { "col-row sel" } else { "col-row" },
                                     onclick: move |_| dispatch(Action::SelectColumn {
                                         table: table_nm.clone(),
-                                        column: col_nm.clone(),
+                                        path: col_path.clone(),
                                     }),
                                     span { style: "width:{indent}px;flex:none;" }
                                     span { class: "col-chev",

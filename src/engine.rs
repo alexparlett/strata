@@ -38,6 +38,40 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 const MAX_CELL_LEN: usize = 400;
 
+/// Which fact a [`Stat`] carries.
+///
+/// Keyed rather than positional so the two tiers can interlock: D4's profile surfaces
+/// only what the source didn't already answer for free, by key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatKey {
+    Nulls,
+    Min,
+    Max,
+    Distinct,
+    Mean,
+    Median,
+}
+
+/// One fact about a column, ready to display.
+///
+/// Deliberately a **list**, not a fixed set of fields: which facts exist depends
+/// entirely on where they came from. A Parquet footer yields nulls/min/max for nothing;
+/// CSV and JSON yield literally none; D4's profile computes whatever the source didn't,
+/// and adds distinct/mean/median besides. Fixed `Option` fields would bake the Parquet
+/// shape into every source and leave the profile nowhere to put the same facts. Both
+/// tiers emit this one shape, so the inspector renders a row per fact that genuinely
+/// exists rather than a grid of blanks.
+///
+/// `exact` is false when the source truncated the value (Parquet does this to long
+/// strings / binary routinely), making it a bound rather than the value — the inspector
+/// marks those `~`. Computed facts are always exact.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stat {
+    pub key: StatKey,
+    pub text: String,
+    pub exact: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColumnInfo {
     pub name: String,
@@ -45,6 +79,17 @@ pub struct ColumnInfo {
     pub kind: Kind,
     pub nullable: bool,
     pub children: Vec<ColumnInfo>,
+    /// Facts the source reports **for free** — read, never computed. Empty for any
+    /// format without metadata to read, which is every format but Parquet (and Arrow).
+    pub stats: Vec<Stat>,
+}
+
+/// What a (re)registration learned about a table: its columns, plus the free row count
+/// (`None` when the source doesn't report one).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableMeta {
+    pub columns: Vec<ColumnInfo>,
+    pub rows: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +127,15 @@ pub enum Command {
     /// scan re-`LIST`s; we run no `ListFilesCache`), so this only re-registers to
     /// refresh the inferred schema. Emits a `Registered` per table.
     RefreshCatalog,
+    /// Full-scan profile of one table (D4) — see [`crate::profile`]. Runs spawned and
+    /// keyed by table, so profiles of different tables run concurrently.
+    Profile {
+        table: String,
+    },
+    /// Abort an in-flight profile.
+    CancelProfile {
+        table: String,
+    },
     CreateView {
         name: String,
         sql: String,
@@ -151,10 +205,15 @@ pub enum Event {
     Registered {
         table: String,
         path: String,
-        result: Result<Vec<ColumnInfo>, String>,
+        result: Result<TableMeta, String>,
     },
     Deregistered {
         table: String,
+    },
+    /// A profile scan finished (D4). The row's `profiling` flag clears either way.
+    Profiled {
+        table: String,
+        result: Result<crate::profile::TableProfile, String>,
     },
     ViewChanged {
         name: String,
@@ -450,10 +509,19 @@ async fn engine_loop(
     // In-flight Query/Explain tasks, keyed by ws_id (S14). Owned by this single loop
     // task (no locking); the spawned tasks only send events back.
     let mut inflight: HashMap<u64, InFlight> = HashMap::new();
+    // In-flight profiles, keyed by **table** — a profile belongs to a table the way a
+    // query belongs to a tab, so several can run at once and none blocks the loop (D4).
+    let mut profiling: HashMap<String, tokio::task::AbortHandle> = HashMap::new();
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             Command::Register(spec) => {
                 let path = spec.paths.first().cloned().unwrap_or_default();
+                // Re-registering replaces the data under any scan of this table: its
+                // result is about to be thrown away by `end_profile`, so stop paying
+                // for it.
+                if let Some(h) = profiling.remove(&spec.name) {
+                    h.abort();
+                }
                 let result = register_external(&ctx, &spec).await;
                 let _ = evt_tx.send(Event::Registered {
                     table: spec.name,
@@ -461,7 +529,40 @@ async fn engine_loop(
                     result,
                 });
             }
+            Command::Profile { table } => {
+                // Spawned, never awaited here: a profile is a full scan and can run for
+                // minutes — awaiting it in this loop would stall every other command
+                // (queries included) behind it. Keyed by table, exactly as a query is
+                // keyed by tab, so profiles of different tables run concurrently.
+                // Reap finished scans first — a completed handle left in the map would
+                // block its own table's re-scan forever.
+                profiling.retain(|_, h| !h.is_finished());
+                if profiling.contains_key(&table) {
+                    continue; // already scanning this table — a second pass adds nothing
+                }
+                let ctx = ctx.clone();
+                let tx = evt_tx.clone();
+                let name = table.clone();
+                let task = tokio::spawn(async move {
+                    let result = run_profile(&ctx, &name).await;
+                    let _ = tx.send(Event::Profiled { table: name, result });
+                });
+                profiling.insert(table, task.abort_handle());
+            }
+            Command::CancelProfile { table } => {
+                // No event: the action layer clears the row itself, since an abort
+                // means no `Profiled` is coming.
+                if let Some(h) = profiling.remove(&table) {
+                    h.abort();
+                }
+            }
             Command::RefreshCatalog => {
+                // A refresh re-infers every table, so every in-flight scan is about to
+                // be describing superseded data — abort the lot rather than let them
+                // run to a result nothing will keep.
+                for (_, h) in profiling.drain() {
+                    h.abort();
+                }
                 // Re-infer each user table's schema in place, straight from what's in
                 // the context — no retained specs. Query snapshots (`__snap_*`) are
                 // skipped by name; SQL views by not being `ListingTable`s. Files, rows,
@@ -499,6 +600,10 @@ async fn engine_loop(
                 }
             }
             Command::Deregister { table } => {
+                // The table's going away — a scan of it is now pure waste.
+                if let Some(h) = profiling.remove(&table) {
+                    h.abort();
+                }
                 let _ = ctx.deregister_table(table.as_str());
                 let _ = evt_tx.send(Event::Deregistered { table });
             }
@@ -1308,10 +1413,7 @@ fn truncate_cell(s: &str) -> String {
 
 // ---- external table registration ----
 
-async fn register_external(
-    ctx: &SessionContext,
-    spec: &TableSpec,
-) -> Result<Vec<ColumnInfo>, String> {
+async fn register_external(ctx: &SessionContext, spec: &TableSpec) -> Result<TableMeta, String> {
     use datafusion::datasource::file_format::arrow::ArrowFormat;
     use datafusion::datasource::file_format::csv::CsvFormat;
     use datafusion::datasource::file_format::json::JsonFormat;
@@ -1347,7 +1449,19 @@ async fn register_external(
             ".parquet",
         ),
     };
-    let mut opts = ListingOptions::new(fmt).with_file_extension(ext);
+    // `with_session_config_options` *before* any explicit option: it carries the
+    // session's `collect_statistics` (and `target_partitions`) onto the options and
+    // would otherwise clobber them.
+    //
+    // It is not optional. `ListingOptions::new` hardcodes `collect_stat: false`, and a
+    // hand-built `ListingTable` never picks the `datafusion.execution.collect_statistics`
+    // key up on its own — `ListingTableConfig::with_listing_options` does no such wiring.
+    // Without this, every footer statistic comes back `Absent` while the engine setting
+    // claims to be on. It's baked in at `try_new`, so a registered table can't be fixed
+    // after the fact — `rebuild_listing` inherits it by cloning `lt.options()`.
+    let mut opts = ListingOptions::new(fmt)
+        .with_session_config_options(&ctx.copied_config())
+        .with_file_extension(ext);
     if !spec.partitions.is_empty() {
         let cols = spec
             .partitions
@@ -1366,28 +1480,20 @@ async fn register_external(
     ctx.register_table(spec.name.as_str(), Arc::new(table))
         .map_err(|e| e.to_string())?;
 
-    let df = ctx
-        .table(spec.name.as_str())
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(df
-        .schema()
-        .fields()
-        .iter()
-        .map(|f| column_info(f))
-        .collect())
+    table_meta(ctx, spec.name.as_str()).await
 }
 
 /// Rebuild a registered `ListingTable` from its own `paths` + `options`, re-inferring
 /// the schema, and re-register it under `name` — the schema-refresh step
 /// (`RefreshCatalog`). Re-registering the *same* provider wouldn't re-infer, so we
-/// construct a fresh table from a re-`infer_schema`d config. Returns its columns.
+/// construct a fresh table from a re-`infer_schema`d config. Returns its columns + free
+/// metadata — `opts` is the live table's own, so `collect_stat` carries over with it.
 async fn rebuild_listing(
     ctx: &SessionContext,
     name: &str,
     paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
     opts: datafusion::datasource::listing::ListingOptions,
-) -> Result<Vec<ColumnInfo>, String> {
+) -> Result<TableMeta, String> {
     use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
     let config = ListingTableConfig::new_with_multi_paths(paths)
         .with_listing_options(opts)
@@ -1398,16 +1504,111 @@ async fn rebuild_listing(
     let _ = ctx.deregister_table(name);
     ctx.register_table(name, Arc::new(table))
        .map_err(|e| e.to_string())?;
+    table_meta(ctx, name).await
+}
+
+// ---- schema helpers ----
+
+/// Profile `name` — one full scan, every column at once (see [`crate::profile`]).
+///
+/// Runs on this worker like any other command, so the UI stays live and the row's
+/// `profiling` flag drives the spinner. Blocking is fine here; it's *meant* to be the
+/// expensive thing the user opted into.
+async fn run_profile(ctx: &SessionContext, name: &str) -> Result<crate::profile::TableProfile, String> {
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
-    Ok(df
+    let columns: Vec<ColumnInfo> = df
         .schema()
         .fields()
         .iter()
         .map(|f| column_info(f))
-        .collect())
+        .collect();
+    let (exprs, slots) = crate::profile::aggregates(&columns);
+    let agg = df.aggregate(vec![], exprs).map_err(|e| e.to_string())?;
+    // Unparse the plan we're about to run, from the plan itself — so "view as query"
+    // shows what produced the numbers rather than something built alongside it that
+    // could drift. Best effort: an un-renderable plan just means no button.
+    let sql = datafusion::sql::unparser::plan_to_sql(agg.logical_plan())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let batches = agg.collect().await.map_err(|e| e.to_string())?;
+    let batch = batches.first().ok_or("profile returned no batches")?;
+    let mut profile = crate::profile::decode(&slots, batch, &columns)?;
+    profile.sql = sql;
+    Ok(profile)
 }
 
-// ---- schema helpers ----
+/// A table's columns plus its **free** metadata — the row count and per-column
+/// min/max/nulls, read from the source's own footers. One metadata read per file, no
+/// data pages. Everything lands `None` for a source that reports nothing (CSV/JSON),
+/// which the inspector renders as an absent row rather than a guess.
+async fn table_meta(ctx: &SessionContext, name: &str) -> Result<TableMeta, String> {
+    let df = ctx.table(name).await.map_err(|e| e.to_string())?;
+    // `|f| column_info(f)`, not `column_info`: `fields()` yields `&Arc<Field>` and the
+    // deref coercion to `&Field` only happens at a call site.
+    let mut columns: Vec<ColumnInfo> = df
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| column_info(f))
+        .collect();
+    let rows = free_stats(ctx, name, &mut columns).await;
+    Ok(TableMeta { columns, rows })
+}
+
+/// Fold the source's free statistics onto `columns`, returning the row count. Best
+/// effort throughout: anything unavailable simply stays `None`.
+async fn free_stats(ctx: &SessionContext, name: &str, columns: &mut [ColumnInfo]) -> Option<u64> {
+    use datafusion::datasource::listing::ListingTable;
+    let provider = ctx.table_provider(name).await.ok()?;
+    // Only a `ListingTable` has files whose footers can be read — a view has none.
+    let lt = provider.downcast_ref::<ListingTable>()?;
+    let state = ctx.state();
+    // `limit: None` — a limit would make the aggregate inexact.
+    let stats = lt.list_files_for_scan(&state, &[], None).await.ok()?.statistics;
+    let rows = stats.num_rows.get_value().map(|n| *n as u64);
+    // Zip rather than index: DataFusion promises one entry per *table*-schema field, but
+    // a table with no files short-circuits to `file_schema`, which omits the partition
+    // columns — indexing would then misattribute every stat.
+    for (col, cs) in columns.iter_mut().zip(stats.column_statistics.iter()) {
+        // Push only what's actually there — an absent fact is an absent row, not a
+        // blank one. Display order.
+        let nulls = match cs.null_count.get_value() {
+            // `Exact(num_rows)` is *also* DataFusion's "no stats for this column"
+            // fallback, so an all-null column and an unknown one are indistinguishable.
+            // Say nothing; the profile answers it for real with a COUNT ... FILTER.
+            Some(n) if Some(*n as u64) == rows => None,
+            Some(n) => Some(Stat {
+                key: StatKey::Nulls,
+                text: n.to_string(),
+                exact: true,
+            }),
+            None => None,
+        };
+        col.stats = [nulls, stat_of(StatKey::Min, &cs.min_value), stat_of(StatKey::Max, &cs.max_value)]
+            .into_iter()
+            .flatten()
+            .collect();
+    }
+    rows
+}
+
+/// A `Precision<ScalarValue>` as a display [`Stat`]. `Absent` → `None` (say nothing).
+/// A null value means the column is in the arrow schema but absent from the source's
+/// own (schema evolution) — also nothing to report. `Inexact` carries through flagged.
+fn stat_of(
+    key: StatKey,
+    p: &datafusion::common::stats::Precision<datafusion::common::ScalarValue>,
+) -> Option<Stat> {
+    let v = p.get_value()?;
+    if v.is_null() {
+        return None;
+    }
+    Some(Stat {
+        key,
+        text: v.to_string(),
+        exact: p.is_exact().unwrap_or(false),
+    })
+}
 
 fn column_info(field: &Field) -> ColumnInfo {
     let dtype = short_type(field.data_type());
@@ -1417,6 +1618,9 @@ fn column_info(field: &Field) -> ColumnInfo {
         dtype,
         nullable: field.is_nullable(),
         children: nested_children(field.data_type()),
+        // Filled by `free_stats` where the source has metadata to read; a nested child
+        // never gets any — footers describe leaves, and we don't traverse into them.
+        stats: Vec::new(),
     }
 }
 

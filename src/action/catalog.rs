@@ -97,9 +97,9 @@ pub fn edit_view(name: &str) {
 
 // ---- catalog interactions ----
 
-/// Select a column for the inspector (and open the inspector).
-pub fn select_column(table: String, column: String) {
-    crate::inspector::select(table, column);
+/// Select a column for the inspector (and open the inspector), by its path in `table`.
+pub fn select_column(table: String, path: Vec<String>) {
+    crate::inspector::select(table, path);
     crate::layout::set_inspector_open(true);
 }
 
@@ -109,6 +109,62 @@ pub fn select_column(table: String, column: String) {
 /// the engine re-infer each retained table spec.
 pub fn refresh() {
     crate::command!(RefreshCatalog);
+}
+
+/// `Action::ProfileTable` — start a full-scan profile of `table` (D4).
+///
+/// A profile belongs to a *table*, the way a query belongs to a tab, so several run
+/// concurrently — a scan can take minutes, and there's no reason profiling `orders`
+/// should block profiling `users`. (The canvas allows one at a time; that only works
+/// because its scan is a 950ms `setTimeout`.) The engine drops a duplicate request for
+/// a table already scanning.
+pub fn profile(table: String) {
+    crate::project::begin_profile(&table);
+    crate::command!(Profile { table });
+}
+
+/// `Action::OpenProfileSql` — drop the profile's query into a tab ("view as query").
+///
+/// The SQL was unparsed from the plan that ran, at the moment it ran, so what the user
+/// reads is what produced the numbers they're looking at — not a reconstruction. A
+/// scratch tab: it's theirs to edit and re-run now.
+pub fn open_profile_sql(table: String) {
+    let sql = {
+        let store = crate::project::store();
+        let p = store.read();
+        p.tables
+         .iter()
+         .find(|t| t.name == table)
+         .and_then(|t| t.profile.as_ref())
+         .map(|p| p.sql.clone())
+         .unwrap_or_default()
+    };
+    if sql.is_empty() {
+        return;
+    }
+    crate::session::open_named(
+        &format!("profile · {table}"),
+        sql,
+        crate::project::Origin::Scratch,
+    );
+}
+
+/// `Action::CancelProfileTable` — abort an in-flight scan.
+///
+/// Clears the row here rather than waiting for an event: the engine aborts the task, so
+/// no `Profiled` is coming. A result already in flight when the abort lands is dropped
+/// by `end_profile`'s flag check.
+pub fn cancel_profile(table: String) {
+    crate::command!(CancelProfile {
+        table: table.clone()
+    });
+    crate::project::end_profile(&table, None);
+}
+
+/// `Action::ConfirmProfileTable` — the cost-confirm's "Profile".
+pub fn confirm_profile(table: String) {
+    crate::overlays::close_profile_confirm();
+    profile(table);
 }
 
 // ---- source scanning (validation + partition detection) ----

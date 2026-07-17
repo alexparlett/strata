@@ -94,12 +94,26 @@ pub enum Action {
     EditView(String),
     ToggleTableOpen(usize),
     ToggleViewOpen(usize),
+    /// Inspect a column by its **path** within the table (`["address", "city"]`) — a
+    /// bare name can't say which `city`.
     SelectColumn {
         table: String,
-        column: String,
+        path: Vec<String>,
     },
     /// Re-infer catalog table schemas (the sidebar refresh button).
     RescanCatalog,
+    /// Full-scan profile of a table (D4), no confirm — the PROFILE zone's ↻ re-scan,
+    /// which re-runs something the user already chose.
+    ProfileTable(String),
+    /// Ask first — every *first* profile of a table goes through here, from either
+    /// entry point (the inspector's button, the table context menu).
+    AskProfileTable(String),
+    /// The cost-confirm's "Profile".
+    ConfirmProfileTable(String),
+    /// Abort an in-flight profile — a full scan can run for minutes.
+    CancelProfileTable(String),
+    /// Open the profile's own query in a tab ("view as query").
+    OpenProfileSql(String),
 
     // ── tab drag-to-reorder (T1) ──
     /// Commit a tab reorder: move workspace `id` to the post-removal slot `insert`.
@@ -251,8 +265,13 @@ fn run(action: Action) {
         EditView(name) => catalog::edit_view(&name),
         ToggleTableOpen(i) => crate::project::toggle_table_open(i),
         ToggleViewOpen(i) => crate::project::toggle_view_open(i),
-        SelectColumn { table, column } => catalog::select_column(table, column),
+        SelectColumn { table, path } => catalog::select_column(table, path),
         RescanCatalog => catalog::refresh(),
+        ProfileTable(name) => catalog::profile(name),
+        AskProfileTable(name) => crate::overlays::open_profile_confirm(name),
+        ConfirmProfileTable(name) => catalog::confirm_profile(name),
+        CancelProfileTable(name) => catalog::cancel_profile(name),
+        OpenProfileSql(name) => catalog::open_profile_sql(name),
 
         MoveTab { id, insert } => tab::move_tab(id, insert),
         ToggleSidebar => crate::layout::toggle_sidebar(),

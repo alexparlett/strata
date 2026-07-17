@@ -67,6 +67,26 @@ pub struct CatalogTable {
     pub partition_cols: Vec<(String, String)>,
     #[serde(skip)]
     pub columns: Vec<ColumnInfo>,
+    /// The source's own row count, when it reports one — a Parquet footer does, CSV and
+    /// JSON don't. Runtime like `columns`: re-read on every registration, never stored.
+    #[serde(skip)]
+    pub rows: Option<u64>,
+    /// The last full-scan profile (D4), or `None` if it's never been profiled.
+    ///
+    /// Cached here **on purpose**: the row is the unit that gets replaced when the
+    /// engine re-registers a table, so a config edit that goes through `upsert_table`
+    /// drops the profile with it. That's the "cached until the table changes" contract.
+    ///
+    /// ⚠️ It isn't *entirely* free: `app.rs`'s `Registered` handler also has an
+    /// update-in-place branch (the load-time / `RefreshCatalog` path), which has to
+    /// clear this explicitly. Any new path that mutates a row rather than replacing it
+    /// must do the same.
+    #[serde(skip)]
+    pub profile: Option<crate::profile::TableProfile>,
+    /// A profile scan is in flight for this table — the row's own lifecycle, mirroring
+    /// `status`. Only one runs at a time across the catalog.
+    #[serde(skip)]
+    pub profiling: bool,
     #[serde(skip)]
     pub open: bool,
     #[serde(skip)]
@@ -413,6 +433,54 @@ pub fn upsert_table(table: CatalogTable) {
 /// Drop the table named `name` (deregister / remove-confirm).
 pub fn remove_table(name: &str) {
     store().tables().write().retain(|t| t.name != name);
+}
+
+/// Whether `name` is mid-profile — so entry points can offer a scan rather than a no-op.
+pub fn is_profiling(name: &str) -> bool {
+    let s = store();
+    let tables = s.tables();
+    let t = tables.read();
+    t.iter().any(|t| t.name == name && t.profiling)
+}
+
+/// Whether any table is mid-profile (D4) — the window-close confirm counts a running
+/// scan as work in flight, exactly as it counts a running query.
+pub fn profiling_any() -> bool {
+    let s = store();
+    let tables = s.tables();
+    let t = tables.read();
+    t.iter().any(|t| t.profiling)
+}
+
+/// Mark `name` as scanning (the PROFILE zone's spinner).
+pub fn begin_profile(name: &str) {
+    let s = store();
+    let mut tables = s.tables();
+    let mut t = tables.write();
+    if let Some(row) = t.iter_mut().find(|t| t.name == name) {
+        row.profiling = true;
+    }
+}
+
+/// Land a finished profile (or just clear the flag, if the scan failed).
+pub fn end_profile(name: &str, profile: Option<crate::profile::TableProfile>) {
+    let s = store();
+    let mut tables = s.tables();
+    let mut t = tables.write();
+    if let Some(row) = t.iter_mut().find(|t| t.name == name) {
+        // A row replaced *during* the scan (a re-register, a config edit, a catalog
+        // refresh) comes back from `upsert_table` with `profiling: false` — which is
+        // exactly the signal that these numbers now describe data that's been swapped
+        // out underneath them. Drop them rather than cache a lie; "cached until the
+        // table changes" has to hold for a scan already in flight when it changed.
+        if !row.profiling {
+            return;
+        }
+        row.profiling = false;
+        if profile.is_some() {
+            row.profile = profile;
+        }
+    }
 }
 
 /// Insert-or-replace a view by name, at its alphabetical slot.

@@ -65,6 +65,10 @@ pub struct OverlayState {
     /// The engine-restart prompt (W2): a saved `datafusion.runtime.*` change can't be
     /// applied to the running engine; `true` = the "restart now?" dialog is up.
     pub engine_restart: bool,
+    /// A table awaiting the profile cost-confirm (D4). Every *first* profile passes
+    /// through here, from either entry point; only the PROFILE zone's ↻ re-scan skips
+    /// it, being a re-run of something already chosen.
+    pub profile_confirm: Option<String>,
 }
 
 /// The per-window overlay store. Hosts read it (`OVERLAYS.resolve().read().cmdk`)
@@ -116,6 +120,16 @@ pub fn open_config(target: ConfigTarget) {
 }
 
 /// Close the table-config window and clear its transient state.
+/// Ask before profiling `table` (D4) — the context-menu entry point only.
+pub fn open_profile_confirm(table: String) {
+    OVERLAYS.resolve().profile_confirm().set(Some(table));
+}
+
+/// Dismiss the profile cost-confirm.
+pub fn close_profile_confirm() {
+    OVERLAYS.resolve().profile_confirm().set(None);
+}
+
 pub fn close_config() {
     let s = OVERLAYS.resolve();
     s.config().set(None);
