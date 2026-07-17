@@ -15,7 +15,6 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::overlays::RunningCloseTarget;
-use crate::state::AppState;
 use crate::ui::components::{Button, ButtonVariant, Checkbox, Dialog, Icon, Prose, Title};
 use crate::ui::icons::{IconName, IconSize};
 
@@ -33,7 +32,6 @@ pub fn RunningCloseHost() -> Element {
 
 #[component]
 fn RunningCloseCard(target: RunningCloseTarget) -> Element {
-    let state = use_context::<Signal<AppState>>();
     let mut dont_ask = use_signal(|| false);
 
     // Mode-driven copy (v11): tab close vs. project exit.
@@ -96,8 +94,8 @@ fn RunningCloseCard(target: RunningCloseTarget) -> Element {
                         }
                         crate::overlays::close_running_close();
                         match target {
-                            RunningCloseTarget::Tab(id) => dispatch(state, Action::CloseTabForce(id)),
-                            RunningCloseTarget::Window => dispatch(state, Action::CloseWindowForce),
+                            RunningCloseTarget::Tab(id) => dispatch(Action::CloseTabForce(id)),
+                            RunningCloseTarget::Window => dispatch(Action::CloseWindowForce),
                         }
                     },
                     "{stop_label}"

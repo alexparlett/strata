@@ -2,8 +2,8 @@
 //! active tab's `Workspace` (SQL editor + results). The parent `Workbench` renders
 //! the strip and the active tab's content (or the no-tabs empty state).
 //!
-//! Panes below are each their own `#[component]` pulling `AppState` from context,
-//! so they have independent reactive scopes — typing in the editor doesn't
+//! Panes below are each their own `#[component]` reading the focused per-window
+//! stores directly, so they have independent reactive scopes — typing in the editor doesn't
 //! re-render the results grid — and their transient UI signals (the tab menu, the
 //! cell view, the rename draft) stay component-local. Submodules: `tabs` (`Tabs`),
 //! `workspace` (`Workspace` = editor + results), `editor` (`Editor`), `results`

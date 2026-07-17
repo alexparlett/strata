@@ -9,7 +9,6 @@
 
 use dioxus::prelude::*;
 
-use crate::state::AppState;
 use crate::ui::components::{Button, ButtonVariant, Dialog, Icon, Prose, Title};
 use crate::ui::icons::{IconName, IconSize};
 
@@ -18,7 +17,6 @@ pub fn EngineRestartHost() -> Element {
     if !crate::overlays::OVERLAYS.resolve().read().engine_restart {
         return rsx! {};
     }
-    let state = use_context::<Signal<AppState>>();
     rsx! {
         Dialog { on_close: move |_| crate::overlays::close_engine_restart(), card_class: "confirm".to_string(), z: 80,
             div { class: "confirm-pad",
@@ -37,7 +35,7 @@ pub fn EngineRestartHost() -> Element {
                     variant: ButtonVariant::Primary,
                     onclick: move |_| {
                         crate::overlays::close_engine_restart();
-                        crate::action::projects::restart_window(state);
+                        crate::action::projects::restart_window();
                     },
                     "Restart"
                 }

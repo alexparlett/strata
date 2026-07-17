@@ -7,13 +7,12 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::{AppState, LogTab};
+use crate::state::LogTab;
 use crate::ui::components::{IconButton, IconButtonVariant};
 use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub(crate) fn ActivityRail() -> Element {
-    let state = use_context::<Signal<AppState>>();
     let sidebar_open = crate::layout::sidebar_open();
     let drawer_open = crate::layout::drawer_open();
     let drawer_tab = crate::layout::drawer_tab();
@@ -26,14 +25,14 @@ pub(crate) fn ActivityRail() -> Element {
     rsx! {
         aside { class: "act-rail",
             // Top group: tool windows.
-            {rail_btn(state, "Catalog", sidebar_open, None, IconName::Database, Action::ToggleSidebar)}
+            {rail_btn("Catalog", sidebar_open, None, IconName::Database, Action::ToggleSidebar)}
 
             div { class: "rail-spacer" }
 
             // Bottom group: diagnostics & activity.
-            {rail_btn(state, "Problems", on(LogTab::Problems), Some(problem_count), IconName::Problems, Action::OpenProblems)}
-            {rail_btn(state, "Events", on(LogTab::Events), None, IconName::Events, Action::OpenEvents)}
-            {rail_btn(state, "History", on(LogTab::History), None, IconName::Clock, Action::OpenHistory)}
+            {rail_btn("Problems", on(LogTab::Problems), Some(problem_count), IconName::Problems, Action::OpenProblems)}
+            {rail_btn("Events", on(LogTab::Events), None, IconName::Events, Action::OpenEvents)}
+            {rail_btn("History", on(LogTab::History), None, IconName::Clock, Action::OpenHistory)}
         }
     }
 }
@@ -41,7 +40,6 @@ pub(crate) fn ActivityRail() -> Element {
 /// One rail button — the shared **toggle** `IconButton` at the rail size (active =
 /// accent-soft tint + accent icon); an optional red count badge (Problems).
 fn rail_btn(
-    state: Signal<AppState>,
     title: &str,
     active: bool,
     badge: Option<usize>,
@@ -57,7 +55,7 @@ fn rail_btn(
                 class: "act-rail",
                 on: active,
                 title: "{title}",
-                onclick: move |_| dispatch(state, action.clone()),
+                onclick: move |_| dispatch(action.clone()),
             }
             if let Some(n) = badge {
                 if n > 0 {

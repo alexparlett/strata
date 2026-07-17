@@ -79,6 +79,11 @@
       "name": "cross-file join",
       "sql": "SELECT u.country, e.action, COUNT(*) AS n, SUM(e.amount) AS total\nFROM events e\nJOIN users u ON e.user_id = u.user_id\nWHERE e.amount IS NOT NULL\nGROUP BY u.country, e.action\nORDER BY total DESC\nLIMIT 20;",
       "meta": "—"
+    },
+    {
+      "name": "test",
+      "sql": "select * from test;",
+      "meta": "5 rows"
     }
   ]
 }

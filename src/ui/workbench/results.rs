@@ -14,7 +14,6 @@ use crate::action::{dispatch, Action};
 use crate::project::ProjectStoreExt;
 use crate::runs::{ResultsView, Selection};
 use crate::session::WorkspaceId;
-use crate::state::AppState;
 use crate::ui::components::{
     Body, Button, ButtonVariant, DotStatus, Eyebrow, Icon, IconButton, IconButtonVariant, Meta,
     MonoValue, Pager, Path, Prose, RectAlign, SearchDialog, Segment, SegmentOption, Select,
@@ -71,7 +70,6 @@ pub(crate) fn Results(ws_id: WorkspaceId) -> Element {
 /// Results area while a query is in flight — a centred spinner. (Cancel is S14.)
 #[component]
 fn Running(ws_id: WorkspaceId) -> Element {
-    let state = use_context::<Signal<AppState>>();
     let target = target_name(ws_id);
     rsx! {
         div { class: "res-state res-running",
@@ -82,7 +80,7 @@ fn Running(ws_id: WorkspaceId) -> Element {
                 variant: ButtonVariant::Danger,
                 small: true,
                 icon: IconName::Stop, icon_size: IconSize::Xs,
-                onclick: move |_| dispatch(state, Action::CancelQuery),
+                onclick: move |_| dispatch(Action::CancelQuery),
                 "Cancel"
             }
         }
@@ -93,7 +91,6 @@ fn Running(ws_id: WorkspaceId) -> Element {
 /// optional code frame with a caret, and an optional hint. Dismiss clears it.
 #[component]
 fn ErrorView(ws_id: WorkspaceId) -> Element {
-    let state = use_context::<Signal<AppState>>();
     let err = crate::runs::RUNS
         .resolve()
         .get(ws_id)
@@ -115,7 +112,7 @@ fn ErrorView(ws_id: WorkspaceId) -> Element {
                     variant: IconButtonVariant::Ghost,
                     icon: IconName::Close,
                     title: "Dismiss",
-                    onclick: move |_| dispatch(state, Action::DismissQueryError),
+                    onclick: move |_| dispatch(Action::DismissQueryError),
                 }
             }
             div { class: "err-body",
@@ -169,7 +166,6 @@ fn ChartPlaceholder() -> Element {
 /// Center-pane placeholder shown when no query tab is open (all tabs closed).
 #[component]
 pub(crate) fn EmptyState() -> Element {
-    let state = use_context::<Signal<AppState>>();
     let has_closed = crate::session::has_closed();
     let saved: Vec<String> = crate::project::store()
         .saved_queries()
@@ -192,14 +188,14 @@ pub(crate) fn EmptyState() -> Element {
                     variant: ButtonVariant::Primary,
                     icon: IconName::Plus, icon_size: IconSize::Sm,
                     kbd: crate::keymap::hint(crate::config::Command::NewTab),
-                    onclick: move |_| dispatch(state, Action::NewTab),
+                    onclick: move |_| dispatch(Action::NewTab),
                     "New query"
                 }
                 if has_closed {
                     Button {
                         variant: ButtonVariant::Secondary,
                         icon: IconName::Reopen, icon_size: IconSize::Sm,
-                        onclick: move |_| dispatch(state, Action::ReopenTab),
+                        onclick: move |_| dispatch(Action::ReopenTab),
                         "Reopen closed"
                     }
                 }
@@ -212,7 +208,7 @@ pub(crate) fn EmptyState() -> Element {
                             let nm = name.clone();
                             rsx! {
                                 div { class: "ws-empty-q",
-                                    onclick: move |_| dispatch(state, Action::OpenSavedQuery(nm.clone())),
+                                    onclick: move |_| dispatch(Action::OpenSavedQuery(nm.clone())),
                                     Icon { name: IconName::Brackets, size: IconSize::Sm, color: "var(--purple)" }
                                     Body { class: "nm", "{name}" }
                                 }
@@ -229,7 +225,6 @@ pub(crate) fn EmptyState() -> Element {
 /// match count + clear) · Table/Chart toggle · Refresh (re-run) · Download (export).
 #[component]
 fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
-    let state = use_context::<Signal<AppState>>();
     let (search, view, matches, page_rows, find_open) = crate::runs::RUNS
         .resolve()
         .get(ws_id)
@@ -285,7 +280,7 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
             Segment {
                 value: if grid { "grid" } else { "chart" },
                 compact: true,
-                on_select: move |v: String| dispatch(state, Action::SetResultsView(
+                on_select: move |v: String| dispatch(Action::SetResultsView(
                     if v == "chart" { ResultsView::Chart } else { ResultsView::Grid },
                 )),
                 options: vec![
@@ -300,11 +295,11 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
                     trigger_class: if find_open { "ds-icon-btn toolbar compact on" } else { "ds-icon-btn toolbar compact" },
                     title: "Find in results",
                     open: find_open,
-                    on_open: move |v| dispatch(state, Action::SetResultsFind { ws: ws_id, open: v }),
+                    on_open: move |v| dispatch(Action::SetResultsFind { ws: ws_id, open: v }),
                     value: search.clone(),
                     placeholder: "Find in results",
                     width: 340,
-                    oninput: move |v| dispatch(state, Action::SetResultSearch(v)),
+                    oninput: move |v| dispatch(Action::SetResultSearch(v)),
                     trigger: rsx! { Icon { name: IconName::Search, size: IconSize::Md } },
                     trailing: rsx! {
                         if !search.is_empty() {
@@ -317,14 +312,14 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
                 variant: IconButtonVariant::Toolbar,
                 compact: true,
                 title: "Refresh — re-run the query",
-                onclick: move |_| dispatch(state, Action::RunQuery),
+                onclick: move |_| dispatch(Action::RunQuery),
             }
             IconButton { icon: IconName::Trash,
                 variant: IconButtonVariant::Toolbar,
                 compact: true,
                 class: "res-clear",
                 title: "Clear results",
-                onclick: move |_| dispatch(state, Action::ClearResults),
+                onclick: move |_| dispatch(Action::ClearResults),
             }
             IconButton { icon: IconName::Download,
                 variant: IconButtonVariant::Toolbar,
@@ -340,8 +335,6 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
 /// snapshot clock chip (ticking every 15s), and the pager pinned right (grid-only).
 #[component]
 fn StatusBar(ws_id: WorkspaceId) -> Element {
-    let state = use_context::<Signal<AppState>>();
-
     // Tick every 15s so the snapshot "Xm ago" label stays fresh.
     let mut tick = use_signal(|| 0u32);
     use_future(move || async move {
@@ -451,7 +444,7 @@ fn StatusBar(ws_id: WorkspaceId) -> Element {
             }
             Spacer {}
             if has_result && view == ResultsView::Grid {
-                {pager_controls(state, total, page, page_size)}
+                {pager_controls(total, page, page_size)}
             }
         }
     }
@@ -563,7 +556,7 @@ fn agg_token(a: AggView) -> Element {
 
 /// The pager cluster on the right of the status bar (grid-only): page-size dropdown
 /// (opens upward) + first/prev/page-input `of M`/next/last.
-fn pager_controls(state: Signal<AppState>, total: usize, page: usize, page_size: usize) -> Element {
+fn pager_controls(total: usize, page: usize, page_size: usize) -> Element {
     let page_count = ((total as f64) / (page_size as f64)).ceil().max(1.0) as usize;
     rsx! {
         Select {
@@ -578,14 +571,14 @@ fn pager_controls(state: Signal<AppState>, total: usize, page: usize, page_size:
                 SelectOption::new("10000", "10,000 / page"),
             ],
             on_select: move |v: String| {
-                if let Ok(n) = v.parse::<usize>() { dispatch(state, Action::SetPageSize(n)); }
+                if let Ok(n) = v.parse::<usize>() { dispatch(Action::SetPageSize(n)); }
             },
         }
         div { style: "width:1px;height:18px;background:var(--line);" }
         Pager {
             page: page as u32,
             page_count: page_count as u32,
-            on_jump: move |n: u32| dispatch(state, Action::FetchPage(n as usize)),
+            on_jump: move |n: u32| dispatch(Action::FetchPage(n as usize)),
         }
     }
 }

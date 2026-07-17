@@ -12,7 +12,6 @@ use dioxus::prelude::*;
 use crate::action::{dispatch, Action};
 use crate::plan::{PlanKind, PlanTab};
 use crate::session::WorkspaceId;
-use crate::state::AppState;
 use crate::ui::components::{
     Badge, Dot, Icon, IconButton, IconButtonVariant, Micro, MonoValue, Readout, Segment,
     SegmentOption, Spacer,
@@ -21,7 +20,6 @@ use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
-    let state = use_context::<Signal<AppState>>();
     let (plan, tab, raw) = {
         let Some(entry) = crate::runs::RUNS.resolve().get(ws_id) else {
             return rsx! { div {} };
@@ -75,7 +73,7 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
                     Segment {
                         value: if eff_physical { "physical" } else { "logical" },
                         compact: true,
-                        on_select: move |v: String| dispatch(state, Action::SetPlanTab(
+                        on_select: move |v: String| dispatch(Action::SetPlanTab(
                             if v == "logical" { PlanTab::Logical } else { PlanTab::Physical },
                         )),
                         options: vec![
@@ -92,7 +90,7 @@ pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
                     variant: IconButtonVariant::Toggle,
                     on: raw,
                     title: "{raw_title}",
-                    onclick: move |_| dispatch(state, Action::TogglePlanRaw),
+                    onclick: move |_| dispatch(Action::TogglePlanRaw),
                 }
             }
             if raw {

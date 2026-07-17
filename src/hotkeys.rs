@@ -20,7 +20,6 @@ use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::HotKeyState;
 
 use crate::config::Command;
-use crate::state::AppState;
 
 /// A fired hotkey's command, parked by the (scope-less) registry callback for the scoped
 /// consumer effect in [`use_shortcuts`]. Per-window (a global is per-`VirtualDom`).
@@ -30,14 +29,14 @@ static PENDING: GlobalSignal<Option<Command>> = Signal::global(|| None);
 /// component. `focused` is the window's focus state (set from the wry `Focused` event):
 /// shortcuts are (re)registered while focused and removed on blur, so they aren't held
 /// system-wide while Strata is backgrounded.
-pub fn use_shortcuts(state: Signal<AppState>) {
+pub fn use_shortcuts() {
     // Drain parked commands in-scope: dispatch may call `window()`, which the callback's
     // bare runtime can't satisfy, but this effect runs inside the component scope.
     use_effect(move || {
         let pending = *PENDING.read();
         if let Some(cmd) = pending {
             *PENDING.write() = None;
-            crate::keymap::run(state, cmd);
+            crate::keymap::run(cmd);
         }
     });
 

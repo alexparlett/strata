@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::overlays::ConfigTarget;
-use crate::state::{AppState, ConfigForm};
+use crate::state::ConfigForm;
 use crate::ui::components::{
     Button, ButtonVariant, Eyebrow, Icon, IconButton, IconButtonVariant, MonoValue, Path,
     Segment, SegmentOption, Select, SelectOption, Spacer, TextInput, Toggle, WinGeom, Window,
@@ -17,13 +17,10 @@ use crate::ui::icons::{IconName, IconSize};
 /// Set a config source path and, if the table name is still blank, default it
 /// from the chosen file/folder's name. When the path is a single file with a
 /// recognised extension, the format is auto-detected from it.
-fn set_source(mut draft: Signal<ConfigForm>, state: Signal<AppState>, idx: usize, path: String) {
+fn set_source(mut draft: Signal<ConfigForm>, idx: usize, path: String) {
     // Store paths inside the project folder relative to it, so the project stays
     // portable; anything outside stays absolute.
-    let base = {
-        let s = state.read();
-        crate::action::catalog::project_dir(&s)
-    };
+    let base = crate::action::catalog::project_dir();
     let path = crate::action::catalog::relativize(base.as_deref(), &path);
     let stem = std::path::Path::new(&path)
         .file_stem()
@@ -68,7 +65,7 @@ fn detect_format(path: &str) -> Option<&'static str> {
 /// channel to a Dioxus task, which applies it through a signal write so the UI
 /// re-renders.
 #[cfg(target_os = "macos")]
-fn browse_source(draft: Signal<ConfigForm>, state: Signal<AppState>, idx: usize) {
+fn browse_source(draft: Signal<ConfigForm>, idx: usize) {
     use futures::StreamExt;
     use objc::runtime::Object;
     use objc::{class, msg_send, sel, sel_impl};
@@ -76,8 +73,8 @@ fn browse_source(draft: Signal<ConfigForm>, state: Signal<AppState>, idx: usize)
     let (tx, mut rx) = futures::channel::mpsc::unbounded::<Option<String>>();
     spawn(async move {
         if let Some(Some(path)) = rx.next().await {
-            set_source(draft, state, idx, path);
-            rescan(draft, state);
+            set_source(draft, idx, path);
+            rescan(draft);
         }
     });
 
@@ -114,16 +111,15 @@ fn browse_source(draft: Signal<ConfigForm>, state: Signal<AppState>, idx: usize)
 /// Non-macOS fallback: rfd can't offer a combined file/folder dialog, so pick a
 /// file (directory paths and globs can still be typed).
 #[cfg(not(target_os = "macos"))]
-fn browse_source(draft: Signal<ConfigForm>, state: Signal<AppState>, idx: usize) {
+fn browse_source(draft: Signal<ConfigForm>, idx: usize) {
     spawn(async move {
         if let Some(handle) = rfd::AsyncFileDialog::new().pick_file().await {
             set_source(
                 draft,
-                state,
                 idx,
                 handle.path().to_string_lossy().into_owned(),
             );
-            rescan(draft, state);
+            rescan(draft);
         }
     });
 }
@@ -138,15 +134,14 @@ fn browse_source(draft: Signal<ConfigForm>, state: Signal<AppState>, idx: usize)
 /// detected Hive keys. The walk is bounded (20k files) so it runs synchronously
 /// — `all_dirs`/errors update in the same render turn as the edit, so the UI
 /// (e.g. the partition toggle brightening once it's available) reacts at once.
-fn rescan(mut draft: Signal<ConfigForm>, state: Signal<AppState>) {
+fn rescan(mut draft: Signal<ConfigForm>) {
     let (paths, format, hive_on, base) = {
         let d = draft.read();
-        let s = state.read();
         (
             d.sources.clone(),
             d.format.clone(),
             d.hive_on,
-            crate::action::catalog::project_dir(&s),
+            crate::action::catalog::project_dir(),
         )
     };
     let r = crate::action::catalog::scan_sources(&paths, &format, base.as_deref());
@@ -229,7 +224,6 @@ fn seed_draft(target: &ConfigTarget) -> ConfigForm {
 
 #[component]
 pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element {
-    let state = use_context::<Signal<AppState>>();
     // The working copy is component-local; the project store stays immutable until
     // a successful register. Seed it from the target once, on mount.
     let mut draft = use_signal(move || seed_draft(&target));
@@ -253,7 +247,7 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
         .clone();
 
     // Scan the sources once when the modal opens (validates pre-filled edit paths).
-    use_hook(move || rescan(draft, state));
+    use_hook(move || rescan(draft));
 
     let title = if editing {
         "Configure table"
@@ -317,7 +311,7 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                     variant: ButtonVariant::Primary,
                     disabled: !form_ready,
                     icon: IconName::Check, icon_size: IconSize::Sm,
-                    onclick: move |_| { if form_ready { dispatch(state, Action::RegisterTable(draft())); } },
+                    onclick: move |_| { if form_ready { dispatch(Action::RegisterTable(draft())); } },
                     "{confirm_label}"
                 }
             },
@@ -339,7 +333,7 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                                     SelectOption::new("json", "json"),
                                     SelectOption::new("arrow", "arrow"),
                                 ],
-                                on_select: move |v: String| { draft.write().format = v; rescan(draft, state); },
+                                on_select: move |v: String| { draft.write().format = v; rescan(draft); },
                             }
                         }
                     }
@@ -353,22 +347,22 @@ pub fn ConfigModal(target: ConfigTarget, on_close: EventHandler<()>) -> Element 
                             div { class: "src-row",
                                 TextInput { value: "{src}", mono: true, grow: true,
                                     oninput: move |v| { let mut w = draft.write(); if let Some(p) = w.sources.get_mut(idx) { *p = v; } },
-                                    onchange: move |_v| rescan(draft, state) }
+                                    onchange: move |_v| rescan(draft) }
                                 IconButton { icon: IconName::Folder, variant: IconButtonVariant::Toolbar, title: "Browse — file or folder…",
-                                    onclick: move |_| browse_source(draft, state, idx),
+                                    onclick: move |_| browse_source(draft, idx),
                                 }
                                 // At least one path is required, so the last remaining
                                 // row has no remove button.
                                 if !single_path {
                                     IconButton { icon: IconName::Minus, icon_size: IconSize::Xs, variant: IconButtonVariant::Danger, title: "Remove path",
-                                        onclick: move |_| { { let mut w = draft.write(); if w.sources.len() > 1 { w.sources.remove(idx); } } rescan(draft, state); },
+                                        onclick: move |_| { { let mut w = draft.write(); if w.sources.len() > 1 { w.sources.remove(idx); } } rescan(draft); },
                                     }
                                 }
                             }
                         }
                     }
                     Button { variant: ButtonVariant::Ghost, icon: IconName::Plus, icon_size: IconSize::Xs,
-                        onclick: move |_| { draft.write().sources.push(String::new()); rescan(draft, state); },
+                        onclick: move |_| { draft.write().sources.push(String::new()); rescan(draft); },
                         "Add path"
                     }
 

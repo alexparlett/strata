@@ -1,7 +1,7 @@
 //! The workspace tab strip: right-click `ContextMenu`, ⋯ overflow + ⌄ "show all tabs"
 //! `DropdownMenu`s, and inline rename. All
 //! transient tab-strip UI — the context menu, plus the inline-rename target +
-//! draft text — is component-local `use_signal` state, never on `AppState`; only
+//! draft text — is component-local `use_signal` state, never in a shared store; only
 //! the durable rename commit (`Action::RenameTab`) goes through the action layer.
 //!
 //! Tabs are addressed by their stable `crate::session::WorkspaceId`; the strip is
@@ -18,7 +18,6 @@ use dioxus_stores::*;
 
 use crate::action::{dispatch, Action};
 use crate::session::{SessionStoreExt, WorkspaceId, WorkspaceStoreExt};
-use crate::state::AppState;
 use crate::ui::components::{
     Body, Caption, ContextMenu, Dot, DropdownMenu, Icon, IconButton, IconButtonVariant, MenuItem,
     MenuSep, Point, Prose, RectAlign, TextInput,
@@ -37,7 +36,6 @@ struct TabDrag {
 
 #[component]
 pub(crate) fn Tabs() -> Element {
-    let state = use_context::<Signal<AppState>>();
     let mut tab_menu = use_signal(|| None::<(WorkspaceId, Point)>);
     // S8 tab-bar controls: ⋯ overflow + ⌄ "show all tabs" — both `DropdownMenu`s. The tab
     // list uses a controlled `open` so its search box can dismiss the menu on Enter.
@@ -165,7 +163,7 @@ pub(crate) fn Tabs() -> Element {
                             onmousedown: move |e| {
                                 if is_rename { return; }
                                 if e.trigger_button() != Some(MouseButton::Primary) { return; }
-                                if id != active { dispatch(state, Action::SwitchTab(id)); }
+                                if id != active { dispatch(Action::SwitchTab(id)); }
                             },
                             // Arm the Tabs-local drag and start edge auto-scroll: while the pointer
                             // sits near the track's left/right edge, keep scrolling the strip so
@@ -235,7 +233,7 @@ pub(crate) fn Tabs() -> Element {
                                 if let Some(d) = drag.write().take() {
                                     let target = if d.insert > d.from { d.insert - 1 } else { d.insert };
                                     if target != d.from {
-                                        dispatch(state, Action::MoveTab { id: d.id, insert: target });
+                                        dispatch(Action::MoveTab { id: d.id, insert: target });
                                     }
                                 }
                             },
@@ -266,11 +264,11 @@ pub(crate) fn Tabs() -> Element {
                                     onfocusout: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None),
                                     oninput: move |e| rename_val.set(e.value()),
                                     onkeydown: move |e| match e.key() {
-                                        Key::Enter => { e.prevent_default(); commit_rename(state, renaming, rename_val, id); }
+                                        Key::Enter => { e.prevent_default(); commit_rename(renaming, rename_val, id); }
                                         Key::Escape => { e.prevent_default(); renaming.set(None); }
                                         _ => {}
                                     },
-                                    onblur: move |_| commit_rename(state, renaming, rename_val, id),
+                                    onblur: move |_| commit_rename(renaming, rename_val, id),
                                     onclick: move |e| e.stop_propagation(),
                                 }
                             } else {
@@ -282,7 +280,7 @@ pub(crate) fn Tabs() -> Element {
                                     title: if dirty { "Unsaved changes — click to close" } else { "Close tab" },
                                     // Don't let a mousedown on × arm a tab drag / re-select.
                                     onmousedown: move |e| e.stop_propagation(),
-                                    onclick: move |e| { e.stop_propagation(); dispatch(state, Action::CloseTab(id)); },
+                                    onclick: move |e| { e.stop_propagation(); dispatch(Action::CloseTab(id)); },
                                     span { class: "close-dot" }
                                     span { class: "close-x", "×" }
                                 }
@@ -304,26 +302,26 @@ pub(crate) fn Tabs() -> Element {
                 IconButton { icon: IconName::Plus,
                     variant: IconButtonVariant::Ghost,
                     title: "New query",
-                    onclick: move |_| dispatch(state, Action::NewTab),
+                    onclick: move |_| dispatch(Action::NewTab),
                 }
                 DropdownMenu {
                     class: "icon-btn plain", style: "width:26px;height:28px;", title: "Show all tabs",
                     align: RectAlign::BOTTOM_END, width: 320, open: tab_list_open,
                     trigger: rsx! { Icon { name: IconName::ChevronDown, size: IconSize::Sm } },
-                    {tab_list_body(state, tab_list_open, tab_list_query, active)}
+                    {tab_list_body(tab_list_open, tab_list_query, active)}
                 }
                 DropdownMenu {
                     class: "icon-btn plain", style: "width:24px;height:28px;", title: "Tab actions",
                     align: RectAlign::BOTTOM_END,
                     trigger: rsx! { Icon { name: IconName::Dots, size: IconSize::Sm } },
-                    {overflow_menu_items(state, active, crate::session::has_closed())}
+                    {overflow_menu_items(active, crate::session::has_closed())}
                 }
             }
 
             // Self-contained tab context menu (right-click → ContextMenu).
             if let Some((id, at)) = tab_menu() {
                 ContextMenu { on_close: move |_| tab_menu.set(None), at: Some(at),
-                    {tab_menu_items(state, tab_menu, renaming, rename_val, id)}
+                    {tab_menu_items(tab_menu, renaming, rename_val, id)}
                 }
             }
 
@@ -335,7 +333,6 @@ pub(crate) fn Tabs() -> Element {
 /// rename, then leave rename mode. A no-op when not renaming, so the Enter that
 /// already committed doesn't fire again on the follow-up blur.
 fn commit_rename(
-    state: Signal<AppState>,
     mut renaming: Signal<Option<WorkspaceId>>,
     rename_val: Signal<String>,
     id: WorkspaceId,
@@ -344,14 +341,13 @@ fn commit_rename(
         return;
     }
     let v = rename_val.peek().clone();
-    dispatch(state, Action::RenameTab(id, v));
+    dispatch(Action::RenameTab(id, v));
     renaming.set(None);
 }
 
 /// Rows for a workspace-tab context menu. Each dismisses the popup then acts —
 /// "Rename" seeds the component-local rename signals; the rest dispatch actions.
 fn tab_menu_items(
-    state: Signal<AppState>,
     mut tab_menu: Signal<Option<(WorkspaceId, Point)>>,
     mut renaming: Signal<Option<WorkspaceId>>,
     mut rename_val: Signal<String>,
@@ -372,32 +368,32 @@ fn tab_menu_items(
                 renaming.set(Some(id));
             } }
         MenuItem { label: "Duplicate".to_string(),
-            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::DuplicateTab(id)); } }
+            onclick: move |_| { tab_menu.set(None); dispatch(Action::DuplicateTab(id)); } }
         MenuSep {}
         MenuItem { label: "Close".to_string(),
-            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseTab(id)); } }
+            onclick: move |_| { tab_menu.set(None); dispatch(Action::CloseTab(id)); } }
         MenuItem { label: "Close others".to_string(),
-            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseOtherTabs(id)); } }
+            onclick: move |_| { tab_menu.set(None); dispatch(Action::CloseOtherTabs(id)); } }
         MenuItem { label: "Close to the right".to_string(),
-            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseTabsRight(id)); } }
+            onclick: move |_| { tab_menu.set(None); dispatch(Action::CloseTabsRight(id)); } }
         MenuItem { label: "Close all".to_string(),
-            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::CloseAllTabs); } }
+            onclick: move |_| { tab_menu.set(None); dispatch(Action::CloseAllTabs); } }
         MenuSep {}
         MenuItem { label: "Reopen closed tab".to_string(), meta: crate::keymap::hint(crate::config::Command::ReopenTab), disabled: !can_reopen,
-            onclick: move |_| { tab_menu.set(None); dispatch(state, Action::ReopenTab); } }
+            onclick: move |_| { tab_menu.set(None); dispatch(Action::ReopenTab); } }
     }
 }
 
 /// Rows for the ⋯ tab-overflow menu (S8): whole-strip actions (not tied to one tab).
-fn overflow_menu_items(state: Signal<AppState>, active: WorkspaceId, can_reopen: bool) -> Element {
+fn overflow_menu_items(active: WorkspaceId, can_reopen: bool) -> Element {
     rsx! {
         MenuItem { label: "Close all tabs".to_string(),
-            onclick: move |_| dispatch(state, Action::CloseAllTabs) }
+            onclick: move |_| dispatch(Action::CloseAllTabs) }
         MenuItem { label: "Close other tabs".to_string(),
-            onclick: move |_| dispatch(state, Action::CloseOtherTabs(active)) }
+            onclick: move |_| dispatch(Action::CloseOtherTabs(active)) }
         MenuSep {}
         MenuItem { label: "Reopen closed tab".to_string(), meta: crate::keymap::hint(crate::config::Command::ReopenTab), disabled: !can_reopen,
-            onclick: move |_| dispatch(state, Action::ReopenTab) }
+            onclick: move |_| dispatch(Action::ReopenTab) }
     }
 }
 
@@ -405,7 +401,6 @@ fn overflow_menu_items(state: Signal<AppState>, active: WorkspaceId, can_reopen:
 /// workspace (click switches, × closes). Reads the live session so closing a row
 /// updates the list in place; Enter opens the first match.
 fn tab_list_body(
-    state: Signal<AppState>,
     mut open: Signal<bool>,
     mut query: Signal<String>,
     active: WorkspaceId,
@@ -440,7 +435,7 @@ fn tab_list_body(
                         if let Some(id) = first {
                             e.prevent_default();
                             open.set(false);
-                            dispatch(state, Action::SwitchTab(id));
+                            dispatch(Action::SwitchTab(id));
                         }
                     }
                     Key::Escape => { e.prevent_default(); open.set(false); }
@@ -455,12 +450,12 @@ fn tab_list_body(
             for (id, name, is_active, dirty) in rows {
                 div {
                     class: if is_active { "tablist-row active" } else { "tablist-row" },
-                    onclick: move |_| dispatch(state, Action::SwitchTab(id)),
+                    onclick: move |_| dispatch(Action::SwitchTab(id)),
                     Dot { size: 6, color: if dirty { "var(--orange)" } else if is_active { "var(--accent)" } else { "var(--dim2)" } }
                     Body { class: "tablist-name", "{name}" }
                     span {
                         class: "tablist-close",
-                        onclick: move |e| { e.stop_propagation(); dispatch(state, Action::CloseTab(id)); },
+                        onclick: move |e| { e.stop_propagation(); dispatch(Action::CloseTab(id)); },
                         "×"
                     }
                 }

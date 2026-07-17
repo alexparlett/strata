@@ -1,7 +1,7 @@
 //! Per-window **layout store** — panel + drawer *visibility* (sidebar / inspector
 //! open, and the bottom drawer's open flag + active tab).
 //!
-//! Split out of `AppState` (F7, "Avoid Large Groups of State"). Visibility is
+//! Split out of the old central app state (F7, "Avoid Large Groups of State"). Visibility is
 //! genuinely shared — the activity rail toggles it and the root decides whether to
 //! render the panel / drawer — so it lives in a small per-window `dioxus-stores`
 //! `Store` (a `GlobalStore` is per-VirtualDom). Runtime-only, never persisted.

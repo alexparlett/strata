@@ -1,7 +1,7 @@
 //! The **Events log** — a per-window store of app events (the bottom drawer's
 //! Events tab). Written by [`push`] / [`push_err`] from across the action layer and
 //! the engine-event handler; read by the drawer. Runtime-only, never persisted —
-//! split out of `AppState` (F7 B8), like [`crate::runs`] / [`crate::diagnostics`].
+//! split out of the old central app state (F7 B8), like [`crate::runs`] / [`crate::diagnostics`].
 //!
 //! The events `Vec` is a per-window `GlobalStore` (like [`crate::runs::RUNS`]); row
 //! ids come from a process-global counter — they need only be unique within a

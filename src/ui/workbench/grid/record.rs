@@ -8,7 +8,6 @@ use crate::action::{dispatch, Action};
 use crate::engine::Cell;
 use crate::serialize::TextFormat;
 use crate::session::WorkspaceId;
-use crate::state::AppState;
 use crate::ui::components::{
     Dialog, DropdownMenu, Icon, IconButton, IconButtonVariant, MenuItem, Meta, MonoValue, Readout,
     RectAlign, Spacer,
@@ -21,7 +20,6 @@ use crate::ui::icons::{IconName, IconSize};
 /// `idx` (a page-local filtered row index) matches the double-clicked gutter row without prop clones.
 #[component]
 pub(super) fn RecordDialog(ws_id: WorkspaceId, idx: Signal<Option<usize>>) -> Element {
-    let state = use_context::<Signal<AppState>>();
     let mut idx = idx;
 
     let Some(entry) = crate::runs::RUNS.resolve().get(ws_id) else {
@@ -91,7 +89,7 @@ pub(super) fn RecordDialog(ws_id: WorkspaceId, idx: Signal<Option<usize>>) -> El
                     class: "icon-btn plain", style: "width:28px;height:28px;", title: "Copy record",
                     align: RectAlign::BOTTOM_END, width: 190,
                     trigger: rsx! { Icon { name: IconName::Dots, size: IconSize::Sm } },
-                    {record_copy_items(state, cur)}
+                    {record_copy_items(cur)}
                 }
                 IconButton {
                     icon: IconName::Close, variant: IconButtonVariant::Ghost, title: "Close",
@@ -143,11 +141,11 @@ pub(super) fn RecordDialog(ws_id: WorkspaceId, idx: Signal<Option<usize>>) -> El
 
 /// The four "Copy as …" rows for the record `⋯` menu — copies row `row` (all columns) in each
 /// format via [`Action::CopyRecord`]. The `DropdownMenu` closes itself on any row click.
-fn record_copy_items(state: Signal<AppState>, row: usize) -> Element {
+fn record_copy_items(row: usize) -> Element {
     rsx! {
-        MenuItem { label: "Copy as TSV".to_string(), onclick: move |_| dispatch(state, Action::CopyRecord(row, TextFormat::Tsv)) }
-        MenuItem { label: "Copy as CSV".to_string(), onclick: move |_| dispatch(state, Action::CopyRecord(row, TextFormat::Csv)) }
-        MenuItem { label: "Copy as JSON".to_string(), onclick: move |_| dispatch(state, Action::CopyRecord(row, TextFormat::Json)) }
-        MenuItem { label: "Copy as Markdown".to_string(), onclick: move |_| dispatch(state, Action::CopyRecord(row, TextFormat::Markdown)) }
+        MenuItem { label: "Copy as TSV".to_string(), onclick: move |_| dispatch(Action::CopyRecord(row, TextFormat::Tsv)) }
+        MenuItem { label: "Copy as CSV".to_string(), onclick: move |_| dispatch(Action::CopyRecord(row, TextFormat::Csv)) }
+        MenuItem { label: "Copy as JSON".to_string(), onclick: move |_| dispatch(Action::CopyRecord(row, TextFormat::Json)) }
+        MenuItem { label: "Copy as Markdown".to_string(), onclick: move |_| dispatch(Action::CopyRecord(row, TextFormat::Markdown)) }
     }
 }

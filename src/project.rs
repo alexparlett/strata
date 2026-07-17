@@ -9,7 +9,7 @@
 //! project on open. Reference model: table `sources` are absolute paths.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use dioxus::prelude::*;
 use dioxus_stores::*;
@@ -136,7 +136,7 @@ pub struct WindowGeom {
 }
 
 /// The open project — the durable core serialized to `<name>.psproj`. Global
-/// prefs and ephemeral UI live on `AppState`, not here.
+/// prefs and ephemeral UI live in their own focused stores, not here.
 #[derive(Store, Clone, PartialEq)]
 pub struct Project {
     pub name: String,
@@ -149,6 +149,9 @@ pub struct Project {
     pub next_hist: u64,
     // last window geometry (absent on new / never-moved projects)
     pub window: Option<WindowGeom>,
+    // where this project lives on disk (`None` = unsaved). Runtime-only — NOT in the
+    // serialized `DefsFile`/`SessionFile`; the path is the on-disk handle, set on open.
+    pub path: Option<PathBuf>,
 }
 
 /// The committed definitions — `.strata/project.json`.
@@ -214,6 +217,7 @@ impl Project {
             history: Vec::new(),
             next_hist: 1,
             window: None,
+            path: None,
         }
     }
 
@@ -276,6 +280,7 @@ impl Project {
                 history: sess.history,
                 next_hist: 0,
                 window: sess.window,
+                path: Some(dir.to_path_buf()),
             };
             // History ids are runtime — assign them 1..n on load (as the old
             // `normalize` did).
@@ -339,6 +344,23 @@ pub fn name() -> String {
     store().name().cloned()
 }
 
+/// The open project's `.strata` directory (`None` = unsaved / in-memory) — reactive.
+/// A runtime `path` field of `Project`, read through its lens; not persisted in the
+/// project files.
+pub fn path() -> Option<PathBuf> {
+    store().path().cloned()
+}
+
+/// The open project's directory — non-reactive (action layer / persistence).
+pub fn path_peek() -> Option<PathBuf> {
+    store().path().peek().clone()
+}
+
+/// Point this window at `path` on disk (`None` = unsaved).
+pub fn set_path(path: Option<PathBuf>) {
+    store().path().set(path);
+}
+
 // --- mutations (lens writes; the caller autosaves) -------------------------
 
 /// Replace the whole project (opening one into this window). Writes each field lens
@@ -353,6 +375,7 @@ pub fn open(project: Project) {
     s.history().set(project.history);
     s.next_hist().set(project.next_hist);
     s.window().set(project.window);
+    s.path().set(project.path);
 }
 
 /// Insert-or-replace a table by name (engine (re)registration / config save).

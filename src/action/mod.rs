@@ -7,12 +7,11 @@
 //! *same* `CloseTab(idx)` — menus map their rows to concrete actions, they don't
 //! re-route through a wrapper.
 
-// Import `Signal` explicitly rather than glob-importing the dioxus prelude —
-// the prelude also exports an `Action`, which would collide with our enum and
-// break `use Action::*` in `dispatch`.
+// The dioxus prelude is deliberately *not* glob-imported here — it also exports
+// an `Action`, which would collide with our enum and break `use Action::*` in
+// `dispatch`.
 use crate::plan::PlanTab;
-use crate::state::{AppState, LogTab, RemoveKind};
-use dioxus::prelude::Signal;
+use crate::state::{LogTab, RemoveKind};
 
 // Domain handler modules. `panel` (the `Resizer` handle + window-fill toggle),
 // `projects` (window startup), and `catalog` (the modal's source scan,
@@ -148,15 +147,15 @@ pub enum Action {
 /// definitions or the working session) trigger an autosave afterward. The SQL
 /// editor is a *controlled* input bound to its workspace's `sql` lens, so no
 /// remount / epoch bump is needed — programmatic edits flow straight to the store.
-pub fn dispatch(state: Signal<AppState>, action: Action) {
+pub fn dispatch(action: Action) {
     let durable = is_durable(&action);
     let defs = durable && touches_defs(&action);
-    run(state, action);
+    run(action);
     if durable {
         if defs {
-            projects::autosave(state);
+            projects::autosave();
         } else {
-            projects::autosave_session(state);
+            projects::autosave_session();
         }
     }
 }
@@ -203,7 +202,7 @@ fn touches_defs(a: &Action) -> bool {
     )
 }
 
-fn run(state: Signal<AppState>, action: Action) {
+fn run(action: Action) {
     use Action::*;
     match action {
         // query & results
@@ -245,7 +244,7 @@ fn run(state: Signal<AppState>, action: Action) {
         // catalog
         OpenConfigNew => catalog::open_config_new(),
         OpenConfigEdit(name) => catalog::open_config_edit(&name),
-        RegisterTable(draft) => catalog::register_table(state, draft),
+        RegisterTable(draft) => catalog::register_table(draft),
         ConfirmRemove { kind, name } => catalog::confirm_remove(kind, name),
         EditView(name) => catalog::edit_view(&name),
         ToggleTableOpen(i) => crate::project::toggle_table_open(i),
@@ -273,14 +272,14 @@ fn run(state: Signal<AppState>, action: Action) {
         RunExport(opts) => query::run_export(opts),
 
         // project (open/recent spawn new windows; close closes this window)
-        OpenProject => projects::open_dir(state),
-        OpenRecent(path) => projects::open_recent(state, path),
+        OpenProject => projects::open_dir(),
+        OpenRecent(path) => projects::open_recent(path),
         OpenChosen {
             new_window,
             remember,
-        } => projects::choose_open(state, new_window, remember),
-        SaveProject => projects::save(state),
-        CloseProject => projects::close(state),
-        CloseWindowForce => projects::close_now(state),
+        } => projects::choose_open(new_window, remember),
+        SaveProject => projects::save(),
+        CloseProject => projects::close(),
+        CloseWindowForce => projects::close_now(),
     }
 }

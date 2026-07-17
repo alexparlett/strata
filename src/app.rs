@@ -1,6 +1,5 @@
-//! Root component: owns the `Signal<AppState>`, bridges the DataFusion engine
-//! (spawn + event-draining coroutine), routes keyboard shortcuts, and lays out
-//! the shell + modals.
+//! Root component: bridges the DataFusion engine (spawn + event-draining
+//! coroutine), routes keyboard shortcuts, and lays out the shell + modals.
 //!
 //! UI intents are funneled through [`crate::action::dispatch`]; this file only
 //! holds the component, the engine wiring, and the engine→state reducer
@@ -14,7 +13,7 @@ use crate::engine::{self, Engine, EngineStoreExt, Event};
 use crate::menu::MenuCmd;
 use crate::project::ProjectStoreExt;
 use crate::query_error::QueryError;
-use crate::state::{AppState, CatalogTable, CatalogView, LogKind, RegStatus};
+use crate::state::{CatalogTable, CatalogView, LogKind, RegStatus};
 use crate::ui;
 
 /// Root class. On macOS the transparent title bar means the traffic-light
@@ -24,19 +23,16 @@ const ROOT_CLASS: &str = "ps-app mac";
 #[cfg(not(target_os = "macos"))]
 const ROOT_CLASS: &str = "ps-app";
 
-/// One project window: owns its `AppState` + engine. `open_path` is the
-/// `.psproj` to load on startup (empty string → a fresh untitled project).
-/// Spawned via `crate::window::spawn_project_window`; the first window is created
-/// by `main` through `root_entry`.
+/// One project window: owns its engine. `open_path` is the `.psproj` to load on
+/// startup (empty string → a fresh untitled project). Spawned via
+/// `crate::window::spawn_project_window`; the first window is created by `main`
+/// through `root_entry`.
 #[component]
 pub fn ProjectRoot(open_path: String) -> Element {
-    let mut state = use_signal(AppState::empty);
-    use_context_provider(|| state);
-
     // Persist live editor SQL edits: the controlled editor writes its workspace's
     // `sql` lens directly (bypassing `dispatch`'s autosave), so this effect
     // subscribes to the session store and writes a debounced `session.json`.
-    crate::action::projects::use_persist_session(state);
+    crate::action::projects::use_persist_session();
 
     // Track this window so siblings can be focused / cycled, and so "Close
     // project" knows whether it's the last one.
@@ -45,9 +41,9 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // Spawn the engine (seeded with the current engine config overrides, W2), drain
     // its events, and load the assigned project.
     use_hook(move || {
-        spawn(drain_events(state));
+        spawn(drain_events());
         if !open_path.is_empty() {
-            crate::action::projects::load_current(state, std::path::PathBuf::from(open_path));
+            crate::action::projects::load_current(std::path::PathBuf::from(open_path));
         }
         // The launch window reopens the rest of last session's projects (once),
         // deferred so window creation doesn't run during this window's mount.
@@ -70,7 +66,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // so a DOM handler can't hear them once focus leaves the app subtree. `crate::hotkeys`
     // registers them while this window is focused; `focused` is relayed from the wry
     // `Focused` event below.
-    crate::hotkeys::use_shortcuts(state);
+    crate::hotkeys::use_shortcuts();
 
     // Persist window geometry + save on an OS close-button (the window is still
     // alive here, unlike `use_drop`). Does *not* open the launcher — an OS close
@@ -86,7 +82,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             }
             match event {
                 WindowEvent::CloseRequested => {
-                    crate::action::projects::save_on_close(state, win_id);
+                    crate::action::projects::save_on_close(win_id);
                 }
                 // Follow the OS light/dark switch live (drives Sync-with-OS
                 // without a restart). Reactive, so the theme re-applies at once.
@@ -112,7 +108,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
     use_effect(move || {
         if let Some(id) = menu_cmd() {
             menu_cmd.set(None);
-            crate::menu::run_project_command(state, &id);
+            crate::menu::run_project_command(&id);
         }
     });
 
@@ -142,7 +138,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
             // subtree. Unknown id → empty string → `:root` still applies.
             style: "{theme_css}",
             "data-density": if crate::settings::density_compact() { "compact" } else { "comfortable" },
-            onkeydown: move |e| handle_key(state, e),
+            onkeydown: move |e| handle_key(e),
 
             ui::header::Header {}
 
@@ -183,10 +179,10 @@ pub fn ProjectRoot(open_path: String) -> Element {
     }
 }
 
-async fn drain_events(state: Signal<AppState>) {
+async fn drain_events() {
     let mut evt_rx = crate::engine::Engine::take_evt_rx();
     while let Some(ev) = evt_rx.recv().await {
-        apply_event(state, ev);
+        apply_event(ev);
     }
 }
 
@@ -194,9 +190,9 @@ async fn drain_events(state: Signal<AppState>) {
 // focus-independent. This DOM handler runs only the *non*-global commands (Esc → Cancel),
 // so the two layers never double-fire. It's best-effort: Esc-to-cancel-a-query works only
 // when focus is in the app subtree, which is fine — an open overlay dismisses its own Esc.
-fn handle_key(state: Signal<AppState>, e: dioxus_core::Event<dioxus::events::KeyboardData>) {
+fn handle_key(e: dioxus_core::Event<dioxus::events::KeyboardData>) {
     if let Some(cmd) = crate::keymap::resolve(&e) {
-        if !crate::keymap::is_global(cmd) && crate::keymap::run(state, cmd) {
+        if !crate::keymap::is_global(cmd) && crate::keymap::run(cmd) {
             e.prevent_default();
         }
     }
@@ -204,7 +200,7 @@ fn handle_key(state: Signal<AppState>, e: dioxus_core::Event<dioxus::events::Key
 
 /// The engine→state reducer: fold an engine [`Event`] into the shared state.
 /// This is not a UI action — it's driven by [`drain_events`].
-pub fn apply_event(state: Signal<AppState>, ev: Event) {
+pub fn apply_event(ev: Event) {
     // Set when an engine event durably changes the project (a config register
     // adds/edits a table). Engine events aren't dispatched, so they don't hit the
     // normal autosave path — we persist explicitly at the end.
@@ -519,6 +515,6 @@ pub fn apply_event(state: Signal<AppState>, ev: Event) {
         }
     }
     if autosave_after {
-        crate::action::projects::autosave(state);
+        crate::action::projects::autosave();
     }
 }

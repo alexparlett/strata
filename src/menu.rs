@@ -26,7 +26,6 @@ use dioxus::desktop::muda::{
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::AppState;
 
 /// Where ⌘A "Select All" applies right now. Set from `onfocusin`/`onfocusout` on the
 /// focusable text surfaces — the results grid, every `TextInput`, the SQL editor — the
@@ -267,12 +266,12 @@ fn recent_submenu() -> Submenu {
 
 /// Run a File-menu command in the focused project window. Called from a
 /// `use_effect` (reactive scope present, so the open-folder dialog can spawn).
-pub fn run_project_command(state: Signal<AppState>, cmd: &MenuCmd) {
+pub fn run_project_command(cmd: &MenuCmd) {
     match cmd {
-        MenuCmd::NewQuery => dispatch(state, Action::NewTab),
-        MenuCmd::OpenProject => dispatch(state, Action::OpenProject),
-        MenuCmd::CloseProject => dispatch(state, Action::CloseProject),
-        MenuCmd::SaveAll => dispatch(state, Action::SaveProject),
+        MenuCmd::NewQuery => dispatch(Action::NewTab),
+        MenuCmd::OpenProject => dispatch(Action::OpenProject),
+        MenuCmd::CloseProject => dispatch(Action::CloseProject),
+        MenuCmd::SaveAll => dispatch(Action::SaveProject),
         MenuCmd::Settings => crate::window::spawn_settings_window(),
         MenuCmd::SelectAll => match select_all_scope() {
             SelectAllScope::Grid => crate::ui::workbench::grid::select_all_active_grid(),
@@ -287,11 +286,11 @@ pub fn run_project_command(state: Signal<AppState>, cmd: &MenuCmd) {
         // default); anywhere else → re-emit native `copy:` for the focused text field.
         MenuCmd::Copy => match select_all_scope() {
             SelectAllScope::Grid => {
-                dispatch(state, Action::CopySelection(crate::serialize::TextFormat::Tsv))
+                dispatch(Action::CopySelection(crate::serialize::TextFormat::Tsv))
             }
             SelectAllScope::Input | SelectAllScope::None => crate::window::send_copy(),
         },
-        MenuCmd::OpenRecent(path) => dispatch(state, Action::OpenRecent(path.clone())),
+        MenuCmd::OpenRecent(path) => dispatch(Action::OpenRecent(path.clone())),
         #[cfg(debug_assertions)]
         MenuCmd::OpenGallery => crate::window::spawn_gallery_window(),
     }

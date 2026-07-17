@@ -13,7 +13,6 @@ use crate::engine::Cell;
 use crate::runs::Selection;
 use crate::serialize::TextFormat;
 use crate::session::WorkspaceId;
-use crate::state::AppState;
 use crate::ui::components::{ContextMenu, Eyebrow, MenuItem, Point};
 
 mod cells;
@@ -55,7 +54,6 @@ pub(super) struct CellView {
 
 #[component]
 pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
-    let state = use_context::<Signal<AppState>>();
     // The nested-cell view is grid-local, opened from a cell, closed by the dialog.
     let cell_view = use_signal(|| None::<CellView>);
     // The record (row-detail) view (Rz5) — a page-local *filtered* row index; `None` = closed.
@@ -205,7 +203,7 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
                     }
                     for (ci, col) in cols.iter().cloned().enumerate() {
                         {render_hcol(
-                            state, drag_sel, ws_id, ci, col, col_ws[ci],
+                            drag_sel, ws_id, ci, col, col_ws[ci],
                             sel_cols.contains(&ci),
                             sort.filter(|s| s.col == ci).map(|s| s.asc),
                         )}
@@ -251,7 +249,7 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
         // Right-click copy menu (Rz4). Operates on the current selection.
         if let Some(at) = ctx_menu() {
             ContextMenu { on_close: move |_| ctx_menu.set(None), at: Some(at), width: 200,
-                {copy_menu_items(state, ctx_menu)}
+                {copy_menu_items(ctx_menu)}
             }
         }
     }
@@ -259,24 +257,24 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
 
 /// Rows for the results right-click copy menu (Rz4). Four peer "Copy as …" formats over the
 /// same selection; TSV is also the ⌘C default (hence its keyboard hint).
-fn copy_menu_items(state: Signal<AppState>, mut ctx_menu: Signal<Option<Point>>) -> Element {
+fn copy_menu_items(mut ctx_menu: Signal<Option<Point>>) -> Element {
     rsx! {
         MenuItem {
             label: "Copy as TSV".to_string(),
             meta: "⌘C".to_string(),
-            onclick: move |_| { ctx_menu.set(None); dispatch(state, Action::CopySelection(TextFormat::Tsv)); },
+            onclick: move |_| { ctx_menu.set(None); dispatch(Action::CopySelection(TextFormat::Tsv)); },
         }
         MenuItem {
             label: "Copy as CSV".to_string(),
-            onclick: move |_| { ctx_menu.set(None); dispatch(state, Action::CopySelection(TextFormat::Csv)); },
+            onclick: move |_| { ctx_menu.set(None); dispatch(Action::CopySelection(TextFormat::Csv)); },
         }
         MenuItem {
             label: "Copy as JSON".to_string(),
-            onclick: move |_| { ctx_menu.set(None); dispatch(state, Action::CopySelection(TextFormat::Json)); },
+            onclick: move |_| { ctx_menu.set(None); dispatch(Action::CopySelection(TextFormat::Json)); },
         }
         MenuItem {
             label: "Copy as Markdown".to_string(),
-            onclick: move |_| { ctx_menu.set(None); dispatch(state, Action::CopySelection(TextFormat::Markdown)); },
+            onclick: move |_| { ctx_menu.set(None); dispatch(Action::CopySelection(TextFormat::Markdown)); },
         }
     }
 }

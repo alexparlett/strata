@@ -5,13 +5,11 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::AppState;
 use crate::ui::components::{Button, ButtonVariant, Dialog, Icon, Readout, Title};
 use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub fn CloseConfirmHost() -> Element {
-    let state = use_context::<Signal<AppState>>();
     let Some(id) = crate::overlays::OVERLAYS.resolve().read().close_confirm else {
         return rsx! {};
     };
@@ -40,7 +38,7 @@ pub fn CloseConfirmHost() -> Element {
                     icon: IconName::Trash, icon_size: IconSize::Sm,
                     onclick: move |_| {
                         crate::overlays::close_close_confirm();
-                        dispatch(state, Action::CloseTabForce(id));
+                        dispatch(Action::CloseTabForce(id));
                     },
                     "Discard"
                 }

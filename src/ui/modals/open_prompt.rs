@@ -10,7 +10,6 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::AppState;
 use crate::ui::components::{Button, ButtonVariant, Checkbox, Dialog, Icon, Prose, Title};
 use crate::ui::icons::{IconName, IconSize};
 
@@ -29,7 +28,6 @@ pub fn OpenPromptHost() -> Element {
 
 #[component]
 fn OpenPromptCard(path: std::path::PathBuf) -> Element {
-    let state = use_context::<Signal<AppState>>();
     let mut remember = use_signal(|| false);
     // The picked project folder (the parent of its `.strata` dir).
     let name = path
@@ -62,12 +60,12 @@ fn OpenPromptCard(path: std::path::PathBuf) -> Element {
                 Button { variant: ButtonVariant::Ghost, onclick: move |_| crate::overlays::close_open_prompt(), "Cancel" }
                 Button {
                     variant: ButtonVariant::Secondary,
-                    onclick: move |_| dispatch(state, Action::OpenChosen { new_window: true, remember: remember() }),
+                    onclick: move |_| dispatch(Action::OpenChosen { new_window: true, remember: remember() }),
                     "New Window"
                 }
                 Button {
                     variant: ButtonVariant::Primary,
-                    onclick: move |_| dispatch(state, Action::OpenChosen { new_window: false, remember: remember() }),
+                    onclick: move |_| dispatch(Action::OpenChosen { new_window: false, remember: remember() }),
                     "This Window"
                 }
             }

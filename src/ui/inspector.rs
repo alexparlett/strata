@@ -8,7 +8,6 @@ use dioxus::prelude::*;
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
 use crate::project::ProjectStoreExt;
-use crate::state::AppState;
 use crate::ui::components::{
     Dot, Eyebrow, IconButton, IconButtonVariant, Meta, MonoValue, Path, Prose, Readout,
 };
@@ -17,7 +16,6 @@ use crate::util::Kind;
 
 #[component]
 pub fn Inspector() -> Element {
-    let state = use_context::<Signal<AppState>>();
     let store = crate::project::store();
     let tables_lens = store.tables();
     let views_lens = store.views();
@@ -33,7 +31,7 @@ pub fn Inspector() -> Element {
                 div { class: "insp-head",
                     Eyebrow { class: "sec-label", "COLUMN INSPECTOR" }
                     IconButton { icon: IconName::Close, icon_size: IconSize::Xs, variant: IconButtonVariant::Ghost, title: "Close inspector",
-                        onclick: move |_| dispatch(state, Action::CloseInspector), }
+                        onclick: move |_| dispatch(Action::CloseInspector), }
                 }
                 Prose { style: "padding:var(--sp-6) var(--sp-4);color:var(--dim2);", "Select a column to inspect." }
             }
@@ -113,7 +111,7 @@ pub fn Inspector() -> Element {
             div { class: "insp-head",
                 Eyebrow { class: "sec-label", "COLUMN INSPECTOR" }
                 IconButton { icon: IconName::Close, icon_size: IconSize::Xs, variant: IconButtonVariant::Ghost, title: "Close inspector",
-                    onclick: move |_| dispatch(state, Action::CloseInspector), }
+                    onclick: move |_| dispatch(Action::CloseInspector), }
             }
 
             div { class: "insp-title",

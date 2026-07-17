@@ -19,7 +19,6 @@ use dioxus::prelude::*;
 use crate::action::{dispatch, Action};
 use crate::config::{Command, KeyChord};
 use crate::session::WorkspaceId;
-use crate::state::AppState;
 
 /// Which mounted context currently owns a context-dependent command. Plain `Copy` data
 /// (not a closure), so it lives safely in a per-window `GlobalSignal`; [`run`] maps the
@@ -220,33 +219,33 @@ pub fn resolve(e: &KeyboardEvent) -> Option<Command> {
 
 /// Execute `cmd`. Returns whether it did anything — so `handle_key` only calls
 /// `prevent_default` on a handled key (an unowned `Find` falls through untouched).
-pub fn run(state: Signal<AppState>, cmd: Command) -> bool {
+pub fn run(cmd: Command) -> bool {
     use Command::*;
     match cmd {
-        Find => fire_find(state),
+        Find => fire_find(),
         NewTab => {
-            dispatch(state, Action::NewTab);
+            dispatch(Action::NewTab);
             true
         }
         ReopenTab => {
-            dispatch(state, Action::ReopenTab);
+            dispatch(Action::ReopenTab);
             true
         }
         CloseActiveTab => {
             let active = crate::session::active_id();
             if active != 0 {
-                dispatch(state, Action::CloseTab(active));
+                dispatch(Action::CloseTab(active));
                 true
             } else {
                 false
             }
         }
         SaveQuery => {
-            dispatch(state, Action::SaveQuery);
+            dispatch(Action::SaveQuery);
             true
         }
         RunQuery => {
-            dispatch(state, Action::RunQuery);
+            dispatch(Action::RunQuery);
             true
         }
         CommandPalette => {
@@ -265,7 +264,7 @@ pub fn run(state: Signal<AppState>, cmd: Command) -> bool {
             // Overlays self-close on Esc (Dialog / Backdrop own their own handler); this
             // guard just stops Esc from *also* cancelling a running query while one is open.
             if !crate::overlays::any_open() {
-                dispatch(state, Action::CancelQuery);
+                dispatch(Action::CancelQuery);
             }
             true
         }
@@ -274,7 +273,7 @@ pub fn run(state: Signal<AppState>, cmd: Command) -> bool {
 
 /// Toggle the find popover of whichever results toolbar owns `Find` (the active tab).
 /// No-op when nothing owns it (no results showing → nothing to find).
-fn fire_find(state: Signal<AppState>) -> bool {
+fn fire_find() -> bool {
     match REGISTRY.peek().get(&Command::Find).copied() {
         Some((ws, Context::ResultsFind)) => {
             let open = crate::runs::RUNS
@@ -282,7 +281,7 @@ fn fire_find(state: Signal<AppState>) -> bool {
                 .get(ws)
                 .map(|e| e.peek().find_open)
                 .unwrap_or(false);
-            dispatch(state, Action::SetResultsFind { ws, open: !open });
+            dispatch(Action::SetResultsFind { ws, open: !open });
             true
         }
         None => false,

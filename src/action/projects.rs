@@ -15,11 +15,10 @@ use dioxus::desktop::tao::window::WindowId;
 
 use crate::engine::TableSpec;
 use crate::project::Project;
-use crate::state::AppState;
 
 /// Load a project into *this* window (startup / freshly-spawned window). A
 /// missing file becomes a new project scaffolded from the folder name.
-pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
+pub fn load_current(path: PathBuf) {
     let project = if Project::exists_at(&path) {
         match Project::load_from_dir(&path) {
             Ok(p) => p,
@@ -45,7 +44,7 @@ pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
         }
         p
     };
-    install(state, project, path);
+    install(project, path);
 }
 
 /// `Action::OpenProject` — pick a folder and open its project, honouring the
@@ -53,7 +52,7 @@ pub fn load_current(mut state: Signal<AppState>, path: PathBuf) {
 /// place, *New window* / *Ask* spawn a window. The picker starts in the
 /// configured **default project directory** when one is set. Async, because a
 /// blocking `rfd` dialog would re-enter the renderer and panic.
-pub fn open_dir(state: Signal<AppState>) {
+pub fn open_dir() {
     let open_pref = crate::settings::open_pref();
     let default_dir = crate::settings::default_project_dir();
     spawn(async move {
@@ -63,24 +62,24 @@ pub fn open_dir(state: Signal<AppState>) {
         }
         if let Some(handle) = dialog.pick_folder().await {
             let path = crate::window::resolve_project_dir(handle.path());
-            open_with_pref(state, path, open_pref);
+            open_with_pref(path, open_pref);
         }
     });
 }
 
 /// `Action::OpenRecent` — open a recent project, honouring the open preference
 /// (This window / New window / Ask), like [`open_dir`].
-pub fn open_recent(state: Signal<AppState>, path: String) {
+pub fn open_recent(path: String) {
     let pref = crate::settings::open_pref();
-    open_with_pref(state, PathBuf::from(path), pref);
+    open_with_pref(PathBuf::from(path), pref);
 }
 
 /// Route an open to the current window, a new window, or the "ask" prompt (B10),
 /// per the resolved open preference.
-fn open_with_pref(state: Signal<AppState>, path: PathBuf, pref: crate::config::OpenPref) {
+fn open_with_pref(path: PathBuf, pref: crate::config::OpenPref) {
     use crate::config::OpenPref;
     match pref {
-        OpenPref::This => open_in_current(state, path),
+        OpenPref::This => open_in_current(path),
         OpenPref::New => crate::window::spawn_project_window(path.to_string_lossy().into_owned()),
         OpenPref::Ask => crate::overlays::open_open_prompt(path),
     }
@@ -88,7 +87,7 @@ fn open_with_pref(state: Signal<AppState>, path: PathBuf, pref: crate::config::O
 
 /// `Action::OpenChosen` — resolve the open-target prompt (B10): open the pending
 /// project here or in a new window, optionally remembering the choice as the pref.
-pub fn choose_open(state: Signal<AppState>, new_window: bool, remember: bool) {
+pub fn choose_open(new_window: bool, remember: bool) {
     let path = crate::overlays::OVERLAYS
         .resolve()
         .read()
@@ -109,18 +108,18 @@ pub fn choose_open(state: Signal<AppState>, new_window: bool, remember: bool) {
     if new_window {
         crate::window::spawn_project_window(path.to_string_lossy().into_owned());
     } else {
-        open_in_current(state, path);
+        open_in_current(path);
     }
 }
 
 /// Open `path` in *this* window, replacing the project in place ("This window"
 /// open preference): save the outgoing project, clear its catalog from this
 /// window's engine, then load the new one.
-pub fn open_in_current(state: Signal<AppState>, path: PathBuf) {
-    save(state);
+pub fn open_in_current(path: PathBuf) {
+    save();
     // The current window is being repurposed for `path`; mark the old project
     // closed (`install` marks the new one open).
-    if let Some(old) = state.read().project_path.clone() {
+    if let Some(old) = crate::project::path_peek() {
         crate::config::mark_closed(&old.to_string_lossy());
     }
     let (tables, views) = {
@@ -143,7 +142,7 @@ pub fn open_in_current(state: Signal<AppState>, path: PathBuf) {
     for table in tables {
         crate::command!(Deregister { table });
     }
-    load_current(state, path);
+    load_current(path);
 }
 
 /// Expand a leading `~` to `$HOME`; `None` for an empty path.
@@ -162,22 +161,22 @@ fn expand_tilde(p: &str) -> Option<PathBuf> {
 /// Save the current project to its file (no-op if it isn't backed by one yet).
 /// Captures the window's current size + position first so the project reopens
 /// where it was left.
-pub fn save(state: Signal<AppState>) {
+pub fn save() {
     if let Some(geom) = crate::window::current_window_geom() {
         crate::project::set_window(geom);
     }
-    write_files(state, true);
+    write_files(true);
 }
 
 /// Save from the window-close handler (`CloseRequested`), where the dioxus scope
 /// isn't available — geometry is read from the window registry *by id* rather
 /// than `window()`. Does not open the launcher (an OS close never does).
-pub fn save_on_close(state: Signal<AppState>, win_id: WindowId) {
+pub fn save_on_close(win_id: WindowId) {
     if let Some(geom) = crate::window::window_geom_by_id(win_id) {
         crate::project::set_window(geom);
     }
-    write_files(state, true);
-    if let Some(dir) = state.read().project_path.clone() {
+    write_files(true);
+    if let Some(dir) = crate::project::path_peek() {
         crate::config::mark_closed(&dir.to_string_lossy());
     }
 }
@@ -185,8 +184,8 @@ pub fn save_on_close(state: Signal<AppState>, win_id: WindowId) {
 /// Write the project to its `.strata/` dir: both files when `defs` (a definition
 /// changed), else only `session.json` (a tab/history/geometry change — keeps the
 /// committed `project.json` quiet). No-op if no project is backed on disk.
-fn write_files(state: Signal<AppState>, defs: bool) {
-    let Some(dir) = state.read().project_path.clone() else {
+fn write_files(defs: bool) {
+    let Some(dir) = crate::project::path_peek() else {
         return;
     };
     let project = crate::project::snapshot();
@@ -204,41 +203,38 @@ fn write_files(state: Signal<AppState>, defs: bool) {
 /// engine change (the engine's `RuntimeEnv` is fixed at build, W2). Persists the
 /// project, spawns a fresh window for the same path (whose new engine picks up the
 /// config), then closes this one. Session tabs are already kept current by
-/// `use_persist_session`; an untitled project (`project_path == None`) just opens a
+/// `use_persist_session`; an untitled project (no project path) just opens a
 /// fresh window.
-pub fn restart_window(state: Signal<AppState>) {
-    let path = state
-        .read()
-        .project_path
-        .clone()
+pub fn restart_window() {
+    let path = crate::project::path_peek()
         .map(|d| d.to_string_lossy().into_owned())
         .unwrap_or_default();
-    write_files(state, true);
+    write_files(true);
     crate::window::spawn_project_window(path);
     dioxus::desktop::window().close();
 }
 
 /// Autosave after a durable change that touched **definitions** — both files.
-pub fn autosave(state: Signal<AppState>) {
-    if state.read().project_path.is_none() {
+pub fn autosave() {
+    if crate::project::path_peek().is_none() {
         return;
     }
     if let Some(geom) = crate::window::current_window_geom() {
         crate::project::set_window(geom);
     }
-    write_files(state, true);
+    write_files(true);
 }
 
 /// Autosave after a **session-only** durable change (tabs / history) — writes just
 /// `session.json`, leaving the committed `project.json` untouched.
-pub fn autosave_session(state: Signal<AppState>) {
-    if state.read().project_path.is_none() {
+pub fn autosave_session() {
+    if crate::project::path_peek().is_none() {
         return;
     }
     if let Some(geom) = crate::window::current_window_geom() {
         crate::project::set_window(geom);
     }
-    write_files(state, false);
+    write_files(false);
 }
 
 /// Persist live editor edits to `session.json`. The controlled `CodeEditor` writes
@@ -246,7 +242,7 @@ pub fn autosave_session(state: Signal<AppState>) {
 /// fires), so this effect subscribes to the reactive [`crate::session`] store and
 /// writes a (debounced) `session.json` whenever it changes — including a keystroke.
 /// Mounted once in the root project component (`ProjectRoot`).
-pub fn use_persist_session(state: Signal<AppState>) {
+pub fn use_persist_session() {
     // A generation counter so a burst of edits collapses into one write: each
     // change bumps it, the spawned task writes only if it's still the latest.
     let mut gen = use_signal(|| 0u64);
@@ -256,8 +252,9 @@ pub fn use_persist_session(state: Signal<AppState>) {
         // doesn't outlive a temporary.
         let store = crate::session::store();
         let _sub = store.read();
-        // No-op until the project is backed on disk.
-        if state.peek().project_path.is_none() {
+        // No-op until the project is backed on disk (non-reactive: this effect
+        // subscribes to the session store, not the project path).
+        if crate::project::path_peek().is_none() {
             return;
         }
         let g = {
@@ -271,7 +268,7 @@ pub fn use_persist_session(state: Signal<AppState>) {
             if *gen.peek() != g {
                 return; // superseded by a newer edit
             }
-            write_files(state, false);
+            write_files(false);
         });
     });
 }
@@ -279,7 +276,7 @@ pub fn use_persist_session(state: Signal<AppState>) {
 /// `Action::CloseProject` — save, then close this window. If any tab has a running
 /// query and the confirm-close setting is on, ask first (S14); otherwise close
 /// straight away via [`close_now`].
-pub fn close(state: Signal<AppState>) {
+pub fn close() {
     let any_running = crate::session::snapshot()
         .workspaces
         .iter()
@@ -288,16 +285,16 @@ pub fn close(state: Signal<AppState>) {
         crate::overlays::open_running_close(crate::overlays::RunningCloseTarget::Window);
         return;
     }
-    close_now(state);
+    close_now();
 }
 
 /// Actually close this window (save + record + launcher/sibling focus + close).
 /// If it's the last project window, open the launcher; otherwise focus a sibling.
 /// An OS close-button doesn't route here, so it never opens the launcher. Reached
 /// directly, or from the running-query confirm's "Stop & close".
-pub fn close_now(state: Signal<AppState>) {
-    save(state);
-    if let Some(dir) = state.read().project_path.clone() {
+pub fn close_now() {
+    save();
+    if let Some(dir) = crate::project::path_peek() {
         crate::config::mark_closed(&dir.to_string_lossy());
     }
     if crate::window::project_window_count() <= 1 {
@@ -312,7 +309,7 @@ pub fn close_now(state: Signal<AppState>) {
 
 /// Install `project` into this window's state and register its catalog with the
 /// window's (fresh) engine, then record it in recents.
-fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
+fn install(project: Project, path: PathBuf) {
     // Registration commands for the incoming catalog (built before the move).
     // Stored sources may be relative to the project dir; resolve to absolute for
     // the engine.
@@ -340,7 +337,7 @@ fn install(mut state: Signal<AppState>, project: Project, path: PathBuf) {
     let name = project.name.clone();
 
     crate::project::open(project);
-    state.write().project_path = Some(path.clone());
+    crate::project::set_path(Some(path.clone()));
     // The workspaces for the incoming project were already loaded into the reactive
     // session store (`load_from_dir` / `reset_blank`); drop the previous project's
     // runs so a reused id can't inherit stale results.

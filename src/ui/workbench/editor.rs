@@ -15,7 +15,6 @@ use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
 use crate::session::WorkspaceStoreExt;
 use crate::sql::{Catalog, Completion, CompletionKind};
-use crate::state::AppState;
 use crate::ui::code_editor::{CodeEditor, Decoration};
 use crate::ui::components::{
     Caption, Icon, IconButton, IconButtonVariant, Meta, MonoValue, Popup, Prose, Rect, Spacer,
@@ -43,21 +42,20 @@ struct LintHover {
 }
 
 /// A compact (28px) toolbar icon button that dispatches `action`.
-fn tool_btn(state: Signal<AppState>, action: Action, title: &str, icon: IconName) -> Element {
+fn tool_btn(action: Action, title: &str, icon: IconName) -> Element {
     rsx! {
         IconButton {
             variant: IconButtonVariant::Toolbar,
             icon: icon,
             compact: true,
             title: "{title}",
-            onclick: move |_| dispatch(state, action.clone()),
+            onclick: move |_| dispatch(action.clone()),
         }
     }
 }
 
 #[component]
 pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
-    let state = use_context::<Signal<AppState>>();
     // The editor owns its own height — a local reactive signal, not global state.
     let height = use_signal(|| 240.0);
     let dirty = ws.read().is_dirty();
@@ -104,7 +102,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                         class: "stop",
                         icon: IconName::Stop,
                         title: "Cancel query (Esc)",
-                        onclick: move |_| dispatch(state, Action::CancelQuery),
+                        onclick: move |_| dispatch(Action::CancelQuery),
                     }
                 } else {
                     // Run (⌘↵) · Explain plan · Explain analyze — three icon buttons (E4,
@@ -116,7 +114,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                         icon: IconName::Play,
                         disabled: block_run,
                         title: if block_run { "Fix the validation problems to run".to_string() } else { format!("Run query ({})", crate::keymap::hint(crate::config::Command::RunQuery)) },
-                        onclick: move |_| if !block_run { dispatch(state, Action::RunQuery) },
+                        onclick: move |_| if !block_run { dispatch(Action::RunQuery) },
                     }
                     IconButton {
                         variant: IconButtonVariant::Toolbar,
@@ -124,7 +122,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                         icon: IconName::List,
                         disabled: block_run,
                         title: "Explain plan",
-                        onclick: move |_| if !block_run { dispatch(state, Action::RunExplain(false)) },
+                        onclick: move |_| if !block_run { dispatch(Action::RunExplain(false)) },
                     }
                     IconButton {
                         variant: IconButtonVariant::Toolbar,
@@ -132,20 +130,20 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                         icon: IconName::Stopwatch,
                         disabled: block_run,
                         title: "Explain analyze — runs the query and times each operator",
-                        onclick: move |_| if !block_run { dispatch(state, Action::RunExplain(true)) },
+                        onclick: move |_| if !block_run { dispatch(Action::RunExplain(true)) },
                     }
                 }
                 div { style: "width:1px;height:18px;background:var(--line);margin:0 var(--sp-1);" }
-                {tool_btn(state, Action::FormatSql, "Format SQL", IconName::Format)}
-                {tool_btn(state, Action::ClearSql, "Clear editor", IconName::Trash)}
+                {tool_btn(Action::FormatSql, "Format SQL", IconName::Format)}
+                {tool_btn(Action::ClearSql, "Clear editor", IconName::Trash)}
                 Spacer {}
-                {tool_btn(state, Action::SaveAsView, "Save as view", IconName::Eye)}
+                {tool_btn(Action::SaveAsView, "Save as view", IconName::Eye)}
                 IconButton { icon: IconName::Save,
                     variant: IconButtonVariant::Toolbar,
                     compact: true,
                     dirty: dirty,
                     title: format!("Save query ({})", crate::keymap::hint(crate::config::Command::SaveQuery)),
-                    onclick: move |_| dispatch(state, Action::SaveQuery),
+                    onclick: move |_| dispatch(Action::SaveQuery),
                 }
             }
             div {

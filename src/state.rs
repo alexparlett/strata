@@ -1,6 +1,6 @@
-//! Central app state (held in one `Signal<AppState>`). This file defines the
-//! state and its empty constructor; the durable project model lives in
-//! `crate::project`. Dev builds open the bundled `sample/` project on launch.
+//! Shared UI value types (form drafts, log entries, catalog-menu kinds) used
+//! across the app. The durable project model lives in `crate::project`; per-window
+//! runtime state lives in focused stores (`crate::session`, `crate::runs`, …).
 
 // The project domain model lives in `crate::project`; re-exported here so the
 // familiar `crate::state::{CatalogTable, Project, …}` paths keep working.
@@ -144,25 +144,6 @@ pub enum CatalogKind {
     Table,
     View,
     Query,
-}
-
-pub struct AppState {
-    // The last window-level pointer not yet relocated: where the open project lives on
-    // disk. Everything else moved to focused stores — the project itself to
-    // `crate::project`, the session to `crate::session`, per-tab runs to `crate::runs`,
-    // the engine to `crate::engine`, prefs to `crate::settings`; recents are read
-    // straight from `crate::config`.
-    pub project_path: Option<std::path::PathBuf>,
-}
-
-impl AppState {
-    /// The base app state: no project backing on disk, default prefs.
-    /// Dev builds replace this by opening the bundled `sample/` project.
-    pub fn empty() -> Self {
-        AppState {
-            project_path: None,
-        }
-    }
 }
 
 /// Wall-clock `HH:MM:SS` (UTC) for log timestamps — avoids a chrono dependency.

@@ -8,7 +8,6 @@ use dioxus_code::{Code, SourceCode};
 use crate::action::{dispatch, Action};
 use crate::engine::Cell;
 use crate::session::WorkspaceId;
-use crate::state::AppState;
 use crate::ui::components::{
     Badge, BadgeVariant, Dialog, IconButton, IconButtonVariant, Meta, MonoValue, Readout, Spacer,
 };
@@ -22,7 +21,6 @@ use super::{mark_pressed_target, CellView};
 /// ascending, `Some(false)` = descending, `None` = unsorted.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_hcol(
-    state: Signal<AppState>,
     mut drag_sel: Signal<bool>,
     ws: WorkspaceId,
     ci: usize,
@@ -67,7 +65,7 @@ pub(super) fn render_hcol(
                     class: "{sort_cls}",
                     title: "Sort by this column",
                     onmousedown: move |e: MouseEvent| e.stop_propagation(),
-                    onclick: move |_| dispatch(state, Action::SortColumn(ci)),
+                    onclick: move |_| dispatch(Action::SortColumn(ci)),
                     {sort_icon.el(IconSize::Sm)}
                 }
             }

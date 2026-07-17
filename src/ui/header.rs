@@ -6,7 +6,6 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::AppState;
 use crate::ui::components::{
     Body, Control, DropdownMenu, Eyebrow, Icon, IconButton, IconButtonVariant, Path, Spacer, Title,
 };
@@ -14,10 +13,9 @@ use crate::ui::icons::{IconName, IconSize};
 
 #[component]
 pub fn Header() -> Element {
-    let state = use_context::<Signal<AppState>>();
     // The command palette + Settings are app-global overlays: the header buttons
     // toggle them through the per-window overlay store (⌘K / ⌘, do the same).
-    // Self-contained: the project switcher dropdown lives here, not in `AppState`.
+    // Self-contained: the project switcher dropdown lives here, component-local.
     let project = crate::project::name();
 
     rsx! {
@@ -28,7 +26,7 @@ pub fn Header() -> Element {
             // propagation). `prevent_default` stops the drag-selection.
             onmousedown: move |e| { e.prevent_default(); dioxus::desktop::window().drag(); },
             // Double-click the title bar to fill the screen / restore.
-            ondoubleclick: move |_| dispatch(state, Action::ToggleWindowFill),
+            ondoubleclick: move |_| dispatch(Action::ToggleWindowFill),
 
             div { class: "row", style: "gap:var(--sp-3);",
                 div { class: "ps-logo", Icon { name: IconName::StrataLogo, size: IconSize::Px(22) } }
@@ -46,7 +44,7 @@ pub fn Header() -> Element {
                     Control { class: "name", "{project}" }
                     Icon { name: IconName::ChevronDown, size: IconSize::Xs }
                 },
-                {project_menu_body(state)}
+                {project_menu_body()}
             }
 
             Spacer {}
@@ -76,18 +74,15 @@ pub fn Header() -> Element {
 /// `DropdownMenu`'s children. Closing is the `DropdownMenu`'s job (any inner click), so
 /// items just dispatch; the async open-picker is spawned on the Header scope so it
 /// survives the unmount.
-fn project_menu_body(state: Signal<AppState>) -> Element {
+fn project_menu_body() -> Element {
     let active = crate::project::name();
     let active_ini = initials_of(&active);
-    let active_path = state
-        .read()
-        .project_path
+    let path = crate::project::path();
+    let active_path = path
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "unsaved · in-memory".to_string());
-    let current = state
-        .read()
-        .project_path
+    let current = path
         .as_ref()
         .map(|p| p.to_string_lossy().into_owned());
     let recents: Vec<(String, String)> = crate::config::load()
@@ -100,7 +95,7 @@ fn project_menu_body(state: Signal<AppState>) -> Element {
     rsx! {
         div {
             class: "menu-item",
-            onclick: move |_| dispatch(state, Action::OpenProject),
+            onclick: move |_| dispatch(Action::OpenProject),
             Icon { name: IconName::Folder, size: IconSize::Sm }
             Body { "Open folder…" }
         }
@@ -125,7 +120,7 @@ fn project_menu_body(state: Signal<AppState>) -> Element {
                     rsx! {
                         div {
                             class: "proj-item",
-                            onclick: move |_| dispatch(state, Action::OpenRecent(open_path.clone())),
+                            onclick: move |_| dispatch(Action::OpenRecent(open_path.clone())),
                             Control { class: "avatar", style: "background:#7ee787;", "{ini}" }
                             div { class: "meta",
                                 Body { class: "nm", "{name}" }

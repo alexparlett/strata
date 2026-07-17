@@ -1,7 +1,7 @@
 //! The column inspector's **selection** — which catalog column `(table, column)` is
 //! being inspected. Set from the catalog sidebar, read by the inspector panel and the
 //! sidebar (tree highlight). Per-window runtime UI state; not persisted. Split out of
-//! `AppState` (F7 B9), a small `dioxus-stores` `Store` like [`crate::layout`].
+//! the old central app state (F7 B9), a small `dioxus-stores` `Store` like [`crate::layout`].
 
 use dioxus::prelude::*;
 use dioxus_stores::*;

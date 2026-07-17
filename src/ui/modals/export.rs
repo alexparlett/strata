@@ -2,7 +2,7 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::{AppState, ExportForm};
+use crate::state::ExportForm;
 use crate::ui::components::{
     Body, Button, ButtonVariant, Caption, Control, Eyebrow, Icon, Meta, MonoValue, NumberStepper,
     Prose, Readout, Segment, SegmentOption, Select, SelectOption, Spacer, TextInput, Toggle,
@@ -48,9 +48,8 @@ fn FormatCards(value: String, on_select: EventHandler<String>) -> Element {
 
 #[component]
 pub fn ExportModal(on_close: EventHandler<()>) -> Element {
-    let state = use_context::<Signal<AppState>>();
     // Form state is component-local — reset each time the window opens. The
-    // `RunExport` action carries a snapshot, so `AppState` never holds it.
+    // `RunExport` action carries a snapshot, so no shared store holds it.
     let mut export = use_signal(ExportForm::default);
     let ex = export();
     let (total, cols) = {
@@ -92,7 +91,7 @@ pub fn ExportModal(on_close: EventHandler<()>) -> Element {
                 Spacer {}
                 Button { variant: ButtonVariant::Secondary, onclick: move |_| on_close.call(()), "Cancel" }
                 Button { variant: ButtonVariant::Primary, icon: IconName::Download, icon_size: IconSize::Sm,
-                    onclick: move |_| dispatch(state, Action::RunExport(export())),
+                    onclick: move |_| dispatch(Action::RunExport(export())),
                     "Export"
                 }
             },

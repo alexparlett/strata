@@ -1,8 +1,8 @@
 //! Per-window **overlay store** — visibility state for the app-global overlays
 //! (Settings, the command palette, Export, table Config, close-confirm).
 //!
-//! Deliberately kept *out* of `AppState` (the domain/project state): overlay
-//! visibility is a pure UI concern. Held in a `dioxus-stores` `GlobalStore` — a
+//! Deliberately kept *out* of the domain/project stores: overlay visibility is a
+//! pure UI concern. Held in a `dioxus-stores` `GlobalStore` — a
 //! small, focused store read reactively inside the always-mounted *host* components
 //! and written via plain helpers from anywhere, including the non-component
 //! action/engine layer (e.g. an export runner closing its own window).

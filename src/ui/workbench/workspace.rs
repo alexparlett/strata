@@ -35,7 +35,7 @@ pub(crate) fn Workspace(ws: Store<crate::session::Workspace>, active: bool) -> E
 /// debounced. Scoped per-tab: the effect subscribes to only this workspace's `sql`
 /// lens (so editing one tab never revalidates another, each tab has its own debounce,
 /// and a programmatic edit to a background tab still revalidates it). The catalog is
-/// read non-reactively (`peek`) so the effect isn't woken by unrelated `AppState`
+/// read non-reactively (`peek`) so the effect isn't woken by unrelated catalog
 /// changes. Runs `crate::sql::analyze` and stores the result; no query is executed.
 fn use_revalidate(ws: Store<crate::session::Workspace>) {
     let mut generation = use_signal(|| 0u64);

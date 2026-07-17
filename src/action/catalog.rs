@@ -2,10 +2,8 @@
 //! remove-confirmation flow, and the catalog-row context menu. Called from
 //! `action::dispatch`.
 
-use dioxus::prelude::*;
-
 use crate::engine;
-use crate::state::{AppState, RemoveKind};
+use crate::state::RemoveKind;
 
 /// Open the Table Config modal for a new external table.
 pub fn open_config_new() {
@@ -24,8 +22,8 @@ pub fn open_config_edit(table: &str) {
 /// store (`begin_register`), and the engine's `Registered` event builds the real
 /// catalog row on success, or surfaces an inline error on failure. No placeholder
 /// row is ever written — only a successful register saves the table.
-pub fn register_table(state: Signal<AppState>, draft: crate::state::ConfigForm) {
-    let base = project_dir(&state.read());
+pub fn register_table(draft: crate::state::ConfigForm) {
+    let base = project_dir();
     // Store paths as entered (relative-to-project where the user chose that); hand
     // the engine fully-resolved absolute paths.
     let rel_paths: Vec<String> = draft
@@ -107,13 +105,13 @@ pub fn select_column(table: String, column: String) {
 
 // ---- source scanning (validation + partition detection) ----
 
+use dioxus::prelude::ReadableExt;
 use std::path::{Path, PathBuf};
 
 /// The project directory a `.psproj` lives in — the base for relative source
 /// paths. `None` when the project isn't backed by a file yet.
-pub fn project_dir(state: &AppState) -> Option<PathBuf> {
-    state
-        .project_path
+pub fn project_dir() -> Option<PathBuf> {
+    crate::project::path_peek()
         .as_ref()
         .and_then(|p| p.parent())
         .map(|p| p.to_path_buf())

@@ -1,7 +1,7 @@
 //! Multi-window coordination.
 //!
 //! Each project opens in its **own** window — its own `VirtualDom`, hence its own
-//! `AppState` + DataFusion engine. Open project windows are tracked in a
+//! per-window stores + DataFusion engine. Open project windows are tracked in a
 //! thread-local registry (all window lifecycle runs on the main thread) so we can
 //! focus a sibling when one closes and cycle between them with ⌘`.
 //!

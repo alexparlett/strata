@@ -15,7 +15,7 @@ use crate::action::{dispatch, Action};
 use crate::project::ProjectStoreExt;
 // Lens accessors (`.workspaces()`, `.id()`, `.name()`) for the Problems grouping.
 use crate::session::{SessionStoreExt, WorkspaceStoreExt};
-use crate::state::{AppState, LogEvent, LogKind, LogTab};
+use crate::state::{LogEvent, LogKind, LogTab};
 use crate::ui::components::{
     Button, ButtonVariant, Caption, Dot, Icon, IconButton, IconButtonVariant, Meta, Path, Prose,
     Spacer, Strong,
@@ -48,7 +48,6 @@ pub fn BottomDraw() -> Element {
 
 #[component]
 pub fn Drawer() -> Element {
-    let state = use_context::<Signal<AppState>>();
     let tab = crate::layout::drawer_tab();
     // The drawer owns its own height — a local reactive signal, not global state.
     let mut height = use_signal(|| 188.0);
@@ -75,18 +74,18 @@ pub fn Drawer() -> Element {
                 // No Clear on Problems — they're live diagnostics that clear
                 // themselves when the SQL is fixed (or the query re-run).
                 if tab != LogTab::Problems {
-                    Button { variant: ButtonVariant::Compact, onclick: move |_| dispatch(state, Action::ClearDrawer), "Clear" }
+                    Button { variant: ButtonVariant::Compact, onclick: move |_| dispatch(Action::ClearDrawer), "Clear" }
                 }
                 IconButton { icon: expand_ic, variant: IconButtonVariant::Ghost, title: "Expand / collapse", onclick: move |_| height.set(if height() > 250.0 { 168.0 } else { 360.0 }),
                 }
-                IconButton { icon: IconName::Close, variant: IconButtonVariant::Ghost, title: "Close", onclick: move |_| dispatch(state, Action::ToggleLog),
+                IconButton { icon: IconName::Close, variant: IconButtonVariant::Ghost, title: "Close", onclick: move |_| dispatch(Action::ToggleLog),
                 }
             }
             {
                 match tab {
-                    LogTab::History => history_body(state),
+                    LogTab::History => history_body(),
                     LogTab::Events => events_body(),
-                    LogTab::Problems => problems_body(state),
+                    LogTab::Problems => problems_body(),
                 }
             }
         }
@@ -95,7 +94,7 @@ pub fn Drawer() -> Element {
 
 /// History tab: one row per past run (single-line preview + a `N lines` chip for
 /// multi-line SQL). Click loads, double-click loads & runs.
-fn history_body(state: Signal<AppState>) -> Element {
+fn history_body() -> Element {
     let history: Vec<(
         u64,
         String,
@@ -139,8 +138,8 @@ fn history_body(state: Signal<AppState>) -> Element {
                             key: "h{id}",
                             class: "hist-item",
                             title: "Click to load · double-click to load & run",
-                            onclick: move |_| dispatch(state, Action::OpenHistoryQuery(sql_load.clone())),
-                            ondoubleclick: move |_| dispatch(state, Action::RunHistoryQuery(sql_run.clone())),
+                            onclick: move |_| dispatch(Action::OpenHistoryQuery(sql_load.clone())),
+                            ondoubleclick: move |_| dispatch(Action::RunHistoryQuery(sql_run.clone())),
                             div { class: "row", style: "gap:var(--sp-3);margin-bottom:var(--sp-3);",
                                 Dot { color: "{dot}", size: 6 }
                                 Meta { style: "color:{meta};", "{rows} rows · {ms} ms" }
@@ -190,7 +189,7 @@ fn events_body() -> Element {
 /// under a sticky per-tab header, flat one-liner rows with an optional class chip
 /// and `line:col` ref; click a row → switch to that tab. Sourced from
 /// `crate::diagnostics` (NOT the event log), so a fixed problem clears itself.
-fn problems_body(state: Signal<AppState>) -> Element {
+fn problems_body() -> Element {
     use crate::diagnostics::{Diagnostic, Severity};
 
     // Iterate the reactive session store so the view tracks the tab set, and read
@@ -238,7 +237,7 @@ fn problems_body(state: Signal<AppState>) -> Element {
                                         key: "p{id}-{i}",
                                         class: "{row_cls}",
                                         title: "Go to source",
-                                        onclick: move |_| dispatch(state, Action::SwitchTab(id)),
+                                        onclick: move |_| dispatch(Action::SwitchTab(id)),
                                         {sev_icon}
                                         Prose { class: "prob-msg", "{d.message}" }
                                         if let Some(code) = d.code.clone() {

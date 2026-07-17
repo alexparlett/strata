@@ -1,5 +1,5 @@
-//! UI components (Dioxus). Each reads the shared `Signal<AppState>` from context
-//! and calls controller actions in `crate::app`.
+//! UI components (Dioxus). Each reads the focused per-window stores (`crate::project`,
+//! `crate::session`, `crate::runs`, …) and emits intents through `crate::action::dispatch`.
 
 pub mod activity_rail;
 pub mod code_editor;

@@ -1,5 +1,5 @@
 //! Reusable UI component library — the shared building blocks the app is composed
-//! from, independent of any one feature or `AppState`. Each component owns its own
+//! from, independent of any one feature or store. Each component owns its own
 //! look and behaviour; callers hand in content (`children`) and callbacks.
 //!
 //! The **overlay** family (A3, egui-style — see `docs/OVERLAY_ARCHITECTURE.md`). The base

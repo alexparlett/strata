@@ -3,7 +3,6 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 use crate::project::ProjectStoreExt;
-use crate::state::AppState;
 use crate::ui::components::{Dialog, Eyebrow, Icon, Meta, Path, Prose, Spacer, TextInput};
 use crate::ui::icons::{IconName, IconSize};
 
@@ -45,8 +44,8 @@ impl PaletteCommand {
     }
 }
 
-/// What selecting a palette row does: dispatch a normal `AppState` action, or open
-/// an overlay-store window directly (window visibility isn't an `AppState` action).
+/// What selecting a palette row does: dispatch a normal action, or open an
+/// overlay-store window directly (window visibility isn't an action).
 #[derive(Clone)]
 enum Effect {
     Dispatch(Action),
@@ -68,7 +67,6 @@ pub fn CmdkHost() -> Element {
 
 #[component]
 pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
-    let state = use_context::<Signal<AppState>>();
     // The query is transient, component-local state: the palette is freshly
     // mounted each time it opens (the root component gates it on its local `cmdk`
     // signal), so it resets naturally.
@@ -133,7 +131,7 @@ pub fn CommandPalette(on_close: EventHandler<()>) -> Element {
                         class: "cmdk-item",
                         onclick: move |_| {
                             match effect.clone() {
-                                Effect::Dispatch(a) => dispatch(state, a),
+                                Effect::Dispatch(a) => dispatch(a),
                                 Effect::OpenExport => crate::overlays::open_export(),
                             }
                             on_close.call(());
