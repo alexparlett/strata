@@ -240,9 +240,9 @@ fn problems_body() -> Element {
                                         onclick: move |_| dispatch(Action::SwitchTab(id)),
                                         {sev_icon}
                                         Prose { class: "prob-msg", "{d.message}" }
-                                        if let Some(code) = d.code.clone() {
-                                            Meta { class: "prob-code", "{code}" }
-                                        }
+                                        // No code chip: the design has icon · message ·
+                                        // line, and the code was a third thing competing
+                                        // with the message for a one-line row.
                                         if let Some(l) = d.loc.clone() {
                                             Path { class: "prob-loc", "{l}" }
                                         }

@@ -104,8 +104,19 @@ for one with no stats — the profile answers it truthfully instead. Builds here
 Completeness bar now needs a real null count (footer or profile) — without one it doesn't render, rather than being
 computed off the result page as before.
 
-### U10 · Bottom drawer (Problems · Events · History) — `token-only`
-In sync (S23/S25). Only nits: an extra `prob-code` chip the design lacks + empty-state wording.
+### U10 · Bottom drawer (Problems · Events · History) — `token-only` ✅
+
+In sync (S23/S25) — spacing, the sticky group header, the green-check empty state and the `--sp-7` row indent all
+already matched, so F3 didn't miss this one. Both logged nits fixed: the `prob-code` chip is gone (the design's row is
+icon · message · line, and the code was a third thing competing with the message on a one-line row), and the Problems
+empty state reads the canvas's "No problems — queries are clean". Removing the chip left `Diagnostic.code` written and
+never read — a field Rust warns on — so it's gone too, along with the `code` argument threaded through
+`sql::validate::diag`. It was near-redundant anyway: an execution error's code was its `etype`, which *is* the message
+whenever the error has no body. Re-add it if **E1** ever needs to tell rules apart, with somewhere to show it.
+**Deliberate divergence — do not "fix":** the canvas has a **Clear** button in the shared drawer header, so it shows on
+all three tabs. We hide it on **Problems**. Problems are live per-tab diagnostics (`crate::diagnostics` ∪
+`runs.query_error`), not a log — they clear themselves when the SQL is fixed or the query re-runs, so a Clear button
+would either lie (they come straight back) or imply the problems aren't real. It stays removed.
 
 ### U11 · Command palette (⌘K) — core built; depth is a feature
 The palette works; grouping, keyboard nav, per-item type-icons + shortcut hints are the "depth" feature → **T3**. (The footer already advertises "↑↓ navigate" — wire it under T3.) No standalone drift beyond that.

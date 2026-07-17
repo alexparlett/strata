@@ -62,13 +62,7 @@ pub fn analyze(sql: &str, catalog: &Catalog) -> Vec<Diagnostic> {
 
     let (toks, lex_err) = lex(sql);
     if let Some(e) = lex_err {
-        out.push(diag(
-            Severity::Error,
-            e.message,
-            Some("Syntax".into()),
-            e.span,
-            sql,
-        ));
+        out.push(diag(Severity::Error, e.message, e.span, sql));
         // A tokenizer failure means the rest of the checks would be unreliable.
         return out;
     }
@@ -89,7 +83,6 @@ fn check_parens(toks: &[Tok], sql: &str, out: &mut Vec<Diagnostic>) {
                 out.push(diag(
                     Severity::Error,
                     "Unmatched closing parenthesis".into(),
-                    Some("Syntax".into()),
                     t.span.clone(),
                     sql,
                 ));
@@ -97,13 +90,7 @@ fn check_parens(toks: &[Tok], sql: &str, out: &mut Vec<Diagnostic>) {
         }
     }
     for open in stack {
-        out.push(diag(
-            Severity::Error,
-            "Unclosed parenthesis".into(),
-            Some("Syntax".into()),
-            open,
-            sql,
-        ));
+        out.push(diag(Severity::Error, "Unclosed parenthesis".into(), open, sql));
     }
 }
 
@@ -126,7 +113,6 @@ fn check_keyword_typos(toks: &[Tok], catalog: &Catalog, sql: &str, out: &mut Vec
             out.push(diag(
                 Severity::Warning,
                 format!("Unknown keyword `{}` — did you mean `{}`?", t.text, kw),
-                Some("Typo".into()),
                 t.span.clone(),
                 sql,
             ));
@@ -134,19 +120,12 @@ fn check_keyword_typos(toks: &[Tok], catalog: &Catalog, sql: &str, out: &mut Vec
     }
 }
 
-fn diag(
-    severity: Severity,
-    message: String,
-    code: Option<String>,
-    span: Range<usize>,
-    sql: &str,
-) -> Diagnostic {
+fn diag(severity: Severity, message: String, span: Range<usize>, sql: &str) -> Diagnostic {
     Diagnostic {
         severity,
         source: DiagSource::Validation,
         message,
         loc: Some(line_col(sql, span.start)),
-        code,
         span: Some(span),
     }
 }

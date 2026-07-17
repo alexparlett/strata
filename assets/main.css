@@ -5026,14 +5026,6 @@ html, body {
   text-overflow: ellipsis;
 }
 
-.prob-code {
-  color: var(--faint);
-  background: var(--elev2);
-  padding: var(--sp-1) var(--sp-3);
-  border-radius: var(--r-xs);
-  flex: none;
-}
-
 .prob-loc {
   color: var(--faint);
   flex: none;

@@ -50,7 +50,13 @@ pub enum DiagSource {
 }
 
 /// One problem on a tab: a severity, a message, and (optionally) a `line L:C`
-/// location for jump/squiggle and a short code/class chip.
+/// location for jump/squiggle.
+///
+/// No class/rule code: the design's Problems row is icon · message · line, and a code
+/// chip was a third thing competing with the message for a single line. It was also
+/// near-redundant — an execution error's code was its `etype`, which is already the
+/// message whenever the error has no body. Re-add it with a place to show it if the
+/// validator (E1) ever needs to distinguish rules.
 #[derive(Clone, PartialEq)]
 pub struct Diagnostic {
     pub severity: Severity,
@@ -58,8 +64,6 @@ pub struct Diagnostic {
     pub message: String,
     /// `line L:C` (matches `QueryError::loc`) — the Problems-row display label.
     pub loc: Option<String>,
-    /// Short class/rule chip, e.g. "Planning Error" or a lint id.
-    pub code: Option<String>,
     /// Byte range into the tab's SQL (S25) — drives the editor squiggle + the
     /// click-to-select jump. `None` for execution errors (only a `line:col` string).
     pub span: Option<Range<usize>>,
@@ -83,7 +87,6 @@ impl Diagnostic {
             source: DiagSource::Execution,
             message,
             loc: qe.loc.clone(),
-            code: Some(qe.etype.clone()),
             span: None,
         }
     }
