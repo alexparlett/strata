@@ -17,7 +17,7 @@ use crate::session::WorkspaceStoreExt;
 use crate::sql::{Catalog, Completion, CompletionKind};
 use crate::ui::code_editor::{CodeEditor, Decoration};
 use crate::ui::components::{
-    Caption, Icon, IconButton, IconButtonVariant, Meta, MonoValue, Popup, Prose, Rect, Spacer,
+    Caption, Icon, IconButton, IconButtonVariant, Meta, MonoValue, Popup, Prose, Rect,
 };
 use crate::ui::icons::{IconName, IconSize};
 
@@ -93,7 +93,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
     let mut hover = use_signal(|| None::<LintHover>);
 
     rsx! {
-        section { style: "flex:none;background:var(--main);",
+        section { style: "flex:none;background:var(--main);border-bottom:1px solid var(--line);",
             div { class: "ed-toolbar",
                 if running {
                     // Running: the primary slot collapses to a red Cancel (E4).
@@ -136,7 +136,9 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                 div { style: "width:1px;height:18px;background:var(--line);margin:0 var(--sp-1);" }
                 {tool_btn(Action::FormatSql, "Format SQL", IconName::Format)}
                 {tool_btn(Action::ClearSql, "Clear editor", IconName::Trash)}
-                Spacer {}
+                // V29: the save pair is separated, not pushed right — the whole toolbar
+                // sits left (run · explain │ edit │ save).
+                div { style: "width:1px;height:18px;background:var(--line);margin:0 var(--sp-1);" }
                 {tool_btn(Action::SaveAsView, "Save as view", IconName::Eye)}
                 IconButton { icon: IconName::Save,
                     variant: IconButtonVariant::Toolbar,
@@ -147,7 +149,7 @@ pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
                 }
             }
             div {
-                style: "position:relative;height:{height}px;background:var(--main);border-bottom:1px solid var(--line);overflow:auto;",
+                style: "position:relative;height:{height}px;background:var(--main);overflow:auto;",
                 // The textarea's focus bubbles here (focusin/focusout) → hold the Select All
                 // scope so ⌘A selects the editor text (and the Edit-menu item enables).
                 onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),

@@ -59,8 +59,12 @@ Builds here → **W7** (Connections rail button + pane), **W1** (cross-window se
 Rebuilt to the handoff-29 catalog: section headers are **collapsible chevron rows** (`.sec-toggle` / `.sec-chev`); column rows **indent by depth with an expand chevron on `struct`/nested columns** (recursive `flatten_cols`, keyed `"{table}::{path}"`); collapse → **close** button; the filter row now searches **views and saved queries** as well as tables, alongside the refresh button. **D5** landed with it (below). Connections pane deferred to **W7** as agreed.
 Note: selecting a *nested* column still doesn't populate the inspector (only top-level columns resolve) — folded into **U9**/**D9**, not U3.
 
-### U4 · SQL editor + workspace tabs — `restyle` 🟡 (restyle aligned; tab features open)
-The **restyle** is aligned: editor / autocomplete / lint-hover / tab menus / inline rename match, the tab-close **dot→× on hover** drift is fixed (**T4**), and the Run control is the three-icon toolbar (**E4**). **Not done** — the tab *feature* builds below: **T1 drag-to-reorder** (no pointer-drag handler yet) and **T2** OS-close intercept.
+### U4 · SQL editor + workspace tabs — `restyle` 🟡 (restyle aligned; T2 open)
+The **restyle** is aligned: editor / autocomplete / lint-hover / tab menus / inline rename match, the tab-close **dot→× on hover** drift is fixed (**T4**), and the Run control is the three-icon toolbar (**E4**).
+Re-aligned to handoff-29's **full-height flat tab bar**: the strip is `align-items: stretch` (`padding: 0`, `gap: 0`) so tabs, dividers and the right cluster's rule span its full height; the active tab wears the editor background with an `inset 0 2px 0 var(--accent)` top bar and `margin-bottom: -1px` to close the seam with the pane below; inactive tabs sit transparent. The editor toolbar is left-aligned per the canvas (the `Spacer` before the save pair → a second separator) at `--sp-4` padding — **F3 missed that one**.
+The leading tab dot is **removed** (our call, not the canvas): it only ever encoded *active*, which the background + accent bar already say. Dirty stays in the trailing close slot (**T4**); the tab-list popover keeps its dot, having no other active/dirty signal. The canvas's dot — a green/orange query-status light on the active tab only — was declined as duplicated information.
+**Kept deliberately:** T1's drop-gap preview (`.ws-tab-slot`) rather than the canvas's newer fade + inset-edge affordance — a *behaviour* change, out of scope for a restyle. Revisit as its own task if wanted. The editor pane's bottom border lives on the `<section>`, not the code-area div: the section is the whole pane (toolbar + code), so its edge is the real boundary.
+**Not done** — **T2** OS-close intercept.
 Builds here → **E4** (Run → three icon buttons) ✅ · **T4** (tab-close dot→× hover) ✅ · **T1** (tab drag-to-reorder) ✅ · **T2** (intercept OS-triggered closes) ⬜ **not built**.
 
 ### U5 · Results grid — `restyle` ✅

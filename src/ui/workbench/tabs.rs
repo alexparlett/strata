@@ -14,7 +14,6 @@ use dioxus::html::geometry::PixelsVector2D;
 use dioxus::html::input_data::MouseButton;
 use dioxus::html::ScrollBehavior;
 use dioxus::prelude::*;
-use dioxus_stores::*;
 
 use crate::action::{dispatch, Action};
 use crate::session::{SessionStoreExt, WorkspaceId, WorkspaceStoreExt};
@@ -248,9 +247,9 @@ pub(crate) fn Tabs() -> Element {
                                 let c = e.client_coordinates();
                                 tab_menu.set(Some((id, Point { x: c.x, y: c.y })));
                             },
-                            // Leading dot = active status only; the dirty marker lives in
-                            // the trailing close slot (T4, per the canvas).
-                            Dot { size: 6, color: if id == active { "var(--accent)" } else { "var(--dim2)" } }
+                            // No leading dot (V29): the active tab already reads as active
+                            // from its background + accent bar, and dirty is the trailing
+                            // close slot (T4) — the dot only duplicated both.
                             if is_rename {
                                 input {
                                     class: "tab-rename",
