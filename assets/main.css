@@ -222,6 +222,19 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .ps-sidebar .filter { padding: var(--sp-4) var(--sp-4) var(--sp-3); display: flex; align-items: center; gap: var(--sp-3); }
 .ps-catalog { flex: 1; overflow-y: auto; padding: var(--sp-3) var(--sp-3) var(--sp-4); }
 .cat-head { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-2) var(--sp-2) var(--sp-3) var(--sp-3); }
+
+.sec-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    cursor: pointer;
+    flex: 1;
+}
+
+.sec-chev {
+    color: var(--dim2);
+    display: flex;
+}
 .tbl-row { display: flex; align-items: center; gap: var(--sp-3); height: 30px; padding: 0 var(--sp-3); border-radius: var(--r-1); cursor: pointer; }
 .tbl-row:hover { background: var(--elev2); }
 .tbl-row .tname { color: var(--text); }
@@ -231,6 +244,14 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 .col-row.sel { background: var(--accent-soft); }
 .col-row .cname { color: var(--text2); }
 .col-row .ctype { margin-left: auto; }
+
+.col-chev {
+    width: 11px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    color: var(--dim2);
+}
 
 /* ---------- center / main ---------- */
 .ps-main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--main); }

@@ -103,6 +103,14 @@ pub fn select_column(table: String, column: String) {
     crate::layout::set_inspector_open(true);
 }
 
+/// Refresh the catalog's schemas (the sidebar refresh button). Data — files, rows,
+/// partition values — is already live (DataFusion re-`LIST`s per scan and we run no
+/// list cache), so this is only for schema drift: one `RefreshCatalog` command has
+/// the engine re-infer each retained table spec.
+pub fn refresh() {
+    crate::command!(RefreshCatalog);
+}
+
 // ---- source scanning (validation + partition detection) ----
 
 use dioxus::prelude::ReadableExt;

@@ -77,6 +77,11 @@ pub enum Command {
     Deregister {
         table: String,
     },
+    /// Re-infer every registered table's schema — picks up new columns or a changed
+    /// partition scheme. Files, rows, and partition *values* are already live (each
+    /// scan re-`LIST`s; we run no `ListFilesCache`), so this only re-registers to
+    /// refresh the inferred schema. Emits a `Registered` per table.
+    RefreshCatalog,
     CreateView {
         name: String,
         sql: String,
@@ -318,20 +323,40 @@ macro_rules! command {
     };
 }
 
-/// Build a `SessionContext` honouring the engine config `overrides`: the nine
-/// `ConfigOptions` keys go on the `SessionConfig`; the two `datafusion.runtime.*`
-/// keys build a `RuntimeEnv` (parsed via `parse_capacity_limit`). Bad values are
-/// logged and skipped rather than failing the whole engine.
+/// The catalog + schema **we own**. DataFusion's `"datafusion"` / `"public"` are only
+/// *defaults*: `datafusion.catalog.default_*` renames them from the user's engine
+/// config, and `SessionConfig::from_env` would inherit `DATAFUSION_*` env vars too (we
+/// build from `new()`, so those can't reach us today — but that's a construction
+/// detail, not a guarantee). Either would move our tables out from under
+/// [`Command::RefreshCatalog`], which looks them up by name. Naming them ourselves is
+/// free: the DataFusion catalog is never persisted — every window rebuilds it by
+/// re-registering the project's tables on open.
+const CATALOG: &str = "strata";
+const SCHEMA: &str = "public";
+
+/// Build a `SessionContext` honouring the engine config `overrides`: the
+/// `ConfigOptions` keys go on the `SessionConfig`; the `datafusion.runtime.*` keys
+/// build a `RuntimeEnv` (parsed via `parse_capacity_limit`). Bad values are logged
+/// and skipped rather than failing the whole engine.
 fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     let mut config = SessionConfig::new();
     for (key, value) in overrides {
         if key.starts_with("datafusion.runtime.") {
             continue; // runtime.* live on the RuntimeEnv, not ConfigOptions
         }
+        if crate::engine_config::is_owned_key(key) {
+            continue; // ours (see below) — a stale saved override must not apply
+        }
         if let Err(e) = config.options_mut().set(key, value) {
             tracing::warn!("engine config: skipping {key}={value}: {e}");
         }
     }
+    // Name the catalog/schema ourselves. The context creates them on construction
+    // (`create_default_catalog_and_schema` defaults on) and they stay the resolution
+    // default for bare table names. Note this alone wouldn't hold: `SetEngineConfig`
+    // re-asserts the overrides over the built config at runtime, which is why
+    // `is_owned_key` fences them out of *both* apply paths, not just this one.
+    let config = config.with_default_catalog_and_schema(CATALOG, SCHEMA);
     match build_runtime(overrides) {
         Ok(Some(rt)) => SessionContext::new_with_config_rt(config, rt),
         Ok(None) => SessionContext::new_with_config(config),
@@ -435,6 +460,43 @@ async fn engine_loop(
                     path,
                     result,
                 });
+            }
+            Command::RefreshCatalog => {
+                // Re-infer each user table's schema in place, straight from what's in
+                // the context — no retained specs. Query snapshots (`__snap_*`) are
+                // skipped by name; SQL views by not being `ListingTable`s. Files, rows,
+                // and partition values are already live (each scan re-`LIST`s — we run
+                // no `ListFilesCache`), so this only refreshes the inferred schema.
+                if let Some(schema) = ctx.catalog(CATALOG).and_then(|c| c.schema(SCHEMA)) {
+                    for name in schema.table_names() {
+                        if name.starts_with("__snap_") {
+                            continue;
+                        }
+                        let Ok(Some(provider)) = schema.table(&name).await else {
+                            continue;
+                        };
+                        // Only `ListingTable`s back on-disk data; grab its own paths +
+                        // options (drops the borrow before we await). `TableProvider`
+                        // has `Any` as a supertrait in DF 54 (no more `as_any`), and
+                        // `downcast_ref` is inherent on `dyn TableProvider` — auto-deref
+                        // through the `Arc` targets the provider, not the `Arc`.
+                        let paths_opts = {
+                            use datafusion::datasource::listing::ListingTable;
+                            provider
+                                .downcast_ref::<ListingTable>()
+                                .map(|lt| (lt.table_paths().clone(), lt.options().clone()))
+                        };
+                        let Some((paths, opts)) = paths_opts else {
+                            continue;
+                        };
+                        let result = rebuild_listing(&ctx, &name, paths, opts).await;
+                        let _ = evt_tx.send(Event::Registered {
+                            table: name,
+                            path: String::new(),
+                            result,
+                        });
+                    }
+                }
             }
             Command::Deregister { table } => {
                 let _ = ctx.deregister_table(table.as_str());
@@ -605,9 +667,12 @@ async fn engine_loop(
                         }
                     }
                     // Custom (non-catalog) overrides: best-effort — DataFusion rejects any
-                    // key it doesn't recognise.
+                    // key it doesn't recognise. `is_owned_key` is *not* in `ENGINE_KEYS`,
+                    // so without the guard a hand-typed `catalog.default_*` would land
+                    // here and re-point resolution away from our own catalog.
                     for (k, val) in &new_overrides {
                         if crate::engine_config::is_restart_key(k)
+                            || crate::engine_config::is_owned_key(k)
                             || crate::engine_config::key_def(k).is_some()
                         {
                             continue;
@@ -1305,6 +1370,35 @@ async fn register_external(
         .table(spec.name.as_str())
         .await
         .map_err(|e| e.to_string())?;
+    Ok(df
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| column_info(f))
+        .collect())
+}
+
+/// Rebuild a registered `ListingTable` from its own `paths` + `options`, re-inferring
+/// the schema, and re-register it under `name` — the schema-refresh step
+/// (`RefreshCatalog`). Re-registering the *same* provider wouldn't re-infer, so we
+/// construct a fresh table from a re-`infer_schema`d config. Returns its columns.
+async fn rebuild_listing(
+    ctx: &SessionContext,
+    name: &str,
+    paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
+    opts: datafusion::datasource::listing::ListingOptions,
+) -> Result<Vec<ColumnInfo>, String> {
+    use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
+    let config = ListingTableConfig::new_with_multi_paths(paths)
+        .with_listing_options(opts)
+        .infer_schema(&ctx.state())
+        .await
+        .map_err(|e| e.to_string())?;
+    let table = ListingTable::try_new(config).map_err(|e| e.to_string())?;
+    let _ = ctx.deregister_table(name);
+    ctx.register_table(name, Arc::new(table))
+       .map_err(|e| e.to_string())?;
+    let df = ctx.table(name).await.map_err(|e| e.to_string())?;
     Ok(df
         .schema()
         .fields()

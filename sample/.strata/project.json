@@ -19,10 +19,10 @@
       ]
     },
     {
-      "name": "users",
+      "name": "products",
       "format": "parquet",
       "sources": [
-        "users.parquet"
+        "products.parquet"
       ],
       "partition_cols": []
     },
@@ -51,30 +51,25 @@
       "partition_cols": []
     },
     {
-      "name": "products",
+      "name": "users",
       "format": "parquet",
       "sources": [
-        "products.parquet"
+        "users.parquet"
       ],
       "partition_cols": []
     }
   ],
   "views": [
     {
-      "name": "revenue_by_region",
-      "sql": "SELECT r.region, SUM(e.amount) AS revenue, COUNT(*) AS n FROM events e JOIN users u ON u.user_id = e.user_id JOIN regions r ON r.country = u.country WHERE e.amount IS NOT NULL GROUP BY r.region ORDER BY revenue DESC"
-    },
-    {
       "name": "active_users",
       "sql": "SELECT u.name, u.country, COUNT(*) AS events FROM users u JOIN events e ON e.user_id = u.user_id GROUP BY u.name, u.country ORDER BY events DESC"
+    },
+    {
+      "name": "revenue_by_region",
+      "sql": "SELECT r.region, SUM(e.amount) AS revenue, COUNT(*) AS n FROM events e JOIN users u ON u.user_id = e.user_id JOIN regions r ON r.country = u.country WHERE e.amount IS NOT NULL GROUP BY r.region ORDER BY revenue DESC"
     }
   ],
   "saved_queries": [
-    {
-      "name": "top spenders",
-      "sql": "SELECT u.name, SUM(e.amount) AS spend\nFROM users u\nJOIN events e ON e.user_id = u.user_id\nWHERE e.action = 'purchase'\nGROUP BY u.name\nORDER BY spend DESC;",
-      "meta": "—"
-    },
     {
       "name": "cross-file join",
       "sql": "SELECT u.country, e.action, COUNT(*) AS n, SUM(e.amount) AS total\nFROM events e\nJOIN users u ON e.user_id = u.user_id\nWHERE e.amount IS NOT NULL\nGROUP BY u.country, e.action\nORDER BY total DESC\nLIMIT 20;",
@@ -84,6 +79,11 @@
       "name": "test",
       "sql": "select * from test;",
       "meta": "5 rows"
+    },
+    {
+      "name": "top spenders",
+      "sql": "SELECT u.name, SUM(e.amount) AS spend\nFROM users u\nJOIN events e ON e.user_id = u.user_id\nWHERE e.action = 'purchase'\nGROUP BY u.name\nORDER BY spend DESC;",
+      "meta": "—"
     }
   ]
 }

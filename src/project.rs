@@ -204,6 +204,22 @@ fn ensure_gitignore(dir: &Path) {
     }
 }
 
+/// Case-insensitive alphabetical ordering for catalog names — how tables, views and
+/// saved queries are presented.
+///
+/// The vecs are kept sorted at the *mutation* points rather than at render, for two
+/// reasons: sidebar rows address the store by index (`tables[i]`, `ToggleTableOpen(i)`),
+/// so a render-time sort would desync those indices; and `upsert_*` re-registering an
+/// existing table would otherwise append it, shuffling rows under the user on every
+/// `RefreshCatalog`.
+fn name_ord(a: &str, b: &str) -> std::cmp::Ordering {
+    a.chars()
+     .flat_map(char::to_lowercase)
+     .cmp(b.chars().flat_map(char::to_lowercase))
+        // Names differing only in case still need a total order.
+     .then_with(|| a.cmp(b))
+}
+
 impl Project {
     /// An empty project: no catalog, no history. Workspaces live in the reactive
     /// [`crate::session`] store, not here — the caller resets it separately (see
@@ -282,6 +298,11 @@ impl Project {
                 window: sess.window,
                 path: Some(dir.to_path_buf()),
             };
+            // Present the catalog alphabetically from the off — the file's order is
+            // just whatever it was last written in.
+            project.tables.sort_by(|a, b| name_ord(&a.name, &b.name));
+            project.views.sort_by(|a, b| name_ord(&a.name, &b.name));
+            project.saved_queries.sort_by(|a, b| name_ord(&a.name, &b.name));
             // History ids are runtime — assign them 1..n on load (as the old
             // `normalize` did).
             for (i, h) in project.history.iter_mut().enumerate() {
@@ -378,13 +399,15 @@ pub fn open(project: Project) {
     s.path().set(project.path);
 }
 
-/// Insert-or-replace a table by name (engine (re)registration / config save).
+/// Insert-or-replace a table by name (engine (re)registration / config save), at its
+/// alphabetical slot — see [`name_ord`].
 pub fn upsert_table(table: CatalogTable) {
     let s = store();
     let mut tables = s.tables();
     let mut t = tables.write();
     t.retain(|x| x.name != table.name);
-    t.push(table);
+    let at = t.partition_point(|x| name_ord(&x.name, &table.name).is_lt());
+    t.insert(at, table);
 }
 
 /// Drop the table named `name` (deregister / remove-confirm).
@@ -392,13 +415,14 @@ pub fn remove_table(name: &str) {
     store().tables().write().retain(|t| t.name != name);
 }
 
-/// Insert-or-replace a view by name.
+/// Insert-or-replace a view by name, at its alphabetical slot.
 pub fn upsert_view(view: CatalogView) {
     let s = store();
     let mut views = s.views();
     let mut v = views.write();
     v.retain(|x| x.name != view.name);
-    v.push(view);
+    let at = v.partition_point(|x| name_ord(&x.name, &view.name).is_lt());
+    v.insert(at, view);
 }
 
 /// Drop the view named `name`.
@@ -417,7 +441,8 @@ pub fn upsert_saved_query(name: String, sql: String, meta: String) -> bool {
         existing.meta = meta;
         true
     } else {
-        q.push(SavedQuery { name, sql, meta });
+        let at = q.partition_point(|x| name_ord(&x.name, &name).is_lt());
+        q.insert(at, SavedQuery { name, sql, meta });
         false
     }
 }

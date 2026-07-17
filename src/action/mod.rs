@@ -98,6 +98,8 @@ pub enum Action {
         table: String,
         column: String,
     },
+    /// Re-infer catalog table schemas (the sidebar refresh button).
+    RescanCatalog,
 
     // ── tab drag-to-reorder (T1) ──
     /// Commit a tab reorder: move workspace `id` to the post-removal slot `insert`.
@@ -250,6 +252,7 @@ fn run(action: Action) {
         ToggleTableOpen(i) => crate::project::toggle_table_open(i),
         ToggleViewOpen(i) => crate::project::toggle_view_open(i),
         SelectColumn { table, column } => catalog::select_column(table, column),
+        RescanCatalog => catalog::refresh(),
 
         MoveTab { id, insert } => tab::move_tab(id, insert),
         ToggleSidebar => crate::layout::toggle_sidebar(),

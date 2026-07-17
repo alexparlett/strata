@@ -49,9 +49,8 @@ pub struct EngineKey {
 /// The curated catalog — the DataFusion `ConfigOptions` + `runtime.*` keys we document,
 /// in display order (grouped by namespace).
 pub const ENGINE_KEYS: &[EngineKey] = &[
-    // catalog
-    EngineKey { key: "datafusion.catalog.default_catalog", default: "datafusion", kind: Kind::Text, desc: "Default catalog name used when a query doesn't specify one." },
-    EngineKey { key: "datafusion.catalog.default_schema", default: "public", kind: Kind::Text, desc: "Default schema name used when a query doesn't specify one." },
+    // catalog — `default_catalog` / `default_schema` are deliberately absent: the app
+    // owns those names, see `is_owned_key`.
     EngineKey { key: "datafusion.catalog.information_schema", default: "false", kind: Kind::Bool, desc: "Expose information_schema virtual tables for schema introspection." },
     EngineKey { key: "datafusion.catalog.newlines_in_values", default: "false", kind: Kind::Bool, desc: "Allow newlines inside quoted CSV values (may reduce scan performance)." },
     // execution
@@ -131,6 +130,22 @@ pub fn is_restart_key(name: &str) -> bool {
     name.trim().starts_with("datafusion.runtime.")
 }
 
+/// Whether `name` is a key the **app** owns and config may never set: the catalog and
+/// schema our tables live in (`crate::engine`'s `CATALOG` / `SCHEMA`).
+///
+/// `RefreshCatalog` looks tables up by those names, so an override would hide the whole
+/// catalog from it — and since the live-apply path re-asserts every override *over*
+/// whatever the `SessionConfig` builder set, naming them at build time doesn't hold on
+/// its own; they have to be skipped here too. They're absent from [`ENGINE_KEYS`], so
+/// they can now only arrive as a hand-typed custom key or a stale saved override — both
+/// are skipped on apply and flagged by [`value_error`].
+pub fn is_owned_key(name: &str) -> bool {
+    matches!(
+        name.trim(),
+        "datafusion.catalog.default_catalog" | "datafusion.catalog.default_schema"
+    )
+}
+
 /// The effective value for `key` given the overrides map — the override if present, else
 /// the known built-in default. `None` for a custom key with no override.
 pub fn effective(overrides: &BTreeMap<String, String>, key: &str) -> Option<String> {
@@ -145,6 +160,10 @@ pub fn effective(overrides: &BTreeMap<String, String>, key: &str) -> Option<Stri
 /// means "unset / use the default") and any custom (non-catalog) key. Lenient by design:
 /// DataFusion does the final validation when the value is applied.
 pub fn value_error(key: &str, value: &str) -> Option<String> {
+    // Reserved regardless of value — better to say so than to accept it and ignore it.
+    if is_owned_key(key) {
+        return Some("Reserved — Strata names the catalog and schema itself.".to_string());
+    }
     let v = value.trim();
     if v.is_empty() {
         return None;

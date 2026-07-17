@@ -55,9 +55,9 @@ Drift: Problems badge sits top-right of the icon with a 2px ring (reposition); h
 **Done (2026-07-17):** Problems badge repositioned to the handoff-29 spec — `.ds-count-badge` `top/right: 1px` (tucked into the button's top-right over the icon; was `top:-5px/right:-5px`, which overhung and clipped the 48px rail's edge). The rest already matched the design (15px · `--t-micro` = 600/9px mono · red fill · 2px surface ring). **Header recent-row branch glyph deferred** — no git integration yet. Toggle-button active state, macOS title-bar insets, and the two-window model were already faithful. Connections rail button/pane left for **W7**.
 Builds here → **W7** (Connections rail button + pane), **W1** (cross-window settings sync).
 
-### U3 · Sidebar / catalog — `partial-rebuild`
-Drift (built content that's structurally wrong): section headers should be **collapsible chevron rows** (currently static); table-column rows need an **indent + expand chevron for `struct` columns** (currently flat dot+name+type).
-Builds here → **W7** (Connections pane), **D5** (rescan button).
+### U3 · Sidebar / catalog — `partial-rebuild` ✅
+Rebuilt to the handoff-29 catalog: section headers are **collapsible chevron rows** (`.sec-toggle` / `.sec-chev`); column rows **indent by depth with an expand chevron on `struct`/nested columns** (recursive `flatten_cols`, keyed `"{table}::{path}"`); collapse → **close** button; the filter row now searches **views and saved queries** as well as tables, alongside the refresh button. **D5** landed with it (below). Connections pane deferred to **W7** as agreed.
+Note: selecting a *nested* column still doesn't populate the inspector (only top-level columns resolve) — folded into **U9**/**D9**, not U3.
 
 ### U4 · SQL editor + workspace tabs — `restyle` 🟡 (restyle aligned; tab features open)
 The **restyle** is aligned: editor / autocomplete / lint-hover / tab menus / inline rename match, the tab-close **dot→× on hover** drift is fixed (**T4**), and the Run control is the three-icon toolbar (**E4**). **Not done** — the tab *feature* builds below: **T1 drag-to-reorder** (no pointer-drag handler yet) and **T2** OS-close intercept.
@@ -148,7 +148,7 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 | ID | Task | Status | Notes |
 | --- | --- | --- | --- |
 | D4 | Column/table profiling (C14; owns U9 PROFILE zone + U15 cost-confirm) | ⬜ | Inspector FROM FILE / PROFILE (scan-derived, cached, cost-honest); nested never element-traversed. |
-| D5 | Catalog re-scan (C15; owns U3 rescan button) | ⬜ | Re-infer ListingTable file sets; log; invalidate profiles. |
+| D5 | Catalog re-scan (C15; owns U3 rescan button) | ✅ | Engine-side `Command::RefreshCatalog`: walks our schema, skips `__snap_*` + non-`ListingTable`s, re-`infer_schema`s each table in place and re-emits `Registered` (so the catalog + Events log update). **Schema-only by design** — with no `ListFilesCache`, DataFusion re-`LIST`s per scan, so file sets / row counts / partition *values* are already live; only inferred schema is frozen at registration. Engine now **owns** its catalog/schema (`strata`/`public`, `engine_config::is_owned_key`) so the lookup can't be re-pointed by config. Profile invalidation is moot until **D4**. Spinner is optimistic (600ms) — a real one needs a `RefreshDone` event. |
 | D6 | Export modal — complete UI rebuild to v19 (C17; owns U13) | ⬜ | Functionally correct but heavily drifted → **rebuild the whole modal UI** to the v19 canvas, keeping the export/backend logic. Scope: data-driven per-format option groups (core + **ADVANCED** section) instead of hard-coded `match` arms; CSV delimiter as a **text input** (resolve `\t`/`\n`); compression via `Select`; drop the extra "Null as" segmented + the embedded **DESTINATION** field (filename → the separate Save-file browser); partition chips + **warning banner/hint**; UPPERCASE section labels. |
 | D7 | Config-table honesty tidy (C16; owns U14 non-remote) | ⬜ | Status order, REQUIRED badge + tooltip, subtitle. (Counts/stepper already honest.) |
 | D8 | Import (read) options CSV/JSON (C13; owns U14 import section) | ⬜ | **Designed in v19** (`Strata.dc.html` §~2205–2313): a format-specific import-read-options block in the config modal — core groups + a collapsible **ADVANCED**, data-driven inputs (CSV delimiter/header/null/quote/skip/comment, JSON settings). Wire the controls → `TableSpec` → `register_external`. *(Was mis-marked 🚧 blocked from the old C13 "design pending" — the design now exists; unblocked.)* |
@@ -189,7 +189,7 @@ config/register-table (C3) · saved queries · native File/Edit/Window menu · t
 2. **Restyle aligns** (built-but-wrong, cheap): U4 restyle done (**E4** Run buttons + **T4** tab-close; tab *features* **T1**/**T2** still open) · U6 ✅
    (collapsible-find + **Rz8** clear) · U1/U2/U12/U14 surface polish · U10. Makes the built app *feel* v19.
 3. **Rebuilds of built surfaces:** U9 inspector metadata (grid → dynamic key/value box) ·
-   U3 sidebar (collapsible sections + nested-column expand) · **D6** export modal (full UI rebuild, backend kept).
+   U3 sidebar (collapsible sections + nested-column expand) ✅ · **D6** export modal (full UI rebuild, backend kept).
 4. **Feature builds** (Part 2 — these *are* the "missing" surfaces): **W1** Settings window ·
    **W7** connections (lands the U2 rail button + U3 pane + U14 LOCATION) · **Rz2** chart ·
    **Rz3–Rz6** grid selection/copy/record/sort · **Rz-plan** plan v3 · **D4** profiling · **T3** palette depth.

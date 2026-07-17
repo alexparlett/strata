@@ -1,5 +1,7 @@
 //! Left sidebar: catalog filter + TABLES + VIEWS.
 
+use std::collections::HashSet;
+
 use dioxus::prelude::*;
 
 use crate::action::panel::Resizer;
@@ -32,6 +34,14 @@ pub fn Sidebar() -> Element {
     let nquery = crate::project::store().saved_queries().read().len();
     // Catalog filter is pure sidebar UI — kept component-local (F7).
     let mut filter = use_signal(String::new);
+    // Collapsible catalog sections (default expanded) — sidebar-local UI.
+    let mut tables_open = use_signal(|| true);
+    let mut views_open = use_signal(|| true);
+    let mut queries_open = use_signal(|| true);
+    // Which struct columns are expanded (keyed "table::path") — sidebar-local.
+    let expanded = use_signal(HashSet::<String>::new);
+    // Catalog schema refresh — a brief optimistic spin while the re-infer fires.
+    let mut rescanning = use_signal(|| false);
     let selected = crate::inspector::selected();
     // The sidebar owns its own width — a local reactive signal, not global state.
     let width = use_signal(|| 288.0);
@@ -45,9 +55,24 @@ pub fn Sidebar() -> Element {
                     placeholder: "Filter catalog…",
                     grow: true,
                 }
-                IconButton { icon: IconName::CollapseLeft,
-                    variant: IconButtonVariant::Toolbar,
-                    title: "Collapse panel",
+                IconButton {
+                    icon: IconName::Refresh,
+                    variant: IconButtonVariant::Ghost,
+                    class: if rescanning() { "ps-spin" } else { "" },
+                    disabled: rescanning(),
+                    title: "Refresh schemas",
+                    onclick: move |_| {
+                        dispatch(Action::RescanCatalog);
+                        rescanning.set(true);
+                        spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                            rescanning.set(false);
+                        });
+                    },
+                }
+                IconButton { icon: IconName::Close,
+                    variant: IconButtonVariant::Ghost,
+                    title: "Close panel",
                     onclick: move |_| dispatch(Action::ToggleSidebar),
                 }
             }
@@ -55,32 +80,49 @@ pub fn Sidebar() -> Element {
             div { class: "ps-catalog ps-scroll",
                 // ---- TABLES ----
                 div { class: "cat-head",
-                    Eyebrow { class: "sec-label", "TABLES · {ntab}" }
+                    div { class: "sec-toggle", onclick: move |_| tables_open.set(!tables_open()),
+                        span { class: "sec-chev",
+                            if tables_open() { Icon { name: IconName::ChevronDown, size: IconSize::Xs } } else { Icon { name: IconName::ChevronRight, size: IconSize::Xs } }
+                        }
+                        Eyebrow { class: "sec-label", "TABLES · {ntab}" }
+                    }
                     Button { variant: ButtonVariant::Compact, icon: IconName::Plus, icon_size: IconSize::Xs, onclick: move |_| dispatch(Action::OpenConfigNew), "New" }
                 }
 
-                for i in 0..ntab {
-                    {render_table(menu, remove, i, &filter(), &selected)}
+                if tables_open() {
+                    for i in 0..ntab {
+                        {render_table(menu, remove, i, &filter(), &selected, expanded)}
+                    }
                 }
 
                 // ---- VIEWS ----
-                div { class: "row", style: "gap:var(--sp-3);padding:var(--sp-4) var(--sp-3) var(--sp-3);",
+                div { class: "sec-toggle", style: "padding:var(--sp-4) var(--sp-3) var(--sp-3);", onclick: move |_| views_open.set(!views_open()),
+                    span { class: "sec-chev",
+                        if views_open() { Icon { name: IconName::ChevronDown, size: IconSize::Xs } } else { Icon { name: IconName::ChevronRight, size: IconSize::Xs } }
+                    }
                     Eyebrow { class: "sec-label", "VIEWS · {nview}" }
                 }
-                for i in 0..nview {
-                    {render_view(menu, remove, i)}
+                if views_open() {
+                    for i in 0..nview {
+                        {render_view(menu, remove, i, &filter())}
+                    }
                 }
 
-                // ---- SAVED QUERIES (always shown, like Tables/Views) ----
-                div { class: "row", style: "gap:var(--sp-3);padding:var(--sp-4) var(--sp-3) var(--sp-3);",
+                // ---- SAVED QUERIES ----
+                div { class: "sec-toggle", style: "padding:var(--sp-4) var(--sp-3) var(--sp-3);", onclick: move |_| queries_open.set(!queries_open()),
+                    span { class: "sec-chev",
+                        if queries_open() { Icon { name: IconName::ChevronDown, size: IconSize::Xs } } else { Icon { name: IconName::ChevronRight, size: IconSize::Xs } }
+                    }
                     Eyebrow { class: "sec-label", "QUERIES · {nquery}" }
                 }
-                if nquery == 0 {
-                    Caption { style: "display:block;padding:var(--sp-2) var(--sp-3) var(--sp-3);color:var(--faint);",
-                        "No saved queries yet" }
-                } else {
-                    for i in 0..nquery {
-                        {render_saved_query(menu, remove, i)}
+                if queries_open() {
+                    if nquery == 0 {
+                        Caption { style: "display:block;padding:var(--sp-2) var(--sp-3) var(--sp-3);color:var(--faint);",
+                            "No saved queries yet" }
+                    } else {
+                        for i in 0..nquery {
+                            {render_saved_query(menu, remove, i, &filter())}
+                        }
                     }
                 }
             }
@@ -197,6 +239,7 @@ fn render_saved_query(
     mut menu: Signal<Option<CtxTarget>>,
     remove: Signal<Option<RemoveTarget>>,
     i: usize,
+    filter: &str,
 ) -> Element {
     let store = crate::project::store();
     let sq = store.saved_queries();
@@ -204,6 +247,9 @@ fn render_saved_query(
     let Some(q) = s.get(i) else {
         return rsx! {};
     };
+    if !filter.is_empty() && !q.name.to_lowercase().contains(&filter.to_lowercase()) {
+        return rsx! {};
+    }
     let name = q.name.clone();
     drop(s);
 
@@ -233,12 +279,70 @@ fn render_saved_query(
     }
 }
 
+/// One flattened, visible catalog column row (a top-level column or an expanded
+/// struct child). `depth` drives the indent; `has_children` / `is_expanded` the chevron.
+struct ColRow {
+    key: String,
+    name: String,
+    dtype: String,
+    dot: &'static str,
+    tcls: &'static str,
+    is_part: bool,
+    is_sel: bool,
+    depth: usize,
+    has_children: bool,
+    is_expanded: bool,
+}
+
+/// Walk a table's column tree into the flat list of *visible* rows: every column,
+/// plus the children of any expanded struct column, depth-first.
+fn flatten_cols(
+    table: &str,
+    parent_path: &str,
+    depth: usize,
+    cols: &[crate::engine::ColumnInfo],
+    parts: &[(String, String)],
+    selected: &Option<(String, String)>,
+    expanded: &HashSet<String>,
+    out: &mut Vec<ColRow>,
+) {
+    for c in cols {
+        let path = if parent_path.is_empty() {
+            c.name.clone()
+        } else {
+            format!("{parent_path}.{}", c.name)
+        };
+        let key = format!("{table}::{path}");
+        let has_children = !c.children.is_empty();
+        let is_expanded = has_children && expanded.contains(&key);
+        out.push(ColRow {
+            key,
+            name: c.name.clone(),
+            dtype: c.dtype.clone(),
+            dot: c.kind.dot_color(),
+            tcls: c.kind.text_class(),
+            // Partition columns are a top-level concept only.
+            is_part: depth == 0 && parts.iter().any(|(n, _)| n == &c.name),
+            is_sel: selected
+                .as_ref()
+                .map_or(false, |(tn, cn)| tn == table && cn == &c.name),
+            depth,
+            has_children,
+            is_expanded,
+        });
+        if is_expanded {
+            flatten_cols(table, &path, depth + 1, &c.children, parts, selected, expanded, out);
+        }
+    }
+}
+
 fn render_table(
     mut menu: Signal<Option<CtxTarget>>,
     remove: Signal<Option<RemoveTarget>>,
     i: usize,
     filter: &str,
     selected: &Option<(String, String)>,
+    mut expanded: Signal<HashSet<String>>,
 ) -> Element {
     let store = crate::project::store();
     let tl = store.tables();
@@ -251,27 +355,15 @@ fn render_table(
     }
     let name = t.name.clone();
     let open = t.open;
-    let status = t.status;
     let parts = t.partition_cols.clone();
-    // owned column view models
-    let cols: Vec<(String, String, &'static str, &'static str, bool, bool)> = t
-        .columns
-        .iter()
-        .map(|c| {
-            let is_part = parts.iter().any(|(n, _)| n == &c.name);
-            let is_sel = selected
-                .as_ref()
-                .map_or(false, |(tn, cn)| tn == &name && cn == &c.name);
-            (
-                c.name.clone(),
-                c.dtype.clone(),
-                c.kind.dot_color(),
-                c.kind.text_class(),
-                is_part,
-                is_sel,
-            )
-        })
-        .collect();
+    // Flatten the (possibly nested) columns into the visible rows, expanding only
+    // the struct columns whose key is in `expanded`.
+    let rows: Vec<ColRow> = {
+        let exp = expanded();
+        let mut out = Vec::new();
+        flatten_cols(&name, "", 0, &t.columns, &parts, selected, &exp, &mut out);
+        out
+    };
     drop(s);
 
     let nm_ctx = name.clone();
@@ -300,21 +392,37 @@ fn render_table(
             }
             if open {
                 div { class: "tbl-cols",
-                    for (cn, ct, dot, tcls, is_part, is_sel) in cols {
+                    for r in rows {
                         {
                             let table_nm = name.clone();
-                            let col_nm = cn.clone();
+                            let col_nm = r.name.clone();
+                            let key = r.key.clone();
+                            let indent = r.depth * 12;
                             rsx! {
                                 div {
-                                    class: if is_sel { "col-row sel" } else { "col-row" },
+                                    class: if r.is_sel { "col-row sel" } else { "col-row" },
                                     onclick: move |_| dispatch(Action::SelectColumn {
                                         table: table_nm.clone(),
                                         column: col_nm.clone(),
                                     }),
-                                    Dot { color: "{dot}", square: true, size: 6 }
-                                    MonoValue { class: "cname", "{cn}" }
-                                    if is_part { Micro { class: "pill", "PART" } }
-                                    Meta { class: "ctype {tcls}", "{ct}" }
+                                    span { style: "width:{indent}px;flex:none;" }
+                                    span { class: "col-chev",
+                                        if r.has_children {
+                                            span {
+                                                style: "display:flex;cursor:pointer;",
+                                                onclick: move |e| {
+                                                    e.stop_propagation();
+                                                    let mut set = expanded.write();
+                                                    if !set.insert(key.clone()) { set.remove(&key); }
+                                                },
+                                                if r.is_expanded { Icon { name: IconName::ChevronDown, size: IconSize::Xs } } else { Icon { name: IconName::ChevronRight, size: IconSize::Xs } }
+                                            }
+                                        }
+                                    }
+                                    Dot { color: "{r.dot}", square: true, size: 6 }
+                                    MonoValue { class: "cname", "{r.name}" }
+                                    if r.is_part { Micro { class: "pill", "PART" } }
+                                    Meta { class: "ctype {r.tcls}", "{r.dtype}" }
                                 }
                             }
                         }
@@ -329,6 +437,7 @@ fn render_view(
     mut menu: Signal<Option<CtxTarget>>,
     remove: Signal<Option<RemoveTarget>>,
     i: usize,
+    filter: &str,
 ) -> Element {
     let store = crate::project::store();
     let vl = store.views();
@@ -336,6 +445,9 @@ fn render_view(
     let Some(v) = s.get(i) else {
         return rsx! {};
     };
+    if !filter.is_empty() && !v.name.to_lowercase().contains(&filter.to_lowercase()) {
+        return rsx! {};
+    }
     let name = v.name.clone();
     let open = v.open;
     let cols: Vec<(String, String, &'static str, &'static str)> = v
