@@ -28,6 +28,7 @@ pub fn ProfileConfirmHost() -> Element {
         return rsx! {};
     };
     let go = name.clone();
+    let is_view = crate::project::is_view(&name);
 
     rsx! {
         Dialog { on_close: move |_| crate::overlays::close_profile_confirm(), card_class: "confirm".to_string(), z: 80,
@@ -36,7 +37,13 @@ pub fn ProfileConfirmHost() -> Element {
                 div { style: "flex:1;min-width:0;",
                     Title { class: "confirm-title", "Profile " span { class: "nm", "{name}" } "?" }
                     Readout { class: "confirm-body",
-                        "Profiling reads every file to compute distinct counts, means and distributions. Distinct counts can't be merged across files, so this is a full scan. The result is cached until the table changes."
+                        // A view's cost is its whole query, not a file scan — saying
+                        // "reads every file" would understate a join.
+                        {if is_view {
+                            "Profiling runs the view's query in full to compute distinct counts, means and distributions — reading whatever the query reads, which may be several tables. Distinct counts can't be merged, so none of it can be shortcut. The result is cached until the view changes."
+                        } else {
+                            "Profiling reads every file to compute distinct counts, means and distributions. Distinct counts can't be merged across files, so this is a full scan. The result is cached until the table changes."
+                        }}
                     }
                 }
             }

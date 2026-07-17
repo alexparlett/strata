@@ -484,12 +484,21 @@ pub fn apply_event(ev: Event) {
                         if let Some(v) = views.iter_mut().find(|v| v.name == name) {
                             v.columns = cols;
                             v.sql = sql;
+                            // The query *is* the view — rewriting it means any profile
+                            // describes a different question. Same explicit clear the
+                            // table path needs, for the same reason: this branch mutates
+                            // the row rather than replacing it. Clearing `profiling` also
+                            // makes `end_profile` discard a scan of the old query.
+                            v.profile = None;
+                            v.profiling = false;
                         } else {
                             views.push(CatalogView {
                                 name: name.clone(),
                                 sql,
                                 meta: "view".into(),
                                 columns: cols,
+                                profile: None,
+                                profiling: false,
                                 open: false,
                             });
                         }

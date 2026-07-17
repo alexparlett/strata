@@ -22,8 +22,9 @@ use dioxus::prelude::*;
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
 use crate::engine::{ColumnInfo, Stat, StatKey};
-use crate::profile::TableProfile;
+use crate::profile::CatalogProfile;
 use crate::project::ProjectStoreExt;
+use crate::state::CatalogKind;
 use crate::ui::components::{
     Button, ButtonVariant, Dot, Eyebrow, Icon, IconButton, IconButtonVariant, Meta, MonoValue,
     Path, Prose, Readout, Tooltip,
@@ -76,7 +77,7 @@ fn resolve<'a>(cols: &'a [ColumnInfo], path: &[String]) -> Option<&'a ColumnInfo
 /// the box doesn't reshuffle when a scan lands. `Nulls` is deliberately absent — it's
 /// the completeness bar, and drawing it as a row too would be the third rendering of
 /// one number.
-fn merged_facts(free: &[Stat], profile: &Option<TableProfile>, path: &[String]) -> Vec<Stat> {
+fn merged_facts(free: &[Stat], profile: &Option<CatalogProfile>, path: &[String]) -> Vec<Stat> {
     const ORDER: [StatKey; 5] = [
         StatKey::Distinct,
         StatKey::Min,
@@ -98,7 +99,7 @@ fn merged_facts(free: &[Stat], profile: &Option<TableProfile>, path: &[String]) 
 
 /// The column's null count, from wherever it's honestly known — the footer first, then
 /// a scan.
-fn null_count(free: &[Stat], profile: &Option<TableProfile>, path: &[String]) -> Option<u64> {
+fn null_count(free: &[Stat], profile: &Option<CatalogProfile>, path: &[String]) -> Option<u64> {
     free.iter()
         .find(|s| s.key == StatKey::Nulls)
         .or_else(|| {
@@ -117,7 +118,7 @@ pub fn Inspector() -> Element {
     // The inspector owns its own width — a local reactive signal, not global state.
     let width = use_signal(|| 292.0);
 
-    let Some((table, path)) = crate::inspector::selected() else {
+    let Some(sel) = crate::inspector::selected() else {
         return rsx! {
             Resizer { axis_x: true, sign: -1.0, min: 220.0, max: 560.0, size: width }
             aside { class: "ps-inspector", style: "width:{width}px;",
@@ -131,22 +132,27 @@ pub fn Inspector() -> Element {
         };
     };
 
-    // The column's catalog row. A view resolves too, but has no files under it — no
-    // footers to read and nothing to scan, so it gets neither tier.
-    let row = tables.iter().find(|t| t.name == table);
+    // One lookup, not two: the selection says which collection owns it. A view has no
+    // files under it and so no footer tier at all — a scan is the only way it learns
+    // anything beyond the type, which is why profiling matters more here than on a
+    // Parquet table.
+    let (table, path, is_view, is_child) = (
+        sel.owner.clone(),
+        sel.path.clone(),
+        sel.kind == CatalogKind::View,
+        sel.is_child(),
+    );
+    let row = (!is_view)
+        .then(|| tables.iter().find(|t| t.name == table))
+        .flatten();
+    let view = is_view
+        .then(|| views.iter().find(|v| v.name == table))
+        .flatten();
     let colinfo = row
-        .and_then(|t| resolve(&t.columns, &path).cloned())
-        .or_else(|| {
-            views
-                .iter()
-                .find(|v| v.name == table)
-                .and_then(|v| resolve(&v.columns, &path).cloned())
-        });
-    // The leaf's own name — the path is how it's found, not what it's called.
-    let colname = path.last().cloned().unwrap_or_default();
-    // A nested *field* (a struct's child), which is a position, not a type: a top-level
-    // struct column is not one.
-    let is_child = path.len() > 1;
+        .map(|t| &t.columns)
+        .or(view.map(|v| &v.columns))
+        .and_then(|cols| resolve(cols, &path).cloned());
+    let colname = sel.name().to_string();
     let kind = colinfo.as_ref().map(|c| c.kind).unwrap_or(Kind::Str);
     let dtype = colinfo.as_ref().map(|c| c.dtype.clone()).unwrap_or_default();
     let free: Vec<Stat> = colinfo.as_ref().map(|c| c.stats.clone()).unwrap_or_default();
@@ -154,10 +160,19 @@ pub fn Inspector() -> Element {
     let src_fmt = row
         .map(|t| t.format.to_uppercase())
         .unwrap_or_else(|| "VIEW".to_string());
-    let rows = row.and_then(|t| t.rows);
-    let profile = row.and_then(|t| t.profile.clone());
-    let profiling = row.map(|t| t.profiling).unwrap_or(false);
-    let profilable = row.is_some();
+    let profile = row
+        .and_then(|t| t.profile.clone())
+        .or_else(|| view.and_then(|v| v.profile.clone()));
+    let profiling = row
+        .map(|t| t.profiling)
+        .or_else(|| view.map(|v| v.profiling))
+        .unwrap_or(false);
+    let profilable = row.is_some() || view.is_some();
+    // Row count from wherever it's honestly known: a footer, else the scan. A view has
+    // only the latter.
+    let rows = row
+        .and_then(|t| t.rows)
+        .or_else(|| profile.as_ref().map(|p| p.rows));
 
     let dot = kind.dot_color();
     let tcls = kind.text_class();
@@ -169,8 +184,7 @@ pub fn Inspector() -> Element {
     // One bar for nulls / presence / completeness — the same number three ways was the
     // duplication. It needs a null count from somewhere real (footer, else scan);
     // without one there's nothing honest to draw, so it doesn't appear.
-    let total = rows.or(profile.as_ref().map(|p| p.rows));
-    let fill = match (null_count(&free, &profile, &path), total) {
+    let fill = match (null_count(&free, &profile, &path), rows) {
         (Some(n), Some(t)) if t > 0 => {
             let pct = 100.0 - (n as f64 / t as f64 * 100.0);
             Some((
@@ -262,7 +276,7 @@ pub fn Inspector() -> Element {
             // The profile action sits below the statistics it fills in — button,
             // spinner and age/re-scan all occupy this one slot.
             if profilable {
-                {profile_slot(&table, is_child, &profile, profiling)}
+                {profile_slot(&table, is_view, is_child, &profile, profiling)}
             }
 
             if nested {
@@ -286,7 +300,7 @@ pub fn Inspector() -> Element {
 /// must refuse a nested path outright. Looking up by leaf name would let
 /// `address.city` collect an unrelated top-level `city`'s facts: the same confusion of
 /// name for identity that the path fixes.
-fn profile_stats<'a>(profile: &'a Option<TableProfile>, path: &[String]) -> Option<&'a Vec<Stat>> {
+fn profile_stats<'a>(profile: &'a Option<CatalogProfile>, path: &[String]) -> Option<&'a Vec<Stat>> {
     let [name] = path else { return None };
     profile.as_ref()?.cols.get(name)
 }
@@ -305,8 +319,9 @@ fn profile_stats<'a>(profile: &'a Option<TableProfile>, path: &[String]) -> Opti
 /// whether the column *contains* fields, not whether it *is* one.
 fn profile_slot(
     table: &str,
+    is_view: bool,
     is_child: bool,
-    profile: &Option<TableProfile>,
+    profile: &Option<CatalogProfile>,
     profiling: bool,
 ) -> Element {
     let (t2, t3) = (table.to_string(), table.to_string());
@@ -334,14 +349,20 @@ fn profile_slot(
             } else {
                 div { class: "prof-empty",
                     Prose { class: "prof-empty-note",
-                        "Reads every file to compute distinct counts, means and distributions. The result is cached until the table changes."
+                        // A view's cost isn't a file scan — it's the whole query, joins
+                        // and all, which may read far more than one table.
+                        {if is_view {
+                            "Runs the view's query in full to compute distinct counts, means and distributions. The result is cached until the view changes."
+                        } else {
+                            "Reads every file to compute distinct counts, means and distributions. The result is cached until the table changes."
+                        }}
                     }
                     // Confirms, like the context menu's Profile: the same action from
                     // two places shouldn't warn from only one of them.
                     Button { variant: ButtonVariant::Secondary, small: true,
                         icon: IconName::Chart, icon_size: IconSize::Sm,
                         onclick: move |_| dispatch(Action::AskProfileTable(t2.clone())),
-                        "Profile table"
+                        {if is_view { "Profile view" } else { "Profile table" }}
                     }
                 }
             }
@@ -367,7 +388,7 @@ fn nested_rows(fields: &[ColumnInfo], depth: usize) -> Element {
 }
 
 /// "just now" / "4m ago" / "2h ago" — how stale the profile is.
-fn age_label(p: &TableProfile) -> String {
+fn age_label(p: &CatalogProfile) -> String {
     let secs = p.at.elapsed().map(|d| d.as_secs()).unwrap_or(0);
     match secs {
         0..=59 => "just now".to_string(),

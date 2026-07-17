@@ -82,9 +82,9 @@ pub struct CatalogTable {
     /// clear this explicitly. Any new path that mutates a row rather than replacing it
     /// must do the same.
     #[serde(skip)]
-    pub profile: Option<crate::profile::TableProfile>,
+    pub profile: Option<crate::profile::CatalogProfile>,
     /// A profile scan is in flight for this table — the row's own lifecycle, mirroring
-    /// `status`. Only one runs at a time across the catalog.
+    /// `status`. Scans are keyed by entry, so several run at once.
     #[serde(skip)]
     pub profiling: bool,
     #[serde(skip)]
@@ -104,6 +104,18 @@ pub struct CatalogView {
     pub meta: String,
     #[serde(skip)]
     pub columns: Vec<ColumnInfo>,
+    /// The last full-scan profile (D4), or `None` if never profiled.
+    ///
+    /// A view is where profiling earns most: it has no footer, so without a scan its
+    /// inspector knows nothing but the column's type. ⚠️ Invalidation is weaker than a
+    /// table's — this drops when the view's own SQL changes, but a view also depends on
+    /// every table beneath it, and a table refresh can't see through to here. See the
+    /// view-dependency task in DEV_TASKS.
+    #[serde(skip)]
+    pub profile: Option<crate::profile::CatalogProfile>,
+    /// A profile scan is in flight for this view.
+    #[serde(skip)]
+    pub profiling: bool,
     #[serde(skip)]
     pub open: bool,
 }
@@ -435,44 +447,95 @@ pub fn remove_table(name: &str) {
     store().tables().write().retain(|t| t.name != name);
 }
 
+/// Whether `name` is a view rather than a table — they share one namespace, so a name
+/// is one or the other.
+pub fn is_view(name: &str) -> bool {
+    let s = store();
+    let views = s.views();
+    let v = views.read();
+    v.iter().any(|v| v.name == name)
+}
+
 /// Whether `name` is mid-profile — so entry points can offer a scan rather than a no-op.
 pub fn is_profiling(name: &str) -> bool {
     let s = store();
-    let tables = s.tables();
-    let t = tables.read();
-    t.iter().any(|t| t.name == name && t.profiling)
+    {
+        let tables = s.tables();
+        let t = tables.read();
+        if t.iter().any(|t| t.name == name && t.profiling) {
+            return true;
+        }
+    }
+    let views = s.views();
+    let v = views.read();
+    v.iter().any(|v| v.name == name && v.profiling)
 }
 
-/// Whether any table is mid-profile (D4) — the window-close confirm counts a running
+/// Whether anything is mid-profile (D4) — the window-close confirm counts a running
 /// scan as work in flight, exactly as it counts a running query.
 pub fn profiling_any() -> bool {
     let s = store();
-    let tables = s.tables();
-    let t = tables.read();
-    t.iter().any(|t| t.profiling)
+    {
+        let tables = s.tables();
+        let t = tables.read();
+        if t.iter().any(|t| t.profiling) {
+            return true;
+        }
+    }
+    let views = s.views();
+    let v = views.read();
+    v.iter().any(|v| v.profiling)
 }
 
-/// Mark `name` as scanning (the PROFILE zone's spinner).
+/// Mark `name` as scanning (the PROFILE zone's spinner). Tables and views both profile.
+///
+/// The two lookups are deliberately sequenced, never nested: dioxus tracks a store's
+/// borrows at whole-store granularity, so holding the `tables` guard while taking the
+/// `views` one would panic `AlreadyBorrowedMut` — lenses don't make them independent.
 pub fn begin_profile(name: &str) {
     let s = store();
-    let mut tables = s.tables();
-    let mut t = tables.write();
-    if let Some(row) = t.iter_mut().find(|t| t.name == name) {
+    {
+        let mut tables = s.tables();
+        let mut t = tables.write();
+        if let Some(row) = t.iter_mut().find(|t| t.name == name) {
+            row.profiling = true;
+            return;
+        }
+    }
+    let mut views = s.views();
+    let mut v = views.write();
+    if let Some(row) = v.iter_mut().find(|v| v.name == name) {
         row.profiling = true;
     }
 }
 
 /// Land a finished profile (or just clear the flag, if the scan failed).
-pub fn end_profile(name: &str, profile: Option<crate::profile::TableProfile>) {
+///
+/// The `profiling` flag not surviving is the signal that the row was replaced or its
+/// definition changed *during* the scan (a re-register, a config edit, a refresh, a
+/// view's SQL being rewritten) — so these numbers now describe something that's been
+/// swapped out underneath them. Drop them rather than cache a lie: "cached until it
+/// changes" has to hold for a scan that was already running when it changed.
+///
+/// Sequenced, not nested — see [`begin_profile`].
+pub fn end_profile(name: &str, profile: Option<crate::profile::CatalogProfile>) {
     let s = store();
-    let mut tables = s.tables();
-    let mut t = tables.write();
-    if let Some(row) = t.iter_mut().find(|t| t.name == name) {
-        // A row replaced *during* the scan (a re-register, a config edit, a catalog
-        // refresh) comes back from `upsert_table` with `profiling: false` — which is
-        // exactly the signal that these numbers now describe data that's been swapped
-        // out underneath them. Drop them rather than cache a lie; "cached until the
-        // table changes" has to hold for a scan already in flight when it changed.
+    {
+        let mut tables = s.tables();
+        let mut t = tables.write();
+        if let Some(row) = t.iter_mut().find(|t| t.name == name) {
+            if row.profiling {
+                row.profiling = false;
+                if profile.is_some() {
+                    row.profile = profile;
+                }
+            }
+            return;
+        }
+    }
+    let mut views = s.views();
+    let mut v = views.write();
+    if let Some(row) = v.iter_mut().find(|v| v.name == name) {
         if !row.profiling {
             return;
         }

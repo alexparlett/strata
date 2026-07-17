@@ -97,9 +97,9 @@ pub fn edit_view(name: &str) {
 
 // ---- catalog interactions ----
 
-/// Select a column for the inspector (and open the inspector), by its path in `table`.
-pub fn select_column(table: String, path: Vec<String>) {
-    crate::inspector::select(table, path);
+/// Select a column for the inspector (and open the inspector).
+pub fn select_column(col: crate::inspector::ColRef) {
+    crate::inspector::select(col);
     crate::layout::set_inspector_open(true);
 }
 
@@ -128,22 +128,31 @@ pub fn profile(table: String) {
 /// The SQL was unparsed from the plan that ran, at the moment it ran, so what the user
 /// reads is what produced the numbers they're looking at — not a reconstruction. A
 /// scratch tab: it's theirs to edit and re-run now.
-pub fn open_profile_sql(table: String) {
+pub fn open_profile_sql(name: String) {
     let sql = {
         let store = crate::project::store();
         let p = store.read();
+        // Views profile too — searching only `tables` meant the button silently did
+        // nothing on exactly the entries where a profile is worth most (a view has no
+        // footer, so the scan is all it has).
         p.tables
-         .iter()
-         .find(|t| t.name == table)
-         .and_then(|t| t.profile.as_ref())
-         .map(|p| p.sql.clone())
-         .unwrap_or_default()
+            .iter()
+            .find(|t| t.name == name)
+            .and_then(|t| t.profile.as_ref())
+            .or_else(|| {
+                p.views
+                 .iter()
+                 .find(|v| v.name == name)
+                 .and_then(|v| v.profile.as_ref())
+            })
+            .map(|p| p.sql.clone())
+            .unwrap_or_default()
     };
     if sql.is_empty() {
         return;
     }
     crate::session::open_named(
-        &format!("profile · {table}"),
+        &format!("profile · {name}"),
         sql,
         crate::project::Origin::Scratch,
     );

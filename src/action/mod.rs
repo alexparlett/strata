@@ -94,12 +94,9 @@ pub enum Action {
     EditView(String),
     ToggleTableOpen(usize),
     ToggleViewOpen(usize),
-    /// Inspect a column by its **path** within the table (`["address", "city"]`) — a
-    /// bare name can't say which `city`.
-    SelectColumn {
-        table: String,
-        path: Vec<String>,
-    },
+    /// Inspect a column — see [`crate::inspector::ColRef`] for why it takes a kind +
+    /// owner + path rather than a name.
+    SelectColumn(crate::inspector::ColRef),
     /// Re-infer catalog table schemas (the sidebar refresh button).
     RescanCatalog,
     /// Full-scan profile of a table (D4), no confirm — the PROFILE zone's ↻ re-scan,
@@ -265,7 +262,7 @@ fn run(action: Action) {
         EditView(name) => catalog::edit_view(&name),
         ToggleTableOpen(i) => crate::project::toggle_table_open(i),
         ToggleViewOpen(i) => crate::project::toggle_view_open(i),
-        SelectColumn { table, path } => catalog::select_column(table, path),
+        SelectColumn(col) => catalog::select_column(col),
         RescanCatalog => catalog::refresh(),
         ProfileTable(name) => catalog::profile(name),
         AskProfileTable(name) => crate::overlays::open_profile_confirm(name),

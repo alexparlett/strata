@@ -139,7 +139,7 @@ pub struct RemoveTarget {
 }
 
 /// Which catalog section a right-clicked row belongs to.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CatalogKind {
     Table,
     View,

@@ -1,14 +1,15 @@
-//! Table **profiling** (D4) — the scan-derived tier behind the column inspector.
+//! Catalog **profiling** (D4) — the scan-derived facts behind the column inspector.
 //!
-//! Two tiers answer the inspector, and they interlock by [`StatKey`]. The source's
-//! *free* metadata ([`crate::engine::ColumnInfo::stats`]) is read from a Parquet footer
-//! at registration and costs nothing; this tier computes what the source didn't say —
-//! which for CSV and JSON is everything, since they carry no metadata at all. The
-//! inspector renders a profiled fact only where the free tier left a gap.
+//! Facts reach the inspector from two places, matched by [`StatKey`] so neither repeats
+//! the other. The source's *free* metadata ([`crate::engine::ColumnInfo::stats`]) is
+//! read from a Parquet footer at registration and costs nothing; this computes what the
+//! source didn't say. For CSV, JSON, and **any view**, that's everything — a view has
+//! no footer at all, so a scan is the only way it learns more than a column's type.
 //!
-//! **One full scan per table, one aggregate, all columns at once.** Distinct counts
+//! **One full scan per entry, one aggregate, all columns at once.** Distinct counts
 //! can't be merged across files, so there is no cheaper form and no partial version —
-//! which is exactly why profiling is opt-in rather than automatic.
+//! which is exactly why profiling is opt-in rather than automatic. For a view the cost
+//! isn't a file scan but its whole query: joins, aggregates and all.
 //!
 //! Built with the DataFrame API, not generated SQL: internal logic doesn't write SQL,
 //! only the user does.
@@ -17,10 +18,11 @@
 //! never descended into. Profiling a struct's elements would mean traversing
 //! arbitrarily deep data on a scan we already told the user was expensive.
 //!
-//! Results cache on the catalog row ([`crate::project::CatalogTable::profile`]), so
-//! `project::upsert_table` drops them the moment the engine re-registers a table. That
-//! is the "cached until the table changes" contract, enforced by construction rather
-//! than by remembering to invalidate.
+//! Results cache on the catalog entry ([`crate::project::CatalogTable::profile`] /
+//! [`crate::project::CatalogView::profile`]). A table's dies with its row when the
+//! engine re-registers it; a view's dies when its SQL is rewritten. ⚠️ A view is also
+//! only as fresh as the tables beneath it, and nothing currently propagates that — see
+//! the view-dependency task in DEV_TASKS.
 
 use std::collections::BTreeMap;
 use std::time::SystemTime;
@@ -37,17 +39,17 @@ use datafusion::prelude::{ident, lit, Expr};
 use crate::engine::{ColumnInfo, Stat, StatKey};
 use crate::util::Kind;
 
-/// A completed profile of one table.
+/// A completed profile of one catalog entry — a table or a view.
 #[derive(Clone, Debug, PartialEq)]
-pub struct TableProfile {
+pub struct CatalogProfile {
     /// When the scan finished — the inspector shows this as an age.
     pub at: SystemTime,
     /// Rows scanned.
     pub rows: u64,
-    /// The query that produced these numbers, unparsed from the plan that actually ran
-    /// (`plan_to_sql`) at the moment it ran. Not a rendering *of* the plan or a
-    /// hand-written equivalent — the plan itself, so "view as query" can't drift from
-    /// the facts above it. Empty if the unparser couldn't render it.
+    /// The query that produced these numbers — see [`profile_sql`]. Its SELECT list is
+    /// unparsed from the very `Expr`s that ran, so it can't drift from the facts above
+    /// it; only the `FROM` is written by us, on purpose. Empty when the unparser
+    /// couldn't render an expression, which the UI reads as "no button".
     pub sql: String,
     /// Facts per column name — the same [`Stat`] list the free tier produces, so the
     /// inspector renders both through one path. A column the scan couldn't say anything
@@ -77,7 +79,7 @@ pub enum Slot {
     Stat { name: String, key: StatKey },
 }
 
-/// The aggregate expressions for one table's profile, and what each output means.
+/// The aggregate expressions for one entry's profile, and what each output means.
 ///
 /// Built with the DataFrame API rather than generated SQL: internal logic doesn't write
 /// SQL, only the user does. It also sidesteps identifier handling entirely — note
@@ -140,16 +142,49 @@ pub fn aggregates(columns: &[ColumnInfo]) -> (Vec<Expr>, Vec<Slot>) {
     (exprs, slots)
 }
 
+/// Render the profile as SQL the user can read and re-run — the "view as query" button.
+///
+/// The SELECT list is unparsed from the very `Expr`s that execute (`expr_to_sql`), so
+/// the facts can't drift from the numbers on screen. Only the `FROM` is ours, and
+/// deliberately so: `plan_to_sql` on the whole plan names *no* view, because DataFusion
+/// inlines a view's definition during planning — by the time there's a plan, the view is
+/// gone and its body is spliced in. Handing someone `FROM (SELECT … JOIN …)` when they
+/// clicked on `active_users` is technically the plan and practically useless. `FROM
+/// active_users` is the same query and the one they can actually work with.
+///
+/// Empty on any expression the unparser can't render — no button beats a broken query.
+pub fn profile_sql(owner: &str, exprs: &[Expr]) -> String {
+    let mut parts = Vec::with_capacity(exprs.len());
+    for e in exprs {
+        match datafusion::sql::unparser::expr_to_sql(e) {
+            Ok(ast) => parts.push(format!("  {ast}")),
+            Err(_) => return String::new(),
+        }
+    }
+    format!(
+        "SELECT\n{}\nFROM {};",
+        parts.join(",\n"),
+        quote_ident(owner)
+    )
+}
+
+/// Quote an identifier for the generated SQL. Catalog names come from the user, so this
+/// is the one place we hand-write an identifier rather than let `ident`/the unparser do
+/// it — double any embedded quote.
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// Decode the aggregate's single result row into per-column facts.
 ///
-/// `columns` is the table's schema, giving the decode a stable column order. A null
+/// `columns` is the entry's schema, giving the decode a stable column order. A null
 /// result cell means the scan had nothing to say: that becomes an absent fact, never a
 /// blank row.
 pub fn decode(
     slots: &[Slot],
     batch: &RecordBatch,
     columns: &[ColumnInfo],
-) -> Result<TableProfile, String> {
+) -> Result<CatalogProfile, String> {
     if batch.num_rows() == 0 {
         return Err("profile returned no rows".into());
     }
@@ -198,7 +233,7 @@ pub fn decode(
             cols.insert(c.name.clone(), facts);
         }
     }
-    Ok(TableProfile {
+    Ok(CatalogProfile {
         at: SystemTime::now(),
         rows,
         // The caller fills this from the plan it ran — decode only sees results.

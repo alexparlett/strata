@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
+use crate::inspector::ColRef;
 use crate::project::ProjectStoreExt;
 use crate::state::{CatalogKind, RemoveKind, RemoveTarget};
 use crate::ui::components::{
@@ -104,7 +105,7 @@ pub fn Sidebar() -> Element {
                 }
                 if views_open() {
                     for i in 0..nview {
-                        {render_view(menu, remove, i, &filter())}
+                        {render_view(menu, remove, i, &filter(), &selected, expanded)}
                     }
                 }
 
@@ -173,10 +174,17 @@ fn catalog_menu_items(
             }
         }
         CatalogKind::View => {
-            let (n1, n2, n3) = (name.clone(), name.clone(), name.clone());
+            let (n1, n2, n3, n4) = (name.clone(), name.clone(), name.clone(), name.clone());
+            let scanning = crate::project::is_profiling(&name);
             rsx! {
                 MenuItem { icon: IconName::Play, icon_size: IconSize::Sm, label: "View view".to_string(),
                     onclick: move |_| dispatch(Action::LoadSelectStar(n1.clone())) }
+                // A view has no footer, so a scan is the only way it learns anything —
+                // it's worth more here than on a table.
+                MenuItem { icon: IconName::Chart, icon_size: IconSize::Sm,
+                    label: if scanning { "Profiling…".to_string() } else { "Profile".to_string() },
+                    disabled: scanning,
+                    onclick: move |_| dispatch(Action::AskProfileTable(n4.clone())) }
                 MenuItem { icon: IconName::Pencil, icon_size: IconSize::Sm, label: "Edit query".to_string(),
                     onclick: move |_| dispatch(Action::EditView(n2.clone())) }
                 MenuSep {}
@@ -305,15 +313,15 @@ struct ColRow {
     is_expanded: bool,
 }
 
-/// Walk a table's column tree into the flat list of *visible* rows: every column,
-/// plus the children of any expanded struct column, depth-first.
+/// Walk a catalog entry's column tree into the flat list of *visible* rows: every
+/// column, plus the children of any expanded struct column, depth-first.
 fn flatten_cols(
-    table: &str,
+    owner: &str,
     parent: &[String],
     depth: usize,
     cols: &[crate::engine::ColumnInfo],
     parts: &[(String, String)],
-    selected: &Option<(String, Vec<String>)>,
+    selected: &Option<ColRef>,
     expanded: &HashSet<String>,
     out: &mut Vec<ColRow>,
 ) {
@@ -321,8 +329,8 @@ fn flatten_cols(
         let mut path = parent.to_vec();
         path.push(c.name.clone());
         // The expand key stays a display string — it only has to be unique per row, and
-        // a collision would merely expand the wrong twig.
-        let key = format!("{table}::{}", path.join("."));
+        // a collision would merely expand the wrong twig. Identity uses `ColRef`.
+        let key = format!("{owner}::{}", path.join("."));
         let has_children = !c.children.is_empty();
         let is_expanded = has_children && expanded.contains(&key);
         out.push(ColRow {
@@ -337,7 +345,7 @@ fn flatten_cols(
             // `city` at any depth in the table.
             is_sel: selected
                 .as_ref()
-                .is_some_and(|(tn, p)| tn == table && p == &path),
+                .is_some_and(|s| s.owner == owner && s.path == path),
             depth,
             has_children,
             is_expanded,
@@ -346,7 +354,7 @@ fn flatten_cols(
         if is_expanded {
             let child_parent = out.last().map(|r| r.path.clone()).unwrap_or_default();
             flatten_cols(
-                table,
+                owner,
                 &child_parent,
                 depth + 1,
                 &c.children,
@@ -364,7 +372,7 @@ fn render_table(
     remove: Signal<Option<RemoveTarget>>,
     i: usize,
     filter: &str,
-    selected: &Option<(String, Vec<String>)>,
+    selected: &Option<ColRef>,
     mut expanded: Signal<HashSet<String>>,
 ) -> Element {
     let store = crate::project::store();
@@ -425,40 +433,51 @@ fn render_table(
                 }
             }
             if open {
-                div { class: "tbl-cols",
-                    for r in rows {
-                        {
-                            let table_nm = name.clone();
-                            let col_path = r.path.clone();
-                            let key = r.key.clone();
-                            let indent = r.depth * 12;
-                            rsx! {
-                                div {
-                                    class: if r.is_sel { "col-row sel" } else { "col-row" },
-                                    onclick: move |_| dispatch(Action::SelectColumn {
-                                        table: table_nm.clone(),
-                                        path: col_path.clone(),
-                                    }),
-                                    span { style: "width:{indent}px;flex:none;" }
-                                    span { class: "col-chev",
-                                        if r.has_children {
-                                            span {
-                                                style: "display:flex;cursor:pointer;",
-                                                onclick: move |e| {
-                                                    e.stop_propagation();
-                                                    let mut set = expanded.write();
-                                                    if !set.insert(key.clone()) { set.remove(&key); }
-                                                },
-                                                if r.is_expanded { Icon { name: IconName::ChevronDown, size: IconSize::Xs } } else { Icon { name: IconName::ChevronRight, size: IconSize::Xs } }
-                                            }
-                                        }
+                {col_rows(CatalogKind::Table, &name, rows, expanded)}
+            }
+        }
+    }
+}
+
+/// The column rows under an open catalog entry — shared by tables and views, because a
+/// view's columns are columns: clickable, selectable, and expandable if they're nested.
+/// They only ever differed by omission (view rows had no `onclick` at all, so clicking
+/// one silently did nothing), which is exactly what a second copy of a list buys you.
+fn col_rows(
+    kind: CatalogKind,
+    owner: &str,
+    rows: Vec<ColRow>,
+    mut expanded: Signal<HashSet<String>>,
+) -> Element {
+    rsx! {
+        div { class: "tbl-cols",
+            for r in rows {
+                {
+                    let col = ColRef { kind, owner: owner.to_string(), path: r.path.clone() };
+                    let key = r.key.clone();
+                    let indent = r.depth * 12;
+                    rsx! {
+                        div {
+                            class: if r.is_sel { "col-row sel" } else { "col-row" },
+                            onclick: move |_| dispatch(Action::SelectColumn(col.clone())),
+                            span { style: "width:{indent}px;flex:none;" }
+                            span { class: "col-chev",
+                                if r.has_children {
+                                    span {
+                                        style: "display:flex;cursor:pointer;",
+                                        onclick: move |e| {
+                                            e.stop_propagation();
+                                            let mut set = expanded.write();
+                                            if !set.insert(key.clone()) { set.remove(&key); }
+                                        },
+                                        if r.is_expanded { Icon { name: IconName::ChevronDown, size: IconSize::Xs } } else { Icon { name: IconName::ChevronRight, size: IconSize::Xs } }
                                     }
-                                    Dot { color: "{r.dot}", square: true, size: 6 }
-                                    MonoValue { class: "cname", "{r.name}" }
-                                    if r.is_part { Micro { class: "pill", "PART" } }
-                                    Meta { class: "ctype {r.tcls}", "{r.dtype}" }
                                 }
                             }
+                            Dot { color: "{r.dot}", square: true, size: 6 }
+                            MonoValue { class: "cname", "{r.name}" }
+                            if r.is_part { Micro { class: "pill", "PART" } }
+                            Meta { class: "ctype {r.tcls}", "{r.dtype}" }
                         }
                     }
                 }
@@ -472,6 +491,8 @@ fn render_view(
     remove: Signal<Option<RemoveTarget>>,
     i: usize,
     filter: &str,
+    selected: &Option<ColRef>,
+    expanded: Signal<HashSet<String>>,
 ) -> Element {
     let store = crate::project::store();
     let vl = store.views();
@@ -484,18 +505,16 @@ fn render_view(
     }
     let name = v.name.clone();
     let open = v.open;
-    let cols: Vec<(String, String, &'static str, &'static str)> = v
-        .columns
-        .iter()
-        .map(|c| {
-            (
-                c.name.clone(),
-                c.dtype.clone(),
-                c.kind.dot_color(),
-                c.kind.text_class(),
-            )
-        })
-        .collect();
+    let profiling = v.profiling;
+    // Same flatten as a table's: a view's columns can be nested too, and selecting one
+    // has to carry a path for the inspector to resolve it. Views have no partition
+    // columns, hence the empty `parts`.
+    let rows: Vec<ColRow> = {
+        let exp = expanded();
+        let mut out = Vec::new();
+        flatten_cols(&name, &[], 0, &v.columns, &[], selected, &exp, &mut out);
+        out
+    };
     drop(s);
 
     let nm_ctx = name.clone();
@@ -516,6 +535,11 @@ fn render_view(
                 }
                 Icon { name: IconName::Eye, size: IconSize::Sm, color: "var(--purple)" }
                 MonoValue { class: "tname", "{name}" }
+                if profiling {
+                    Tooltip { message: "Profiling...",
+                        span { class: "tbl-spin ps-spin", Icon { name: IconName::Spinner, size: IconSize::Xs } }
+                    }
+                }
                 DropdownMenu {
                     class: "row-menu", title: "Actions", align: RectAlign::BOTTOM_END, width: 180,
                     trigger: rsx! { Icon { name: IconName::Dots, size: IconSize::Sm } },
@@ -523,15 +547,7 @@ fn render_view(
                 }
             }
             if open {
-                div { class: "tbl-cols",
-                    for (cn, ct, dot, tcls) in cols {
-                        div { class: "col-row",
-                            Dot { color: "{dot}", square: true, size: 6 }
-                            MonoValue { class: "cname", "{cn}" }
-                            Meta { class: "ctype {tcls}", "{ct}" }
-                        }
-                    }
-                }
+                {col_rows(CatalogKind::View, &name, rows, expanded)}
             }
         }
     }

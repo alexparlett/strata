@@ -213,7 +213,7 @@ pub enum Event {
     /// A profile scan finished (D4). The row's `profiling` flag clears either way.
     Profiled {
         table: String,
-        result: Result<crate::profile::TableProfile, String>,
+        result: Result<crate::profile::CatalogProfile, String>,
     },
     ViewChanged {
         name: String,
@@ -608,6 +608,11 @@ async fn engine_loop(
                 let _ = evt_tx.send(Event::Deregistered { table });
             }
             Command::CreateView { name, sql } => {
+                // Redefining the view replaces the question any in-flight scan is
+                // answering — `end_profile` will discard its result, so stop paying.
+                if let Some(h) = profiling.remove(&name) {
+                    h.abort();
+                }
                 let stmt = format!("CREATE OR REPLACE VIEW {name} AS {sql}");
                 let result = match ctx.sql(&stmt).await {
                     Ok(df) => {
@@ -629,6 +634,10 @@ async fn engine_loop(
                 });
             }
             Command::DropView { name } => {
+                // The view's going away — a scan of it is now pure waste.
+                if let Some(h) = profiling.remove(&name) {
+                    h.abort();
+                }
                 let result = ctx
                     .sql(&format!("DROP VIEW IF EXISTS {name}"))
                     .await
@@ -1514,7 +1523,7 @@ async fn rebuild_listing(
 /// Runs on this worker like any other command, so the UI stays live and the row's
 /// `profiling` flag drives the spinner. Blocking is fine here; it's *meant* to be the
 /// expensive thing the user opted into.
-async fn run_profile(ctx: &SessionContext, name: &str) -> Result<crate::profile::TableProfile, String> {
+async fn run_profile(ctx: &SessionContext, name: &str) -> Result<crate::profile::CatalogProfile, String> {
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
     let columns: Vec<ColumnInfo> = df
         .schema()
@@ -1523,14 +1532,16 @@ async fn run_profile(ctx: &SessionContext, name: &str) -> Result<crate::profile:
         .map(|f| column_info(f))
         .collect();
     let (exprs, slots) = crate::profile::aggregates(&columns);
-    let agg = df.aggregate(vec![], exprs).map_err(|e| e.to_string())?;
-    // Unparse the plan we're about to run, from the plan itself — so "view as query"
-    // shows what produced the numbers rather than something built alongside it that
-    // could drift. Best effort: an un-renderable plan just means no button.
-    let sql = datafusion::sql::unparser::plan_to_sql(agg.logical_plan())
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-    let batches = agg.collect().await.map_err(|e| e.to_string())?;
+    // Render *before* executing, from the same `Expr`s that are about to run, so "view
+    // as query" can't drift from the facts it produced. Not `plan_to_sql` on the whole
+    // plan: that inlines a view's body and names no view (see `profile_sql`).
+    let sql = crate::profile::profile_sql(name, &exprs);
+    let batches = df
+        .aggregate(vec![], exprs)
+        .map_err(|e| e.to_string())?
+        .collect()
+        .await
+        .map_err(|e| e.to_string())?;
     let batch = batches.first().ok_or("profile returned no batches")?;
     let mut profile = crate::profile::decode(&slots, batch, &columns)?;
     profile.sql = sql;
