@@ -12,6 +12,11 @@
 //! *local reactive signal* and renders its own [`crate::action::panel::Resizer`]
 //! handle, which mutates that local signal — there is no shared resize state.
 //! Mutators write through field lenses. See [[workbench-and-runs]].
+//!
+//! **Read rule:** call sites read via the `pub fn` accessors below (`layout::field()`),
+//! never inline `store().field()` — accessors return owned values (no temporary-value
+//! dance, no stray non-subscribing `.peek()` in render); binding `store()` is for writes /
+//! module-internal use only.
 
 use dioxus::prelude::*;
 use dioxus_stores::*;

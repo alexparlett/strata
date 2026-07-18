@@ -167,12 +167,9 @@ fn ChartPlaceholder() -> Element {
 #[component]
 pub fn EmptyState() -> Element {
     let has_closed = crate::session::has_closed();
-    let saved: Vec<String> = crate::project::store()
-        .saved_queries()
-        .read()
-        .iter()
+    let saved: Vec<String> = crate::project::saved_query_names()
+        .into_iter()
         .take(4)
-        .map(|q| q.name.clone())
         .collect();
     rsx! {
         div { class: "ws-empty",

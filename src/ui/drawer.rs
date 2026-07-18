@@ -58,7 +58,7 @@ pub fn Drawer() -> Element {
         IconName::Maximize
     };
     let (title, count): (&str, usize) = match tab {
-        LogTab::History => ("History", crate::project::store().history().read().len()),
+        LogTab::History => ("History", crate::project::history_len()),
         LogTab::Events => ("Events", crate::events::len()),
         // Problems counts live error diagnostics (validation ∪ execution), not log rows.
         LogTab::Problems => ("Problems", crate::diagnostics::total_problems()),
@@ -104,9 +104,7 @@ fn history_body() -> Element {
         usize,
         &'static str,
         &'static str,
-    )> = crate::project::store()
-        .history()
-        .read()
+    )> = crate::project::history()
         .iter()
         .map(|h| {
             let dot = if h.ok { "var(--green)" } else { "var(--red2)" };

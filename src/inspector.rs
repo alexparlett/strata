@@ -5,6 +5,11 @@
 //!
 //! A column is named by a [`crate::model::ColRef`] (kind + owner + path); this module is
 //! just the store that remembers which one is selected.
+//!
+//! **Read rule:** call sites read via the `pub fn` accessors below (`inspector::field()`),
+//! never inline `store().field()` — accessors return owned values (no temporary-value
+//! dance, no stray non-subscribing `.peek()` in render); binding `store()` is for writes /
+//! module-internal use only.
 
 use dioxus::prelude::*;
 use dioxus_stores::*;

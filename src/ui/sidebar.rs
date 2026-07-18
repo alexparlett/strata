@@ -30,9 +30,9 @@ pub fn Sidebar() -> Element {
     let mut menu = use_signal(|| None::<CtxTarget>);
     // The remove-confirm dialog is likewise sidebar-local, opened from a row menu.
     let remove = use_signal(|| None::<RemoveTarget>);
-    let ntab = crate::project::store().tables().read().len();
-    let nview = crate::project::store().views().read().len();
-    let nquery = crate::project::store().saved_queries().read().len();
+    let ntab = crate::project::table_count();
+    let nview = crate::project::view_count();
+    let nquery = crate::project::query_count();
     // Catalog filter is pure sidebar UI — kept component-local (F7).
     let mut filter = use_signal(String::new);
     // Collapsible catalog sections (default expanded) — sidebar-local UI.

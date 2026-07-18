@@ -27,6 +27,11 @@
 //! Persistence to the machine-global app config happens **only** on Save (all
 //! fields, theme included) or from those immediate mutators — `os_dark` is never
 //! persisted. See [[settings-store]].
+//!
+//! **Read rule:** call sites read via the `pub fn` accessors below (`settings::field()`) —
+//! the same accessor convention as the `Store` modules. Here it's not optional: `shared()`
+//! is private and the state is coarse leaked `Signal`s, so there's no field lens to read
+//! directly. Accessors `.read()` (subscribe) in a component; `.peek()` is for the action layer.
 
 use std::cell::Cell;
 

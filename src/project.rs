@@ -7,6 +7,11 @@
 //! Only *definitions* are durable. For tables/views the `columns`/`status` are
 //! runtime and `#[serde(skip)]`-ped — re-derived when the engine re-registers a
 //! project on open. Reference model: table `sources` are absolute paths.
+//!
+//! **Read rule:** call sites read via the `pub fn` accessors below (`project::field()`),
+//! never inline `store().field()` — accessors return owned values (no temporary-value
+//! dance, no stray non-subscribing `.peek()` in render); binding `store()` is for writes /
+//! module-internal use only.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -429,6 +434,45 @@ pub fn path() -> Option<PathBuf> {
 /// The open project's directory — non-reactive (action layer / persistence).
 pub fn path_peek() -> Option<PathBuf> {
     store().path().peek().clone()
+}
+
+// --- catalog reads (each subscribes to just its own list's lens) -----------
+
+/// Number of registered tables (the sidebar TABLES section count). Reactive.
+pub fn table_count() -> usize {
+    store().tables().read().len()
+}
+
+/// Number of views (the sidebar VIEWS section count). Reactive.
+pub fn view_count() -> usize {
+    store().views().read().len()
+}
+
+/// Number of saved queries (the sidebar QUERIES section count + save-as-view
+/// auto-naming). Reactive.
+pub fn query_count() -> usize {
+    store().saved_queries().read().len()
+}
+
+/// Number of history rows (the drawer History tab count). Reactive.
+pub fn history_len() -> usize {
+    store().history().read().len()
+}
+
+/// The saved-query names (the empty-state's recent list). Reactive.
+pub fn saved_query_names() -> Vec<String> {
+    store()
+        .saved_queries()
+        .read()
+        .iter()
+        .map(|q| q.name.clone())
+        .collect()
+}
+
+/// A clone of the run history as stored (the drawer History list maps it to rows).
+/// Bounded by `max_history`, so the clone is cheap. Reactive.
+pub fn history() -> Vec<HistoryItem> {
+    store().history().read().clone()
 }
 
 /// Point this window at `path` on disk (`None` = unsaved).

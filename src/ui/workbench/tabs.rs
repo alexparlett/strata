@@ -67,7 +67,7 @@ pub fn Tabs() -> Element {
     // it re-runs on change; a fresh tab whose ref isn't stored yet is covered by the
     // per-tab `onmounted` scroll below.
     use_effect(move || {
-        let a = crate::session::store().active().cloned();
+        let a = crate::session::active_id();
         if let Some(m) = tab_refs.peek().get(&a).cloned() {
             spawn(async move {
                 let _ = m.scroll_to(ScrollBehavior::Instant).await;

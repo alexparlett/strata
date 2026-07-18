@@ -6,6 +6,11 @@
 //! The events `Vec` is a per-window `GlobalStore` (like [`crate::runs::RUNS`]); row
 //! ids come from a process-global counter — they need only be unique within a
 //! window's list, which is all the drawer needs for keys + row lookup.
+//!
+//! **Read rule:** call sites read via the `pub fn` accessors below (`events::items` /
+//! `events::len`), never inline `store().read()` — accessors return owned values (no
+//! temporary-value dance, no stray non-subscribing `.peek()` in render); binding `store()`
+//! is for writes / module-internal use only.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

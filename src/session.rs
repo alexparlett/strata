@@ -20,6 +20,11 @@
 //! **Durable vs runtime.** `Session` is pure serde (persisted in `session.json`);
 //! a workspace's live query output is the runtime half and lives, keyed by the
 //! same id, in [`crate::runs`] (never serialized).
+//!
+//! **Read rule:** call sites read via the `pub fn` accessors below (`session::field()`),
+//! never inline `store().field()` — accessors return owned values (no temporary-value
+//! dance, no stray non-subscribing `.peek()` in render); binding `store()` is for writes /
+//! module-internal use only.
 
 use std::collections::HashSet;
 

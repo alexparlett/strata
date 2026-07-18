@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 /// Save the active SELECT as a named catalog view (auto-named `saved_view_N`).
 pub fn save_as_view() {
     let sql = crate::session::active_sql();
-    let n = crate::project::store().read().views.len() + 1;
+    let n = crate::project::view_count() + 1;
     let name = format!("saved_view_{n}");
     // The tab is now bound to (and in sync with) this view.
     crate::session::set_origin(

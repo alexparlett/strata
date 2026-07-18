@@ -15,6 +15,12 @@
 //! persisted; entries are created on first write (`edit`), dropped when a tab closes
 //! (`drop_ids`), and cleared on project open (`clear`) — a fresh project reassigns
 //! ids, so a new tab could otherwise inherit a stale run.
+//!
+//! **Read rule:** derived / single-fact reads go through the `pub fn` accessors below
+//! (`runs::is_running(id)` etc.) — owned returns, no temporary-value dance. This is a
+//! *keyed* store, so a component rendering one tab's run binds its entry and reads many
+//! fields off it (`RUNS.resolve().get(id)` then `.read()`) — that's the multi-field bind
+//! idiom, fine; `.peek()` stays for the action layer.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
