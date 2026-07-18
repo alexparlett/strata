@@ -22,7 +22,9 @@ mod overlays;
 mod plan;
 mod profile;
 mod project;
-mod model;
+// `model` is now the extracted `strata-model` crate; alias it as `crate::model` so the
+// 52 existing `crate::model::*` references keep resolving unchanged (Phase 0 of the port).
+pub(crate) use strata_model as model;
 mod runs;
 mod session;
 mod settings;

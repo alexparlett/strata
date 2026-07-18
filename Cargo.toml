@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/strata-forms", "crates/strata-forms-macro"]
+members = [".", "crates/strata-forms", "crates/strata-forms-macro", "crates/strata-model"]
 resolver = "2"
 
 [package]
@@ -35,6 +35,10 @@ dioxus-stores = "0.7"
 # The styled field components live app-side (they render our controls); the crate is
 # renderer-agnostic. `chrono` feature enables `validators::strftime`. See crates/strata-forms.
 strata-forms = { path = "crates/strata-forms", features = ["chrono"] }
+
+# Core data vocabulary — extracted leaf crate (Phase 0 of the Freya port; framework-agnostic,
+# to be shared by the Dioxus app and the coming strata-freya app). See docs/FREYA_PORT_PLAN.md.
+strata-model = { path = "crates/strata-model" }
 
 # OS-level global hotkeys for the app's global commands (⌘F/⌘K/…). Already a
 # transitive dep of dioxus-desktop; pinned to the same 0.7 so the `GlobalHotKeyEvent`

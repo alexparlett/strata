@@ -1,0 +1,9 @@
+[package]
+name = "strata-model"
+version = "0.2.0"
+edition = "2021"
+description = "Strata core data vocabulary (schema, results, catalog, forms, logs, errors) — a framework-agnostic leaf crate shared by every frontend. Phase 0 of the Freya port."
+license = "MIT"
+
+# Deliberately zero dependencies: this is the leaf every other crate depends *down* onto.
+[dependencies]

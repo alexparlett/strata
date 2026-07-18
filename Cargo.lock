@@ -6287,6 +6287,7 @@ dependencies = [
  "serde_json",
  "sqlformat",
  "strata-forms",
+ "strata-model",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -6309,6 +6310,10 @@ dependencies = [
  "quote",
  "syn 2.0.118",
 ]
+
+[[package]]
+name = "strata-model"
+version = "0.2.0"
 
 [[package]]
 name = "streaming-iterator"
