@@ -214,7 +214,10 @@ pub fn SettingsRoot() -> Element {
         }
         match crate::menu::MenuCmd::parse(&ev.id().0) {
             Some(crate::menu::MenuCmd::SelectAll) => {
-                if crate::menu::select_all_scope() == crate::menu::SelectAllScope::Input {
+                if matches!(
+                    crate::keymap::focus_responder(),
+                    Some(crate::keymap::Responder::TextInput)
+                ) {
                     crate::window::send_select_all();
                 }
             }

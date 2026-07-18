@@ -264,15 +264,14 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
     use_effect(move || {
         if crate::session::active_id() == ws_id {
             crate::keymap::register(
-                crate::config::Command::Find,
-                ws_id,
-                crate::keymap::Context::ResultsFind,
+                crate::keymap::CtxCommand::Find,
+                crate::keymap::Responder::Toolbar(ws_id),
             );
         } else {
-            crate::keymap::unregister_if(crate::config::Command::Find, ws_id);
+            crate::keymap::unregister_if(crate::keymap::CtxCommand::Find, ws_id);
         }
     });
-    use_drop(move || crate::keymap::unregister_if(crate::config::Command::Find, ws_id));
+    use_drop(move || crate::keymap::unregister_if(crate::keymap::CtxCommand::Find, ws_id));
 
     rsx! {
         div { class: "results-tb",

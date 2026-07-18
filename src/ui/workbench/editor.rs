@@ -150,10 +150,10 @@ pub fn Editor(ws: Store<crate::session::Workspace>) -> Element {
             }
             div {
                 style: "position:relative;height:{height}px;background:var(--main);overflow:auto;",
-                // The textarea's focus bubbles here (focusin/focusout) → hold the Select All
-                // scope so ⌘A selects the editor text (and the Edit-menu item enables).
-                onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input),
-                onfocusout: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None),
+                // The textarea's focus bubbles here (focusin/focusout) → claim the ⌘A/⌘C
+                // focus responder so ⌘A selects the editor text (and the Edit-menu item enables).
+                onfocusin: move |_| crate::keymap::claim_focus(crate::keymap::Responder::TextInput),
+                onfocusout: move |_| crate::keymap::release_focus(),
                 CodeEditor {
                     value: ws.sql().cloned(),
                     language: crate::ui::lang("sql"),

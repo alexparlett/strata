@@ -20,32 +20,104 @@ use crate::action::{dispatch, Action};
 use crate::config::{Command, KeyChord};
 use crate::session::WorkspaceId;
 
-/// Which mounted context currently owns a context-dependent command. Plain `Copy` data
-/// (not a closure), so it lives safely in a per-window `GlobalSignal`; [`run`] maps the
-/// kind to an action. New contexts (e.g. an editor find) add a variant here — never a
-/// literal-key arm in `handle_key`.
-#[derive(Clone, Copy, PartialEq)]
-pub enum Context {
-    ResultsFind,
+/// A command whose handler depends on **what's focused or mounted right now**, resolved
+/// through [`REGISTRY`] rather than a fixed action. Its own key family, distinct from the
+/// rebindable [`Command`] set: `Find` *is* also a keymap `Command` (⌘F, rebindable), but
+/// `SelectAll`/`Copy` are native Edit-menu accelerators (⌘A/⌘C, intercepted by muda — not
+/// keymap OS-hotkeys), so they aren't `Command`s. This enum is the one thing both families
+/// register against.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CtxCommand {
+    /// ⌘F — owned by the active tab's results toolbar (mount/tab-scoped).
+    Find,
+    /// ⌘A — owned by whatever text/grid surface is focused (focus-scoped).
+    SelectAll,
+    /// ⌘C — owned by whatever text/grid surface is focused (focus-scoped).
+    Copy,
 }
 
-/// Per-window registry: a context command → its active owner. Written by the owning
-/// component's mount effect; read by [`run`].
-static REGISTRY: GlobalSignal<HashMap<Command, (WorkspaceId, Context)>> =
+/// Who currently answers a [`CtxCommand`]. Plain `Copy` data (not a closure) so it lives
+/// safely in a per-window `GlobalSignal`; the readers ([`run`]/[`focus_responder`]) map the
+/// variant to an action. Unifies what used to be two mechanisms — the mount-scoped Find
+/// context and the focus-scoped `SelectAllScope` (formerly in `menu`).
+#[derive(Clone, Copy, PartialEq)]
+pub enum Responder {
+    /// The results toolbar of workspace `ws` — owns `Find` (toggles that tab's find popover).
+    Toolbar(WorkspaceId),
+    /// The results grid of workspace `ws` — `SelectAll` selects its cells, `Copy` writes TSV.
+    Grid(WorkspaceId),
+    /// A native text surface (SQL editor / `TextInput` / tab-rename) — `SelectAll`/`Copy`
+    /// re-emit the native `selectAll:`/`copy:` down the responder chain.
+    TextInput,
+}
+
+impl Responder {
+    /// The owning workspace, if the responder is tied to one (grid/toolbar); `None` for a
+    /// windowless text surface. Used by [`unregister_if`] to release only one's own slot.
+    fn owner(&self) -> Option<WorkspaceId> {
+        match self {
+            Responder::Toolbar(ws) | Responder::Grid(ws) => Some(*ws),
+            Responder::TextInput => None,
+        }
+    }
+}
+
+/// Per-window registry: each context command → its active owner. Written by the owning
+/// component (Find from a mount effect; `SelectAll`/`Copy` from focus handlers via
+/// [`claim_focus`]/[`release_focus`]); read by [`run`], [`focus_responder`], and the Edit-menu
+/// routing.
+static REGISTRY: GlobalSignal<HashMap<CtxCommand, Responder>> =
     Signal::global(|| HashMap::new());
 
-/// Claim `cmd` for `owner` while it's the active context (last writer wins).
-pub fn register(cmd: Command, owner: WorkspaceId, ctx: Context) {
-    REGISTRY.write().insert(cmd, (owner, ctx));
+/// The two Edit commands a single focused surface answers together (⌘A + ⌘C).
+const FOCUS_CMDS: [CtxCommand; 2] = [CtxCommand::SelectAll, CtxCommand::Copy];
+
+/// Claim `cmd` for `who` while it's the active context (last writer wins). For the
+/// mount-scoped `Find`; focus surfaces use [`claim_focus`] instead.
+pub fn register(cmd: CtxCommand, who: Responder) {
+    REGISTRY.write().insert(cmd, who);
 }
 
 /// Release `cmd` — but only if `owner` still holds it (safe to call from any tab's
 /// deactivate / unmount without stealing the slot from whoever owns it now).
-pub fn unregister_if(cmd: Command, owner: WorkspaceId) {
+pub fn unregister_if(cmd: CtxCommand, owner: WorkspaceId) {
     let mut reg = REGISTRY.write();
-    if reg.get(&cmd).map(|(o, _)| *o == owner).unwrap_or(false) {
+    if reg.get(&cmd).and_then(Responder::owner) == Some(owner) {
         reg.remove(&cmd);
     }
+}
+
+/// A focusable surface gained focus → it now answers ⌘A/⌘C. Also enables the Edit-menu
+/// **Select All** item (greyed when nothing can answer it — the one keymap→menu poke, since
+/// the native item can't reactively read a per-window signal). Called from `onfocusin`.
+pub fn claim_focus(who: Responder) {
+    {
+        let mut reg = REGISTRY.write();
+        for c in FOCUS_CMDS {
+            reg.insert(c, who);
+        }
+    }
+    crate::menu::set_select_all_enabled(true);
+}
+
+/// The focused surface lost focus → drop its ⌘A/⌘C claim and grey **Select All**. Focus
+/// always leaves one surface before the next's `onfocusin`, so an unconditional clear
+/// matches the old single-scope behaviour. Called from `onfocusout`.
+pub fn release_focus() {
+    {
+        let mut reg = REGISTRY.write();
+        for c in FOCUS_CMDS {
+            reg.remove(&c);
+        }
+    }
+    crate::menu::set_select_all_enabled(false);
+}
+
+/// Who currently owns ⌘A/⌘C (the focused surface), for the Edit-menu routing + the
+/// launcher/settings shims. `SelectAll` and `Copy` are always claimed together, so reading
+/// either answers both.
+pub fn focus_responder() -> Option<Responder> {
+    REGISTRY.peek().get(&CtxCommand::SelectAll).copied()
 }
 
 /// Per-command metadata — the **single source of truth** for order, label, description, the
@@ -274,8 +346,8 @@ pub fn run(cmd: Command) -> bool {
 /// Toggle the find popover of whichever results toolbar owns `Find` (the active tab).
 /// No-op when nothing owns it (no results showing → nothing to find).
 fn fire_find() -> bool {
-    match REGISTRY.peek().get(&Command::Find).copied() {
-        Some((ws, Context::ResultsFind)) => {
+    match REGISTRY.peek().get(&CtxCommand::Find).copied() {
+        Some(Responder::Toolbar(ws)) => {
             let open = crate::runs::RUNS
                 .resolve()
                 .get(ws)
@@ -284,6 +356,6 @@ fn fire_find() -> bool {
             dispatch(Action::SetResultsFind { ws, open: !open });
             true
         }
-        None => false,
+        _ => false,
     }
 }

@@ -65,14 +65,14 @@ pub fn Input(
                 }
                 if let Some(h) = onmounted { h.call(e); }
             },
-            // Hold the Select All scope while focused so ⌘A / ⌘C reach this field. RustRover-
-            // style — applies to every input in the app for free, since they all bottom out here.
+            // Claim the ⌘A/⌘C focus responder while focused so both reach this field.
+            // RustRover-style — applies to every input for free, since they all bottom out here.
             onfocusin: move |e| {
-                crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Input);
+                crate::keymap::claim_focus(crate::keymap::Responder::TextInput);
                 if let Some(h) = onfocusin { h.call(e); }
             },
             onfocusout: move |e| {
-                crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None);
+                crate::keymap::release_focus();
                 if let Some(h) = onfocusout { h.call(e); }
             },
             oninput: move |e: FormEvent| { if let Some(h) = oninput { h.call(e.value()); } },

@@ -166,13 +166,13 @@ pub fn ResultsGrid(ws_id: WorkspaceId) -> Element {
                     ctx_menu.set(Some(Point { x: c.x, y: c.y }));
                 }
             },
-            onfocusin: move |_| crate::menu::set_select_all_scope(crate::menu::SelectAllScope::Grid),
+            onfocusin: move |_| crate::keymap::claim_focus(crate::keymap::Responder::Grid(ws_id)),
             // Clicking anywhere off the grid (it loses focus) clears the selection — so a
             // selection only ever exists while the grid is focused (Esc always reaches it).
             // Exception: opening the copy context menu pulls focus off the grid, but the menu
             // needs the selection to act on — so keep it while the menu is open.
             onfocusout: move |_| {
-                crate::menu::set_select_all_scope(crate::menu::SelectAllScope::None);
+                crate::keymap::release_focus();
                 if ctx_menu.peek().is_none() {
                     sel_clear(ws_id);
                 }

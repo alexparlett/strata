@@ -17,7 +17,7 @@
 //! builds the item id and [`MenuCmd::parse`] recovers it from the event, so the
 //! build-time and handle-time sides can't drift.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 use dioxus::desktop::muda::{
     accelerator::Accelerator, IsMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem,
@@ -27,45 +27,23 @@ use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
 
-/// Where ⌘A "Select All" applies right now. Set from `onfocusin`/`onfocusout` on the
-/// focusable text surfaces — the results grid, every `TextInput`, the SQL editor — the
-/// same idea RustRover uses: the command is enabled only in a scope that can answer it and
-/// greyed everywhere else. Drives both the Edit-menu item's enabled state and how
-/// [`run_project_command`] routes the command.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum SelectAllScope {
-    /// The results grid is focused → select every cell on the page.
-    Grid,
-    /// A text field / editor is focused → select its text natively.
-    Input,
-    /// Nothing that can Select All → the menu item is greyed.
-    None,
-}
-
 thread_local! {
     /// Handle to the live Edit-menu Select All item, so focus changes can grey / enable it.
     /// The macOS menu bar is app-global (the last-created window installs it — see
     /// [`app_menu`]); this holds that item. Main-thread only, like all menu ops.
     static SELECT_ALL_ITEM: RefCell<Option<MenuItem>> = RefCell::new(None);
-    /// The current [`SelectAllScope`] — read when ⌘A fires to route the command.
-    static SELECT_ALL_SCOPE: Cell<SelectAllScope> = Cell::new(SelectAllScope::None);
 }
 
-/// Set the active Select All scope and reflect it in the menu item's enabled state (greyed
-/// when [`SelectAllScope::None`]). Called from the text surfaces' focus handlers.
-pub fn set_select_all_scope(scope: SelectAllScope) {
-    SELECT_ALL_SCOPE.with(|s| s.set(scope));
-    let enabled = scope != SelectAllScope::None;
+/// Grey / enable the Edit-menu **Select All** item. Who can answer ⌘A now lives in
+/// `keymap`'s responder registry (RustRover-style: enabled only in a scope that can answer
+/// it); `keymap::claim_focus`/`release_focus` call this so the native item — which can't
+/// reactively read a per-window signal — tracks it. The one keymap→menu edge.
+pub fn set_select_all_enabled(enabled: bool) {
     SELECT_ALL_ITEM.with(|c| {
         if let Some(item) = c.borrow().as_ref() {
             item.set_enabled(enabled);
         }
     });
-}
-
-/// The active Select All scope (for routing the ⌘A command).
-pub fn select_all_scope() -> SelectAllScope {
-    SELECT_ALL_SCOPE.with(|s| s.get())
 }
 
 /// A command the native File menu can emit. Serialized to a [`MenuId`] when the
