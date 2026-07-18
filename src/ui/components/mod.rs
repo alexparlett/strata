@@ -51,6 +51,7 @@ mod toggle;
 mod tooltip;
 mod typography;
 mod window;
+pub mod code_editor;
 
 pub use badge::{Badge, BadgeVariant, Dot, DotStatus, StatusDot};
 pub use button::{Button, ButtonVariant, IconButton, IconButtonVariant};

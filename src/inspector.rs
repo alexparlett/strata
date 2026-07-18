@@ -57,7 +57,7 @@ pub struct Inspector {
 /// This window's inspector selection (per-window, like [`crate::layout`]).
 pub static INSPECTOR: GlobalStore<Inspector> = Global::new(|| Inspector::default());
 
-fn store() -> Store<Inspector> {
+pub(crate) fn store() -> Store<Inspector> {
     INSPECTOR.resolve()
 }
 

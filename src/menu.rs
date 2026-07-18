@@ -89,9 +89,6 @@ pub enum MenuCmd {
     Copy,
     /// Open a specific recent project (payload = its `.strata` path).
     OpenRecent(String),
-    /// Dev-only: open the S28/S29 component gallery window (Help menu, debug builds).
-    #[cfg(debug_assertions)]
-    OpenGallery,
 }
 
 const RECENT_PREFIX: &str = "file.recent:";
@@ -108,8 +105,6 @@ impl MenuCmd {
             MenuCmd::SelectAll => "edit.select_all".into(),
             MenuCmd::Copy => "edit.copy".into(),
             MenuCmd::OpenRecent(path) => format!("{RECENT_PREFIX}{path}"),
-            #[cfg(debug_assertions)]
-            MenuCmd::OpenGallery => "help.gallery".into(),
         }
     }
 
@@ -124,8 +119,6 @@ impl MenuCmd {
             "file.settings" => MenuCmd::Settings,
             "edit.select_all" => MenuCmd::SelectAll,
             "edit.copy" => MenuCmd::Copy,
-            #[cfg(debug_assertions)]
-            "help.gallery" => MenuCmd::OpenGallery,
             other => MenuCmd::OpenRecent(other.strip_prefix(RECENT_PREFIX)?.to_string()),
         })
     }
@@ -229,8 +222,6 @@ pub fn app_menu() -> Menu {
     #[cfg(debug_assertions)]
     {
         let help = Submenu::new("Help", true);
-        let gallery = MenuItem::with_id(MenuCmd::OpenGallery, "Component Gallery", true, None);
-        let _ = help.append_items(&[&gallery]);
         let _ = menu.append_items(&[&help]);
     }
 
@@ -291,7 +282,5 @@ pub fn run_project_command(cmd: &MenuCmd) {
             SelectAllScope::Input | SelectAllScope::None => crate::window::send_copy(),
         },
         MenuCmd::OpenRecent(path) => dispatch(Action::OpenRecent(path.clone())),
-        #[cfg(debug_assertions)]
-        MenuCmd::OpenGallery => crate::window::spawn_gallery_window(),
     }
 }

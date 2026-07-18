@@ -22,6 +22,7 @@ use dioxus::prelude::*;
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
 use crate::engine::{ColumnInfo, Stat, StatKey};
+use crate::inspector::InspectorStoreExt;
 use crate::profile::CatalogProfile;
 use crate::project::ProjectStoreExt;
 use crate::state::CatalogKind;
@@ -117,8 +118,11 @@ pub fn Inspector() -> Element {
     let views = views_lens.read();
     // The inspector owns its own width — a local reactive signal, not global state.
     let width = use_signal(|| 292.0);
+    let inspector_store = crate::inspector::store();
+    let selected_lens = inspector_store.selected();
+    let selected = selected_lens.read();
 
-    let Some(sel) = crate::inspector::selected() else {
+    let Some(sel) = selected.as_ref() else {
         return rsx! {
             Resizer { axis_x: true, sign: -1.0, min: 220.0, max: 560.0, size: width }
             aside { class: "ps-inspector", style: "width:{width}px;",
