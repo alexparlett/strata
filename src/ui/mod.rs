@@ -4,7 +4,6 @@
 pub mod activity_rail;
 pub mod components;
 pub mod drawer;
-pub mod errview;
 pub mod header;
 pub mod icons;
 pub mod inspector;

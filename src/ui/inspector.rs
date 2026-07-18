@@ -21,17 +21,17 @@ use dioxus::prelude::*;
 
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
-use crate::engine::{ColumnInfo, Stat, StatKey};
 use crate::inspector::InspectorStoreExt;
+use crate::model::CatalogKind;
+use crate::model::Kind;
+use crate::model::{ColumnInfo, Stat, StatKey};
 use crate::profile::CatalogProfile;
 use crate::project::ProjectStoreExt;
-use crate::state::CatalogKind;
 use crate::ui::components::{
     Button, ButtonVariant, Dot, Eyebrow, Icon, IconButton, IconButtonVariant, Meta, MonoValue,
     Path, Prose, Readout, Tooltip,
 };
 use crate::ui::icons::{IconName, IconSize};
-use crate::util::Kind;
 
 /// The inspector's label for a fact.
 fn label(key: StatKey) -> &'static str {

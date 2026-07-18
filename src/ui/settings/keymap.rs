@@ -14,7 +14,7 @@ use crate::ui::components::{
 use crate::ui::icons::{IconName, IconSize};
 
 #[component]
-pub(super) fn Keymap() -> Element {
+pub fn Keymap() -> Element {
     let draft = use_context::<super::SettingsCtx>().draft;
     // Which command is capturing a chord right now, and any pending conflict (the command
     // being rebound, the captured chord, and the command that already holds it).

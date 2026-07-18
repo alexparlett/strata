@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 use crate::ui::components::{Caption, Segment, SegmentOption, Strong, TextInput, Toggle};
 
 #[component]
-pub(super) fn DataDisplay() -> Element {
+pub fn DataDisplay() -> Element {
     let mut draft = use_context::<super::SettingsCtx>().draft;
     let d = draft.read();
     let density_compact = d.density_compact;

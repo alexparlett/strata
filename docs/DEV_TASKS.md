@@ -245,3 +245,10 @@ config/register-table (C3) · saved queries · native File/Edit/Window menu · t
   B12. Likely in the `open_in_current` / re-`install` path when the incoming path
   equals the live project (paths get re-resolved/relativised against the wrong base
   before the outgoing project is torn down). Deferred — revisit later.
+
+- **Editing a view's query and pressing ⌘S saves it as a *saved query*, not an
+  update to the view.** Opening a view's underlying SQL in the editor and hitting
+  ⌘S routes through the Save-query path, so it lands as a new saved query rather
+  than re-issuing `CREATE OR REPLACE VIEW` on the view being edited. Unintuitive —
+  the user expects ⌘S to update the view they opened. Needs the editor to remember
+  it's editing a view (origin) and route Save to the view-update path.

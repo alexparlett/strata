@@ -16,7 +16,7 @@
 use dioxus::prelude::*;
 use dioxus_stores::*;
 
-use crate::state::LogTab;
+use crate::model::LogTab;
 
 /// Window panel + drawer visibility — per-window runtime UI state; not persisted.
 #[derive(Store, Clone, PartialEq)]

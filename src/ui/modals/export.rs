@@ -2,7 +2,7 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::ExportForm;
+use crate::model::ExportForm;
 use crate::ui::components::{
     Body, Button, ButtonVariant, Caption, Control, Eyebrow, Icon, Meta, MonoValue, NumberStepper,
     Prose, Readout, Segment, SegmentOption, Select, SelectOption, Spacer, TextInput, Toggle,
@@ -328,7 +328,7 @@ fn export_preview(ex: &ExportForm) -> (String, String) {
 
 /// Rough exported-size estimate: avg text bytes/row × total rows, scaled by
 /// compression for columnar formats. Approximate — for a UI hint only.
-fn estimate_size(res: &crate::engine::QueryOutput, eff: &str, ex: &ExportForm) -> String {
+fn estimate_size(res: &crate::model::QueryOutput, eff: &str, ex: &ExportForm) -> String {
     let sample = res.rows.len().min(20);
     if sample == 0 {
         return "0 B".into();

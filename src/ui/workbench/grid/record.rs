@@ -5,8 +5,8 @@ use dioxus::prelude::*;
 use dioxus_code::{Code, SourceCode};
 
 use crate::action::{dispatch, Action};
-use crate::engine::Cell;
-use crate::serialize::TextFormat;
+use crate::engine::serialize::TextFormat;
+use crate::model::Cell;
 use crate::session::WorkspaceId;
 use crate::ui::components::{
     Dialog, DropdownMenu, Icon, IconButton, IconButtonVariant, MenuItem, Meta, MonoValue, Readout,
@@ -19,7 +19,7 @@ use crate::ui::icons::{IconName, IconSize};
 /// reads the run directly (result + filter), rebuilding the same filtered page the grid shows, so
 /// `idx` (a page-local filtered row index) matches the double-clicked gutter row without prop clones.
 #[component]
-pub(super) fn RecordDialog(ws_id: WorkspaceId, idx: Signal<Option<usize>>) -> Element {
+pub fn RecordDialog(ws_id: WorkspaceId, idx: Signal<Option<usize>>) -> Element {
     let mut idx = idx;
 
     let Some(entry) = crate::runs::RUNS.resolve().get(ws_id) else {
@@ -112,7 +112,7 @@ pub(super) fn RecordDialog(ws_id: WorkspaceId, idx: Signal<Option<usize>>) -> El
                                 Some(c) if nested => {
                                     let json = page_batch
                                         .as_ref()
-                                        .and_then(|b| crate::serialize::cell_pretty_json(b, ci, batch_row))
+                                        .and_then(|b| crate::engine::serialize::cell_pretty_json(b, ci, batch_row))
                                         .unwrap_or_else(|| c.text.clone());
                                     rsx! {
                                         div { class: "record-val record-nested",

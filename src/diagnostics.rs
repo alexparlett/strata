@@ -22,9 +22,8 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use dioxus::prelude::*;
-use dioxus_stores::*;
 
-use crate::query_error::QueryError;
+use crate::model::QueryError;
 // Lens accessors (`.workspaces()`, `.id()`) to sum problems across tabs.
 use crate::session::{SessionStoreExt, WorkspaceStoreExt};
 

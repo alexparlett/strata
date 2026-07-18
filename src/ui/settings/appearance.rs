@@ -9,7 +9,7 @@ use crate::ui::icons::{IconName, IconSize};
 /// Sync-with-OS toggle + theme grid. Reads the shared draft; picking a theme edits the
 /// draft **and** previews it live across every window.
 #[component]
-pub(super) fn Appearance() -> Element {
+pub fn Appearance() -> Element {
     let ctx = use_context::<super::SettingsCtx>();
     let mut draft = ctx.draft;
     let d = draft.read();

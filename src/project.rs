@@ -1,8 +1,8 @@
 //! The **project domain model** — catalog definitions, query tabs, and history
 //! that make up a project. Persisted as a `.strata/` directory: the durable
 //! definitions in `project.json` (committed) + the working session (tabs, history,
-//! geometry) in `session.json` (gitignored). App/global state lives in
-//! `crate::state`.
+//! geometry) in `session.json` (gitignored). Shared value types live in `crate::model`;
+//! per-window runtime state lives in focused stores (`crate::session`, `crate::runs`, …).
 //!
 //! Only *definitions* are durable. For tables/views the `columns`/`status` are
 //! runtime and `#[serde(skip)]`-ped — re-derived when the engine re-registers a
@@ -15,7 +15,7 @@ use dioxus::prelude::*;
 use dioxus_stores::*;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::ColumnInfo;
+use crate::model::ColumnInfo;
 
 /// File names inside the `.strata/` project directory.
 const PROJECT_JSON: &str = "project.json";

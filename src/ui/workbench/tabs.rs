@@ -34,7 +34,7 @@ struct TabDrag {
 }
 
 #[component]
-pub(crate) fn Tabs() -> Element {
+pub fn Tabs() -> Element {
     let mut tab_menu = use_signal(|| None::<(WorkspaceId, Point)>);
     // S8 tab-bar controls: ⋯ overflow + ⌄ "show all tabs" — both `DropdownMenu`s. The tab
     // list uses a controlled `open` so its search box can dismiss the menu on Enter.

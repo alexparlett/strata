@@ -55,7 +55,7 @@ fn tool_btn(action: Action, title: &str, icon: IconName) -> Element {
 }
 
 #[component]
-pub(crate) fn Editor(ws: Store<crate::session::Workspace>) -> Element {
+pub fn Editor(ws: Store<crate::session::Workspace>) -> Element {
     // The editor owns its own height — a local reactive signal, not global state.
     let height = use_signal(|| 240.0);
     let dirty = ws.read().is_dirty();

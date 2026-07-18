@@ -19,7 +19,7 @@ pub struct TableSym {
 }
 
 impl TableSym {
-    fn from_cols(name: &str, is_view: bool, cols: &[crate::engine::ColumnInfo]) -> Self {
+    fn from_cols(name: &str, is_view: bool, cols: &[crate::model::ColumnInfo]) -> Self {
         TableSym {
             name: name.to_string(),
             is_view,

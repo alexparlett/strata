@@ -11,12 +11,9 @@ use dioxus::prelude::*;
 mod action;
 mod app;
 mod config;
-mod ddl;
 mod diagnostics;
 mod engine;
-mod engine_config;
 mod events;
-mod hotkeys;
 mod inspector;
 mod keymap;
 mod layout;
@@ -25,17 +22,17 @@ mod overlays;
 mod plan;
 mod profile;
 mod project;
-mod query_error;
+mod model;
 mod runs;
-mod serialize;
 mod session;
 mod settings;
 mod sql;
-mod state;
 mod theme;
 mod ui;
 mod util;
 mod window;
+mod hooks;
+mod store;
 // Syntax highlighting is provided by `dioxus-code` (Code / CodeEditor) — the
 // former hand-rolled `highlight.rs` is no longer used.
 

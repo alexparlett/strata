@@ -264,23 +264,11 @@ pub fn run_project_command(cmd: &MenuCmd) {
         MenuCmd::CloseProject => dispatch(Action::CloseProject),
         MenuCmd::SaveAll => dispatch(Action::SaveProject),
         MenuCmd::Settings => crate::window::spawn_settings_window(),
-        MenuCmd::SelectAll => match select_all_scope() {
-            SelectAllScope::Grid => crate::ui::workbench::grid::select_all_active_grid(),
-            // The focused element is a text field (that's what set this scope). Re-emit the
-            // native `selectAll:` down the responder chain so it selects the field's own text
-            // — the eval-free equivalent of the system Select All.
-            SelectAllScope::Input => crate::window::send_select_all(),
-            // The item is greyed outside those scopes, so this shouldn't fire — defensive.
-            SelectAllScope::None => {}
-        },
-        // ⌘C routes on the same focus scope: grid → copy the selection (TSV, the paste-friendly
-        // default); anywhere else → re-emit native `copy:` for the focused text field.
-        MenuCmd::Copy => match select_all_scope() {
-            SelectAllScope::Grid => {
-                dispatch(Action::CopySelection(crate::serialize::TextFormat::Tsv))
-            }
-            SelectAllScope::Input | SelectAllScope::None => crate::window::send_copy(),
-        },
+        // ⌘A / ⌘C route on the current focus scope, but that decision is the action layer's
+        // (`query::select_all` / `query::menu_copy`) — the menu is a dumb adapter, like every
+        // other arm here.
+        MenuCmd::SelectAll => dispatch(Action::SelectAll),
+        MenuCmd::Copy => dispatch(Action::Copy),
         MenuCmd::OpenRecent(path) => dispatch(Action::OpenRecent(path.clone())),
     }
 }

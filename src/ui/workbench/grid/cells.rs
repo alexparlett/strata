@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 use dioxus_code::{Code, SourceCode};
 
 use crate::action::{dispatch, Action};
-use crate::engine::Cell;
+use crate::model::Cell;
 use crate::session::WorkspaceId;
 use crate::ui::components::{
     Badge, BadgeVariant, Dialog, IconButton, IconButtonVariant, Meta, MonoValue, Readout, Spacer,
@@ -20,7 +20,7 @@ use super::{mark_pressed_target, CellView};
 /// the V20 resize grip and the Rz6 sort chevron. `sort_dir`: `Some(true)` = this column sorts
 /// ascending, `Some(false)` = descending, `None` = unsorted.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_hcol(
+pub fn render_hcol(
     mut drag_sel: Signal<bool>,
     ws: WorkspaceId,
     ci: usize,
@@ -129,7 +129,7 @@ fn ColGrip(ws: WorkspaceId, ci: usize, w: f64, drag_sel: Signal<bool>) -> Elemen
 /// lightweight `Element`. Mousedown starts/extends the selection (⇧ extends, drag paints);
 /// double-click opens the nested-cell view for struct/list/map cells.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_cell(
+pub fn render_cell(
     ws: WorkspaceId,
     i: usize,
     ci: usize,
@@ -199,7 +199,7 @@ pub(super) fn render_cell(
 /// The nested-cell JSON view (struct/list/map cell) — a workspace-local `Dialog`
 /// with a static highlighted `Code` body. The `cell_view` signal owns open/close.
 #[component]
-pub(crate) fn CellDialog(cell_view: Signal<Option<CellView>>, view: CellView) -> Element {
+pub fn CellDialog(cell_view: Signal<Option<CellView>>, view: CellView) -> Element {
     let mut cell_view = cell_view;
     rsx! {
         Dialog { on_close: move |_| cell_view.set(None), card_class: "modal cell-modal".to_string(), z: 64,

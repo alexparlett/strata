@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 
-use crate::state::LogTab;
+use crate::model::LogTab;
 
 /// Open the bottom drawer on the **History** tab (status-bar History button).
 /// Toggles closed if it's already open on History.

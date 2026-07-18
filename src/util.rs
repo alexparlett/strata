@@ -1,105 +1,18 @@
-//! Small shared helpers: column-type classification/colours, name derivation,
-//! byte formatting.
+//! Small shared helpers: SQL hashing, byte formatting, name derivation, wall-clock
+//! timestamps. (Domain vocabulary like `Kind` lives in `crate::model`.)
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// The visual "kind" of a column, driving dot/type/cell colours (matches the
-/// Strata type→colour map).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Kind {
-    Str,
-    Num,
-    Bool,
-    Ts,
-    Struct,
-    List,
-    Map,
-}
-
-impl Kind {
-    /// Infer a kind from an Arrow `DataType` debug string (e.g. "Int64",
-    /// "Utf8", "Timestamp(...)", "Struct(...)", "List(...)", "Map(...)").
-    pub fn from_arrow(dtype: &str) -> Kind {
-        let d = dtype;
-        if d.starts_with("Struct") {
-            Kind::Struct
-        } else if d.starts_with("List")
-            || d.starts_with("LargeList")
-            || d.starts_with("FixedSizeList")
-        {
-            Kind::List
-        } else if d.starts_with("Map") {
-            Kind::Map
-        } else if d.starts_with("Boolean") {
-            Kind::Bool
-        } else if d.starts_with("Timestamp") || d.starts_with("Date") || d.starts_with("Time") {
-            Kind::Ts
-        } else if d.starts_with("Int")
-            || d.starts_with("UInt")
-            || d.starts_with("Float")
-            || d.starts_with("Decimal")
-        {
-            Kind::Num
-        } else {
-            Kind::Str
-        }
-    }
-
-    /// CSS class for the small square dot (`d-num`, ...).
-    pub fn dot_class(self) -> &'static str {
-        match self {
-            Kind::Str => "d-str",
-            Kind::Num => "d-num",
-            Kind::Bool => "d-bool",
-            Kind::Ts => "d-ts",
-            Kind::Struct => "d-struct",
-            Kind::List => "d-list",
-            Kind::Map => "d-map",
-        }
-    }
-
-    /// CSS colour for the type swatch/dot (`var(--t-num)`, ...) — for the `Dot` component's
-    /// `color` prop (inline fill, so it beats the base dot styling).
-    pub fn dot_color(self) -> &'static str {
-        match self {
-            Kind::Str => "var(--t-str)",
-            Kind::Num => "var(--t-num)",
-            Kind::Bool => "var(--t-bool)",
-            Kind::Ts => "var(--t-ts)",
-            Kind::Struct => "var(--t-struct)",
-            Kind::List => "var(--t-list)",
-            Kind::Map => "var(--t-map)",
-        }
-    }
-
-    /// CSS class for coloured type text (`t-num`, ...).
-    pub fn text_class(self) -> &'static str {
-        match self {
-            Kind::Str => "t-str",
-            Kind::Num => "t-num",
-            Kind::Bool => "t-bool",
-            Kind::Ts => "t-ts",
-            Kind::Struct => "t-struct",
-            Kind::List => "t-list",
-            Kind::Map => "t-map",
-        }
-    }
-
-    /// Extra CSS class for a result cell (`num`/`bool`/`ts`/`nested`), if any.
-    pub fn cell_class(self) -> &'static str {
-        match self {
-            Kind::Num => "num",
-            Kind::Bool => "bool",
-            Kind::Ts => "ts",
-            Kind::Struct | Kind::List | Kind::Map => "nested",
-            Kind::Str => "",
-        }
-    }
-
-    pub fn is_nested(self) -> bool {
-        matches!(self, Kind::Struct | Kind::List | Kind::Map)
-    }
+/// Wall-clock `HH:MM:SS` (UTC) for log timestamps — avoids a chrono dependency.
+pub fn now_hms() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        % 86_400;
+    format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
 }
 
 /// A stable FNV-1a hash of the **trimmed** SQL — the tab dirty-tracking baseline.
@@ -156,4 +69,60 @@ pub fn derive_table_name(path: &Path, existing: &BTreeSet<String>) -> String {
         i += 1;
     }
     name
+}
+
+/// Split `"1.5G"` → `("1.5", "G")` — the leading numeric run and the trailing unit.
+fn split_num_unit(s: &str) -> (&str, &str) {
+    let idx = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
+    (s[..idx].trim(), s[idx..].trim())
+}
+
+/// A number with an optional byte-size unit (K/M/G/T, optionally `i`/`B`).
+pub fn is_byte_size(v: &str) -> bool {
+    let (num, unit) = split_num_unit(v);
+    if num.parse::<f64>().is_err() {
+        return false;
+    }
+    unit.is_empty()
+        || matches!(
+            unit.chars().next().map(|c| c.to_ascii_lowercase()),
+            Some('k') | Some('m') | Some('g') | Some('t') | Some('b')
+        )
+}
+
+/// A number with an optional duration unit (s/m/h).
+pub fn is_duration(v: &str) -> bool {
+    let (num, unit) = split_num_unit(v);
+    if num.parse::<f64>().is_err() {
+        return false;
+    }
+    unit.is_empty()
+        || matches!(
+            unit.chars().next().map(|c| c.to_ascii_lowercase()),
+            Some('s') | Some('m') | Some('h')
+        )
+}
+
+/// A `±HH:MM` offset (hours 00-14, minutes 00-59) or a named zone (letters, digits, `/_+-`).
+pub fn is_time_zone(v: &str) -> bool {
+    if let Some(rest) = v.strip_prefix(['+', '-']) {
+        let b = rest.as_bytes();
+        return rest.len() == 5
+            && b[2] == b':'
+            && matches!(
+                (rest[0..2].parse::<u32>(), rest[3..5].parse::<u32>()),
+                (Ok(h), Ok(m)) if h <= 14 && m <= 59
+            );
+    }
+    v.chars().any(|c| c.is_ascii_alphabetic())
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '+' | '-'))
+}
+
+pub fn now_secs() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }

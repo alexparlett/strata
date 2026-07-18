@@ -19,7 +19,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray};
+use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray, UInt32Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::record_batch::RecordBatchWriter;
@@ -98,6 +98,29 @@ pub fn write_batch<W: Write>(
             drive(MarkdownWriter::new(w), &flat)
         }
     }
+}
+
+/// Serialize a **sub-selection** of `batch` — the `cols` columns, at the given `rows`
+/// (batch-row indices) — to `w` in `fmt`. The arrow projection + row `take` live here,
+/// next to the rest of the batch→text machinery, so callers (the clipboard copy actions)
+/// only decide *which* rows and columns, not how to slice a `RecordBatch`.
+pub fn write_selection<W: Write>(
+    fmt: TextFormat,
+    batch: &RecordBatch,
+    rows: &[u32],
+    cols: &[usize],
+    header: bool,
+    w: W,
+) -> Result<(), ArrowError> {
+    let projected = batch.project(cols)?;
+    let indices = UInt32Array::from(rows.to_vec());
+    let taken: Vec<ArrayRef> = projected
+        .columns()
+        .iter()
+        .map(|c| datafusion::arrow::compute::take(&**c, &indices, None))
+        .collect::<Result<_, _>>()?;
+    let sub = RecordBatch::try_new(projected.schema(), taken)?;
+    write_batch(fmt, &sub, header, w)
 }
 
 /// Write one batch through a `RecordBatchWriter` and finalize it.

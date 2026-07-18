@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 /// `Action::RunExport` — pick a destination (native save dialog, or a folder for a partitioned
 /// export) and export the snapshot to a file via the engine's `COPY … TO`. Clipboard copy is the
 /// grid's Copy (page-bounded), so export is file-only and streams to disk — safe at any size.
-pub fn run_export(ex: crate::state::ExportForm) {
+pub fn run_export(ex: crate::model::ExportForm) {
     let ws_id = crate::session::active_id();
     let (page, page_size) = crate::runs::RUNS
         .resolve()

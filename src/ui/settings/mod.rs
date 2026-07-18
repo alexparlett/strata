@@ -113,7 +113,7 @@ const SETTINGS_INDEX: &[SettingEntry] = &[
 /// Self-contained: owns its element ref, watches the shared [`SettingsCtx::flash`] target,
 /// and lights up (a one-shot CSS animation, cleared on `animationend`) when it's the target.
 #[component]
-pub(super) fn Anchor(id: &'static str, children: Element) -> Element {
+pub fn Anchor(id: &'static str, children: Element) -> Element {
     let mut flash = use_context::<SettingsCtx>().flash;
     let mut me = use_signal(|| None::<Rc<MountedData>>);
     let mut lit = use_signal(|| false);

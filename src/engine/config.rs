@@ -14,6 +14,7 @@
 //! a bad one until restart) — which is exactly why [`value_error`] validates values in the
 //! editor, before Apply, rather than relying on the engine to complain.
 
+use crate::util::{is_byte_size, is_duration, is_time_zone};
 use std::collections::BTreeMap;
 
 /// The value shape of a known key — drives editor-side validation ([`value_error`]).
@@ -190,50 +191,3 @@ pub fn value_error(key: &str, value: &str) -> Option<String> {
     }
 }
 
-/// Split `"1.5G"` → `("1.5", "G")` — the leading numeric run and the trailing unit.
-fn split_num_unit(s: &str) -> (&str, &str) {
-    let idx = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
-    (s[..idx].trim(), s[idx..].trim())
-}
-
-/// A number with an optional byte-size unit (K/M/G/T, optionally `i`/`B`).
-fn is_byte_size(v: &str) -> bool {
-    let (num, unit) = split_num_unit(v);
-    if num.parse::<f64>().is_err() {
-        return false;
-    }
-    unit.is_empty()
-        || matches!(
-            unit.chars().next().map(|c| c.to_ascii_lowercase()),
-            Some('k') | Some('m') | Some('g') | Some('t') | Some('b')
-        )
-}
-
-/// A number with an optional duration unit (s/m/h).
-fn is_duration(v: &str) -> bool {
-    let (num, unit) = split_num_unit(v);
-    if num.parse::<f64>().is_err() {
-        return false;
-    }
-    unit.is_empty()
-        || matches!(
-            unit.chars().next().map(|c| c.to_ascii_lowercase()),
-            Some('s') | Some('m') | Some('h')
-        )
-}
-
-/// A `±HH:MM` offset (hours 00-14, minutes 00-59) or a named zone (letters, digits, `/_+-`).
-fn is_time_zone(v: &str) -> bool {
-    if let Some(rest) = v.strip_prefix(['+', '-']) {
-        let b = rest.as_bytes();
-        return rest.len() == 5
-            && b[2] == b':'
-            && matches!(
-                (rest[0..2].parse::<u32>(), rest[3..5].parse::<u32>()),
-                (Ok(h), Ok(m)) if h <= 14 && m <= 59
-            );
-    }
-    v.chars().any(|c| c.is_ascii_alphabetic())
-        && v.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '+' | '-'))
-}

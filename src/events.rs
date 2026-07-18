@@ -12,8 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dioxus::prelude::*;
 use dioxus_stores::*;
 
-use crate::query_error::QueryError;
-use crate::state::{now_hms, LogEvent, LogKind};
+use crate::model::QueryError;
+use crate::model::{LogEvent, LogKind};
+use crate::util::now_hms;
 
 /// Cap on retained events (newest first).
 const CAP: usize = 200;
@@ -93,29 +94,29 @@ pub fn toggle_row(id: u64) {
 /// `LogKind::Ok` event — `crate::event_ok!("…")`.
 #[macro_export]
 macro_rules! event_ok {
-    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Ok, format!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::events::push($crate::model::LogKind::Ok, format!($($arg)*)) };
 }
 
 /// `LogKind::Info` event — `crate::event_info!("…")`.
 #[macro_export]
 macro_rules! event_info {
-    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Info, format!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::events::push($crate::model::LogKind::Info, format!($($arg)*)) };
 }
 
 /// `LogKind::Run` event — `crate::event_run!("…")`.
 #[macro_export]
 macro_rules! event_run {
-    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Run, format!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::events::push($crate::model::LogKind::Run, format!($($arg)*)) };
 }
 
 /// `LogKind::Warn` event — `crate::event_warn!("…")`.
 #[macro_export]
 macro_rules! event_warn {
-    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Warn, format!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::events::push($crate::model::LogKind::Warn, format!($($arg)*)) };
 }
 
 /// `LogKind::Error` event — `crate::event_error!("…")`.
 #[macro_export]
 macro_rules! event_error {
-    ($($arg:tt)*) => { $crate::events::push($crate::state::LogKind::Error, format!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::events::push($crate::model::LogKind::Error, format!($($arg)*)) };
 }

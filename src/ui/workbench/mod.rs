@@ -25,11 +25,12 @@ use dioxus_stores::*;
 use crate::session::{SessionStoreExt, WorkspaceStoreExt};
 
 mod editor;
-pub(crate) mod grid;
+mod grid;
 mod plan_view;
 mod results;
 mod tabs;
 mod workspace;
+mod errview;
 
 /// The center working area: the tab strip plus every open `Workspace`, each bound
 /// to its own reactive sub-store (only the active one is visible). Renders the

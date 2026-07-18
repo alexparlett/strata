@@ -3,6 +3,7 @@
 //! Each submodule owns one concern; this file is just the wiring.
 
 mod copy;
+mod edit;
 mod export;
 mod paging;
 mod run;
@@ -11,6 +12,7 @@ mod sql;
 mod view;
 
 pub use copy::*;
+pub use edit::*;
 pub use export::*;
 pub use paging::*;
 pub use run::*;

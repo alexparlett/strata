@@ -13,7 +13,7 @@ use dioxus_stores::Store;
 use crate::session::WorkspaceStoreExt;
 
 #[component]
-pub(crate) fn Workspace(ws: Store<crate::session::Workspace>, active: bool) -> Element {
+pub fn Workspace(ws: Store<crate::session::Workspace>, active: bool) -> Element {
     // Keep this tab's Problems diagnostics in step with *its* SQL.
     use_revalidate(ws);
     // Hidden (but mounted) when this isn't the active tab.

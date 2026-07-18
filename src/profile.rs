@@ -1,7 +1,7 @@
 //! Catalog **profiling** (D4) — the scan-derived facts behind the column inspector.
 //!
 //! Facts reach the inspector from two places, matched by [`StatKey`] so neither repeats
-//! the other. The source's *free* metadata ([`crate::engine::ColumnInfo::stats`]) is
+//! the other. The source's *free* metadata ([`crate::model::ColumnInfo::stats`]) is
 //! read from a Parquet footer at registration and costs nothing; this computes what the
 //! source didn't say. For CSV, JSON, and **any view**, that's everything — a view has
 //! no footer at all, so a scan is the only way it learns more than a column's type.
@@ -36,8 +36,8 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::prelude::{ident, lit, Expr};
 
-use crate::engine::{ColumnInfo, Stat, StatKey};
-use crate::util::Kind;
+use crate::model::Kind;
+use crate::model::{ColumnInfo, Stat, StatKey};
 
 /// A completed profile of one catalog entry — a table or a view.
 #[derive(Clone, Debug, PartialEq)]

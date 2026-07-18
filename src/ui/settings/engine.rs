@@ -17,7 +17,7 @@ use crate::ui::icons::{IconName, IconSize};
 
 /// A draft key/value row with a stable id (for keying + selection).
 #[derive(Clone, PartialEq)]
-pub(super) struct EngineRow {
+pub struct EngineRow {
     pub id: usize,
     pub name: String,
     pub value: String,
@@ -25,7 +25,7 @@ pub(super) struct EngineRow {
 
 /// The Properties editor's reactive state — provided to the page + footer via context.
 #[derive(Clone, Copy)]
-pub(super) struct EngineState {
+pub struct EngineState {
     rows: Signal<Vec<EngineRow>>,
     sel: Signal<Option<usize>>,
     /// Reveal *all* rows' errors — set by Apply (the whole-form gate).
@@ -53,7 +53,7 @@ fn rows_from_map(map: &BTreeMap<String, String>) -> Vec<EngineRow> {
 }
 
 /// Create the editor state, seeded from the applied overrides.
-pub(super) fn use_engine_state(applied: BTreeMap<String, String>) -> EngineState {
+pub fn use_engine_state(applied: BTreeMap<String, String>) -> EngineState {
     let initial = rows_from_map(&applied);
     let start_seq = initial.len();
     EngineState {
@@ -221,7 +221,7 @@ impl EngineState {
     }
 
     /// Discard unsaved edits: rows back to the applied baseline.
-    pub(super) fn revert(self) {
+    pub fn revert(self) {
         let base = self.applied.peek().clone();
         self.rows.clone().set(rows_from_map(&base));
         self.sel.clone().set(None);
@@ -251,7 +251,7 @@ impl EngineState {
                 // Value type check for known keys — catches e.g. a non-numeric batch_size or
                 // a bad runtime.memory_limit before Apply (runtime keys are never applied
                 // live, so DataFusion wouldn't otherwise reject them until restart).
-                if let Some(msg) = crate::engine_config::value_error(n, &r.value) {
+                if let Some(msg) = crate::engine::config::value_error(n, &r.value) {
                     out.insert(r.id, msg);
                 }
             }
@@ -260,7 +260,7 @@ impl EngineState {
     }
 
     /// Normalize rows → the applied `name → value` map (non-blank names, last wins).
-    pub(super) fn to_map(&self) -> BTreeMap<String, String> {
+    pub fn to_map(&self) -> BTreeMap<String, String> {
         let mut m = BTreeMap::new();
         for r in self.rows.read().iter() {
             let n = r.name.trim();
@@ -272,13 +272,13 @@ impl EngineState {
     }
 
     /// Has the draft diverged from the applied baseline?
-    pub(super) fn dirty(&self) -> bool {
+    pub fn dirty(&self) -> bool {
         self.to_map() != *self.applied.read()
     }
 
     /// Validate for the footer's Apply: `true` if clean; otherwise reveal the per-row
     /// errors (so Apply can navigate here + block) and return `false`.
-    pub(super) fn validate_and_show(self) -> bool {
+    pub fn validate_and_show(self) -> bool {
         if self.errors().is_empty() {
             true
         } else {
@@ -290,7 +290,7 @@ impl EngineState {
 
 /// Autocomplete suggestions for the row whose name field is focused: catalog keys that
 /// match the typed query and aren't already used by another row (top 7).
-fn suggestions(rows: &[EngineRow], menu_id: usize) -> Vec<&'static crate::engine_config::EngineKey> {
+fn suggestions(rows: &[EngineRow], menu_id: usize) -> Vec<&'static crate::engine::config::EngineKey> {
     let Some(row) = rows.iter().find(|r| r.id == menu_id) else {
         return Vec::new();
     };
@@ -301,7 +301,7 @@ fn suggestions(rows: &[EngineRow], menu_id: usize) -> Vec<&'static crate::engine
         .map(|r| r.name.trim())
         .filter(|n| !n.is_empty())
         .collect();
-    let list: Vec<_> = crate::engine_config::ENGINE_KEYS
+    let list: Vec<_> = crate::engine::config::ENGINE_KEYS
         .iter()
         .filter(|e| !used.contains(e.key) && (q.is_empty() || e.key.to_lowercase().contains(&q)))
         .collect();
@@ -312,7 +312,7 @@ fn suggestions(rows: &[EngineRow], menu_id: usize) -> Vec<&'static crate::engine
 }
 
 #[component]
-pub(super) fn Engine() -> Element {
+pub fn Engine() -> Element {
     let st = use_context::<super::SettingsCtx>().engine;
     let rows = st.rows.read().clone();
     let sel = *st.sel.read();
@@ -394,9 +394,9 @@ fn engine_row_view(
 ) -> Element {
     let id = row.id;
     let name = row.name.trim();
-    let known = !name.is_empty() && crate::engine_config::key_def(name).is_some();
+    let known = !name.is_empty() && crate::engine::config::key_def(name).is_some();
     let is_custom = !name.is_empty() && !known;
-    let restart = crate::engine_config::is_restart_key(name);
+    let restart = crate::engine::config::is_restart_key(name);
     let changed = !name.is_empty()
         && st
         .applied
@@ -510,8 +510,8 @@ fn inspector(st: EngineState, rows: &[EngineRow]) -> Element {
     if name.is_empty() {
         return rsx! {};
     }
-    let def = crate::engine_config::key_def(name);
-    let restart = crate::engine_config::is_restart_key(name);
+    let def = crate::engine::config::key_def(name);
+    let restart = crate::engine::config::is_restart_key(name);
     let desc = def
         .map(|e| e.desc.to_string())
         .unwrap_or_else(|| "Custom property — not a recognized DataFusion option. It will be applied as-is.".to_string());

@@ -3,7 +3,7 @@
 //! `action::dispatch`.
 
 use crate::engine;
-use crate::state::RemoveKind;
+use crate::model::RemoveKind;
 
 /// Open the Table Config modal for a new external table.
 pub fn open_config_new() {
@@ -22,7 +22,7 @@ pub fn open_config_edit(table: &str) {
 /// store (`begin_register`), and the engine's `Registered` event builds the real
 /// catalog row on success, or surfaces an inline error on failure. No placeholder
 /// row is ever written — only a successful register saves the table.
-pub fn register_table(draft: crate::state::ConfigForm) {
+pub fn register_table(draft: crate::model::ConfigForm) {
     let base = project_dir();
     // Store paths as entered (relative-to-project where the user chose that); hand
     // the engine fully-resolved absolute paths.
@@ -98,7 +98,7 @@ pub fn edit_view(name: &str) {
 // ---- catalog interactions ----
 
 /// Select a column for the inspector (and open the inspector).
-pub fn select_column(col: crate::inspector::ColRef) {
+pub fn select_column(col: crate::model::ColRef) {
     crate::inspector::select(col);
     crate::layout::set_inspector_open(true);
 }

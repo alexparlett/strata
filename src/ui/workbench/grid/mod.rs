@@ -9,9 +9,9 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::action::{dispatch, Action};
-use crate::engine::Cell;
+use crate::engine::serialize::TextFormat;
+use crate::model::Cell;
 use crate::runs::Selection;
-use crate::serialize::TextFormat;
 use crate::session::WorkspaceId;
 use crate::ui::components::{ContextMenu, Eyebrow, MenuItem, Point};
 
@@ -20,7 +20,6 @@ mod record;
 mod selection;
 use cells::{render_cell, render_hcol, CellDialog};
 use record::RecordDialog;
-pub(crate) use selection::select_all_active_grid;
 use selection::{cell_sel_style, sel_all_cells, sel_clear, sel_row};
 
 thread_local! {
@@ -33,7 +32,7 @@ thread_local! {
 
 /// Mark that a selectable target (cell / row / column) claimed this mousedown, so the
 /// grid-scroll background handler won't treat it as a click-to-deselect.
-pub(super) fn mark_pressed_target() {
+pub fn mark_pressed_target() {
     PRESSED_TARGET.with(|f| f.set(true));
 }
 
@@ -46,14 +45,14 @@ fn take_pressed_target() -> bool {
 /// A nested-cell view target (struct/list/map cell), opened from a grid cell and
 /// shown in a `CellDialog`. Workspace-local to the grid.
 #[derive(Clone, PartialEq)]
-pub(super) struct CellView {
+pub struct CellView {
     name: String,
     type_label: String,
     json: String,
 }
 
 #[component]
-pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
+pub fn ResultsGrid(ws_id: WorkspaceId) -> Element {
     // The nested-cell view is grid-local, opened from a cell, closed by the dialog.
     let cell_view = use_signal(|| None::<CellView>);
     // The record (row-detail) view (Rz5) — a page-local *filtered* row index; `None` = closed.
@@ -180,7 +179,8 @@ pub(crate) fn ResultsGrid(ws_id: WorkspaceId) -> Element {
             },
             // Esc clears the selection (context-tier — stopped so it doesn't also hit the
             // global Cancel). ⌘A is owned by the Edit menu: it intercepts the accelerator at
-            // the AppKit level before the webview, then routes to `select_all_active_grid`.
+            // the AppKit level before the webview, dispatches `Action::SelectAll`, and the
+            // action layer (`query::select_all`) routes it here.
             onkeydown: move |e: KeyboardEvent| {
                 if e.key() == Key::Escape && has_sel {
                     e.stop_propagation();

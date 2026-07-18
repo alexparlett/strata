@@ -7,18 +7,18 @@
 //! *same* `CloseTab(idx)` — menus map their rows to concrete actions, they don't
 //! re-route through a wrapper.
 
+use crate::model::{LogTab, RemoveKind};
 // The dioxus prelude is deliberately *not* glob-imported here — it also exports
 // an `Action`, which would collide with our enum and break `use Action::*` in
 // `dispatch`.
 use crate::plan::PlanTab;
-use crate::state::{LogTab, RemoveKind};
 
 // Domain handler modules. `panel` (the `Resizer` handle + window-fill toggle),
 // `projects` (window startup), and `catalog` (the modal's source scan,
 // `scan_sources`) are reached from outside the action layer; the rest are
 // private — reachable only through `dispatch`.
-pub(crate) mod catalog;
-pub(crate) mod overlay;
+pub mod catalog;
+pub mod overlay;
 pub mod panel;
 // `projects` is public so a window's `ProjectRoot` startup can load its assigned
 // project in place (`load_current`), outside the dispatch funnel.
@@ -47,11 +47,16 @@ pub enum Action {
     FetchPage(usize),
     /// Cycle sort on results column `usize` (asc → desc → clear); re-fetches page 1 (Rz6).
     SortColumn(usize),
+    /// Edit-menu ⌘A — routed by focus scope to the grid page or the focused text field.
+    /// The menu is a dumb adapter; `query::select_all` decides where it lands.
+    SelectAll,
+    /// Edit-menu ⌘C — routed by focus scope to the grid copy or the focused text field.
+    Copy,
     /// Copy the current grid selection to the clipboard in the given format (Rz4).
-    CopySelection(crate::serialize::TextFormat),
+    CopySelection(crate::engine::serialize::TextFormat),
     /// Copy a single record — all columns of the page-local filtered row index — to the
     /// clipboard in the given format (Rz5, the record view's `⋯` menu).
-    CopyRecord(usize, crate::serialize::TextFormat),
+    CopyRecord(usize, crate::engine::serialize::TextFormat),
     LoadSelectStar(String),
     FormatSql,
     ClearSql,
@@ -86,7 +91,7 @@ pub enum Action {
     // ── catalog ──
     OpenConfigNew,
     OpenConfigEdit(String),
-    RegisterTable(crate::state::ConfigForm),
+    RegisterTable(crate::model::ConfigForm),
     ConfirmRemove {
         kind: RemoveKind,
         name: String,
@@ -94,9 +99,9 @@ pub enum Action {
     EditView(String),
     ToggleTableOpen(usize),
     ToggleViewOpen(usize),
-    /// Inspect a column — see [`crate::inspector::ColRef`] for why it takes a kind +
+    /// Inspect a column — see [`crate::model::ColRef`] for why it takes a kind +
     /// owner + path rather than a name.
-    SelectColumn(crate::inspector::ColRef),
+    SelectColumn(crate::model::ColRef),
     /// Re-infer catalog table schemas (the sidebar refresh button).
     RescanCatalog,
     /// Full-scan profile of a table (D4), no confirm — the PROFILE zone's ↻ re-scan,
@@ -135,7 +140,7 @@ pub enum Action {
     ToggleLog,
     ClearDrawer,
     ToggleLogRow(u64),
-    RunExport(crate::state::ExportForm),
+    RunExport(crate::model::ExportForm),
     // Settings prefs now write the `crate::settings` store directly from the
     // Settings modal — they are no longer dispatched through here.
 
@@ -226,6 +231,8 @@ fn run(action: Action) {
         CancelQuery => query::cancel(),
         FetchPage(page) => query::fetch_page(page),
         SortColumn(ci) => query::sort_column(ci),
+        SelectAll => query::select_all(),
+        Copy => query::menu_copy(),
         CopySelection(fmt) => query::copy_selection(fmt),
         CopyRecord(row, fmt) => query::copy_record(row, fmt),
         LoadSelectStar(name) => query::select_star(&name),

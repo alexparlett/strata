@@ -19,7 +19,7 @@ use crate::ui::components::{
 use crate::ui::icons::{IconName, IconSize};
 
 #[component]
-pub(crate) fn PlanView(ws_id: WorkspaceId) -> Element {
+pub fn PlanView(ws_id: WorkspaceId) -> Element {
     let (plan, tab, raw) = {
         let Some(entry) = crate::runs::RUNS.resolve().get(ws_id) else {
             return rsx! { div {} };

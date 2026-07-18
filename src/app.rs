@@ -10,9 +10,10 @@ use dioxus::prelude::*;
 
 use crate::engine::{Event, TableMeta};
 use crate::menu::MenuCmd;
+use crate::model::LogKind;
+use crate::model::QueryError;
 use crate::project::ProjectStoreExt;
-use crate::query_error::QueryError;
-use crate::state::{CatalogTable, CatalogView, LogKind, RegStatus};
+use crate::project::{CatalogTable, CatalogView, RegStatus};
 use crate::ui;
 
 /// Root class. On macOS the transparent title bar means the traffic-light
@@ -65,7 +66,7 @@ pub fn ProjectRoot(open_path: String) -> Element {
     // so a DOM handler can't hear them once focus leaves the app subtree. `crate::hotkeys`
     // registers them while this window is focused; `focused` is relayed from the wry
     // `Focused` event below.
-    crate::hotkeys::use_shortcuts();
+    crate::hooks::use_shortcuts::use_shortcuts();
 
     // Persist window geometry + save on an OS close-button (the window is still
     // alive here, unlike `use_drop`). Does *not* open the launcher — an OS close

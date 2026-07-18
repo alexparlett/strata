@@ -2,8 +2,8 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
+use crate::model::ConfigForm;
 use crate::overlays::ConfigTarget;
-use crate::state::ConfigForm;
 use crate::ui::components::{
     Button, ButtonVariant, Eyebrow, Icon, IconButton, IconButtonVariant, MonoValue, Path,
     Segment, SegmentOption, Select, SelectOption, Spacer, TextInput, Toggle, WinGeom, Window,

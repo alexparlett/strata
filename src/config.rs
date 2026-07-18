@@ -2,6 +2,7 @@
 //! persisted as JSON in the OS user-config dir via the `preferences` crate.
 //! Distinct from a `Project` — this is per-machine, never inside a `.psproj`.
 
+use crate::util;
 use preferences::{AppInfo, Preferences};
 use serde::{Deserialize, Serialize};
 
@@ -117,7 +118,7 @@ pub struct Settings {
     pub keybinds: Vec<KeyBind>,
     /// Curated DataFusion engine option overrides (only non-default keys), applied to
     /// each window's `SessionContext` (W2). Keyed by `datafusion.*` option name; see
-    /// [`crate::engine_config`].
+    /// [`crate::engine::config`].
     #[serde(default)]
     pub engine: std::collections::BTreeMap<String, String>,
 }
@@ -190,7 +191,7 @@ impl AppConfig {
             RecentProject {
                 name: name.to_string(),
                 path: path.to_string(),
-                last_opened: now_secs(),
+                last_opened: util::now_secs(),
                 pinned,
             },
         );
@@ -252,12 +253,4 @@ pub fn mark_closed(path: &str) {
     let mut cfg = load();
     cfg.remove_open(path);
     save(&cfg);
-}
-
-fn now_secs() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }

@@ -10,7 +10,7 @@ pub fn save_as_view() {
     // The tab is now bound to (and in sync with) this view.
     crate::session::set_origin(
         crate::session::active_id(),
-        crate::state::Origin::View(name.clone()),
+        crate::project::Origin::View(name.clone()),
     );
     crate::command!(CreateView { name, sql });
 }
@@ -24,7 +24,7 @@ pub fn select_star(table: &str) {
     } else {
         format!("SELECT *\nFROM {table};")
     };
-    crate::session::open_named(table, sql, crate::state::Origin::Scratch);
+    crate::session::open_named(table, sql, crate::project::Origin::Scratch);
 }
 
 /// Save the active tab's SQL to the project under the tab's name (upsert by name,
@@ -52,7 +52,7 @@ pub fn save() {
     let verb = if updated { "Updated" } else { "Saved" };
     crate::event_ok!("{verb} query '{name}' to project");
     // The tab is now bound to (and in sync with) this saved query.
-    crate::session::set_origin(w.id, crate::state::Origin::SavedQuery(name.clone()));
+    crate::session::set_origin(w.id, crate::project::Origin::SavedQuery(name.clone()));
 }
 
 /// Open a saved query: reuse a tab already named after it, else open a new tab.
@@ -71,7 +71,7 @@ pub fn open_saved(name: &str) {
     crate::session::open_named(
         name,
         sql,
-        crate::state::Origin::SavedQuery(name.to_string()),
+        crate::project::Origin::SavedQuery(name.to_string()),
     );
 }
 

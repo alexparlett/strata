@@ -2,7 +2,6 @@
 
 use dioxus::prelude::*;
 
-use crate::ddl::{self, Decision};
 
 /// Run the active tab's SQL (DDL-classified: run / capture-view / drop-view / block).
 pub fn run() {
@@ -17,46 +16,27 @@ pub fn run() {
         explain(trimmed);
         return;
     }
-    match ddl::classify(&trimmed) {
-        Decision::Block { reason } => {
-            let id = crate::session::active_id();
-            if id != 0 {
-                crate::runs::edit_existing(id, |run| {
-                    run.running = false;
-                    run.result = None;
-                });
-            }
-            tracing::warn!("blocked statement: {reason}");
-        }
-        Decision::CaptureView { name, sql } => {
-            crate::command!(CreateView { name, sql });
-        }
-        Decision::DropView { name } => {
-            crate::command!(DropView { name });
-        }
-        Decision::Query => {
-            let req = crate::engine::Engine::next_req();
-            let ws_id = crate::session::active_id();
-            let page_size = crate::runs::RUNS
-                .resolve()
-                .get(ws_id)
-                .map(|e| e.peek().page_size)
-                .unwrap_or(100);
-            crate::runs::edit(ws_id, |run| {
-                run.running = true;
-                run.query_error = None;
-                run.plan = None;
-                run.pending_req = Some(req);
-                run.page = 1;
-            });
-            crate::command!(Query {
-                req_id: req,
-                ws_id,
-                sql: trimmed,
-                page_size,
-            });
-        }
-    }
+
+    let req = crate::engine::Engine::next_req();
+    let ws_id = crate::session::active_id();
+    let page_size = crate::runs::RUNS
+        .resolve()
+        .get(ws_id)
+        .map(|e| e.peek().page_size)
+        .unwrap_or(100);
+    crate::runs::edit(ws_id, |run| {
+        run.running = true;
+        run.query_error = None;
+        run.plan = None;
+        run.pending_req = Some(req);
+        run.page = 1;
+    });
+    crate::command!(Query {
+        req_id: req,
+        ws_id,
+        sql: trimmed,
+        page_size,
+    });
 }
 
 /// Send an already-built `EXPLAIN …` statement to the engine's explain path for the

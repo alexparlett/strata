@@ -6,7 +6,7 @@
 
 use dioxus::prelude::*;
 
-use crate::query_error::QueryError;
+use crate::model::QueryError;
 use crate::ui::components::{Caption, Readout};
 
 /// Render `message → code frame → hint` for `err`, using the `.err-*` classes.

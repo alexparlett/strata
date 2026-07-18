@@ -6,9 +6,9 @@ use dioxus::prelude::*;
 
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
-use crate::inspector::ColRef;
+use crate::model::ColRef;
+use crate::model::{CatalogKind, RemoveKind, RemoveTarget};
 use crate::project::ProjectStoreExt;
-use crate::state::{CatalogKind, RemoveKind, RemoveTarget};
 use crate::ui::components::{
     Button, ButtonVariant, Caption, ContextMenu, Dialog, Dot, DropdownMenu, Eyebrow, Icon,
     IconButton, IconButtonVariant, MenuItem, MenuSep, Meta, Micro, MonoValue, Point, Readout,
@@ -345,7 +345,7 @@ fn flatten_cols(
     owner: &str,
     parent: &[String],
     depth: usize,
-    cols: &[crate::engine::ColumnInfo],
+    cols: &[crate::model::ColumnInfo],
     parts: &[(String, String)],
     selected: &Option<ColRef>,
     expanded: &HashSet<String>,

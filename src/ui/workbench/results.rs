@@ -25,7 +25,7 @@ use crate::ui::icons::{IconName, IconSize};
 /// The body is a mutually-exclusive state switch; the status bar is always present so
 /// the status token stays consistent (no-run · running · failed · grid/chart · plan).
 #[component]
-pub(crate) fn Results(ws_id: WorkspaceId) -> Element {
+pub fn Results(ws_id: WorkspaceId) -> Element {
     let (running, has_err, has_plan, has_result, view) = crate::runs::RUNS
         .resolve()
         .get(ws_id)
@@ -116,7 +116,7 @@ fn ErrorView(ws_id: WorkspaceId) -> Element {
                 }
             }
             div { class: "err-body",
-                {crate::ui::errview::error_detail(&err)}
+                {super::errview::error_detail(&err)}
             }
         }
     }
@@ -125,7 +125,7 @@ fn ErrorView(ws_id: WorkspaceId) -> Element {
 /// Results area before this workspace has produced any rows. An unrun EXPLAIN gets
 /// a plan-specific hint. Also the grid's defensive fallback (see `grid`).
 #[component]
-pub(crate) fn Empty(ws_id: WorkspaceId) -> Element {
+pub fn Empty(ws_id: WorkspaceId) -> Element {
     let sql = crate::session::snapshot()
         .workspaces
         .iter()
@@ -165,7 +165,7 @@ fn ChartPlaceholder() -> Element {
 
 /// Center-pane placeholder shown when no query tab is open (all tabs closed).
 #[component]
-pub(crate) fn EmptyState() -> Element {
+pub fn EmptyState() -> Element {
     let has_closed = crate::session::has_closed();
     let saved: Vec<String> = crate::project::store()
         .saved_queries()
@@ -468,7 +468,7 @@ fn selection_agg(ws_id: WorkspaceId) -> Option<AggView> {
     let result = run.result.as_ref()?;
     let search = run.result_search.to_lowercase();
     // Same filtered visible page the grid renders (selection indexes into this).
-    let rows: Vec<&Vec<crate::engine::Cell>> = result
+    let rows: Vec<&Vec<crate::model::Cell>> = result
         .rows
         .iter()
         .filter(|r| search.is_empty() || r.iter().any(|c| c.text.to_lowercase().contains(&search)))

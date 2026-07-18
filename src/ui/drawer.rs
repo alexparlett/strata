@@ -12,10 +12,10 @@ use dioxus_stores::*;
 
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
+use crate::model::{LogEvent, LogKind, LogTab};
 use crate::project::ProjectStoreExt;
 // Lens accessors (`.workspaces()`, `.id()`, `.name()`) for the Problems grouping.
 use crate::session::{SessionStoreExt, WorkspaceStoreExt};
-use crate::state::{LogEvent, LogKind, LogTab};
 use crate::ui::components::{
     Button, ButtonVariant, Caption, Dot, Icon, IconButton, IconButtonVariant, Meta, Path, Prose,
     Spacer, Strong,

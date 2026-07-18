@@ -7,12 +7,12 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::state::LogTab;
+use crate::model::LogTab;
 use crate::ui::components::{IconButton, IconButtonVariant};
 use crate::ui::icons::{IconName, IconSize};
 
 #[component]
-pub(crate) fn ActivityRail() -> Element {
+pub fn ActivityRail() -> Element {
     let sidebar_open = crate::layout::sidebar_open();
     let drawer_open = crate::layout::drawer_open();
     let drawer_tab = crate::layout::drawer_tab();

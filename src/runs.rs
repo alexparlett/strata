@@ -22,9 +22,9 @@ use std::time::Instant;
 use dioxus::prelude::*;
 use dioxus_stores::*;
 
-use crate::engine::QueryOutput;
+use crate::model::QueryError;
+use crate::model::QueryOutput;
 use crate::plan::{PlanTab, QueryPlan};
-use crate::query_error::QueryError;
 
 /// Which result view is active for a tab — the grid (default) or the chart (R2).
 /// Toggled from the results toolbar; kept per result-set (per tab).

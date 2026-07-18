@@ -8,7 +8,7 @@ use crate::ui::components::{
 use crate::ui::icons::IconName;
 
 #[component]
-pub(super) fn System() -> Element {
+pub fn System() -> Element {
     let mut draft = use_context::<super::SettingsCtx>().draft;
     let d = draft.read();
     let reopen = d.reopen_on_startup;
