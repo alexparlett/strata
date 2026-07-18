@@ -206,6 +206,21 @@ fn catalog_menu_items(
 
 /// The remove-confirmation dialog (drop table / view) — a sidebar-local `Dialog`.
 /// The `remove` signal owns open/close; confirming dispatches the actual drop.
+/// The drop-confirm consequence line (D10) — "N view(s) read this {noun} and will be
+/// left invalid." Count only, not names: a busy table can back dozens of views, and a
+/// list that long warns no better than a number. Empty when nothing depends on it.
+///
+/// Not "stop working": a view captures its sources by reference, so it keeps *running*
+/// after the drop and only fails when the project is reopened and its SQL re-planned. So
+/// it's flagged invalid in the catalog (the warning triangle) rather than broken now.
+fn phrase(count: usize, noun: &str) -> String {
+    match count {
+        0 => String::new(),
+        1 => format!("1 view reads this {noun} and will be left invalid."),
+        n => format!("{n} views read this {noun} and will be left invalid."),
+    }
+}
+
 fn remove_dialog(
     mut remove: Signal<Option<RemoveTarget>>,
     t: RemoveTarget,
@@ -225,6 +240,14 @@ fn remove_dialog(
     let kind = t.kind;
     let name = t.name.clone();
     let confirm_name = t.name;
+    // What this drop leaves invalid (D10), resolved by the planner so it's transitive
+    // through nested views. Neither case breaks anything *now* — a view holds its
+    // sources by reference and keeps running until the project reloads and re-plans its
+    // SQL. So dependents are flagged invalid, not broken (see `phrase`).
+    let breaks_msg = match kind {
+        RemoveKind::Table => phrase(crate::project::views_using(&name).len(), "table"),
+        RemoveKind::View => phrase(crate::project::views_referencing(&name).len(), "view"),
+    };
 
     rsx! {
         Dialog { on_close: move |_| remove.set(None), card_class: "confirm".to_string(), z: 78,
@@ -233,6 +256,9 @@ fn remove_dialog(
                 div { style: "flex:1;min-width:0;",
                     Title { class: "confirm-title", "{title} " span { class: "nm", "{name}" } "?" }
                     Readout { class: "confirm-body", "{body}" }
+                    if !breaks_msg.is_empty() {
+                        Readout { class: "confirm-warn", "{breaks_msg}" }
+                    }
                 }
             }
             div { class: "confirm-foot",
@@ -367,6 +393,19 @@ fn flatten_cols(
     }
 }
 
+/// A warning triangle for an invalid catalog row (D-validity), with the reason on hover.
+/// Empty when there's no problem, so callers can drop it in unconditionally.
+fn problem_badge(problem: &Option<String>) -> Element {
+    let Some(msg) = problem else {
+        return rsx! {};
+    };
+    rsx! {
+        Tooltip { message: msg.clone(),
+            span { class: "cat-warn", Icon { name: IconName::Warning, size: IconSize::Xs } }
+        }
+    }
+}
+
 fn render_table(
     mut menu: Signal<Option<CtxTarget>>,
     remove: Signal<Option<RemoveTarget>>,
@@ -387,6 +426,9 @@ fn render_table(
     let name = t.name.clone();
     let open = t.open;
     let parts = t.partition_cols.clone();
+    // The catalog is definitions, not a mirror of DataFusion — a row can exist yet be
+    // broken. Flag it (a failed register: missing file, bad path).
+    let problem = crate::project::table_problem(t);
     // Scans are per-table and concurrent (D4), so the inspector's PROFILE spinner only
     // ever speaks for the *selected* column's table — start one on `orders`, click to
     // `users`, and it vanishes. The row is the only place a scan is always visible.
@@ -421,6 +463,7 @@ fn render_table(
                 }
                 Icon { name: IconName::Table, size: IconSize::Sm, color: "var(--dim)" }
                 MonoValue { class: "tname", "{name}" }
+                {problem_badge(&problem)}
                 if profiling {
                     Tooltip { message: "Profiling...",
                         span { class: "tbl-spin ps-spin", Icon { name: IconName::Spinner, size: IconSize::Xs } }
@@ -506,6 +549,14 @@ fn render_view(
     let name = v.name.clone();
     let open = v.open;
     let profiling = v.profiling;
+    // Validity is derived against the *live* tables (D-validity): a hard SQL failure, or
+    // a base table that's since gone missing. A separate read of the tables lens —
+    // simultaneous immutable reads don't collide.
+    let problem = {
+        let tl = store.tables();
+        let tables = tl.read();
+        crate::project::view_problem(v, &tables)
+    };
     // Same flatten as a table's: a view's columns can be nested too, and selecting one
     // has to carry a path for the inspector to resolve it. Views have no partition
     // columns, hence the empty `parts`.
@@ -535,6 +586,7 @@ fn render_view(
                 }
                 Icon { name: IconName::Eye, size: IconSize::Sm, color: "var(--purple)" }
                 MonoValue { class: "tname", "{name}" }
+                {problem_badge(&problem)}
                 if profiling {
                     Tooltip { message: "Profiling...",
                         span { class: "tbl-spin ps-spin", Icon { name: IconName::Spinner, size: IconSize::Xs } }

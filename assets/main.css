@@ -738,6 +738,14 @@ html, body {
   color: var(--accent);
 }
 
+/* Invalid catalog row (D-validity) — failed to register, or a base table went missing.
+   The row still exists (it's a definition); the triangle says it doesn't work. */
+.cat-warn {
+  display: flex;
+  flex: none;
+  color: var(--orange);
+}
+
 .tbl-row .tname {
   color: var(--text);
 }
@@ -2170,6 +2178,14 @@ html, body {
 .confirm-body {
   margin-top: var(--sp-3);
   color: var(--dim);
+}
+
+/* A consequence the user should read before confirming — e.g. the views a table drop
+   would break (D10). Warn-coloured: it's not an error yet, it's what happens if you go
+   ahead. */
+.confirm-warn {
+  margin-top: var(--sp-3);
+  color: var(--orange);
 }
 
 .confirm-foot {

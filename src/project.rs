@@ -104,18 +104,40 @@ pub struct CatalogView {
     pub meta: String,
     #[serde(skip)]
     pub columns: Vec<ColumnInfo>,
+    /// The base tables this view reads (D10) — resolved by the planner at registration,
+    /// so it sees through nested views and subqueries and never parses SQL itself.
+    ///
+    /// Runtime, like `columns`: re-derived whenever the view is registered, so it can't
+    /// drift from the SQL. Drives profile invalidation and the warning when dropping a
+    /// *table* would break a view.
+    #[serde(skip)]
+    pub deps: Vec<String>,
+    /// The **views** this view reads (D10) — transitive, since the planner inlines each
+    /// hop and the walk collects every one. Drives the warning when dropping a *view*
+    /// would break dependent views (on their next reload — a dropped view's body is
+    /// already inlined into its dependents' live plans, so nothing breaks until then).
+    #[serde(skip)]
+    pub view_deps: Vec<String>,
     /// The last full-scan profile (D4), or `None` if never profiled.
     ///
     /// A view is where profiling earns most: it has no footer, so without a scan its
-    /// inspector knows nothing but the column's type. ⚠️ Invalidation is weaker than a
-    /// table's — this drops when the view's own SQL changes, but a view also depends on
-    /// every table beneath it, and a table refresh can't see through to here. See the
-    /// view-dependency task in DEV_TASKS.
+    /// inspector knows nothing but the column's type. Dies when the view's own SQL
+    /// changes, and — via `deps` — when any table it reads is re-registered.
     #[serde(skip)]
     pub profile: Option<crate::profile::CatalogProfile>,
     /// A profile scan is in flight for this view.
     #[serde(skip)]
     pub profiling: bool,
+    /// A **hard** registration failure — the view's SQL didn't plan (a syntax error, a
+    /// type error, a base table that was already missing at creation). `Some` = the row
+    /// exists as a definition but there is no working view behind it.
+    ///
+    /// This is the half of validity `deps` can't see: `deps` only knows *which* tables a
+    /// view reads, so a missing dependency is derived from the catalog (see
+    /// `view_problem`), but a SQL error leaves no deps to check. Set from the engine's
+    /// `ViewChanged` error, cleared on the next success.
+    #[serde(skip)]
+    pub error: Option<String>,
     #[serde(skip)]
     pub open: bool,
 }
@@ -445,6 +467,95 @@ pub fn upsert_table(table: CatalogTable) {
 /// Drop the table named `name` (deregister / remove-confirm).
 pub fn remove_table(name: &str) {
     store().tables().write().retain(|t| t.name != name);
+}
+
+// --- validity (the catalog is definitions, not a mirror of DataFusion) ------------
+//
+// A row existing means "we intend this to exist", not "this works". Validity is derived
+// where it can be — a view needs its base tables, and `deps` (D10) already says which —
+// and stored only for failures the catalog can't see (a view's SQL not planning).
+
+/// A table's problem, if any: it failed to register (missing file, bad path). `None`
+/// when it's `Ready`.
+pub fn table_problem(t: &CatalogTable) -> Option<String> {
+    match t.status {
+        RegStatus::Failed => Some(
+            t.error
+             .clone()
+             .unwrap_or_else(|| "Failed to register".to_string()),
+        ),
+        _ => None,
+    }
+}
+
+/// A view's problem, if any — *derived*, so it's always current and self-heals:
+///
+/// - a **hard** failure (`error`) — the SQL didn't plan; or
+/// - a **missing dependency** — a base table it reads is gone or itself broken. `deps`
+///   is the transitive base-table set (D10), so this catches a table dropped *after* the
+///   view registered fine, which triggers no event of its own. Recomputed against the
+///   live catalog every call, so re-adding the table clears it with nothing to
+///   invalidate.
+///
+/// `tables` is the current table list (passed rather than fetched so the caller can hold
+/// one read of the store).
+pub fn view_problem(v: &CatalogView, tables: &[CatalogTable]) -> Option<String> {
+    if let Some(e) = &v.error {
+        return Some(e.clone());
+    }
+    for dep in &v.deps {
+        match tables.iter().find(|t| &t.name == dep) {
+            None => return Some(format!("Reads {dep}, which is no longer in the catalog.")),
+            Some(t) if t.status == RegStatus::Failed => {
+                return Some(format!("Reads {dep}, which failed to load."))
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The views that read `table` directly-or-transitively (D10), by name — resolved by
+/// the planner, so this is what would actually break *now* if the table went away.
+pub fn views_using(table: &str) -> Vec<String> {
+    let s = store();
+    let views = s.views();
+    let v = views.read();
+    v.iter()
+     .filter(|v| v.deps.iter().any(|d| d == table))
+     .map(|v| v.name.clone())
+     .collect()
+}
+
+/// The views that read view `name` directly-or-transitively (D10). What would fail to
+/// *reload* if the view were dropped — their live plans already have its body inlined,
+/// so they keep working until the project is re-opened and their SQL re-planned.
+pub fn views_referencing(name: &str) -> Vec<String> {
+    let s = store();
+    let views = s.views();
+    let v = views.read();
+    v.iter()
+     .filter(|v| v.view_deps.iter().any(|d| d == name))
+     .map(|v| v.name.clone())
+     .collect()
+}
+
+/// Drop the cached profile of every view that reads `table` — it just re-registered, so
+/// their numbers describe data that's moved (D10).
+///
+/// This is the half of the "cached until it changes" contract a view can't get from its
+/// own row: a table's profile dies with its row, but nothing about refreshing `orders`
+/// touches a view over `orders` unless we look it up.
+pub fn invalidate_views_using(table: &str) {
+    let s = store();
+    let mut views = s.views();
+    let mut v = views.write();
+    for row in v.iter_mut().filter(|v| v.deps.iter().any(|d| d == table)) {
+        row.profile = None;
+        // A scan in flight is now reading a table mid-change; `end_profile` drops a
+        // result whose flag didn't survive.
+        row.profiling = false;
+    }
 }
 
 /// Whether `name` is a view rather than a table — they share one namespace, so a name

@@ -19,7 +19,6 @@ use dioxus::prelude::{Global, ReadableExt, WritableExt};
 use dioxus_stores::*;
 
 use crate::plan::{PlanKind, PlanNode, QueryPlan};
-use crate::session::{Session, SESSION};
 use crate::sql::FunctionCatalog;
 use crate::util::Kind;
 use datafusion::arrow::array::Array;
@@ -33,7 +32,6 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::*;
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 const MAX_CELL_LEN: usize = 400;
@@ -219,6 +217,11 @@ pub enum Event {
         name: String,
         sql: String,
         dropped: bool,
+        /// The base tables the view reads (D10) — empty on a drop or a failure.
+        deps: Vec<String>,
+        /// Every name the view inlines — its referenced views, plus table-alias / CTE
+        /// noise the UI filters against the known views. Empty on a drop or failure.
+        aliases: Vec<String>,
         result: Result<Vec<ColumnInfo>, String>,
     },
     QueryResult {
@@ -614,11 +617,18 @@ async fn engine_loop(
                     h.abort();
                 }
                 let stmt = format!("CREATE OR REPLACE VIEW {name} AS {sql}");
+                let (mut deps, mut aliases) = (Vec::new(), Vec::new());
                 let result = match ctx.sql(&stmt).await {
                     Ok(df) => {
                         let _ = df.collect().await;
                         match ctx.table(name.as_str()).await {
                             Ok(t) => {
+                                // The same `DataFrame` gives the columns and what the
+                                // view reads (D10) — the planner has already resolved it,
+                                // so we never parse the SQL ourselves.
+                                let d = plan_deps(t.logical_plan());
+                                deps = d.tables;
+                                aliases = d.aliases;
                                 Ok(t.schema().fields().iter().map(|f| column_info(f)).collect())
                             }
                             Err(e) => Err(e.to_string()),
@@ -630,6 +640,8 @@ async fn engine_loop(
                     name,
                     sql,
                     dropped: false,
+                    deps,
+                    aliases,
                     result,
                 });
             }
@@ -647,6 +659,8 @@ async fn engine_loop(
                     name,
                     sql: String::new(),
                     dropped: true,
+                    deps: Vec::new(),
+                    aliases: Vec::new(),
                     result,
                 });
             }
@@ -1517,6 +1531,62 @@ async fn rebuild_listing(
 }
 
 // ---- schema helpers ----
+
+/// What a view plan reads (D10): its **base tables** and the **names it inlines**.
+///
+/// Asks the planner, not the SQL text, which matters three ways:
+///
+/// - **Views are already resolved away.** DataFusion 54 inlines a view at plan-*build*
+///   time, so a plan from `ctx.table("a_view")` scans the view's base tables directly.
+///   That's transitive for free — a view over a view was inlined when the inner one was
+///   planned, so `C → B → A → orders` collapses to a single tree carrying `orders` at
+///   the leaf and `A`, `B` as the inliner's alias markers on the way down. Reading the
+///   SQL would stop at `FROM b`.
+/// - **`apply_with_subqueries`, not `apply`.** Plain `apply` visits only direct
+///   children, so a view with `WHERE id IN (SELECT id FROM other)` would silently drop
+///   `other` — and a *missed* dependency is the failure that matters: a stale profile
+///   nobody invalidates, or an entry dropped without warning.
+/// - **`.table()`, not `to_string()`.** A `TableReference` renders as written — `t`
+///   here, `public.t` there — so `to_string()` yields two keys for one thing. The engine
+///   owns a single schema, so the bare name is the identity.
+struct PlanDeps {
+    /// Base tables scanned — for profile invalidation and the table-drop warning.
+    tables: Vec<String>,
+    /// Every `SubqueryAlias` name, which for an inlined sub-view is the view's own name.
+    /// Raw: also includes plain table aliases (`FROM t AS x`) and CTE names, since those
+    /// are indistinguishable from a view inline in the plan. The UI keeps only the ones
+    /// that are actually views. Recursion is automatic — a chain leaves one alias per
+    /// hop in the tree, so this is the transitive set of referenced views.
+    aliases: Vec<String>,
+}
+
+fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
+    use datafusion::common::tree_node::TreeNodeRecursion;
+    use datafusion::logical_expr::LogicalPlan;
+    let mut tables = std::collections::BTreeSet::new();
+    let mut aliases = std::collections::BTreeSet::new();
+    let _ = plan.apply_with_subqueries(|node| {
+        match node {
+            LogicalPlan::TableScan(scan) => {
+                // A source still carrying its own plan is a view that *didn't* inline —
+                // only reachable if filters were pushed at build time, which our path
+                // never does. Recording it would name the view instead of what it reads.
+                if scan.source.get_logical_plan().is_none() {
+                    tables.insert(scan.table_name.table().to_string());
+                }
+            }
+            LogicalPlan::SubqueryAlias(a) => {
+                aliases.insert(a.alias.table().to_string());
+            }
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    PlanDeps {
+        tables: tables.into_iter().collect(),
+        aliases: aliases.into_iter().collect(),
+    }
+}
 
 /// Profile `name` — one full scan, every column at once (see [`crate::profile`]).
 ///

@@ -443,6 +443,11 @@ pub fn apply_event(ev: Event) {
                         });
                     }
                 }
+                // The table just re-registered, so any view reading it is describing
+                // data that's moved (D10). This is the half of "cached until it changes"
+                // a view can't get from its own row — nothing about refreshing `orders`
+                // touches a view over `orders` unless we go and look.
+                crate::project::invalidate_views_using(&table);
                 crate::event_ok!("Registered table '{table}' · {n} cols · schema validated");
             }
             Err(e) => {
@@ -469,6 +474,8 @@ pub fn apply_event(ev: Event) {
             name,
             sql,
             dropped,
+            deps,
+            aliases,
             result,
         } => {
             if dropped {
@@ -481,9 +488,25 @@ pub fn apply_event(ev: Event) {
                         let store = crate::project::store();
                         let mut v = store.views();
                         let mut views = v.write();
+                        // The engine's `aliases` are raw — inlined view names mixed with
+                        // table-alias / CTE noise it can't tell apart from a view inline.
+                        // Keep only the ones that are actually views (D10). A view can't
+                        // reference itself, and by registration order every view it reads
+                        // already has a row.
+                        let known: std::collections::HashSet<String> = views
+                            .iter()
+                            .filter(|x| x.name != name)
+                            .map(|x| x.name.clone())
+                            .collect();
+                        let view_deps: Vec<String> =
+                            aliases.into_iter().filter(|a| known.contains(a)).collect();
                         if let Some(v) = views.iter_mut().find(|v| v.name == name) {
                             v.columns = cols;
                             v.sql = sql;
+                            v.deps = deps;
+                            v.view_deps = view_deps;
+                            // Planned cleanly — clear any prior failure.
+                            v.error = None;
                             // The query *is* the view — rewriting it means any profile
                             // describes a different question. Same explicit clear the
                             // table path needs, for the same reason: this branch mutates
@@ -497,6 +520,9 @@ pub fn apply_event(ev: Event) {
                                 sql,
                                 meta: "view".into(),
                                 columns: cols,
+                                deps,
+                                view_deps,
+                                error: None,
                                 profile: None,
                                 profiling: false,
                                 open: false,
@@ -507,6 +533,23 @@ pub fn apply_event(ev: Event) {
                         autosave_after = true;
                     }
                     Err(e) => {
+                        // The view didn't plan — a SQL error, or a base table missing at
+                        // load. Mark the *definition* invalid rather than dropping it: the
+                        // row survives (its SQL is fixable, or its table may return), and
+                        // the sidebar flags it. `deps` can't see this — there's no working
+                        // plan to read them from — which is exactly why `error` exists.
+                        let store = crate::project::store();
+                        let mut vl = store.views();
+                        let mut views = vl.write();
+                        if let Some(v) = views.iter_mut().find(|v| v.name == name) {
+                            v.error = Some(e.clone());
+                            v.columns.clear();
+                            v.deps.clear();
+                            v.view_deps.clear();
+                            v.profile = None;
+                            v.profiling = false;
+                        }
+                        drop(views);
                         tracing::error!("view '{name}' failed: {e}");
                         crate::event_error!("View '{name}' failed: {e}");
                     }
