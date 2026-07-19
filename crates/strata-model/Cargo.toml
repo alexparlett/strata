@@ -5,5 +5,7 @@ edition = "2021"
 description = "Strata core data vocabulary (schema, results, catalog, forms, logs, errors) — a framework-agnostic leaf crate shared by every frontend. Phase 0 of the Freya port."
 license = "MIT"
 
-# Deliberately zero dependencies: this is the leaf every other crate depends *down* onto.
+# The leaf every other crate depends *down* onto. Only serde (the catalog/project
+# definitions persist to `.strata/`); deliberately no datafusion, no UI.
 [dependencies]
+serde = { version = "1", features = ["derive"] }

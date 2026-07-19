@@ -30,7 +30,7 @@ use dioxus_stores::*;
 
 use crate::model::QueryError;
 use crate::model::QueryOutput;
-use crate::plan::{PlanTab, QueryPlan};
+use strata_core::engine::plan::{PlanTab, QueryPlan};
 
 /// Which result view is active for a tab — the grid (default) or the chart (R2).
 /// Toggled from the results toolbar; kept per result-set (per tab).

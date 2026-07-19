@@ -7,7 +7,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::prelude::*;
 
-use crate::model::{ColumnInfo, Kind, Stat, StatKey};
+use strata_model::{ColumnInfo, Kind, Stat, StatKey};
 
 use super::{TableMeta, TableSpec};
 

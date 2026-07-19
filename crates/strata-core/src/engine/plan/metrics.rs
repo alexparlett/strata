@@ -265,7 +265,7 @@ pub fn self_time_ms(kind: PlanKind, metrics: &[Metric]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::PlanKind;
+    use crate::engine::plan::PlanKind;
 
     fn m(name: &str, value: u64, kind: MetricKind) -> Metric {
         Metric {

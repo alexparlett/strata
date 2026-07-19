@@ -7,9 +7,9 @@
 
 use std::ops::Range;
 
-use crate::diagnostics::{DiagSource, Diagnostic, Severity};
-use crate::sql::lex::{lex, Tok, TokKind};
-use crate::sql::symbols::Catalog;
+use crate::engine::sql::lex::{lex, Tok, TokKind};
+use crate::engine::sql::symbols::Catalog;
+use strata_model::{DiagSource, Diagnostic, Severity};
 
 /// Clause keywords we typo-check bare identifiers against (edit distance ≤ 1).
 const CLAUSE_KEYWORDS: &[&str] = &[

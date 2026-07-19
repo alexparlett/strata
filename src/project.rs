@@ -20,132 +20,15 @@ use dioxus::prelude::*;
 use dioxus_stores::*;
 use serde::{Deserialize, Serialize};
 
-use crate::model::ColumnInfo;
-
 /// File names inside the `.strata/` project directory.
 const PROJECT_JSON: &str = "project.json";
 const SESSION_JSON: &str = "session.json";
 
-/// Registration lifecycle of a catalog table (runtime, not persisted).
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum RegStatus {
-    /// A freshly-loaded or -added table, awaiting engine registration.
-    #[default]
-    Loading,
-    Ready,
-    Failed,
-}
-
-/// Accept partition columns as either the legacy name-only `["year","month"]`
-/// (→ typed `Utf8`) or the current typed `[["year","Int32"], …]` form, so old
-/// `.psproj` files keep loading. Serialization always emits the typed form.
-fn de_partition_cols<'de, D>(d: D) -> Result<Vec<(String, String)>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Col {
-        Named(String),
-        Typed(String, String),
-    }
-    Ok(Vec::<Col>::deserialize(d)?
-        .into_iter()
-        .map(|c| match c {
-            Col::Named(n) => (n, "Utf8".to_string()),
-            Col::Typed(n, t) => (n, t),
-        })
-        .collect())
-}
-
-/// One logical table (a DataFusion `ListingTable` over many source paths).
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
-pub struct CatalogTable {
-    pub name: String,
-    #[serde(skip)]
-    pub meta: String,
-    pub format: String,
-    pub sources: Vec<String>,
-    /// Hive partition columns as `(name, arrow_type)` — the persisted source of
-    /// truth for deterministic reload (types aren't re-detected).
-    #[serde(default, deserialize_with = "de_partition_cols")]
-    pub partition_cols: Vec<(String, String)>,
-    #[serde(skip)]
-    pub columns: Vec<ColumnInfo>,
-    /// The source's own row count, when it reports one — a Parquet footer does, CSV and
-    /// JSON don't. Runtime like `columns`: re-read on every registration, never stored.
-    #[serde(skip)]
-    pub rows: Option<u64>,
-    /// The last full-scan profile (D4), or `None` if it's never been profiled.
-    ///
-    /// Cached here **on purpose**: the row is the unit that gets replaced when the
-    /// engine re-registers a table, so a config edit that goes through `upsert_table`
-    /// drops the profile with it. That's the "cached until the table changes" contract.
-    ///
-    /// ⚠️ It isn't *entirely* free: `app.rs`'s `Registered` handler also has an
-    /// update-in-place branch (the load-time / `RefreshCatalog` path), which has to
-    /// clear this explicitly. Any new path that mutates a row rather than replacing it
-    /// must do the same.
-    #[serde(skip)]
-    pub profile: Option<crate::profile::CatalogProfile>,
-    /// A profile scan is in flight for this table — the row's own lifecycle, mirroring
-    /// `status`. Scans are keyed by entry, so several run at once.
-    #[serde(skip)]
-    pub profiling: bool,
-    #[serde(skip)]
-    pub open: bool,
-    #[serde(skip)]
-    pub status: RegStatus,
-    #[serde(skip)]
-    pub error: Option<String>,
-}
-
-/// A saved, query-backed catalog view (a real DataFusion `CREATE VIEW`).
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
-pub struct CatalogView {
-    pub name: String,
-    pub sql: String,
-    #[serde(skip)]
-    pub meta: String,
-    #[serde(skip)]
-    pub columns: Vec<ColumnInfo>,
-    /// The base tables this view reads (D10) — resolved by the planner at registration,
-    /// so it sees through nested views and subqueries and never parses SQL itself.
-    ///
-    /// Runtime, like `columns`: re-derived whenever the view is registered, so it can't
-    /// drift from the SQL. Drives profile invalidation and the warning when dropping a
-    /// *table* would break a view.
-    #[serde(skip)]
-    pub deps: Vec<String>,
-    /// The **views** this view reads (D10) — transitive, since the planner inlines each
-    /// hop and the walk collects every one. Drives the warning when dropping a *view*
-    /// would break dependent views (on their next reload — a dropped view's body is
-    /// already inlined into its dependents' live plans, so nothing breaks until then).
-    #[serde(skip)]
-    pub view_deps: Vec<String>,
-    /// The last full-scan profile (D4), or `None` if never profiled.
-    ///
-    /// A view is where profiling earns most: it has no footer, so without a scan its
-    /// inspector knows nothing but the column's type. Dies when the view's own SQL
-    /// changes, and — via `deps` — when any table it reads is re-registered.
-    #[serde(skip)]
-    pub profile: Option<crate::profile::CatalogProfile>,
-    /// A profile scan is in flight for this view.
-    #[serde(skip)]
-    pub profiling: bool,
-    /// A **hard** registration failure — the view's SQL didn't plan (a syntax error, a
-    /// type error, a base table that was already missing at creation). `Some` = the row
-    /// exists as a definition but there is no working view behind it.
-    ///
-    /// This is the half of validity `deps` can't see: `deps` only knows *which* tables a
-    /// view reads, so a missing dependency is derived from the catalog (see
-    /// `view_problem`), but a SQL error leaves no deps to check. Set from the engine's
-    /// `ViewChanged` error, cleared on the next success.
-    #[serde(skip)]
-    pub error: Option<String>,
-    #[serde(skip)]
-    pub open: bool,
-}
+// The catalog *definition* types (RegStatus / CatalogTable / CatalogView) are shared
+// vocabulary and now live in `strata-model`, re-exported here so `crate::project::Catalog*`
+// keeps resolving unchanged. Their partition-cols deserializer moved with them. This module
+// keeps the project *store* + persistence.
+pub use crate::model::{CatalogTable, CatalogView, RegStatus};
 
 /// What a tab is bound to — drives ⌘S behaviour and the dirty indicator.
 #[derive(Clone, Serialize, Deserialize, Default, PartialEq)]

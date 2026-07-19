@@ -38,24 +38,9 @@ use std::cell::Cell;
 use dioxus::prelude::*;
 
 use crate::config::{KeyBind, OpenPref, Settings};
-
-/// The live display-theme selection: the chosen theme id + whether to follow the
-/// OS. The *effective* theme (honouring Sync-with-OS and the OS appearance) is
-/// derived in [`effective_theme`].
-#[derive(Clone, PartialEq)]
-pub struct ThemeSel {
-    pub id: String,
-    pub sync_os: bool,
-}
-
-impl ThemeSel {
-    fn of(s: &Settings) -> Self {
-        Self {
-            id: s.theme.clone(),
-            sync_os: s.sync_os,
-        }
-    }
-}
+// The theme selection now lives in `core::theme` (the input to `ThemeSel::effective`);
+// `From<&Settings>` (in `core::config`) is the projection this window previews from.
+use crate::theme::ThemeSel;
 
 /// The shared, cross-window settings handles. All **leaked** signals (no owner
 /// scope), so they survive any window closing and are safe to share by value.
@@ -100,7 +85,7 @@ fn shared() -> Shared {
         let loc = std::panic::Location::caller();
         let s = Shared {
             applied: Signal::leak_with_caller(cfg.clone(), loc),
-            theme: Signal::leak_with_caller(ThemeSel::of(&cfg), loc),
+            theme: Signal::leak_with_caller(ThemeSel::from(&cfg), loc),
             // Detect the OS appearance once, here — every window then reads this same
             // value (and its `ThemeChanged` handler keeps it current via `set_os_dark`).
             os_dark: Signal::leak_with_caller(crate::theme::os_is_dark(), loc),
@@ -138,8 +123,8 @@ pub fn use_settings() -> String {
 pub fn effective_theme() -> String {
     let s = shared();
     let t = s.theme.read();
-    let x = crate::theme::effective_id(&t.id, t.sync_os, *s.os_dark.read());
-    x
+    let os_dark = s.os_dark.read();
+    t.effective(*os_dark)
 }
 
 pub fn density_compact() -> bool {
@@ -213,7 +198,7 @@ pub fn preview_sync_os(on: bool) {
 /// to the app config. This is the **only** place the Settings window writes to disk.
 pub fn save_draft(draft: Settings) {
     let sh = shared();
-    let sel = ThemeSel::of(&draft);
+    let sel = ThemeSel::from(&draft);
     let mut applied = sh.applied;
     let mut theme = sh.theme;
     applied.set(draft.clone());
@@ -227,7 +212,7 @@ pub fn save_draft(draft: Settings) {
 /// Settings window is cancelled/closed without saving.
 pub fn revert_theme_preview() {
     let sh = shared();
-    let saved = ThemeSel::of(&sh.applied.peek());
+    let saved = ThemeSel::from(&*sh.applied.peek());
     let mut theme = sh.theme;
     if *theme.peek() != saved {
         theme.set(saved);

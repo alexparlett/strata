@@ -14,12 +14,12 @@ use dioxus_stores::Store;
 use crate::action::panel::Resizer;
 use crate::action::{dispatch, Action};
 use crate::session::WorkspaceStoreExt;
-use crate::sql::{Catalog, Completion, CompletionKind};
 use crate::ui::components::code_editor::{CodeEditor, Decoration};
 use crate::ui::components::{
     Caption, Icon, IconButton, IconButtonVariant, Meta, MonoValue, Popup, Prose, Rect,
 };
 use crate::ui::icons::{IconName, IconSize};
+use strata_core::engine::sql::{Catalog, Completion, CompletionKind};
 
 /// The open completion popup for this editor.
 #[derive(Clone, PartialEq)]

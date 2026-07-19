@@ -14,7 +14,7 @@ use datafusion::prelude::*;
 use futures::StreamExt;
 
 use super::catalog::column_info;
-use crate::model::{Cell, ColumnInfo, QueryOutput};
+use strata_model::{Cell, ColumnInfo, QueryOutput};
 
 /// Max characters kept per display cell (the grid truncates with an ellipsis).
 const MAX_CELL_LEN: usize = 400;

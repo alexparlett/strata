@@ -25,13 +25,13 @@ use crate::inspector::InspectorStoreExt;
 use crate::model::CatalogKind;
 use crate::model::Kind;
 use crate::model::{ColumnInfo, Stat, StatKey};
-use crate::profile::CatalogProfile;
 use crate::project::ProjectStoreExt;
 use crate::ui::components::{
     Button, ButtonVariant, Dot, Eyebrow, Icon, IconButton, IconButtonVariant, Meta, MonoValue,
     Path, Prose, Readout, Tooltip,
 };
 use crate::ui::icons::{IconName, IconSize};
+use strata_core::engine::profile::CatalogProfile;
 
 /// The inspector's label for a fact.
 fn label(key: StatKey) -> &'static str {

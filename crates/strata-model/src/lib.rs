@@ -15,15 +15,21 @@
 //! stays in `crate::engine`: that's the engine's wire format, not shared vocabulary.
 
 mod catalog;
+mod diagnostics;
 mod form;
 mod log;
+mod profile;
 mod query_error;
 mod results;
 mod schema;
 
-pub use catalog::{CatalogKind, ColRef, RemoveKind, RemoveTarget};
+pub use catalog::{
+    CatalogKind, CatalogTable, CatalogView, ColRef, RegStatus, RemoveKind, RemoveTarget,
+};
+pub use diagnostics::{DiagSource, Diagnostic, Severity};
 pub use form::{ConfigForm, ExportForm};
 pub use log::{LogEvent, LogKind, LogTab};
+pub use profile::CatalogProfile;
 pub use query_error::QueryError;
 pub use results::{Cell, QueryOutput};
 pub use schema::{ColumnInfo, Kind, Stat, StatKey};

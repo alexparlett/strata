@@ -11,7 +11,7 @@ use crate::model::{LogTab, RemoveKind};
 // The dioxus prelude is deliberately *not* glob-imported here — it also exports
 // an `Action`, which would collide with our enum and break `use Action::*` in
 // `dispatch`.
-use crate::plan::PlanTab;
+use strata_core::engine::plan::PlanTab;
 
 // Domain handler modules. `panel` (the `Resizer` handle + window-fill toggle),
 // `projects` (window startup), and `catalog` (the modal's source scan,

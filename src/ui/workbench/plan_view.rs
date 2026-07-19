@@ -10,13 +10,13 @@
 use dioxus::prelude::*;
 
 use crate::action::{dispatch, Action};
-use crate::plan::{PlanKind, PlanTab};
 use crate::session::WorkspaceId;
 use crate::ui::components::{
     Badge, Dot, Icon, IconButton, IconButtonVariant, Micro, MonoValue, Readout, Segment,
     SegmentOption, Spacer,
 };
 use crate::ui::icons::{IconName, IconSize};
+use strata_core::engine::plan::{PlanKind, PlanTab};
 
 #[component]
 pub fn PlanView(ws_id: WorkspaceId) -> Element {

@@ -84,7 +84,7 @@ pub struct KeyBind {
     pub chord: Option<KeyChord>,
 }
 
-#[derive(Clone, Serialize, Deserialize, dioxus_stores::Store)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Active theme id (see `crate::theme`). Persists across sessions/windows.
     #[serde(default = "default_theme")]
@@ -121,6 +121,18 @@ pub struct Settings {
     /// [`crate::engine::config`].
     #[serde(default)]
     pub engine: std::collections::BTreeMap<String, String>,
+}
+
+/// The live theme selection projected out of the persisted settings — the input to
+/// [`crate::theme::ThemeSel::effective`]. Lives here (not in `theme`) so `theme` needn't
+/// know about `Settings`; every frontend derives it the same way.
+impl From<&Settings> for crate::theme::ThemeSel {
+    fn from(s: &Settings) -> Self {
+        Self {
+            id: s.theme.clone(),
+            sync_os: s.sync_os,
+        }
+    }
 }
 
 fn default_theme() -> String {

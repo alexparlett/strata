@@ -7,7 +7,7 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::*;
 
-use crate::plan::{PlanKind, PlanNode, QueryPlan};
+use crate::engine::plan::{PlanKind, PlanNode, QueryPlan};
 
 /// Build a structured [`QueryPlan`] for an `EXPLAIN [ANALYZE]` statement by
 /// walking DataFusion's own typed plans — **no plan-text parsing**.
@@ -169,7 +169,7 @@ fn node_metrics(p: &dyn ExecutionPlan) -> (Option<u64>, Vec<crate::plan::Metric>
 /// by variant first (robust — `elapsed_compute`'s name has no "time" in it), then a
 /// name heuristic for the generic operator-defined `Count`/`Gauge` metrics.
 fn metric_kind(v: &MetricValue) -> crate::plan::MetricKind {
-    use crate::plan::MetricKind as K;
+    use crate::engine::plan::MetricKind as K;
     match v {
         MetricValue::ElapsedCompute(_) | MetricValue::Time { .. } => K::Time,
         MetricValue::SpilledBytes(_) | MetricValue::OutputBytes(_) => K::Bytes,

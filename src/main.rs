@@ -10,7 +10,7 @@ use dioxus::prelude::*;
 
 mod action;
 mod app;
-mod config;
+pub use strata_core::config;
 mod diagnostics;
 mod engine;
 mod events;
@@ -19,19 +19,21 @@ mod keymap;
 mod layout;
 mod menu;
 mod overlays;
-mod plan;
-mod profile;
+pub use strata_core::engine::plan;
+pub use strata_core::engine::profile;
 mod project;
 // `model` is now the extracted `strata-model` crate; alias it as `crate::model` so the
 // 52 existing `crate::model::*` references keep resolving unchanged (Phase 0 of the port).
-pub(crate) use strata_model as model;
+pub use strata_model as model;
 mod runs;
 mod session;
 mod settings;
-mod sql;
-mod theme;
+// `sql` is now the `strata-core` language service; alias it as `crate::sql` so the app's
+// `crate::sql::*` references (incl. `FunctionCatalog`) resolve unchanged.
+pub use strata_core::engine::sql;
+pub(crate) use strata_core::theme;
 mod ui;
-mod util;
+pub use strata_core::util;
 mod window;
 mod hooks;
 mod store;

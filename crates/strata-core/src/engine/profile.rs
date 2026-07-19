@@ -36,34 +36,12 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::prelude::{ident, lit, Expr};
 
-use crate::model::Kind;
-use crate::model::{ColumnInfo, Stat, StatKey};
+use strata_model::Kind;
+use strata_model::{ColumnInfo, Stat, StatKey};
 
-/// A completed profile of one catalog entry — a table or a view.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CatalogProfile {
-    /// When the scan finished — the inspector shows this as an age.
-    pub at: SystemTime,
-    /// Rows scanned.
-    pub rows: u64,
-    /// The query that produced these numbers — see [`profile_sql`]. Its SELECT list is
-    /// unparsed from the very `Expr`s that ran, so it can't drift from the facts above
-    /// it; only the `FROM` is written by us, on purpose. Empty when the unparser
-    /// couldn't render an expression, which the UI reads as "no button".
-    pub sql: String,
-    /// Facts per column name — the same [`Stat`] list the free tier produces, so the
-    /// inspector renders both through one path. A column the scan couldn't say anything
-    /// about is simply absent, never present-but-empty.
-    ///
-    /// A nested column isn't a different *kind* of result, just a shorter one: it gets
-    /// `Nulls` and nothing else, because you can't distinct or order a struct. The
-    /// canvas models it as a separate "presence" breakdown drawn as its own bar, but
-    /// filled/null is precisely `Nulls` as a percentage — the same number the fact row
-    /// and the completeness bar already show. (Its bar only earns a place with the
-    /// third "empty" segment, which needs a per-kind emptiness test — `array_length(c)
-    /// = 0` and friends — that isn't implemented here.)
-    pub cols: BTreeMap<String, Vec<Stat>>,
-}
+// The profile *result* type is shared vocabulary — it lives in `strata-model`. This module
+// is the scan *logic* (DataFusion aggregate exprs + result decode) that fills it.
+pub use strata_model::CatalogProfile;
 
 /// What one output column of the aggregate means.
 ///

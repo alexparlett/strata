@@ -1,0 +1,22 @@
+[package]
+name = "strata-core"
+version = "0.2.0"
+edition = "2021"
+description = "Strata's framework-agnostic logic core: the SQL language service (and, being filled in during the port, the engine worker + protocol, serialization, profiling, and persistence). Shared by every frontend."
+license = "MIT"
+
+[dependencies]
+strata-model = { path = "../strata-model" }
+# The query engine family. `sql` uses datafusion's re-exported `sqlparser`; `engine`/
+# `profile`/`serialize` use datafusion + arrow proper.
+datafusion = "54"
+# `engine` worker: dedicated thread + tokio runtime + mpsc command/event channels.
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+# `config`/`theme`/`plan` persist + (de)serialize.
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+# `config`: app config (recent projects + prefs) in the OS user-config dir.
+preferences = "2"
+tracing = "0.1.44"
+arboard = "3.6.1"

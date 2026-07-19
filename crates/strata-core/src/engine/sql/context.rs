@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use crate::sql::lex::{Tok, TokKind};
+use crate::engine::sql::lex::{Tok, TokKind};
 
 /// What the caret position expects — the completion provider keys off this.
 #[derive(Clone, Debug, PartialEq)]

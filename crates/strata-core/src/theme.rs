@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use dioxus::html::completions::CompleteWithBraces::base;
 
 /// Light/dark grouping — used for the "Sync with OS" split and per-mode fallback.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -172,8 +171,8 @@ fn is_font_token(key: &str) -> bool {
     matches!(key, "ui" | "mono")
 }
 
-const MIDNIGHT_JSON: &str = include_str!("../themes/midnight.json");
-const DAYLIGHT_JSON: &str = include_str!("../themes/daylight.json");
+const MIDNIGHT_JSON: &str = include_str!("../../../themes/midnight.json");
+const DAYLIGHT_JSON: &str = include_str!("../../../themes/daylight.json");
 
 static REGISTRY: OnceLock<Vec<ResolvedTheme>> = OnceLock::new();
 
@@ -214,6 +213,24 @@ pub fn default_for(dark: bool) -> &'static str {
         "midnight"
     } else {
         "daylight"
+    }
+}
+
+/// The live display-theme **selection**: the chosen theme id + whether to follow the
+/// OS. The *effective* theme (honouring Sync-with-OS and the OS appearance) is derived
+/// by [`ThemeSel::effective`]. This is the input to theme resolution, framework-agnostic
+/// — a frontend projects it from its settings (see `From<&Settings>` in `config`) and
+/// holds it however it likes (the Dioxus app in a leaked signal).
+#[derive(Clone, PartialEq, Debug)]
+pub struct ThemeSel {
+    pub id: String,
+    pub sync_os: bool,
+}
+
+impl ThemeSel {
+    /// The theme id that should actually apply right now, honouring Sync-with-OS.
+    pub fn effective(&self, os_dark: bool) -> String {
+        effective_id(&self.id, self.sync_os, os_dark)
     }
 }
 

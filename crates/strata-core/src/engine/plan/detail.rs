@@ -105,7 +105,7 @@ pub fn guide_rails(nodes: &[PlanNode], i: usize) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::{PlanKind, PlanNode};
+    use crate::engine::plan::{PlanKind, PlanNode};
 
     #[test]
     fn parses_detail_into_kv_parts() {

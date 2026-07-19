@@ -8,9 +8,9 @@ use std::ops::Range;
 // datafusion re-export) — the authoritative list, not a hand-picked subset.
 use datafusion::sql::sqlparser::keywords::ALL_KEYWORDS;
 
-use crate::sql::context::{analyze_caret, Context};
-use crate::sql::lex::lex;
-use crate::sql::symbols::{Catalog, TableSym};
+use crate::engine::sql::context::{analyze_caret, Context};
+use crate::engine::sql::lex::lex;
+use crate::engine::sql::symbols::{Catalog, TableSym};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CompletionKind {

@@ -30,24 +30,26 @@ Freya author's own IDE. We follow its module/data-scoping conventions.
 
 ---
 
-## 2. Workspace crate layout (module boundaries → crate boundaries)
+## 2. Workspace crate layout (module ≠ crate)
 
-This session's module-boundary work (model = leaf, engine = the only DataFusion boundary,
-sql service, serialize) defined the seams. The port promotes them to **crate** boundaries
-— the strongest boundary Rust has, enforced by the compiler.
+Crates are units of **reuse / compilation / enforcement**, not a mirror of the module tree.
+The only hard requirement is that the **Freya binary reuse the framework-agnostic core
+without pulling Dioxus** — that needs library crate(s), *not* one-crate-per-module. Splitting
+granularly would force every shared type into inter-crate ceremony for marginal benefit on a
+two-frontend project. So: **two core crates**, with the module boundaries we built preserved
+*inside* them.
 
 ```
 strata/                        (workspace root)
 ├── crates/
-│   ├── strata-model           leaf: data vocabulary (schema/results/catalog/log/…)
-│   │                          deps: serde, arrow types. No UI, no engine.
-│   ├── strata-sql             language service (lex/context/symbols/validate/complete)
-│   │                          deps: strata-model, datafusion (fn catalog)
-│   ├── strata-engine          DataFusion worker + Command/Event protocol + serialize
-│   │                          deps: strata-model, datafusion, tokio. The *worker*; the
-│   │                          handle is app-side.
-│   ├── strata-persist         config + `.strata/` project files
-│   │                          deps: strata-model, serde, preferences
+│   ├── strata-model           the DATA vocabulary leaf. Pure types: schema/results/
+│   │                          catalog defs (CatalogTable/View/RegStatus) / CatalogProfile /
+│   │                          Diagnostic / forms / logs / errors / project data model.
+│   │                          deps: serde only. No datafusion, no UI. Everyone depends down.
+│   ├── strata-core            the framework-agnostic LOGIC, as modules: `sql` (language
+│   │                          service), `engine` (worker + Command/Event protocol + the
+│   │                          connection handle struct), `serialize`, `profile` (scan
+│   │                          logic), `persist`. deps: strata-model, datafusion, tokio.
 │   ├── strata-forms           headless form layer (already renderer-agnostic — keep)
 │   └── strata-forms-macro
 ├── strata-freya/  (bin)       the Freya app — target
@@ -55,12 +57,27 @@ strata/                        (workspace root)
                                shared core crates until cutover, then deleted
 ```
 
-**Coupling check (measured):** `engine/` (except `mod.rs`), `model/`, `sql/`, `serialize`,
-`config`, `profile`, `util` are already pure (no `dioxus` import) — ~3,900 lines that move
-to core nearly as-is. Only `engine/mod.rs` (the store handle) is coupled and becomes
-app-side. Everything in `ui/` (~11K lines) + the stores + `main.css` (~5K lines) is rewrite.
+**Data vs logic:** `strata-model` holds the shared *data types* (serde-derivable, no heavy
+deps); `strata-core` holds the *logic* over them (datafusion/tokio). Both binaries depend on
+model + core. The one real untangling: **lift the data types out of the Dioxus store modules**
+— `CatalogTable`/`CatalogView`/`Diagnostic`/`Project` currently sit interleaved with their
+`GlobalStore`/mutators in `project.rs`/`diagnostics.rs`; the *type* moves to `strata-model`,
+the *store* stays app-side (re-export shims keep `crate::project::CatalogTable` etc. resolving
+so call sites don't churn).
 
-**Granularity:** stop at clear domains (four core libs). Not one-crate-per-file.
+**Coupling check (measured):** `engine/` (except `mod.rs`), `sql/`, `serialize`, `config`,
+`profile`, `util` are already pure (no `dioxus` import). `engine/mod.rs` *looks* coupled but
+only its `#[derive(Store)]`/`GlobalStore` wrapper is — the `Engine` **handle struct itself**
+(`cmd_tx`/`evt_rx`/`next_req` + `spawn`/`send`/`take_evt_rx`) is plain tokio channels + an
+atomic, so it **moves to `strata-core` too**. The app keeps only a ~30-line *reactive-storage
+shim*: the `GlobalStore`/`GlobalSignal` that holds the core handle, the `command!` macro, and
+the accessors delegating to it (the Freya app holds the same handle via context/Radio). The
+`functions` reactive field becomes frontend state fed by `Event::Functions`, leaving the core
+handle pure I/O. `ui/` (~11K lines) + the stores + `main.css` (~5K) is the rewrite.
+
+**Why two, not one:** `strata-model` is a genuinely zero-heavy-dep leaf (no datafusion), so a
+consumer wanting only the vocabulary (tests, a CLI) gets it without pulling datafusion.
+`strata-core` is where datafusion/tokio live. That's the one boundary worth a crate line.
 
 ---
 

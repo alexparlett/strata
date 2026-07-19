@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use datafusion::arrow::record_batch::RecordBatch;
 
-use crate::model::{Cell, ColumnInfo, QueryOutput};
-use crate::plan::QueryPlan;
+use crate::engine::plan::QueryPlan;
+use strata_model::{Cell, ColumnInfo, QueryOutput};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
 /// (`None` when the source doesn't report one).

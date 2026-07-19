@@ -2,7 +2,7 @@
 //! their columns) projected from `state.project`, plus the registered functions
 //! (from the engine, F5). Cheap to build on the UI thread each analysis pass.
 
-use crate::sql::FunctionCatalog;
+use crate::engine::sql::FunctionCatalog;
 
 #[derive(Clone, Default, PartialEq)]
 pub struct ColumnSym {
@@ -19,7 +19,7 @@ pub struct TableSym {
 }
 
 impl TableSym {
-    fn from_cols(name: &str, is_view: bool, cols: &[crate::model::ColumnInfo]) -> Self {
+    fn from_cols(name: &str, is_view: bool, cols: &[strata_model::ColumnInfo]) -> Self {
         TableSym {
             name: name.to_string(),
             is_view,
@@ -51,8 +51,8 @@ pub struct Catalog {
 impl Catalog {
     /// Build from the project catalog + the engine's function names.
     pub fn build(
-        tables: &[crate::project::CatalogTable],
-        views: &[crate::project::CatalogView],
+        tables: &[strata_model::CatalogTable],
+        views: &[strata_model::CatalogView],
         functions: FunctionCatalog,
     ) -> Self {
         let mut out = Vec::with_capacity(tables.len() + views.len());
