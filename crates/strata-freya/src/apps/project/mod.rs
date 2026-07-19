@@ -4,5 +4,6 @@
 //! submodules, re-exported.
 
 mod project;
+mod contexts;
 
 pub use project::ProjectApp;

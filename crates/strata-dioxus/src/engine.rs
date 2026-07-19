@@ -63,10 +63,11 @@ impl Engine {
         ENGINE.write().set_functions(functions);
     }
 
-    /// Take this window's event stream for the single drain task (panics if taken
-    /// twice — see the core handle).
+    /// Take this window's event stream for the single drain task. `.peek()` (not `.read()`)
+    /// so no signal borrow is held across the drain — a borrow held across `.await` would
+    /// panic `AlreadyBorrowedMut` when `set_functions` writes. Panics if taken twice.
     pub fn take_evt_rx() -> UnboundedReceiver<Event> {
-        ENGINE.write().take_evt_rx()
+        ENGINE.peek().take_evt_rx()
     }
 }
 

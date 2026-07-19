@@ -8,8 +8,8 @@
 use freya::prelude::*;
 use strata_core::engine::{Command, Event};
 use strata_model::QueryOutput;
-
-use crate::engine;
+use crate::apps::project::contexts::engine_ctx;
+use crate::apps::project::contexts::engine_ctx::EngineCtx;
 
 pub struct ProjectApp;
 
@@ -18,11 +18,13 @@ impl App for ProjectApp {
         let mut result = use_state(|| Option::<QueryOutput>::None);
         let mut error = use_state(|| Option::<String>::None);
 
+        use_provide_context(|| EngineCtx::new());
+
         // Spawn the engine once and drain its event stream into local state. (1b's next
         // slice promotes this to the per-window Radio station.) `spawn` is Freya's, not
         // Tokio's — it runs on the UI executor, so writing state after `.await` is safe.
-        let engine = use_hook(move || {
-            let (ctx, mut evt_rx) = engine::spawn();
+        use_hook(move || {
+            let mut evt_rx = consume_context::<EngineCtx>().take_evt_rx();
             spawn(async move {
                 while let Some(ev) = evt_rx.recv().await {
                     match ev {
@@ -40,10 +42,10 @@ impl App for ProjectApp {
                     }
                 }
             });
-            ctx
         });
 
         let on_run = move |_| {
+            let engine = consume_context::<EngineCtx>();
             let req = engine.next_req();
             engine.send(Command::Query {
                 req_id: req,

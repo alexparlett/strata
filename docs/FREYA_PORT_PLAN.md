@@ -65,7 +65,7 @@ types out of the Dioxus store modules**
 `GlobalStore`/mutators in `project.rs`/`diagnostics.rs`; the *type* moves to `strata-model`, the *store* stays app-side
 (re-export shims keep `crate::project::CatalogTable` etc. resolving so call sites don't churn).
 
-**Coupling check (measured):** `engine/` (except `mod.rs`), `sql/`, `serialize`, `config`,
+**Coupling check (measured):** `engine/` (except `engine_provider`), `sql/`, `serialize`, `config`,
 `profile`, `util` are already pure (no `dioxus` import). `engine/mod.rs` *looks* coupled but only its
 `#[derive(Store)]`/`GlobalStore` wrapper is — the `Engine` **handle struct itself**
 (`cmd_tx`/`evt_rx`/`next_req` + `spawn`/`send`/`take_evt_rx`) is plain tokio channels + an atomic, so it **moves to
@@ -116,7 +116,7 @@ strata-freya/src/
   state (`create_global` singletons), shared DS widgets, and the engine capability defs sit at the top level. (Call it
   `windows/` if you prefer the literal term.)
 
-**Conventions (valin):** `*_ui.rs` (render), `*_state.rs` (feature-local state), `mod.rs`
+**Conventions (valin):** `*_ui.rs` (render), `*_state.rs` (feature-local state), `engine_provider`
 (wiring, private submodules + re-export). Feature-local state co-located; app-wide model in the app's `state/`; truly
 global in the top-level `state/`.
 

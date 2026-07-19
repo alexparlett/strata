@@ -33,9 +33,8 @@ pub use query::purge_snapshot_root;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-
+use std::sync::Mutex;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-
 use sql::FunctionCatalog;
 
 /// Process-unique id per spawned engine (one per project window), used to scope
@@ -53,7 +52,7 @@ pub struct Engine {
     cmd_tx: UnboundedSender<Command>,
     /// This window's event stream — `Some` until the single drain task takes it
     /// ([`take_evt_rx`](Engine::take_evt_rx)). A receiver is single-consumer.
-    evt_rx: Option<UnboundedReceiver<Event>>,
+    evt_rx: Mutex<Option<UnboundedReceiver<Event>>>,
     /// Monotonic request-id source.
     next_req: AtomicU64,
     /// The engine's registered SQL functions — read (reactively, by the frontend) by
@@ -83,7 +82,7 @@ impl Engine {
             .expect("spawn engine");
         Engine {
             cmd_tx,
-            evt_rx: Some(evt_rx),
+            evt_rx: Mutex::new(Some(evt_rx)),
             next_req: AtomicU64::new(1),
             functions: FunctionCatalog::default(),
         }
@@ -94,11 +93,16 @@ impl Engine {
         let _ = self.cmd_tx.send(cmd);
     }
 
-    /// A cloned command sender — the sending half of the handle, for a frontend that
-    /// holds it in framework context (e.g. Freya) rather than the whole handle. The clone
-    /// keeps the command channel open alongside the worker.
-    pub fn sender(&self) -> UnboundedSender<Command> {
-        self.cmd_tx.clone()
+    /// Take this window's event stream for the single drain task. Interior-mutable
+    /// (`&self`) so it works whether the handle is held behind an `Arc` (Freya) or a
+    /// signal (Dioxus); the drain then OWNS the receiver and awaits it directly, holding
+    /// no lock or store borrow across `.await`. Panics if taken twice (single-consumer).
+    pub fn take_evt_rx(&self) -> UnboundedReceiver<Event> {
+        self.evt_rx
+            .lock()
+            .unwrap()
+            .take()
+            .expect("engine event stream already taken")
     }
 
     /// Allocate the next request id (monotonic).
@@ -114,11 +118,5 @@ impl Engine {
     /// Replace the registered SQL functions (from [`Event::Functions`]).
     pub fn set_functions(&mut self, functions: FunctionCatalog) {
         self.functions = functions;
-    }
-
-    /// Take this engine's event stream for the single drain task. A receiver is
-    /// single-consumer; panics if taken twice.
-    pub fn take_evt_rx(&mut self) -> UnboundedReceiver<Event> {
-        self.evt_rx.take().expect("engine event stream already taken")
     }
 }
