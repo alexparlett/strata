@@ -1,0 +1,104 @@
+{
+  "id": "midnight",
+  "name": "Midnight",
+  "author": "Strata",
+  "mode": "dark",
+  "sheet": {
+    "primary": "#4cc6ff",
+    "secondary": "#a9e2ff",
+    "tertiary": "#2ea6e0",
+    "success": "#9fe6b4",
+    "warning": "#ffa657",
+    "error": "#ff8a8a",
+    "info": "#4cc6ff",
+    "background": "#15181e",
+    "surface_primary": "#333b47",
+    "surface_secondary": "#38414f",
+    "surface_tertiary": "#2a313c",
+    "surface_inverse": "#6f7988",
+    "surface_inverse_secondary": "#8792a2",
+    "surface_inverse_tertiary": "#a1abbb",
+    "border": "#363e4a",
+    "border_focus": "#4cc6ff",
+    "border_disabled": "#23272f",
+    "text_primary": "#edf0f5",
+    "text_secondary": "#cfd6e0",
+    "text_placeholder": "#6f7988",
+    "text_inverse": "#08111a",
+    "text_highlight": "#4cc6ff",
+    "focus": "rgba(76,198,255,.14)",
+    "active": "#414a57",
+    "disabled": "#4d5765",
+    "overlay": "rgba(0,0,0,.5)",
+    "shadow": "rgba(0,0,0,.45)"
+  },
+  "tokens": {
+    "syntax": {
+      "syn_keyword": "#ff7b9c",
+      "syn_function": "#d2a8ff",
+      "syn_string": "#a5d6ff",
+      "syn_number": "#79c0ff",
+      "syn_comment": "#6f7988",
+      "syn_identifier": "#edf0f5",
+      "syn_punct": "#909aa9"
+    },
+    "data_type": {
+      "t_str": "#7ee787",
+      "t_num": "#79c0ff",
+      "t_bool": "#d2a8ff",
+      "t_ts": "#ffa657",
+      "t_struct": "#f0a5c0",
+      "t_list": "#8ad4ff",
+      "t_map": "#ffcf6b"
+    },
+    "grid": {
+      "cell": "#cfd6e0",
+      "cell_num": "#9fc6ff",
+      "cell_ts": "#e2b98c",
+      "grid_line": "#23272f",
+      "row_hover": "#2a323e",
+      "zebra": "rgba(255,255,255,.025)"
+    },
+    "accents": {
+      "accent_soft": "rgba(76,198,255,.14)"
+    },
+    "scrollbar": {
+      "track": "#191d24",
+      "thumb": "#3b434f",
+      "thumb_hover": "#4c5663",
+      "thumb_active": "#5a6572"
+    },
+    "switch": {
+      "track": "#333d4b",
+      "thumb": "#edf0f5",
+      "track_on": "#2ea6e0",
+      "thumb_on": "#4cc6ff"
+    },
+    "checkbox": {
+      "fill_off": "#2a313c",
+      "border": "#414a57",
+      "fill_on": "#4cc6ff",
+      "tick": "#08111a"
+    },
+    "menu": {
+      "bg": "#262c35",
+      "border": "#363e4a",
+      "shadow": "rgba(0,0,0,.45)",
+      "item_hover": "#323c48",
+      "item_selected": "#333d4b"
+    },
+    "tooltip": {
+      "bg": "#2a313c",
+      "text": "#edf0f5",
+      "border": "#414a57"
+    },
+    "table": {
+      "row_hover": "#2a323e",
+      "divider": "#23272f"
+    }
+  },
+  "fonts": {
+    "ui": "IBM Plex Sans",
+    "mono": "JetBrains Mono"
+  }
+}

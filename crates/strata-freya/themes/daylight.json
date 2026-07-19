@@ -1,0 +1,104 @@
+{
+  "id": "daylight",
+  "name": "Daylight",
+  "author": "Strata",
+  "mode": "light",
+  "sheet": {
+    "primary": "#2b7fd0",
+    "secondary": "#7fbce8",
+    "tertiary": "#1f6bb0",
+    "success": "#1a7f4b",
+    "warning": "#bc4c00",
+    "error": "#c0332e",
+    "info": "#2b7fd0",
+    "background": "#eceef1",
+    "surface_primary": "#d3d7de",
+    "surface_secondary": "#e4e8ee",
+    "surface_tertiary": "#ffffff",
+    "surface_inverse": "#aeb4bf",
+    "surface_inverse_secondary": "#949ba7",
+    "surface_inverse_tertiary": "#7c828e",
+    "border": "#d0d4db",
+    "border_focus": "#2b7fd0",
+    "border_disabled": "#edeef1",
+    "text_primary": "#1a1c22",
+    "text_secondary": "#33373f",
+    "text_placeholder": "#7c828e",
+    "text_inverse": "#ffffff",
+    "text_highlight": "#2b7fd0",
+    "focus": "rgba(43,127,208,.12)",
+    "active": "#dfe4ea",
+    "disabled": "#a3a9b3",
+    "overlay": "rgba(15,23,42,.4)",
+    "shadow": "rgba(15,23,42,.18)"
+  },
+  "tokens": {
+    "syntax": {
+      "syn_keyword": "#cf222e",
+      "syn_function": "#8250df",
+      "syn_string": "#0a3069",
+      "syn_number": "#0550ae",
+      "syn_comment": "#7c828e",
+      "syn_identifier": "#1a1c22",
+      "syn_punct": "#5f6771"
+    },
+    "data_type": {
+      "t_str": "#0a7d33",
+      "t_num": "#0550ae",
+      "t_bool": "#8250df",
+      "t_ts": "#bc4c00",
+      "t_struct": "#bf3989",
+      "t_list": "#0969da",
+      "t_map": "#9a6700"
+    },
+    "grid": {
+      "cell": "#33373f",
+      "cell_num": "#0550ae",
+      "cell_ts": "#9a6700",
+      "grid_line": "#e3e5e9",
+      "row_hover": "#eaf0f8",
+      "zebra": "rgba(15,23,42,.035)"
+    },
+    "accents": {
+      "accent_soft": "rgba(43,127,208,.12)"
+    },
+    "scrollbar": {
+      "track": "#eceef2",
+      "thumb": "#c5cad3",
+      "thumb_hover": "#adb2bc",
+      "thumb_active": "#9aa1ac"
+    },
+    "switch": {
+      "track": "#c4c8d0",
+      "thumb": "#ffffff",
+      "track_on": "#2b7fd0",
+      "thumb_on": "#ffffff"
+    },
+    "checkbox": {
+      "fill_off": "#ffffff",
+      "border": "#c4c8d0",
+      "fill_on": "#2b7fd0",
+      "tick": "#ffffff"
+    },
+    "menu": {
+      "bg": "#ffffff",
+      "border": "#d5d8de",
+      "shadow": "rgba(15,23,42,.18)",
+      "item_hover": "#eef0f4",
+      "item_selected": "#e7edf6"
+    },
+    "tooltip": {
+      "bg": "#ffffff",
+      "text": "#1a1c22",
+      "border": "#d5d8de"
+    },
+    "table": {
+      "row_hover": "#eaf0f8",
+      "divider": "#e3e5e9"
+    }
+  },
+  "fonts": {
+    "ui": "IBM Plex Sans",
+    "mono": "JetBrains Mono"
+  }
+}

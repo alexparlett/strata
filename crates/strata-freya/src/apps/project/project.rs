@@ -15,6 +15,8 @@ pub struct ProjectApp;
 
 impl App for ProjectApp {
     fn render(&self) -> impl IntoElement {
+        use_init_theme(|| crate::theme::strata_theme("midnight"));
+
         let mut result = use_state(|| Option::<QueryOutput>::None);
         let mut error = use_state(|| Option::<String>::None);
 
@@ -60,6 +62,7 @@ impl App for ProjectApp {
 
         rect()
             .expanded()
+            .theme_background()
             .vertical()
             .child(Button::new().on_press(on_run).child("Run SELECT 1"))
             .maybe(err.is_some(), |el| {

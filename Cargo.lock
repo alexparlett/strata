@@ -7885,6 +7885,8 @@ name = "strata-freya"
 version = "0.2.0"
 dependencies = [
  "freya",
+ "serde",
+ "serde_json",
  "strata-core",
  "strata-model",
  "tokio",

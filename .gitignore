@@ -5,3 +5,4 @@
 sample/sample.strata
 # Stray test-project scaffold (rescaffolds from the reopen-on-startup set).
 themes/themes.strata/
+design-handoff/
