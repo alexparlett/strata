@@ -1,227 +1,162 @@
 # Strata (Freya) — theme spec
 
-A **native theme format for the Freya frontend**, authored directly against what the app
-renders — no lossy mapping from the old CSS-variable tokens. Two blocks:
+A **native theme format for the Freya frontend**, authored directly against Freya's theming model — no lossy mapping.
+Three blocks:
 
-- **`sheet`** → copied 1:1 into Freya's `ColorsSheet`. This is the **complete 27-field
-  `ColorsSheet`** (verified against the struct — Part A covers every field, no more, no less).
-  Every built-in Freya component (Button, Input, Select, Switch, Tooltip, Menu, tabs, …)
-  resolves its colours from here, so filling every slot is what stops a widget rendering in
-  Freya's default blue.
-- **`tokens`** → Strata's own colours for our **hand-rolled** components (SQL editor syntax,
-  results-grid cells, data-type badges). These carry over from today's theme essentially
-  unchanged.
-- plus **`fonts`**.
+- **`sheet`** → copied 1:1 into Freya's `ColorsSheet` (the 27-slot palette). Every component's
+  `Reference("<slot>")` resolves against this at render, so it does most of the work.
+- **`components`** → per-component overrides, keyed by **Freya's component key**
+  (`"button"`, `"menu_container"`, `"switch"`, …). Each field is a **Preference**: a *Specific*
+  value or a *Reference* to a sheet slot. Overrides are **partial** — unspecified fields keep Freya's default. Our own
+  components (grid, editor, …) join this map once built with
+  `define_theme!`.
+- **`fonts`**.
 
-Values below are the **current Midnight/Daylight palette** as a starting point. Cells marked
-_proposed_ have no direct source in today's theme (Freya needs the slot but Strata never had
-one) — a sensible derived value is given; please confirm/tune. Verification: we render
-Freya's component `gallery()` under the theme and adjust until every widget looks right.
+Colours are `#rrggbb`, `#rrggbbaa`, or `rgba(r,g,b,a)`. Field names are `snake_case`.
 
-Colours are `#rrggbb`, or `#rrggbbaa` / `rgba(r,g,b,a)` where alpha is needed. Field names are
-`snake_case`.
+Midnight/Daylight ship built-in; custom themes load the same shape (roadmap: a plugin theme dir, like any IDE). Every
+theme file is validated by **`themes/theme.schema.json`** — reference it via `"$schema": "./theme.schema.json"` for
+editor autocomplete + validation.
 
 ---
 
-## A — `sheet` (→ Freya `ColorsSheet`)
+## A — `sheet` (→ Freya `ColorsSheet`, all 27 fields)
 
-> **This sheet does ~all the work.** Verified against Freya's component themes: nearly every
-> built-in sets its colours as `Preference::Reference("<sheet field>")`, so filling these 27
-> slots themes almost every widget automatically — no per-component colour overrides. That
-> also means the fields below marked _proposed_ are **not optional**: `secondary`/`tertiary`
-> drive filled-control states, `surface_inverse*` drive scrollbar thumbs + switch/radio,
-> `disabled` drives disabled segments, `shadow` drives menu/card shadows. Set them all
-> deliberately. (Component *sizing/radius/type* is separate — Freya's defaults, which we
-> override per-component to match Strata's spacing scale; not the designer's colour job.)
+Verified complete against the `ColorsSheet` struct. Fill every slot — components reference these, so a gap shows as a
+leftover Freya default.
 
 ### Brand
-`secondary`/`tertiary` are **accent tints, not separate hues** — Freya uses them for the
-*states* of filled controls (`tertiary` = hover of filled buttons/inputs/cards/chips;
-`secondary` = filled-control focus borders + switch track + slider thumb). Set them as a
-lighter and darker `primary`, not a different colour.
 
-| field | controls / used by | Midnight | Daylight |
-|---|---|---|---|
-| `primary` | main brand accent — filled buttons, toggled switch thumb, radio/checkbox selected, progress, links | `#4cc6ff` | `#2b7fd0` |
-| `secondary` | lighter accent tint — filled-control focus borders, switch track, slider thumb, checkbox tick — _tune_ | `#a9e2ff` | `#7fbce8` |
-| `tertiary` | darker accent tint — hover of filled buttons/inputs/cards/chips — _tune_ | `#2ea6e0` | `#1f6bb0` |
+`secondary`/`tertiary` are **accent tints**, not separate hues — Freya uses them for filled-control states (`tertiary` =
+filled hover; `secondary` = filled focus / switch track / slider thumb). Set them as a lighter and darker `primary`.
+
+| field       | controls                                                       | Midnight  | Daylight  |
+|-------------|----------------------------------------------------------------|-----------|-----------|
+| `primary`   | filled buttons, toggled thumb, selected marks, progress, links | `#4cc6ff` | `#2b7fd0` |
+| `secondary` | lighter accent tint (filled focus, switch track, slider)       | `#a9e2ff` | `#7fbce8` |
+| `tertiary`  | darker accent tint (filled hover)                              | `#2ea6e0` | `#1f6bb0` |
 
 ### Status
-| field | controls / used by | Midnight | Daylight |
-|---|---|---|---|
-| `success` | success text / badges / valid state | `#9fe6b4` | `#1a7f4b` |
-| `warning` | warning text / badges | `#ffa657` | `#bc4c00` |
-| `error` | error text / invalid input / destructive | `#ff8a8a` | `#c0332e` |
-| `info` | informational accent — _proposed_ | `#4cc6ff` | `#2b7fd0` |
+
+| field     | controls             | Midnight  | Daylight  |
+|-----------|----------------------|-----------|-----------|
+| `success` | success / valid      | `#9fe6b4` | `#1a7f4b` |
+| `warning` | warning              | `#ffa657` | `#bc4c00` |
+| `error`   | error / destructive  | `#ff8a8a` | `#c0332e` |
+| `info`    | informational accent | `#4cc6ff` | `#2b7fd0` |
 
 ### Surfaces (elevation ramp)
-| field | controls / used by | Midnight | Daylight |
-|---|---|---|---|
-| `background` | app base / window body | `#15181e` | `#eceef1` |
-| `surface_primary` | panels, sidebars, cards | `#191d24` | `#f6f7f9` |
-| `surface_secondary` | raised surface (inputs, rows) | `#1e232b` | `#ffffff` |
-| `surface_tertiary` | popovers, menus, dropdowns | `#2a313c` | `#eef0f4` |
-| `surface_inverse` | inverted surface (e.g. a light chip/tooltip on dark UI) — _proposed_ | `#edf0f5` | `#1a1c22` |
-| `surface_inverse_secondary` | _proposed_ | `#cfd6e0` | `#33373f` |
-| `surface_inverse_tertiary` | _proposed_ | `#b6bfcb` | `#474c56` |
+
+| field                       | controls                      | Midnight  | Daylight  |
+|-----------------------------|-------------------------------|-----------|-----------|
+| `background`                | app base / window body        | `#15181e` | `#eceef1` |
+| `surface_primary`           | panels, sidebars              | `#333b47` | `#d3d7de` |
+| `surface_secondary`         | universal hover / raised rows | `#38414f` | `#e4e8ee` |
+| `surface_tertiary`          | default control background    | `#2a313c` | `#ffffff` |
+| `surface_inverse`           | thumbs, unchecked marks       | `#6f7988` | `#aeb4bf` |
+| `surface_inverse_secondary` | thumb hover                   | `#8792a2` | `#949ba7` |
+| `surface_inverse_tertiary`  | thumb active / unchecked fill | `#a1abbb` | `#7c828e` |
 
 ### Borders
-| field | controls / used by | Midnight | Daylight |
-|---|---|---|---|
-| `border` | default dividers / outlines | `#23272f` | `#edeef1` |
-| `border_focus` | focused input / focus ring | `#4cc6ff` | `#2b7fd0` |
-| `border_disabled` | disabled control outline | `#2c333d` | `#e3e5e9` |
+
+| field             | controls            | Midnight  | Daylight  |
+|-------------------|---------------------|-----------|-----------|
+| `border`          | dividers / outlines | `#363e4a` | `#d0d4db` |
+| `border_focus`    | focus ring          | `#4cc6ff` | `#2b7fd0` |
+| `border_disabled` | disabled outline    | `#23272f` | `#edeef1` |
 
 ### Text
-| field | controls / used by | Midnight | Daylight |
-|---|---|---|---|
-| `text_primary` | primary body text | `#edf0f5` | `#1a1c22` |
-| `text_secondary` | secondary / labels | `#cfd6e0` | `#33373f` |
-| `text_placeholder` | placeholders / hints | `#6f7988` | `#7c828e` |
-| `text_inverse` | text on an accent/inverse fill | `#08111a` | `#ffffff` |
-| `text_highlight` | links / highlighted text — _proposed_ | `#4cc6ff` | `#2b7fd0` |
+| field              | controls                  | Midnight  | Daylight  |
+|--------------------|---------------------------|-----------|-----------|
+| `text_primary`     | body text                 | `#edf0f5` | `#1a1c22` |
+| `text_secondary`   | labels / placeholders-ish | `#cfd6e0` | `#33373f` |
+| `text_placeholder` | placeholders              | `#6f7988` | `#7c828e` |
+| `text_inverse`     | text on an accent fill    | `#08111a` | `#ffffff` |
+| `text_highlight`   | links / highlight         | `#4cc6ff` | `#2b7fd0` |
 
-### States / Interaction
-(`ColorsSheet` has **no `hover` slot** — components derive hover from a surface + opacity, or
-their per-component theme. Our grid's row-hover is a `tokens.grid` value, below.)
+### States / Utility
 
-| field | controls / used by | Midnight | Daylight |
-|---|---|---|---|
-| `focus` | focus background fill — _proposed_ (soft accent) | `rgba(76,198,255,.14)` | `rgba(43,127,208,.12)` |
-| `active` | pressed / active background — _proposed_ | `#2a313c` | `#eef0f4` |
-| `disabled` | disabled fill / text | `#4d5765` | `#a3a9b3` |
+(`ColorsSheet` has no `hover` slot — hover comes from `surface_secondary`.)
 
-### Utility
-| field | controls / used by | Midnight | Daylight |
-|---|---|---|---|
-| `overlay` | modal scrim / backdrop — _proposed_ | `rgba(0,0,0,.5)` | `rgba(15,23,42,.4)` |
-| `shadow` | drop-shadow colour — _proposed_ | `rgba(0,0,0,.45)` | `rgba(15,23,42,.18)` |
+| field      | controls              | Midnight               | Daylight               |
+|------------|-----------------------|------------------------|------------------------|
+| `focus`    | focus background fill | `rgba(76,198,255,.14)` | `rgba(43,127,208,.12)` |
+| `active`   | pressed background    | `#414a57`              | `#dfe4ea`              |
+| `disabled` | disabled fill/text    | `#4d5765`              | `#a3a9b3`              |
+| `overlay`  | modal scrim           | `rgba(0,0,0,.5)`       | `rgba(15,23,42,.4)`    |
+| `shadow`   | drop shadow           | `rgba(0,0,0,.45)`      | `rgba(15,23,42,.18)`   |
 
 ---
 
-## B — `tokens` (Strata's hand-rolled components)
+## B — `components` (per-component overrides)
 
-### `syntax` — SQL editor
-| field | Midnight | Daylight |
-|---|---|---|
-| `syn_keyword` | `#ff7b9c` | `#cf222e` |
-| `syn_function` | `#d2a8ff` | `#8250df` |
-| `syn_string` | `#a5d6ff` | `#0a3069` |
-| `syn_number` | `#79c0ff` | `#0550ae` |
-| `syn_comment` | `#6f7988` | `#7c828e` |
-| `syn_identifier` | `#edf0f5` | `#1a1c22` |
-| `syn_punct` | `#909aa9` | `#5f6771` |
+### Preference grammar (per field value)
 
-### `data_type` — schema / type badges
-| field | Midnight | Daylight |
-|---|---|---|
-| `t_str` | `#7ee787` | `#0a7d33` |
-| `t_num` | `#79c0ff` | `#0550ae` |
-| `t_bool` | `#d2a8ff` | `#8250df` |
-| `t_ts` | `#ffa657` | `#bc4c00` |
-| `t_struct` | `#f0a5c0` | `#bf3989` |
-| `t_list` | `#8ad4ff` | `#0969da` |
-| `t_map` | `#ffcf6b` | `#9a6700` |
+Each field is a **tagged `Preference`** — an object with exactly one of `specific` / `reference`
+(a serde externally-tagged enum, so the discriminator is explicit — no string-vs-object sniffing):
 
-### `grid` — results grid
-| field | controls | Midnight | Daylight |
-|---|---|---|---|
-| `cell` | default cell text | `#cfd6e0` | `#33373f` |
-| `cell_num` | numeric cell text | `#9fc6ff` | `#0550ae` |
-| `cell_ts` | timestamp cell text | `#e2b98c` | `#9a6700` |
-| `grid_line` | grid rules | `#23272f` | `#e3e5e9` |
-| `row_hover` | hovered-row wash | `#2a323e` | `#eaf0f8` |
-| `zebra` | alternating-row wash (alpha) | `rgba(255,255,255,.025)` | `rgba(15,23,42,.035)` |
+| author writes                                             | means                                                                 |
+|-----------------------------------------------------------|-----------------------------------------------------------------------|
+| `{ "specific": "#2a313c" }` / `{ "specific": "rgba(…)" }` | `Preference::Specific(Color)`                                         |
+| `{ "specific": 14 }`                                      | `Preference::Specific(f32)` (`font_size`, `size`)                     |
+| `{ "specific": 8 }`                                       | `Preference::Specific(CornerRadius::new_all(8))` (`corner_radius`)    |
+| `{ "specific": 4 }` / `{ "specific": [6,12,6,12] }`       | `Preference::Specific(Gaps)` — all-sides / `[top,right,bottom,left]`  |
+| `{ "reference": "surface_tertiary" }`                     | `Preference::Reference("surface_tertiary")` — resolves from the sheet |
 
-(Type / status accents reuse `sheet.*` where they overlap — e.g. a numeric cell can read
-`sheet.info`; badges read `sheet.success`/`error`/`warning`.)
+The `specific` value's JSON type (string / number / array) is inferred, then coerced to the field's known type (see the
+table below). **References are colours-only** — Freya panics on a reference for a number/gaps/radius field. **Overrides
+are partial**: only the fields you list change; the rest keep Freya's default (which references the sheet, so still
+follows the palette).
 
-### `accents` — tints
-| field | controls | Midnight | Daylight |
-|---|---|---|---|
-| `accent_soft` | accent tint fills / selected-tab wash (alpha) | `rgba(76,198,255,.14)` | `rgba(43,127,208,.12)` |
+### Supported component keys + field types
+
+**Generic across all components.** A single macro in `theme.rs` drives `get → override the
+listed fields → set` for *any* component in the registration, so a theme author can override any field of any registered
+component (colour fields as `specific` or `reference`; layout fields as `specific`). The registration covers the
+built-in Freya set — buttons (+ variants +
+`button_layout`), cards, inputs (+ variants + `input_layout`), `switch`(+`switch_layout`),
+`checkbox`, `radio`, `select`, `menu_container`, `menu_item`, `popup`, `tooltip`,
+`floating_tab`, `segmented_button`, `button_segment`, `chip`, `sidebar_item`, `accordion`,
+`scrollbar`, `progressbar`, `circular_loader`, `skeleton`, `resizable_handle`, `slider`,
+`color_picker`, `table`, `typography`. Adding another Freya component is **one line** in the registration. Field names +
+types come from Freya's `themes.rs`; the schema (`theme.schema.json`) validates authored files. Representative subset:
+
+| key                | colour fields                                                                                                            | layout fields                  |
+|--------------------|--------------------------------------------------------------------------------------------------------------------------|--------------------------------|
+| `scrollbar`        | background, thumb_background, hover_thumb_background, active_thumb_background                                            | size (f32)                     |
+| `switch`           | background, thumb_background, toggled_background, toggled_thumb_background, focus_border_fill                            | —                              |
+| `checkbox`         | unselected_fill, selected_fill, selected_icon_fill, border_fill                                                          | —                              |
+| `menu_container`   | background, shadow, border_fill                                                                                          | padding (Gaps), corner_radius  |
+| `menu_item`        | background, hover_background, select_background, border_fill, select_border_fill, color                                  | corner_radius                  |
+| `tooltip`          | background, color, border_fill                                                                                           | font_size (f32)                |
+| `table`            | background, arrow_fill, row_background, hover_row_background, divider_fill, color                                        | corner_radius                  |
+| `button`           | background, hover_background, border_fill, focus_border_fill, color                                                      | — (layout via `button_layout`) |
+| `input`            | background, focus_background, color, placeholder_color, border_fill, focus_border_fill                                   | —                              |
+| `select`           | select_background, background_button, hover_background, color, border_fill, focus_border_fill, arrow_fill                | —                              |
+| `sidebar_item`     | color, background, active_background, hover_background, focus_border_fill                                                | corner_radius, padding, margin |
+| `chip`             | background, hover_background, selected_background, border_fill, focus_border_fill, color, hover_color, selected_color, … | corner_radius, padding         |
+| `segmented_button` | background, border_fill                                                                                                  | corner_radius                  |
+| `button_segment`   | background, hover_background, disabled_background, selected_background, focus_background, color, selected_icon_fill      | padding, selected_padding      |
+
+Full field lists + Freya's defaults live in `freya-components/src/theming/themes.rs`; the loader mirrors them per key.
+
+### Our own components (future)
+
+The results grid, code editor, status dots, and typography presets will define their
+`*ThemePreference` with `define_theme!` (exported at `freya::components::define_theme`), register defaults in the same
+pass, and read via `get_theme!`. They then appear as component keys here (`"editor"`, `"grid"`, …) authored
+identically — one system for Freya's widgets and ours.
 
 ---
 
 ## C — `fonts`
-| field | value (both themes) |
-|---|---|
-| `ui` | `IBM Plex Sans` (fallback: system-ui, sans-serif) |
-| `mono` | `JetBrains Mono` (fallback: ui-monospace, monospace) |
 
-Freya wants a resolvable family name, not a CSS stack — we'll bundle/register the fonts app
-side; the designer just names the family.
+| field  | value                                         |
+|--------|-----------------------------------------------|
+| `ui`   | `IBM Plex Sans` (bundled app-side; name only) |
+| `mono` | `JetBrains Mono`                              |
 
 ---
-
-## E — Component theming map (how the sheet lands on each widget)
-
-Extracted from Freya's `themes.rs` (v0.4). **Colour fields only** — each component's default
-preference resolves these from the sheet, so this is the reverse index: it shows what every
-widget pulls, so you can predict the blast radius of changing a slot. (Sizing / radius / type
-are Freya defaults we override separately, not colours.) "tint" = transparent by default.
-
-**Buttons** (variant picked per use)
-| variant | background | hover | border | focus border | text |
-|---|---|---|---|---|---|
-| Button (default) | `surface_tertiary` | `surface_secondary` | `border` | `border_focus` | `text_primary` |
-| Filled | `primary` | `tertiary` | – | `secondary` | `text_inverse` |
-| Outline | `surface_tertiary` | `surface_secondary` | `border` | `secondary` | `primary` |
-| Flat | – | `surface_tertiary` | – | `border` | `text_primary` |
-
-**Inputs**
-| variant | background | focus bg | text | placeholder | border | focus border |
-|---|---|---|---|---|---|---|
-| Input | `surface_tertiary` | `background` | `text_primary` | `text_secondary` | `border` | `border_focus` |
-| Filled | `primary` | `tertiary` | `text_inverse` | `text_inverse` | – | `secondary` |
-| Flat | – | `surface_tertiary` | `text_primary` | `text_secondary` | – | `border` |
-
-**Selection / overlays**
-| widget | slots |
-|---|---|
-| Select | menu `background`, button `surface_tertiary`, hover `surface_secondary`, text/arrow `text_primary`, border `border`, focus `border_focus` |
-| Menu item | hover/selected `surface_secondary`, selected-border `border_focus`, text `text_primary` |
-| Menu container | `background`, border `surface_primary`, shadow `shadow` |
-| Popup | `background`, text `text_primary` |
-| Tooltip | `surface_tertiary`, text `text_primary`, border `surface_primary` |
-
-**Toggles**
-| widget | slots |
-|---|---|
-| Switch | track `surface_secondary`, thumb `surface_inverse`, toggled-track `secondary`, toggled-thumb `primary`, focus `border_focus` |
-| Checkbox | off `surface_inverse_tertiary`, on `primary`, tick `secondary`, border `surface_primary` |
-| Radio | off `surface_inverse_tertiary`, on `primary`, border `surface_primary` |
-
-**Tabs / segmented**
-| widget | slots |
-|---|---|
-| Floating tab | hover `surface_secondary`, text `text_primary` (bg tint) |
-| Segmented button | track `surface_tertiary`, border `border` |
-| Segment | `surface_tertiary`, hover/selected/focus `surface_secondary`, disabled `disabled`, text `text_primary`, selected-icon `primary` |
-
-**Sidebar / chips / accordion**
-| widget | slots |
-|---|---|
-| Sidebar item | `surface_tertiary`, active/hover `surface_secondary`, text `text_primary`, focus `border_focus` |
-| Chip | `background`, hover `tertiary`, selected `primary`, border `border`, focus `secondary`, text `text_primary`, hover/selected text `text_inverse` |
-| Accordion | `surface_tertiary`, border `border`, text `text_primary` |
-
-**Feedback / structure**
-| widget | slots |
-|---|---|
-| Scrollbar | track `surface_primary`, thumb `surface_inverse`, hover/active `surface_inverse_secondary` / `_tertiary` |
-| Progress bar | track `surface_primary`, fill `primary`, text `text_inverse` |
-| Circular loader | `surface_primary` |
-| Skeleton | `surface_primary` + **hardcoded** translucent-white shimmer (the one colour that won't cascade) |
-| Resizable handle | `surface_secondary`, hover `surface_primary` |
-| Table | `background`, hover-row `surface_secondary`, divider `surface_primary`, text/arrow `text_primary` |
-| Card | filled: `primary`/hover `tertiary`/text `text_inverse`; outline: `surface_tertiary`/hover `surface_secondary`/border `border`; both shadow `shadow` |
-| Titlebar button | hover `surface_secondary` (bg tint) |
-| Link | `text_highlight` |
-
-Takeaways for authoring the sheet: `surface_tertiary` is the workhorse (most default control
-backgrounds); `surface_secondary` is the universal hover; `primary`+`tertiary`+`secondary`
-drive every *filled/selected/toggled* state; `surface_inverse*` are thumbs + unchecked marks.
 
 ## D — file shape
 
@@ -233,20 +168,30 @@ drive every *filled/selected/toggled* state; `surface_inverse*` are thumbs + unc
   "sheet": {
     "primary": "#4cc6ff",
     "background": "#15181e",
-    "surface_primary": "#191d24",
-    "text_primary": "#edf0f5",
-    "border": "#23272f",
-    "hover": "#2a323e"
+    "surface_tertiary": "#2a313c",
+    "text_primary": "#edf0f5"
   },
-  "tokens": {
-    "syntax":    { "syn_keyword": "#ff7b9c" },
-    "data_type": { "t_str": "#7ee787" },
-    "grid":      { "cell": "#cfd6e0", "zebra": "rgba(255,255,255,.025)" },
-    "accents":   { "accent_soft": "rgba(76,198,255,.14)" }
+  "components": {
+    "menu_container": {
+      "background": { "specific": "#262c35" },
+      "border_fill": { "reference": "border" },
+      "shadow": { "specific": "rgba(0,0,0,.45)" },
+      "corner_radius": { "specific": 8 }
+    },
+    "switch": {
+      "background": { "specific": "#333d4b" },
+      "toggled_background": { "specific": "#2ea6e0" },
+      "focus_border_fill": { "reference": "border_focus" }
+    },
+    "tooltip": {
+      "background": { "specific": "#2a313c" },
+      "color": { "specific": "#edf0f5" },
+      "font_size": { "specific": 14 }
+    }
   },
   "fonts": { "ui": "IBM Plex Sans", "mono": "JetBrains Mono" }
 }
 ```
 
-The exact `sheet` field set is finalised when we wire the loader (the compiler pins it to
-Freya's real `ColorsSheet`); if Freya adds/renames a slot we adjust the spec then.
+(`sheet` field set is pinned to Freya's `ColorsSheet`; the `components` key/field set is whatever the loader maps —
+extended as we adopt more components.)

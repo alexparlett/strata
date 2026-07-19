@@ -1,4 +1,5 @@
 {
+  "$schema": "./theme.schema.json",
   "id": "daylight",
   "name": "Daylight",
   "author": "Strata",
@@ -32,6 +33,88 @@
     "overlay": "rgba(15,23,42,.4)",
     "shadow": "rgba(15,23,42,.18)"
   },
+  "components": {
+    "scrollbar": {
+      "background": {
+        "specific": "#eceef2"
+      },
+      "thumb_background": {
+        "specific": "#c5cad3"
+      },
+      "hover_thumb_background": {
+        "specific": "#adb2bc"
+      },
+      "active_thumb_background": {
+        "specific": "#9aa1ac"
+      }
+    },
+    "switch": {
+      "background": {
+        "specific": "#c4c8d0"
+      },
+      "thumb_background": {
+        "specific": "#ffffff"
+      },
+      "toggled_background": {
+        "specific": "#2b7fd0"
+      },
+      "toggled_thumb_background": {
+        "specific": "#ffffff"
+      }
+    },
+    "checkbox": {
+      "unselected_fill": {
+        "specific": "#ffffff"
+      },
+      "selected_fill": {
+        "specific": "#2b7fd0"
+      },
+      "selected_icon_fill": {
+        "specific": "#ffffff"
+      },
+      "border_fill": {
+        "specific": "#c4c8d0"
+      }
+    },
+    "menu_container": {
+      "background": {
+        "specific": "#ffffff"
+      },
+      "border_fill": {
+        "specific": "#d5d8de"
+      },
+      "shadow": {
+        "specific": "rgba(15,23,42,.18)"
+      }
+    },
+    "menu_item": {
+      "hover_background": {
+        "specific": "#eef0f4"
+      },
+      "select_background": {
+        "specific": "#e7edf6"
+      }
+    },
+    "tooltip": {
+      "background": {
+        "specific": "#ffffff"
+      },
+      "color": {
+        "specific": "#1a1c22"
+      },
+      "border_fill": {
+        "specific": "#d5d8de"
+      }
+    },
+    "table": {
+      "hover_row_background": {
+        "specific": "#eaf0f8"
+      },
+      "divider_fill": {
+        "specific": "#e3e5e9"
+      }
+    }
+  },
   "tokens": {
     "syntax": {
       "syn_keyword": "#cf222e",
@@ -61,40 +144,6 @@
     },
     "accents": {
       "accent_soft": "rgba(43,127,208,.12)"
-    },
-    "scrollbar": {
-      "track": "#eceef2",
-      "thumb": "#c5cad3",
-      "thumb_hover": "#adb2bc",
-      "thumb_active": "#9aa1ac"
-    },
-    "switch": {
-      "track": "#c4c8d0",
-      "thumb": "#ffffff",
-      "track_on": "#2b7fd0",
-      "thumb_on": "#ffffff"
-    },
-    "checkbox": {
-      "fill_off": "#ffffff",
-      "border": "#c4c8d0",
-      "fill_on": "#2b7fd0",
-      "tick": "#ffffff"
-    },
-    "menu": {
-      "bg": "#ffffff",
-      "border": "#d5d8de",
-      "shadow": "rgba(15,23,42,.18)",
-      "item_hover": "#eef0f4",
-      "item_selected": "#e7edf6"
-    },
-    "tooltip": {
-      "bg": "#ffffff",
-      "text": "#1a1c22",
-      "border": "#d5d8de"
-    },
-    "table": {
-      "row_hover": "#eaf0f8",
-      "divider": "#e3e5e9"
     }
   },
   "fonts": {
