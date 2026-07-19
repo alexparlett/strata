@@ -1,94 +1,22 @@
 [workspace]
-members = [".", "crates/strata-forms", "crates/strata-forms-macro", "crates/strata-model", "crates/strata-core"]
+# Virtual manifest — no root package. Each frontend is a sibling binary crate on the
+# shared core (Freya port): `strata-dioxus` (the transitional Dioxus app) and, coming,
+# `strata-freya`. See docs/FREYA_PORT_PLAN.md.
+members = [
+    "crates/strata-dioxus",
+    "crates/strata-forms",
+    "crates/strata-forms-macro",
+    "crates/strata-model",
+    "crates/strata-core",
+]
+# Bare `cargo build` / `cargo run` at the root target only the Dioxus app, so adding the
+# Skia-heavy `strata-freya` member later never pulls Skia into the default build (build it
+# explicitly with `-p strata-freya`).
+default-members = ["crates/strata-dioxus"]
 resolver = "2"
 
-[package]
-name = "strata"
-version = "0.2.0"
-edition = "2021"
-description = "Strata — a local, Athena-style parquet query workspace (Dioxus + DataFusion)."
-license = "MIT"
-
-[features]
-default = ["sample-data"]
-# Dev convenience: on first launch (no recent project), open the bundled on-disk
-# sample project shipped in the repo `sample/` dir. Disable
-# (`--no-default-features`) for a clean production start that reopens the
-# most-recent project or shows the launcher.
-sample-data = []
-
-[dependencies]
-# UI: Dioxus desktop (RSX in a webview, so the Strata CSS ports faithfully)
-dioxus = { version = "0.7", features = ["desktop", "router"] }
-
-# Syntax highlighter for the SQL query view (tree-sitter based). We vendor the
-# editor *component* into src/ui/code_editor (S26a) to add caret/keydown/decoration
-# support the upstream `dioxus-code-editor` crate doesn't expose; the highlighter
-# (`dioxus-code`) is still an upstream dep. Grammars are per-language features.
-dioxus-code = { version = "0.1", features = ["runtime", "lang-sql", "lang-json"] }
-
-# Reactive stores (per-entry reactivity + field lenses) — the tab model is a
-# Store<Session>, so each tab view binds a sub-store scoped to its own tab.
-dioxus-stores = "0.7"
-
-# Headless form layer (validation-state + #[derive(Form)]) — workspace sub-crates.
-# The styled field components live app-side (they render our controls); the crate is
-# renderer-agnostic. `chrono` feature enables `validators::strftime`. See crates/strata-forms.
-strata-forms = { path = "crates/strata-forms", features = ["chrono"] }
-
-# Core data vocabulary — extracted leaf crate (Phase 0 of the Freya port; framework-agnostic,
-# to be shared by the Dioxus app and the coming strata-freya app). See docs/FREYA_PORT_PLAN.md.
-strata-model = { path = "crates/strata-model" }
-
-# Framework-agnostic logic core (SQL language service now; engine/serialize/profile/persist
-# to follow). Shared by both frontends. See docs/FREYA_PORT_PLAN.md.
-strata-core = { path = "crates/strata-core" }
-
-# OS-level global hotkeys for the app's global commands (⌘F/⌘K/…). Already a
-# transitive dep of dioxus-desktop; pinned to the same 0.7 so the `GlobalHotKeyEvent`
-# it wraps in `UserWindowEvent` unifies with the one we register/read (crate::hotkeys).
-global-hotkey = "0.7"
-
-# Query engine: Apache DataFusion (Arrow-native SQL over parquet)
-# A9: 43 → 54. datafusion is our only DataFusion-family pin (arrow/parquet/
-# sqlparser/object_store come through its re-exports). See docs/A9_DATAFUSION_UPGRADE.md.
-datafusion = "54"
-
-# Async runtime + stream utilities for the engine thread
-tokio = { version = "1", features = ["full"] }
-futures = "0.3"
-
-# SQL formatting for the editor "Format" action
-sqlformat = "0.3"
-
-# Serde for project (.psproj) + app-config persistence
-serde = { version = "1", features = ["derive"] }
-# `preserve_order` keeps object keys in insertion order so pretty-printed JSON copies
-# (crate::serialize::PrettyJsonWriter) reflect arrow's column / struct-field order instead of
-# alphabetizing (indexmap is already in the tree via arrow-json). `arbitrary_precision` keeps
-# Decimal128/256 exact — arrow emits them as raw number tokens; without it serde_json would parse
-# them through f64 and reformat high-precision decimals. NB: `arbitrary_precision` is incompatible
-# with `#[serde(flatten)]`, so `AppConfig` keeps `settings` a plain nested field (never flatten it).
-serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
-
-# Native file/folder dialogs
-rfd = "0.15"
-
-# System clipboard (Copy result as markdown)
-arboard = "3"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# macOS: set the NSWindow background dark so window resizes don't flash white
-# (the webview repaints a beat behind the frame). objc is already in the tree
-# via dioxus-desktop; declared here so we can call into AppKit directly.
-[target.'cfg(target_os = "macos")'.dependencies]
-objc = "0.2"
-# ObjC completion-handler block for NSOpenPanel (combined file/folder picker).
-block = "0.1"
-
+# Profiles are honoured only at the workspace root (a virtual manifest), so they live here
+# and apply workspace-wide.
 [profile.dev]
 opt-level = 1
 

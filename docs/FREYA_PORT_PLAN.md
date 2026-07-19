@@ -39,22 +39,31 @@ granularly would force every shared type into inter-crate ceremony for marginal 
 two-frontend project. So: **two core crates**, with the module boundaries we built preserved
 *inside* them.
 
+**Status: phase 0 ✅ complete — builds + runs on macOS.** Both frontends are now sibling
+member crates on the shared core; the workspace root is a **virtual manifest** (no root
+package), so neither frontend is privileged.
+
 ```
-strata/                        (workspace root)
-├── crates/
-│   ├── strata-model           the DATA vocabulary leaf. Pure types: schema/results/
-│   │                          catalog defs (CatalogTable/View/RegStatus) / CatalogProfile /
-│   │                          Diagnostic / forms / logs / errors / project data model.
-│   │                          deps: serde only. No datafusion, no UI. Everyone depends down.
-│   ├── strata-core            the framework-agnostic LOGIC, as modules: `sql` (language
-│   │                          service), `engine` (worker + Command/Event protocol + the
-│   │                          connection handle struct), `serialize`, `profile` (scan
-│   │                          logic), `persist`. deps: strata-model, datafusion, tokio.
-│   ├── strata-forms           headless form layer (already renderer-agnostic — keep)
-│   └── strata-forms-macro
-├── strata-freya/  (bin)       the Freya app — target
-└── strata/        (bin)       the current Dioxus app — transitional, re-pointed at the
-                               shared core crates until cutover, then deleted
+parquet-visualiser/            (virtual workspace root — no root package)
+├── Cargo.toml                 [workspace] members + [profile.*] + default-members = strata-dioxus
+├── sample/  themes/  .strata/ runtime data — stays at root (cwd-relative, not crate-relative)
+└── crates/
+    ├── strata-model           the DATA vocabulary leaf. Pure serde types: schema/results/
+    │                          catalog defs (CatalogTable/View/RegStatus) / CatalogProfile /
+    │                          Diagnostic / forms / logs / errors. deps: serde only. No
+    │                          datafusion, no UI. Everyone depends down.
+    ├── strata-core            the framework-agnostic LOGIC, as modules: `engine` (worker +
+    │                          Command/Event protocol + the connection handle; `sql`/`plan`/
+    │                          `profile` nested under it) + `config` / `theme` / `util`.
+    │                          deps: strata-model, datafusion, tokio, arboard, preferences.
+    ├── strata-dioxus  (bin)   the current Dioxus app — transitional, on the shared core.
+    │                          Package name kept `strata` (binary + `dx` unchanged; Dioxus.toml
+    │                          + assets/ live here). Deleted at cutover.
+    ├── strata-freya   (bin)   the Freya app — target (coming in phase 1). Its own member,
+    │                          excluded from `default-members` so Skia stays out of the
+    │                          default `cargo build`/`run` (build it with `-p strata-freya`).
+    ├── strata-forms           headless form layer (already renderer-agnostic — keep)
+    └── strata-forms-macro
 ```
 
 **Data vs logic:** `strata-model` holds the shared *data types* (serde-derivable, no heavy
