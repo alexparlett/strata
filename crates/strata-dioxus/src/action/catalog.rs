@@ -136,17 +136,17 @@ pub fn open_profile_sql(name: String) {
         // nothing on exactly the entries where a profile is worth most (a view has no
         // footer, so the scan is all it has).
         p.tables
-            .iter()
-            .find(|t| t.name == name)
-            .and_then(|t| t.profile.as_ref())
-            .or_else(|| {
-                p.views
-                 .iter()
-                 .find(|v| v.name == name)
-                 .and_then(|v| v.profile.as_ref())
-            })
-            .map(|p| p.sql.clone())
-            .unwrap_or_default()
+         .iter()
+         .find(|t| t.name == name)
+         .and_then(|t| t.profile.as_ref())
+         .or_else(|| {
+             p.views
+              .iter()
+              .find(|v| v.name == name)
+              .and_then(|v| v.profile.as_ref())
+         })
+         .map(|p| p.sql.clone())
+         .unwrap_or_default()
     };
     if sql.is_empty() {
         return;
@@ -335,12 +335,12 @@ fn detect_partitions(root: &Path) -> Vec<(String, String)> {
 fn infer_type(v: &str) -> String {
     let is_date = v.len() == 10
         && v.as_bytes().iter().enumerate().all(|(i, b)| {
-            if i == 4 || i == 7 {
-                *b == b'-'
-            } else {
-                b.is_ascii_digit()
-            }
-        });
+        if i == 4 || i == 7 {
+            *b == b'-'
+        } else {
+            b.is_ascii_digit()
+        }
+    });
     if is_date {
         return "Date".into();
     }

@@ -426,12 +426,12 @@ fn handle_completion_key(
         // operators, brackets, `.`, `;`, quotes — but still types. A following `.`
         // re-opens completion for that table's columns.
         Key::Character(s)
-            if s.chars()
-                .next()
-                .map_or(false, |c| !crate::sql::is_word_char(c)) =>
-        {
-            close_completion(comp, comp_gen);
-        }
+        if s.chars()
+            .next()
+            .map_or(false, |c| !crate::sql::is_word_char(c)) =>
+            {
+                close_completion(comp, comp_gen);
+            }
         // Word characters: leave the popup open — refresh_completion updates it.
         _ => {}
     }

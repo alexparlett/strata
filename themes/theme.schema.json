@@ -4,123 +4,242 @@
   "title": "Strata theme",
   "description": "A Strata colour theme. Colours are authored in named groups for readability; the loader flattens every leaf into one token map keyed by the CSS-variable name (e.g. `bg` -> `--bg`). Group names are cosmetic. Missing tokens fall back to the mode's built-in default.",
   "type": "object",
-  "required": ["id", "name", "mode"],
+  "required": [
+    "id",
+    "name",
+    "mode"
+  ],
   "additionalProperties": false,
   "properties": {
-    "$schema": { "type": "string" },
+    "$schema": {
+      "type": "string"
+    },
     "id": {
       "type": "string",
       "description": "Stable unique id (lowercase, no spaces). Used to select and to `extends`.",
       "pattern": "^[a-z0-9][a-z0-9-]*$"
     },
-    "name": { "type": "string", "description": "Display name shown in Settings." },
-    "author": { "type": "string" },
+    "name": {
+      "type": "string",
+      "description": "Display name shown in Settings."
+    },
+    "author": {
+      "type": "string"
+    },
     "extends": {
       "type": "string",
       "description": "Optional base theme id; this theme's tokens are layered over the base's."
     },
     "mode": {
       "type": "string",
-      "enum": ["dark", "light"],
+      "enum": [
+        "dark",
+        "light"
+      ],
       "description": "Light/dark grouping — drives 'Sync with OS' and per-mode fallback."
     },
     "colors": {
       "type": "object",
       "description": "Colour tokens grouped by role. Groups are for readability only — leaves are flattened by name.",
-      "additionalProperties": { "$ref": "#/definitions/colorGroup" },
+      "additionalProperties": {
+        "$ref": "#/definitions/colorGroup"
+      },
       "properties": {
         "surface": {
           "$ref": "#/definitions/colorGroup",
           "description": "App surfaces from deepest to most elevated.",
           "properties": {
-            "bg": { "$ref": "#/definitions/color" },
-            "panel": { "$ref": "#/definitions/color" },
-            "main": { "$ref": "#/definitions/color", "description": "Primary content canvas (results grid / editor / active tab)." },
-            "surface": { "$ref": "#/definitions/color", "description": "Elevated containers (modals, popovers, cards, command palette)." },
-            "surface-sunk": { "$ref": "#/definitions/color" },
-            "elev": { "$ref": "#/definitions/color", "description": "Interactive control base (buttons, inputs, chips)." },
-            "elev2": { "$ref": "#/definitions/color" },
-            "elev3": { "$ref": "#/definitions/color" }
+            "bg": {
+              "$ref": "#/definitions/color"
+            },
+            "panel": {
+              "$ref": "#/definitions/color"
+            },
+            "main": {
+              "$ref": "#/definitions/color",
+              "description": "Primary content canvas (results grid / editor / active tab)."
+            },
+            "surface": {
+              "$ref": "#/definitions/color",
+              "description": "Elevated containers (modals, popovers, cards, command palette)."
+            },
+            "surface-sunk": {
+              "$ref": "#/definitions/color"
+            },
+            "elev": {
+              "$ref": "#/definitions/color",
+              "description": "Interactive control base (buttons, inputs, chips)."
+            },
+            "elev2": {
+              "$ref": "#/definitions/color"
+            },
+            "elev3": {
+              "$ref": "#/definitions/color"
+            }
           }
         },
         "border": {
           "$ref": "#/definitions/colorGroup",
           "properties": {
-            "line": { "$ref": "#/definitions/color" },
-            "line2": { "$ref": "#/definitions/color" },
-            "line3": { "$ref": "#/definitions/color" },
-            "line-hi": { "$ref": "#/definitions/color" }
+            "line": {
+              "$ref": "#/definitions/color"
+            },
+            "line2": {
+              "$ref": "#/definitions/color"
+            },
+            "line3": {
+              "$ref": "#/definitions/color"
+            },
+            "line-hi": {
+              "$ref": "#/definitions/color"
+            }
           }
         },
         "text": {
           "$ref": "#/definitions/colorGroup",
           "description": "Text ramp from primary to faint.",
           "properties": {
-            "text": { "$ref": "#/definitions/color" },
-            "text2": { "$ref": "#/definitions/color" },
-            "text3": { "$ref": "#/definitions/color" },
-            "dim": { "$ref": "#/definitions/color" },
-            "dim2": { "$ref": "#/definitions/color" },
-            "dim3": { "$ref": "#/definitions/color" },
-            "faint": { "$ref": "#/definitions/color" },
-            "faint2": { "$ref": "#/definitions/color" }
+            "text": {
+              "$ref": "#/definitions/color"
+            },
+            "text2": {
+              "$ref": "#/definitions/color"
+            },
+            "text3": {
+              "$ref": "#/definitions/color"
+            },
+            "dim": {
+              "$ref": "#/definitions/color"
+            },
+            "dim2": {
+              "$ref": "#/definitions/color"
+            },
+            "dim3": {
+              "$ref": "#/definitions/color"
+            },
+            "faint": {
+              "$ref": "#/definitions/color"
+            },
+            "faint2": {
+              "$ref": "#/definitions/color"
+            }
           }
         },
         "accent": {
           "$ref": "#/definitions/colorGroup",
           "properties": {
-            "accent": { "$ref": "#/definitions/color" },
-            "accent-ink": { "$ref": "#/definitions/color", "description": "Text/ink drawn on top of the accent fill." },
-            "accent-soft": { "$ref": "#/definitions/color", "description": "Accent tint (often an rgba/color-mix) for selected/active fills." }
+            "accent": {
+              "$ref": "#/definitions/color"
+            },
+            "accent-ink": {
+              "$ref": "#/definitions/color",
+              "description": "Text/ink drawn on top of the accent fill."
+            },
+            "accent-soft": {
+              "$ref": "#/definitions/color",
+              "description": "Accent tint (often an rgba/color-mix) for selected/active fills."
+            }
           }
         },
         "status": {
           "$ref": "#/definitions/colorGroup",
           "properties": {
-            "green": { "$ref": "#/definitions/color" },
-            "red": { "$ref": "#/definitions/color" },
-            "red2": { "$ref": "#/definitions/color" },
-            "orange": { "$ref": "#/definitions/color" },
-            "purple": { "$ref": "#/definitions/color" },
-            "warm": { "$ref": "#/definitions/color" }
+            "green": {
+              "$ref": "#/definitions/color"
+            },
+            "red": {
+              "$ref": "#/definitions/color"
+            },
+            "red2": {
+              "$ref": "#/definitions/color"
+            },
+            "orange": {
+              "$ref": "#/definitions/color"
+            },
+            "purple": {
+              "$ref": "#/definitions/color"
+            },
+            "warm": {
+              "$ref": "#/definitions/color"
+            }
           }
         },
         "dataType": {
           "$ref": "#/definitions/colorGroup",
           "description": "Arrow/data-type colours used in cells, the inspector and JSON views.",
           "properties": {
-            "t-str": { "$ref": "#/definitions/color" },
-            "t-num": { "$ref": "#/definitions/color" },
-            "t-bool": { "$ref": "#/definitions/color" },
-            "t-ts": { "$ref": "#/definitions/color" },
-            "t-struct": { "$ref": "#/definitions/color" },
-            "t-list": { "$ref": "#/definitions/color" },
-            "t-map": { "$ref": "#/definitions/color" }
+            "t-str": {
+              "$ref": "#/definitions/color"
+            },
+            "t-num": {
+              "$ref": "#/definitions/color"
+            },
+            "t-bool": {
+              "$ref": "#/definitions/color"
+            },
+            "t-ts": {
+              "$ref": "#/definitions/color"
+            },
+            "t-struct": {
+              "$ref": "#/definitions/color"
+            },
+            "t-list": {
+              "$ref": "#/definitions/color"
+            },
+            "t-map": {
+              "$ref": "#/definitions/color"
+            }
           }
         },
         "syntax": {
           "$ref": "#/definitions/colorGroup",
           "description": "SQL editor syntax highlighting.",
           "properties": {
-            "syn-keyword": { "$ref": "#/definitions/color" },
-            "syn-function": { "$ref": "#/definitions/color" },
-            "syn-string": { "$ref": "#/definitions/color" },
-            "syn-number": { "$ref": "#/definitions/color" },
-            "syn-comment": { "$ref": "#/definitions/color" },
-            "syn-identifier": { "$ref": "#/definitions/color" },
-            "syn-punct": { "$ref": "#/definitions/color" }
+            "syn-keyword": {
+              "$ref": "#/definitions/color"
+            },
+            "syn-function": {
+              "$ref": "#/definitions/color"
+            },
+            "syn-string": {
+              "$ref": "#/definitions/color"
+            },
+            "syn-number": {
+              "$ref": "#/definitions/color"
+            },
+            "syn-comment": {
+              "$ref": "#/definitions/color"
+            },
+            "syn-identifier": {
+              "$ref": "#/definitions/color"
+            },
+            "syn-punct": {
+              "$ref": "#/definitions/color"
+            }
           }
         },
         "grid": {
           "$ref": "#/definitions/colorGroup",
           "description": "Results grid: cell text, dividers, hover and zebra striping.",
           "properties": {
-            "cell": { "$ref": "#/definitions/color" },
-            "cell-num": { "$ref": "#/definitions/color" },
-            "cell-ts": { "$ref": "#/definitions/color" },
-            "grid-line": { "$ref": "#/definitions/color" },
-            "row-hover": { "$ref": "#/definitions/color" },
-            "zebra": { "$ref": "#/definitions/color" }
+            "cell": {
+              "$ref": "#/definitions/color"
+            },
+            "cell-num": {
+              "$ref": "#/definitions/color"
+            },
+            "cell-ts": {
+              "$ref": "#/definitions/color"
+            },
+            "grid-line": {
+              "$ref": "#/definitions/color"
+            },
+            "row-hover": {
+              "$ref": "#/definitions/color"
+            },
+            "zebra": {
+              "$ref": "#/definitions/color"
+            }
           }
         }
       }
@@ -128,10 +247,16 @@
     "fonts": {
       "type": "object",
       "description": "Font stacks. `ui` drives the interface, `mono` the editor / data.",
-      "additionalProperties": { "type": "string" },
+      "additionalProperties": {
+        "type": "string"
+      },
       "properties": {
-        "ui": { "type": "string" },
-        "mono": { "type": "string" }
+        "ui": {
+          "type": "string"
+        },
+        "mono": {
+          "type": "string"
+        }
       }
     }
   },
@@ -143,7 +268,9 @@
     },
     "colorGroup": {
       "type": "object",
-      "additionalProperties": { "$ref": "#/definitions/color" }
+      "additionalProperties": {
+        "$ref": "#/definitions/color"
+      }
     }
   }
 }

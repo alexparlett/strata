@@ -1,5 +1,20 @@
-{"country": "UK", "signups": 120}
-{"country": "SG", "signups": 80}
-{"country": "CN", "signups": 210}
-{"country": "DE", "signups": 64}
-{"country": "NG", "signups": 150}
+{
+  "country": "UK",
+  "signups": 120
+}
+{
+  "country": "SG",
+  "signups": 80
+}
+{
+  "country": "CN",
+  "signups": 210
+}
+{
+  "country": "DE",
+  "signups": 64
+}
+{
+  "country": "NG",
+  "signups": 150
+}

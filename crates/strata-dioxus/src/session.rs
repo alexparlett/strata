@@ -450,10 +450,10 @@ fn normalize(s: &mut Session) {
     // Keep the focus clock above any persisted stamp so new activations stay monotonic.
     s.view_clock = s.view_clock.max(
         s.workspaces
-            .iter()
-            .map(|w| w.last_viewed)
-            .max()
-            .unwrap_or(0),
+         .iter()
+         .map(|w| w.last_viewed)
+         .max()
+         .unwrap_or(0),
     );
     if !s.workspaces.iter().any(|w| w.id == s.active) {
         s.active = s.workspaces[0].id;

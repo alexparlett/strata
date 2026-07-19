@@ -44,7 +44,7 @@ pub fn register_current_window() -> WindowId {
 pub fn unregister_window(id: WindowId) {
     WINDOWS.with(|w| {
         w.borrow_mut()
-            .retain(|weak| weak.upgrade().map(|c| c.id() != id).unwrap_or(false))
+         .retain(|weak| weak.upgrade().map(|c| c.id() != id).unwrap_or(false))
     });
 }
 

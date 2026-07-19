@@ -44,7 +44,7 @@ impl FunctionCatalog {
     }
 
     /// All names across categories (for a pooled completion fallback).
-    pub fn all(&self) -> impl Iterator<Item = &String> {
+    pub fn all(&self) -> impl Iterator<Item=&String> {
         self.scalar
             .iter()
             .chain(self.aggregate.iter())

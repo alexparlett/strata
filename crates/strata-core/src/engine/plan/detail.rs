@@ -48,24 +48,24 @@ pub fn detail_parts(detail: &str) -> Vec<DetailPart> {
     }
 
     raw.into_iter()
-        .map(|p| {
-            if let Some(eq) = p.find('=') {
-                let head = &p[..eq];
-                if eq > 0 && eq < 26 && is_detail_ident(head) {
-                    return DetailPart {
-                        key: head.to_string(),
-                        val: p[eq + 1..].to_string(),
-                        has_key: true,
-                    };
-                }
-            }
-            DetailPart {
-                key: String::new(),
-                val: p,
-                has_key: false,
-            }
-        })
-        .collect()
+       .map(|p| {
+           if let Some(eq) = p.find('=') {
+               let head = &p[..eq];
+               if eq > 0 && eq < 26 && is_detail_ident(head) {
+                   return DetailPart {
+                       key: head.to_string(),
+                       val: p[eq + 1..].to_string(),
+                       has_key: true,
+                   };
+               }
+           }
+           DetailPart {
+               key: String::new(),
+               val: p,
+               has_key: false,
+           }
+       })
+       .collect()
 }
 
 /// `^[A-Za-z][A-Za-z0-9_]*$` — the design's key-head test.

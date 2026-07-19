@@ -33,8 +33,8 @@ impl PlanKind {
             "arrow",
             "memoryexec",
         ]
-        .iter()
-        .any(|k| s.contains(k));
+            .iter()
+            .any(|k| s.contains(k));
         if is_source {
             PlanKind::Source
         } else if s.contains("join") {

@@ -55,7 +55,6 @@ pub mod code_editor;
 
 pub use badge::{Badge, BadgeVariant, Dot, DotStatus, StatusDot};
 pub use button::{Button, ButtonVariant, IconButton, IconButtonVariant};
-pub use callout::{Callout, CalloutVariant};
 pub use checkbox::Checkbox;
 pub use context_menu::ContextMenu;
 pub use dialog::Dialog;
@@ -70,7 +69,6 @@ pub use search_dialog::SearchDialog;
 pub use segmented::{Segment, SegmentOption};
 pub use select::{Select, SelectOption};
 pub use spacer::Spacer;
-pub use split_button::SplitButton;
 pub use text_input::{Input, NumberStepper, SearchBar, TextInput};
 pub use toggle::Toggle;
 pub use tooltip::Tooltip;

@@ -237,9 +237,9 @@ fn ResultsToolbar(ws_id: WorkspaceId) -> Element {
                         pr
                     } else {
                         res.rows
-                            .iter()
-                            .filter(|row| row.iter().any(|c| c.text.to_lowercase().contains(&s)))
-                            .count()
+                           .iter()
+                           .filter(|row| row.iter().any(|c| c.text.to_lowercase().contains(&s)))
+                           .count()
                     };
                     (m, pr)
                 })

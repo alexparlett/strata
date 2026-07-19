@@ -127,13 +127,13 @@ pub fn open_in_current(path: PathBuf) {
         let p = store.read();
         (
             p.tables
-                .iter()
-                .map(|t| t.name.clone())
-                .collect::<Vec<String>>(),
+             .iter()
+             .map(|t| t.name.clone())
+             .collect::<Vec<String>>(),
             p.views
-                .iter()
-                .map(|v| v.name.clone())
-                .collect::<Vec<String>>(),
+             .iter()
+             .map(|v| v.name.clone())
+             .collect::<Vec<String>>(),
         )
     };
     for name in views {

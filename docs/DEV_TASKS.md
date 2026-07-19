@@ -1,19 +1,19 @@
 # Strata — Dev backlog
 
-**Complete refresh — 2026-07-10**, re-derived from the current app state against the
-**v19 design handoff**: the `Design.dc.html` design system + the per-window canvases
-(`Strata` / `Settings` / `Launcher` / `Windows` `.dc.html`), and the specs in `docs/`
+**Complete refresh — 2026-07-10**, re-derived from the current app state against the **v19 design handoff**: the
+`Design.dc.html` design system + the per-window canvases (`Strata` / `Settings` / `Launcher` / `Windows` `.dc.html`),
+and the specs in `docs/`
 (`FEATURES.md`, `CHART_SPEC.md`, `CONNECTIONS_SPEC.md`, `EXPLAIN_PLAN_SPEC.md`).
 
 Reframed around two axes:
 
-1. **UI surfaces (Part 1)** — every part of the app **audited design-vs-code** against
-   the v19 canvas: what's the concrete drift, and is it an *align* (restyle) or a *build*.
+1. **UI surfaces (Part 1)** — every part of the app **audited design-vs-code** against the v19 canvas: what's the
+   concrete drift, and is it an *align* (restyle) or a *build*.
 2. **Functional workstreams (Part 2)** — behaviour/feature work.
 
 **v19 headline change:** a single **spacing + radius token scale** (`--sp-1..9`, `--r-xs..4`)
-that every padding/margin/gap/border-radius snaps to — the next step after the S28
-type/colour/control tokens. It's the universal **F3** task; every Part-1 row gets it *on top of*
+that every padding/margin/gap/border-radius snaps to — the next step after the S28 type/colour/control tokens. It's the
+universal **F3** task; every Part-1 row gets it *on top of*
 the structural drift listed.
 
 **Legend / drift rating:** `token-only` (just the F3 pass) · `restyle` (visual/treatment) ·
@@ -39,51 +39,90 @@ the structural drift listed.
 
 ## Part 1 — UI surfaces: alignment drift
 
-This is the **align** work only — where a surface is **built but doesn't match v19**.
-Things that don't exist yet are **not** drift: they're features, they live in Part 2, and
-each surface points to the ones that land there as **Builds here →**. The rating describes
-the align work only; F3 spacing is assumed on top of every row.
+This is the **align** work only — where a surface is **built but doesn't match v19**. Things that don't exist yet are
+**not** drift: they're features, they live in Part 2, and each surface points to the ones that land there as **Builds
+here →**. The rating describes the align work only; F3 spacing is assumed on top of every row.
 
 ### U1 · Launcher — `restyle` ✅
-Drift: "Open folder…" → design's ghost **"Open"** (uppercase); project row has 4 actions vs design's 3 (drop open-in-new-window?); Projects nav pill has an extra `border-left` accent bar (design = tinted bg only); no-match empty-state copy/placement.
-Builds here → **W1** (rail Settings gear).
-**Done (V26 align, no theme):** "Open folder…" → uppercase ghost **Open** (DS `Eyebrow` typography, no inline tracking); project rows dropped the open-in-new-window action (4→3: Pin · Reveal · Remove) + the inline pin badge (state reads from PINNED grouping + pin tint); Projects nav pill lost the accent left-bar (text-coloured over accent-tinted bg only); empty state splits into no-match (`No projects match "q".`) vs no-recents, left/muted placement; RECENT header always heads recents. Also wired ⌘A/⌘C on the launcher search via a `use_muda_event_handler` shim (mirrors settings) — works ~99%; the residual muda-menu crash is tracked in **F8**. Theme-window restyle deferred (separate task).
+
+Drift: "Open folder…" → design's ghost **"Open"** (uppercase); project row has 4 actions vs design's 3 (drop
+open-in-new-window?); Projects nav pill has an extra `border-left` accent bar (design = tinted bg only); no-match
+empty-state copy/placement. Builds here → **W1** (rail Settings gear). **Done (V26 align, no theme):** "Open folder…" →
+uppercase ghost **Open** (DS `Eyebrow` typography, no inline tracking); project rows dropped the open-in-new-window
+action (4→3: Pin · Reveal · Remove) + the inline pin badge (state reads from PINNED grouping + pin tint); Projects nav
+pill lost the accent left-bar (text-coloured over accent-tinted bg only); empty state splits into no-match
+(`No projects match "q".`) vs no-recents, left/muted placement; RECENT header always heads recents. Also wired ⌘A/⌘C on
+the launcher search via a `use_muda_event_handler` shim (mirrors settings) — works ~99%; the residual muda-menu crash is
+tracked in **F8**. Theme-window restyle deferred (separate task).
 
 ### U2 · App shell — header · macOS title bar · activity rail — `restyle` ✅
-Rail active-state = the standard **toggle-button** treatment (accent tint) — our `IconButtonVariant::Toggle` already matches, **no drift** (the 2.5px edge-bar still in `Strata.dc.html` is stale, superseded by the toggle-button design).
-Drift: Problems badge sits top-right of the icon with a 2px ring (reposition); header recent-rows lack the branch glyph. Two-window model + macOS title bar (inset 13/21) are faithful.
-**Done (2026-07-17):** Problems badge repositioned to the handoff-29 spec — `.ds-count-badge` `top/right: 1px` (tucked into the button's top-right over the icon; was `top:-5px/right:-5px`, which overhung and clipped the 48px rail's edge). The rest already matched the design (15px · `--t-micro` = 600/9px mono · red fill · 2px surface ring). **Header recent-row branch glyph deferred** — no git integration yet. Toggle-button active state, macOS title-bar insets, and the two-window model were already faithful. Connections rail button/pane left for **W7**.
-Builds here → **W7** (Connections rail button + pane), **W1** (cross-window settings sync).
+
+Rail active-state = the standard **toggle-button** treatment (accent tint) — our `IconButtonVariant::Toggle` already
+matches, **no drift** (the 2.5px edge-bar still in `Strata.dc.html` is stale, superseded by the toggle-button design).
+Drift: Problems badge sits top-right of the icon with a 2px ring (reposition); header recent-rows lack the branch glyph.
+Two-window model + macOS title bar (inset 13/21) are faithful. **Done (2026-07-17):** Problems badge repositioned to the
+handoff-29 spec — `.ds-count-badge` `top/right: 1px` (tucked into the button's top-right over the icon; was
+`top:-5px/right:-5px`, which overhung and clipped the 48px rail's edge). The rest already matched the design (15px ·
+`--t-micro` = 600/9px mono · red fill · 2px surface ring). **Header recent-row branch glyph deferred** — no git
+integration yet. Toggle-button active state, macOS title-bar insets, and the two-window model were already faithful.
+Connections rail button/pane left for **W7**. Builds here → **W7** (Connections rail button + pane), **W1**
+(cross-window settings sync).
 
 ### U3 · Sidebar / catalog — `partial-rebuild` ✅
-Rebuilt to the handoff-29 catalog: section headers are **collapsible chevron rows** (`.sec-toggle` / `.sec-chev`); column rows **indent by depth with an expand chevron on `struct`/nested columns** (recursive `flatten_cols`, keyed `"{table}::{path}"`); collapse → **close** button; the filter row now searches **views and saved queries** as well as tables, alongside the refresh button. **D5** landed with it (below). Connections pane deferred to **W7** as agreed.
-Note: selecting a *nested* column still doesn't populate the inspector (only top-level columns resolve) — folded into **U9**/**D9**, not U3.
+
+Rebuilt to the handoff-29 catalog: section headers are **collapsible chevron rows** (`.sec-toggle` / `.sec-chev`);
+column rows **indent by depth with an expand chevron on `struct`/nested columns** (recursive `flatten_cols`, keyed
+`"{table}::{path}"`); collapse → **close** button; the filter row now searches **views and saved queries** as well as
+tables, alongside the refresh button. **D5** landed with it (below). Connections pane deferred to **W7** as agreed.
+Note: selecting a *nested* column still doesn't populate the inspector (only top-level columns resolve) — folded into
+**U9**/ **D9**, not U3.
 
 ### U4 · SQL editor + workspace tabs — `restyle` 🟡 (restyle aligned; T2 open)
-The **restyle** is aligned: editor / autocomplete / lint-hover / tab menus / inline rename match, the tab-close **dot→× on hover** drift is fixed (**T4**), and the Run control is the three-icon toolbar (**E4**).
-Re-aligned to handoff-29's **full-height flat tab bar**: the strip is `align-items: stretch` (`padding: 0`, `gap: 0`) so tabs, dividers and the right cluster's rule span its full height; the active tab wears the editor background with an `inset 0 2px 0 var(--accent)` top bar and `margin-bottom: -1px` to close the seam with the pane below; inactive tabs sit transparent. The editor toolbar is left-aligned per the canvas (the `Spacer` before the save pair → a second separator) at `--sp-4` padding — **F3 missed that one**.
-The leading tab dot is **removed** (our call, not the canvas): it only ever encoded *active*, which the background + accent bar already say. Dirty stays in the trailing close slot (**T4**); the tab-list popover keeps its dot, having no other active/dirty signal. The canvas's dot — a green/orange query-status light on the active tab only — was declined as duplicated information.
-**Kept deliberately:** T1's drop-gap preview (`.ws-tab-slot`) rather than the canvas's newer fade + inset-edge affordance — a *behaviour* change, out of scope for a restyle. Revisit as its own task if wanted. The editor pane's bottom border lives on the `<section>`, not the code-area div: the section is the whole pane (toolbar + code), so its edge is the real boundary.
-**Not done** — **T2** OS-close intercept.
-Builds here → **E4** (Run → three icon buttons) ✅ · **T4** (tab-close dot→× hover) ✅ · **T1** (tab drag-to-reorder) ✅ · **T2** (intercept OS-triggered closes) ⬜ **not built**.
+
+The **restyle** is aligned: editor / autocomplete / lint-hover / tab menus / inline rename match, the tab-close **dot→×
+on hover** drift is fixed (**T4**), and the Run control is the three-icon toolbar (**E4**). Re-aligned to handoff-29's
+**full-height flat tab bar**: the strip is `align-items: stretch` (`padding: 0`, `gap: 0`) so tabs, dividers and the
+right cluster's rule span its full height; the active tab wears the editor background with an
+`inset 0 2px 0 var(--accent)` top bar and `margin-bottom: -1px` to close the seam with the pane below; inactive tabs sit
+transparent. The editor toolbar is left-aligned per the canvas (the `Spacer` before the save pair → a second separator)
+at `--sp-4` padding — **F3 missed that one**. The leading tab dot is **removed** (our call, not the canvas): it only
+ever encoded *active*, which the background + accent bar already say. Dirty stays in the trailing close slot (**T4**);
+the tab-list popover keeps its dot, having no other active/dirty signal. The canvas's dot — a green/orange query-status
+light on the active tab only — was declined as duplicated information. **Kept deliberately:** T1's drop-gap preview
+(`.ws-tab-slot`) rather than the canvas's newer fade + inset-edge affordance — a *behaviour* change, out of scope for a
+restyle. Revisit as its own task if wanted. The editor pane's bottom border lives on the `<section>`, not the code-area
+div: the section is the whole pane (toolbar + code), so its edge is the real boundary. **Not done** — **T2** OS-close
+intercept. Builds here → **E4** (Run → three icon buttons) ✅ · **T4** (tab-close dot→× hover) ✅ · **T1** (tab
+drag-to-reorder) ✅ · **T2** (intercept OS-triggered closes) ⬜ **not built**.
 
 ### U5 · Results grid — `restyle` ✅
-Zebra / type-colour cells / sticky header match, and all builds shipped — **Rz3** (selection + live aggregate), **Rz6** (column sort), **Rz5** (record / row-detail view). Only remaining drift is note-only: the nested-cell popover is a `Dialog`+highlighted `Code` vs the design's centred backdrop modal + `<pre>` (accepted as-is).
+
+Zebra / type-colour cells / sticky header match, and all builds shipped — **Rz3** (selection + live aggregate), **Rz6**
+(column sort), **Rz5** (record / row-detail view). Only remaining drift is note-only: the nested-cell popover is a
+`Dialog`+highlighted `Code` vs the design's centred backdrop modal + `<pre>` (accepted as-is).
 
 ### U6 · Results toolbar · status bar · pager — `restyle` ✅
-Done: find is a **collapsible search popover** — a new `SearchDialog` component built on the S29 `Popup`/`Backdrop` base (trigger measures its own rect, anchors `BOTTOM_END`, dismisses via the backdrop which also clears the filter; ✕ + `on` active-state on the toggle). **Table/Chart** is a text-only `Segment`; right-cluster order is now **find · refresh · clear · export**, all bordered `Toolbar` icon buttons. **Rz8** clear-results is wired: `Action::ClearResults` → `query::clear_results` (drops the active tab's result/plan/error + find query → empty state, no-op mid-run) behind a trash button with a destructive red hover. Status bar + pager already matched. New: `SearchDialog` (+ export), `.res-find-panel` is now card-only (Popup owns position), `.ds-icon-btn.toolbar.res-clear`/`.on` rules.
-Builds here → **Rz3** (status selection token). ⌘F-to-open works via the global-hotkey keymap (find state lives in `runs.find_open`; ⌘F → keymap → the active toolbar's `Find` registry owner). See **W4**.
+
+Done: find is a **collapsible search popover** — a new `SearchDialog` component built on the S29 `Popup`/`Backdrop` base
+(trigger measures its own rect, anchors `BOTTOM_END`, dismisses via the backdrop which also clears the filter; ✕ + `on`
+active-state on the toggle). **Table/Chart** is a text-only `Segment`; right-cluster order is now **find · refresh ·
+clear · export**, all bordered `Toolbar` icon buttons. **Rz8** clear-results is wired: `Action::ClearResults` →
+`query::clear_results` (drops the active tab's result/plan/error + find query → empty state, no-op mid-run) behind a
+trash button with a destructive red hover. Status bar + pager already matched. New: `SearchDialog` (+ export),
+`.res-find-panel` is now card-only (Popup owns position), `.ds-icon-btn.toolbar.res-clear`/`.on` rules. Builds here →
+**Rz3** (status selection token). ⌘F-to-open works via the global-hotkey keymap (find state lives in `runs.find_open`;
+⌘F → keymap → the active toolbar's `Find` registry owner). See **W4**.
 
 ### U7 · Results — chart view — *not built*
+
 No align work — the whole surface is a feature → **Rz2** (`CHART_SPEC.md`).
 
 ### U8 · Results — query-plan view — ✅ v3 rebuilt (Rz-plan)
-Rebuilt to the `EXPLAIN_PLAN_SPEC.md` v3 shape: engine emits typed, pre-labelled
-metrics + derived per-node self-time (`crate::plan::{Metric, MetricKind, self_time_ms,
-insights, metric_group}`; engine classifies each `MetricValue` by variant); UI is a
-three-tier card (headline rows·self-time·bytes·time-share bar → non-zero insight
-callouts → collapsed grouped grid w/ hide-zeros), depth guide-rails, 2-line detail
-clamp, amber ANALYZE badge, active-tab summary. ⏳ awaiting Alex's green build on Mac.
+
+Rebuilt to the `EXPLAIN_PLAN_SPEC.md` v3 shape: engine emits typed, pre-labelled metrics + derived per-node self-time (`crate::plan::{Metric, MetricKind, self_time_ms,
+insights, metric_group}`; engine classifies each `MetricValue` by variant); UI is a three-tier card (headline
+rows·self-time·bytes·time-share bar → non-zero insight callouts → collapsed grouped grid w/ hide-zeros), depth
+guide-rails, 2-line detail clamp, amber ANALYZE badge, active-tab summary. ⏳ awaiting Alex's green build on Mac.
 
 ### U9 · Column inspector — `partial-rebuild` ✅ (with D4)
 
@@ -119,19 +158,32 @@ all three tabs. We hide it on **Problems**. Problems are live per-tab diagnostic
 would either lie (they come straight back) or imply the problems aren't real. It stays removed.
 
 ### U11 · Command palette (⌘K) — core built; depth is a feature
-The palette works; grouping, keyboard nav, per-item type-icons + shortcut hints are the "depth" feature → **T3**. (The footer already advertises "↑↓ navigate" — wire it under T3.) No standalone drift beyond that.
+
+The palette works; grouping, keyboard nav, per-item type-icons + shortcut hints are the "depth" feature → **T3**. (The
+footer already advertises "↑↓ navigate" — wire it under T3.) No standalone drift beyond that.
 
 ### U12 · Settings — `restyle` (built parts) ✅
-Drift on the built overlay: drop the "appearance & behavior" subtitle; tooltip-vs-caption affordance; theme-card source badge. Appearance / Data-display / System match structurally.
-Builds here → **W1** (standalone window + Cancel/Save footer, draft/save + live theme), **W2** (Engine category), **W3** (search box + History-limit), **W4** (rebindable Keymap).
-**Design alignment (done):** System page ALL-CAPS section labels removed (uniform divider-separated list, matching Data-display); Engine ▸ Properties "Configuration properties" heading dropped and the explainer info-box flattened to plain muted subtext with inline `.engine-code` chips (matching the Keymap subtext); History limit is a numeric input like the data-display fields; dead `.settings-sublabel`/`.engine-note-ic` CSS retired. **Esc closes the Settings window** (focusable + autofocused root `onkeydown` → `window().close()` = Cancel; the keymap capture and open engine-autocomplete `stop_propagation` so Esc dismisses them first). Theme-window restyle deferred to a separate task.
+
+Drift on the built overlay: drop the "appearance & behavior" subtitle; tooltip-vs-caption affordance; theme-card source
+badge. Appearance / Data-display / System match structurally. Builds here → **W1** (standalone window + Cancel/Save
+footer, draft/save + live theme), **W2** (Engine category), **W3** (search box + History-limit), **W4** (rebindable
+Keymap). **Design alignment (done):** System page ALL-CAPS section labels removed (uniform divider-separated list,
+matching Data-display); Engine ▸ Properties "Configuration properties" heading dropped and the explainer info-box
+flattened to plain muted subtext with inline `.engine-code` chips (matching the Keymap subtext); History limit is a
+numeric input like the data-display fields; dead `.settings-sublabel`/`.engine-note-ic` CSS retired. **Esc closes the
+Settings window** (focusable + autofocused root `onkeydown` → `window().close()` = Cancel; the keymap capture and open
+engine-autocomplete `stop_propagation` so Esc dismisses them first). Theme-window restyle deferred to a separate task.
 
 ### U13 · Export modal — `rebuild`
-Functionally correct, but the UI has drifted so far from v19 that it's a **complete rebuild**, not a patch. One task → **D6** (rebuild the modal to the canvas; keep the export/backend logic).
+
+Functionally correct, but the UI has drifted so far from v19 that it's a **complete rebuild**, not a patch. One task →
+**D6** (rebuild the modal to the canvas; keep the export/backend logic).
 
 ### U14 · Config / Register-table modal — `restyle` (built parts)
-Drift on the built (local) modal: status order (below import-options, above Hive); add the SOURCE PATHS **REQUIRED badge + resolution tooltip**; drop the subtitle. Honesty tidies (per-path counts, no-fake-stepper) + Hive partitioning already match.
-Builds here → **W7** (LOCATION toggle + object-store branch), **D8** (import-read options).
+
+Drift on the built (local) modal: status order (below import-options, above Hive); add the SOURCE PATHS **REQUIRED
+badge + resolution tooltip**; drop the subtitle. Honesty tidies (per-path counts, no-fake-stepper) + Hive partitioning
+already match. Builds here → **W7** (LOCATION toggle + object-store branch), **D8** (import-read options).
 
 ### U15 · Dialogs — `restyle`
 
@@ -155,28 +207,30 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 | W2 | Engine settings category (S17; owns U12 Engine)                                                     | ✅     | **Shipped + green (d74d86e).** Built on the headless **strata-forms** layer (workspace sub-crates `strata-forms` + `strata-forms-macro`; the form owns the draft): a typed `EngineForm` (`#[derive(Form)]`, one field per option keyed by its config id) is the UI-layer working draft, seeded from / mapped back into `Settings.engine` on `form.submit()` (gate + `on_submit`); `crate::engine_config` stays a datafusion-free **domain** catalog (key/label/desc/kind/default + validate/effective/set_override). Settings ▸ Engine renders grouped rows via the app-side `FormField{kind}` (bool→Toggle, enum→Select, int→NumberStepper, text→TextInput) with per-field validation + inline error caption + a **reset-all** button; `Settings.engine` stays a `BTreeMap` of **only non-default overrides** (== default clears the key). **Global** config (in the shared Settings), **applied live**: `crate::engine` builds each window's `SessionContext` from the overrides (9 `ConfigOptions` on `SessionConfig`; 2 `datafusion.runtime.*` on a `RuntimeEnv` via `RuntimeEnvBuilder` + `parse_capacity_limit`), and `ProjectRoot`'s effect sends `Command::SetEngineConfig` on any Save → the engine live-sets the 9 through `state_ref().write().config_mut().options_mut()` (tables preserved); a saved `runtime.*` change (differs from what the engine was built with) emits `Event::EngineRestartRequired` → an `EngineRestartHost` modal ("Restart to apply" · Not now / Restart), Restart → `projects::restart_window` (persist + respawn the project window + close this one). `format.*` (null/date/timestamp) wired into the grid cell formatter (`CellFormat`). **SQL escape hatch dropped** — the editor already runs with `with_allow_statements(false)`, so `SET`/`RESET`/`SHOW datafusion.*` don't apply. **Redesigned (design24, c0e78aa):** the typed strata-forms `EngineForm` was replaced by a bespoke free-form key/value **Properties** editor (JetBrains-style — add/remove/duplicate/paste rows, catalog autocomplete via `Popup`, selection inspector). `engine_config` is now a flat `ENGINE_KEYS` catalog (name/default/`Kind`/desc); per-value validation (bool/int/bytes/duration/timezone/enum) blocks Apply + reveals inline on blur; runtime.* still restart-gated. strata-forms retained for config/export/connections. |
 | W3 | Settings search box + history-limit (S18; owns U12 search + System→History)                         | ✅     | **Shipped (654d975).** Search box in the settings nav → flat results list (label + category) over a 13-entry index; picking a result routes to its page and **flashes the field** (eval-free `Anchor` — `scroll_to` + a one-shot CSS flash cleared on `animationend`), with a 'No settings match' empty state. History limit = `Settings.max_history` (default 100), surfaced as a numeric input on System ▸ History (matching the data-display fields); `project.history` is truncated to the cap after each insert.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | W4 | Keymap rebinding (S24; owns U12 Keymap rebuild)                                                     | ✅     | **Shipped (fbf263a).** Command metadata consolidated into one `COMMANDS` table (`all_commands`/`global_commands`/`describe`/`default_chord`/`is_global` derive from it; action stays in `run`). Unbind = `effective_chord -> Option<KeyChord>` (backed by `KeyBind.chord: Option`). Settings ▸ Keymap is interactive: click-to-capture, conflict box (**Reassign** steals + unbinds the other / **Cancel**), Custom badge, per-row reset ↺, Add shortcut, Reset all — **capture *and* reset are conflict-checked, so no duplicate binding is reachable**; edits the draft, persists on Apply. Dynamic shortcut hints via `keymap::hint(cmd)` replace every hardcoded glyph (header/editor/tabs/dialogs/toast; fixed a stale ⌘N→⌘T). Fix: `use_shortcuts` regained a **reactive per-window `focused` signal** (local wry `Focused` handler) — the focus-mechanism cleanup had left it one-shot, so rebinds never re-registered and blur-removal was dead; each window now re-registers its OS hotkeys from the current chords on refocus, and bindings live in the shared cross-window settings so a rebind reaches every window. **Menu left as-is** (keymap commands stay OS hotkeys, no menu accelerators; shortcut discoverability → the command palette, T3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| W5 | Author-friendly theme files + JSON Schema (S16)                                                     | ✅     | **Grouped format + schema + retuned builtins done** (scoped this pass; live-reload + plugin-dir discovery deferred). Theme files are now authored in **named groups** (`colors.{surface,border,text,accent,status,dataType,syntax,grid}` + `fonts`) — the old flat `tokens` map is **gone**; `theme.rs` `Theme.flatten()` collapses group leaves → the token map the pipeline resolves (extends/fallback/CSS render unchanged). Added `themes/theme.schema.json` (draft-07: known keys per group + lenient colour pattern; builtins carry `"$schema"`). Added `warm` to the token set. **Builtins retuned to the V25/6/7 ramp**: Midnight dark base lifted `#0b0e13`→`#15181e` (clearer JetBrains-style tiers), Daylight reworked to the JetBrains-Light comfort zone; surfaces/borders/text/status mapped design→app tokens (kept the app's own names + syntax/data colours). `:root` fallback in `main.css` synced to the new Midnight; fixed a retune fallout where grid-header cell separators (`--line`) collided with the now-similar `--elev` header bg → bumped to `--line2`. **Split out to a follow-up (not blocking W5):** live file-watch reload + plugin-contributed theme dirs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| W5 | Author-friendly theme files + JSON Schema (S16)                                                     | ✅     | **Grouped format + schema + retuned builtins done** (scoped this pass; live-reload + plugin-dir discovery deferred). Theme files are now authored in **named groups** (`colors.{surface,border,text,accent,status,dataType,syntax,grid}` + `fonts`) — the old flat `tokens` map is **gone**; `theme.rs` `Theme.flatten()` collapses group leaves → the token map the pipeline resolves (extends/fallback/CSS render unchanged). Added `themes/theme.schema.json` (draft-07: known keys per group + lenient colour pattern; builtins carry `"$schema"`). Added `warm` to the token set. **Builtins retuned to the V25/6/7 ramp**: Midnight dark base lifted `#0b0e13`→`#15181e` (clearer JetBrains-style tiers), Daylight reworked to the JetBrains-Light comfort zone; surfaces/borders/text/status mapped design→app tokens (kept the app's own names + syntax/data colours). `:root` fallback in `main.css` synced to the new Midnight; fixed a retune fallout where grid-header cell separators (`--line`) collided with the now-similar `--elev` header bg → bumped to `--line2`. **Split out to a follow-up (not blocking W5):** live file-watch reload + plugin-contributed theme dirs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | W7 | Connections pane + remote object stores (S21; owns U2 rail button + U3 pane + U14 LOCATION)         | ⬜     | Project-scoped connections (S3/GCS/HTTP), no app-managed secrets; Config-table LOCATION toggle. `CONNECTIONS_SPEC.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ### Editor & SQL
-| ID | Task | Status | Notes |
-| --- | --- | --- | --- |
-| E1 | Validator coverage (S31) | ⬜ | Unknown table/view (reuse S26 context resolver), bad leading keyword, unterminated string; accumulate all. |
-| E2 | Autocomplete follow-ups (S7) | 🟡 | ⌘Space trigger, flip-up, caret-after-accept. Core shipped. |
-| E3 | Undo/redo per tab (C12) | ⬜ | ⌘Z / ⇧⌘Z; `dioxus-code` history vs explicit per-workspace stack. |
-| E4 | Editor Run = three icon buttons (owns U4; supersedes S30 split-button) | ✅ | Accent **Run** (⌘↵) + neutral **Explain plan** (list) + **Explain analyze** (stopwatch); Run→red **Cancel** while running. Explain buttons dispatch `Action::RunExplain(analyze)`; the handler `query::run_explain` wraps the SQL via `plan::as_explain` (strip+reapply `EXPLAIN [ANALYZE]`, unit-tested) and routes it through the shared engine explain path — **editor buffer untouched**, like Save-as-view. Added `IconButtonVariant::Primary` (accent-fill, `.stop`=red) + `IconName::List`/`Stopwatch`. |
+
+| ID | Task                                                                   | Status | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|----|------------------------------------------------------------------------|--------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| E1 | Validator coverage (S31)                                               | ⬜     | Unknown table/view (reuse S26 context resolver), bad leading keyword, unterminated string; accumulate all.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| E2 | Autocomplete follow-ups (S7)                                           | 🟡     | ⌘Space trigger, flip-up, caret-after-accept. Core shipped.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| E3 | Undo/redo per tab (C12)                                                | ⬜     | ⌘Z / ⇧⌘Z; `dioxus-code` history vs explicit per-workspace stack.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| E4 | Editor Run = three icon buttons (owns U4; supersedes S30 split-button) | ✅     | Accent **Run** (⌘↵) + neutral **Explain plan** (list) + **Explain analyze** (stopwatch); Run→red **Cancel** while running. Explain buttons dispatch `Action::RunExplain(analyze)`; the handler `query::run_explain` wraps the SQL via `plan::as_explain` (strip+reapply `EXPLAIN [ANALYZE]`, unit-tested) and routes it through the shared engine explain path — **editor buffer untouched**, like Save-as-view. Added `IconButtonVariant::Primary` (accent-fill, `.stop`=red) + `IconName::List`/`Stopwatch`. |
 
 ### Results & data
-| ID | Task | Status | Notes |
-| --- | --- | --- | --- |
-| Rz2 | Chart view (R2; owns U7) | ⬜ | 6 types, canvas, encoder strip, client aggregate, guardrails. `CHART_SPEC.md`. |
-| Rz3 | Grid selection + live aggregate (R3; owns U5 selection + U6 selection token) | ✅ | Cell/range (click + shift-extend + drag-paint) · Excel-style **headers** (plain=select-only, ⌘=toggle one, ⇧=contiguous range via `run.sel_anchor`) · `#` corner=select-all · Esc/click-off clear · status-bar aggregate. ⌘A via a **context-aware Edit-menu item** that greys out of scope (grid/text-input focus tracked → `menu::set_select_all_scope`; input select-all re-emitted natively). Copy = Rz4. |
-| Rz-cols | **Resizable columns (V20)** | ✅ | Per-column drag grip on the header right edge (8px, accent line on hover **and** held lit through the drag), double-click **auto-fit** (clamp 64–520). Widths keyed by col index on the run (`col_widths`, session-scoped, survive paging/sort, reset on clear). Drag via `ResizeTarget::Column` on the existing root move/up driver; default width = `Settings.default_col_width` (struct-only). Rows size to the width-sum (`grid-inner: max-content`) so scroll kicks in + the last column always grows. |
-| Rz4 | Copy affordances (R4) | ✅ | Right-click selection → **Copy as TSV / CSV / JSON / Markdown** (⌘C = TSV, via a context-aware Edit-menu Copy item). One shared Arrow serializer (`crate::serialize`): the selection is projected + `take`n into a `RecordBatch`, then written by a `RecordBatchWriter` per format — arrow-csv, `PrettyJsonWriter` (arrow-json encode + whole-document serde_json pretty), a padded/right-aligned `MarkdownWriter`; nested struct/list/map stay real JSON, flattened to compact JSON for the flat formats; all carry headers. Clipboard is page-bounded — export→clipboard dropped, export is file-only. |
-| Rz5 | Record (row-detail) view (R5; owns U5/U15 record view) | ✅ | Double-click the row-number gutter → centred modal (`RecordDialog`): the row as a **key→value** card — column name over its type-coloured Arrow type, scalar values grid-coloured, **nested struct/list/map as pretty JSON** (`serialize::cell_pretty_json`) in a recessed block. `Row n of total` header, ↑/↓ prev/next (page-local, clamped), `⋯` menu → Copy as TSV/CSV/JSON/Markdown (`Action::CopyRecord` → `query::copy_record`, single-row batch through the Rz4 serializer). |
-| Rz6 | Column sort (R6; owns U5 sort) | ✅ | Header sort chevron cycles asc→desc→clear; applied as an `ORDER BY` over the on-disk snapshot at page-read time (`FetchPage.sort`, DataFrame `.sort()`), nulls always last, real Arrow-type ordering. `run.sort` per result set (survives paging, reset on new result); sort re-fetches page 1. |
-| Rz8 | Clear-results button (R8; owns U6 clear) | ✅ | `Action::ClearResults` → `query::clear_results`; trash in right cluster → empty state, guarded mid-run. |
-| Rz-plan | Plan view v3 rework (S20; owns U8) | ✅ | Engine emits a typed, pre-labelled `Vec<Metric>` (classified by `MetricValue` variant) + derived per-node **self-time** (`crate::plan::self_time_ms`, §7); UI = three-tier card (headline rows·self-time·bytes·time-share bar → non-zero `insights()` callouts → collapsed `metric_group()` grid w/ hide-zeros), depth guide-rails, 2-line detail clamp, amber ANALYZE badge, active-tab summary. `EXPLAIN_PLAN_SPEC.md` v3. ⏳ awaiting green build on Mac. |
+
+| ID      | Task                                                                         | Status | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+|---------|------------------------------------------------------------------------------|--------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Rz2     | Chart view (R2; owns U7)                                                     | ⬜     | 6 types, canvas, encoder strip, client aggregate, guardrails. `CHART_SPEC.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Rz3     | Grid selection + live aggregate (R3; owns U5 selection + U6 selection token) | ✅     | Cell/range (click + shift-extend + drag-paint) · Excel-style **headers** (plain=select-only, ⌘=toggle one, ⇧=contiguous range via `run.sel_anchor`) · `#` corner=select-all · Esc/click-off clear · status-bar aggregate. ⌘A via a **context-aware Edit-menu item** that greys out of scope (grid/text-input focus tracked → `menu::set_select_all_scope`; input select-all re-emitted natively). Copy = Rz4.                                                                                                                                                                                            |
+| Rz-cols | **Resizable columns (V20)**                                                  | ✅     | Per-column drag grip on the header right edge (8px, accent line on hover **and** held lit through the drag), double-click **auto-fit** (clamp 64–520). Widths keyed by col index on the run (`col_widths`, session-scoped, survive paging/sort, reset on clear). Drag via `ResizeTarget::Column` on the existing root move/up driver; default width = `Settings.default_col_width` (struct-only). Rows size to the width-sum (`grid-inner: max-content`) so scroll kicks in + the last column always grows.                                                                                              |
+| Rz4     | Copy affordances (R4)                                                        | ✅     | Right-click selection → **Copy as TSV / CSV / JSON / Markdown** (⌘C = TSV, via a context-aware Edit-menu Copy item). One shared Arrow serializer (`crate::serialize`): the selection is projected + `take`n into a `RecordBatch`, then written by a `RecordBatchWriter` per format — arrow-csv, `PrettyJsonWriter` (arrow-json encode + whole-document serde_json pretty), a padded/right-aligned `MarkdownWriter`; nested struct/list/map stay real JSON, flattened to compact JSON for the flat formats; all carry headers. Clipboard is page-bounded — export→clipboard dropped, export is file-only. |
+| Rz5     | Record (row-detail) view (R5; owns U5/U15 record view)                       | ✅     | Double-click the row-number gutter → centred modal (`RecordDialog`): the row as a **key→value** card — column name over its type-coloured Arrow type, scalar values grid-coloured, **nested struct/list/map as pretty JSON** (`serialize::cell_pretty_json`) in a recessed block. `Row n of total` header, ↑/↓ prev/next (page-local, clamped), `⋯` menu → Copy as TSV/CSV/JSON/Markdown (`Action::CopyRecord` → `query::copy_record`, single-row batch through the Rz4 serializer).                                                                                                                     |
+| Rz6     | Column sort (R6; owns U5 sort)                                               | ✅     | Header sort chevron cycles asc→desc→clear; applied as an `ORDER BY` over the on-disk snapshot at page-read time (`FetchPage.sort`, DataFrame `.sort()`), nulls always last, real Arrow-type ordering. `run.sort` per result set (survives paging, reset on new result); sort re-fetches page 1.                                                                                                                                                                                                                                                                                                          |
+| Rz8     | Clear-results button (R8; owns U6 clear)                                     | ✅     | `Action::ClearResults` → `query::clear_results`; trash in right cluster → empty state, guarded mid-run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Rz-plan | Plan view v3 rework (S20; owns U8)                                           | ✅     | Engine emits a typed, pre-labelled `Vec<Metric>` (classified by `MetricValue` variant) + derived per-node **self-time** (`crate::plan::self_time_ms`, §7); UI = three-tier card (headline rows·self-time·bytes·time-share bar → non-zero `insights()` callouts → collapsed `metric_group()` grid w/ hide-zeros), depth guide-rails, 2-line detail clamp, amber ANALYZE badge, active-tab summary. `EXPLAIN_PLAN_SPEC.md` v3. ⏳ awaiting green build on Mac.                                                                                                                                             |
 
 ### Catalog & sources
 
@@ -192,63 +246,63 @@ Feature/behaviour work; several own a Part-1 "build" gap (cross-refs above).
 | D11 | Catalog validity indicators (invalid tables / views)                  | ✅     | The catalog is *definitions*, not a mirror of DataFusion — a row can exist yet not work. Now flagged with a warning triangle (`.cat-warn`, hover for the reason). **Tables:** already tracked `RegStatus::Failed` + `error` from a load failure (missing file / bad path) but never rendered it — now `table_problem` surfaces it. **Views:** new `CatalogView.error` set from the `ViewChanged` **Err** branch (which previously just logged) for hard failures — a SQL error, or a base table missing at creation. **Plus a *derived* missing-dependency check** (`view_problem`): a view is invalid if any of its `deps` (D10 base tables) is absent or itself `Failed`. Pure catalog computation, recomputed against the live tables every render — no engine round-trip, no stored flag to invalidate, self-heals when the table returns, transitive because deps are flattened base tables. ⚠️ **Overturned a wrong premise (verified against DF 54 source):** dropping a table does **not** break its views immediately. A view's stored plan captures each source by `Arc<dyn TableSource>` and physical planning scans off that Arc — the base table's *name* is never re-resolved at query time. So after `deregister_table`, `SELECT * FROM a_view` still runs; the view only fails on **reload**, when its SQL re-plans and the name isn't found. The drop-confirm copy is corrected accordingly — dependents are "left invalid" (flagged), not "stop working". Consequence for a would-be validity API: re-issuing `CREATE OR REPLACE VIEW` catches a *directly* missing base table (planning re-resolves names) but a view-of-a-view masks it (the inlined Arc is still live), which is exactly why validity is derived from `deps` rather than by re-planning.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ### Tabs, windows & misc
-| ID | Task | Status | Notes |
-| --- | --- | --- | --- |
-| T1 | Tab drag-to-reorder (S19) | ✅ | Mousedown arms a drag; the root pointer-driver promotes it past a threshold (`AppState.tab_drag`, mirrors the resize driver). JetBrains-style bespoke visuals: the dragged tab is **lifted out** of the strip (not rendered), a floating `.ws-tab-ghost` rides the cursor, and a `.ws-tab-slot` gap opens at the drop point. The drop index is computed in **visible (post-removal) order** from the hovered tab's midpoint (per-tab `onmousemove` + measured widths), so every slot — including the origin — is reachable. **Edge auto-scroll**: a spawned loop scrolls the track (`MountedData::scroll`) while the pointer sits near either edge. Reorder = `session::move_workspace` (active stays active by id); autosaves the session. |
-| T2 | Intercept OS-triggered closes (A8) | ⬜ | Red-button / ⌘Q / dock → themed RunningClose (unsafe objc; iterate-together). |
-| T3 | Command palette depth (C5; owns U11) | 🟡 | Grouping, keyboard nav, per-item icons + shortcut hints, columns group. |
-| T4 | Tab close dot→× hover-swap (U4 nicety) | ✅ | Close slot shows × on a clean tab, and on a dirty tab an unsaved dot that becomes × on hover (CSS off `.ws-tab.dirty` / `:hover`); the dirty marker moved off the leading status dot into the close slot, per the canvas. |
+
+| ID | Task                                   | Status | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+|----|----------------------------------------|--------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| T1 | Tab drag-to-reorder (S19)              | ✅     | Mousedown arms a drag; the root pointer-driver promotes it past a threshold (`AppState.tab_drag`, mirrors the resize driver). JetBrains-style bespoke visuals: the dragged tab is **lifted out** of the strip (not rendered), a floating `.ws-tab-ghost` rides the cursor, and a `.ws-tab-slot` gap opens at the drop point. The drop index is computed in **visible (post-removal) order** from the hovered tab's midpoint (per-tab `onmousemove` + measured widths), so every slot — including the origin — is reachable. **Edge auto-scroll**: a spawned loop scrolls the track (`MountedData::scroll`) while the pointer sits near either edge. Reorder = `session::move_workspace` (active stays active by id); autosaves the session. |
+| T2 | Intercept OS-triggered closes (A8)     | ⬜     | Red-button / ⌘Q / dock → themed RunningClose (unsafe objc; iterate-together).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| T3 | Command palette depth (C5; owns U11)   | 🟡     | Grouping, keyboard nav, per-item icons + shortcut hints, columns group.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| T4 | Tab close dot→× hover-swap (U4 nicety) | ✅     | Close slot shows × on a clean tab, and on a dirty tab an unsaved dot that becomes × on hover (CSS off `.ws-tab.dirty` / `:hover`); the dirty marker moved off the leading status dot into the close slot, per the canvas.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ---
 
 ## Part 3 — Done (reference)
 
-**Architecture:** project-scoped state · `Action`/`dispatch` · overlay containers + per-window
-store · modal form-state off `AppState` · per-tab run state · `.strata/` split + dirty tracking ·
-workspace module split · **DataFusion 43→54 upgrade**.
+**Architecture:** project-scoped state · `Action`/`dispatch` · overlay containers + per-window store · modal form-state
+off `AppState` · per-tab run state · `.strata/` split + dirty tracking · workspace module split · **DataFusion 43→54
+upgrade**.
 
-**Design system:** **S28** (type/colour/control/icon/dot tokens + components, app-wide migration,
-dead-CSS retired) · **S29** (overlay/menu family) · **S2** JSON theming.
+**Design system:** **S28** (type/colour/control/icon/dot tokens + components, app-wide migration, dead-CSS retired) ·
+**S29** (overlay/menu family) · **S2** JSON theming.
 
-**Features shipped:** launcher + multi-window + pinning + reopen-on-startup · permanent activity
-rail · sidebar/catalog + filter + context menus + inline rename · SQL editor + **autocomplete (S7)**
-+ **validator + squiggles + hover popover (S25/S26/S27)** · tabs (rename/context/overflow/show-all/
-duplicate) · results grid + **unified status bar + pager (R1)** · plan view (thin, S12) ·
-**cancellation + confirm-close (S14)** · error view · drawer (Problems/Events/History) · command
-palette (core) · settings (Appearance/Data/System/Keymap, in-window) · **real export (C2)** ·
-config/register-table (C3) · saved queries · native File/Edit/Window menu · themes.
+**Features shipped:** launcher + multi-window + pinning + reopen-on-startup · permanent activity rail ·
+sidebar/catalog + filter + context menus + inline rename · SQL editor + **autocomplete (S7)**
+
++ **validator + squiggles + hover popover (S25/S26/S27)** · tabs (rename/context/overflow/show-all/ duplicate) · results
+  grid + **unified status bar + pager (R1)** · plan view (thin, S12) · **cancellation + confirm-close (S14)** · error
+  view · drawer (Problems/Events/History) · command palette (core) · settings (Appearance/Data/System/Keymap,
+  in-window) · **real export (C2)** · config/register-table (C3) · saved queries · native File/Edit/Window menu ·
+  themes.
 
 ---
 
 ## Rough order
 
 1. **F3 spacing/radius tokens** app-wide — the v19 headline; cheap, high-impact.
-2. **Restyle aligns** (built-but-wrong, cheap): U4 restyle done (**E4** Run buttons + **T4** tab-close; tab *features* **T1**/**T2** still open) · U6 ✅
-   (collapsible-find + **Rz8** clear) · U1/U2/U12/U14 surface polish · U10. Makes the built app *feel* v19.
-3. **Rebuilds of built surfaces:** U9 inspector metadata (grid → dynamic key/value box) ·
-   U3 sidebar (collapsible sections + nested-column expand) ✅ · **D6** export modal (full UI rebuild, backend kept).
-4. **Feature builds** (Part 2 — these *are* the "missing" surfaces): **W1** Settings window ·
-   **W7** connections (lands the U2 rail button + U3 pane + U14 LOCATION) · **Rz2** chart ·
-   **Rz3–Rz6** grid selection/copy/record/sort · **Rz-plan** plan v3 · **D4** profiling · **T3** palette depth.
+2. **Restyle aligns** (built-but-wrong, cheap): U4 restyle done (**E4** Run buttons + **T4** tab-close; tab *features*
+   **T1**/ **T2** still open) · U6 ✅ (collapsible-find + **Rz8** clear) · U1/U2/U12/U14 surface polish · U10. Makes the
+   built app *feel* v19.
+3. **Rebuilds of built surfaces:** U9 inspector metadata (grid → dynamic key/value box) · U3 sidebar (collapsible
+   sections + nested-column expand) ✅ · **D6** export modal (full UI rebuild, backend kept).
+4. **Feature builds** (Part 2 — these *are* the "missing" surfaces): **W1** Settings window · **W7** connections (lands
+   the U2 rail button + U3 pane + U14 LOCATION) · **Rz2** chart · **Rz3–Rz6** grid selection/copy/record/sort ·
+   **Rz-plan** plan v3 · **D4** profiling · **T3** palette depth.
 5. **Functional polish:** E1 validator · E3 undo/redo · W2–W5 settings/theme · T2 OS-close.
 
 ---
 
 ## Known bugs
 
-- **Re-opening the *already-open* project via File ▸ Open Recent corrupts its saved
-  paths.** Picking the recent that's the project currently open in the window (an
-  in-place re-open of itself) mangles the table's **relative source paths** and
-  **partition columns** on the next save (repro: `sample/signups.json`). Re-opening a
-  *different* project — or the same project from the header switcher — is fine; only
-  the same-project entry in the native recent submenu triggers it. Surfaced during F7
-  B12. Likely in the `open_in_current` / re-`install` path when the incoming path
-  equals the live project (paths get re-resolved/relativised against the wrong base
-  before the outgoing project is torn down). Deferred — revisit later.
+- **Re-opening the *already-open* project via File ▸ Open Recent corrupts its saved paths.** Picking the recent that's
+  the project currently open in the window (an in-place re-open of itself) mangles the table's **relative source paths**
+  and **partition columns** on the next save (repro: `sample/signups.json`). Re-opening a *different* project — or the
+  same project from the header switcher — is fine; only the same-project entry in the native recent submenu triggers it.
+  Surfaced during F7 B12. Likely in the `open_in_current` / re-`install` path when the incoming path equals the live
+  project (paths get re-resolved/relativised against the wrong base before the outgoing project is torn down).
+  Deferred — revisit later.
 
-- **Editing a view's query and pressing ⌘S saves it as a *saved query*, not an
-  update to the view.** Opening a view's underlying SQL in the editor and hitting
-  ⌘S routes through the Save-query path, so it lands as a new saved query rather
-  than re-issuing `CREATE OR REPLACE VIEW` on the view being edited. Unintuitive —
-  the user expects ⌘S to update the view they opened. Needs the editor to remember
-  it's editing a view (origin) and route Save to the view-update path.
+- **Editing a view's query and pressing ⌘S saves it as a *saved query*, not an update to the view.** Opening a view's
+  underlying SQL in the editor and hitting ⌘S routes through the Save-query path, so it lands as a new saved query
+  rather than re-issuing `CREATE OR REPLACE VIEW` on the view being edited. Unintuitive — the user expects ⌘S to update
+  the view they opened. Needs the editor to remember it's editing a view (origin) and route Save to the view-update
+  path.
