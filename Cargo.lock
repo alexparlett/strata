@@ -7881,6 +7881,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-freya"
+version = "0.2.0"
+dependencies = [
+ "freya",
+]
+
+[[package]]
 name = "strata-model"
 version = "0.2.0"
 dependencies = [

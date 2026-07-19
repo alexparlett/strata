@@ -4,6 +4,7 @@
 # `strata-freya`. See docs/FREYA_PORT_PLAN.md.
 members = [
     "crates/strata-dioxus",
+    "crates/strata-freya",
     "crates/strata-forms",
     "crates/strata-forms-macro",
     "crates/strata-model",

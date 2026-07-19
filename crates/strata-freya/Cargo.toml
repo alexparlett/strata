@@ -1,0 +1,16 @@
+[package]
+name = "strata-freya"
+version = "0.2.0"
+edition = "2021"
+description = "Strata's Freya (Skia/native) frontend — the Freya-port target. Rides the shared strata-core alongside the transitional strata-dioxus app."
+license = "MIT"
+
+[dependencies]
+# Native GUI (Skia). 0.4 = the own-reactive-core line (no Dioxus). If 0.4 isn't yet
+# on crates.io, switch to the git dep — see docs/PHASE1_HANDOFF.md.
+freya = "0.4"
+
+# NB: no tokio here. The engine owns its runtime on its own thread; the UI side only does
+# non-blocking `cmd_tx.send()` + awaits the engine's `tokio::sync` mpsc under Freya's own
+# `spawn` (sync channels are executor-agnostic). 1b adds `tokio = { features = ["sync"] }`
+# only to *name* the channel type — no runtime, no `rt.enter()`.
