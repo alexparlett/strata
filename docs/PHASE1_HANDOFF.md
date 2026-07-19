@@ -58,11 +58,25 @@ exact `launch(LaunchConfig::new().with_window(WindowConfig::new(app)))` example)
 - `use freya::prelude::*` should cover `rect`/`launch`/`LaunchConfig`/`WindowConfig`.
 - window title/size intentionally omitted here; added in 1b once the toolchain is proven.
 
-## 1b — engine bridge + round-trip (next)
+## 1b — engine bridge + round-trip
 
-Add deps: `strata-core`, `strata-model`, and `tokio = { version = "1", features = ["sync"] }`
-(sync **only** — just to name `UnboundedReceiver<Event>`; no runtime). Then: spawn
-`strata_core::engine::Engine`; put the cmd handle in root context; drain the `Event` stream in
-a Freya `spawn` loop into a Radio station; a SQL input + Run button → `Command::Query` (start
-with `SELECT` literals, no tables) → render `QueryOutput` rows. Proves the shared core runs
-real queries under Freya.
+Deps added: `strata-core`, `strata-model`, `tokio = { features = ["sync"] }` (sync **only** —
+just to name `UnboundedReceiver<Event>`; no runtime).
+
+**Slice 1 (this build) — prove the bridge, minimal UI.** `src/engine/mod.rs` spawns the core
+engine and returns a cloneable `EngineCtx` (sending half) + the event `evt_rx`; needed a tiny
+core addition, `Engine::sender()` (clone of `cmd_tx`, so the whole non-`Clone` handle needn't
+go into context). `ProjectApp::render` spawns the engine in a `use_hook`, drains `evt_rx` in a
+Freya `spawn` into `use_state`, and a **Run** button fires a hardcoded `Command::Query`
+(`SELECT 1 AS n, 'hello' AS greeting` — no tables), rendered as a plain text table on
+`Event::QueryResult`. This validates: engine spawns under Freya, the `tokio::sync` drain works
+on Freya's executor, and the round-trip lands.
+
+Likely first-build wrinkles (blind Freya API — all small): the `.children(iter)` /
+`.width(Size::px(..))` / `.map`/`.maybe` builder signatures, and whether `use_state.set()` from
+inside `spawn` needs any extra bound. Report anything and I'll adjust.
+
+**Slice 2 (next) — station + input.** Promote `result`/`error`/`running` into a per-window
+Radio station (`apps/project/state.rs`, `use_init_radio_station`), add a Freya `Input`
+two-way-bound SQL box (`State<String>::into_writable()`), and extract the body into
+`apps/project/views/workbench.rs`. Then Phase 1 is complete.

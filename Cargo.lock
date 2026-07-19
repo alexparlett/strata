@@ -7885,6 +7885,9 @@ name = "strata-freya"
 version = "0.2.0"
 dependencies = [
  "freya",
+ "strata-core",
+ "strata-model",
+ "tokio",
 ]
 
 [[package]]

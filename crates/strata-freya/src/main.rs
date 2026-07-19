@@ -15,6 +15,7 @@ use apps::project::ProjectApp;
 use freya::prelude::*;
 
 mod apps;
+mod engine;
 
 fn main() {
     launch(LaunchConfig::new().with_window(WindowConfig::new_app(ProjectApp)));

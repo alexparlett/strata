@@ -94,6 +94,13 @@ impl Engine {
         let _ = self.cmd_tx.send(cmd);
     }
 
+    /// A cloned command sender — the sending half of the handle, for a frontend that
+    /// holds it in framework context (e.g. Freya) rather than the whole handle. The clone
+    /// keeps the command channel open alongside the worker.
+    pub fn sender(&self) -> UnboundedSender<Command> {
+        self.cmd_tx.clone()
+    }
+
     /// Allocate the next request id (monotonic).
     pub fn next_req(&self) -> u64 {
         self.next_req.fetch_add(1, Ordering::Relaxed)
