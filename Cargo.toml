@@ -1,19 +1,22 @@
 [workspace]
-# Virtual manifest — no root package. Each frontend is a sibling binary crate on the
-# shared core (Freya port): `strata-dioxus` (the transitional Dioxus app) and, coming,
-# `strata-freya`. See docs/FREYA_PORT_PLAN.md.
+# Virtual manifest — no root package. The Freya frontend (`strata-freya`) + the shared core
+# crates. The transitional Dioxus app (`strata-dioxus`) is deliberately NOT a member: its editor
+# stack (dioxus-code → arborium-tree-sitter) and Freya's (freya-code-editor → tree-sitter) both
+# set `links = "tree-sitter"`, and Cargo forbids two packages linking the same native lib in one
+# dependency graph. So `strata-dioxus` is its own workspace (see its Cargo.toml); both workspaces
+# share strata-core / strata-model / strata-forms via path deps. See docs/FREYA_PORT_PLAN.md.
 members = [
-    "crates/strata-dioxus",
     "crates/strata-freya",
     "crates/strata-forms",
     "crates/strata-forms-macro",
     "crates/strata-model",
     "crates/strata-core",
 ]
-# Bare `cargo build` / `cargo run` at the root target only the Dioxus app, so adding the
-# Skia-heavy `strata-freya` member later never pulls Skia into the default build (build it
-# explicitly with `-p strata-freya`).
-default-members = ["crates/strata-dioxus"]
+# Its own workspace — keep it out of this graph so the tree-sitter link conflict can't arise.
+exclude = ["crates/strata-dioxus"]
+# Bare `cargo build` / `cargo run` at the root target the Freya app (the port target). Build the
+# Dioxus app from its own directory (`cd crates/strata-dioxus && cargo run`).
+default-members = ["crates/strata-freya"]
 resolver = "2"
 
 # Profiles are honoured only at the workspace root (a virtual manifest), so they live here

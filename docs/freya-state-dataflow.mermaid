@@ -1,0 +1,47 @@
+flowchart TD
+    subgraph APP[App-global switchboard]
+        MENU["OS menu / tray handler<br/>(context-less)"]
+        SW["Switchboard<br/>focused window + inboxes"]
+    end
+
+    subgraph WIN[Project window = one Session]
+        direction TB
+        COMP["Components<br/>strip · editor · results · sidebar"]
+        STATION["SessionState (Radio) — CONCERN 1<br/>tabs own their CodeEditorData"]
+        PROJECT["Project store (Radio)<br/>views · saved queries (save targets)"]
+        LAYOUT["Layout store<br/>context signal"]
+        LOG["Event log store<br/>context signal · complete record"]
+        QUERY["Query layer (freya-query) — CONCERN 2<br/>cache keyed by QuerySpec"]
+        GATE["Engine handle · EngineCtx<br/>(context)"]
+        ROUTER["Event router<br/>owns evt_rx + pending map"]
+        ROOT["Window root<br/>drains MenuCommand"]
+    end
+
+    ENGINE["Engine thread<br/>(DataFusion)"]
+
+    %% concern 1: tab management (stateful tabs in the store)
+    COMP -->|methods / editor slice write| STATION
+    STATION -->|per-tab + structural channels| COMP
+    PROJECT -->|save target lookup| COMP
+
+    %% satellites
+    COMP <-->|resize / toggle| LAYOUT
+    LOG -->|read: toasts / problems| COMP
+
+    %% concern 2: results element drives freya-query off the tab's sql
+    COMP -->|Run / page / plan: use_query spec| QUERY
+    QUERY -->|state: pending / loading / settled / err| COMP
+    QUERY -->|run: engine.query spec| GATE
+    GATE -->|Command req_id| ENGINE
+
+    %% event path
+    ENGINE -->|Event stream| ROUTER
+    ROUTER -->|complete oneshot: result or err| QUERY
+    ROUTER -->|log every error + notice| LOG
+    GATE -.->|register req to oneshot| ROUTER
+
+    %% menu seam (the one context-less boundary)
+    MENU -->|forward MenuCommand| SW
+    SW -->|to focused inbox| ROOT
+    ROOT -->|call SessionState method| STATION
+    COMP -.->|register sender + focus| SW

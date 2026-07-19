@@ -8,7 +8,8 @@ license = "MIT"
 [dependencies]
 # Native GUI (Skia). 0.4 = the own-reactive-core line (no Dioxus). If 0.4 isn't yet
 # on crates.io, switch to the git dep — see docs/PHASE1_HANDOFF.md.
-freya = "0.4"
+# `radio` = per-window Session store; `code-editor` = the Rope-backed CodeEditorData a QueryTab owns.
+freya = { version = "0.4", features = ["radio", "code-editor"] }
 
 # The shared core: engine (Command/Event protocol + worker handle) + the data vocabulary.
 strata-core = { path = "../strata-core" }
@@ -21,3 +22,6 @@ tokio = { version = "1", features = ["sync"] }
 # The native theme format (themes/*.json) → deserialized into the Freya ColorsSheet.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Stable per-tab identity (TabId) + serde for the future session snapshot.
+uuid = { version = "1", features = ["v4", "serde"] }

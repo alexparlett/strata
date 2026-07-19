@@ -5,5 +5,6 @@
 
 mod project;
 mod contexts;
+mod state;
 
 pub use project::ProjectApp;

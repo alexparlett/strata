@@ -1,15 +1,20 @@
 //! The project window **root shell** (rail · sidebar · workbench · drawer).
 //!
-//! Phase 1b (bridge slice): spawn the shared engine, drain its event stream, and prove the
-//! `Command -> Event -> rows` round-trip with a hardcoded query. The SQL input + per-window
-//! Radio station (`state/`) + the extracted `views/workbench` land in the next slice; the
-//! rail/sidebar/inspector/drawer follow in later phases.
+//! Phase 1c (Session station slice): initialise this window's per-window Session store and prove
+//! the tab-management model — new / duplicate / close / reopen / switch / dirty — reacts through
+//! the Radio channels. The strip here is a **throwaway** text list; the real DS tab strip + the
+//! `CodeEditor` bound to each tab's `Writable<CodeEditorData>` slice land in the next slice.
+//!
+//! The engine `Command -> Event -> rows` round-trip below is the earlier 1b proof, kept until the
+//! query layer (freya-query) replaces it.
 
 use freya::prelude::*;
+use freya::radio::RadioStation;
 use strata_core::engine::{Command, Event};
 use strata_model::QueryOutput;
-use crate::apps::project::contexts::engine_ctx;
+
 use crate::apps::project::contexts::engine_ctx::EngineCtx;
+use crate::apps::project::state::{use_init_session, Chan, SessionState, TabId};
 
 pub struct ProjectApp;
 
@@ -17,14 +22,17 @@ impl App for ProjectApp {
     fn render(&self) -> impl IntoElement {
         use_init_theme(|| crate::theme::strata_theme("midnight"));
 
+        // This window's Session store (opens one blank tab), provided via context.
+        let session = use_init_session();
+
         let mut result = use_state(|| Option::<QueryOutput>::None);
         let mut error = use_state(|| Option::<String>::None);
 
         use_provide_context(|| EngineCtx::new());
 
-        // Spawn the engine once and drain its event stream into local state. (1b's next
-        // slice promotes this to the per-window Radio station.) `spawn` is Freya's, not
-        // Tokio's — it runs on the UI executor, so writing state after `.await` is safe.
+        // Spawn the engine once and drain its event stream into local state. (The query layer
+        // promotes this to the freya-query router.) `spawn` is Freya's — it runs on the UI
+        // executor, so writing state after `.await` is safe.
         use_hook(move || {
             let mut evt_rx = consume_context::<EngineCtx>().take_evt_rx();
             spawn(async move {
@@ -64,6 +72,7 @@ impl App for ProjectApp {
             .expanded()
             .theme_background()
             .vertical()
+            .child(session_strip(session))
             .child(Button::new().on_press(on_run).child("Run SELECT 1"))
             .maybe(err.is_some(), |el| {
                 el.child(
@@ -76,8 +85,74 @@ impl App for ProjectApp {
     }
 }
 
+/// Throwaway tab strip over the Session store: names (dirty-dotted), switch, close, + New,
+/// Reopen. Reads the whole store (so it re-renders on any change) — the real strip will
+/// subscribe per `Chan::Tab(id)`.
+fn session_strip(mut session: RadioStation<SessionState, Chan>) -> impl IntoElement {
+    let (rows, active, can_reopen) = {
+        let s = session.read();
+        let rows: Vec<(TabId, String, bool)> = s
+            .order
+            .iter()
+            .map(|id| {
+                let t = &s.tabs[id];
+                (*id, t.name.clone(), t.is_dirty())
+            })
+            .collect();
+        (rows, s.active, s.can_reopen())
+    };
+
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .padding(8.)
+        .children(rows.into_iter().map(move |(id, name, dirty)| {
+            let is_active = active == Some(id);
+            let title = match (is_active, dirty) {
+                (true, true) => format!("[* {name}]"),
+                (true, false) => format!("[{name}]"),
+                (false, true) => format!("* {name}"),
+                (false, false) => name,
+            };
+            rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .child(
+                    Button::new()
+                        .on_press(move |_| {
+                            session.write_channel(Chan::Tabs).switch(id);
+                        })
+                        .child(title),
+                )
+                .child(
+                    Button::new()
+                        .on_press(move |_| {
+                            session.write_channel(Chan::Tabs).close_one(id);
+                        })
+                        .child("x"),
+                )
+                .into()
+        }))
+        .child(
+            Button::new()
+                .on_press(move |_| {
+                    session.write_channel(Chan::Tabs).open_blank();
+                })
+                .child("+ New"),
+        )
+        .maybe(can_reopen, move |el| {
+            el.child(
+                Button::new()
+                    .on_press(move |_| {
+                        session.write_channel(Chan::Tabs).reopen_last();
+                    })
+                    .child("Reopen"),
+            )
+        })
+}
+
 /// A dead-simple columns + rows table over a query page (fixed-width text cells). The real
-/// selectable/virtualized grid is Phase 2.
+/// selectable/virtualized grid is a later slice.
 fn results_table(out: &QueryOutput) -> impl IntoElement {
     rect()
         .vertical()

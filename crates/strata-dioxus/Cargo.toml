@@ -5,6 +5,20 @@ edition = "2021"
 description = "Strata — a local, Athena-style parquet query workspace (Dioxus + DataFusion). The transitional Dioxus frontend during the Freya port; both frontends ride the shared strata-core."
 license = "MIT"
 
+# Own workspace root. The Dioxus editor stack (dioxus-code → arborium-tree-sitter) sets
+# `links = "tree-sitter"`, which cannot coexist in one dependency graph with Freya's
+# freya-code-editor (also `links = "tree-sitter"`). So this transitional app resolves on its own,
+# path-depending the shared core crates that live in the sibling workspace. Build from this dir.
+[workspace]
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
 [features]
 default = ["sample-data"]
 # Dev convenience: on first launch (no recent project), open the bundled on-disk
