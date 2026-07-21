@@ -1,15 +1,17 @@
 # Phase 4 — Multi-window
 
 The other OS windows and the machinery that lets them share state: **launcher**, **settings**,
-**export**, the **config / register-table** modal, cross-window shared state, and native close
-handling.
+**export**, the **config / register-table** modal, cross-window shared state, native close
+handling, and **project lifecycle** (open/load + session persistence).
 
 ## State of play
 Greenfield in Freya — only the project window exists (`apps/project/`). Per the port plan §6 these
 land here, and per §4 the cross-window singletons (settings, theme, recents) use
 **`State::create_global`** (created in `main`, passed into each window root), **not** a per-window
 Radio station. Each window is its own Freya `App` root under `apps/<window>/`. Native close uses
-**`winit CloseRequested`** (no objc). The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the
+**`winit CloseRequested`** (no objc). **Project open/load + session persistence (P4-13/14) are not
+built and are a prerequisite** — the window opens with no project today; the load half will likely be
+pulled earlier than the rest of this phase. The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the
 Freya rebuild.
 
 ## Tasks
@@ -28,6 +30,8 @@ Freya rebuild.
 | P4-10 | Export window (rebuild to canvas) | ⬜ | D6/U13 | P4-01, P2-01 |
 | P4-11 | Config / register-table modal | ⬜ | U14/D7 | — |
 | P4-12 | Import (read) options (CSV/JSON) | ⬜ | D8 | P4-11 |
+| P4-13 | Open / create a project (`.strata/` load) | ⬜ | lifecycle | P4-01 · *pull early* |
+| P4-14 | Session persistence + autosave | ⬜ | lifecycle | P4-13 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.
