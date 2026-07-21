@@ -129,7 +129,7 @@ types come from Freya's `themes.rs`; the schema (`theme.schema.json`) validates 
 | `menu_container`   | background, shadow, border_fill                                                                                          | padding (Gaps), corner_radius  |
 | `menu_item`        | background, hover_background, select_background, border_fill, select_border_fill, color                                  | corner_radius                  |
 | `tooltip`          | background, color, border_fill                                                                                           | font_size (f32)                |
-| `table`            | background, arrow_fill, row_background, hover_row_background, divider_fill, color                                        | corner_radius                  |
+| `table`            | background, arrow_fill, row_background, cell_hover_background, divider_fill, color                                        | corner_radius                  |
 | `button`           | background, hover_background, border_fill, focus_border_fill, color                                                      | — (layout via `button_layout`) |
 | `input`            | background, focus_background, color, placeholder_color, border_fill, focus_border_fill                                   | —                              |
 | `select`           | select_background, background_button, hover_background, color, border_fill, focus_border_fill, arrow_fill                | —                              |

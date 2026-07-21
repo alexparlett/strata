@@ -1,23 +1,41 @@
 [workspace]
-# Virtual manifest — no root package. The Freya frontend (`strata-freya`) + the shared core
-# crates. The transitional Dioxus app (`strata-dioxus`) is deliberately NOT a member: its editor
-# stack (dioxus-code → arborium-tree-sitter) and Freya's (freya-code-editor → tree-sitter) both
-# set `links = "tree-sitter"`, and Cargo forbids two packages linking the same native lib in one
-# dependency graph. So `strata-dioxus` is its own workspace (see its Cargo.toml); both workspaces
-# share strata-core / strata-model / strata-forms via path deps. See docs/FREYA_PORT_PLAN.md.
+# Virtual manifest — no root package. The Freya frontend (`strata-freya`) + the shared core crates
+# + our vendored editor (`strata-code-editor`). The transitional Dioxus app (`strata-dioxus`) is
+# deliberately NOT a member: its editor stack (dioxus-code → arborium-tree-sitter) and ours
+# (strata-code-editor → tree-sitter) both set `links = "tree-sitter"`, and Cargo forbids two
+# packages linking the same native lib in one dependency graph. So `strata-dioxus` is its own
+# workspace (see its Cargo.toml); both workspaces share strata-core / strata-model / strata-forms
+# via path deps. See docs/FREYA_PORT_PLAN.md.
 members = [
     "crates/strata-freya",
     "crates/strata-forms",
     "crates/strata-forms-macro",
     "crates/strata-model",
     "crates/strata-core",
+    "crates/strata-code-editor",
 ]
-# Its own workspace — keep it out of this graph so the tree-sitter link conflict can't arise.
-exclude = ["crates/strata-dioxus"]
+# `strata-dioxus` is its own workspace (tree-sitter link conflict). `crates/freya` is our Freya fork
+# checkout — kept only for convenient source editing; the build resolves it from git (see
+# `[workspace.dependencies]`), so it must NOT be treated as a member of this workspace.
+exclude = ["crates/strata-dioxus", "crates/freya"]
 # Bare `cargo build` / `cargo run` at the root target the Freya app (the port target). Build the
 # Dioxus app from its own directory (`cd crates/strata-dioxus && cargo run`).
 default-members = ["crates/strata-freya"]
 resolver = "2"
+
+# Freya (Skia/native GUI) — our fork. Resolved from the LOCAL checkout at `crates/freya` (a separate
+# workspace, excluded above), so edits there are picked up on the next `cargo build` — no push, no
+# `cargo update`. These paths canonicalize to one location, and the fork's own crates reference each
+# other by path too, so the umbrella `freya` and the sibling crates our vendored editor pulls still
+# share a single `freya-core`/`torin` (no duplicates in the graph).
+# For reproducible CI/release builds, swap these back to `{ git = "…", rev = "…" }` (pin a rev).
+[workspace.dependencies]
+freya = { path = "crates/freya/crates/freya" }
+freya-core = { path = "crates/freya/crates/freya-core" }
+freya-engine = { path = "crates/freya/crates/freya-engine" }
+freya-edit = { path = "crates/freya/crates/freya-edit" }
+freya-components = { path = "crates/freya/crates/freya-components" }
+torin = { path = "crates/freya/crates/torin" }
 
 # Profiles are honoured only at the workspace root (a virtual manifest), so they live here
 # and apply workspace-wide.

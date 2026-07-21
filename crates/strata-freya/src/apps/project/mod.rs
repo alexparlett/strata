@@ -6,5 +6,11 @@
 mod project;
 mod contexts;
 mod state;
+mod views;
+pub mod model;
 
 pub use project::ProjectApp;
+pub use views::{
+    DataGridThemePreference, HeaderBarThemePreference, StatusBarThemePreference, TabBarThemePreference,
+    TabThemePreference,
+};

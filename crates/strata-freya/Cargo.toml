@@ -6,14 +6,22 @@ description = "Strata's Freya (Skia/native) frontend — the Freya-port target. 
 license = "MIT"
 
 [dependencies]
-# Native GUI (Skia). 0.4 = the own-reactive-core line (no Dioxus). If 0.4 isn't yet
-# on crates.io, switch to the git dep — see docs/PHASE1_HANDOFF.md.
-# `radio` = per-window Session store; `code-editor` = the Rope-backed CodeEditorData a QueryTab owns.
-freya = { version = "0.4", features = ["radio", "code-editor"] }
+# Native GUI (Skia), from our fork (see the root `[workspace.dependencies]`). `radio` = per-window
+# Session store. The editor is our vendored `strata-code-editor` (owned fork of freya-code-editor),
+# NOT freya's `code-editor` feature — so we control cursor / gutter / line highlight / syntax palette
+# / squiggles / autocomplete.
+freya = { workspace = true, features = ["radio"] }
 
 # The shared core: engine (Command/Event protocol + worker handle) + the data vocabulary.
 strata-core = { path = "../strata-core" }
 strata-model = { path = "../strata-model" }
+
+# Our owned code-editor surface (vendored from freya-code-editor; see the crate's lib.rs).
+strata-code-editor = { path = "../strata-code-editor" }
+
+# The SQL grammar fed to the editor (derekstride/tree-sitter-sql). Its handle comes via
+# tree-sitter-language, so `LANGUAGE` drops into `EditorLanguage::new` with no direct tree-sitter dep.
+tree-sitter-sequel = "0.3"
 
 # `sync` ONLY — just to name the engine's `UnboundedReceiver<Event>` and drain it under
 # Freya's `spawn`. No runtime, no `rt.enter()`: the engine owns its runtime on its thread.

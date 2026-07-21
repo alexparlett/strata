@@ -16,7 +16,13 @@ use freya::prelude::*;
 
 mod apps;
 mod theme;
+pub mod components;
 
 fn main() {
-    launch(LaunchConfig::new().with_window(WindowConfig::new_app(ProjectApp)));
+    launch(
+        LaunchConfig::new()
+            .with_window(
+                ProjectApp::window()
+            ),
+    );
 }

@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
-use freya::code_editor::{CodeEditorData, EditorLanguage, Rope};
 use serde::{Deserialize, Serialize};
+use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
 use uuid::Uuid;
 
 /// Stable per-tab identity — real identity, so no allocator and no duplicate-id repair.
@@ -42,11 +42,25 @@ pub struct QueryTab {
     pub origin: Origin,
 }
 
+/// The SQL grammar (derekstride/tree-sitter-sql via `tree-sitter-sequel`) + its highlights query,
+/// handed to each tab's editor for syntax highlighting.
+fn sql_language() -> EditorLanguage {
+    EditorLanguage::new(
+        tree_sitter_sequel::LANGUAGE,
+        tree_sitter_sequel::HIGHLIGHTS_QUERY,
+    )
+}
+
 impl QueryTab {
     /// A tab holding `sql`, bound to `origin`. The editor is marked saved at its opening text,
     /// so a freshly-opened bound tab reads as *not* dirty until edited.
     pub fn new(name: String, sql: String, origin: Origin) -> Self {
-        let mut editor = CodeEditorData::new(Rope::from_str(&sql), None::<EditorLanguage>);
+        let mut editor = CodeEditorData::new(Rope::from_str(&sql), Some(sql_language()));
+        // Populate the line metrics so the editor renders its content immediately (parse builds
+        // the line blocks; measure sizes them). `mark_as_saved` then snapshots the opening text
+        // as the dirty baseline so a freshly-opened tab isn't "edited".
+        editor.parse();
+        editor.measure(12.0, "Jetbrains Mono");
         editor.mark_as_saved();
         Self {
             id: TabId::new(),
@@ -84,6 +98,11 @@ pub struct SessionState {
     pub order: Vec<TabId>,     // strip order (drag-reorder)
     pub active: Option<TabId>,
     pub closed: Vec<(usize, QueryTab)>, // reopen stack — parked tab + its strip index at close
+    /// A throwaway editor buffer the [`EditorTab`](crate::apps::project::views::workbench) slice
+    /// falls back to when its tab was closed mid-event. Closing the active tab (nav-dropdown ×)
+    /// fires the editor's commit-on-click-outside *after* the close removed the tab, so its
+    /// slice write lands here (and is discarded) instead of panicking on a missing tab.
+    pub scratch: Option<CodeEditorData>,
 }
 
 impl SessionState {
@@ -186,6 +205,81 @@ impl SessionState {
         }
     }
 
+    /// Close every open tab, parking each (with its strip index) on the reopen stack so they can be
+    /// brought back one-by-one; leaves the session empty.
+    pub fn close_all(&mut self) {
+        for (at, id) in std::mem::take(&mut self.order).into_iter().enumerate() {
+            if let Some(tab) = self.tabs.remove(&id) {
+                self.closed.push((at, tab));
+            }
+        }
+        let overflow = self.closed.len().saturating_sub(CLOSED_CAP);
+        if overflow > 0 {
+            self.closed.drain(0..overflow);
+        }
+        self.active = None;
+    }
+
+    /// Close every tab *except* `id`, parking each on the reopen stack (with its strip index);
+    /// leaves `id` the only open tab, and active.
+    pub fn close_others(&mut self, id: TabId) {
+        if !self.tabs.contains_key(&id) {
+            return;
+        }
+        let victims: Vec<(usize, TabId)> = self
+            .order
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| **t != id)
+            .map(|(i, t)| (i, *t))
+            .collect();
+        for (at, tid) in victims {
+            if let Some(tab) = self.tabs.remove(&tid) {
+                self.closed.push((at, tab));
+            }
+        }
+        self.order.retain(|t| *t == id);
+        let overflow = self.closed.len().saturating_sub(CLOSED_CAP);
+        if overflow > 0 {
+            self.closed.drain(0..overflow);
+        }
+        self.active = Some(id);
+    }
+
+    /// Close every tab to the *right* of `id` in strip order, parking each on the reopen stack. `id`
+    /// stays; if the active tab was among those closed, `id` takes focus.
+    pub fn close_right(&mut self, id: TabId) {
+        let Some(from) = self.order.iter().position(|t| *t == id) else {
+            return;
+        };
+        let victims: Vec<(usize, TabId)> = self
+            .order
+            .iter()
+            .enumerate()
+            .skip(from + 1)
+            .map(|(i, t)| (i, *t))
+            .collect();
+        if victims.is_empty() {
+            return;
+        }
+        let active_closed = self
+            .active
+            .is_some_and(|a| victims.iter().any(|(_, t)| *t == a));
+        for (at, tid) in &victims {
+            if let Some(tab) = self.tabs.remove(tid) {
+                self.closed.push((*at, tab));
+            }
+        }
+        self.order.truncate(from + 1);
+        let overflow = self.closed.len().saturating_sub(CLOSED_CAP);
+        if overflow > 0 {
+            self.closed.drain(0..overflow);
+        }
+        if active_closed {
+            self.active = Some(id);
+        }
+    }
+
     /// Re-open the most recently closed tab (⇧⌘T), restoring its full editor state at (close to)
     /// its original strip position.
     pub fn reopen_last(&mut self) {
@@ -194,9 +288,8 @@ impl SessionState {
             self.tabs.insert(id, tab);
             let at = at.min(self.order.len());
             self.order.insert(at, id);
-            // Reopen restores the tab in place without stealing focus; only take focus if the
-            // session was empty (nothing selected).
-            self.active = self.active.or(Some(id));
+            // Reopen focuses the restored tab (⇧⌘T), matching the Dioxus behaviour and browsers.
+            self.active = Some(id);
         }
     }
 

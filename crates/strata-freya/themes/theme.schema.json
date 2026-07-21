@@ -49,10 +49,16 @@
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "focus_border_fill": {
               "$ref": "#/$defs/colorPref"
             },
             "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_color": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -70,10 +76,16 @@
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "focus_border_fill": {
               "$ref": "#/$defs/colorPref"
             },
             "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_color": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -91,10 +103,16 @@
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "focus_border_fill": {
               "$ref": "#/$defs/colorPref"
             },
             "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_color": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -112,10 +130,16 @@
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "focus_border_fill": {
               "$ref": "#/$defs/colorPref"
             },
             "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_color": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -873,24 +897,342 @@
             }
           }
         },
-        "typography": {
+        "header_bar": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "title": {
-              "$ref": "#/$defs/numberPref"
+            "background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "subtitle": {
-              "$ref": "#/$defs/numberPref"
+            "color": {
+              "$ref": "#/$defs/colorPref"
             },
-            "body": {
-              "$ref": "#/$defs/numberPref"
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "code_editor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "caption": {
-              "$ref": "#/$defs/numberPref"
+            "gutter_selected": {
+              "$ref": "#/$defs/colorPref"
             },
-            "overline": {
-              "$ref": "#/$defs/numberPref"
+            "gutter_unselected": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "gutter_border": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "line_selected_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "cursor": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "highlight": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "whitespace": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "code_editor_syntax": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "whitespace": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "attribute": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "boolean": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "comment": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "constant": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "constructor": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "escape": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "function": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "function_macro": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "function_method": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "keyword": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "label": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "module": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "number": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "operator": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "property": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "punctuation": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "punctuation_bracket": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "punctuation_delimiter": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "punctuation_special": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "string": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "string_escape": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "string_special": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "tag": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_literal": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_reference": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_title": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_uri": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_emphasis": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "variable": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "variable_builtin": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "variable_parameter": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "run_button": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "running_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "running_hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "running_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "tab_bar": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "tab": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "accent": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "status_bar": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "datagrid": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "arrow_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "row_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "zebra_row_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "cell_hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selection_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "gutter_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "gutter_active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "gutter_active_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "header_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "header_hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "header_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "header_label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "header_active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "header_active_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "column_divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "header_divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "cell_num_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "cell_ts_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_str_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_num_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_bool_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_ts_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_struct_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_list_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_map_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "comfortable_cell_padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "compact_cell_padding": {
+              "$ref": "#/$defs/gapsPref"
             }
           }
         }
@@ -917,6 +1259,54 @@
       },
       "additionalProperties": {
         "type": "string"
+      }
+    },
+    "typography": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "display": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "title": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "strong_body": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "body_medium": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "control": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "body": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "caption": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "code_display": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "data_display": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "data_value": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "code_block": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "field_label": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "meta": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "mono_path": {
+          "$ref": "#/$defs/typeRole"
+        }
       }
     }
   },
@@ -1133,6 +1523,36 @@
         },
         "shadow": {
           "$ref": "#/$defs/color"
+        }
+      }
+    },
+    "typeRole": {
+      "type": "object",
+      "required": [
+        "family",
+        "weight",
+        "size"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "type": "string",
+          "enum": [
+            "ui",
+            "mono"
+          ]
+        },
+        "weight": {
+          "type": "number"
+        },
+        "size": {
+          "type": "number"
+        },
+        "line_height": {
+          "type": "number"
+        },
+        "letter_spacing": {
+          "type": "number"
         }
       }
     }

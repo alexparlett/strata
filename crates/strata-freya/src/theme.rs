@@ -16,8 +16,15 @@
 
 use std::collections::BTreeMap;
 
+use crate::apps::project::{
+    DataGridThemePreference, HeaderBarThemePreference, StatusBarThemePreference, TabBarThemePreference,
+    TabThemePreference,
+};
+use crate::components::run_button::RunButtonThemePreference;
 use freya::prelude::*;
 use serde::Deserialize;
+use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
+use strata_code_editor::prelude::EditorThemePreference;
 
 const MIDNIGHT_JSON: &str = include_str!("../themes/midnight.json");
 const DAYLIGHT_JSON: &str = include_str!("../themes/daylight.json");
@@ -52,6 +59,26 @@ pub struct StrataTheme {
     pub tokens: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default)]
     pub fonts: BTreeMap<String, String>,
+    /// The type scale — named roles (display · title · body · meta · …), each fixing a font
+    /// family (`ui`/`mono`, resolved via `fonts`), weight and size (+ optional line-height /
+    /// letter-spacing). A **top-level** section (not a `components` entry): its fields are
+    /// `TypeRole` objects, not the colour `Pref`s every `components.*` map holds. Consumed by the
+    /// typography components (`crate::components::typography`) via [`typography`].
+    #[serde(default)]
+    pub typography: BTreeMap<String, TypeRole>,
+}
+
+/// One authored typography role from the theme file. `family` is a `fonts` key (`ui`/`mono`);
+/// `weight`/`size` are required; `line_height`/`letter_spacing` are optional.
+#[derive(Deserialize, Clone)]
+pub struct TypeRole {
+    pub family: String,
+    pub weight: i32,
+    pub size: f32,
+    #[serde(default)]
+    pub line_height: Option<f32>,
+    #[serde(default)]
+    pub letter_spacing: Option<f32>,
 }
 
 /// A component field override — the `specific` / `reference` discriminated union.
@@ -168,11 +195,121 @@ pub fn strata_theme(id: &str) -> Theme {
     th.name = Box::leak(t.id.clone().into_boxed_str());
     th.colors = t.sheet.to_colors_sheet();
     apply_component_overrides(&mut th, &t.components);
+    register_component_themes(&mut th, &t.components);
+    // Install the resolved type scale onto the theme itself (its `Box<dyn Any>` component store), so
+    // typography components read it with a standard `use_theme().get::<Typography>(..)` — no provider,
+    // no cache. Keyed `strata_typography` to avoid Freya's built-in `typography`.
+    th.set(TYPOGRAPHY_KEY, resolve_typography(&t));
     th
 }
 
-// ---- the registry (single source: runtime overrides + schema) ------------------------------
+/// A resolved typography role, ready to paint: the **actual** font family name (looked up from
+/// `fonts`), plus the role's weight, size and optional line-height / letter-spacing.
+#[derive(Clone, PartialEq)]
+pub struct TextStyle {
+    pub family: String,
+    pub weight: i32,
+    pub size: f32,
+    pub line_height: Option<f32>,
+    pub letter_spacing: Option<f32>,
+}
 
+/// The resolved type scale for a theme — one [`TextStyle`] per role. Provided at the window root
+/// (see `project.rs`) and read by the typography components. Field names mirror the theme file's
+/// `typography.<role>` keys.
+#[derive(Clone, PartialEq)]
+pub struct Typography {
+    pub display: TextStyle,
+    pub title: TextStyle,
+    pub strong_body: TextStyle,
+    pub body_medium: TextStyle,
+    pub control: TextStyle,
+    pub body: TextStyle,
+    pub caption: TextStyle,
+    pub code_display: TextStyle,
+    pub data_display: TextStyle,
+    pub data_value: TextStyle,
+    pub code_block: TextStyle,
+    pub field_label: TextStyle,
+    pub meta: TextStyle,
+    pub mono_path: TextStyle,
+}
+
+/// The `Theme` key the resolved [`Typography`] scale is installed under (see [`strata_theme`]).
+/// Prefixed `strata_` so it never collides with Freya's built-in `typography` component theme.
+pub const TYPOGRAPHY_KEY: &str = "strata_typography";
+
+/// Load + resolve the [`Typography`] scale for a theme id. Used to seed the theme (in
+/// [`strata_theme`]) and as a defensive fallback; components read the installed copy off the active
+/// theme via `use_theme().read().get::<Typography>(`[`TYPOGRAPHY_KEY`]`)`.
+pub fn typography(id: &str) -> Typography {
+    resolve_typography(&load(id))
+}
+
+/// Resolve the scale from an already-loaded theme — each role's `family` key (`ui`/`mono`) looked up
+/// in `fonts` to the real family name. A role the file omits falls back to a neutral 13px UI style
+/// so text still renders (the theme owns the scale).
+fn resolve_typography(t: &StrataTheme) -> Typography {
+    let fam = |key: &str| -> String {
+        t.fonts
+         .get(key)
+         .cloned()
+         .unwrap_or_else(|| "IBM Plex Sans".to_string())
+    };
+    let role = |name: &str| -> TextStyle {
+        match t.typography.get(name) {
+            Some(r) => TextStyle {
+                family: fam(&r.family),
+                weight: r.weight,
+                size: r.size,
+                line_height: r.line_height,
+                letter_spacing: r.letter_spacing,
+            },
+            None => TextStyle {
+                family: fam("ui"),
+                weight: 400,
+                size: 13.0,
+                line_height: None,
+                letter_spacing: None,
+            },
+        }
+    };
+    Typography {
+        display: role("display"),
+        title: role("title"),
+        strong_body: role("strong_body"),
+        body_medium: role("body_medium"),
+        control: role("control"),
+        body: role("body"),
+        caption: role("caption"),
+        code_display: role("code_display"),
+        data_display: role("data_display"),
+        data_value: role("data_value"),
+        code_block: role("code_block"),
+        field_label: role("field_label"),
+        meta: role("meta"),
+        mono_path: role("mono_path"),
+    }
+}
+
+/// Our own `define_theme!` components — the ones Freya's base themes don't register. **Unlike the
+/// built-ins** (which inherit a Freya default and take *partial* `components` overrides), these are
+/// defined **wholly in the theme file**: `"key" => Type { field, … }` names a component + its
+/// colour fields, and registration reads every field straight from `components.<key>`. There are no
+/// code defaults — a field the theme file omits renders magenta, on purpose (the theme owns it).
+///
+/// The constructor lives behind a **local** trait (not an inherent `impl`) so the same macro works
+/// for **external** preference types too — an inherent impl is illegal outside a type's own crate,
+/// but a local-trait impl isn't. That's how `code_editor` (freya's own `EditorThemePreference`)
+/// joins this list rather than needing a bespoke `th.set`.
+trait ComponentTheme {
+    /// Every field a magenta placeholder, then replaced field-by-field from the theme file.
+    fn placeholder() -> Self;
+}
+
+// Field coercion (`kind` → `set_*` fn) and kind lookup — the single mapping, shared by
+// `strata_components!` (custom) and `theme_registry!` (builtin). Defined above `strata_components!`'s
+// invocation so the custom macro can delegate to them rather than re-listing the mapping.
 macro_rules! set_field {
     (color,  $dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
     (f32,    $dst:expr, $f:expr, $key:expr) => { set_f32($dst, $f, $key) };
@@ -186,6 +323,113 @@ macro_rules! kind_of {
     (gaps)   => { Kind::Gaps };
     (corner) => { Kind::Corner };
 }
+
+/// Placeholder value for a custom-component field of the given kind — magenta for a colour (so an
+/// omission is glaringly visible), else a zeroed scalar/gaps/corner. A bare field defaults to colour.
+macro_rules! strata_placeholder {
+    () => { Preference::Specific(Color::from_rgb(255, 0, 255)) };
+    (color) => { Preference::Specific(Color::from_rgb(255, 0, 255)) };
+    (f32) => { Preference::Specific(0.0_f32) };
+    (gaps) => { Preference::Specific(Gaps::default()) };
+    (corner) => { Preference::Specific(CornerRadius::default()) };
+}
+
+/// Thin adapters over the shared `set_field!` / `kind_of!` so a *bare* field (no `: kind`) defaults to
+/// colour — the only thing `strata_components!` needs beyond the builtin mapping, which stays defined
+/// once, in `set_field!` / `kind_of!`.
+macro_rules! strata_set {
+    ($dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
+    ($dst:expr, $f:expr, $key:expr, $kind:ident) => { set_field!($kind, $dst, $f, $key) };
+}
+
+macro_rules! strata_kind {
+    () => { Kind::Color };
+    ($kind:ident) => { kind_of!($kind) };
+}
+
+macro_rules! strata_components {
+    // Each field is a bare ident (colour — the common case) or `ident: kind` (`f32` / `gaps` / `corner`),
+    // mirroring `theme_registry!`, so a custom component can carry layout tokens, not just colours.
+    ($( $key:literal => $ty:ty { $( $field:ident $(: $kind:ident)? ),* $(,)? } ),* $(,)?) => {
+        // `macro_rules!` can't build `$ty { … }` from a fragment, but `Self { … }` inside a trait
+        // impl for the concrete type can — and a local-trait impl is allowed for external types too.
+        $(
+            impl ComponentTheme for $ty {
+                fn placeholder() -> Self {
+                    Self { $( $field: strata_placeholder!($($kind)?) ),* }
+                }
+            }
+        )*
+
+        /// Register each custom component **from the theme file** (`components.<key>`). No code
+        /// defaults: a field the file omits keeps its placeholder.
+        fn register_component_themes(th: &mut Theme, components: &BTreeMap<String, BTreeMap<String, Pref>>) {
+            $(
+                {
+                    let mut p = <$ty as ComponentTheme>::placeholder();
+                    if let Some(f) = components.get($key) {
+                        $( strata_set!(&mut p.$field, f, stringify!($field) $(, $kind)?); )*
+                    }
+                    th.set($key, p);
+                }
+            )*
+        }
+
+        /// Our custom components in [`REGISTRY`]'s shape, so `generate_schema` emits + validates them.
+        const CUSTOM_REGISTRY: &[(&str, &[(&str, Kind)])] = &[
+            $( ($key, &[ $( (stringify!($field), strata_kind!($($kind)?)) ),* ]) ),*
+        ];
+    };
+}
+
+strata_components! {
+    "header_bar" => HeaderBarThemePreference { background, color, border_fill },
+    // Freya's own `EditorThemePreference` (the `CodeEditor` reads it off the app `Theme`), but NOT
+    // registered by the base theme — so it's a custom component here, not a `theme_registry!` entry.
+    "code_editor" => EditorThemePreference {
+        background, gutter_selected, gutter_unselected, gutter_border, line_selected_background,
+        cursor, highlight, text, whitespace,
+    },
+    "code_editor_syntax" => EditorSyntaxThemePreference {
+        text, whitespace, attribute, boolean, comment, constant, constructor, escape, function, 
+        function_macro, function_method, keyword, label, module, number, operator, property, 
+        punctuation, punctuation_bracket, punctuation_delimiter, punctuation_special, string, 
+        string_escape, string_special, tag, text_literal, text_reference, text_title, text_uri, 
+        text_emphasis, type_, variable, variable_builtin, variable_parameter, 
+    },
+    // The Run button's three states (idle / disabled / running), each background + hover + fg.
+    "run_button" => RunButtonThemePreference {
+        background, hover_background, color,
+        disabled_background, disabled_hover_background, disabled_color,
+        running_background, running_hover_background, running_color,
+    },
+    // The editor tab strip: `tab_bar` is the container (bg + divider); `editor_tab` is one
+    // tab's resting/hover/active bg, label colour, and active accent.
+    "tab_bar" => TabBarThemePreference { background, divider_fill },
+    "tab" => TabThemePreference {
+        background, hover_background, active_background, color, active_color, accent,
+    },
+    // The results-pane footer: surface bg, mono label colour, 1px top divider, future pager hover.
+    "status_bar" => StatusBarThemePreference {
+        background, color, border_fill, hover_background,
+    },
+    // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
+    // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and
+    // per-type cell + dtype-label colours.
+    "datagrid" => DataGridThemePreference {
+        background, arrow_fill, row_background, zebra_row_background, cell_hover_background,
+        selection_border_fill, gutter_color, gutter_active_background,
+        gutter_active_color, header_background, header_hover_background, header_color,
+        header_label_color, header_active_background,
+        header_active_color, divider_fill, column_divider_fill, header_divider_fill,
+        cell_num_color, cell_ts_color, type_str_color, type_num_color, type_bool_color,
+        type_ts_color, type_struct_color, type_list_color, type_map_color, color,
+        comfortable_cell_padding: gaps, compact_cell_padding: gaps,
+    },
+}
+
+// ---- the registry (single source: runtime overrides + schema) ------------------------------
+// (`set_field!` / `kind_of!` are defined above, before `strata_components!`, so both macros share them.)
 
 /// Emits `apply_component_overrides` (runtime, generic over all listed components) **and** the
 /// `REGISTRY` descriptor (for schema generation) from one declarative list.
@@ -216,10 +460,10 @@ macro_rules! theme_registry {
 
 theme_registry! {
     // Buttons
-    "button"          => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, focus_border_fill: color, color: color },
-    "filled_button"   => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, focus_border_fill: color, color: color },
-    "outline_button"  => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, focus_border_fill: color, color: color },
-    "flat_button"     => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, focus_border_fill: color, color: color },
+    "button"          => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, color: color, hover_color: color },
+    "filled_button"   => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, color: color, hover_color: color },
+    "outline_button"  => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, color: color, hover_color: color },
+    "flat_button"     => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, color: color, hover_color: color },
     "button_layout"          => ButtonLayoutThemePreference { padding: gaps, margin: gaps, corner_radius: corner },
     "compact_button_layout"  => ButtonLayoutThemePreference { padding: gaps, margin: gaps, corner_radius: corner },
     "expanded_button_layout" => ButtonLayoutThemePreference { padding: gaps, margin: gaps, corner_radius: corner },
@@ -264,8 +508,10 @@ theme_registry! {
     "slider"           => SliderThemePreference { background: color, thumb_background: color, thumb_inner_background: color, border_fill: color },
     "color_picker"     => ColorPickerThemePreference { background: color, border_fill: color, color: color },
     "table"            => TableThemePreference { background: color, arrow_fill: color, row_background: color, hover_row_background: color, divider_fill: color, corner_radius: corner, color: color },
-    // Typography
-    "typography" => TypographyThemePreference { title: f32, subtitle: f32, body: f32, caption: f32, overline: f32 },
+    // NB: Freya's built-in `typography` component (title/subtitle/body/caption/overline) is
+    // intentionally NOT registered — Strata's type scale is the richer role-based top-level
+    // `typography` section (see `generate_schema` + `crate::components::typography`), not a
+    // Freya component override.
 }
 
 /// Build the JSON schema from [`REGISTRY`] + the sheet slots. The `schema_in_sync` test keeps
@@ -280,7 +526,7 @@ pub fn generate_schema() -> serde_json::Value {
     };
 
     let mut components = Map::new();
-    for (key, fields) in REGISTRY {
+    for (key, fields) in REGISTRY.iter().chain(CUSTOM_REGISTRY.iter()) {
         let mut props = Map::new();
         for (name, kind) in *fields {
             props.insert((*name).to_string(), json!({ "$ref": ref_for(kind) }));
@@ -296,6 +542,17 @@ pub fn generate_schema() -> serde_json::Value {
         sheet_props.insert((*s).to_string(), json!({ "$ref": "#/$defs/color" }));
     }
     let slots = serde_json::to_value(SLOTS).unwrap();
+
+    // The type scale — a top-level `typography` section, one `typeRole` per named role.
+    const TYPE_ROLES: &[&str] = &[
+        "display", "title", "strong_body", "body_medium", "control", "body", "caption",
+        "code_display", "data_display", "data_value", "code_block", "field_label", "meta",
+        "mono_path",
+    ];
+    let mut typo_props = Map::new();
+    for r in TYPE_ROLES {
+        typo_props.insert((*r).to_string(), json!({ "$ref": "#/$defs/typeRole" }));
+    }
 
     json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -313,7 +570,8 @@ pub fn generate_schema() -> serde_json::Value {
             "sheet": { "$ref": "#/$defs/sheet" },
             "components": { "type": "object", "additionalProperties": false, "properties": Value::Object(components) },
             "tokens": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/color" } } },
-            "fonts": { "type": "object", "properties": { "ui": { "type": "string" }, "mono": { "type": "string" } }, "additionalProperties": { "type": "string" } }
+            "fonts": { "type": "object", "properties": { "ui": { "type": "string" }, "mono": { "type": "string" } }, "additionalProperties": { "type": "string" } },
+            "typography": { "type": "object", "additionalProperties": false, "properties": Value::Object(typo_props) }
         },
         "$defs": {
             "color": { "type": "string", "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|rgba\\([^)]*\\))$" },
@@ -324,7 +582,14 @@ pub fn generate_schema() -> serde_json::Value {
             ] },
             "numberPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "type": "number" } } },
             "gapsPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "oneOf": [ { "type": "number" }, { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 } ] } } },
-            "sheet": { "type": "object", "additionalProperties": false, "required": slots, "properties": Value::Object(sheet_props) }
+            "sheet": { "type": "object", "additionalProperties": false, "required": slots, "properties": Value::Object(sheet_props) },
+            "typeRole": { "type": "object", "required": ["family", "weight", "size"], "additionalProperties": false, "properties": {
+                "family": { "type": "string", "enum": ["ui", "mono"] },
+                "weight": { "type": "number" },
+                "size": { "type": "number" },
+                "line_height": { "type": "number" },
+                "letter_spacing": { "type": "number" }
+            } }
         }
     })
 }

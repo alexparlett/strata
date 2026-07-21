@@ -1,0 +1,21 @@
+[package]
+name = "strata-code-editor"
+version = "0.1.0"
+edition = "2024"
+description = "Strata's owned code-editor surface — vendored from freya-code-editor (marc2332/freya, MIT) so we control cursor style, gutter, line highlight, syntax palette, squiggles, and autocomplete. Editing engine (freya-edit) + grammar (tree-sitter) stay upstream deps."
+license = "MIT"
+
+[dependencies]
+# The freya sibling crates, from the same fork git source as the `freya` umbrella (root
+# `[workspace.dependencies]`) — so there is exactly one `freya-edit` / `freya-core` in the graph and
+# `CodeEditorData: TextEditor` lines up.
+freya-core = { workspace = true }
+freya-engine = { workspace = true }
+freya-edit = { workspace = true }
+freya-components = { workspace = true }
+torin = { workspace = true }
+
+ropey = "1.6"
+smallvec = "1.15"
+tree-sitter = "0.26"
+rustc-hash = "1.1"
