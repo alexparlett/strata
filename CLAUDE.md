@@ -210,9 +210,9 @@ The Freya-rewrite backlog lives in **`.claude/tasks/`** (committed): a top `READ
 **one folder per phase / workstream**, each with its own `README.md` and **one file per task**. Each
 task file is self-contained — current state, what to build, acceptance, Freya components, and the
 `DEV_TASKS.md` ID it traces to — so a session can pick up a single task (e.g. in a worktree) without
-loading the rest. **Phase 2** (workbench) and **Phase 3** (catalog/inspector/drawer) are fully broken
-out; phases 4–6 and the Connections/Chart workstreams are indexed in the top `README.md` but not yet
-detailed. Read that index first (status legend, phase order, known bugs).
+loading the rest. Every migration phase (2–6) and both workstreams (Connections, Chart) are broken out
+into task files; the near-term ones (phases 2–3) carry the most detail. Read the top `README.md` first
+(status legend, phase order, known bugs).
 
 Heads-up on the near-term critical path: `phase-2-workbench/P2-01` bundles the query round-trip **and**
 the result snapshot system and is **design-first** — it needs a `docs/SNAPSHOT_SPEC.md` agreed (and
