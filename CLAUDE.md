@@ -17,9 +17,10 @@ rediscover.
 ```bash
 cargo run              # root default-member = the Freya app (strata-freya)
 cargo run --release    # first build pulls DataFusion + compiles Skia; give it time
-
-cd crates/strata-dioxus && cargo run    # the transitional Dioxus app (its own workspace)
 ```
+
+(`crates/strata-dioxus` — the old Dioxus app — **no longer builds**; reference code only. See the
+engine-model note below.)
 
 After **any theme change**, regenerate + verify the schema:
 `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
@@ -65,11 +66,11 @@ Members:
 
 Excluded from the workspace (deliberately):
 
-- **`crates/strata-dioxus`** — the **transitional Dioxus app** (the mature, webview implementation
-  we're porting *from*). It's its own workspace because its editor stack and ours both set
-  `links = "tree-sitter"`, which Cargo forbids in one dependency graph. Build it with
-  `cd crates/strata-dioxus && cargo run`. It shares `strata-core`/`strata-model`/`strata-forms` via
-  path deps.
+- **`crates/strata-dioxus`** — the old Dioxus app (the mature, webview implementation we're
+  porting *from*), kept as **reference code only**: it references the engine protocol that was
+  deleted from `strata-core` with P2-01, so it **no longer builds** — read it for feature
+  behaviour, don't try to fix its build. (It was always its own workspace because its editor
+  stack and ours both set `links = "tree-sitter"`.)
 - **`crates/freya`** — our **Freya fork checkout** (see below).
 
 ## The Freya fork
@@ -221,12 +222,21 @@ the result snapshot system and is **design-first** — it needs a `docs/SNAPSHOT
 
 ---
 
-## Engine model (shared by both frontends)
+## Engine model
 
-DataFusion runs on its **own thread with its own Tokio runtime**; the UI never needs a UI-side Tokio
-runtime. The UI does non-blocking `send()` of `Command`s and drains a `tokio::sync` event channel
-(`Event::…`) under Freya's own `spawn`. In Freya the engine handle is an `Arc<Engine>` held in
-context (`EngineCtx`), consumed by components — not stored in any god-object `AppState`. Managed DDL
+The engine (`strata_core::engine::Engine`) is a **direct-call async facade**: it owns a private
+multi-thread Tokio runtime (DataFusion's operators need a Tokio context; query CPU never touches
+the render thread), spawns each call onto it, and the caller awaits the `JoinHandle` — which is
+executor-agnostic, so Freya's non-Tokio UI executor awaits engine methods like any async fn. No
+UI-side runtime, no channels, no request ids. freya-query capabilities call the facade directly
+(`engine.query(…)`, `engine.fetch_page(…)`); snapshot lifecycle (supersede / cancel / retire) is
+the facade's own bookkeeping — see **`docs/SNAPSHOT_SPEC.md`**. In Freya the handle is `EngineCtx`
+(an `Arc<Engine>` + Deref) held in context — not stored in any god-object `AppState`. Managed DDL
 policy: the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE`, captures `CREATE`/`DROP VIEW`, blocks
 `CREATE EXTERNAL TABLE` / CTAS / `INSERT` (use Table Config) and hard-blocks
 `CREATE DATABASE`/`SCHEMA`.
+
+> The Dioxus-era `Command`/`Event` channel protocol + worker loop was **deleted from
+> `strata-core`** with P2-01. `crates/strata-dioxus` still references it and therefore **no longer
+> builds** — it is kept as *reference code only* for porting features to Freya. Don't try to fix
+> its build.

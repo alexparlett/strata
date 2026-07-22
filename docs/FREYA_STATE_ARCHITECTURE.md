@@ -40,13 +40,12 @@ flowchart TD
         PROJECT["Project store (Radio)<br/>views · saved queries (save targets)"]
         LAYOUT["Layout store<br/>context signal"]
         LOG["Event log store<br/>context signal · complete record"]
-        QUERY["Query layer (freya-query) — CONCERN 2<br/>cache keyed by QuerySpec"]
-        GATE["Engine handle · EngineCtx<br/>(context)"]
-        ROUTER["Event router<br/>owns evt_rx + pending map"]
+        QUERY["Query layer (freya-query) — CONCERN 2<br/>Run keyed by nonce · page reads by SnapshotId"]
+        GATE["Engine handle · EngineCtx<br/>(context, Deref → Engine)"]
         ROOT["Window root<br/>drains MenuCommand"]
     end
 
-    ENGINE["Engine thread<br/>(DataFusion)"]
+    ENGINE["Engine facade<br/>(DataFusion on its own runtime)"]
 
     %% concern 1: tab management (stateful tabs in the store)
     COMP -->|methods / editor slice write| STATION
@@ -60,14 +59,8 @@ flowchart TD
     %% concern 2: results element drives freya-query off the tab's sql
     COMP -->|Run / page / plan: use_query spec| QUERY
     QUERY -->|state: pending / loading / settled / err| COMP
-    QUERY -->|run: engine.query spec| GATE
-    GATE -->|Command req_id| ENGINE
-
-    %% event path
-    ENGINE -->|Event stream| ROUTER
-    ROUTER -->|complete oneshot: result or err| QUERY
-    ROUTER -->|log every error + notice| LOG
-    GATE -.->|register req to oneshot| ROUTER
+    QUERY -->|capability awaits engine method| GATE
+    GATE -->|async call · JoinHandle await| ENGINE
 
     %% menu seam (the one context-less boundary)
     MENU -->|forward MenuCommand| SW
@@ -97,8 +90,8 @@ editor buffer lives in the store, inside the tab.
 | **`Project`** | Radio (per-window) | yes (`project.json`) | view + saved-query definitions — the *save targets* |
 | **`LayoutCtx`** | context `State<Layout>` | yes | panel sizes, sidebar/inspector/drawer open |
 | **`LogCtx`** | context `State<VecDeque<LogEntry>>` | no | the complete event/error log (§9) |
-| **Query layer** | freya-query | no | results / pages / plan / explain, cached by `QuerySpec` |
-| **Engine handle** (`EngineCtx`) | context | — | send `Command`, correlate request/response, own `evt_rx` |
+| **Query layer** | freya-query | no | results / pages / plan / explain — Runs keyed by a per-press nonce, page reads by `(SnapshotId, page, …)` (see `SNAPSHOT_SPEC.md`) |
+| **Engine handle** (`EngineCtx`) | context | — | the direct-call engine facade (`Arc<Engine>`, Deref) + the tab-close cleanup hook |
 | **Switchboard** | `create_global` | — | focused window + per-window menu inboxes (handles, not state) |
 
 Each is a single responsibility. `SessionState` is *not* a god-object: layout, the log, and
@@ -249,121 +242,89 @@ struct TabSnapshot { id: TabId, name: String, origin: Origin, text: String }  //
 
 ---
 
-## 6. Concern 2 — query execution (freya-query, UI-driven)
+## 6. Concern 2 — query execution (freya-query over result snapshots)
 
-Running a tab's SQL — **run / plan / explain / page** — is owned by the results element via
+> The full design is **`docs/SNAPSHOT_SPEC.md`** — this section is its summary and supersedes
+> the earlier `QuerySpec { sql, page, epoch }` sketch.
+
+Running a tab's SQL — **run / explain / page** — is owned by the results element via
 freya-query. The session is untouched: the results panel reads the active tab's editor text
 and drives execution itself.
 
+A **Run executes once** and materializes an immutable on-disk **snapshot** (the `__snap_*`
+mechanism), answering with a handle (`SnapshotId` + schema + total, riding in `QueryOutput`)
+plus page 1. Every later read — page, sort, filter, export — targets *that snapshot*. Raw-SQL
+identity is **never** a cache key (same SQL ≠ same data); the sound keys are a per-press nonce
+for the Run and the snapshot id for reads:
+
 ```rust
-// apps/project/query/run_query.rs
+// apps/project/query/run_query.rs — two capabilities, both carrying Captured<EngineCtx>
+// (invisible to cache identity: PartialEq always-true, Hash no-op).
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct QuerySpec {
-    pub window: WindowKey,   // per-window discriminator (cache is app-global; note below)
-    pub sql:    String,      // the sql that was Run (a snapshot), not the live editor text
-    pub mode:   QueryMode,   // Run | Plan | Explain
-    pub page:   PageReq,
-    pub epoch:  u64,         // catalog epoch — bump to invalidate after DDL / reload
-}
+QuerySpec  { run: RunId /* fresh per Run press */, sql, mode: Run | Explain{analyze}, page_size }
+RunQuery   : QueryCapability<Keys = QuerySpec, Ok = QueryOutcome /* Rows(QueryPage) | Plan */, Err = String>
 
-/// The engine handle rides along via `Captured`, so it does NOT affect cache identity
-/// (its PartialEq is always-true, Hash is a no-op).
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct RunQuery(pub Captured<EngineCtx>);
-
-impl QueryCapability for RunQuery {
-    type Ok = QueryPage; type Err = String; type Keys = QuerySpec;
-    async fn run(&self, spec: &QuerySpec) -> Result<QueryPage, String> {
-        self.0.query(spec.clone()).await   // Command + await Event via the router (§7)
-    }
-}
+PageSpec   { snapshot: SnapshotId, page, page_size, sort: Option<(String, bool)> }
+FetchSnapshotPage : QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = String>
 ```
 
 **The Run trigger is component-local**, not session state. The workbench holds
 `let mut request = use_state(|| None::<QuerySpec>)`:
 
-1. **Run** (⌘↵): snapshot the editor text → `request.set(Some(QuerySpec { sql, mode: Run, page: first, .. }))`.
-2. Results grid: `use_query(Query::new(request()?, RunQuery(gateway.captured())))` — runs +
-   caches on the spec; `gateway` from context.
-3. **Editing doesn't re-run** — it mutates the editor, never `request`. Only Run rebuilds it.
-4. **Page / mode**: `request.set(… page+1 …)` / `… mode: Plan …` → new key → fetch, prior
-   served from cache. Plan and Explain are the identical `use_query` pattern with a different
-   `QueryMode`.
-5. **Dedup**: two tabs Run with the same spec share one cache entry.
-6. **Loading / cancel**: the grid reads `query.read().state()`
-   (`Pending | Loading{res} | Settled{res}`); cancel sends `Command::Cancel` via the gateway
-   and the router settles the future `Err(Cancelled)`.
-7. **Invalidation**: reload / DDL bumps `epoch`, or `QueriesStorage::<RunQuery>::invalidate_matching(...)`.
-   Catalog + functions are their own capabilities (`FetchCatalog`, `FetchFunctions`).
-
-> **Cache scope note.** `QueriesStorage::<Cap>` is addressed by capability *type* with no
-> handle — app-global across the process's windows. `window` in `QuerySpec` partitions it per
-> window (each window has its own engine/catalog). If it turns out per-window at build time,
-> `window` is redundant but harmless.
+1. **Run** (⌘↵): snapshot the editor text → `request.set(Some(QuerySpec { run: RunId::new(),
+   sql, mode: Run, page_size }))`.
+2. Results grid: `use_query(Query::new(request()?, RunQuery(engine.captured())).stale_time(MAX))`
+   — `engine` from context. `stale_time(MAX)` on both capabilities: a settled entry never
+   re-executes by itself (freya-query re-runs stale entries on resubscribe — for an *action*
+   that would be a silent re-execution).
+3. **Editing doesn't re-run** — it mutates the editor, never `request`. Only Run rebuilds it
+   (new nonce → new execution → new snapshot; the old one is retired, spec §4).
+4. **Paging / sort**: the grid drives `use_query(FetchSnapshotPage)` with
+   `PageSpec { snapshot: handle, … }` — a new key fetches, a revisited key is cache-served with
+   zero engine traffic (sound because the snapshot is immutable). Explain is the same
+   `use_query` pattern with `mode: Explain`.
+5. **Loading / cancel**: the grid reads `query.read().state()`
+   (`Pending | Loading{res} | Settled{res}`); cancel is `engine.cancel(tab.into(), run.into())`
+   → the awaiting run settles `Err("cancelled")`.
+6. **Invalidation**: none for results — a Run result is point-in-time; DDL / reload does *not*
+   retire it (spec §4). Catalog + functions are their own capabilities (`FetchCatalog`,
+   `FetchFunctions`) and invalidate on DDL via `on_settled`.
 
 ---
 
-## 7. The engine handle (`EngineCtx`) + event router
+## 7. The engine handle (`EngineCtx`) — a direct-call facade
 
-**One** per-window handle in context does everything — send commands, correlate
-request/response, and hand `evt_rx` to the router. (There's no separate "gateway": the
-`pending` map that `query()` writes and the router reads belongs in the same place, so it's all
-`EngineCtx`.) The engine is one thread emitting a single correlated `Event` stream, and
-freya-query's `run` awaits a per-request result, so `EngineCtx` demultiplexes:
+The engine (`strata_core::engine::Engine`) is a **direct-call async facade**, not a protocol:
+it owns a private multi-thread Tokio runtime (DataFusion's operators require a Tokio context,
+and query CPU must never run on the render thread), spawns each call onto it, and awaits the
+`JoinHandle` — executor-agnostic, so Freya's non-Tokio executor awaits engine calls like any
+async fn. This is exactly the shape a freya-query capability expects (cf. Freya's
+`state_query_sqlite` example: `blocking::unblock(...).await`, no channels). There is **no**
+event stream, no request ids, no router — the Dioxus-era `Command`/`Event` protocol is retired
+(it survives only in `crates/strata-dioxus`, reference code that no longer builds).
 
 ```rust
-// apps/project/engine/ctx.rs
+// strata-core — the facade (lifecycle bookkeeping lives HERE, framework-free, unit-tested):
+async fn query(ws: WsId, tag: RunTag, sql, page_size) -> Result<(QueryOutput, RecordBatch), String>
+async fn fetch_page(snapshot, page, page_size, sort) -> Result<(Vec<Vec<Cell>>, RecordBatch), String>
+async fn explain(ws: WsId, tag: RunTag, sql) -> Result<QueryPlan, String>
+fn cancel(ws, tag) -> Option<elapsed_ms>   ·   fn cleanup_ws(ws)   ·   impl Drop  // + register, …
 
+// apps/project/contexts/engine_ctx.rs — the thin per-window wrapper:
 #[derive(Clone)]
-pub struct EngineCtx {
-    eng:     Arc<Engine>,   // Command tx + req_id alloc + (take-once) evt_rx
-    pending: Arc<Mutex<HashMap<ReqId, oneshot::Sender<Result<QueryPage, String>>>>>,
-}
+pub struct EngineCtx { eng: Arc<Engine> }   // Deref → Engine
+impl From<TabId> for WsId { … }             // the tab IS the workspace (Uuid → u128)
 impl EngineCtx {
-    pub fn new() -> Self { /* spawn the core engine, wrap it */ }
-
-    /// Request/response — this is what freya-query's `RunQuery::run` awaits.
-    pub async fn query(&self, spec: QuerySpec) -> Result<QueryPage, String> {
-        let req = self.eng.next_req();
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().insert(req, tx);
-        self.eng.send(Command::Query { req_id: req, sql: spec.sql, page: spec.page.into() });
-        CancelOnDrop::new(&self.eng, req).await_result(rx).await   // Cancel if dropped
-    }
-    pub fn captured(&self) -> Captured<EngineCtx> { Captured::new(self.clone()) }
-    pub fn take_evt_rx(&self) -> UnboundedReceiver<Event> { self.eng.take_evt_rx() }
+    pub fn captured(&self) -> Captured<EngineCtx> { … }   // capability field, cache-invisible
+    pub fn cleanup(&self, tab: TabId) { … }               // → engine.cleanup_ws(tab.into())
 }
 ```
 
-The **router** is spawned once in the window root. It consumes the *same* `EngineCtx` from
-context — using it both to take `evt_rx` and to reach `pending` — and is the single fan-out
-point: it logs every error/notice *and* resolves the per-request futures:
-
-```rust
-use_hook(move || {
-    let engine  = consume_context::<EngineCtx>();
-    let mut rx  = engine.take_evt_rx();
-    let mut log = use_consume::<LogCtx>();   // State<VecDeque<LogEntry>>, Copy
-    spawn(async move {
-        while let Some(ev) = rx.recv().await {
-            match ev {
-                Event::QueryResult { req_id, result, .. } => {
-                    if let Err(e) = &result { log.write().push_back(LogEntry::query_err(req_id, e)); }
-                    if let Some(tx) = engine.pending.lock().remove(&req_id) { let _ = tx.send(result); }
-                }
-                Event::Registration { result, .. } => { if let Err(e) = &result { log.write().push_back(LogEntry::reg_err(e)); } }
-                Event::Notice(n)   => { log.write().push_back(LogEntry::notice(n)); }
-                Event::Functions(_) | Event::Progress { .. } => { /* feed a query / signal */ }
-                _ => {}
-            }
-        }
-    });
-});
-```
-
-Freya's `spawn` runs on the UI executor, so these writes are on-thread and safe. The router
-touches no session and no reducer.
+Tab-close cleanup is one funnel in the window root — a `use_side_effect` diffs the session's
+open tab set (subscribed on `Chan::Tabs`) and calls `cleanup` for tabs that disappeared, so
+every close path is covered without touching any of them. Errors reach the UI as each query's
+own `Err` state (freya-query `Settled`), not through an event side-channel; genuine engine
+*push* (profile progress, later) uses a `watch` channel + `use_track_watcher` when it lands.
 
 ---
 
@@ -376,7 +337,8 @@ Both are small context signals, not Radio stations:
   channel. Persisted by its own debounced side effect (§5). Coarse writes are fine — layout is
   tiny and its only readers are the panel container.
 - **`LogCtx = State<VecDeque<LogEntry>>`** — the window's complete event/error record, appended
-  by the router. `LogEntry` carries a level + origin so views filter it (a toast host = recent
+  by whichever layer observes the fact (a settled query's `Err`, a mutation's result, a load
+  summary). `LogEntry` carries a level + origin so views filter it (a toast host = recent
   warn+, Problems = a tab's logged query error). Ephemeral.
 
 ---
@@ -390,7 +352,7 @@ originated, so the user sees them in place. Both happen; not either/or.
 
 | Origin | In the log | Also shown inline |
 |--------|-----------|-------------------|
-| Query execution | yes (router logs the `Err`) | that tab's results / Problems, from `RunQuery::Err`; auto-clears on re-run |
+| Query execution | yes (logged where the query settles `Err`) | that tab's results / Problems, from `RunQuery::Err`; auto-clears on re-run |
 | Registration via configure form | yes | the form's submit error (`use_mutation(RegisterSource)::Err`); `on_settled` invalidates `FetchCatalog` |
 | Registration at load | yes | a per-source marker on the sidebar catalog item (+ one load-summary notice) |
 
@@ -441,9 +403,8 @@ apps/project/
   query/
     run_query.rs    RunQuery + QuerySpec + QueryPage
     catalog.rs      FetchCatalog / FetchFunctions
-  engine/
-    ctx.rs          EngineCtx — the one handle: query() / captured() / take_evt_rx()
-    router.rs       the event router loop (consumes EngineCtx from context)
+  contexts/
+    engine_ctx.rs   EngineCtx — Arc<Engine> (Deref) + captured() + cleanup(tab); TabId→WsId
   project/          Project store (views + saved-query defs; save targets) — adjacent task
 state/
   switchboard.rs    app-global Switchboard (menu seam), created in main
@@ -453,8 +414,8 @@ state/
 
 ## 12. Open decisions
 
-1. **`WindowKey` in `QuerySpec`** — kept for multi-window correctness against a possibly
-   app-global query cache (§6 note). Confirm >1 project window matters; else drop it.
+1. ~~**`WindowKey` in `QuerySpec`**~~ — resolved by `SNAPSHOT_SPEC.md`: the Run nonce and
+   snapshot ids are process-unique, so a per-window discriminator adds nothing; dropped.
 2. **Persisted per-tab extras** — the snapshot stores `{name, origin, text}`. Also persist
    cursor offset / scroll (nice-to-have restore) or keep it minimal? Lean minimal.
 3. **`Project` store shape** — the save-target store (views + saved queries) is referenced here
@@ -471,6 +432,6 @@ state/
    `is_edited`; the `CodeEditor` bound to the `Writable<CodeEditorData>` slice; language-service
    wiring from the validated spike.
 3. **Persistence** — `persist.rs` snapshot + load/save side effects.
-4. **Query layer** — `EngineGateway` + router + `RunQuery`; results grid on `use_query`. Replaces
-   the round-trip's drain-into-`use_state`.
+4. **Query layer** — the engine facade + `RunQuery`/`FetchSnapshotPage`; results grid on
+   `use_query`. Replaces the round-trip's drain-into-`use_state`.
 5. **Menu seam** — switchboard + focused-window forwarding, once a second window exists.

@@ -5,6 +5,7 @@
 
 mod project;
 mod contexts;
+mod query;
 mod state;
 mod views;
 pub mod model;

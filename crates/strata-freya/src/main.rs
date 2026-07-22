@@ -7,9 +7,9 @@
 //! (bridge), `components/` (DS widgets), `theme.rs`, and `platform/` come online as the
 //! phase that needs them lands.
 //!
-//! No Tokio runtime here on purpose: the engine owns its own runtime on its own thread,
-//! and the UI only does non-blocking `cmd_tx.send()` + awaits the engine's `tokio::sync`
-//! event channel (executor-agnostic) under Freya's `spawn`.
+//! No Tokio runtime here on purpose: the engine facade owns a private runtime, and the
+//! UI just awaits its methods (`JoinHandle`s are executor-agnostic) — see
+//! `strata_core::engine` and `docs/SNAPSHOT_SPEC.md` §7.
 
 use apps::project::ProjectApp;
 use freya::prelude::*;
@@ -19,6 +19,9 @@ mod theme;
 pub mod components;
 
 fn main() {
+    // Clear snapshot leftovers from a previous crashed run (each live engine only ever
+    // cleans its own subdirectory — safe only here, before any engine exists).
+    strata_core::engine::purge_snapshot_root();
     launch(
         LaunchConfig::new()
             .with_window(

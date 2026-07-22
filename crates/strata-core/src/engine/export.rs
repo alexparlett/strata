@@ -1,11 +1,16 @@
-//! Export a workspace's snapshot to disk via `COPY … TO` (one file, or a Hive
+//! Export one result snapshot to disk via `COPY … TO` (one file, or a Hive
 //! directory when partition columns are given).
+//!
+//! Not yet reachable from the facade — `Engine::export` lands with the Freya export
+//! task (dead-code-allowed until then, like the other feature reservoirs).
+#![allow(dead_code)]
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
 
 use super::query::snapshot_name;
+use strata_model::SnapshotId;
 
 /// Everything an export needs (one struct to dodge a too-many-arguments fn).
 pub struct ExportArgs {
@@ -23,15 +28,15 @@ pub struct ExportArgs {
     pub keep_partition: bool,
 }
 
-/// Export a workspace's snapshot via `COPY (…) TO … STORED AS`. A plain file path
-/// (extension) → one file; `partition_cols` → a Hive-partitioned directory.
+/// Export one snapshot via `COPY (…) TO … STORED AS`. A plain file path (extension)
+/// → one file; `partition_cols` → a Hive-partitioned directory.
 /// Returns `(path, rows_written)`.
 pub async fn run_export(
     ctx: &SessionContext,
-    ws_id: u64,
+    snapshot: SnapshotId,
     a: ExportArgs,
 ) -> Result<(String, usize), String> {
-    let snap = snapshot_name(ws_id);
+    let snap = snapshot_name(snapshot);
     if ctx.table(snap.as_str()).await.is_err() {
         return Err("No results to export — run a query first".to_string());
     }

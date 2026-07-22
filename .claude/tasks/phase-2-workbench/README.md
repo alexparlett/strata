@@ -25,7 +25,7 @@ decision** before pagination/sort/filter/export rest on it.
 
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
-| P2-01 | **Query round-trip + result snapshot system (design + build)** | ⬜ design | — | — |
+| P2-01 | **Query round-trip + result snapshot system (design + build)** | ✅ | — | — |
 | P2-02 | Results driven by `use_query` (no runs store) | ⬜ | — | P2-01 |
 | P2-03 | `QueryPage` → grid model (kill fixture) | ⬜ | — | P2-01 |
 | P2-04 | SQL autocomplete (completions + follow-ups) | ⬜ | E2 | — |

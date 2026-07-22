@@ -10,7 +10,7 @@ license = "MIT"
 # Session store. The editor is our vendored `strata-code-editor` (owned fork of freya-code-editor),
 # NOT freya's `code-editor` feature — so we control cursor / gutter / line highlight / syntax palette
 # / squiggles / autocomplete.
-freya = { workspace = true, features = ["radio"] }
+freya = { workspace = true, features = ["radio", "query"] }
 
 # The shared core: engine (Command/Event protocol + worker handle) + the data vocabulary.
 strata-core = { path = "../strata-core" }
@@ -23,13 +23,14 @@ strata-code-editor = { path = "../strata-code-editor" }
 # tree-sitter-language, so `LANGUAGE` drops into `EditorLanguage::new` with no direct tree-sitter dep.
 tree-sitter-sequel = "0.3"
 
-# `sync` ONLY — just to name the engine's `UnboundedReceiver<Event>` and drain it under
-# Freya's `spawn`. No runtime, no `rt.enter()`: the engine owns its runtime on its thread.
-tokio = { version = "1", features = ["sync"] }
-
 # The native theme format (themes/*.json) → deserialized into the Freya ColorsSheet.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Stable per-tab identity (TabId) + serde for the future session snapshot.
 uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+# Drives the freya-query capabilities headlessly in unit tests (`block_on` — the
+# engine's JoinHandles are executor-agnostic, no runtime needed UI-side).
+futures = "0.3"

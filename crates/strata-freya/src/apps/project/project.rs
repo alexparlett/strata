@@ -5,10 +5,13 @@
 //! here is still the **throwaway** harness to create/switch tabs — the real DS strip is a later
 //! slice.
 
-use crate::apps::project::contexts::engine_ctx::EngineCtx;
-use crate::apps::project::state::use_init_session;
+use std::collections::HashSet;
+
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::state::{use_init_session, Chan, SessionState, TabId};
 use crate::apps::project::views::{HeaderBar, Workbench};
 use freya::prelude::*;
+use freya::radio::use_radio;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 
 pub struct ProjectApp;
@@ -34,10 +37,27 @@ impl ProjectApp {
 impl App for ProjectApp {
     fn render(&self) -> impl IntoElement {
         use_init_theme(|| crate::theme::strata_theme("midnight"));
-        // Spawn this window's engine into context, ready for the query layer to consume.
-        use_provide_context(|| EngineCtx::new());
+        // Spawn this window's engine into context — the direct-call facade the query
+        // layer's capabilities await (state-arch §7).
+        let engine = use_provide_context(|| EngineCtx::new());
         // This window's Session store (opens one blank tab), provided via context.
         let session = use_init_session();
+
+        // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
+        // structural change and retire the engine state of tabs that are gone. One
+        // funnel for every close path (close / close-others / close-right / close-all);
+        // a reopened tab simply starts with no engine state, like a fresh one.
+        let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
+        let mut known = use_state(HashSet::<TabId>::new);
+        use_side_effect(move || {
+            let open: HashSet<TabId> = radio.read().tabs.keys().copied().collect();
+            for tab in known.peek().difference(&open) {
+                engine.cleanup(*tab);
+            }
+            if *known.peek() != open {
+                known.set(open);
+            }
+        });
 
         rect()
             .expanded()
