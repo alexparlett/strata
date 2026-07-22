@@ -10,6 +10,12 @@ driving the keymap/menu complexity). Freya gives native rendering, native events
 **Reference architecture:** [`marc2332/valin`](https://github.com/marc2332/valin) — the Freya author's own IDE. We
 follow its module/data-scoping conventions.
 
+> **Superseded in part.** §4 is superseded by `FREYA_STATE_ARCHITECTURE.md`, and everything this
+> plan says about the engine boundary — the `Command`/`Event` protocol, the "Tokio runtime entered
+> in `main`", the `oneshot` bridge, `watch`-channel push — is superseded by `docs/SNAPSHOT_SPEC.md`
+> §5/§7 (P2-01): the engine is now a **direct-call async facade** owning a private runtime; `main`
+> stays runtime-free and freya-query capabilities await engine methods directly.
+
 ---
 
 ## 1. Guiding principles

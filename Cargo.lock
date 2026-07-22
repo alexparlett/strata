@@ -3007,6 +3007,7 @@ dependencies = [
  "freya-edit",
  "freya-engine",
  "freya-performance-plugin",
+ "freya-query",
  "freya-radio",
  "freya-winit",
  "torin",
@@ -3119,6 +3120,15 @@ dependencies = [
  "freya-core",
  "freya-engine",
  "freya-winit",
+]
+
+[[package]]
+name = "freya-query"
+version = "0.4.0"
+dependencies = [
+ "async-io",
+ "freya-core",
+ "futures-util",
 ]
 
 [[package]]
@@ -6205,12 +6215,12 @@ name = "strata-freya"
 version = "0.2.0"
 dependencies = [
  "freya",
+ "futures",
  "serde",
  "serde_json",
  "strata-code-editor",
  "strata-core",
  "strata-model",
- "tokio",
  "tree-sitter-sequel",
  "uuid",
 ]

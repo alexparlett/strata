@@ -9,7 +9,23 @@ use datafusion::prelude::*;
 
 use strata_model::{ColumnInfo, Kind, Stat, StatKey};
 
-use super::{TableMeta, TableSpec};
+/// What a (re)registration learned about a table: its columns, plus the free row count
+/// (`None` when the source doesn't report one).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableMeta {
+    pub columns: Vec<ColumnInfo>,
+    pub rows: Option<u64>,
+}
+
+/// Everything needed to register one external table: its name, source paths, format,
+/// and Hive partition columns.
+#[derive(Clone, Debug)]
+pub struct TableSpec {
+    pub name: String,
+    pub paths: Vec<String>,
+    pub format: String,
+    pub partitions: Vec<(String, String)>,
+}
 
 // ---- external table registration ----
 
@@ -88,6 +104,8 @@ pub async fn register_external(ctx: &SessionContext, spec: &TableSpec) -> Result
 /// (`RefreshCatalog`). Re-registering the *same* provider wouldn't re-infer, so we
 /// construct a fresh table from a re-`infer_schema`d config. Returns its columns + free
 /// metadata — `opts` is the live table's own, so `collect_stat` carries over with it.
+/// Feature reservoir: consumed by `Engine::refresh_catalog` when the catalog task lands.
+#[allow(dead_code)]
 pub async fn rebuild_listing(
     ctx: &SessionContext,
     name: &str,
@@ -126,6 +144,8 @@ pub async fn rebuild_listing(
 /// - **`.table()`, not `to_string()`.** A `TableReference` renders as written — `t`
 ///   here, `public.t` there — so `to_string()` yields two keys for one thing. The engine
 ///   owns a single schema, so the bare name is the identity.
+/// Feature reservoir: consumed by `Engine::create_view` (D10) when the views task lands.
+#[allow(dead_code)]
 pub struct PlanDeps {
     /// Base tables scanned — for profile invalidation and the table-drop warning.
     pub tables: Vec<String>,
@@ -137,6 +157,8 @@ pub struct PlanDeps {
     pub aliases: Vec<String>,
 }
 
+/// Feature reservoir: consumed by `Engine::create_view` (D10) when the views task lands.
+#[allow(dead_code)]
 pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     use datafusion::common::tree_node::TreeNodeRecursion;
     use datafusion::logical_expr::LogicalPlan;
@@ -170,6 +192,8 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
 /// Runs on this worker like any other command, so the UI stays live and the row's
 /// `profiling` flag drives the spinner. Blocking is fine here; it's *meant* to be the
 /// expensive thing the user opted into.
+/// Feature reservoir: consumed by `Engine::profile` (D4) when the profiling task lands.
+#[allow(dead_code)]
 pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<crate::profile::CatalogProfile, String> {
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
     let columns: Vec<ColumnInfo> = df

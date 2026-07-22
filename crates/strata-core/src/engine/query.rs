@@ -1,6 +1,12 @@
 //! The pagination engine: run each query **once**, spool the full result to a temp
 //! parquet snapshot, then serve every page as a bounded `LIMIT/OFFSET` read — so RAM
 //! only ever holds one page. Also the display-cell formatting (`CellFormat`).
+//!
+//! Snapshots are keyed by [`SnapshotId`] — the Run's request id, unique per engine for
+//! the life of the process — so a snapshot is **immutable**: a re-run materializes a
+//! *new* snapshot under a new id, and every read keyed by an id targets a fixed set
+//! (`docs/SNAPSHOT_SPEC.md`). Lifecycle (which ws owns which snapshot, when to
+//! [`retire_snapshot`]) is the worker loop's bookkeeping.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -14,15 +20,15 @@ use datafusion::prelude::*;
 use futures::StreamExt;
 
 use super::catalog::column_info;
-use strata_model::{Cell, ColumnInfo, QueryOutput};
+use strata_model::{Cell, ColumnInfo, QueryOutput, SnapshotId};
 
 /// Max characters kept per display cell (the grid truncates with an ellipsis).
 const MAX_CELL_LEN: usize = 400;
 
 // ---- query → snapshot → page ----
 
-pub fn snapshot_name(ws_id: u64) -> String {
-    format!("__snap_{ws_id}")
+pub fn snapshot_name(snapshot: SnapshotId) -> String {
+    format!("__snap_{snapshot}")
 }
 
 fn snapshots_root() -> String {
@@ -31,19 +37,29 @@ fn snapshots_root() -> String {
     d.to_string_lossy().into_owned()
 }
 
-/// Per-engine snapshot subdirectory. Each window runs its own engine with a
-/// unique `engine_id`, so windows never share (or clobber) snapshot files even
-/// though their workspace ids overlap (every project numbers workspaces from 1).
+/// Per-engine snapshot subdirectory. Scoped by **pid + engine id**: `engine_id` is only
+/// process-unique, and the snapshot root in the OS temp dir is machine-shared — without
+/// the pid, two concurrent processes (a second app instance, parallel test binaries)
+/// both allocate `e_0`, `e_1`, … and one process's cleanup deletes the other's live
+/// snapshots.
 pub fn snapshot_dir(engine_id: u64) -> String {
     let mut d = std::path::PathBuf::from(snapshots_root());
-    d.push(format!("e_{engine_id}"));
+    d.push(format!("e_{}_{engine_id}", std::process::id()));
     d.to_string_lossy().into_owned()
 }
 
-pub fn snapshot_file(engine_id: u64, ws_id: u64) -> String {
+pub fn snapshot_file(engine_id: u64, snapshot: SnapshotId) -> String {
     let mut d = std::path::PathBuf::from(snapshot_dir(engine_id));
-    d.push(format!("ws_{ws_id}.parquet"));
+    d.push(format!("s_{snapshot}.parquet"));
     d.to_string_lossy().into_owned()
+}
+
+/// Retire one snapshot: deregister its table and delete its file. Safe on a snapshot
+/// that never fully materialized (a failed / cancelled run's partial) — both halves
+/// are best-effort.
+pub fn retire_snapshot(ctx: &SessionContext, engine_id: u64, snapshot: SnapshotId) {
+    let _ = ctx.deregister_table(snapshot_name(snapshot).as_str());
+    let _ = std::fs::remove_file(snapshot_file(engine_id, snapshot));
 }
 
 /// Remove *all* engines' snapshots. Safe only at process startup, before any
@@ -52,24 +68,40 @@ pub fn purge_snapshot_root() {
     let _ = std::fs::remove_dir_all(snapshots_root());
 }
 
-/// Run the query **once**, streaming every batch straight to a parquet snapshot
-/// on disk while counting the exact total and capturing the first page — no
-/// separate `COUNT`, no re-read, bounded memory.
+/// Run the query **once**, streaming every batch straight to a fresh parquet snapshot
+/// on disk while counting the exact total and capturing the first page — no separate
+/// `COUNT`, no re-read, bounded memory. On failure the partial snapshot is cleaned up
+/// here (nothing was ever registered); the caller only ever sees a fully-materialized
+/// snapshot or none (`QueryOutput::snapshot`).
 pub async fn run_and_snapshot(
     ctx: &SessionContext,
     engine_id: u64,
-    ws_id: u64,
+    snapshot: SnapshotId,
+    sql: &str,
+    page_size: usize,
+    fmt: &CellFormat,
+) -> Result<(QueryOutput, RecordBatch), String> {
+    let result = materialize(ctx, engine_id, snapshot, sql, page_size, fmt).await;
+    if result.is_err() {
+        // The stream may have died mid-spool — drop the partial file (no table was
+        // registered yet, so the id is simply never a readable snapshot).
+        let _ = std::fs::remove_file(snapshot_file(engine_id, snapshot));
+    }
+    result
+}
+
+async fn materialize(
+    ctx: &SessionContext,
+    engine_id: u64,
+    snapshot: SnapshotId,
     sql: &str,
     page_size: usize,
     fmt: &CellFormat,
 ) -> Result<(QueryOutput, RecordBatch), String> {
     let start = Instant::now();
-    let snap = snapshot_name(ws_id);
-    let file = snapshot_file(engine_id, ws_id);
+    let snap = snapshot_name(snapshot);
+    let file = snapshot_file(engine_id, snapshot);
 
-    // reset the previous snapshot for this workspace
-    let _ = ctx.deregister_table(snap.as_str());
-    let _ = std::fs::remove_file(&file);
     if let Some(parent) = Path::new(&file).parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -114,7 +146,8 @@ pub async fn run_and_snapshot(
     }
 
     // Only register a snapshot if the query produced rows; an empty result has
-    // no pages to fetch.
+    // no pages to fetch (`QueryOutput::snapshot` stays `None`).
+    let materialized = writer.is_some();
     if let Some(w) = writer {
         w.close().map_err(|e| e.to_string())?;
         ctx.register_parquet(snap.as_str(), file.as_str(), ParquetReadOptions::default())
@@ -126,6 +159,7 @@ pub async fn run_and_snapshot(
         .map_err(|e| e.to_string())?;
     Ok((
         QueryOutput {
+            snapshot: materialized.then_some(snapshot),
             columns,
             rows: page1,
             total,
@@ -210,13 +244,13 @@ fn append_batch_capped(
 
 pub async fn fetch_page(
     ctx: &SessionContext,
-    ws_id: u64,
+    snapshot: SnapshotId,
     page: usize,
     page_size: usize,
     sort: Option<(String, bool)>,
     fmt: &CellFormat,
 ) -> Result<Page, String> {
-    let snap = snapshot_name(ws_id);
+    let snap = snapshot_name(snapshot);
     let offset = page.saturating_sub(1) * page_size;
     read_page(ctx, &snap, offset, page_size, sort, fmt).await
 }

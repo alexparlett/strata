@@ -31,5 +31,5 @@ pub use form::{ConfigForm, ExportForm};
 pub use log::{LogEvent, LogKind, LogTab};
 pub use profile::CatalogProfile;
 pub use query_error::QueryError;
-pub use results::{Cell, QueryOutput};
+pub use results::{Cell, QueryOutput, SnapshotId};
 pub use schema::{ColumnInfo, Kind, Stat, StatKey};
