@@ -17,8 +17,8 @@
 use std::collections::BTreeMap;
 
 use crate::apps::project::{
-    DataGridThemePreference, HeaderBarThemePreference, StatusBarThemePreference, TabBarThemePreference,
-    TabThemePreference,
+    CancelButtonThemePreference, DataGridThemePreference, HeaderBarThemePreference,
+    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
 use crate::components::run_button::RunButtonThemePreference;
 use freya::prelude::*;
@@ -403,6 +403,9 @@ strata_components! {
         disabled_background, disabled_hover_background, disabled_color,
         running_background, running_hover_background, running_color,
     },
+    // The results pane's Cancel control. Its values track `run_button`'s `running_*` set —
+    // the same cancel dress, kept consistent when either is retuned.
+    "cancel_button" => CancelButtonThemePreference { background, hover_background, border_fill, color },
     // The editor tab strip: `tab_bar` is the container (bg + divider); `editor_tab` is one
     // tab's resting/hover/active bg, label colour, and active accent.
     "tab_bar" => TabBarThemePreference { background, divider_fill },

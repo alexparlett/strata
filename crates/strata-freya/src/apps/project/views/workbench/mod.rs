@@ -23,7 +23,7 @@ mod results;
 mod tab_bar;
 pub mod editor;
 
-pub use results::{DataGridThemePreference, StatusBarThemePreference};
+pub use results::{CancelButtonThemePreference, DataGridThemePreference, StatusBarThemePreference};
 pub use tab_bar::bar::TabBarThemePreference;
 pub use tab_bar::tab::TabThemePreference;
 

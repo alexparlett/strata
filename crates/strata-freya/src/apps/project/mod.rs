@@ -12,6 +12,6 @@ pub mod model;
 
 pub use project::ProjectApp;
 pub use views::{
-    DataGridThemePreference, HeaderBarThemePreference, StatusBarThemePreference, TabBarThemePreference,
-    TabThemePreference,
+    CancelButtonThemePreference, DataGridThemePreference, HeaderBarThemePreference,
+    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };

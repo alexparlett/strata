@@ -32,6 +32,7 @@ use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 use status_bar::Pager;
 pub use datagrid::DataGridThemePreference;
+pub use running::CancelButtonThemePreference;
 pub use status_bar::StatusBarThemePreference;
 
 /// Which of the state bodies the results pane shows — the status bar's coarse view state.
@@ -79,7 +80,7 @@ impl Component for Results {
                 // Keyed by the press's nonce so a new Run remounts the body — the page below
                 // resets to 1 and the grid's column widths reseed for the new schema.
                 let run = spec.run;
-                ResultsBody { spec, key: DiffKey::None }.key(run).into()
+                ResultsBody { spec, request: self.request, key: DiffKey::None }.key(run).into()
             }
         };
         el
@@ -93,6 +94,8 @@ impl Component for Results {
 #[derive(PartialEq)]
 struct ResultsBody {
     spec: QuerySpec,
+    /// The workbench's Run trigger — Cancel clears it, returning the pane to empty.
+    request: State<Option<QuerySpec>>,
     key: DiffKey,
 }
 
@@ -114,10 +117,24 @@ impl Component for ResultsBody {
         // is keyed by the press's nonce).
         let page = use_state(|| 1usize);
 
+        // Cancel = abort engine-side (S14: tag-guarded, a stale press can't kill a newer run)
+        // + clear the Run trigger, unmounting this body back to the empty state. The query
+        // entry settles `Err("cancelled")` unobserved — a new press is a fresh nonce anyway.
+        let cancel = {
+            let engine = engine.clone();
+            let ws = self.spec.tab;
+            let run = self.spec.run;
+            let mut request = self.request;
+            move |()| {
+                engine.cancel(ws.into(), run.into());
+                request.set(None);
+            }
+        };
+
         let reader = query.read();
         let (body, state, pager): (Element, ResultsState, Option<Pager>) = match &*reader.state() {
             QueryStateData::Pending | QueryStateData::Loading { .. } => {
-                (Running.into(), ResultsState::Running, None)
+                (Running::new(cancel).into(), ResultsState::Running, None)
             }
             QueryStateData::Settled { res: Ok(QueryOutcome::Rows(rows)), .. } => (
                 DataGrid::new(&rows.output, page).into(),
