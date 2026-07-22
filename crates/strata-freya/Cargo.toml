@@ -30,6 +30,10 @@ serde_json = "1"
 # Stable per-tab identity (TabId) + serde for the future session snapshot.
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# Executor-agnostic timer for the running state's elapsed ticker — the same primitive
+# freya-sdk's `use_timeout` rides (Freya's UI executor has no timer of its own).
+async-io = "2.5"
+
 [dev-dependencies]
 # Drives the freya-query capabilities headlessly in unit tests (`block_on` — the
 # engine's JoinHandles are executor-agnostic, no runtime needed UI-side).

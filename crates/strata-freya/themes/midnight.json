@@ -103,6 +103,20 @@
         "specific": "#ff8a8a"
       }
     },
+    "cancel_button": {
+      "background": {
+        "specific": "rgba(229,72,77,.16)"
+      },
+      "hover_background": {
+        "specific": "rgba(229,72,77,.24)"
+      },
+      "border_fill": {
+        "specific": "rgba(229,72,77,.3)"
+      },
+      "color": {
+        "specific": "#ff8a8a"
+      }
+    },
     "outline_button": {
       "background": {
         "specific": "rgba(0,0,0,0)"

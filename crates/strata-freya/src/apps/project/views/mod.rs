@@ -6,6 +6,7 @@ mod header;
 
 pub use header::{HeaderBar, HeaderBarThemePreference};
 pub use workbench::{
-    DataGridThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    CancelButtonThemePreference, DataGridThemePreference, StatusBarThemePreference,
+    TabBarThemePreference, TabThemePreference,
     Workbench,
 };

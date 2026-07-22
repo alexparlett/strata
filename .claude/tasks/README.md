@@ -29,10 +29,9 @@ Read this index first, then open only the phase/workstream file you're working i
   gone): page 1 rides the Run's output, later pages are cached snapshot reads, and a minimal pager
   sits in the status bar. Since P2-01/P2-02, editor → run → engine → results is live: the results
   state machine (empty / running / grid / explain / error) is driven by freya-query off the tab's
-  SQL. Still to build:
-  the **running** and **explain-plan** body content (their states are reached, bodies are
-  placeholders), the **status bar** pager/info, and the **Table/Chart switcher, find, record view,
-  copy** surfaces. So Phase 2 remains **build *and* wire** — per surface, on a live spine.
+  SQL. Since P2-06 the **running** body is real (spinner · live elapsed · Cancel/Esc). Still to
+  build: the **explain-plan** body content (its state is reached, the body is a placeholder), the
+  **status bar** pager/info, and the **Table/Chart switcher, find, record view, copy** surfaces. So Phase 2 remains **build *and* wire** — per surface, on a live spine.
 - **The core logic survives.** The DataFusion engine + `Command`/`Event` protocol, the SQL language
   service (`sql`), `serialize`, `plan`, `profile`, view-deps/validity, config, and `.strata`
   persistence all live in **`strata-core`/`strata-model`** and are done. So most remaining Freya work
@@ -57,7 +56,7 @@ Read this index first, then open only the phase/workstream file you're working i
 |---|---|---|
 | 0 · Core extraction | `strata-model` / `strata-core` split; both frontends on the shared core | ✅ done |
 | 1 · Skeleton + engine round-trip | window shell, per-window state scaffold, engine bridge | ✅ shell up, round-trip wired (P2-01/02: direct-call facade + freya-query) |
-| **2 · Workbench** | editor · results grid · tabs · run/explain · toolbar · status bar | 🟡 **datagrid + tabs built; run/explain wired to real results states; grid on fixture; plan/running bodies + chart-switcher/find/record/copy still to build** → `phase-2-workbench/` |
+| **2 · Workbench** | editor · results grid · tabs · run/explain · toolbar · status bar | 🟡 **datagrid + tabs + running body built; run/explain wired to real results states; plan body + chart-switcher/find/record/copy still to build** → `phase-2-workbench/` |
 | 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · bottom drawer | ⬜ greenfield → `phase-3-catalog-inspector-drawer/` |
 | 4 · Multi-window | launcher · settings · export · config modal · native close | ⬜ greenfield → `phase-4-multi-window/` |
 | 5 · Design polish | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | ⬜ ongoing → `phase-5-design-polish/` |

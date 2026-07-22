@@ -13,8 +13,9 @@ It is **not** "UI done, plumbing missing." Three kinds of work remain:
   dimmed), page 1 rides the Run's output, later pages are `FetchSnapshotPage` reads cached forever,
   and the status bar carries a minimal working pager. The editor toolbar renders its full button
   row and a `CodeEditor` is mounted per tab.
-- **Stub / not built:** `running.rs` and `explain_plan.rs` are one-line placeholders (their
-  *states* are reached for real now); the status bar shows a dot + state label + selection + the
+- **Stub / not built:** `explain_plan.rs` is a one-line placeholder (its *state* is reached for
+  real now; `running.rs` is built — spinner, live elapsed, Cancel/Esc, P2-06); the status bar
+  shows a dot + state label + selection + the
   minimal pager (P2-08 dresses it: info chips, aggregates, styling); there's no
   Table/Chart switcher, find popover, record view, cell/gutter double-click views, or copy menu; and the
   editor has **no completions/diagnostics** binding (SQL highlighting *is* wired).
@@ -23,8 +24,8 @@ It is **not** "UI done, plumbing missing." Three kinds of work remain:
   (`use_state(|| None::<QuerySpec>)`, threaded as props — no runs store), the results pane derives
   Empty / Running / Grid / ExplainPlan / **Error** from `use_query`'s state, a settled `Err`
   renders a real error body (`results/error.rs`), and page reads are `(snapshot, page, page_size,
-  sort)`-keyed queries. Remaining plumbing is per-surface: plan rendering (P2-05), cancel (P2-15/06),
-  sort (P2-13).
+  sort)`-keyed queries. Remaining plumbing is per-surface: plan rendering (P2-05), the toolbar's
+  Run→Cancel flip (P2-15 — the running body's Cancel landed with P2-06), sort (P2-13).
 
 The logic behind every feature already lives in `strata-core` (`[core ✓]`). The snapshot design
 P2-01 needed is agreed and built — **`docs/SNAPSHOT_SPEC.md`** — so pagination/sort/filter/export
@@ -39,7 +40,7 @@ now have their read model.
 | P2-03 | `QueryPage` → grid model (kill fixture) | ✅ | — | P2-01 |
 | P2-04 | SQL autocomplete (completions + follow-ups) | ⬜ | E2 | — |
 | P2-05 | Explain-plan view | ⬜ | Rz-plan/U8 | P2-02/03 |
-| P2-06 | Running state (spinner + elapsed + cancel) | ⬜ | — | P2-02 |
+| P2-06 | Running state (spinner + elapsed + cancel) | ✅ | — | P2-02 |
 | P2-07 | Table/Chart switcher | ⬜ | U6a | P2-02 |
 | P2-08 | Status bar — pager + info + aggregate | 🟢 | U6/Rz3 | P2-03 |
 | P2-09 | Find in results | ⬜ | U6c | P2-03 |

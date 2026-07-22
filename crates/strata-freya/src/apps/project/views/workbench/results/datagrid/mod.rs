@@ -17,13 +17,12 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use freya::components::{define_theme, get_theme};
+use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
 use freya::query::{use_query, Query, QueryStateData};
 use strata_model::SnapshotId;
 
 use super::error::ErrorState;
-use super::running::Running;
 use super::selection::{CellRole, SelCtl, Selection};
 use super::toolbar::DataGridToolbar;
 use crate::apps::project::contexts::EngineCtx;
@@ -213,8 +212,15 @@ impl Component for DataGrid {
                 QueryStateData::Settled { res: Err(err), .. } => {
                     return ErrorState::new(err.clone()).into_element();
                 }
+                // A page read in flight — just the spinner: a snapshot page fetch is not a
+                // cancellable run, so it doesn't wear the full running state (timer + Cancel).
                 QueryStateData::Pending | QueryStateData::Loading { .. } => {
-                    return Running.into_element();
+                    return rect()
+                        .width(Size::fill())
+                        .height(Size::flex(1.))
+                        .center()
+                        .child(CircularLoader::new().size(30.))
+                        .into_element();
                 }
             }
         };
