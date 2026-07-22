@@ -290,6 +290,18 @@ FetchSnapshotPage : QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = St
    retire it (spec §4). Catalog + functions are their own capabilities (`FetchCatalog`,
    `FetchFunctions`) and invalidate on DDL via `on_settled`.
 
+**As built (P2-02).** The `request` slot lives in the **workbench** element (the common parent of
+its two consumers) and is threaded as **struct-field props** — `EditorTab` → toolbar (writer),
+`Results` (reader) — *not* context, and *not* a per-tab registry (a root-provided
+`HashMap<TabId, QuerySpec>` was rejected as a runs-store by another name). Per-tab results on tab
+switch come from the cache being keyed by the press's `QuerySpec` (which carries `tab`), plus a
+`spec.tab == tab` filter in `Results`; a press in another tab supersedes the slot — one execution
+per window. A workbench `use_side_effect` clears the slot when the pressed tab closes (mirror of
+the §7 close funnel, so a reopened tab starts fresh). A settled `Err` renders the results pane's
+error body (`ResultsState::Error`, `results/error.rs`). Rule of thumb carried forward: props for
+small/known/shallow consumer sets; context only for DI handles (`EngineCtx`, theme) and
+deep/open-ended trees (`Selection`).
+
 ---
 
 ## 7. The engine handle (`EngineCtx`) — a direct-call facade

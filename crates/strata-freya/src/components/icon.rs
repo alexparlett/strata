@@ -25,6 +25,7 @@ pub enum IconName {
     Reopen,
     Reload,
     Download,
+    Alert,
 }
 
 impl IconName {
@@ -48,6 +49,7 @@ impl IconName {
             IconName::Reopen => REOPEN,
             IconName::Reload => RELOAD,
             IconName::Download => DOWNLOAD,
+            IconName::Alert => ALERT,
         }
     }
 }
@@ -122,3 +124,5 @@ const REOPEN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 
 const RELOAD: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>"#;
 // Down arrow into a tray — the results **Download** (export) button.
 const DOWNLOAD: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 11l4 4 4-4M5 21h14"/></svg>"#;
+// Results error state (circle + exclamation).
+const ALERT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/></svg>"#;

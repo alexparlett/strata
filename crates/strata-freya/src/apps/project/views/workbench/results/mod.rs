@@ -1,30 +1,39 @@
-//! The query output surface below the editor. One of three state bodies — **empty** (no rows yet),
-//! **running** (a query is executing), **grid** (rows are available) — each its own component,
-//! under a single **status bar** footer present in every state (the results-pane footer, themed by
-//! `status_bar`). The active state is driven by the query runtime (freya-query + the runs store)
-//! once that lands; until then it defaults to `Empty`.
+//! The query output surface below the editor. The body is **freya-query off the tab's SQL**
+//! (state-arch §6): the pane reads the workbench's Run trigger and derives its state from
+//! that query's own lifecycle — no press for this tab → **empty**; `Pending`/`Loading` →
+//! **running**; settled rows → **grid**; a settled plan → **explain**; a settled `Err` →
+//! **error**. Every state sits over the same **status bar** footer (the results-pane footer,
+//! themed by `status_bar`).
+
+use std::time::Duration;
 
 use freya::prelude::*;
+use freya::query::{use_query, Query, QueryStateData};
 
 mod datagrid;
 mod empty;
+mod error;
+mod explain_plan;
 mod running;
 mod selection;
 mod status_bar;
 mod toolbar;
-mod explain_plan;
 
 use datagrid::DataGrid;
 use empty::EmptyState;
+use error::ErrorState;
 use running::Running;
 use status_bar::StatusBar;
 
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::query::{QueryOutcome, QuerySpec, RunQuery};
+use crate::apps::project::state::TabId;
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 pub use datagrid::DataGridThemePreference;
 pub use status_bar::StatusBarThemePreference;
 
-/// Which of the three views the results pane shows.
+/// Which of the state bodies the results pane shows — the status bar's coarse view state.
 #[derive(PartialEq, Clone, Copy)]
 pub enum ResultsState {
     /// No query has produced rows yet.
@@ -35,26 +44,23 @@ pub enum ResultsState {
     Grid,
     /// Explain plan is available.
     ExplainPlan,
+    /// The last run settled `Err`.
+    Error,
 }
 
-/// The results pane. Switches between the empty / running / grid views.
+/// The results pane for one tab. Reads the workbench's Run trigger and mounts the
+/// query-driven body when the latest press belongs to *this* tab — otherwise the empty
+/// state. Revisiting a tab whose press is still current re-serves the settled outcome
+/// from the freya-query cache (keyed by the press's [`QuerySpec`]) with zero engine traffic.
 #[derive(PartialEq)]
 pub struct Results {
-    state: ResultsState,
+    id: TabId,
+    request: State<Option<QuerySpec>>,
 }
 
 impl Results {
-    pub fn new() -> Self {
-        // SPIKE: force the grid so the VirtualScrollView spike is visible. Reverts to `Empty` (derived
-        // from the runs store / query state) once the runtime layer is wired.
-        Self {
-            state: ResultsState::Grid,
-        }
-    }
-
-    pub fn state(mut self, state: ResultsState) -> Self {
-        self.state = state;
-        self
+    pub fn new(id: TabId, request: State<Option<QuerySpec>>) -> Self {
+        Self { id, request }
     }
 }
 
@@ -62,27 +68,73 @@ impl Component for Results {
     fn render(&self) -> impl IntoElement {
         use_provide_context(|| State::create(Selection::None));
 
-        let body: Element = match self.state {
-            ResultsState::Empty => EmptyState.into(),
-            ResultsState::Running => Running.into(),
-            ResultsState::Grid => DataGrid::new().into(),
-            ResultsState::ExplainPlan => ExplainPlan.into(),
+        // Subscribes to the Run trigger: a press re-renders the pane with the new spec.
+        let id = self.id;
+        let spec = self.request.read().as_ref().filter(|spec| spec.tab == id).cloned();
+
+        let el: Element = match spec {
+            None => shell(EmptyState.into(), ResultsState::Empty),
+            Some(spec) => ResultsBody { spec }.into(),
+        };
+        el
+    }
+}
+
+/// The pane once its tab owns the current press: subscribes `use_query` on the press's
+/// [`QuerySpec`] and derives the body from the query state. `stale_time(MAX)` because a Run
+/// is an *action* — a settled entry must never re-execute by itself (SNAPSHOT_SPEC §6); only
+/// a new press (fresh nonce → new key) runs again.
+#[derive(PartialEq)]
+struct ResultsBody {
+    spec: QuerySpec,
+}
+
+impl Component for ResultsBody {
+    fn render(&self) -> impl IntoElement {
+        let engine = use_consume::<EngineCtx>();
+        let query = use_query(
+            Query::new(self.spec.clone(), RunQuery(engine.captured()))
+                .stale_time(Duration::MAX),
+        );
+
+        let reader = query.read();
+        let (body, state): (Element, ResultsState) = match &*reader.state() {
+            QueryStateData::Pending | QueryStateData::Loading { .. } => {
+                (Running.into(), ResultsState::Running)
+            }
+            // The grid still renders its fixture — P2-03 feeds it the settled `QueryPage`.
+            QueryStateData::Settled { res: Ok(QueryOutcome::Rows(_)), .. } => {
+                (DataGrid::new().into(), ResultsState::Grid)
+            }
+            // The plan body is a placeholder — P2-05 renders the settled `QueryPlan`.
+            QueryStateData::Settled { res: Ok(QueryOutcome::Plan(_)), .. } => {
+                (ExplainPlan.into(), ResultsState::ExplainPlan)
+            }
+            QueryStateData::Settled { res: Err(err), .. } => {
+                (ErrorState::new(err.clone()).into(), ResultsState::Error)
+            }
         };
 
-        // The state body flexes to fill the panel; the status bar keeps its fixed 40px, so it stays
-        // pinned at the bottom no matter how tall the grid's content is. Wrapping the body in an
-        // explicit `flex(1)` box (rather than leaning on each body to flex itself) is what actually
-        // bounds the grid — otherwise its scroll view would grow to its content and shove the footer off.
-        rect()
-            .width(Size::fill())
-            .height(Size::fill())
-            .content(Content::Flex)
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::flex(1.))
-                    .child(body),
-            )
-            .child(StatusBar::new(self.state))
+        shell(body, state)
     }
+}
+
+/// The pane frame every state shares. The state body flexes to fill the panel; the status bar
+/// keeps its fixed 40px, so it stays pinned at the bottom no matter how tall the grid's content
+/// is. Wrapping the body in an explicit `flex(1)` box (rather than leaning on each body to flex
+/// itself) is what actually bounds the grid — otherwise its scroll view would grow to its
+/// content and shove the footer off.
+fn shell(body: Element, state: ResultsState) -> Element {
+    rect()
+        .width(Size::fill())
+        .height(Size::fill())
+        .content(Content::Flex)
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.))
+                .child(body),
+        )
+        .child(StatusBar::new(state))
+        .into()
 }
