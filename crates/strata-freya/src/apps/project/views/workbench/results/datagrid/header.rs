@@ -17,8 +17,8 @@ use crate::components::typography::{Meta, MonoValue};
 #[derive(PartialEq)]
 pub struct HeaderCell {
     pub index: usize,
-    pub name: &'static str,
-    pub dtype: &'static str,
+    pub name: String,
+    pub dtype: String,
     pub w: f32,
     pub widths: State<Vec<f32>>,
     pub controller: ScrollController,
@@ -79,7 +79,7 @@ impl Component for HeaderCell {
                             .direction(Direction::Horizontal)
                             .main_align(Alignment::SpaceBetween)
                             .cross_align(Alignment::Center)
-                            .child(MonoValue::new(self.name).color(name_color).max_lines(1))
+                            .child(MonoValue::new(self.name.clone()).color(name_color).max_lines(1))
                             // Decorative for the spike; the sort action wires up with the runs store.
                             .child(
                                 Button::new()
@@ -89,7 +89,7 @@ impl Component for HeaderCell {
                                     .child(Icon::new(IconName::ChevronDown).size(11.)),
                             ),
                     )
-                    .child(Meta::new(self.dtype).color(self.type_color)),
+                    .child(Meta::new(self.dtype.clone()).color(self.type_color)),
             )
             .child(Divider::vertical().color(self.divider))
             .child(ColGrip {

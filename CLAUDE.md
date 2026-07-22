@@ -217,11 +217,13 @@ into task files; the near-term ones (phases 2–3) carry the most detail. Read t
 (status legend, phase order, known bugs).
 
 The near-term critical path is done: P2-01 (engine facade + snapshots, `docs/SNAPSHOT_SPEC.md`
-agreed) and P2-02 (results driven by `use_query`) are ✅ — pagination/sort/filter/export now rest
-on the snapshot read model. Results are **freya-query** off the tab's SQL (no runs-by-id store, no
-query state on the session — state-arch §2): the workbench owns a `use_state(|| None::<QuerySpec>)`
-Run trigger, threaded as **struct-field props** to the toolbar and results pane — props for known
-shallow consumers, context only for DI handles (`EngineCtx`) and deep trees (`Selection`).
+agreed), P2-02 (results driven by `use_query`) and P2-03 (grid renders the real `QueryPage`;
+fixture deleted; snapshot page reads via `FetchSnapshotPage`, paged from the status bar) are ✅ —
+sort/filter/export now rest on the snapshot read model. Results are **freya-query** off the tab's
+SQL (no runs-by-id store, no query state on the session — state-arch §2): the workbench owns a
+`use_state(|| None::<QuerySpec>)` Run trigger, threaded as **struct-field props** to the toolbar
+and results pane — props for known shallow consumers, context only for DI handles (`EngineCtx`)
+and deep trees (`Selection`).
 
 ---
 

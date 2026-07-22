@@ -25,9 +25,11 @@ Read this index first, then open only the phase/workstream file you're working i
 ## The big framing (read before sizing anything)
 
 - **The workbench is part-built, part-stub — and the round trip is now wired.** The datagrid core
-  and tab strip are real (the grid still renders a static `fixture()` — P2-03 swaps in real rows).
-  Since P2-01/P2-02, editor → run → engine → results is live: the results state machine (empty /
-  running / grid / explain / error) is driven by freya-query off the tab's SQL. Still to build:
+  and tab strip are real, and since P2-03 the grid renders the **real result set** (the fixture is
+  gone): page 1 rides the Run's output, later pages are cached snapshot reads, and a minimal pager
+  sits in the status bar. Since P2-01/P2-02, editor → run → engine → results is live: the results
+  state machine (empty / running / grid / explain / error) is driven by freya-query off the tab's
+  SQL. Still to build:
   the **running** and **explain-plan** body content (their states are reached, bodies are
   placeholders), the **status bar** pager/info, and the **Table/Chart switcher, find, record view,
   copy** surfaces. So Phase 2 remains **build *and* wire** — per surface, on a live spine.

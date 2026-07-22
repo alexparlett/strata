@@ -30,6 +30,7 @@ use crate::apps::project::query::{QueryOutcome, QuerySpec, RunQuery};
 use crate::apps::project::state::TabId;
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
+use status_bar::Pager;
 pub use datagrid::DataGridThemePreference;
 pub use status_bar::StatusBarThemePreference;
 
@@ -73,8 +74,13 @@ impl Component for Results {
         let spec = self.request.read().as_ref().filter(|spec| spec.tab == id).cloned();
 
         let el: Element = match spec {
-            None => shell(EmptyState.into(), ResultsState::Empty),
-            Some(spec) => ResultsBody { spec }.into(),
+            None => shell(EmptyState.into(), ResultsState::Empty, None),
+            Some(spec) => {
+                // Keyed by the press's nonce so a new Run remounts the body — the page below
+                // resets to 1 and the grid's column widths reseed for the new schema.
+                let run = spec.run;
+                ResultsBody { spec, key: DiffKey::None }.key(run).into()
+            }
         };
         el
     }
@@ -87,6 +93,13 @@ impl Component for Results {
 #[derive(PartialEq)]
 struct ResultsBody {
     spec: QuerySpec,
+    key: DiffKey,
+}
+
+impl KeyExt for ResultsBody {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
 }
 
 impl Component for ResultsBody {
@@ -96,26 +109,39 @@ impl Component for ResultsBody {
             Query::new(self.spec.clone(), RunQuery(engine.captured()))
                 .stale_time(Duration::MAX),
         );
+        // The 1-based snapshot page the grid shows. It lives here — beside the status bar that
+        // pages it and the grid that reads it — and starts at 1 for every press (this component
+        // is keyed by the press's nonce).
+        let page = use_state(|| 1usize);
 
         let reader = query.read();
-        let (body, state): (Element, ResultsState) = match &*reader.state() {
+        let (body, state, pager): (Element, ResultsState, Option<Pager>) = match &*reader.state() {
             QueryStateData::Pending | QueryStateData::Loading { .. } => {
-                (Running.into(), ResultsState::Running)
+                (Running.into(), ResultsState::Running, None)
             }
-            // The grid still renders its fixture — P2-03 feeds it the settled `QueryPage`.
-            QueryStateData::Settled { res: Ok(QueryOutcome::Rows(_)), .. } => {
-                (DataGrid::new().into(), ResultsState::Grid)
-            }
+            QueryStateData::Settled { res: Ok(QueryOutcome::Rows(rows)), .. } => (
+                DataGrid::new(&rows.output, page).into(),
+                ResultsState::Grid,
+                Some(Pager {
+                    page,
+                    total: rows.output.total,
+                    page_size: rows.output.page_size,
+                }),
+            ),
             // The plan body is a placeholder — P2-05 renders the settled `QueryPlan`.
             QueryStateData::Settled { res: Ok(QueryOutcome::Plan(_)), .. } => {
-                (ExplainPlan.into(), ResultsState::ExplainPlan)
+                (ExplainPlan.into(), ResultsState::ExplainPlan, None)
             }
             QueryStateData::Settled { res: Err(err), .. } => {
-                (ErrorState::new(err.clone()).into(), ResultsState::Error)
+                (ErrorState::new(err.clone()).into(), ResultsState::Error, None)
             }
         };
 
-        shell(body, state)
+        shell(body, state, pager)
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
     }
 }
 
@@ -123,8 +149,8 @@ impl Component for ResultsBody {
 /// keeps its fixed 40px, so it stays pinned at the bottom no matter how tall the grid's content
 /// is. Wrapping the body in an explicit `flex(1)` box (rather than leaning on each body to flex
 /// itself) is what actually bounds the grid — otherwise its scroll view would grow to its
-/// content and shove the footer off.
-fn shell(body: Element, state: ResultsState) -> Element {
+/// content and shove the footer off. The pager rides only with the grid state.
+fn shell(body: Element, state: ResultsState, pager: Option<Pager>) -> Element {
     rect()
         .width(Size::fill())
         .height(Size::fill())
@@ -135,6 +161,6 @@ fn shell(body: Element, state: ResultsState) -> Element {
                 .height(Size::flex(1.))
                 .child(body),
         )
-        .child(StatusBar::new(state))
+        .child(StatusBar::new(state).pager(pager))
         .into()
 }

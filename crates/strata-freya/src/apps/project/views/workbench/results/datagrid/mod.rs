@@ -6,20 +6,28 @@
 //! header + body together for wide tables.
 //!
 //! Layout: this file owns the [`DataGrid`] component + its render, the shared constants, and the
-//! `datagrid` [`define_theme!`]. The pieces live in submodules — [`model`] (data + type→colour +
-//! density + fixture), [`cell`] (the body / gutter / `#` cell), [`header`] (the column header +
+//! `datagrid` [`define_theme!`]. The pieces live in submodules — [`model`] (grid data + type→colour +
+//! density), [`cell`] (the body / gutter / `#` cell), [`header`] (the column header +
 //! resize grip) — and the selection model is the sibling `super::selection`.
 //!
 //! Every colour is a `datagrid` component token (`define_theme!` / `get_theme!`) — no semantic sheet
-//! reads. Fed by a throwaway fixture (10k rows); only the fixture is disposable.
+//! reads. Fed by the Run's real [`GridData`]: page 1 rides in the Run's own output, later pages are
+//! snapshot reads through [`FetchSnapshotPage`] (cached forever — the snapshot is immutable).
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use freya::components::{define_theme, get_theme};
 use freya::prelude::*;
+use freya::query::{use_query, Query, QueryStateData};
+use strata_model::SnapshotId;
 
+use super::error::ErrorState;
+use super::running::Running;
 use super::selection::{CellRole, SelCtl, Selection};
 use super::toolbar::DataGridToolbar;
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::query::{FetchSnapshotPage, PageSpec};
 use crate::components::divider::Divider;
 
 mod cell;
@@ -28,7 +36,7 @@ mod model;
 
 use cell::Cell;
 use header::HeaderCell;
-use model::{fixture, Density, GridData};
+use model::{Density, GridData, KindColors};
 
 const HEADER_H: f32 = 46.;
 const GUTTER_W: f32 = 52.; // the `#` row-number column (matches the Dioxus `.hnum` / `.rnum`)
@@ -40,7 +48,6 @@ const MAX_COL_W: f32 = 2000.;
 const GRIP_W: f32 = 6.; // resize hot-zone width on a column's right edge
 const EDGE_MARGIN: f32 = 36.; // how close to the viewport edge a resize drag starts auto-scrolling
 const EDGE_STEP: f32 = 24.; // px scrolled per pointer-move tick while resizing at an edge
-const N_ROWS: usize = 10_000;
 // Wheel axis-lock threshold: a scroll commits to whichever axis dominates, so a mostly-vertical
 // gesture never drifts the horizontal pan (and vice-versa). 1.0 = lock to the larger axis; raise it
 // to allow more diagonal freedom before locking.
@@ -50,14 +57,14 @@ const AUTOFIT_CHAR_W: f32 = 7.6; // mono char-width estimate
 const AUTOFIT_PAD: f32 = 28.; // cell horizontal padding + affordance
 
 /// Per-column content auto-fit width — `max(header name + 3, widest cell) × char-width + padding`,
-/// clamped to the resize bounds. Computed once (the fixture is static) and handed to each grip.
+/// clamped to the resize bounds. Recomputed per page (a grip double-click fits the *visible* cells).
 fn autofit_widths(data: &GridData) -> Vec<f32> {
     (0..data.columns.len())
         .map(|ci| {
             let mut max_len = data.columns[ci].name.chars().count() + 3;
             for row in &data.rows {
-                if let Some(text) = row.get(ci) {
-                    max_len = max_len.max(text.chars().count());
+                if let Some(cell) = row.get(ci) {
+                    max_len = max_len.max(cell.text.chars().count());
                 }
             }
             (max_len as f32 * AUTOFIT_CHAR_W + AUTOFIT_PAD).clamp(MIN_COL_W, MAX_COL_W)
@@ -102,16 +109,30 @@ define_theme!(
     }
 );
 
-/// The results grid (spike).
+/// The results grid for one settled Run. Renders one page of the Run's snapshot and owns the
+/// page *reads*: page 1 rides in the Run's own output; later pages go through
+/// [`FetchSnapshotPage`], keyed by `(snapshot, page, page_size, sort)` — so a revisited page is
+/// served from the freya-query cache with zero engine traffic (the snapshot is immutable).
 #[derive(PartialEq)]
 pub struct DataGrid {
+    /// Page 1 — the page the Run itself returned (also the source of the result schema).
+    data: Rc<GridData>,
+    /// The Run's materialized snapshot (`None` ⇔ zero rows; there is nothing to page).
+    snapshot: Option<SnapshotId>,
+    page_size: usize,
+    /// The 1-based page to show — owned by the results pane; the status-bar pager bumps it.
+    page: State<usize>,
     density: Density,
     pub(crate) theme: Option<DataGridThemePartial>,
 }
 
 impl DataGrid {
-    pub fn new() -> Self {
+    pub fn new(output: &strata_model::QueryOutput, page: State<usize>) -> Self {
         Self {
+            data: Rc::new(GridData::from_run(output)),
+            snapshot: output.snapshot,
+            page_size: output.page_size,
+            page,
             density: Density::Comfortable,
             theme: None,
         }
@@ -127,15 +148,12 @@ impl DataGrid {
 
 impl Component for DataGrid {
     fn render(&self) -> impl IntoElement {
-        // Fixture once (memoised); per-column widths seeded to the default, mutated by the grips.
-        let data = use_hook(|| Rc::new(fixture()));
-        let n = data.columns.len();
+        let engine = use_consume::<EngineCtx>();
+        // Per-column widths, seeded from the run's schema at mount and mutated by the grips. They
+        // live at this level — not per page — so a page flip keeps the user's resizes (the column
+        // set is fixed for the life of the snapshot).
+        let n = self.data.columns.len();
         let widths = use_state(move || vec![DEFAULT_COL_W; n]);
-        // Per-column content auto-fit widths (grip double-click), computed once — the fixture is static.
-        let autofit = use_hook({
-            let data = data.clone();
-            move || Rc::new(autofit_widths(&data))
-        });
         // One horizontal scroll controller, shared with the resize grips (so they can auto-scroll the
         // view while dragging past an edge), plus the grid viewport in screen coords for edge detection.
         let controller = use_scroll_controller(ScrollConfig::default);
@@ -145,6 +163,25 @@ impl Component for DataGrid {
         // the view and made the drag janky. The grips write it; it settles back to `min_w` on release.
         let hold_w = use_state(|| 0.0f32);
 
+        // The current page's snapshot read (SNAPSHOT_SPEC §6): keyed by [`PageSpec`] and cached
+        // forever (`stale_time(MAX)` — reads of an immutable snapshot never go stale), so a
+        // revisited page settles straight from the cache. Disabled on page 1, which rode in the
+        // Run's own output — the placeholder id of a disabled read never reaches the engine.
+        let page = *self.page.read();
+        let fetch = use_query(
+            Query::new(
+                PageSpec {
+                    snapshot: self.snapshot.unwrap_or(SnapshotId(0)),
+                    page,
+                    page_size: self.page_size,
+                    sort: None,
+                },
+                FetchSnapshotPage(engine.captured()),
+            )
+            .stale_time(Duration::MAX)
+            .enable(page > 1 && self.snapshot.is_some()),
+        );
+
         // ── selection ──────────────────────────────────────────────────────────────────────────────
         // Shared selection state + a Copy controller the cells call on pointer events. Freya pointer
         // events carry no modifiers, so shift / ⌘ are tracked via the root's global key up/down below.
@@ -153,6 +190,36 @@ impl Component for DataGrid {
         let drag = use_state(|| false);
         let mut shift = use_state(|| false);
         let mut meta = use_state(|| false);
+
+        // The datagrid theme is used directly (no parallel palette): the header + outer scroll borrow
+        // it, and the body closure — which must own its captures — takes a cheap clone (all `Color`).
+        let theme = get_theme!(&self.theme, DataGridThemePreference, "datagrid");
+        // Cell padding comes from the theme via the density selector; the row height follows its
+        // vertical extent so the virtual scroller's item size matches.
+        let cell_pad = self.density.padding(&theme);
+        let row_h = CELL_LINE_H + cell_pad.vertical();
+
+        // Resolve the page to render: page 1 from the Run, later pages from the snapshot read.
+        // A page fetch in flight (or failed) replaces the grid body; the widths above survive it.
+        // (These early returns sit below every hook, so the hook order is stable across states.)
+        let data: Rc<GridData> = if page == 1 {
+            self.data.clone()
+        } else {
+            match &*fetch.read().state() {
+                QueryStateData::Settled { res: Ok(fetched), .. } => Rc::new(GridData::from_page(
+                    self.data.columns.clone(),
+                    fetched.rows.clone(),
+                )),
+                QueryStateData::Settled { res: Err(err), .. } => {
+                    return ErrorState::new(err.clone()).into_element();
+                }
+                QueryStateData::Pending | QueryStateData::Loading { .. } => {
+                    return Running.into_element();
+                }
+            }
+        };
+        // Per-column content auto-fit widths (grip double-click), from this page's cells.
+        let autofit = autofit_widths(&data);
         let sel_ctl = SelCtl {
             sel,
             anchor,
@@ -164,14 +231,6 @@ impl Component for DataGrid {
         };
         // (No selection snapshot here: each cell reads the selection reactively and styles itself, so a
         // selection change re-renders only the affected cells — the grid itself doesn't re-render.)
-
-        // The datagrid theme is used directly (no parallel palette): the header + outer scroll borrow
-        // it, and the body closure — which must own its captures — takes a cheap clone (all `Color`).
-        let theme = get_theme!(&self.theme, DataGridThemePreference, "datagrid");
-        // Cell padding comes from the theme via the density selector; the row height follows its
-        // vertical extent so the virtual scroller's item size matches.
-        let cell_pad = self.density.padding(&theme);
-        let row_h = CELL_LINE_H + cell_pad.vertical();
 
         // The columns' natural span, including the trailing dead zone (so the last grip stays reachable).
         // It's the content's `min-width` (à la CSS `min-width: max-content`): the header + rows are `fill`
@@ -206,8 +265,8 @@ impl Component for DataGrid {
             let w = widths.read().get(ci).copied().unwrap_or(DEFAULT_COL_W);
             header = header.child(HeaderCell {
                 index: ci,
-                name: col.name,
-                dtype: col.dtype,
+                name: col.name.clone(),
+                dtype: col.dtype.clone(),
                 w,
                 widths,
                 controller,
@@ -230,11 +289,13 @@ impl Component for DataGrid {
         header = header.child(rect().width(Size::flex(1.)).min_width(Size::px(TRAIL_W)).height(Size::fill()));
 
         // Virtualized body: the builder runs only for rows scrolled into view; it reads `widths` fresh
-        // so a resize reflows every visible row.
-        let data_b = data.clone();
+        // so a resize reflows every visible row. The page's rows ride as `builder_data` (not a plain
+        // capture) so flipping pages — same length, new cells — rebuilds the visible rows.
         let len = data.rows.len();
+        // Absolute row numbers: the gutter continues across pages (page 2 starts at page_size + 1).
+        let row_base = (page - 1) * self.page_size;
         let theme_b = theme.clone();
-        let body = VirtualScrollView::new(move |index, _| {
+        let body = VirtualScrollView::new_with_data(data.clone(), move |index, data| {
             let mut cells = rect()
                 .width(Size::fill())
                 .height(Size::flex(1.))
@@ -242,7 +303,7 @@ impl Component for DataGrid {
                 .content(Content::Flex)
                 .child(Cell {
                     width: Size::px(GUTTER_W),
-                    text: (index + 1).to_string(),
+                    text: (row_base + index + 1).to_string(),
                     color: theme_b.gutter_color,
                     mono: false,
                     cross: Alignment::Center,
@@ -256,12 +317,19 @@ impl Component for DataGrid {
                     active_background: Some(theme_b.gutter_active_background),
                 });
 
-            for (ci, col) in data_b.columns.iter().enumerate() {
+            for (ci, col) in data.columns.iter().enumerate() {
                 let w = widths.read().get(ci).copied().unwrap_or(DEFAULT_COL_W);
+                let cell = &data.rows[index][ci];
                 cells = cells.child(Cell {
                     width: Size::px(w),
-                    text: data_b.rows[index][ci].clone(),
-                    color: col.kind.cell_color(&theme_b),
+                    text: cell.text.clone(),
+                    // Nulls render dimmed (the model keeps the flag exactly for this), in the
+                    // gutter's muted tone; everything else takes its type colour.
+                    color: if cell.null {
+                        theme_b.gutter_color
+                    } else {
+                        col.kind.cell_color(&theme_b)
+                    },
                     mono: true,
                     cross: Alignment::Start,
                     pad: Gaps::new(0., cell_pad.right(), 0., cell_pad.left()),
@@ -364,5 +432,6 @@ impl Component for DataGrid {
             })
             .child(DataGridToolbar)
             .child(scroll)
+            .into_element()
     }
 }

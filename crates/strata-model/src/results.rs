@@ -6,7 +6,7 @@ use super::ColumnInfo;
 
 /// One display cell: the formatted text plus a null flag (the grid dims nulls, so the
 /// flag stays even though the text is the configured NULL rendering).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cell {
     pub text: String,
     pub null: bool,
