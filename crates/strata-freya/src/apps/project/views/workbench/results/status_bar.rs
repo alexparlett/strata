@@ -52,6 +52,7 @@ impl Component for StatusBar {
                 ResultsState::Running => c.warning,
                 ResultsState::Grid => c.success,
                 ResultsState::ExplainPlan => c.info,
+                ResultsState::Error => c.error,
             }
         };
         let sel = consume_context::<State<Selection>>();
@@ -63,6 +64,7 @@ impl Component for StatusBar {
             ResultsState::Running => "Running…",
             ResultsState::Grid => "Results",
             ResultsState::ExplainPlan => "Query plan",
+            ResultsState::Error => "Query failed",
         };
 
         let selection = sel.read().clone();

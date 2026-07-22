@@ -192,6 +192,10 @@ Run flow end-to-end:
    `PageSpec { snapshot: handle, … }` — fetched once per distinct key, cache-served after.
 5. Cancel: `engine.cancel(tab.into(), run.into())` — the awaiting run settles `Err("cancelled")`.
 
+Steps 1–3 are wired (P2-02): the workbench owns the `request` slot (props to toolbar + results —
+placement rationale in state-arch §6 "As built"); step 4 lands with the grid model (P2-03), step 5
+with Run→Cancel (P2-15/P2-06).
+
 ## 7. `EngineCtx` — the window's handle
 
 A thin per-window context wrapper — `Arc<Engine>` with `Deref`, plus the only UI-shaped pieces:

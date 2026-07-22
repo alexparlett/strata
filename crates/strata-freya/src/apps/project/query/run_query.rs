@@ -21,6 +21,10 @@ use uuid::Uuid;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::TabId;
 
+/// Rows per page for a Run's snapshot (page 1 rides in the Run's own `QueryOutput`; later
+/// pages go through [`FetchSnapshotPage`]). Matches the Dioxus app's default.
+pub const DEFAULT_PAGE_SIZE: usize = 100;
+
 /// One Run press's identity — the cache key that makes a Run an action (§6). Fresh per
 /// press; never derived from the SQL.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

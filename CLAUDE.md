@@ -158,11 +158,12 @@ src/apps/project/                the project window (Valin-shaped)
       editor/                    SQL editor: tab, toolbar
       tab_bar/                   bar, tab, controls (new/navigate/overflow), drag, menu (context menu)
       results/
-        mod.rs                   results panel (states: running / plan / rows / empty)
+        mod.rs                   results panel — freya-query-driven states (empty / running /
+                                 grid / explain / error) off the workbench's `request` slot
         datagrid/                mod, header, cell, model  (sticky typed header, virtualized cells,
                                  per-column resize + double-click autofit)
         selection.rs             cell/row/column selection model + SelCtl controller
-        toolbar.rs, status_bar.rs, running.rs, explain_plan.rs, empty.rs
+        toolbar.rs, status_bar.rs, running.rs, explain_plan.rs, empty.rs, error.rs
 ```
 
 **Note on the two frontends:** most of the persistent memory notes describe the **Dioxus** app's
@@ -215,10 +216,12 @@ loading the rest. Every migration phase (2–6) and both workstreams (Connection
 into task files; the near-term ones (phases 2–3) carry the most detail. Read the top `README.md` first
 (status legend, phase order, known bugs).
 
-Heads-up on the near-term critical path: `phase-2-workbench/P2-01` bundles the query round-trip **and**
-the result snapshot system and is **design-first** — it needs a `docs/SNAPSHOT_SPEC.md` agreed (and
-`FREYA_STATE_ARCHITECTURE.md` §6 updated) before pagination/sort/filter/export rest on it. Results are
-**freya-query** off the tab's SQL (no runs-by-id store, no query state on the session — state-arch §2).
+The near-term critical path is done: P2-01 (engine facade + snapshots, `docs/SNAPSHOT_SPEC.md`
+agreed) and P2-02 (results driven by `use_query`) are ✅ — pagination/sort/filter/export now rest
+on the snapshot read model. Results are **freya-query** off the tab's SQL (no runs-by-id store, no
+query state on the session — state-arch §2): the workbench owns a `use_state(|| None::<QuerySpec>)`
+Run trigger, threaded as **struct-field props** to the toolbar and results pane — props for known
+shallow consumers, context only for DI handles (`EngineCtx`) and deep trees (`Selection`).
 
 ---
 

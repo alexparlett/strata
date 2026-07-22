@@ -9,6 +9,7 @@
 //! their layer lands (Run/Explain → freya-query, Save → the Project store, Format/Clear → editor
 //! commands), and the running / dirty / validation states that gate them come with those.
 
+use crate::apps::project::query::QuerySpec;
 use crate::apps::project::state::{Chan, SessionState};
 use editor::tab::EditorTab;
 use empty::EmptyState;
@@ -37,6 +38,24 @@ impl Component for Workbench {
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let active = radio.read().active;
 
+        // The window's Run trigger (state-arch §6): the latest Run press, component-local —
+        // written by the editor toolbar, read by the results pane, threaded as plain props.
+        // Editing never touches it; only a press rebuilds it (fresh nonce → new execution).
+        let mut request = use_state(|| None::<QuerySpec>);
+
+        // A press outlives its tab only until the close funnel runs: if the pressed tab is
+        // gone (close / close-others / …), drop the slot so a reopened tab starts with no
+        // results, like a fresh one — matching the engine-side cleanup (SNAPSHOT_SPEC §4).
+        use_side_effect(move || {
+            let gone = request
+                .peek()
+                .as_ref()
+                .is_some_and(|spec| !radio.read().tabs.contains_key(&spec.tab));
+            if gone {
+                request.set(None);
+            }
+        });
+
         rect()
             .expanded()
             .child(TabBar::new())
@@ -50,11 +69,11 @@ impl Component for Workbench {
                         .panel(
                             ResizablePanel::new(PanelSize::px(240.))
                                 .min_size(92.)
-                                .child(EditorTab::new(id)),
+                                .child(EditorTab::new(id, request)),
                         )
                         .panel(
                             ResizablePanel::new(PanelSize::percent(100.))
-                                .child(Results::new()),
+                                .child(Results::new(id, request)),
                         ),
                 )
             })

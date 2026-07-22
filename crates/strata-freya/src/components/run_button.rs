@@ -1,7 +1,7 @@
 //! The editor's Run control — a purpose-built button with three visual states (idle / disabled /
 //! running). Themed via `define_theme!`; its colours are defined wholly in the theme file's
 //! `components.run_button` (see `crate::theme`). Idle runs the query, running shows a stop glyph,
-//! disabled is inert. Interaction wiring (press → run/cancel) lands with the query layer.
+//! disabled is inert (its press never fires).
 
 use freya::prelude::*;
 
@@ -35,11 +35,23 @@ pub enum RunState {
 pub struct RunButton {
     state: RunState,
     theme: Option<RunButtonThemePartial>,
+    on_press: Option<EventHandler<Event<PressEventData>>>,
 }
 
 impl RunButton {
     pub fn new(state: RunState) -> Self {
-        Self { state, theme: None }
+        Self {
+            state,
+            theme: None,
+            on_press: None,
+        }
+    }
+
+    /// The press action for the *current* state — run when idle, cancel when running
+    /// (the caller decides; disabled swallows it).
+    pub fn on_press(mut self, on_press: impl Into<EventHandler<Event<PressEventData>>>) -> Self {
+        self.on_press = Some(on_press.into());
+        self
     }
 }
 
@@ -78,6 +90,9 @@ impl Component for RunButton {
             IconName::Play
         };
 
+        let on_press = self.on_press.clone();
+        let disabled = self.state == RunState::Disabled;
+
         rect()
             .width(Size::px(28.))
             .height(Size::px(28.))
@@ -86,6 +101,13 @@ impl Component for RunButton {
             .center()
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
+            .map(on_press, move |el, on_press| {
+                el.on_press(move |e| {
+                    if !disabled {
+                        on_press.call(e);
+                    }
+                })
+            })
             .child(Icon::new(icon).color(fg).size(15.))
     }
 }

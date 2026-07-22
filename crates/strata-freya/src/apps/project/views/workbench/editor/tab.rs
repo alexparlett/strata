@@ -1,21 +1,24 @@
+use crate::apps::project::query::QuerySpec;
 use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
 use freya::components::use_theme;
-use freya::prelude::{rect, use_a11y, ChildrenExt, Component, ContainerSizeExt, ContainerWithContentExt, Content, IntoElement, IntoWritable, Size};
+use freya::prelude::{rect, use_a11y, ChildrenExt, Component, ContainerSizeExt, ContainerWithContentExt, Content, IntoElement, IntoWritable, Size, State};
 use freya::radio::use_radio;
 use strata_code_editor::prelude::{CodeEditor, CodeEditorData, EditorLanguage, Rope};
 
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a
-/// `Writable<CodeEditorData>` straight into the store on `Chan::Tab(id)`.
+/// `Writable<CodeEditorData>` straight into the store on `Chan::Tab(id)`. Carries the
+/// workbench's Run trigger down to the toolbar (which writes a press into it).
 #[derive(PartialEq)]
 pub struct EditorTab {
     pub id: TabId,
+    pub request: State<Option<QuerySpec>>,
 }
 
 impl EditorTab {
-    pub fn new(id: TabId) -> Self {
-        Self { id }
+    pub fn new(id: TabId, request: State<Option<QuerySpec>>) -> Self {
+        Self { id, request }
     }
 }
 
@@ -43,7 +46,7 @@ impl Component for EditorTab {
             .expanded()
             .vertical()
             .content(Content::Flex)
-            .child(EditorToolbar)
+            .child(EditorToolbar { id, request: self.request })
             .child(
                 rect()
                     .width(Size::fill())
