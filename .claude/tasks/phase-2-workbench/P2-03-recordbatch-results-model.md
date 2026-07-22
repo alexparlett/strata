@@ -1,14 +1,19 @@
 # P2-03 · `QueryPage` → grid model (kill the fixture)
 
-**Phase:** 2 — Workbench · **Status:** ⬜ `[core ✓]` · **Depends on:** P2-01/02 · **Unblocks:** P2-08..13
+**Phase:** 2 — Workbench · **Status:** ✅ **built** · **Depends on:** P2-01/02 · **Unblocks:** P2-08..13
 
 ## Goal
 The datagrid renders the `QueryPage` returned by `use_query` (typed columns + a page of rows) instead
 of the static `fixture()`.
 
 ## Current state
-`datagrid/model.rs::fixture()` builds static `GridData`; `datagrid/mod.rs` does
-`use_hook(|| Rc::new(fixture()))`.
+Built. `fixture()` and the local `Kind` are deleted: `GridData` holds the model's real
+`Vec<ColumnInfo>` + `Vec<Vec<Cell>>` (nulls render dimmed), `DataGrid::new(&QueryOutput, page)`
+renders page 1 from the Run's own output, and later pages are `use_query(FetchSnapshotPage)` reads
+keyed by `PageSpec` with `stale_time(MAX)` (`enable(false)` on page 1). Column widths live at the
+grid level so a page flip keeps resizes; the gutter numbers rows absolutely across pages. A minimal
+working pager (prev/next + row range) sits in the status bar's right slot — P2-08 dresses it.
+`ResultsBody` is keyed by the press's `RunId`, so a new Run resets page + widths.
 
 ## Build
 1. Feed `GridData` (or its replacement) from the settled `QueryPage`: real column names, Arrow types
@@ -19,9 +24,9 @@ of the static `fixture()`.
 4. Re-check autofit clamp bounds against real column widths.
 
 ## Acceptance
-- [ ] Grid shows the real result set; type colours from the real Arrow schema.
-- [ ] Prev/next bumps the snapshot read's page; a revisited page is cache-served (immutable snapshot).
-- [ ] `fixture()` is not on the normal render path.
+- [x] Grid shows the real result set; type colours from the real Arrow schema.
+- [x] Prev/next bumps the snapshot read's page; a revisited page is cache-served (immutable snapshot).
+- [x] `fixture()` is not on the normal render path (deleted).
 
 ## Freya / references
 - `datagrid/{mod,model,cell,header}.rs` — keep render/selection/resize, swap the data source only.

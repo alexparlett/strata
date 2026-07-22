@@ -1,27 +1,24 @@
-//! Datagrid data model — the column type vocabulary ([`Kind`]) with its theme-colour mapping, the
-//! [`Column`] / [`GridData`] shapes and the throwaway [`fixture`], and the cell-padding [`Density`].
-//! A stand-in for the real RecordBatch-shaped results model; only the fixture is disposable.
+//! Datagrid data model — the [`GridData`] page the grid renders (the run's real result schema +
+//! the engine's formatted cells), the [`Kind`] → theme-colour mapping ([`KindColors`]), and the
+//! cell-padding [`Density`].
 
 use freya::prelude::*;
+use strata_model::{Cell, ColumnInfo, Kind, QueryOutput};
 
-use super::{DataGridTheme, N_ROWS};
+use super::DataGridTheme;
 
-/// A column's logical type — drives the header dtype-label colour and the cell text colour (matches
-/// the Dioxus `Kind` → `text_class()` / `cell_class()`).
-#[derive(Clone, Copy, PartialEq)]
-pub enum Kind {
-    Str,
-    Num,
-    Bool,
-    Ts,
-    Struct,
-    List,
-    Map,
+/// Theme-colour mapping for a column's [`Kind`] (the model's schema vocabulary) — drives the
+/// header dtype-label colour and the cell text colour (matches the Dioxus `Kind` →
+/// `text_class()` / `cell_class()`).
+pub trait KindColors {
+    /// The header dtype-label colour (Dioxus `.ct .t-*`).
+    fn type_color(self, t: &DataGridTheme) -> Color;
+    /// The cell text colour (Dioxus `.cell.num` / `.cell.ts` / `.cell.bool`; everything else default).
+    fn cell_color(self, t: &DataGridTheme) -> Color;
 }
 
-impl Kind {
-    /// The header dtype-label colour (Dioxus `.ct .t-*`).
-    pub fn type_color(self, t: &DataGridTheme) -> Color {
+impl KindColors for Kind {
+    fn type_color(self, t: &DataGridTheme) -> Color {
         match self {
             Kind::Str => t.type_str_color,
             Kind::Num => t.type_num_color,
@@ -33,8 +30,7 @@ impl Kind {
         }
     }
 
-    /// The cell text colour (Dioxus `.cell.num` / `.cell.ts` / `.cell.bool`; everything else default).
-    pub fn cell_color(self, t: &DataGridTheme) -> Color {
+    fn cell_color(self, t: &DataGridTheme) -> Color {
         match self {
             Kind::Num => t.cell_num_color,
             Kind::Ts => t.cell_ts_color,
@@ -44,16 +40,24 @@ impl Kind {
     }
 }
 
-pub struct Column {
-    pub name: &'static str,
-    pub dtype: &'static str,
-    pub kind: Kind,
+/// The grid's input: one page of a run — the result schema plus that page's formatted cells.
+#[derive(PartialEq)]
+pub struct GridData {
+    pub columns: Vec<ColumnInfo>,
+    pub rows: Vec<Vec<Cell>>,
 }
 
-/// The grid's input: columns + pre-formatted cell text per row.
-pub struct GridData {
-    pub columns: Vec<Column>,
-    pub rows: Vec<Vec<String>>,
+impl GridData {
+    /// Page 1, riding in the Run's own [`QueryOutput`] — no page fetch on first paint.
+    pub fn from_run(output: &QueryOutput) -> Self {
+        Self { columns: output.columns.clone(), rows: output.rows.clone() }
+    }
+
+    /// A later page read from the immutable snapshot; the schema is the Run's (a page fetch
+    /// carries only rows).
+    pub fn from_page(columns: Vec<ColumnInfo>, rows: Vec<Vec<Cell>>) -> Self {
+        Self { columns, rows }
+    }
 }
 
 /// Cell padding density — the vertical breathing room around cell text (the horizontal inset is
@@ -75,34 +79,4 @@ impl Density {
             Density::Compact => t.compact_cell_padding,
         }
     }
-}
-
-/// Build the throwaway fixture (10k rows × 8 typed columns) that stands in for real query results.
-pub fn fixture() -> GridData {
-    let columns = vec![
-        Column { name: "id", dtype: "Int64", kind: Kind::Num },
-        Column { name: "amount", dtype: "Float64", kind: Kind::Num },
-        Column { name: "name", dtype: "Utf8", kind: Kind::Str },
-        Column { name: "active", dtype: "Boolean", kind: Kind::Bool },
-        Column { name: "created_at", dtype: "Timestamp", kind: Kind::Ts },
-        Column { name: "score", dtype: "Int64", kind: Kind::Num },
-        Column { name: "meta", dtype: "Struct", kind: Kind::Struct },
-        Column { name: "tags", dtype: "List", kind: Kind::List },
-    ];
-    let names = ["alpha", "beta", "gamma", "delta"];
-    let rows = (0..N_ROWS)
-        .map(|i| {
-            vec![
-                i.to_string(),
-                format!("{:.2}", (i as f32 * 1.37) % 1000.),
-                format!("{}_{i}", names[i % names.len()]),
-                (i % 2 == 0).to_string(),
-                format!("2026-07-{:02} 12:{:02}", (i % 28) + 1, i % 60),
-                ((i * 7) % 100).to_string(),
-                "{…}".to_string(),
-                "[…]".to_string(),
-            ]
-        })
-        .collect();
-    GridData { columns, rows }
 }
