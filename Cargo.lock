@@ -3269,6 +3269,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "freya-testing"
+version = "0.4.0"
+dependencies = [
+ "accesskit",
+ "freya-clipboard",
+ "freya-components",
+ "freya-core",
+ "freya-engine",
+ "futures-channel",
+ "ragnarok",
+ "torin",
+]
+
+[[package]]
 name = "freya-winit"
 version = "0.4.0"
 dependencies = [
@@ -6647,6 +6661,7 @@ version = "0.2.0"
 dependencies = [
  "async-io",
  "freya",
+ "freya-testing",
  "futures",
  "serde",
  "serde_json",

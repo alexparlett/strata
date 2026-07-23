@@ -11,6 +11,7 @@ use std::time::Duration;
 use freya::prelude::*;
 use freya::query::{use_query, Query, QueryStateData};
 use freya::radio::use_radio;
+use strata_core::engine::plan::PlanTab;
 use strata_model::SnapshotId;
 
 mod chart;
@@ -43,6 +44,7 @@ use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 use status_bar::{Pager, RunInfo};
 pub use datagrid::DataGridThemePreference;
+pub use explain_plan::ExplainPlanThemePreference;
 pub use running::{CancelButtonThemePartial, CancelButtonThemePreference};
 pub use status_bar::StatusBarThemePreference;
 
@@ -182,6 +184,11 @@ impl Component for ResultsBody {
         let page = use_state(|| 1usize);
         let run_size = self.spec.page_size;
         let page_size = use_state(move || run_size);
+        // The plan view's slots (P2-05): which tree shows and the Raw text toggle. Like the
+        // page, per-press — a new Run starts back on the tree, physical-first. They live here
+        // so the status bar's active-tab summary reads the same selection the view renders.
+        let plan_tab = use_state(PlanTab::default);
+        let plan_raw = use_state(|| false);
 
         // The tab's Table/Chart view mode (P2-07) — per-tab (its own `Chan::View` channel),
         // so it survives re-runs and tab switches; the toolbar's toggle writes it.
@@ -328,11 +335,19 @@ impl Component for ResultsBody {
                     bar,
                 )
             }
-            // The plan body is a placeholder — P2-05 renders the settled `QueryPlan`.
-            QueryStateData::Settled { res: Ok(QueryOutcome::Plan(plan)), .. } => (
-                ExplainPlan.into(),
-                StatusBar::new(ResultsState::ExplainPlan).plan_ops(plan.physical.len()),
-            ),
+            // The settled EXPLAIN (P2-05): the three-tier plan card tree. The status bar's
+            // summary counts the *shown* tree — the same effective tab the view resolves.
+            QueryStateData::Settled { res: Ok(QueryOutcome::Plan(plan)), .. } => {
+                let tab = explain_plan::effective_tab(plan, *plan_tab.read());
+                let ops = match tab {
+                    PlanTab::Physical => plan.physical.len(),
+                    PlanTab::Logical => plan.logical.len(),
+                };
+                (
+                    ExplainPlan::new(plan.clone(), plan_tab, plan_raw).into(),
+                    StatusBar::new(ResultsState::ExplainPlan).plan(ops, tab),
+                )
+            }
             QueryStateData::Settled { res: Err(err), .. } => {
                 (ErrorState::new(err.clone()).into(), StatusBar::new(ResultsState::Error))
             }

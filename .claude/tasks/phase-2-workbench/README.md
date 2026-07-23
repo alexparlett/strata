@@ -40,7 +40,7 @@ now have their read model.
 | P2-02 | Results driven by `use_query` (no runs store) | ✅ | — | P2-01 |
 | P2-03 | `QueryPage` → grid model (kill fixture) | ✅ | — | P2-01 |
 | P2-04 | SQL autocomplete (completions + follow-ups) | ⬜ | E2 | — |
-| P2-05 | Explain-plan view | ⬜ | Rz-plan/U8 | P2-02/03 |
+| P2-05 | Explain-plan view | ✅ | Rz-plan/U8 | P2-02/03 |
 | P2-06 | Running state (spinner + elapsed + cancel) | ✅ | — | P2-02 |
 | P2-07 | Table/Chart switcher | ✅ | U6a | P2-02 |
 | P2-08 | Status bar — pager + info + aggregate | ✅ | U6/Rz3 | P2-03 |

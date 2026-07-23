@@ -18,8 +18,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::apps::project::{
-    CancelButtonThemePreference, DataGridThemePreference, HeaderBarThemePreference,
-    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    CancelButtonThemePreference, DataGridThemePreference, ExplainPlanThemePreference,
+    HeaderBarThemePreference, StatusBarThemePreference, TabBarThemePreference,
+    TabThemePreference,
 };
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
@@ -306,6 +307,16 @@ strata_components! {
     // (including its `disabled_*` set).
     "status_bar" => StatusBarThemePreference {
         background, color, border_fill, sub_color, control_color,
+    },
+    // The EXPLAIN plan view (P2-05): the sunken body + card surfaces, the shared hairline
+    // (card/box borders, rails, bar track), the text ramp (muted body / values / detail keys /
+    // links / raw), the HOTSPOT + time dress, and the categorical operator palette — the same
+    // `type_*_color` set the datagrid carries (kind/group/tone mapping lives in the view).
+    "explain_plan" => ExplainPlanThemePreference {
+        background, card_background, border_fill, group_background, insight_background,
+        color, value_color, key_color, muted_color, raw_color, hot_color, warm_color,
+        type_str_color, type_num_color, type_bool_color, type_ts_color, type_struct_color,
+        type_list_color, type_map_color,
     },
     // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
     // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and

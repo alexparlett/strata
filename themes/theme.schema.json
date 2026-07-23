@@ -1251,6 +1251,69 @@
             }
           }
         },
+        "explain_plan": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "group_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "insight_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "value_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "key_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "muted_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "raw_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hot_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "warm_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_str_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_num_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_bool_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_ts_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_struct_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_list_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_map_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "datagrid": {
           "type": "object",
           "additionalProperties": false,

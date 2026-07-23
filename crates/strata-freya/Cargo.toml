@@ -43,3 +43,8 @@ async-io = "2.5"
 # The T2 close bridge's veto channel (winit `on_close` hook → UI executor wake-up), and
 # `block_on` in the freya-query unit tests.
 futures = "0.3"
+
+[dev-dependencies]
+# Headless Skia renderer for the `#[ignore]`d preview harnesses (e.g. `plan_preview`):
+# mounts a real surface under the real theme and snapshots it to a PNG for eyeballing.
+freya-testing = { workspace = true }

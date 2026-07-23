@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use async_io::Timer;
 use freya::components::use_theme;
 use freya::prelude::*;
+use strata_core::engine::plan::PlanTab;
 use strata_model::Kind;
 
 use super::datagrid::{GridData, PageRead};
@@ -70,8 +71,8 @@ pub struct StatusBar {
     state: ResultsState,
     pager: Option<Pager>,
     info: Option<RunInfo>,
-    /// Physical-operator count for the plan state's sub-label.
-    plan_ops: Option<usize>,
+    /// The plan state's sub-label: operator count of the shown tree + which tree it is.
+    plan: Option<(usize, PlanTab)>,
     /// The resolved current page (grid state) — the selection aggregate reads its real cells.
     view: Option<PageRead>,
     pub theme: Option<StatusBarThemePartial>,
@@ -79,7 +80,7 @@ pub struct StatusBar {
 
 impl StatusBar {
     pub fn new(state: ResultsState) -> Self {
-        Self { state, pager: None, info: None, plan_ops: None, view: None, theme: None }
+        Self { state, pager: None, info: None, plan: None, view: None, theme: None }
     }
 
     /// Show the pager cluster (the grid state passes it; every other state passes nothing).
@@ -94,9 +95,10 @@ impl StatusBar {
         self
     }
 
-    /// Operator count for the plan state's sub-label.
-    pub fn plan_ops(mut self, ops: usize) -> Self {
-        self.plan_ops = Some(ops);
+    /// The plan state's sub-label: the shown tree's operator count + which tree (P2-05 —
+    /// tracks the view's Physical/Logical selection).
+    pub fn plan(mut self, ops: usize, tab: PlanTab) -> Self {
+        self.plan = Some((ops, tab));
         self
     }
 
@@ -155,8 +157,12 @@ impl Component for StatusBar {
             },
             ResultsState::ExplainPlan => (
                 "Query plan".into(),
-                self.plan_ops.map(|n| {
-                    format!("{n} operator{} · physical", if n == 1 { "" } else { "s" })
+                self.plan.map(|(n, tab)| {
+                    let tree = match tab {
+                        PlanTab::Physical => "physical",
+                        PlanTab::Logical => "logical",
+                    };
+                    format!("{n} operator{} · {tree}", if n == 1 { "" } else { "s" })
                 }),
             ),
             ResultsState::Error => ("Query failed".into(), None),

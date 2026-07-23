@@ -34,7 +34,7 @@ pub mod editor;
 
 pub use results::{
     CancelButtonThemePartial, CancelButtonThemePreference, DataGridThemePreference,
-    StatusBarThemePreference,
+    ExplainPlanThemePreference, StatusBarThemePreference,
 };
 pub use tab_bar::bar::TabBarThemePreference;
 pub use tab_bar::tab::TabThemePreference;
