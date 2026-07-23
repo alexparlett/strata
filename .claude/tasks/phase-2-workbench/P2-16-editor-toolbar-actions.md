@@ -1,6 +1,6 @@
 # P2-16 · Editor toolbar actions (Format · Clear · Preview · Save-as-view)
 
-**Phase:** 2 — Workbench · **Status:** 🟢 `[core ✓]` · **Depends on:** P2-01
+**Phase:** 2 — Workbench · **Status:** ✅ `[core ✓]` · **Depends on:** P2-01
 
 ## Goal
 Wire the remaining editor-toolbar buttons and fix the view-save routing bug.

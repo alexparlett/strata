@@ -49,6 +49,17 @@ impl Component for DataGridToolbar {
                 .width(Size::px(28.))
                 .child(Icon::new(icon).size(15.))
         };
+        // Every tool wears its comp `title=` as a tooltip; Find's carries the effective
+        // find chord (reactive — a rebind repaints it) even while the button is a stub.
+        let tip = |title: String, button: Button| {
+            TooltipContainer::new(Tooltip::new(title))
+                .position(AttachedPosition::Bottom)
+                .child(button)
+        };
+        let find_title = crate::keymap::use_hint_title(
+            "Find in results",
+            strata_core::config::Command::Find,
+        );
 
         let row = rect()
             .width(Size::fill())
@@ -59,9 +70,13 @@ impl Component for DataGridToolbar {
             .spacing(8.)
             .padding((0., 10.))
             .background(bg)
-            .child(tool(IconName::Search))
-            .child(tool(IconName::Reload))
-            .child(
+            .child(tip(find_title, tool(IconName::Search)))
+            .child(tip(
+                "Re-run the query to refresh the snapshot".into(),
+                tool(IconName::Reload),
+            ))
+            .child(tip(
+                "Clear results".into(),
                 // Destructive dress on hover, per the comp: red icon over a red-tinted fill and
                 // border (the Dioxus `.res-clear` recipe — 15% / 45% red mixes).
                 tool(IconName::Trash)
@@ -72,8 +87,8 @@ impl Component for DataGridToolbar {
                         session.write_channel(Chan::Request(tab)).clear_request(tab);
                         sel.set(Selection::None);
                     }),
-            )
-            .child(tool(IconName::Download));
+            ))
+            .child(tip("Export results".into(), tool(IconName::Download)));
 
         rect()
             .width(Size::fill())

@@ -378,10 +378,19 @@
         "reference": "surface_tertiary"
       },
       "color": {
-        "reference": "text_primary"
+        "reference": "text_secondary"
       },
       "border_fill": {
         "specific": "#414a57"
+      },
+      "font_family": {
+        "specific": "ui"
+      },
+      "font_size": {
+        "specific": 12.5
+      },
+      "font_weight": {
+        "specific": 400
       }
     },
     "floating_tab": {

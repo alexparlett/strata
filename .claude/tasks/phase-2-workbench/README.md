@@ -50,10 +50,10 @@ now have their read model.
 | P2-13 | Column sort | 🟢 | Rz6 | P2-01/03 |
 | P2-14 | Clear results | ✅ | Rz8 | P2-02 |
 | P2-15 | Run / Explain / Analyze buttons wiring | ✅ | E4 | P2-01 |
-| P2-16 | Editor toolbar actions (Format/Preview/Save-as-view) | 🟢 | — | P2-01 |
+| P2-16 | Editor toolbar actions (Format/Preview/Save-as-view) | ✅ | — | P2-01 |
 | P2-18 | SQL validation + inline squiggles | ⬜ | E1 | — |
 | P2-19 | Undo/redo per tab | ⬜ | E3 | — |
-| P2-20 | Keyboard shortcuts + OS-close intercept | 🟢 | W4/T2 | — |
+| P2-20 | Keyboard shortcuts + OS-close intercept | ✅ | W4/T2 | — |
 | P2-21 | Tabs & split — remaining nits | 🟡 | — | — |
 
 **Already done (no task file):** datagrid core, cell/row/col selection (`selection.rs` + `SelCtl`),

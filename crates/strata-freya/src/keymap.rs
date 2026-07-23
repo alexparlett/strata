@@ -100,6 +100,18 @@ pub fn use_hint(cmd: Command) -> String {
     strata_core::keymap::hint(&settings.read(), cmd)
 }
 
+/// A tooltip title with the command's effective chord appended — `"Save query (⌘S)"`,
+/// or just the label when the command is unbound. Reactive like [`use_hint`], so a
+/// rebind repaints every tooltip.
+pub fn use_hint_title(label: &str, cmd: Command) -> String {
+    let hint = use_hint(cmd);
+    if hint.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label} ({hint})")
+    }
+}
+
 /// A muted key-cap caption (`⇧⌘T`) for menu rows and labels. Renders nothing when the
 /// command is unbound. A component rather than a helper so menus built from event
 /// handlers (no hook scope) still get the hooks at render time, under the window root's

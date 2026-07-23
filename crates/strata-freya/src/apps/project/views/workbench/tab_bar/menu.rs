@@ -14,13 +14,30 @@ use crate::components::divider::Divider;
 use crate::components::typography::Prose;
 use crate::keymap::KeyHint;
 
-/// A menu row with a right-aligned, keymap-derived shortcut hint. The row fills the
-/// button (`MenuButton` is `fill_minimum`), so the hint hugs the menu's right edge and
-/// tracks any rebind reactively ([`KeyHint`] renders nothing when unbound).
+/// A comfortable width for a menu holding [`menu_row`]s — room for the longest label plus
+/// its right-aligned chord. Doubles as each row's width cap and the menu's `min_width`:
+/// the cap stops an uncapped `fill` blowing the menu out to the window width in the
+/// globally-positioned `ContextMenu` overlay (whose available width is the window), and
+/// the `min_width` guarantees the row that same room inside an `Attached` dropdown
+/// (whose available width is the trigger's — without it the row squeezes and
+/// `MenuButton`'s `Overflow::Clip` cuts the hint off).
+pub const HINT_MENU_WIDTH: f32 = 200.;
+
+/// The horizontal chrome around a menu row: the `menu_container` card padding (4 × 2)
+/// plus `MenuButton`'s default padding (12 × 2). Subtracted from [`HINT_MENU_WIDTH`] so
+/// a row-capped menu (the `ContextMenu`, where the row is what sets the width) lands on
+/// the same card width as a `min_width`-floored dropdown.
+const MENU_ROW_CHROME: f32 = 32.;
+
+/// A menu row with a right-aligned, keymap-derived shortcut hint: the row fills the
+/// available width capped so the menu's card lands at [`HINT_MENU_WIDTH`], and
+/// `SpaceBetween` pushes the hint to its right edge, tracking any rebind reactively
+/// ([`KeyHint`] renders nothing when unbound).
 pub fn menu_row(label: &str, hint: Command) -> impl IntoElement {
     rect()
         .horizontal()
         .width(Size::fill())
+        .max_width(Size::px(HINT_MENU_WIDTH - MENU_ROW_CHROME))
         .cross_align(Alignment::Center)
         .main_align(Alignment::SpaceBetween)
         .spacing(16.)
@@ -42,6 +59,7 @@ pub fn tab_context_menu(
     settings: State<strata_core::config::Settings>,
 ) -> Menu {
     Menu::new()
+        .min_width(Size::px(HINT_MENU_WIDTH))
         // Rename → just flip the tab into rename mode. The tab reacts (seeds the draft + focuses the
         // input) in its own scope, so it survives this menu closing.
         .child(

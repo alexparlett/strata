@@ -124,10 +124,6 @@ impl SessionState {
         self.active.and_then(|id| self.tabs.get(&id))
     }
 
-    pub fn can_reopen(&self) -> bool {
-        !self.closed.is_empty()
-    }
-
     /// The tab's current run request, if any.
     pub fn request(&self, id: TabId) -> Option<&QuerySpec> {
         self.tabs.get(&id).and_then(|t| t.request.as_ref())

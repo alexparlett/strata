@@ -19,6 +19,15 @@
 >   (no more ⌘T typing "t" / ⌘↵ inserting a newline) while the globals still fire.
 > - **Keymap-derived hints**: tab context/overflow menu rows (`KeyHint`), the status bar's
 >   "⌘↵ to run", the running body's "Cancel · Esc" — all react to rebinds.
+> - **Tooltips + chord surfacing** (follow-up sweep): every canvas `title=` is a
+>   `TooltipContainer` now — RunButton's state-dependent "Run (⌘↵)" / "Cancel query (Esc)" /
+>   "Enter a query to run", the editor toolbar (Explain/Analyze/Format/Clear/Save-as-view +
+>   "Save query (⌘S)"), the results toolbar ("Find in results (⌘F)", Refresh/Clear/Export),
+>   tab-strip controls + dirty-aware tab close, the pager cluster, and the workbench empty
+>   state (inline ⌘T key-cap chip on New query — the canvas's `⌘N` chip was stale — plus the
+>   named "Reopen {tab}" tooltip). Chord-bearing titles go through `keymap::use_hint_title`,
+>   so they track rebinds. Still pending elsewhere: header Search (⌘K) / Settings (⌘,) →
+>   P6-01 / P4-03; find-bar Close (Esc) → P2-09 (noted in those task files).
 > - **T2**: `apps/project/close.rs` — atomics+channel bridge to the fork's `with_on_close` veto;
 >   themed `CloseConfirm` `Popup` doubles as the modal key barrier; red button / ⌘Q /
 >   ⌘W-on-running-tab share one predicate + dialog; respects `confirm_close_running`.

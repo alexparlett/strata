@@ -640,7 +640,13 @@
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "font_family": {
+              "$ref": "#/$defs/fontPref"
+            },
             "font_size": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "font_weight": {
               "$ref": "#/$defs/numberPref"
             }
           }
