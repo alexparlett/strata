@@ -4,19 +4,21 @@ use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
 use freya::components::use_theme;
 use freya::prelude::{
-    rect, use_a11y, ChildrenExt, Component, ContainerSizeExt, ContainerWithContentExt, Content,
-    ComponentKey, DiffKey, Event, IntoElement, IntoWritable, Key, KeyExt, KeyboardEventData,
-    Modifiers, NamedKey, Size, State,
+    rect, use_a11y, use_consume, use_side_effect, ChildrenExt, Component, ContainerSizeExt,
+    ContainerWithContentExt, Content, ComponentKey, DiffKey, Event, IntoElement, IntoWritable, Key,
+    KeyExt, KeyboardEventData, Modifiers, NamedKey, Size, State,
 };
 use freya::radio::use_radio;
 use strata_code_editor::prelude::{CodeEditor, CodeEditorData, EditorLanguage, Rope};
+use strata_core::config::{Command, Settings};
 
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a
 /// `Writable<CodeEditorData>` straight into the store on `Chan::Tab(id)`. Carries the
 /// `running` mirror down to the toolbar for its Run→Cancel flip (the Run trigger itself is
 /// the tab's own — `QueryTab::request`). The editor's pre-key gate keeps primary-held app
 /// chords (⌘T / ⌘↵ / …) out of the buffer while letting them reach the keymap's global
-/// listeners.
+/// listeners, and keeps the buffer's rebindable undo/redo chords (`EditBindings`) synced
+/// from the settings so the text layer matches whatever the user bound.
 #[derive(PartialEq)]
 pub struct EditorTab {
     pub id: TabId,
@@ -57,6 +59,18 @@ impl Component for EditorTab {
                  .get_or_insert_with(|| CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>))
             }
         });
+        let editor = editor.into_writable();
+        let settings = use_consume::<State<Settings>>();
+        // Keep the buffer's history chords in lockstep with the settings: freya-edit
+        // matches `EditBindings` in `process_key` (no hardcoded ⌘Z/⌘Y left), so a
+        // rebind in Settings retargets undo/redo live, without remounting the editor.
+        {
+            let mut editor = editor.clone();
+            use_side_effect(move || {
+                let bindings = crate::keymap::edit_bindings(&settings.read());
+                editor.write_if(|mut data| data.set_edit_bindings(bindings));
+            });
+        }
         let border = use_theme().read().colors.border;
 
         rect()
@@ -71,20 +85,25 @@ impl Component for EditorTab {
                     .child(
                         // Type (family · size · weight · line height) comes from the
                         // `code_editor` theme — the editor dresses and measures itself.
-                        CodeEditor::new(editor.into_writable(), a11y_id)
+                        CodeEditor::new(editor, a11y_id)
                             .a11y_auto_focus(true)
                             .gutter(true)
                             .show_whitespace(false)
                             .highlight_current_line(false)
                             // Primary-held chords belong to the app keymap unless the
-                            // editor owns them (select / copy / cut / paste / undo /
-                            // redo): skip the editor's processing — otherwise ⌘T types a
-                            // "t" and ⌘↵ inserts a newline — while the global listeners
-                            // still fire (only `prevent_default` would cancel those, and
-                            // this calls only `stop_propagation`, like the default
-                            // pre-handler). Named keys keep flowing: Ctrl/Alt+arrows are
+                            // editor owns them: skip the editor's processing —
+                            // otherwise ⌘T types a "t" and ⌘↵ inserts a newline — while
+                            // the global listeners still fire (only `prevent_default`
+                            // would cancel those, and this calls only
+                            // `stop_propagation`, like the default pre-handler). The
+                            // editor owns exactly the chords that currently resolve to
+                            // an editing command (`Command::is_edit` — select all /
+                            // copy / cut / paste / undo / redo, all rebindable): those
+                            // flow through to `process_key`, where the buffer's own
+                            // `EditBindings` (synced from these same settings above)
+                            // match them. Named keys keep flowing: Ctrl/Alt+arrows are
                             // editor navigation.
-                            .on_pre_key_down(|e: Event<KeyboardEventData>| {
+                            .on_pre_key_down(move |e: Event<KeyboardEventData>| {
                                 e.stop_propagation();
                                 if let Key::Named(NamedKey::Tab) = &e.key {
                                     e.prevent_default();
@@ -92,12 +111,16 @@ impl Component for EditorTab {
                                 let primary = e
                                     .modifiers
                                     .intersects(Modifiers::META | Modifiers::CONTROL);
-                                let editor_owned = match &e.key {
-                                    Key::Character(c) => strata_core::keymap::RESERVED_KEYS
-                                        .contains(&c.to_lowercase().as_str()),
-                                    Key::Named(NamedKey::Enter) => false,
-                                    _ => true,
-                                };
+                                let editor_owned = crate::keymap::chord_from_event(&e)
+                                    .and_then(|chord| {
+                                        strata_core::keymap::resolve(&settings.peek(), &chord)
+                                    })
+                                    .is_some_and(Command::is_edit)
+                                    || match &e.key {
+                                        Key::Character(_) => false,
+                                        Key::Named(NamedKey::Enter) => false,
+                                        _ => true,
+                                    };
                                 !(primary && !editor_owned)
                             }),
                     )

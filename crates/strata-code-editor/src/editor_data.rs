@@ -37,6 +37,11 @@ pub struct CodeEditorData {
     /// can re-measure without their caller knowing the editor's type. `None` until
     /// first mounted (headless data never measures).
     pub(crate) measured_font: Option<(f32, String, i32)>,
+    /// The editing-action chords (select all / copy / cut / paste / undo / redo)
+    /// `process_key` responds to — the freya-edit layer matches these instead of
+    /// hardcoding ⌘A/⌘C/⌘X/⌘V/⌘Z/⌘Y, so the app can drive them from its own
+    /// configurable shortcuts (see [`set_edit_bindings`](Self::set_edit_bindings)).
+    pub(crate) bindings: EditBindings,
 }
 
 impl CodeEditorData {
@@ -52,6 +57,7 @@ impl CodeEditorData {
             pending_edit: None,
             language: language.into(),
             measured_font: None,
+            bindings: EditBindings::default(),
         };
         data.configure_highlighter();
         data
@@ -114,6 +120,51 @@ impl CodeEditorData {
         if let Some((size, family, weight)) = self.measured_font.clone() {
             self.measure(size, &family, weight);
         }
+    }
+
+    /// Replace the editing-action chords [`process`](Self::process) responds to.
+    /// Returns whether they changed (`write_if`-friendly), so a settings sync can run
+    /// unconditionally without spurious re-renders.
+    pub fn set_edit_bindings(&mut self, bindings: EditBindings) -> bool {
+        if self.bindings == bindings {
+            return false;
+        }
+        self.bindings = bindings;
+        true
+    }
+
+    /// Undo the last edit through the full edit path — history revert, selection
+    /// restore, re-highlight, re-measure. The programmatic twin of the keystroke path,
+    /// for dispatch that arrives outside the keyboard (an Edit menu item, a command
+    /// palette action). Returns whether anything changed.
+    pub fn undo_edit(&mut self) -> bool {
+        let Some(selection) = TextEditor::undo(self) else {
+            return false;
+        };
+        self.selection = selection;
+        self.refresh_after_history();
+        true
+    }
+
+    /// Redo the last undone edit (see [`undo_edit`](Self::undo_edit)).
+    pub fn redo_edit(&mut self) -> bool {
+        let Some(selection) = TextEditor::redo(self) else {
+            return false;
+        };
+        self.selection = selection;
+        self.refresh_after_history();
+        true
+    }
+
+    /// Post-history bookkeeping, mirroring what [`process`](Self::process) does after a
+    /// `TEXT_CHANGED` key event: re-parse, re-measure with the mounted font, and drop
+    /// any in-flight drag state.
+    fn refresh_after_history(&mut self) {
+        self.parse();
+        if let Some((size, family, weight)) = self.measured_font.clone() {
+            self.measure(size, &family, weight);
+        }
+        self.dragging = TextDragging::default();
     }
 
     pub fn process(
@@ -472,6 +523,10 @@ impl TextEditor for CodeEditorData {
         };
 
         Some((start, end))
+    }
+
+    fn edit_bindings(&self) -> &EditBindings {
+        &self.bindings
     }
 
     fn undo(&mut self) -> Option<TextSelection> {
