@@ -1,4 +1,4 @@
-use crate::apps::project::query::QuerySpec;
+use crate::apps::project::query::{QuerySpec, RunId};
 use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
@@ -9,16 +9,18 @@ use strata_code_editor::prelude::{CodeEditor, CodeEditorData, EditorLanguage, Ro
 
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a
 /// `Writable<CodeEditorData>` straight into the store on `Chan::Tab(id)`. Carries the
-/// workbench's Run trigger down to the toolbar (which writes a press into it).
+/// workbench's Run trigger down to the toolbar (which writes a press into it), plus the
+/// `running` mirror the toolbar reads for its Run→Cancel flip.
 #[derive(PartialEq)]
 pub struct EditorTab {
     pub id: TabId,
     pub request: State<Option<QuerySpec>>,
+    pub running: State<Option<RunId>>,
 }
 
 impl EditorTab {
-    pub fn new(id: TabId, request: State<Option<QuerySpec>>) -> Self {
-        Self { id, request }
+    pub fn new(id: TabId, request: State<Option<QuerySpec>>, running: State<Option<RunId>>) -> Self {
+        Self { id, request, running }
     }
 }
 
@@ -46,7 +48,7 @@ impl Component for EditorTab {
             .expanded()
             .vertical()
             .content(Content::Flex)
-            .child(EditorToolbar { id, request: self.request })
+            .child(EditorToolbar { id, request: self.request, running: self.running })
             .child(
                 rect()
                     .width(Size::fill())
