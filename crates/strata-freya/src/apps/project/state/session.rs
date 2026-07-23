@@ -37,6 +37,16 @@ pub enum Origin {
     SavedQuery(Uuid),
 }
 
+/// Which body the results pane shows for a settled rows outcome — the toolbar's Table/Chart
+/// segmented toggle (P2-07). Per **tab** (CHART_SPEC §1): switching tabs restores the mode,
+/// and it survives re-runs; the chart *config* will be per result set (Chart workstream).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum ResultsView {
+    #[default]
+    Grid,
+    Chart,
+}
+
 /// One query tab. Owns its editing buffer exactly like Valin's `EditorTab`, and its own
 /// Run trigger — the latest run request, whose results the tab's pane shows.
 pub struct QueryTab {
@@ -51,6 +61,9 @@ pub struct QueryTab {
     /// Reads/writes go through [`Chan::Request`](super::Chan) — its own channel, so
     /// keystrokes (on `Chan::Tab`) never wake the results pane.
     pub request: Option<QuerySpec>,
+    /// The results view mode (Table/Chart toggle). Its own channel too
+    /// ([`Chan::View`](super::Chan)) — a flip wakes only the tab's results pane.
+    pub view: ResultsView,
 }
 
 /// The SQL grammar (derekstride/tree-sitter-sql via `tree-sitter-sequel`) + its highlights query,
@@ -79,6 +92,7 @@ impl QueryTab {
             editor,
             origin,
             request: None,
+            view: ResultsView::default(),
         }
     }
 
@@ -142,6 +156,19 @@ impl SessionState {
     pub fn clear_request(&mut self, id: TabId) {
         if let Some(t) = self.tabs.get_mut(&id) {
             t.request = None;
+        }
+    }
+
+    /// The tab's results view mode (a missing tab reads Grid — the default).
+    pub fn view(&self, id: TabId) -> ResultsView {
+        self.tabs.get(&id).map(|t| t.view).unwrap_or_default()
+    }
+
+    /// Flip `id`'s results view (the toolbar's Table/Chart toggle). Write on
+    /// [`Chan::View(id)`](super::Chan).
+    pub fn set_view(&mut self, id: TabId, view: ResultsView) {
+        if let Some(t) = self.tabs.get_mut(&id) {
+            t.view = view;
         }
     }
 

@@ -1170,6 +1170,30 @@
             }
           }
         },
+        "segmented_toggle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "item_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "item_active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "item_active_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "tab_bar": {
           "type": "object",
           "additionalProperties": false,

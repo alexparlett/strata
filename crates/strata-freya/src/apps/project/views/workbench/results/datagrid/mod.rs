@@ -26,7 +26,7 @@ use super::error::ErrorState;
 use super::find::FindState;
 use super::selection::{CellRole, SelCtl, Selection};
 use super::sort::SortState;
-use super::toolbar::DataGridToolbar;
+use super::toolbar::ResultsToolbar;
 use crate::apps::project::state::TabId;
 use crate::components::divider::Divider;
 
@@ -480,7 +480,7 @@ impl Component for DataGrid {
                 Key::Named(NamedKey::Meta) | Key::Named(NamedKey::Control) => meta.set(false),
                 _ => {}
             })
-            .child(DataGridToolbar::new(self.tab, self.find))
+            .child(ResultsToolbar::new(self.tab, self.find))
             .child(scroll)
             .into_element()
     }
