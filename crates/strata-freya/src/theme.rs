@@ -22,6 +22,7 @@ use crate::apps::project::{
     StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
 use crate::components::run_button::RunButtonThemePreference;
+use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use freya::prelude::*;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
 use strata_code_editor::prelude::EditorThemePreference;
@@ -287,6 +288,12 @@ strata_components! {
     // The results pane's Cancel control. Its values track `run_button`'s `running_*` set —
     // the same cancel dress, kept consistent when either is retuned.
     "cancel_button" => CancelButtonThemePreference { background, hover_background, border_fill, color },
+    // The icon segmented toggle (results Table/Chart switcher, reusable): pill container
+    // (bg + border + divider) and per-item rest / active (accent-tint) dress.
+    "segmented_toggle" => SegmentedToggleThemePreference {
+        background, border_fill, divider_fill, item_color, item_active_background,
+        item_active_color,
+    },
     // The editor tab strip: `tab_bar` is the container (bg + divider); `editor_tab` is one
     // tab's resting/hover/active bg, label colour, and active accent.
     "tab_bar" => TabBarThemePreference { background, divider_fill },

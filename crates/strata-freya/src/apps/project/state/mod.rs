@@ -10,4 +10,4 @@ mod session;
 pub use channel::Chan;
 pub use hooks::{use_init_project, use_init_session};
 pub use project::{ProjChan, ProjectState};
-pub use session::{Origin, QueryTab, SessionState, TabId};
+pub use session::{Origin, QueryTab, ResultsView, SessionState, TabId};

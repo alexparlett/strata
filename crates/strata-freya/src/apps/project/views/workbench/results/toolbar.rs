@@ -1,5 +1,6 @@
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use crate::apps::project::state::{Chan, ResultsView, SessionState, TabId};
 use crate::components::icon::{Icon, IconName};
+use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::InputTypography;
 use freya::components::use_theme;
 use freya::prelude::*;
@@ -9,9 +10,11 @@ use strata_core::config::Command;
 use super::find::FindState;
 use super::selection::Selection;
 
-/// The editor query toolbar, built to the comp. The bar itself only needs the editor surface (its
-/// background) and the divider colour. The Run control is its own three-state `RunButton`; the rest
-/// are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke IconButton).
+/// The results toolbar, built to the comp — shared by the grid and chart bodies. The
+/// **Table/Chart segmented toggle** sits at the left (P2-07): it reads the tab's per-tab view
+/// mode off `Chan::View(id)` and a press flips it, swapping the body under this bar. The right
+/// cluster are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke
+/// IconButton); **Find is grid-only** (CHART_SPEC §1), Reload and Download show in both modes.
 ///
 /// **Search** (P2-09) toggles the find popover — an [`Attached`] panel anchored to the trigger
 /// (bottom-end, so it opens down-and-left clear of the window edge), on the [`Menu`] base for its
@@ -25,20 +28,21 @@ use super::selection::Selection;
 /// executes. Reload / Download stay stubbed until their layers land (re-run P2-15, export in
 /// Phase 4).
 #[derive(PartialEq)]
-pub struct DataGridToolbar {
-    /// The tab whose results this grid shows — Trash clears its Run trigger.
+pub struct ResultsToolbar {
+    /// The tab whose results this pane shows — Trash clears its Run trigger, the toggle
+    /// flips its view mode.
     tab: TabId,
     /// The grid's find state — the Search trigger + popover render it (P2-09).
     find: FindState,
 }
 
-impl DataGridToolbar {
+impl ResultsToolbar {
     pub fn new(tab: TabId, find: FindState) -> Self {
         Self { tab, find }
     }
 }
 
-impl Component for DataGridToolbar {
+impl Component for ResultsToolbar {
     fn render(&self) -> impl IntoElement {
         let theme = use_theme();
         let (bg, danger, accent, faint) = {
@@ -55,6 +59,9 @@ impl Component for DataGridToolbar {
         let mut sel = use_consume::<State<Selection>>();
         let tab = self.tab;
         let mut session = use_radio::<SessionState, Chan>(Chan::Request(tab));
+        // The Table/Chart view mode — its own channel, so a flip wakes only the results pane.
+        let mut view_radio = use_radio::<SessionState, Chan>(Chan::View(tab));
+        let view = view_radio.read().view(tab);
 
         // An outline icon button — `outline_button` variant with a centred icon (the icon inherits
         // the button's colour, hover included, via `currentColor`).
@@ -146,16 +153,40 @@ impl Component for DataGridToolbar {
             .align_end()
             .maybe_child(open.then(popover));
 
+        // ── the Table/Chart segmented toggle (left cluster, P2-07) ────────────────────────
+        // A press writes the tab's view mode; leaving the grid dismisses the find popover
+        // (and so its filter) with it — Find is grid-only.
+        let toggle = SegmentedToggle::new()
+            .child(
+                ToggleSegment::new(IconName::Grid)
+                    .title("Table")
+                    .selected(view == ResultsView::Grid)
+                    .on_press(move |_| {
+                        view_radio.write_channel(Chan::View(tab)).set_view(tab, ResultsView::Grid);
+                    }),
+            )
+            .child(
+                ToggleSegment::new(IconName::Chart)
+                    .title("Chart")
+                    .selected(view == ResultsView::Chart)
+                    .on_press(move |_| {
+                        find.dismiss();
+                        view_radio.write_channel(Chan::View(tab)).set_view(tab, ResultsView::Chart);
+                    }),
+            );
+
         let row = rect()
             .width(Size::fill())
             .height(Size::px(38.))
             .horizontal()
+            .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .main_align(Alignment::End)
             .spacing(8.)
             .padding((0., 10.))
             .background(bg)
-            .child(search)
+            .child(toggle)
+            .child(rect().width(Size::flex(1.)))
+            .maybe_child((view == ResultsView::Grid).then_some(search))
             .child(tip(
                 "Re-run the query to refresh the snapshot".into(),
                 tool(IconName::Reload),

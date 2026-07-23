@@ -119,7 +119,7 @@ impl Component for StatusBar {
             let dot = match self.state {
                 ResultsState::Empty => c.text_placeholder,
                 ResultsState::Running => c.warning,
-                ResultsState::Grid => c.success,
+                ResultsState::Grid | ResultsState::Chart => c.success,
                 ResultsState::ExplainPlan => c.info,
                 ResultsState::Error => c.error,
             };
@@ -141,6 +141,15 @@ impl Component for StatusBar {
                 Some(info) => (
                     format!("{} rows", fmt_int(info.total)),
                     Some(format!("· {} ms", info.elapsed_ms)),
+                ),
+                None => ("Results".into(), None),
+            },
+            // Chart mode (P2-07): same rows lead, but the sub names the source honestly —
+            // the chart draws the materialized snapshot, not live files (comp `_statusVals`).
+            ResultsState::Chart => match &self.info {
+                Some(info) => (
+                    format!("{} rows", fmt_int(info.total)),
+                    Some("charting snapshot".into()),
                 ),
                 None => ("Results".into(), None),
             },

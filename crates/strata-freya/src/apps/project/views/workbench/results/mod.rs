@@ -13,6 +13,7 @@ use freya::query::{use_query, Query, QueryStateData};
 use freya::radio::use_radio;
 use strata_model::SnapshotId;
 
+mod chart;
 mod datagrid;
 mod empty;
 mod error;
@@ -24,6 +25,7 @@ mod sort;
 mod status_bar;
 mod toolbar;
 
+use chart::ChartView;
 use datagrid::{DataGrid, GridData, PageRead};
 use find::FindState;
 use sort::SortState;
@@ -36,7 +38,7 @@ use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{
     FetchSnapshotPage, PageSpec, QueryOutcome, QuerySpec, RunId, RunQuery,
 };
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use crate::apps::project::state::{Chan, ResultsView, SessionState, TabId};
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 use status_bar::{Pager, RunInfo};
@@ -53,6 +55,8 @@ pub enum ResultsState {
     Running,
     /// Rows are available — the grid.
     Grid,
+    /// Rows are available and the tab's view mode is Chart (P2-07) — the chart body.
+    Chart,
     /// Explain plan is available.
     ExplainPlan,
     /// The last run settled `Err`.
@@ -179,6 +183,12 @@ impl Component for ResultsBody {
         let run_size = self.spec.page_size;
         let page_size = use_state(move || run_size);
 
+        // The tab's Table/Chart view mode (P2-07) — per-tab (its own `Chan::View` channel),
+        // so it survives re-runs and tab switches; the toolbar's toggle writes it.
+        let ws = self.spec.tab;
+        let view_radio = use_radio::<SessionState, Chan>(Chan::View(ws));
+        let results_view = view_radio.read().view(ws);
+
         // Find-in-results (P2-09): per-press state, like the page number — a new Run starts
         // unfiltered. A query change reshuffles the filtered rows under the page-local
         // selection — the old indices would silently point at *different* cells (the same
@@ -236,7 +246,6 @@ impl Component for ResultsBody {
         // + clear this tab's Run trigger, unmounting this body back to the empty state. The
         // query entry settles `Err("cancelled")` unobserved — a new press is a fresh nonce
         // anyway.
-        let ws = self.spec.tab;
         let session = use_radio::<SessionState, Chan>(Chan::Request(ws));
         let cancel = {
             let engine = engine.clone();
@@ -253,6 +262,20 @@ impl Component for ResultsBody {
             QueryStateData::Pending | QueryStateData::Loading { .. } => {
                 (Running::new(cancel).into(), StatusBar::new(ResultsState::Running))
             }
+            // Chart mode (P2-07): the placeholder body under the shared toolbar. The pager
+            // and selection aggregate are grid concerns, so the bar keeps only the run
+            // readouts; the page/find/sort state above stays put for the switch back.
+            QueryStateData::Settled {
+                res: Ok(QueryOutcome::Rows(rows)),
+                settlement_instant,
+            } if results_view == ResultsView::Chart => (
+                ChartView::new(ws, find).into(),
+                StatusBar::new(ResultsState::Chart).info(RunInfo {
+                    total: rows.output.total,
+                    elapsed_ms: rows.output.elapsed_ms,
+                    settled: *settlement_instant,
+                }),
+            ),
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Rows(rows)),
                 settlement_instant,

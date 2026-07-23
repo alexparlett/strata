@@ -435,6 +435,26 @@
         "reference": "primary"
       }
     },
+    "segmented_toggle": {
+      "background": {
+        "reference": "surface_secondary"
+      },
+      "border_fill": {
+        "specific": "#363e4a"
+      },
+      "divider_fill": {
+        "specific": "#363e4a"
+      },
+      "item_color": {
+        "specific": "#b6bfcb"
+      },
+      "item_active_background": {
+        "specific": "rgba(76,198,255,.13)"
+      },
+      "item_active_color": {
+        "reference": "primary"
+      }
+    },
     "chip": {
       "background": {
         "reference": "background"
