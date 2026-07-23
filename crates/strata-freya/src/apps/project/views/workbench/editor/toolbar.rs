@@ -1,3 +1,4 @@
+use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, QuerySpec, RunId, DEFAULT_PAGE_SIZE};
 use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::components::divider::Divider;
@@ -11,14 +12,20 @@ use freya::radio::use_radio;
 /// background) and the divider colour. The Run control is its own three-state `RunButton`; the rest
 /// are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke IconButton).
 ///
-/// Run / Explain / Analyze are wired: a press snapshots the tab's editor text into a fresh-nonce
-/// [`QuerySpec`] in the workbench's `request` slot — the results pane's `use_query` picks it up
-/// (state-arch §6). Run→Cancel while running, and the running / dirty / validation gates, land
-/// with P2-15. The editing actions (Format / Clear / Save) are stubbed until their layers land.
+/// Run / Explain / Analyze are wired (P2-15): a press snapshots the tab's editor text into a
+/// fresh-nonce [`QuerySpec`] in the workbench's `request` slot — the results pane's `use_query`
+/// picks it up (state-arch §6). While that press is in flight (the `running` mirror holds its
+/// nonce) Run wears its Cancel dress — pressing it aborts engine-side and drops the trigger,
+/// the same action as the Running body's control. A blank buffer disables Run. The editing
+/// actions (Format / Clear / Save) are stubbed until their layers land (P2-16), along with the
+/// dirty / validation gates that come with them.
 #[derive(PartialEq)]
 pub struct EditorToolbar {
     pub id: TabId,
     pub request: State<Option<QuerySpec>>,
+    /// The in-flight press's nonce, mirrored from the results body's query lifecycle (see
+    /// `ResultsBody` — the toolbar must not subscribe the query itself).
+    pub running: State<Option<RunId>>,
 }
 
 impl Component for EditorToolbar {
@@ -30,11 +37,31 @@ impl Component for EditorToolbar {
             (t.colors.background, t.colors.border)
         };
         let radio = use_radio::<SessionState, Chan>(Chan::Tab(id));
+        let engine = use_consume::<EngineCtx>();
         let mut request = self.request;
 
+        // This tab's press while it's still executing: the current request belongs to this
+        // tab *and* the running mirror still holds its nonce (`request` alone can't tell —
+        // it stays set after settle to keep the results body mounted).
+        let in_flight = self
+            .request
+            .read()
+            .as_ref()
+            .filter(|s| s.tab == id && *self.running.read() == Some(s.run))
+            .map(|s| s.run);
+
+        // A blank buffer can't run — the button gates to Disabled. Subscribed on
+        // `Chan::Tab(id)`, so typing re-derives it; `chars().all` early-exits on the first
+        // real character (no rope→String materialise per keystroke).
+        let blank = radio
+            .read()
+            .tabs
+            .get(&id)
+            .is_none_or(|t| t.editor.rope.chars().all(|c| c.is_whitespace()));
+
         // A press is an *action*: snapshot the editor text now, mint a fresh nonce, and
-        // set it as the window's current execution. Blank buffers are a no-op (proper
-        // disabled-state gating is P2-15). `read()` here is peek-equivalent: inside an
+        // set it as the window's current execution. The blank guard backs up the visual
+        // gate (Explain/Analyze share it). `read()` here is peek-equivalent: inside an
         // event handler there's no reactive context, so it cannot subscribe.
         let mut press = move |mode: QueryMode| {
             let sql = radio.read().tabs.get(&id).map(|t| t.text()).unwrap_or_default();
@@ -48,6 +75,25 @@ impl Component for EditorToolbar {
                 mode,
                 page_size: DEFAULT_PAGE_SIZE,
             }));
+        };
+
+        let run_state = if in_flight.is_some() {
+            RunState::Running
+        } else if blank {
+            RunState::Disabled
+        } else {
+            RunState::Idle
+        };
+
+        // Running → the press is Cancel: engine-side abort (tag-guarded, S14 — a stale press
+        // can't kill a newer run) + drop the trigger, unmounting the results body back to
+        // Empty. Otherwise it's Run. Disabled never fires (RunButton swallows it).
+        let run_press = move |_| match in_flight {
+            Some(run) => {
+                engine.cancel(id.into(), run.into());
+                request.set(None);
+            }
+            None => press(QueryMode::Run),
         };
 
         // An outline icon button — `outline_button` variant with a centred icon. (Icon keeps its
@@ -67,9 +113,7 @@ impl Component for EditorToolbar {
             .spacing(8.)
             .padding((0., 10.))
             .background(bg)
-            .child(
-                RunButton::new(RunState::Idle).on_press(move |_| press(QueryMode::Run)),
-            )
+            .child(RunButton::new(run_state).on_press(run_press))
             .child(
                 tool(IconName::Explain)
                     .on_press(move |_| press(QueryMode::Explain { analyze: false })),

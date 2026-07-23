@@ -5,11 +5,12 @@
 //! each tab's cursor / undo / scroll travel with it.
 //!
 //! The toolbar is built to the `Editor.dc.html` comp from reusable `IconButton`s (accent Run +
-//! outlined Explain · Analyze │ Format · Clear │ Save-as-view · Save). Actions are stubbed until
-//! their layer lands (Run/Explain → freya-query, Save → the Project store, Format/Clear → editor
-//! commands), and the running / dirty / validation states that gate them come with those.
+//! outlined Explain · Analyze │ Format · Clear │ Save-as-view · Save). Run / Explain / Analyze
+//! drive freya-query through the `request` slot (Run flips to Cancel mid-run via the `running`
+//! mirror); Format / Clear / Save stay stubbed until their layer lands (Save → the Project
+//! store, Format/Clear → editor commands), with the dirty / validation gates that come with them.
 
-use crate::apps::project::query::QuerySpec;
+use crate::apps::project::query::{QuerySpec, RunId};
 use crate::apps::project::state::{Chan, SessionState};
 use editor::tab::EditorTab;
 use empty::EmptyState;
@@ -43,6 +44,12 @@ impl Component for Workbench {
         // Editing never touches it; only a press rebuilds it (fresh nonce → new execution).
         let mut request = use_state(|| None::<QuerySpec>);
 
+        // The in-flight press's nonce, mirrored out of the results body's query lifecycle
+        // (see `ResultsBody`) so the toolbar can wear Run→Cancel without subscribing the
+        // query itself — freya-query re-runs stale entries on subscribe, and an in-flight
+        // entry reads as stale, so a second enabled subscriber would double-execute the run.
+        let running = use_state(|| None::<RunId>);
+
         // A press outlives its tab only until the close funnel runs: if the pressed tab is
         // gone (close / close-others / …), drop the slot so a reopened tab starts with no
         // results, like a fresh one — matching the engine-side cleanup (SNAPSHOT_SPEC §4).
@@ -69,11 +76,11 @@ impl Component for Workbench {
                         .panel(
                             ResizablePanel::new(PanelSize::px(240.))
                                 .min_size(92.)
-                                .child(EditorTab::new(id, request)),
+                                .child(EditorTab::new(id, request, running)),
                         )
                         .panel(
                             ResizablePanel::new(PanelSize::percent(100.))
-                                .child(Results::new(id, request)),
+                                .child(Results::new(id, request, running)),
                         ),
                 )
             })

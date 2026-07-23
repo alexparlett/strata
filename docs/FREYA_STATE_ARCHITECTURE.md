@@ -302,6 +302,18 @@ error body (`ResultsState::Error`, `results/error.rs`). Rule of thumb carried fo
 small/known/shallow consumer sets; context only for DI handles (`EngineCtx`, theme) and
 deep/open-ended trees (`Selection`).
 
+**Run→Cancel (P2-15).** The toolbar's Run control flips to Cancel while the press is in flight —
+but it can't derive that from `request` (which stays `Some` after settle, keeping the grid
+mounted), and it **must not** subscribe the run's `use_query` itself: freya-query re-runs *stale*
+entries when a subscriber mounts, and a `Pending`/`Loading` entry reads as stale, so a second
+enabled subscriber would double-execute the run (nor can it share state via `.enable(false)` —
+`enabled` is part of `Query`'s cache identity, so that's a different, never-running entry). So
+the workbench holds a second component-local slot, `running: State<Option<RunId>>`, threaded as
+props beside `request`; `ResultsBody` — the query's sole subscriber — mirrors the lifecycle into
+it with a `use_side_effect` (the press's nonce while in flight, `None` on settle) plus a
+nonce-guarded `use_drop` (a stale body's unmount can't clobber a newer press's flag). Cancel from
+either surface is the same action: `engine.cancel(tab, run)` + `request = None`.
+
 ---
 
 ## 7. The engine handle (`EngineCtx`) — a direct-call facade

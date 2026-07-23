@@ -29,7 +29,7 @@ use status_bar::StatusBar;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{
-    FetchSnapshotPage, PageSpec, QueryOutcome, QuerySpec, RunQuery,
+    FetchSnapshotPage, PageSpec, QueryOutcome, QuerySpec, RunId, RunQuery,
 };
 use crate::apps::project::state::TabId;
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
@@ -62,11 +62,16 @@ pub enum ResultsState {
 pub struct Results {
     id: TabId,
     request: State<Option<QuerySpec>>,
+    running: State<Option<RunId>>,
 }
 
 impl Results {
-    pub fn new(id: TabId, request: State<Option<QuerySpec>>) -> Self {
-        Self { id, request }
+    pub fn new(
+        id: TabId,
+        request: State<Option<QuerySpec>>,
+        running: State<Option<RunId>>,
+    ) -> Self {
+        Self { id, request, running }
     }
 }
 
@@ -84,7 +89,14 @@ impl Component for Results {
                 // Keyed by the press's nonce so a new Run remounts the body — the page below
                 // resets to 1 and the grid's column widths reseed for the new schema.
                 let run = spec.run;
-                ResultsBody { spec, request: self.request, key: DiffKey::None }.key(run).into()
+                ResultsBody {
+                    spec,
+                    request: self.request,
+                    running: self.running,
+                    key: DiffKey::None,
+                }
+                .key(run)
+                .into()
             }
         };
         el
@@ -100,6 +112,9 @@ struct ResultsBody {
     spec: QuerySpec,
     /// The workbench's Run trigger — Cancel clears it, returning the pane to empty.
     request: State<Option<QuerySpec>>,
+    /// The workbench's in-flight mirror — this body (the query's sole subscriber) resolves
+    /// it to the press's nonce while Pending/Loading so the toolbar can flip Run→Cancel.
+    running: State<Option<RunId>>,
     key: DiffKey,
 }
 
@@ -116,6 +131,34 @@ impl Component for ResultsBody {
             Query::new(self.spec.clone(), RunQuery(engine.captured()))
                 .stale_time(Duration::MAX),
         );
+
+        // Mirror the run's in-flight-ness into the workbench's `running` slot for the
+        // toolbar's Run→Cancel flip (P2-15). The toolbar cannot subscribe this query
+        // itself: freya-query re-runs *stale* entries when a subscriber mounts, and an
+        // in-flight entry reads as stale — a second enabled subscriber would double-execute
+        // the run. So this body, the sole subscriber, resolves the slot: the press's nonce
+        // while Pending/Loading, cleared on settle. Unmount (cancel / supersede / tab
+        // close) clears it too — nonce-guarded, so if a new press's body mounts before the
+        // old one drops, the stale drop can't clobber the newer run's flag.
+        let run = self.spec.run;
+        let mut running = self.running;
+        use_side_effect(move || {
+            let in_flight = matches!(
+                &*query.read().state(),
+                QueryStateData::Pending | QueryStateData::Loading { .. }
+            );
+            let mirrored = *running.peek() == Some(run);
+            if in_flight && !mirrored {
+                running.set(Some(run));
+            } else if !in_flight && mirrored {
+                running.set(None);
+            }
+        });
+        use_drop(move || {
+            if *running.peek() == Some(run) {
+                running.set(None);
+            }
+        });
         // The 1-based snapshot page the grid shows and the rows-per-page it's cut into. They
         // live here — beside the status bar that pages them and the grid that reads them — and
         // reset for every press (this component is keyed by the press's nonce). `page_size`
