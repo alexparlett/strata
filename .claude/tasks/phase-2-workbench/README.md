@@ -14,9 +14,9 @@ It is **not** "UI done, plumbing missing." Three kinds of work remain:
   and the status bar carries a minimal working pager. The editor toolbar renders its full button
   row and a `CodeEditor` is mounted per tab.
 - **Stub / not built:** `explain_plan.rs` is a one-line placeholder (its *state* is reached for
-  real now; `running.rs` is built — spinner, live elapsed, Cancel/Esc, P2-06); the status bar
-  shows a dot + state label + selection + the
-  minimal pager (P2-08 dresses it: info chips, aggregates, styling); there's no
+  real now; `running.rs` is built — spinner, live elapsed, Cancel/Esc, P2-06; the status bar is
+  built to the comp — toned label, snapshot chip, live selection aggregate, and the full pager
+  with page-size select + page input, P2-08); there's no
   Table/Chart switcher, find popover, record view, cell/gutter double-click views, or copy menu; and the
   editor has **no completions/diagnostics** binding (SQL highlighting *is* wired).
 - **Plumbing: done (P2-01 + P2-02 + P2-03).** Editor → Run/Explain/Analyze press → engine facade →
@@ -42,7 +42,7 @@ now have their read model.
 | P2-05 | Explain-plan view | ⬜ | Rz-plan/U8 | P2-02/03 |
 | P2-06 | Running state (spinner + elapsed + cancel) | ✅ | — | P2-02 |
 | P2-07 | Table/Chart switcher | ⬜ | U6a | P2-02 |
-| P2-08 | Status bar — pager + info + aggregate | 🟢 | U6/Rz3 | P2-03 |
+| P2-08 | Status bar — pager + info + aggregate | ✅ | U6/Rz3 | P2-03 |
 | P2-09 | Find in results | ⬜ | U6c | P2-03 |
 | P2-10 | Gutter double-click → row detail (record view) | ⬜ | Rz5 | P2-03 |
 | P2-11 | Copy affordances (TSV/CSV/JSON/MD) | ⬜ | Rz4 | P2-03 |

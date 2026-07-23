@@ -1,6 +1,6 @@
 # P2-08 · Status bar — pager + info + selection aggregate
 
-**Phase:** 2 — Workbench · **Status:** 🟢 · **DEV_TASKS:** U6 / Rz3 · **Depends on:** P2-03
+**Phase:** 2 — Workbench · **Status:** ✅ **built** · **DEV_TASKS:** U6 / Rz3 · **Depends on:** P2-03
 
 ## Goal
 Fill out the results status bar: pager, row/snapshot info, elapsed, and the live selection aggregate.

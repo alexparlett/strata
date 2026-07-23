@@ -202,3 +202,57 @@ roles! {
     /// Path — a recessive mono path / footer (mono · 400 · 11).
     Path => mono_path,
 }
+
+/// Wraps an `Input` in a typography role's font — family · size · weight resolved from the same
+/// scale as the text roles above. Freya's `Input` paints no font of its own (its internal label
+/// inherits the ambient font), so *this* is how an input joins the type scale: wrap it, never
+/// hard-code a family/size at the call site.
+/// Which role of the scale dresses a wrapped input.
+#[derive(PartialEq, Clone, Copy)]
+enum InputRole {
+    Body,
+    Mono,
+}
+
+#[derive(PartialEq)]
+pub struct InputTypography {
+    role: InputRole,
+    child: Element,
+    /// The wrapper hugs its input by default; a fill-width input needs the wrapper to fill too.
+    width: Option<Size>,
+}
+
+impl InputTypography {
+    /// The UI text dress (`body`, ui · 400 · 12.5) — search / filter / rename inputs.
+    pub fn body(input: impl IntoElement) -> Self {
+        Self { role: InputRole::Body, child: input.into_element(), width: None }
+    }
+
+    /// The mono data dress (`data_value`, mono · 500 · 12.5) — value inputs (e.g. the pager's
+    /// page number).
+    pub fn mono(input: impl IntoElement) -> Self {
+        Self { role: InputRole::Mono, child: input.into_element(), width: None }
+    }
+
+    /// Size the wrapper (`Size::fill()` for a fill-width input; default: hug the input).
+    pub fn width(mut self, width: impl Into<Size>) -> Self {
+        self.width = Some(width.into());
+        self
+    }
+}
+
+impl Component for InputTypography {
+    fn render(&self) -> impl IntoElement {
+        let scale = scale();
+        let style = match self.role {
+            InputRole::Body => &scale.body,
+            InputRole::Mono => &scale.data_value,
+        };
+        rect()
+            .font_family(style.family.clone())
+            .font_size(style.size)
+            .font_weight(style.weight)
+            .map(self.width.clone(), |el, width| el.width(width))
+            .child(self.child.clone())
+    }
+}

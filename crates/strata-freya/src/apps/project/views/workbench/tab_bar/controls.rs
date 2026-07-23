@@ -5,7 +5,7 @@ use freya::radio::{use_radio, Radio};
 use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{Caption, Prose};
+use crate::components::typography::{Caption, InputTypography, Prose};
 
 /// A flat 28×28 icon button — the cluster's building block. The icon takes no explicit colour, so it
 /// inherits the button's (hover-reactive) `color`. Callers add the `.on_press`.
@@ -157,22 +157,23 @@ impl Component for NavMenu {
     }
 }
 
-/// The search row: a single filter input with the magnifier *inside* it (Freya's `Input.leading`).
-/// The input paints no font of its own, so it inherits the UI body font we set here (family + 12.5);
-/// text/placeholder colours come from the `input` theme (`text_primary` / `text_placeholder`).
+/// The search row: a single filter input with the magnifier *inside* it (Freya's `Input.leading`),
+/// wearing the scale's UI body dress via [`InputTypography`]; text/placeholder colours come from
+/// the `input` theme (`text_primary` / `text_placeholder`).
 fn nav_search(query: State<String>, faint: Color) -> impl IntoElement {
     rect()
         .width(Size::fill())
         .padding(Gaps::new(8., 8., 8., 8.))
-        .font_family("IBM Plex Sans")
-        .font_size(12.5)
         .child(
-            Input::new(query)
-                .leading(Icon::new(IconName::Search).color(faint).size(14.))
-                .placeholder("Find a query tab…")
-                .compact()
-                .auto_focus(true)
-                .width(Size::fill()),
+            InputTypography::body(
+                Input::new(query)
+                    .leading(Icon::new(IconName::Search).color(faint).size(14.))
+                    .placeholder("Find a query tab…")
+                    .compact()
+                    .auto_focus(true)
+                    .width(Size::fill()),
+            )
+            .width(Size::fill()),
         )
 }
 

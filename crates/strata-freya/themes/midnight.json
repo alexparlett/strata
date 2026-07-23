@@ -135,6 +135,9 @@
       }
     },
     "flat_button": {
+      "disabled_color": {
+        "specific": "#3a4350"
+      },
       "background": {
         "specific": "rgba(0,0,0,0)"
       },
@@ -297,6 +300,9 @@
       }
     },
     "select": {
+      "list_margin": {
+        "specific": 2
+      },
       "select_background": {
         "reference": "surface_tertiary"
       },
@@ -631,14 +637,29 @@
       "color": {
         "specific": "#909aa9"
       },
-      "hover_background": {
-        "specific": "#262d37"
-      },
       "border_fill": {
         "reference": "border"
+      },
+      "sub_color": {
+        "reference": "text_placeholder"
+      },
+      "control_color": {
+        "specific": "#b6bfcb"
       }
     },
     "code_editor": {
+      "font_family": {
+        "specific": "mono"
+      },
+      "font_size": {
+        "specific": 12
+      },
+      "font_weight": {
+        "specific": 400
+      },
+      "line_height": {
+        "specific": 1.6
+      },
       "background": {
         "reference": "surface_primary"
       },

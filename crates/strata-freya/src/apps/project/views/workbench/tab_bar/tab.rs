@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::Body;
+use crate::components::typography::{Body, InputTypography};
 use freya::components::{use_theme, DragZone};
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -256,25 +256,22 @@ impl Component for Tab {
                     .spacing(8.);
                 if *renaming.read() {
                     // A fixed-width box that scrolls when the name is longer — matching the Dioxus
-                    // `.tab-rename` (118px, body font). The wrapper sets the font (the `Input` paints
-                    // none of its own) so the text matches the tab name. Enter commits (`on_submit`);
-                    // Escape / click-outside are handled on the tab root.
+                    // `.tab-rename` (118px, body font via `InputTypography` — the `Input` paints
+                    // no font of its own) so the text matches the tab name. Enter commits
+                    // (`on_submit`); Escape / click-outside are handled on the tab root.
                     row.child(
-                        rect()
-                            .font_family("IBM Plex Sans")
-                            .font_size(12.5)
-                            .child(
-                                Input::new(draft)
-                                    .a11y_id(a11y)
-                                    .flat()
-                                    .compact()
-                                    .auto_focus(true)
-                                    .width(Size::px(118.))
-                                    .on_submit(move |value: String| {
-                                        radio.write().rename(id, value);
-                                        renaming.set(false);
-                                    }),
-                            ),
+                        InputTypography::body(
+                            Input::new(draft)
+                                .a11y_id(a11y)
+                                .flat()
+                                .compact()
+                                .auto_focus(true)
+                                .width(Size::px(118.))
+                                .on_submit(move |value: String| {
+                                    radio.write().rename(id, value);
+                                    renaming.set(false);
+                                }),
+                        ),
                     )
                 } else {
                     row.child(Body::new(self.name.clone()).color(fg)).child(close)

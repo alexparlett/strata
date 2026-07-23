@@ -23,6 +23,13 @@ define_theme! {
         highlight: Color,
         text: Color,
         whitespace: Color,
+        /// The editor's type — themed like every other component, so the editor dresses itself
+        /// (the `CodeEditor` builders remain as per-instance overrides).
+        font_family: String,
+        font_size: f32,
+        font_weight: i32,
+        /// Line height as a multiplier of `font_size`.
+        line_height: f32,
     }
 }
 
@@ -69,7 +76,13 @@ define_theme! {
 }
 
 impl EditorTheme {
+    /// The default type, shared by both stock palettes.
+    fn default_type() -> (String, f32, i32, f32) {
+        ("JetBrains Mono".to_string(), 14.0, 400, 1.4)
+    }
+
     pub fn dark() -> Self {
+        let (font_family, font_size, font_weight, line_height) = Self::default_type();
         Self {
             background: Color::from_rgb(29, 32, 33),
             gutter_selected: Color::from_rgb(235, 235, 235),
@@ -80,10 +93,15 @@ impl EditorTheme {
             highlight: Color::from_rgb(80, 80, 80),
             text: Color::WHITE,
             whitespace: Color::from_af32rgb(0.2, 223, 191, 142),
+            font_family,
+            font_size,
+            font_weight,
+            line_height,
         }
     }
 
     pub fn light() -> Self {
+        let (font_family, font_size, font_weight, line_height) = Self::default_type();
         Self {
             background: Color::from_rgb(246, 248, 250),
             gutter_selected: Color::from_rgb(36, 41, 46),
@@ -94,6 +112,10 @@ impl EditorTheme {
             highlight: Color::from_rgb(200, 225, 255),
             text: Color::from_rgb(36, 41, 46),
             whitespace: Color::from_af32rgb(0.3, 106, 115, 125),
+            font_family,
+            font_size,
+            font_weight,
+            line_height,
         }
     }
 }
@@ -246,6 +268,10 @@ impl From<EditorTheme> for EditorThemePreference {
             highlight: Preference::Specific(theme.highlight),
             text: Preference::Specific(theme.text),
             whitespace: Preference::Specific(theme.whitespace),
+            font_family: Preference::Specific(theme.font_family),
+            font_size: Preference::Specific(theme.font_size),
+            font_weight: Preference::Specific(theme.font_weight),
+            line_height: Preference::Specific(theme.line_height),
         }
     }
 }

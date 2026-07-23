@@ -78,15 +78,16 @@ impl CodeEditorData {
         self.metrics.run_parser(&self.rope, edit);
     }
 
-    pub fn measure(&mut self, font_size: f32, font_family: &str) {
+    pub fn measure(&mut self, font_size: f32, font_family: &str, font_weight: i32) {
         self.metrics
-            .measure_longest_line(font_size, font_family, &self.rope);
+            .measure_longest_line(font_size, font_family, font_weight, &self.rope);
     }
 
     pub fn process(
         &mut self,
         font_size: f32,
         font_family: &str,
+        font_weight: i32,
         edit_event: EditableEvent,
     ) -> bool {
         let mut processed = false;
@@ -193,7 +194,7 @@ impl CodeEditorData {
                         let event = self.process_key(key, &modifiers, true, true, true, true);
                         if event.contains(TextEvent::TEXT_CHANGED) {
                             self.parse();
-                            self.measure(font_size, font_family);
+                            self.measure(font_size, font_family, font_weight);
                             self.dragging = TextDragging::default();
                         }
                         if !event.is_empty() {

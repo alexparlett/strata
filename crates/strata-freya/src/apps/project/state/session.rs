@@ -56,11 +56,11 @@ impl QueryTab {
     /// so a freshly-opened bound tab reads as *not* dirty until edited.
     pub fn new(name: String, sql: String, origin: Origin) -> Self {
         let mut editor = CodeEditorData::new(Rope::from_str(&sql), Some(sql_language()));
-        // Populate the line metrics so the editor renders its content immediately (parse builds
-        // the line blocks; measure sizes them). `mark_as_saved` then snapshots the opening text
-        // as the dirty baseline so a freshly-opened tab isn't "edited".
+        // Populate the line blocks so the editor renders its content immediately. Measurement is
+        // the mounted `CodeEditor`'s job — it measures with its theme-resolved type on mount
+        // (the session doesn't know the editor's font). `mark_as_saved` then snapshots the
+        // opening text as the dirty baseline so a freshly-opened tab isn't "edited".
         editor.parse();
-        editor.measure(12.0, "Jetbrains Mono");
         editor.mark_as_saved();
         Self {
             id: TabId::new(),
