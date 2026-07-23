@@ -46,6 +46,9 @@
             "hover_background": {
               "$ref": "#/$defs/colorPref"
             },
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
@@ -55,10 +58,16 @@
             "focus_border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "disabled_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "color": {
               "$ref": "#/$defs/colorPref"
             },
             "hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -73,6 +82,9 @@
             "hover_background": {
               "$ref": "#/$defs/colorPref"
             },
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
@@ -82,10 +94,16 @@
             "focus_border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "disabled_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "color": {
               "$ref": "#/$defs/colorPref"
             },
             "hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -100,6 +118,9 @@
             "hover_background": {
               "$ref": "#/$defs/colorPref"
             },
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
@@ -109,10 +130,16 @@
             "focus_border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "disabled_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "color": {
               "$ref": "#/$defs/colorPref"
             },
             "hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -127,6 +154,9 @@
             "hover_background": {
               "$ref": "#/$defs/colorPref"
             },
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
@@ -136,10 +166,16 @@
             "focus_border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "disabled_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "color": {
               "$ref": "#/$defs/colorPref"
             },
             "hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -489,6 +525,9 @@
           "properties": {
             "margin": {
               "$ref": "#/$defs/gapsPref"
+            },
+            "list_margin": {
+              "$ref": "#/$defs/numberPref"
             },
             "select_background": {
               "$ref": "#/$defs/colorPref"
@@ -942,6 +981,18 @@
             },
             "whitespace": {
               "$ref": "#/$defs/colorPref"
+            },
+            "font_family": {
+              "$ref": "#/$defs/fontPref"
+            },
+            "font_size": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "font_weight": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "line_height": {
+              "$ref": "#/$defs/numberPref"
             }
           }
         },
@@ -1153,7 +1204,10 @@
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
-            "hover_background": {
+            "sub_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "control_color": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -1401,6 +1455,19 @@
       "properties": {
         "specific": {
           "type": "number"
+        }
+      }
+    },
+    "fontPref": {
+      "type": "object",
+      "required": [
+        "specific"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "specific": {
+          "type": "string",
+          "description": "A fonts key (ui/mono) or a literal family name"
         }
       }
     },

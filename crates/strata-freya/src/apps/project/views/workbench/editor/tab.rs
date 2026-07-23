@@ -52,12 +52,11 @@ impl Component for EditorTab {
                     .width(Size::fill())
                     .height(Size::flex(1.))
                     .child(
+                        // Type (family · size · weight · line height) comes from the
+                        // `code_editor` theme — the editor dresses and measures itself.
                         CodeEditor::new(editor.into_writable(), a11y_id)
                             .a11y_auto_focus(true)
-                            .font_size(12.)
-                            .font_family("Jetbrains Mono")
                             .gutter(true)
-                            .line_height(1.6)
                             .show_whitespace(false)
                             .highlight_current_line(false),
                     )

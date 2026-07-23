@@ -11,22 +11,18 @@
 //! resize grip) — and the selection model is the sibling `super::selection`.
 //!
 //! Every colour is a `datagrid` component token (`define_theme!` / `get_theme!`) — no semantic sheet
-//! reads. Fed by the Run's real [`GridData`]: page 1 rides in the Run's own output, later pages are
-//! snapshot reads through [`FetchSnapshotPage`] (cached forever — the snapshot is immutable).
+//! reads. Fed by the Run's real [`GridData`]: the results pane resolves the current page (page 1
+//! from the Run's own output, anything else via the cached `FetchSnapshotPage`) and hands it in as
+//! a [`PageRead`] — the grid itself never touches the engine.
 
 use std::rc::Rc;
-use std::time::Duration;
 
 use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
-use freya::query::{use_query, Query, QueryStateData};
-use strata_model::SnapshotId;
 
 use super::error::ErrorState;
 use super::selection::{CellRole, SelCtl, Selection};
 use super::toolbar::DataGridToolbar;
-use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{FetchSnapshotPage, PageSpec};
 use crate::components::divider::Divider;
 
 mod cell;
@@ -35,7 +31,8 @@ mod model;
 
 use cell::Cell;
 use header::HeaderCell;
-use model::{Density, GridData, KindColors};
+use model::{Density, KindColors};
+pub use model::{GridData, PageRead};
 
 const HEADER_H: f32 = 46.;
 const GUTTER_W: f32 = 52.; // the `#` row-number column (matches the Dioxus `.hnum` / `.rnum`)
@@ -108,33 +105,25 @@ define_theme!(
     }
 );
 
-/// The results grid for one settled Run. Renders one page of the Run's snapshot and owns the
-/// page *reads*: page 1 rides in the Run's own output; later pages go through
-/// [`FetchSnapshotPage`], keyed by `(snapshot, page, page_size, sort)` — so a revisited page is
-/// served from the freya-query cache with zero engine traffic (the snapshot is immutable).
+/// The results grid for one settled Run. Renders the page the results pane resolved for it
+/// ([`PageRead`]): the pane owns the page/page-size state and the snapshot read; the grid keeps
+/// its own per-column widths (which is why the in-flight and failed page states render *inside*
+/// it — swapping the component out would drop the user's resizes).
 #[derive(PartialEq)]
 pub struct DataGrid {
-    /// Page 1 — the page the Run itself returned (also the source of the result schema).
-    data: Rc<GridData>,
-    /// The Run's materialized snapshot (`None` ⇔ zero rows; there is nothing to page).
-    snapshot: Option<SnapshotId>,
-    page_size: usize,
-    /// The 1-based page to show — owned by the results pane; the status-bar pager bumps it.
-    page: State<usize>,
+    /// The page the Run itself returned — the source of the result schema (widths seed off it).
+    run: Rc<GridData>,
+    /// The resolved current page.
+    view: PageRead,
+    /// Absolute index of the page's first row (0-based) — the gutter continues across pages.
+    row_base: usize,
     density: Density,
     pub(crate) theme: Option<DataGridThemePartial>,
 }
 
 impl DataGrid {
-    pub fn new(output: &strata_model::QueryOutput, page: State<usize>) -> Self {
-        Self {
-            data: Rc::new(GridData::from_run(output)),
-            snapshot: output.snapshot,
-            page_size: output.page_size,
-            page,
-            density: Density::Comfortable,
-            theme: None,
-        }
+    pub fn new(run: Rc<GridData>, view: PageRead, row_base: usize) -> Self {
+        Self { run, view, row_base, density: Density::Comfortable, theme: None }
     }
 
     /// Cell padding density (default [`Comfortable`](Density::Comfortable)). Wire to a user setting
@@ -147,11 +136,10 @@ impl DataGrid {
 
 impl Component for DataGrid {
     fn render(&self) -> impl IntoElement {
-        let engine = use_consume::<EngineCtx>();
         // Per-column widths, seeded from the run's schema at mount and mutated by the grips. They
         // live at this level — not per page — so a page flip keeps the user's resizes (the column
         // set is fixed for the life of the snapshot).
-        let n = self.data.columns.len();
+        let n = self.run.columns.len();
         let widths = use_state(move || vec![DEFAULT_COL_W; n]);
         // One horizontal scroll controller, shared with the resize grips (so they can auto-scroll the
         // view while dragging past an edge), plus the grid viewport in screen coords for edge detection.
@@ -161,25 +149,6 @@ impl Component for DataGrid {
         // not resizing) so shrinking a column can't shrink the scroll extent mid-drag — which reflowed
         // the view and made the drag janky. The grips write it; it settles back to `min_w` on release.
         let hold_w = use_state(|| 0.0f32);
-
-        // The current page's snapshot read (SNAPSHOT_SPEC §6): keyed by [`PageSpec`] and cached
-        // forever (`stale_time(MAX)` — reads of an immutable snapshot never go stale), so a
-        // revisited page settles straight from the cache. Disabled on page 1, which rode in the
-        // Run's own output — the placeholder id of a disabled read never reaches the engine.
-        let page = *self.page.read();
-        let fetch = use_query(
-            Query::new(
-                PageSpec {
-                    snapshot: self.snapshot.unwrap_or(SnapshotId(0)),
-                    page,
-                    page_size: self.page_size,
-                    sort: None,
-                },
-                FetchSnapshotPage(engine.captured()),
-            )
-            .stale_time(Duration::MAX)
-            .enable(page > 1 && self.snapshot.is_some()),
-        );
 
         // ── selection ──────────────────────────────────────────────────────────────────────────────
         // Shared selection state + a Copy controller the cells call on pointer events. Freya pointer
@@ -198,30 +167,23 @@ impl Component for DataGrid {
         let cell_pad = self.density.padding(&theme);
         let row_h = CELL_LINE_H + cell_pad.vertical();
 
-        // Resolve the page to render: page 1 from the Run, later pages from the snapshot read.
-        // A page fetch in flight (or failed) replaces the grid body; the widths above survive it.
-        // (These early returns sit below every hook, so the hook order is stable across states.)
-        let data: Rc<GridData> = if page == 1 {
-            self.data.clone()
-        } else {
-            match &*fetch.read().state() {
-                QueryStateData::Settled { res: Ok(fetched), .. } => Rc::new(GridData::from_page(
-                    self.data.columns.clone(),
-                    fetched.rows.clone(),
-                )),
-                QueryStateData::Settled { res: Err(err), .. } => {
-                    return ErrorState::new(err.clone()).into_element();
-                }
-                // A page read in flight — just the spinner: a snapshot page fetch is not a
-                // cancellable run, so it doesn't wear the full running state (timer + Cancel).
-                QueryStateData::Pending | QueryStateData::Loading { .. } => {
-                    return rect()
-                        .width(Size::fill())
-                        .height(Size::flex(1.))
-                        .center()
-                        .child(CircularLoader::new().size(30.))
-                        .into_element();
-                }
+        // The page to render, as the results pane resolved it. A page read in flight (or failed)
+        // replaces the grid body; the widths above survive it. (These early returns sit below
+        // every hook, so the hook order is stable across states.)
+        let data: Rc<GridData> = match &self.view {
+            PageRead::Ready(data) => data.clone(),
+            PageRead::Failed(err) => {
+                return ErrorState::new(err.clone()).into_element();
+            }
+            // A page read in flight — just the spinner: a snapshot page fetch is not a
+            // cancellable run, so it doesn't wear the full running state (timer + Cancel).
+            PageRead::Loading => {
+                return rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.))
+                    .center()
+                    .child(CircularLoader::new().size(30.))
+                    .into_element();
             }
         };
         // Per-column content auto-fit widths (grip double-click), from this page's cells.
@@ -299,7 +261,7 @@ impl Component for DataGrid {
         // capture) so flipping pages — same length, new cells — rebuilds the visible rows.
         let len = data.rows.len();
         // Absolute row numbers: the gutter continues across pages (page 2 starts at page_size + 1).
-        let row_base = (page - 1) * self.page_size;
+        let row_base = self.row_base;
         let theme_b = theme.clone();
         let body = VirtualScrollView::new_with_data(data.clone(), move |index, data| {
             let mut cells = rect()

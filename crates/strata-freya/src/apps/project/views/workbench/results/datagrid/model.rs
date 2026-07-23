@@ -1,6 +1,8 @@
 //! Datagrid data model — the [`GridData`] page the grid renders (the run's real result schema +
-//! the engine's formatted cells), the [`Kind`] → theme-colour mapping ([`KindColors`]), and the
-//! cell-padding [`Density`].
+//! the engine's formatted cells), the resolved-page [`PageRead`], the [`Kind`] → theme-colour
+//! mapping ([`KindColors`]), and the cell-padding [`Density`].
+
+use std::rc::Rc;
 
 use freya::prelude::*;
 use strata_model::{Cell, ColumnInfo, Kind, QueryOutput};
@@ -57,6 +59,31 @@ impl GridData {
     /// carries only rows).
     pub fn from_page(columns: Vec<ColumnInfo>, rows: Vec<Vec<Cell>>) -> Self {
         Self { columns, rows }
+    }
+}
+
+/// The resolved read of the snapshot page the results pane currently shows. `ResultsBody` owns
+/// the resolution — page 1 straight from the Run's own output while the page size still matches
+/// the Run's, anything else through the cached `FetchSnapshotPage` — and threads the result as a
+/// prop to *both* consumers: the grid renders it, the status bar aggregates the selection over
+/// it. One subscription, one place the "page 1 rides in the Run" rule lives.
+#[derive(Clone, PartialEq)]
+pub enum PageRead {
+    /// The page's rows are in hand.
+    Ready(Rc<GridData>),
+    /// The snapshot read is in flight.
+    Loading,
+    /// The snapshot read settled `Err`.
+    Failed(String),
+}
+
+impl PageRead {
+    /// The page data, when the read has settled `Ok`.
+    pub fn ready(&self) -> Option<&Rc<GridData>> {
+        match self {
+            PageRead::Ready(data) => Some(data),
+            _ => None,
+        }
     }
 }
 

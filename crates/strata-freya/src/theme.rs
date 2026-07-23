@@ -89,13 +89,43 @@ pub enum Pref {
     Reference(String),
 }
 
-/// The payload of a `specific` — a colour, a scalar, or four gap sides (distinct JSON types).
-#[derive(Deserialize)]
-#[serde(untagged)]
+/// The payload of a `specific` — a colour/font string, a scalar, or four gap sides (distinct
+/// JSON types). Deserialized by hand through `serde_json::Value` rather than `#[serde(untagged)]`:
+/// untagged buffering breaks on non-integer numbers when serde_json's `arbitrary_precision`
+/// feature is enabled anywhere in the workspace (strata-core enables it), and `Value` handles it
+/// natively.
 pub enum SpecificValue {
     Color(String),
     Scalar(f32),
     Sides([f32; 4]),
+}
+
+impl<'de> Deserialize<'de> for SpecificValue {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        match serde_json::Value::deserialize(d)? {
+            serde_json::Value::String(s) => Ok(Self::Color(s)),
+            serde_json::Value::Number(n) => {
+                Ok(Self::Scalar(n.as_f64().ok_or_else(|| {
+                    D::Error::custom("specific number out of range")
+                })? as f32))
+            }
+            serde_json::Value::Array(a) => {
+                let sides: Vec<f32> = a
+                    .iter()
+                    .map(|v| v.as_f64().map(|n| n as f32))
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| D::Error::custom("specific sides must be numbers"))?;
+                let sides: [f32; 4] = sides.try_into().map_err(|_| {
+                    D::Error::custom("specific sides must have exactly 4 numbers")
+                })?;
+                Ok(Self::Sides(sides))
+            }
+            _ => Err(D::Error::custom(
+                "specific must be a colour/font string, a number, or a 4-number array",
+            )),
+        }
+    }
 }
 
 /// A component field's value type — drives both the runtime coercion and the schema.
@@ -103,8 +133,12 @@ pub enum SpecificValue {
 pub enum Kind {
     Color,
     F32,
+    I32,
     Gaps,
     Corner,
+    /// A font family: a `fonts` key (`ui`/`mono`) resolved to the real family name, or a
+    /// literal family name.
+    Font,
 }
 
 /// The 27 fields of Freya's `ColorsSheet`, as authored colour strings.
@@ -195,7 +229,7 @@ pub fn strata_theme(id: &str) -> Theme {
     th.name = Box::leak(t.id.clone().into_boxed_str());
     th.colors = t.sheet.to_colors_sheet();
     apply_component_overrides(&mut th, &t.components);
-    register_component_themes(&mut th, &t.components);
+    register_component_themes(&mut th, &t.components, &t.fonts);
     // Install the resolved type scale onto the theme itself (its `Box<dyn Any>` component store), so
     // typography components read it with a standard `use_theme().get::<Typography>(..)` — no provider,
     // no cache. Keyed `strata_typography` to avoid Freya's built-in `typography`.
@@ -313,6 +347,7 @@ trait ComponentTheme {
 macro_rules! set_field {
     (color,  $dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
     (f32,    $dst:expr, $f:expr, $key:expr) => { set_f32($dst, $f, $key) };
+    (i32,    $dst:expr, $f:expr, $key:expr) => { set_i32($dst, $f, $key) };
     (gaps,   $dst:expr, $f:expr, $key:expr) => { set_gaps($dst, $f, $key) };
     (corner, $dst:expr, $f:expr, $key:expr) => { set_corner($dst, $f, $key) };
 }
@@ -320,6 +355,7 @@ macro_rules! set_field {
 macro_rules! kind_of {
     (color)  => { Kind::Color };
     (f32)    => { Kind::F32 };
+    (i32)    => { Kind::I32 };
     (gaps)   => { Kind::Gaps };
     (corner) => { Kind::Corner };
 }
@@ -330,20 +366,25 @@ macro_rules! strata_placeholder {
     () => { Preference::Specific(Color::from_rgb(255, 0, 255)) };
     (color) => { Preference::Specific(Color::from_rgb(255, 0, 255)) };
     (f32) => { Preference::Specific(0.0_f32) };
+    (i32) => { Preference::Specific(0_i32) };
     (gaps) => { Preference::Specific(Gaps::default()) };
     (corner) => { Preference::Specific(CornerRadius::default()) };
+    (font) => { Preference::Specific(String::new()) };
 }
 
 /// Thin adapters over the shared `set_field!` / `kind_of!` so a *bare* field (no `: kind`) defaults to
 /// colour — the only thing `strata_components!` needs beyond the builtin mapping, which stays defined
-/// once, in `set_field!` / `kind_of!`.
+/// once, in `set_field!` / `kind_of!`. (`font` is the one kind with extra context — it resolves
+/// through the theme's `fonts` map, threaded in by `register_component_themes`.)
 macro_rules! strata_set {
-    ($dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
-    ($dst:expr, $f:expr, $key:expr, $kind:ident) => { set_field!($kind, $dst, $f, $key) };
+    ($fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
+    ($fonts:expr, $dst:expr, $f:expr, $key:expr, font) => { set_font($dst, $f, $key, $fonts) };
+    ($fonts:expr, $dst:expr, $f:expr, $key:expr, $kind:ident) => { set_field!($kind, $dst, $f, $key) };
 }
 
 macro_rules! strata_kind {
     () => { Kind::Color };
+    (font) => { Kind::Font };
     ($kind:ident) => { kind_of!($kind) };
 }
 
@@ -362,13 +403,18 @@ macro_rules! strata_components {
         )*
 
         /// Register each custom component **from the theme file** (`components.<key>`). No code
-        /// defaults: a field the file omits keeps its placeholder.
-        fn register_component_themes(th: &mut Theme, components: &BTreeMap<String, BTreeMap<String, Pref>>) {
+        /// defaults: a field the file omits keeps its placeholder. `fonts` is the theme's
+        /// `fonts` map, for `font`-kind fields.
+        fn register_component_themes(
+            th: &mut Theme,
+            components: &BTreeMap<String, BTreeMap<String, Pref>>,
+            fonts: &BTreeMap<String, String>,
+        ) {
             $(
                 {
                     let mut p = <$ty as ComponentTheme>::placeholder();
                     if let Some(f) = components.get($key) {
-                        $( strata_set!(&mut p.$field, f, stringify!($field) $(, $kind)?); )*
+                        $( strata_set!(fonts, &mut p.$field, f, stringify!($field) $(, $kind)?); )*
                     }
                     th.set($key, p);
                 }
@@ -389,6 +435,7 @@ strata_components! {
     "code_editor" => EditorThemePreference {
         background, gutter_selected, gutter_unselected, gutter_border, line_selected_background,
         cursor, highlight, text, whitespace,
+        font_family: font, font_size: f32, font_weight: i32, line_height: f32,
     },
     "code_editor_syntax" => EditorSyntaxThemePreference {
         text, whitespace, attribute, boolean, comment, constant, constructor, escape, function, 
@@ -412,9 +459,12 @@ strata_components! {
     "tab" => TabThemePreference {
         background, hover_background, active_background, color, active_color, accent,
     },
-    // The results-pane footer: surface bg, mono label colour, 1px top divider, future pager hover.
+    // The results-pane footer: surface bg, mono label colour, 1px top divider, plus the P2-08
+    // cluster — muted sub-labels (`sub_color`) and the page-size trigger label
+    // (`control_color`). The pager nav buttons are entirely the standard `flat_button` theme
+    // (including its `disabled_*` set).
     "status_bar" => StatusBarThemePreference {
-        background, color, border_fill, hover_background,
+        background, color, border_fill, sub_color, control_color,
     },
     // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
     // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and
@@ -463,10 +513,10 @@ macro_rules! theme_registry {
 
 theme_registry! {
     // Buttons
-    "button"          => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, color: color, hover_color: color },
-    "filled_button"   => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, color: color, hover_color: color },
-    "outline_button"  => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, color: color, hover_color: color },
-    "flat_button"     => ButtonColorsThemePreference { background: color, hover_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, color: color, hover_color: color },
+    "button"          => ButtonColorsThemePreference { background: color, hover_background: color, disabled_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, disabled_border_fill: color, color: color, hover_color: color, disabled_color: color },
+    "filled_button"   => ButtonColorsThemePreference { background: color, hover_background: color, disabled_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, disabled_border_fill: color, color: color, hover_color: color, disabled_color: color },
+    "outline_button"  => ButtonColorsThemePreference { background: color, hover_background: color, disabled_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, disabled_border_fill: color, color: color, hover_color: color, disabled_color: color },
+    "flat_button"     => ButtonColorsThemePreference { background: color, hover_background: color, disabled_background: color, border_fill: color, hover_border_fill: color, focus_border_fill: color, disabled_border_fill: color, color: color, hover_color: color, disabled_color: color },
     "button_layout"          => ButtonLayoutThemePreference { padding: gaps, margin: gaps, corner_radius: corner },
     "compact_button_layout"  => ButtonLayoutThemePreference { padding: gaps, margin: gaps, corner_radius: corner },
     "expanded_button_layout" => ButtonLayoutThemePreference { padding: gaps, margin: gaps, corner_radius: corner },
@@ -489,7 +539,7 @@ theme_registry! {
     "checkbox" => CheckboxThemePreference { unselected_fill: color, selected_fill: color, selected_icon_fill: color, border_fill: color },
     "radio"    => RadioItemThemePreference { unselected_fill: color, selected_fill: color, border_fill: color },
     // Selection / overlays
-    "select"         => SelectThemePreference { margin: gaps, select_background: color, background_button: color, hover_background: color, color: color, border_fill: color, focus_border_fill: color, arrow_fill: color },
+    "select"         => SelectThemePreference { margin: gaps, list_margin: f32, select_background: color, background_button: color, hover_background: color, color: color, border_fill: color, focus_border_fill: color, arrow_fill: color },
     "menu_container" => MenuContainerThemePreference { background: color, padding: gaps, shadow: color, border_fill: color, corner_radius: corner },
     "menu_item"      => MenuItemThemePreference { background: color, hover_background: color, select_background: color, border_fill: color, select_border_fill: color, corner_radius: corner, color: color },
     "popup"          => PopupThemePreference { background: color, color: color, padding: gaps, spacing: f32 },
@@ -524,8 +574,9 @@ pub fn generate_schema() -> serde_json::Value {
 
     let ref_for = |k: &Kind| match k {
         Kind::Color => "#/$defs/colorPref",
-        Kind::F32 | Kind::Corner => "#/$defs/numberPref",
+        Kind::F32 | Kind::I32 | Kind::Corner => "#/$defs/numberPref",
         Kind::Gaps => "#/$defs/gapsPref",
+        Kind::Font => "#/$defs/fontPref",
     };
 
     let mut components = Map::new();
@@ -584,6 +635,7 @@ pub fn generate_schema() -> serde_json::Value {
                 { "type": "object", "required": ["reference"], "additionalProperties": false, "properties": { "reference": { "$ref": "#/$defs/slot" } } }
             ] },
             "numberPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "type": "number" } } },
+            "fontPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "type": "string", "description": "A fonts key (ui/mono) or a literal family name" } } },
             "gapsPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "oneOf": [ { "type": "number" }, { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 } ] } } },
             "sheet": { "type": "object", "additionalProperties": false, "required": slots, "properties": Value::Object(sheet_props) },
             "typeRole": { "type": "object", "required": ["family", "weight", "size"], "additionalProperties": false, "properties": {
@@ -607,9 +659,29 @@ fn set_color(dst: &mut Preference<Color>, f: &BTreeMap<String, Pref>, key: &str)
     }
 }
 
+/// A `font`-kind field: the authored string is a `fonts` key (`ui`/`mono`) resolved to the real
+/// family name, or — when it names no key — a literal family name.
+fn set_font(
+    dst: &mut Preference<String>,
+    f: &BTreeMap<String, Pref>,
+    key: &str,
+    fonts: &BTreeMap<String, String>,
+) {
+    if let Some(Pref::Specific(SpecificValue::Color(s))) = f.get(key) {
+        let family = fonts.get(s).cloned().unwrap_or_else(|| s.clone());
+        *dst = Preference::Specific(family);
+    }
+}
+
 fn set_f32(dst: &mut Preference<f32>, f: &BTreeMap<String, Pref>, key: &str) {
     if let Some(Pref::Specific(SpecificValue::Scalar(n))) = f.get(key) {
         *dst = Preference::Specific(*n);
+    }
+}
+
+fn set_i32(dst: &mut Preference<i32>, f: &BTreeMap<String, Pref>, key: &str) {
+    if let Some(Pref::Specific(SpecificValue::Scalar(n))) = f.get(key) {
+        *dst = Preference::Specific(*n as i32);
     }
 }
 
@@ -660,7 +732,7 @@ fn pc(s: &str) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::generate_schema;
+    use super::{generate_schema, Preference};
 
     /// The committed `theme.schema.json` must equal what `generate_schema()` produces — so the
     /// schema can't drift from the registration. Regenerate with
@@ -678,6 +750,32 @@ mod tests {
             assert_eq!(
                 committed, generated,
                 "theme.schema.json is stale — run `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`"
+            );
+        }
+    }
+
+    /// Both committed theme files must parse — the app panics at launch otherwise. (The full
+    /// `strata_theme` needs Freya's runtime context, so this pins the pure layers.) Regression:
+    /// non-integer scalars (`line_height: 1.6`) broke serde's untagged buffering under the
+    /// workspace's `arbitrary_precision` feature; `SpecificValue` now deserializes by hand.
+    /// Also pins the `font`-kind path: `"mono"` resolves through `fonts` to a real family name.
+    #[test]
+    fn theme_files_parse_end_to_end() {
+        for id in ["midnight", "daylight"] {
+            let t = super::load(id);
+            let editor = t.components.get("code_editor").expect("code_editor authored");
+            match editor.get("line_height") {
+                Some(super::Pref::Specific(super::SpecificValue::Scalar(n))) => {
+                    assert!((n - 1.6).abs() < f32::EPSILON, "{id}: line_height value")
+                }
+                _ => panic!("{id}: line_height must parse as a specific scalar"),
+            }
+            let mut family = Preference::Specific(String::new());
+            super::set_font(&mut family, editor, "font_family", &t.fonts);
+            assert_eq!(
+                family,
+                Preference::Specific("JetBrains Mono".to_string()),
+                "{id}: fonts-map resolution"
             );
         }
     }

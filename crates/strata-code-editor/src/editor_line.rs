@@ -29,6 +29,7 @@ pub struct EditorLineUI {
     pub(crate) show_whitespace: bool,
     pub(crate) highlight_current_line: bool,
     pub(crate) font_family: Cow<'static, str>,
+    pub(crate) font_weight: i32,
     pub(crate) theme: EditorTheme,
     pub(crate) syntax_theme: EditorSyntaxTheme,
     pub(crate) a11y_id: AccessibilityId,
@@ -49,6 +50,7 @@ impl Component for EditorLineUI {
             show_whitespace,
             highlight_current_line,
             font_family,
+            font_weight,
             theme,
             syntax_theme,
             a11y_id,
@@ -73,6 +75,7 @@ impl Component for EditorLineUI {
                     editor_editor.process(
                         font_size,
                         &font_family,
+                        font_weight,
                         EditableEvent::Down {
                             location: e.element_location(),
                             editor_line: EditorLine::Paragraph(line_index),
@@ -93,6 +96,7 @@ impl Component for EditorLineUI {
                     editor_editor.process(
                         font_size,
                         &font_family,
+                        font_weight,
                         EditableEvent::Move {
                             location: e.element_location(),
                             editor_line: EditorLine::Paragraph(line_index),
@@ -137,6 +141,7 @@ impl Component for EditorLineUI {
                         .child(
                             label()
                                 .font_family(font_family.clone())
+                                .font_weight(font_weight)
                                 .color(gutter_color)
                                 .text(format!("{}", line_index + 1)),
                         ),
@@ -158,6 +163,7 @@ impl Component for EditorLineUI {
                     .min_width(Size::fill())
                     .height(Size::fill())
                     .font_family(font_family)
+                    .font_weight(font_weight)
                     .max_lines(1)
                     .color(theme.text)
                     .spans_iter(line.iter().map(|span| {
