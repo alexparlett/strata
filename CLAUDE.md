@@ -227,10 +227,12 @@ The near-term critical path is done: P2-01 (engine facade + snapshots, `docs/SNA
 agreed), P2-02 (results driven by `use_query`) and P2-03 (grid renders the real `QueryPage`;
 fixture deleted; snapshot page reads via `FetchSnapshotPage`, paged from the status bar) are ✅ —
 sort/filter/export now rest on the snapshot read model. Results are **freya-query** off the tab's
-SQL (no runs-by-id store, no query state on the session — state-arch §2): the workbench owns a
-`use_state(|| None::<QuerySpec>)` Run trigger, threaded as **struct-field props** to the toolbar
-and results pane — props for known shallow consumers, context only for DI handles (`EngineCtx`)
-and deep trees (`Selection`).
+SQL (no runs-by-id store, no query *results* on the session — state-arch §2): each `QueryTab`
+owns its Run trigger (`QueryTab::request: Option<QuerySpec>`, on the dedicated
+`Chan::Request(id)` channel, so one tab's press/cancel never touches another tab's results and
+keystrokes never wake the results pane); the `running` mirror is threaded as **struct-field
+props** — props for known shallow consumers, context only for DI handles (`EngineCtx`) and deep
+trees (`Selection`).
 
 ---
 

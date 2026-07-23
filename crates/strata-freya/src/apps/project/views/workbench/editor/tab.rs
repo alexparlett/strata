@@ -1,31 +1,41 @@
-use crate::apps::project::query::{QuerySpec, RunId};
+use crate::apps::project::query::RunId;
 use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
 use freya::components::use_theme;
 use freya::prelude::{
     rect, use_a11y, ChildrenExt, Component, ContainerSizeExt, ContainerWithContentExt, Content,
-    Event, IntoElement, IntoWritable, Key, KeyboardEventData, Modifiers, NamedKey, Size, State,
+    ComponentKey, DiffKey, Event, IntoElement, IntoWritable, Key, KeyExt, KeyboardEventData,
+    Modifiers, NamedKey, Size, State,
 };
 use freya::radio::use_radio;
 use strata_code_editor::prelude::{CodeEditor, CodeEditorData, EditorLanguage, Rope};
 
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a
 /// `Writable<CodeEditorData>` straight into the store on `Chan::Tab(id)`. Carries the
-/// workbench's Run trigger down to the toolbar (which writes a press into it), plus the
-/// `running` mirror the toolbar reads for its Run→Cancel flip. The editor's pre-key gate
-/// keeps primary-held app chords (⌘T / ⌘↵ / …) out of the buffer while letting them reach
-/// the keymap's global listeners.
+/// `running` mirror down to the toolbar for its Run→Cancel flip (the Run trigger itself is
+/// the tab's own — `QueryTab::request`). The editor's pre-key gate keeps primary-held app
+/// chords (⌘T / ⌘↵ / …) out of the buffer while letting them reach the keymap's global
+/// listeners.
 #[derive(PartialEq)]
 pub struct EditorTab {
     pub id: TabId,
-    pub request: State<Option<QuerySpec>>,
     pub running: State<Option<RunId>>,
+    pub key: DiffKey,
 }
 
 impl EditorTab {
-    pub fn new(id: TabId, request: State<Option<QuerySpec>>, running: State<Option<RunId>>) -> Self {
-        Self { id, request, running }
+    pub fn new(id: TabId, running: State<Option<RunId>>) -> Self {
+        // Keyed by the tab: the pane renders in one fixed slot, and without a key a tab
+        // switch would reuse the scope — the mounted `CodeEditor`'s props all compare equal
+        // (`Writable` is always-equal), so it would keep the *previous* tab's buffer binding.
+        Self { id, running, key: DiffKey::None }.key(id)
+    }
+}
+
+impl KeyExt for EditorTab {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
     }
 }
 
@@ -53,7 +63,7 @@ impl Component for EditorTab {
             .expanded()
             .vertical()
             .content(Content::Flex)
-            .child(EditorToolbar { id, request: self.request, running: self.running })
+            .child(EditorToolbar { id, running: self.running })
             .child(
                 rect()
                     .width(Size::fill())
@@ -93,5 +103,9 @@ impl Component for EditorTab {
                     )
             )
             .child(Divider::horizontal().color(border))
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
     }
 }

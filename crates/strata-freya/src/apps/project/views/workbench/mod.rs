@@ -6,16 +6,17 @@
 //!
 //! The toolbar is built to the `Editor.dc.html` comp from reusable `IconButton`s (accent Run +
 //! outlined Explain · Analyze │ Format · Clear │ Save-as-view · Save). Run / Explain / Analyze
-//! drive freya-query through the `request` slot (Run flips to Cancel mid-run via the `running`
-//! mirror); Format / Clear / Save-as-view / Save go through `editor::actions` — buffer
-//! rewrites plus the dispatch-on-origin save into the Project store (⌘S lands with the keymap).
+//! drive freya-query through the tab's own `request` slot (`QueryTab::request`, on
+//! `Chan::Request(id)`; Run flips to Cancel mid-run via the `running` mirror); Format / Clear /
+//! Save-as-view / Save go through `editor::actions` — buffer rewrites plus the
+//! dispatch-on-origin save into the Project store (⌘S lands with the keymap).
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::apps::project::close::{CloseGuard, CloseTarget, TabCloser};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{QueryMode, QuerySpec, RunId};
+use crate::apps::project::query::{QueryMode, RunId};
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 use editor::actions;
 use editor::tab::EditorTab;
@@ -49,52 +50,29 @@ impl Component for Workbench {
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let active = radio.read().active;
 
-        // The window's Run trigger (state-arch §6): the latest Run press, component-local —
-        // written by the editor toolbar, read by the results pane, threaded as plain props.
-        // Editing never touches it; only a press rebuilds it (fresh nonce → new execution).
-        let mut request = use_state(|| None::<QuerySpec>);
-
         // The in-flight press's nonce, mirrored out of the results body's query lifecycle
         // (see `ResultsBody`) so the toolbar can wear Run→Cancel without subscribing the
         // query itself — freya-query re-runs stale entries on subscribe, and an in-flight
         // entry reads as stale, so a second enabled subscriber would double-execute the run.
+        // (The Run trigger itself lives on each tab — `QueryTab::request`, state-arch §6.)
         let running = use_state(|| None::<RunId>);
-
-        // A press outlives its tab only until the close funnel runs: if the pressed tab is
-        // gone (close / close-others / …), drop the slot so a reopened tab starts with no
-        // results, like a fresh one — matching the engine-side cleanup (SNAPSHOT_SPEC §4).
-        use_side_effect(move || {
-            let gone = request
-                .peek()
-                .as_ref()
-                .is_some_and(|spec| !radio.read().tabs.contains_key(&spec.tab));
-            if gone {
-                request.set(None);
-            }
-        });
 
         // Mirror "a query is in flight" into the close guard's atomic, where the winit
         // `on_close` hook (T2) reads it synchronously — the hook runs outside any
-        // component scope and can't touch reactive state.
+        // component scope and can't touch reactive state. `running` alone answers it: the
+        // mounted results body resolves it while its run executes and clears it on settle,
+        // cancel, and unmount.
         let close_guard = use_consume::<Arc<CloseGuard>>();
         {
             let close_guard = close_guard.clone();
             use_side_effect(move || {
-                let in_flight = request
-                    .read()
-                    .as_ref()
-                    .is_some_and(|s| *running.read() == Some(s.run));
-                close_guard.running.store(in_flight, Ordering::Relaxed);
+                close_guard.running.store(running.read().is_some(), Ordering::Relaxed);
             });
         }
         let confirm = use_consume::<State<Option<CloseTarget>>>();
         // The single-tab close gate, shared by every close path (⌘W here; the tab's ×,
         // the tab context menu, and the nav dropdown consume it from context).
-        let closer = use_provide_context(move || TabCloser {
-            request,
-            running,
-            confirm,
-        });
+        let closer = use_provide_context(move || TabCloser { running, confirm });
 
         // The workbench-owned shortcuts (one keyboard handler per node — see
         // `keymap::on_commands`). Tab commands write the session store; ⌘↵ and ⌘S share
@@ -129,12 +107,12 @@ impl Component for Workbench {
                     let Some(id) = active else { return false };
                     // In flight → consume but do nothing: Esc is the cancel, and a
                     // second press must not double-run.
-                    let in_flight = request
-                        .peek()
-                        .as_ref()
-                        .is_some_and(|s| s.tab == id && *running.peek() == Some(s.run));
+                    let in_flight = cmd_radio
+                        .read()
+                        .request(id)
+                        .is_some_and(|s| *running.peek() == Some(s.run));
                     if !in_flight {
-                        actions::press_query(cmd_radio, id, request, QueryMode::Run);
+                        actions::press_query(cmd_radio, id, QueryMode::Run);
                     }
                     true
                 }
@@ -161,11 +139,11 @@ impl Component for Workbench {
                         .panel(
                             ResizablePanel::new(PanelSize::px(240.))
                                 .min_size(92.)
-                                .child(EditorTab::new(id, request, running)),
+                                .child(EditorTab::new(id, running)),
                         )
                         .panel(
                             ResizablePanel::new(PanelSize::percent(100.))
-                                .child(Results::new(id, request, running)),
+                                .child(Results::new(id, running)),
                         ),
                 )
             })
