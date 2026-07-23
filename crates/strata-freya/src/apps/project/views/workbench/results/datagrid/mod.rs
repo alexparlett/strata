@@ -25,7 +25,7 @@ use strata_core::config::{Command, Settings};
 use super::error::ErrorState;
 use super::selection::{CellRole, SelCtl, Selection};
 use super::toolbar::DataGridToolbar;
-use crate::apps::project::query::QuerySpec;
+use crate::apps::project::state::TabId;
 use crate::components::divider::Divider;
 
 mod cell;
@@ -120,20 +120,15 @@ pub struct DataGrid {
     view: PageRead,
     /// Absolute index of the page's first row (0-based) — the gutter continues across pages.
     row_base: usize,
-    /// The workbench's Run trigger, passed through to the toolbar (Trash clears it).
-    request: State<Option<QuerySpec>>,
+    /// The tab this grid's Run belongs to — the toolbar's Trash clears its Run trigger.
+    tab: TabId,
     density: Density,
     pub(crate) theme: Option<DataGridThemePartial>,
 }
 
 impl DataGrid {
-    pub fn new(
-        run: Rc<GridData>,
-        view: PageRead,
-        row_base: usize,
-        request: State<Option<QuerySpec>>,
-    ) -> Self {
-        Self { run, view, row_base, request, density: Density::Comfortable, theme: None }
+    pub fn new(run: Rc<GridData>, view: PageRead, row_base: usize, tab: TabId) -> Self {
+        Self { run, view, row_base, tab, density: Density::Comfortable, theme: None }
     }
 
     /// Cell padding density (default [`Comfortable`](Density::Comfortable)). Wire to a user setting
@@ -427,7 +422,7 @@ impl Component for DataGrid {
                 Key::Named(NamedKey::Meta) | Key::Named(NamedKey::Control) => meta.set(false),
                 _ => {}
             })
-            .child(DataGridToolbar::new(self.request))
+            .child(DataGridToolbar::new(self.tab))
             .child(scroll)
             .into_element()
     }

@@ -20,7 +20,7 @@ use freya::radio::Radio;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use strata_core::config::Settings;
 
-use crate::apps::project::query::{QuerySpec, RunId};
+use crate::apps::project::query::RunId;
 use crate::apps::project::state::{Chan, SessionState, TabId};
 
 /// Shared with the winit `on_close` hook. The UI mirrors reactive state in
@@ -98,7 +98,6 @@ pub fn close_bridge(
 /// actions whose engine cleanup already runs through the root's tab-diff funnel.
 #[derive(Clone, Copy, PartialEq)]
 pub struct TabCloser {
-    pub request: State<Option<QuerySpec>>,
     pub running: State<Option<RunId>>,
     pub confirm: State<Option<CloseTarget>>,
 }
@@ -106,11 +105,11 @@ pub struct TabCloser {
 impl TabCloser {
     /// Close `id` — via the confirm when its query is in flight and the pref is on.
     pub fn close(&self, mut radio: Radio<SessionState, Chan>, settings: State<Settings>, id: TabId) {
-        let in_flight = self
-            .request
-            .peek()
-            .as_ref()
-            .is_some_and(|s| s.tab == id && *self.running.peek() == Some(s.run));
+        // `read()` is peek-equivalent here: close() runs in event handlers, no reactive scope.
+        let in_flight = radio
+            .read()
+            .request(id)
+            .is_some_and(|s| *self.running.peek() == Some(s.run));
         if in_flight && settings.peek().confirm_close_running {
             let mut confirm = self.confirm;
             confirm.set(Some(CloseTarget::Tab(id)));

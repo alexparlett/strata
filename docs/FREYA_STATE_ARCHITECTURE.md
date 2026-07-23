@@ -268,11 +268,16 @@ PageSpec   { snapshot: SnapshotId, page, page_size, sort: Option<(String, bool)>
 FetchSnapshotPage : QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = String>
 ```
 
-**The Run trigger is component-local**, not session state. The workbench holds
-`let mut request = use_state(|| None::<QuerySpec>)`:
+**The Run trigger is per-tab tab state**: each `QueryTab` owns its latest run request
+(`QueryTab::request: Option<QuerySpec>`), read/written on its **own channel**
+(`Chan::Request(id)`) so a press wakes only that tab's results pane + toolbar and keystrokes
+(on `Chan::Tab(id)`) never wake the results. Scoping the trigger to the tab is what keeps one
+tab's press/cancel from ever disturbing another tab's results; the *results* still live only
+in the freya-query cache — the store holds specs, never rows:
 
-1. **Run** (⌘↵): snapshot the editor text → `request.set(Some(QuerySpec { run: RunId::new(),
-   sql, mode: Run, page_size }))`.
+1. **Run** (⌘↵): snapshot the editor text →
+   `session.write_channel(Chan::Request(id)).set_request(id, QuerySpec { run: RunId::new(),
+   sql, mode: Run, page_size })`.
 2. Results grid: `use_query(Query::new(request()?, RunQuery(engine.captured())).stale_time(MAX))`
    — `engine` from context. `stale_time(MAX)` on both capabilities: a settled entry never
    re-executes by itself (freya-query re-runs stale entries on resubscribe — for an *action*
@@ -290,17 +295,21 @@ FetchSnapshotPage : QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = St
    retire it (spec §4). Catalog + functions are their own capabilities (`FetchCatalog`,
    `FetchFunctions`) and invalidate on DDL via `on_settled`.
 
-**As built (P2-02).** The `request` slot lives in the **workbench** element (the common parent of
-its two consumers) and is threaded as **struct-field props** — `EditorTab` → toolbar (writer),
-`Results` (reader) — *not* context, and *not* a per-tab registry (a root-provided
-`HashMap<TabId, QuerySpec>` was rejected as a runs-store by another name). Per-tab results on tab
-switch come from the cache being keyed by the press's `QuerySpec` (which carries `tab`), plus a
-`spec.tab == tab` filter in `Results`; a press in another tab supersedes the slot — one execution
-per window. A workbench `use_side_effect` clears the slot when the pressed tab closes (mirror of
-the §7 close funnel, so a reopened tab starts fresh). A settled `Err` renders the results pane's
-error body (`ResultsState::Error`, `results/error.rs`). Rule of thumb carried forward: props for
-small/known/shallow consumer sets; context only for DI handles (`EngineCtx`, theme) and
-deep/open-ended trees (`Selection`).
+**As built (P2-02, reworked post-P2-16).** P2-02 shipped the trigger as a single
+workbench-local `use_state(|| None::<QuerySpec>)` slot ("one execution per window") — which
+meant a press *or cancel* in one tab wiped every other tab's results. The rework moved it onto
+the tab itself: `QueryTab::request` in the session store, under the dedicated `Chan::Request(id)`
+channel (`state/channel.rs`). Not a root-provided `HashMap<TabId, QuerySpec>` — that was
+rejected twice (a runs-store by another name, and one shared value leaking every tab's press
+into every consumer); the store holds each tab's own spec exactly where the tab's buffer already
+lives. Per-tab results on tab switch come from the cache being keyed by the tab's `QuerySpec`;
+`Results` for tab *n* reads `session.request(n)` and mounts the body when it's `Some`. Tab close
+parks the tab with `request = None` (all four close paths), so a reopened tab starts fresh —
+matching the engine-side cleanup in the §7 close funnel; the old workbench prune side-effect is
+gone. A settled `Err` renders the results pane's error body (`ResultsState::Error`,
+`results/error.rs`). Rule of thumb carried forward: per-tab state lives on the `QueryTab` under
+a granular channel; props for small/known/shallow consumer sets (`running`); context only for DI
+handles (`EngineCtx`, theme) and deep/open-ended trees (`Selection`).
 
 **Run→Cancel (P2-15).** The toolbar's Run control flips to Cancel while the press is in flight —
 but it can't derive that from `request` (which stays `Some` after settle, keeping the grid
@@ -308,11 +317,12 @@ mounted), and it **must not** subscribe the run's `use_query` itself: freya-quer
 entries when a subscriber mounts, and a `Pending`/`Loading` entry reads as stale, so a second
 enabled subscriber would double-execute the run (nor can it share state via `.enable(false)` —
 `enabled` is part of `Query`'s cache identity, so that's a different, never-running entry). So
-the workbench holds a second component-local slot, `running: State<Option<RunId>>`, threaded as
-props beside `request`; `ResultsBody` — the query's sole subscriber — mirrors the lifecycle into
-it with a `use_side_effect` (the press's nonce while in flight, `None` on settle) plus a
-nonce-guarded `use_drop` (a stale body's unmount can't clobber a newer press's flag). Cancel from
-either surface is the same action: `engine.cancel(tab, run)` + `request = None`.
+the workbench holds a component-local slot, `running: State<Option<RunId>>`, threaded as props;
+`ResultsBody` — the query's sole subscriber — mirrors the lifecycle into it with a
+`use_side_effect` (the press's nonce while in flight, `None` on settle) plus a nonce-guarded
+`use_drop` (a stale body's unmount can't clobber a newer press's flag). Cancel from either
+surface is the same action: `engine.cancel(tab, run)` + `clear_request(tab)` on
+`Chan::Request(tab)`.
 
 ---
 

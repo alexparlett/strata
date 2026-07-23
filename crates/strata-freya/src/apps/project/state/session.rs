@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
 use uuid::Uuid;
 
+use crate::apps::project::query::QuerySpec;
+
 /// Stable per-tab identity — real identity, so no allocator and no duplicate-id repair.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TabId(pub Uuid);
@@ -35,12 +37,20 @@ pub enum Origin {
     SavedQuery(Uuid),
 }
 
-/// One query tab. Owns its editing buffer exactly like Valin's `EditorTab`.
+/// One query tab. Owns its editing buffer exactly like Valin's `EditorTab`, and its own
+/// Run trigger — the latest run request, whose results the tab's pane shows.
 pub struct QueryTab {
     pub id: TabId,
     pub name: String,
     pub editor: CodeEditorData,
     pub origin: Origin,
+    /// The tab's Run trigger (state-arch §6): the latest run request. Editing never touches
+    /// it — only a Run press rebuilds it (fresh nonce → new execution) and only Cancel /
+    /// Trash clear it; the results themselves live in the freya-query cache, keyed by this
+    /// spec. Scoped to the tab, so no other tab's request (or cancel) can disturb it.
+    /// Reads/writes go through [`Chan::Request`](super::Chan) — its own channel, so
+    /// keystrokes (on `Chan::Tab`) never wake the results pane.
+    pub request: Option<QuerySpec>,
 }
 
 /// The SQL grammar (derekstride/tree-sitter-sql via `tree-sitter-sequel`) + its highlights query,
@@ -68,6 +78,7 @@ impl QueryTab {
             name,
             editor,
             origin,
+            request: None,
         }
     }
 
@@ -115,6 +126,27 @@ impl SessionState {
 
     pub fn can_reopen(&self) -> bool {
         !self.closed.is_empty()
+    }
+
+    /// The tab's current run request, if any.
+    pub fn request(&self, id: TabId) -> Option<&QuerySpec> {
+        self.tabs.get(&id).and_then(|t| t.request.as_ref())
+    }
+
+    /// Set `id`'s Run trigger (a Run / Explain / Analyze press). Write on
+    /// [`Chan::Request(id)`](super::Chan).
+    pub fn set_request(&mut self, id: TabId, spec: QuerySpec) {
+        if let Some(t) = self.tabs.get_mut(&id) {
+            t.request = Some(spec);
+        }
+    }
+
+    /// Drop `id`'s Run trigger (Cancel / Trash), returning its pane to empty. Write on
+    /// [`Chan::Request(id)`](super::Chan).
+    pub fn clear_request(&mut self, id: TabId) {
+        if let Some(t) = self.tabs.get_mut(&id) {
+            t.request = None;
+        }
     }
 
     // --- structural mutations (each leaves a valid `active`) --------------
@@ -199,7 +231,10 @@ impl SessionState {
             .and_then(|a| self.order.iter().position(|t| *t == a));
         let was_active = self.active == Some(id);
 
-        if let Some(tab) = self.tabs.remove(&id) {
+        if let Some(mut tab) = self.tabs.remove(&id) {
+            // Parked without its request: reopen starts with no results, like a fresh tab —
+            // matching the engine-side cleanup (SNAPSHOT_SPEC §4, the root's tab-diff funnel).
+            tab.request = None;
             let at = pos.unwrap_or(self.order.len());
             self.closed.push((at, tab));
             let overflow = self.closed.len().saturating_sub(CLOSED_CAP);
@@ -223,7 +258,8 @@ impl SessionState {
     /// brought back one-by-one; leaves the session empty.
     pub fn close_all(&mut self) {
         for (at, id) in std::mem::take(&mut self.order).into_iter().enumerate() {
-            if let Some(tab) = self.tabs.remove(&id) {
+            if let Some(mut tab) = self.tabs.remove(&id) {
+                tab.request = None;
                 self.closed.push((at, tab));
             }
         }
@@ -248,7 +284,8 @@ impl SessionState {
             .map(|(i, t)| (i, *t))
             .collect();
         for (at, tid) in victims {
-            if let Some(tab) = self.tabs.remove(&tid) {
+            if let Some(mut tab) = self.tabs.remove(&tid) {
+                tab.request = None;
                 self.closed.push((at, tab));
             }
         }
@@ -280,7 +317,8 @@ impl SessionState {
             .active
             .is_some_and(|a| victims.iter().any(|(_, t)| *t == a));
         for (at, tid) in &victims {
-            if let Some(tab) = self.tabs.remove(tid) {
+            if let Some(mut tab) = self.tabs.remove(tid) {
+                tab.request = None;
                 self.closed.push((*at, tab));
             }
         }

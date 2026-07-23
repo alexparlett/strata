@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use freya::prelude::*;
 use freya::query::{use_query, Query, QueryStateData};
+use freya::radio::use_radio;
 use strata_model::SnapshotId;
 
 mod datagrid;
@@ -31,7 +32,7 @@ use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{
     FetchSnapshotPage, PageSpec, QueryOutcome, QuerySpec, RunId, RunQuery,
 };
-use crate::apps::project::state::TabId;
+use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 use status_bar::{Pager, RunInfo};
@@ -54,24 +55,29 @@ pub enum ResultsState {
     Error,
 }
 
-/// The results pane for one tab. Reads the workbench's Run trigger and mounts the
-/// query-driven body when the latest press belongs to *this* tab — otherwise the empty
-/// state. Revisiting a tab whose press is still current re-serves the settled outcome
-/// from the freya-query cache (keyed by the press's [`QuerySpec`]) with zero engine traffic.
+/// The results pane for one tab. Reads the tab's own Run trigger (`QueryTab::request`, on
+/// `Chan::Request(id)` — so keystrokes never wake this pane) and mounts the query-driven
+/// body when the tab has one — otherwise the empty state. Revisiting a tab whose request
+/// is still current re-serves the settled outcome from the freya-query cache (keyed by the
+/// request's [`QuerySpec`]) with zero engine traffic.
 #[derive(PartialEq)]
 pub struct Results {
     id: TabId,
-    request: State<Option<QuerySpec>>,
     running: State<Option<RunId>>,
+    key: DiffKey,
 }
 
 impl Results {
-    pub fn new(
-        id: TabId,
-        request: State<Option<QuerySpec>>,
-        running: State<Option<RunId>>,
-    ) -> Self {
-        Self { id, request, running }
+    pub fn new(id: TabId, running: State<Option<RunId>>) -> Self {
+        // Keyed by the tab, like `EditorTab`: the pane renders in one fixed slot, so without
+        // a key a tab switch reuses the scope and the `Selection` context leaks across tabs.
+        Self { id, running, key: DiffKey::None }.key(id)
+    }
+}
+
+impl KeyExt for Results {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
     }
 }
 
@@ -79,9 +85,10 @@ impl Component for Results {
     fn render(&self) -> impl IntoElement {
         use_provide_context(|| State::create(Selection::None));
 
-        // Subscribes to the Run trigger: a press re-renders the pane with the new spec.
+        // Subscribes to the tab's Run trigger: a press re-renders the pane with the new spec.
         let id = self.id;
-        let spec = self.request.read().as_ref().filter(|spec| spec.tab == id).cloned();
+        let radio = use_radio::<SessionState, Chan>(Chan::Request(id));
+        let spec = radio.read().request(id).cloned();
 
         let el: Element = match spec {
             None => shell(EmptyState.into(), StatusBar::new(ResultsState::Empty)),
@@ -91,7 +98,6 @@ impl Component for Results {
                 let run = spec.run;
                 ResultsBody {
                     spec,
-                    request: self.request,
                     running: self.running,
                     key: DiffKey::None,
                 }
@@ -100,6 +106,10 @@ impl Component for Results {
             }
         };
         el
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
     }
 }
 
@@ -110,8 +120,6 @@ impl Component for Results {
 #[derive(PartialEq)]
 struct ResultsBody {
     spec: QuerySpec,
-    /// The workbench's Run trigger — Cancel clears it, returning the pane to empty.
-    request: State<Option<QuerySpec>>,
     /// The workbench's in-flight mirror — this body (the query's sole subscriber) resolves
     /// it to the press's nonce while Pending/Loading so the toolbar can flip Run→Cancel.
     running: State<Option<RunId>>,
@@ -197,16 +205,18 @@ impl Component for ResultsBody {
         );
 
         // Cancel = abort engine-side (S14: tag-guarded, a stale press can't kill a newer run)
-        // + clear the Run trigger, unmounting this body back to the empty state. The query
-        // entry settles `Err("cancelled")` unobserved — a new press is a fresh nonce anyway.
+        // + clear this tab's Run trigger, unmounting this body back to the empty state. The
+        // query entry settles `Err("cancelled")` unobserved — a new press is a fresh nonce
+        // anyway.
+        let ws = self.spec.tab;
+        let session = use_radio::<SessionState, Chan>(Chan::Request(ws));
         let cancel = {
             let engine = engine.clone();
-            let ws = self.spec.tab;
             let run = self.spec.run;
-            let mut request = self.request;
+            let mut session = session;
             move |()| {
                 engine.cancel(ws.into(), run.into());
-                request.set(None);
+                session.write_channel(Chan::Request(ws)).clear_request(ws);
             }
         };
 
@@ -249,7 +259,7 @@ impl Component for ResultsBody {
                     })
                     .view(view.clone());
                 let row_base = (cur_page - 1) * cur_size;
-                (DataGrid::new(run_grid, view, row_base, self.request).into(), bar)
+                (DataGrid::new(run_grid, view, row_base, self.spec.tab).into(), bar)
             }
             // The plan body is a placeholder — P2-05 renders the settled `QueryPlan`.
             QueryStateData::Settled { res: Ok(QueryOutcome::Plan(plan)), .. } => (

@@ -1,5 +1,5 @@
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{QueryMode, QuerySpec, RunId};
+use crate::apps::project::query::{QueryMode, RunId};
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState, TabId};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
@@ -14,10 +14,11 @@ use freya::radio::{use_radio, use_radio_station};
 /// are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke IconButton).
 ///
 /// Run / Explain / Analyze are wired (P2-15): a press snapshots the tab's editor text into a
-/// fresh-nonce [`QuerySpec`] in the workbench's `request` slot — the results pane's `use_query`
-/// picks it up (state-arch §6). While that press is in flight (the `running` mirror holds its
-/// nonce) Run wears its Cancel dress — pressing it aborts engine-side and drops the trigger,
-/// the same action as the Running body's control. A blank buffer disables Run.
+/// fresh-nonce `QuerySpec` in the tab's own `request` slot (`QueryTab::request`, written on
+/// `Chan::Request`) — the results pane's `use_query` picks it up (state-arch §6). While that
+/// press is in flight (the `running` mirror holds its nonce) Run wears its Cancel dress —
+/// pressing it aborts engine-side and drops the trigger, the same action as the Running
+/// body's control. A blank buffer disables Run.
 ///
 /// The editing actions are wired to [`actions`] (P2-16): Format / Clear rewrite the buffer
 /// (history-tracked); Eye saves the buffer as a new `saved_view_N` catalog view; Save is the
@@ -26,7 +27,6 @@ use freya::radio::{use_radio, use_radio_station};
 #[derive(PartialEq)]
 pub struct EditorToolbar {
     pub id: TabId,
-    pub request: State<Option<QuerySpec>>,
     /// The in-flight press's nonce, mirrored from the results body's query lifecycle (see
     /// `ResultsBody` — the toolbar must not subscribe the query itself).
     pub running: State<Option<RunId>>,
@@ -45,16 +45,17 @@ impl Component for EditorToolbar {
         // The Project store — save-target access only, so no channel subscription (the
         // toolbar shows nothing catalog-derived).
         let project = use_radio_station::<ProjectState, ProjChan>();
-        let request = self.request;
+        // The tab's Run trigger, on its own channel — a press re-renders this toolbar
+        // without waking the editor, and keystrokes (on `Chan::Tab`) never land here twice.
+        let request_radio = use_radio::<SessionState, Chan>(Chan::Request(id));
 
-        // This tab's press while it's still executing: the current request belongs to this
-        // tab *and* the running mirror still holds its nonce (`request` alone can't tell —
-        // it stays set after settle to keep the results body mounted).
-        let in_flight = self
-            .request
+        // This tab's request while it's still executing: the tab has a request *and* the
+        // running mirror still holds its nonce (the request alone can't tell — it stays set
+        // after settle to keep the results body mounted).
+        let in_flight = request_radio
             .read()
-            .as_ref()
-            .filter(|s| s.tab == id && *self.running.read() == Some(s.run))
+            .request(id)
+            .filter(|s| *self.running.read() == Some(s.run))
             .map(|s| s.run);
 
         // A blank buffer can't run — the button gates to Disabled. Subscribed on
@@ -67,9 +68,9 @@ impl Component for EditorToolbar {
             .is_none_or(|t| t.editor.rope.chars().all(|c| c.is_whitespace()));
 
         // A press is an *action* — `actions::press_query` snapshots the text, mints a
-        // fresh nonce, and sets the window's current execution; the ⌘↵ listener in the
+        // fresh nonce, and sets the tab's current execution; the ⌘↵ listener in the
         // workbench dispatches the very same call.
-        let press = move |mode: QueryMode| actions::press_query(radio, id, request, mode);
+        let press = move |mode: QueryMode| actions::press_query(radio, id, mode);
 
         let run_state = if in_flight.is_some() {
             RunState::Running
@@ -87,7 +88,7 @@ impl Component for EditorToolbar {
         // body's control and Esc). Otherwise it's Run. Disabled never fires (RunButton
         // swallows it).
         let run_press = move |_| match in_flight {
-            Some(run) => actions::cancel_run(&engine, id, run, request),
+            Some(run) => actions::cancel_run(&engine, radio, id, run),
             None => press(QueryMode::Run),
         };
 

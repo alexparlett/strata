@@ -1,7 +1,8 @@
-use crate::apps::project::query::QuerySpec;
+use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::components::icon::{Icon, IconName};
 use freya::components::use_theme;
 use freya::prelude::*;
+use freya::radio::use_radio;
 
 use super::selection::Selection;
 
@@ -9,7 +10,7 @@ use super::selection::Selection;
 /// background) and the divider colour. The Run control is its own three-state `RunButton`; the rest
 /// are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke IconButton).
 ///
-/// **Trash** clears the active tab's results (Rz8 / P2-14): it drops the workbench's Run trigger,
+/// **Trash** clears the active tab's results (Rz8 / P2-14): it drops the tab's Run trigger,
 /// unmounting the grid back to the empty state. The mid-run guard is structural — this toolbar only
 /// renders inside a settled grid body (a running query shows the Running body instead), so the
 /// button can't fire while a query executes. Search / Reload / Download stay stubbed until their
@@ -17,13 +18,13 @@ use super::selection::Selection;
 /// when P2-09 gives it state to clear.
 #[derive(PartialEq)]
 pub struct DataGridToolbar {
-    /// The workbench's Run trigger — the active press whose results this grid shows.
-    request: State<Option<QuerySpec>>,
+    /// The tab whose results this grid shows — Trash clears its Run trigger.
+    tab: TabId,
 }
 
 impl DataGridToolbar {
-    pub fn new(request: State<Option<QuerySpec>>) -> Self {
-        Self { request }
+    pub fn new(tab: TabId) -> Self {
+        Self { tab }
     }
 }
 
@@ -37,7 +38,8 @@ impl Component for DataGridToolbar {
         // The grid's shared selection (provided by the results pane) — cleared with the results so
         // a later run doesn't wake up wearing the old grid's selection.
         let mut sel = use_consume::<State<Selection>>();
-        let mut request = self.request;
+        let tab = self.tab;
+        let mut session = use_radio::<SessionState, Chan>(Chan::Request(tab));
 
         // An outline icon button — `outline_button` variant with a centred icon (the icon inherits
         // the button's colour, hover included, via `currentColor`).
@@ -67,7 +69,7 @@ impl Component for DataGridToolbar {
                     .hover_border_fill(danger.with_a(115))
                     .hover_color(danger)
                     .on_press(move |_| {
-                        request.set(None);
+                        session.write_channel(Chan::Request(tab)).clear_request(tab);
                         sel.set(Selection::None);
                     }),
             )

@@ -10,7 +10,7 @@
 //! minting the first free `saved_view_N` name. The buffer is never DDL-classified —
 //! DDL is blocked at Run, and Save saves the text as-is.
 
-use freya::prelude::{spawn, State, WritableUtils};
+use freya::prelude::spawn;
 use freya::radio::{Radio, RadioStation};
 use strata_model::{SavedQuery, ViewDef};
 use uuid::Uuid;
@@ -22,39 +22,35 @@ use crate::apps::project::state::{
 };
 
 /// A Run / Explain / Analyze press (P2-15 + ⌘↵): snapshot the tab's editor text *now*,
-/// mint a fresh nonce, and set it as the window's current execution in the `request`
-/// slot. A blank buffer never runs (backs up the toolbar's visual gate).
-pub fn press_query(
-    session: Radio<SessionState, Chan>,
-    id: TabId,
-    mut request: State<Option<QuerySpec>>,
-    mode: QueryMode,
-) {
+/// mint a fresh nonce, and set it as the tab's run request — on `Chan::Request(id)`, so
+/// only the tab's results pane and toolbar wake. A blank buffer never runs (backs up
+/// the toolbar's visual gate).
+pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: QueryMode) {
     let sql = session.read().tabs.get(&id).map(|t| t.text()).unwrap_or_default();
     if sql.trim().is_empty() {
         return;
     }
-    request.set(Some(QuerySpec {
+    session.write_channel(Chan::Request(id)).set_request(id, QuerySpec {
         tab: id,
         run: RunId::new(),
         sql,
         mode,
         page_size: DEFAULT_PAGE_SIZE,
-    }));
+    });
 }
 
-/// Cancel the in-flight press (the toolbar's Run→Cancel flip, the Running body's
+/// Cancel the in-flight request (the toolbar's Run→Cancel flip, the Running body's
 /// control, and Esc all land here): tag-guarded engine-side abort (S14 — a stale press
-/// can't kill a newer run) + drop the trigger, unmounting the results body back to
-/// Empty.
+/// can't kill a newer run) + drop *this tab's* trigger, unmounting its results body
+/// back to Empty. Other tabs' requests are untouchable from here by construction.
 pub fn cancel_run(
     engine: &EngineCtx,
+    mut session: Radio<SessionState, Chan>,
     id: TabId,
     run: RunId,
-    mut request: State<Option<QuerySpec>>,
 ) {
     engine.cancel(id.into(), run.into());
-    request.set(None);
+    session.write_channel(Chan::Request(id)).clear_request(id);
 }
 
 /// Pretty-print the tab's SQL in place. History-tracked — undo restores the
