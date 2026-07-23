@@ -49,18 +49,20 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Build from the project catalog + the engine's function names.
-    pub fn build(
-        tables: &[strata_model::CatalogTable],
-        views: &[strata_model::CatalogView],
+    /// Build from the project catalog + the engine's function names. Takes
+    /// `(name, columns)` pairs — the columns are what registration *learned* (they live
+    /// on the UI project store's rows, not on the defs), so the caller projects them.
+    pub fn build<'a>(
+        tables: impl IntoIterator<Item = (&'a str, &'a [strata_model::ColumnInfo])>,
+        views: impl IntoIterator<Item = (&'a str, &'a [strata_model::ColumnInfo])>,
         functions: FunctionCatalog,
     ) -> Self {
-        let mut out = Vec::with_capacity(tables.len() + views.len());
-        for t in tables {
-            out.push(TableSym::from_cols(&t.name, false, &t.columns));
+        let mut out = Vec::new();
+        for (name, cols) in tables {
+            out.push(TableSym::from_cols(name, false, cols));
         }
-        for v in views {
-            out.push(TableSym::from_cols(&v.name, true, &v.columns));
+        for (name, cols) in views {
+            out.push(TableSym::from_cols(name, true, cols));
         }
         Catalog {
             tables: out,

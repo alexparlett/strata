@@ -87,7 +87,7 @@ editor buffer lives in the store, inside the tab.
 | Store | Tier | Persisted | Holds |
 |-------|------|-----------|-------|
 | **`SessionState`** | Radio (per-window) | yes (snapshot) | the open tabs (each a `QueryTab` owning its `CodeEditorData`), order, active, closed stack |
-| **`Project`** | Radio (per-window) | yes (`project.json`) | view + saved-query definitions — the *save targets* |
+| **`Project`** | Radio (per-window) | yes (`project.json`) | catalog rows: pure defs (`TableDef`/`ViewDef`/`SavedQuery`) each wrapped with registration state (`Reg<T>`: Loading/Ready/Failed) — the *save targets*. Identity: views/tables by **name** (their SQL identity, one shared namespace, compared case-insensitively); saved queries by stable **`id: Uuid`** (the name is a label). Defs persist; `Reg` never does. Built P4-13-internals. |
 | **`LayoutCtx`** | context `State<Layout>` | yes | panel sizes, sidebar/inspector/drawer open |
 | **`LogCtx`** | context `State<VecDeque<LogEntry>>` | no | the complete event/error log (§9) |
 | **Query layer** | freya-query | no | results / pages / plan / explain — Runs keyed by a per-press nonce, page reads by `(SnapshotId, page, …)` (see `SNAPSHOT_SPEC.md`) |

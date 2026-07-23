@@ -1,12 +1,13 @@
 //! Catalog references and row descriptors: which [`CatalogKind`] section a row is in,
 //! what a pending removal ([`RemoveKind`] / [`RemoveTarget`]) targets, and a [`ColRef`]
-//! that names one column. Also the persisted **catalog definitions** ([`CatalogTable`] /
-//! [`CatalogView`]) — durable in `.strata/project.json`, with runtime-only fields
-//! (`columns`/`status`/`profile`/…) `#[serde(skip)]`-ped and re-derived on registration.
+//! that names one column. Also the persisted **catalog definitions** ([`TableDef`] /
+//! [`ViewDef`] / [`SavedQuery`]) — exactly what `.strata/project.json` stores, nothing
+//! more. What registration *learns* about a def (columns, row counts, status, profiles)
+//! is runtime state and lives with the UI's project store, wrapped around these — not
+//! here as skipped fields.
 
 use serde::{Deserialize, Serialize};
-
-use crate::{CatalogProfile, ColumnInfo};
+use uuid::Uuid;
 
 /// What a pending removal targets — drives the confirm dialog's wording and the
 /// engine command sent on confirm.
@@ -70,16 +71,6 @@ impl ColRef {
 // Catalog definitions (persisted to `.strata/project.json`)
 // ---------------------------------------------------------------------------
 
-/// Registration lifecycle of a catalog table (runtime, not persisted).
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum RegStatus {
-    /// A freshly-loaded or -added table, awaiting engine registration.
-    #[default]
-    Loading,
-    Ready,
-    Failed,
-}
-
 /// Accept partition columns as either the legacy name-only `["year","month"]`
 /// (→ typed `Utf8`) or the current typed `[["year","Int32"], …]` form, so old project
 /// files keep loading. Serialization always emits the typed form.
@@ -102,72 +93,37 @@ where
         .collect())
 }
 
-/// One logical table (a DataFusion `ListingTable` over many source paths). Only
-/// *definitions* are durable; the runtime fields below are `#[serde(skip)]` and re-derived
-/// when the engine re-registers a project on open.
+/// One logical table definition (a DataFusion `ListingTable` over many source paths).
+/// `sources` are stored project-relative where they sit inside the project folder.
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
-pub struct CatalogTable {
+pub struct TableDef {
     pub name: String,
-    #[serde(skip)]
-    pub meta: String,
     pub format: String,
     pub sources: Vec<String>,
     /// Hive partition columns as `(name, arrow_type)` — the persisted source of truth for
     /// deterministic reload (types aren't re-detected).
     #[serde(default, deserialize_with = "de_partition_cols")]
     pub partition_cols: Vec<(String, String)>,
-    #[serde(skip)]
-    pub columns: Vec<ColumnInfo>,
-    /// The source's own row count, when it reports one (Parquet footer does; CSV/JSON
-    /// don't). Runtime like `columns`: re-read on every registration, never stored.
-    #[serde(skip)]
-    pub rows: Option<u64>,
-    /// The last full-scan profile (D4), or `None` if never profiled. Cached on the row on
-    /// purpose: the row is the unit replaced when the engine re-registers a table, so a
-    /// config edit through `upsert_table` drops the profile with it.
-    #[serde(skip)]
-    pub profile: Option<CatalogProfile>,
-    /// A profile scan is in flight for this table — keyed by entry, so several run at once.
-    #[serde(skip)]
-    pub profiling: bool,
-    #[serde(skip)]
-    pub open: bool,
-    #[serde(skip)]
-    pub status: RegStatus,
-    #[serde(skip)]
-    pub error: Option<String>,
 }
 
-/// A saved, query-backed catalog view (a real DataFusion `CREATE VIEW`).
+/// A saved, query-backed catalog view definition (a real DataFusion `CREATE VIEW`).
+/// Views are addressed by `name` — that *is* their engine/SQL identity.
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
-pub struct CatalogView {
+pub struct ViewDef {
     pub name: String,
     pub sql: String,
-    #[serde(skip)]
+}
+
+/// A named SQL snippet stored in the project — distinct from a [`ViewDef`] (which is a
+/// real DataFusion view). Re-opened in a query tab, not queryable by name — so unlike a
+/// view, its `name` is only a label, and identity is the stable `id` (what a tab's
+/// save-target origin holds; renaming can't dangle it). Files written before ids get one
+/// minted per load; it sticks on the next save.
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+pub struct SavedQuery {
+    #[serde(default = "Uuid::new_v4")]
+    pub id: Uuid,
+    pub name: String,
+    pub sql: String,
     pub meta: String,
-    #[serde(skip)]
-    pub columns: Vec<ColumnInfo>,
-    /// The base tables this view reads (D10) — resolved by the planner at registration, so
-    /// it sees through nested views and subqueries and never parses SQL itself. Runtime,
-    /// like `columns`: re-derived on registration so it can't drift.
-    #[serde(skip)]
-    pub deps: Vec<String>,
-    /// The **views** this view reads (D10) — transitive, since the planner inlines each hop
-    /// and the walk collects every one.
-    #[serde(skip)]
-    pub view_deps: Vec<String>,
-    /// The last full-scan profile (D4), or `None` if never profiled. A view has no footer,
-    /// so a scan is the only way its inspector learns more than a column's type.
-    #[serde(skip)]
-    pub profile: Option<CatalogProfile>,
-    /// A profile scan is in flight for this view.
-    #[serde(skip)]
-    pub profiling: bool,
-    /// A **hard** registration failure — the view's SQL didn't plan (syntax/type error, or
-    /// a base table missing at creation). `Some` = the row exists as a definition but there
-    /// is no working view behind it.
-    #[serde(skip)]
-    pub error: Option<String>,
-    #[serde(skip)]
-    pub open: bool,
 }

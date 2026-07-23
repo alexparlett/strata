@@ -6190,6 +6190,7 @@ dependencies = [
  "strata-model",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -6222,6 +6223,7 @@ dependencies = [
  "strata-code-editor",
  "strata-core",
  "strata-model",
+ "tracing",
  "tree-sitter-sequel",
  "uuid",
 ]
@@ -6231,6 +6233,7 @@ name = "strata-model"
 version = "0.2.0"
 dependencies = [
  "serde",
+ "uuid",
 ]
 
 [[package]]

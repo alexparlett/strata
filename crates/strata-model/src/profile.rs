@@ -1,6 +1,6 @@
 //! The **result** of a catalog profiling scan (D4) — pure data vocabulary. The scan
 //! *logic* (DataFusion aggregate expressions + result decoding) lives in `strata-core`;
-//! this is only the shape it produces, cached on a `CatalogTable`/`CatalogView`.
+//! this is only the shape it produces, cached on the UI project store's catalog rows.
 
 use std::collections::BTreeMap;
 use std::time::SystemTime;

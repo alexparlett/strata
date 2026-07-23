@@ -30,7 +30,7 @@ Freya rebuild.
 | P4-10 | Export window (rebuild to canvas) | ⬜ | D6/U13 | P4-01, P2-01 |
 | P4-11 | Config / register-table modal | ⬜ | U14/D7 | — |
 | P4-12 | Import (read) options (CSV/JSON) | ⬜ | D8 | P4-11 |
-| P4-13 | Open / create a project (`.strata/` load) | ⬜ | lifecycle | P4-01 · *pull early* |
+| P4-13 | Open / create a project (`.strata/` load) | 🟡 internals done (defs load/scaffold + engine registration, sample-by-default); UI pending | lifecycle | P4-01 · *pull early* |
 | P4-14 | Session persistence + autosave | ⬜ | lifecycle | P4-13 |
 
 ## Legend

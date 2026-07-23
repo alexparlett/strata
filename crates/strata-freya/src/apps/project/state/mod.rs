@@ -1,10 +1,13 @@
-//! The per-window **Session** store (Radio): the open tabs + their arrangement.
-//! See `docs/FREYA_STATE_ARCHITECTURE.md` §3–§4.
+//! The per-window stores (Radio): the **Session** (open tabs + arrangement) and the
+//! **Project** (the open project's catalog defs — the save targets).
+//! See `docs/FREYA_STATE_ARCHITECTURE.md` §2–§4.
 
 mod channel;
 mod hooks;
+mod project;
 mod session;
 
 pub use channel::Chan;
-pub use hooks::use_init_session;
-pub use session::{ArtifactKey, Origin, QueryTab, SessionState, TabId};
+pub use hooks::{use_init_project, use_init_session};
+pub use project::{ProjChan, ProjectState};
+pub use session::{Origin, QueryTab, SessionState, TabId};

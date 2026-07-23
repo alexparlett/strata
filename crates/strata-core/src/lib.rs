@@ -7,6 +7,7 @@
 //! - [`util`] — small pure helpers (hashing, byte/duration/timezone parsing, names).
 //! - [`plan`] — the query-plan (EXPLAIN) model + formatting.
 //! - [`config`] — disk app config + settings/keymap definitions.
+//! - [`project`] — `.strata/` project persistence (the durable catalog defs).
 //! - [`profile`] — the profiling scan logic (aggregate exprs + result decode).
 //! - [`engine`] — the DataFusion worker, `Command`/`Event` protocol, and connection handle.
 
@@ -14,5 +15,6 @@ use engine::{plan, profile};
 
 pub mod config;
 pub mod engine;
+pub mod project;
 pub mod theme;
 pub mod util;
