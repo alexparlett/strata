@@ -10,6 +10,8 @@ Not built. P2-20 binds ⌘K; this is the palette surface it opens.
 
 ## Build
 - A palette overlay (filter + list) over the command registry (the P2-20 command table + actions).
+  The header search button that also opens it takes the canvas `Search (⌘K)` tooltip —
+  `keymap::use_hint_title("Search", Command::CommandPalette)`.
 - **Depth (T3):** grouping, keyboard navigation (↑↓ + enter), per-item **type icons** + **shortcut
   hints** (from `keymap::hint`), a columns group. The footer already advertises "↑↓ navigate".
 

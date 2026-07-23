@@ -155,16 +155,24 @@ impl Component for Tab {
         // The close affordance: a flat 16×16 icon button (its icon inherits the flat-button colour +
         // hover tint). `stop_propagation` so pressing it closes the tab without also bubbling up to
         // the tab-body switch. Closes through the shared gate — the T2 confirm when this
-        // tab's query is in flight.
-        let close_button = Button::new()
-            .flat()
-            .width(Size::px(16.))
-            .height(Size::px(16.))
-            .on_press(move |e: Event<PressEventData>| {
-                e.stop_propagation();
-                closer.close(radio, settings, id);
-            })
-            .child(Icon::new(IconName::Close).size(11.));
+        // tab's query is in flight. Its tooltip is the comp's dirty-aware `closeTitle`.
+        let close_button = TooltipContainer::new(Tooltip::new(if self.dirty {
+            "Unsaved changes — click to close"
+        } else {
+            "Close tab"
+        }))
+        .position(AttachedPosition::Bottom)
+        .child(
+            Button::new()
+                .flat()
+                .width(Size::px(16.))
+                .height(Size::px(16.))
+                .on_press(move |e: Event<PressEventData>| {
+                    e.stop_propagation();
+                    closer.close(radio, settings, id);
+                })
+                .child(Icon::new(IconName::Close).size(11.)),
+        );
 
         // Trailing 16×16 close slot. A clean tab shows the × button outright; a dirty tab shows its
         // unsaved dot, which swaps to the × button while the slot is hovered so it stays one click to

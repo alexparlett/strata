@@ -419,15 +419,20 @@ impl Component for PagerCluster {
         // ── nav buttons + page input ──────────────────────────────────────────────────────
         // The standard flat ("ghost") `Button`, 28×28 like every other icon-button cluster in
         // the app — the `flat_button` theme carries the whole dress, ghost hover and
-        // `disabled_*` at-a-bound tint included.
-        let nav = move |icon: IconName, enabled: bool, target: usize| {
-            Button::new()
-                .flat()
-                .enabled(enabled)
-                .width(Size::px(28.))
-                .height(Size::px(28.))
-                .on_press(move |_| Self::jump(sel, page, target))
-                .child(Icon::new(icon).size(15.))
+        // `disabled_*` at-a-bound tint included. Each wears its comp `title=` as a tooltip,
+        // opening upward — the bar sits on the window's bottom edge.
+        let nav = move |title: &'static str, icon: IconName, enabled: bool, target: usize| {
+            TooltipContainer::new(Tooltip::new(title))
+                .position(AttachedPosition::Top)
+                .child(
+                    Button::new()
+                        .flat()
+                        .enabled(enabled)
+                        .width(Size::px(28.))
+                        .height(Size::px(28.))
+                        .on_press(move |_| Self::jump(sel, page, target))
+                        .child(Icon::new(icon).size(15.)),
+                )
         };
 
         let jump_input = rect()
@@ -465,11 +470,21 @@ impl Component for PagerCluster {
                     .direction(Direction::Horizontal)
                     .cross_align(Alignment::Center)
                     .spacing(2.)
-                    .child(nav(IconName::First, current > 1, 1))
-                    .child(nav(IconName::ChevronLeft, current > 1, current.saturating_sub(1).max(1)))
+                    .child(nav("First page", IconName::First, current > 1, 1))
+                    .child(nav(
+                        "Previous",
+                        IconName::ChevronLeft,
+                        current > 1,
+                        current.saturating_sub(1).max(1),
+                    ))
                     .child(jump_input)
-                    .child(nav(IconName::ChevronRight, current < pages, (current + 1).min(pages)))
-                    .child(nav(IconName::Last, current < pages, pages)),
+                    .child(nav(
+                        "Next",
+                        IconName::ChevronRight,
+                        current < pages,
+                        (current + 1).min(pages),
+                    ))
+                    .child(nav("Last page", IconName::Last, current < pages, pages)),
             )
     }
 }

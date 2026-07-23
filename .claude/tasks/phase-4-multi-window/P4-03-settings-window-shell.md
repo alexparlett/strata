@@ -10,7 +10,8 @@ Not built.
 
 ## Build (to `Settings.dc.html`, DEV_TASKS W1)
 - Its own OS window (Freya `App` root), same chrome as a project window; **single instance,
-  focus-if-open**; opened from the header gear, launcher gear, ⌘, and the menu.
+  focus-if-open**; opened from the header gear, launcher gear, ⌘, and the menu. The header gear's
+  tooltip is the canvas `Settings (⌘,)` — `keymap::use_hint_title("Settings", Command::OpenSettings)`.
 - **Category nav** (Appearance · Data-display · System · Engine · Keymap) + the search box (P4-09).
 - **Draft/save:** controls edit a local `Settings` draft; **Save** commits to the shared `applied`
   settings (all windows) + persists; **Cancel** / Esc-close discards.

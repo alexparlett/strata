@@ -146,7 +146,7 @@ pub fn strata_theme(t: &StrataTheme) -> Theme {
     // so leak it once (negligible, lives for the program).
     th.name = Box::leak(t.id.clone().into_boxed_str());
     th.colors = to_colors_sheet(&t.sheet);
-    apply_component_overrides(&mut th, &t.components);
+    apply_component_overrides(&mut th, &t.components, &t.fonts);
     register_component_themes(&mut th, &t.components, &t.fonts);
     // Install the resolved type scale onto the theme itself (its `Box<dyn Any>` component store), so
     // typography components read it with a standard `use_theme().get::<Typography>(..)` — no provider,
@@ -178,15 +178,17 @@ trait ComponentTheme {
 // `strata_components!` (custom) and `theme_registry!` (builtin). Defined above `strata_components!`'s
 // invocation so the custom macro can delegate to them rather than re-listing the mapping.
 macro_rules! set_field {
-    (color,  $dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
-    (f32,    $dst:expr, $f:expr, $key:expr) => { set_f32($dst, $f, $key) };
-    (i32,    $dst:expr, $f:expr, $key:expr) => { set_i32($dst, $f, $key) };
-    (gaps,   $dst:expr, $f:expr, $key:expr) => { set_gaps($dst, $f, $key) };
-    (corner, $dst:expr, $f:expr, $key:expr) => { set_corner($dst, $f, $key) };
+    (color,  $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
+    (font,   $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_font($dst, $f, $key, $fonts) };
+    (f32,    $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_f32($dst, $f, $key) };
+    (i32,    $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_i32($dst, $f, $key) };
+    (gaps,   $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_gaps($dst, $f, $key) };
+    (corner, $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_corner($dst, $f, $key) };
 }
 
 macro_rules! kind_of {
     (color)  => { Kind::Color };
+    (font)   => { Kind::Font };
     (f32)    => { Kind::F32 };
     (i32)    => { Kind::I32 };
     (gaps)   => { Kind::Gaps };
@@ -207,12 +209,11 @@ macro_rules! strata_placeholder {
 
 /// Thin adapters over the shared `set_field!` / `kind_of!` so a *bare* field (no `: kind`) defaults to
 /// colour — the only thing `strata_components!` needs beyond the builtin mapping, which stays defined
-/// once, in `set_field!` / `kind_of!`. (`font` is the one kind with extra context — it resolves
-/// through the theme's `fonts` map, threaded in by `register_component_themes`.)
+/// once, in `set_field!` / `kind_of!` (`font` included: it resolves through the theme's `fonts`
+/// map, threaded through both macros).
 macro_rules! strata_set {
     ($fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
-    ($fonts:expr, $dst:expr, $f:expr, $key:expr, font) => { set_font($dst, $f, $key, $fonts) };
-    ($fonts:expr, $dst:expr, $f:expr, $key:expr, $kind:ident) => { set_field!($kind, $dst, $f, $key) };
+    ($fonts:expr, $dst:expr, $f:expr, $key:expr, $kind:ident) => { set_field!($kind, $fonts, $dst, $f, $key) };
 }
 
 macro_rules! strata_kind {
@@ -321,13 +322,17 @@ strata_components! {
 /// `REGISTRY` descriptor (for schema generation) from one declarative list.
 macro_rules! theme_registry {
     ($( $key:literal => $ty:ty { $( $field:ident : $kind:ident ),* $(,)? } ),* $(,)?) => {
-        fn apply_component_overrides(th: &mut Theme, components: &BTreeMap<String, BTreeMap<String, Pref>>) {
+        fn apply_component_overrides(
+            th: &mut Theme,
+            components: &BTreeMap<String, BTreeMap<String, Pref>>,
+            fonts: &BTreeMap<String, String>,
+        ) {
             for (name, f) in components {
                 match name.as_str() {
                     $(
                         $key => {
                             if let Some(mut p) = th.get::<$ty>($key).cloned() {
-                                $( set_field!($kind, &mut p.$field, f, stringify!($field)); )*
+                                $( set_field!($kind, fonts, &mut p.$field, f, stringify!($field)); )*
                                 th.set($key, p);
                             }
                         }
@@ -376,7 +381,7 @@ theme_registry! {
     "menu_container" => MenuContainerThemePreference { background: color, padding: gaps, shadow: color, border_fill: color, corner_radius: corner },
     "menu_item"      => MenuItemThemePreference { background: color, hover_background: color, select_background: color, border_fill: color, select_border_fill: color, corner_radius: corner, color: color },
     "popup"          => PopupThemePreference { background: color, color: color, padding: gaps, spacing: f32 },
-    "tooltip"        => TooltipThemePreference { background: color, color: color, border_fill: color, font_size: f32 },
+    "tooltip"        => TooltipThemePreference { background: color, color: color, border_fill: color, font_family: font, font_size: f32, font_weight: i32 },
     // Tabs / segmented
     "floating_tab"     => FloatingTabThemePreference { background: color, hover_background: color, color: color, padding: gaps, corner_radius: corner },
     "segmented_button" => SegmentedButtonThemePreference { background: color, border_fill: color, corner_radius: corner },

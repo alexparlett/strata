@@ -8,6 +8,7 @@ use crate::components::run_button::{RunButton, RunState};
 use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
+use strata_core::config::Command;
 
 /// The editor query toolbar, built to the comp. The bar itself only needs the editor surface (its
 /// background) and the divider colour. The Run control is its own three-state `RunButton`; the rest
@@ -100,6 +101,14 @@ impl Component for EditorToolbar {
                 .width(Size::px(28.))
                 .child(Icon::new(icon).size(15.))
         };
+        // Every tool wears its comp `title=` as a tooltip; Save's carries the effective
+        // save chord (reactive — a rebind repaints it).
+        let tip = |title: String, button: Button| {
+            TooltipContainer::new(Tooltip::new(title))
+                .position(AttachedPosition::Bottom)
+                .child(button)
+        };
+        let save_title = crate::keymap::use_hint_title("Save query", Command::SaveQuery);
 
         let row = rect()
             .width(Size::fill())
@@ -110,24 +119,38 @@ impl Component for EditorToolbar {
             .padding((0., 10.))
             .background(bg)
             .child(RunButton::new(run_state).on_press(run_press))
-            .child(
+            .child(tip(
+                "Explain plan".into(),
                 tool(IconName::Explain)
                     .on_press(move |_| press(QueryMode::Explain { analyze: false })),
-            )
-            .child(
+            ))
+            .child(tip(
+                "Explain analyze".into(),
                 tool(IconName::Analyze)
                     .on_press(move |_| press(QueryMode::Explain { analyze: true })),
-            )
+            ))
             .child(Divider::vertical().length(Size::px(18.)).color(border))
-            .child(tool(IconName::Format).on_press(move |_| actions::format(radio, id)))
-            .child(tool(IconName::Trash).on_press(move |_| actions::clear(radio, id)))
+            .child(tip(
+                "Format SQL".into(),
+                tool(IconName::Format).on_press(move |_| actions::format(radio, id)),
+            ))
+            .child(tip(
+                "Clear editor".into(),
+                tool(IconName::Trash).on_press(move |_| actions::clear(radio, id)),
+            ))
             .child(Divider::vertical().length(Size::px(18.)).color(border))
-            .child(tool(IconName::Eye).on_press(move |_| {
-                actions::save_as_view(radio, project, view_engine.clone(), id)
-            }))
-            .child(tool(IconName::Save).on_press(move |_| {
-                actions::save(radio, project, save_engine.clone(), id)
-            }));
+            .child(tip(
+                "Save as view".into(),
+                tool(IconName::Eye).on_press(move |_| {
+                    actions::save_as_view(radio, project, view_engine.clone(), id)
+                }),
+            ))
+            .child(tip(
+                save_title,
+                tool(IconName::Save).on_press(move |_| {
+                    actions::save(radio, project, save_engine.clone(), id)
+                }),
+            ));
 
         rect()
             .width(Size::fill())

@@ -17,6 +17,14 @@ fn cluster_button(icon: IconName, icon_size: f32) -> Button {
         .child(Icon::new(icon).size(icon_size))
 }
 
+/// A cluster button wearing its comp `title=` as a tooltip. The tooltip wraps just the trigger,
+/// so a menu-opening button stays the anchor its [`Attached`] dropdown measures.
+fn tip(title: &'static str, button: Button) -> TooltipContainer {
+    TooltipContainer::new(Tooltip::new(title))
+        .position(AttachedPosition::Bottom)
+        .child(button)
+}
+
 /// The tab strip's pinned right cluster: **new-query** · **quick-navigate** · **overflow**. The two
 /// menus are their own components below — this is just the row.
 #[derive(PartialEq)]
@@ -31,9 +39,12 @@ impl TabControls {
 impl Component for TabControls {
     fn render(&self) -> impl IntoElement {
         let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
-        let new_tab = cluster_button(IconName::Plus, 15.).on_press(move |_| {
-            radio.write().open_blank();
-        });
+        let new_tab = tip(
+            "New query",
+            cluster_button(IconName::Plus, 15.).on_press(move |_| {
+                radio.write().open_blank();
+            }),
+        );
 
         rect()
             .horizontal()
@@ -154,7 +165,10 @@ impl Component for NavMenu {
                 ))
             });
 
-        Attached::new(cluster_button(IconName::ChevronDown, 14.).on_press(move |_| open.toggle()))
+        Attached::new(tip(
+            "Show all tabs",
+            cluster_button(IconName::ChevronDown, 14.).on_press(move |_| open.toggle()),
+        ))
             .bottom()
             .align_end()
             .maybe_child(open().then(|| Menu::new().on_close(move |_| open.set(false)).child(panel)))
@@ -258,6 +272,10 @@ impl Component for OverflowMenu {
         let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
 
         let menu = Menu::new()
+            // Room for the hint row's chord (see `HINT_MENU_WIDTH`) — the Attached
+            // overlay's available width is the trigger's, so without a floor the row
+            // squeezes and the chord clips.
+            .min_width(Size::px(super::menu::HINT_MENU_WIDTH))
             .on_close(move |_| open.set(false))
             .child(
                 MenuButton::new()
@@ -279,7 +297,10 @@ impl Component for OverflowMenu {
                     )),
             );
 
-        Attached::new(cluster_button(IconName::Dots, 15.).on_press(move |_| open.toggle()))
+        Attached::new(tip(
+            "Tab actions",
+            cluster_button(IconName::Dots, 15.).on_press(move |_| open.toggle()),
+        ))
             .bottom()
             .align_end()
             .maybe_child(open().then(|| menu))
