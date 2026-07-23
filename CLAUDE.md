@@ -170,6 +170,7 @@ src/apps/project/                the project window (Valin-shaped)
         datagrid/                mod, header, cell, model  (sticky typed header, virtualized cells,
                                  per-column resize + double-click autofit)
         selection.rs             cell/row/column selection model + SelCtl controller
+        find.rs                  find-in-results (P2-09): FindState + the page-local filter
         toolbar.rs, status_bar.rs, running.rs, explain_plan.rs, empty.rs, error.rs
 ```
 

@@ -23,6 +23,7 @@ use freya::prelude::*;
 use strata_core::config::{Command, Settings};
 
 use super::error::ErrorState;
+use super::find::FindState;
 use super::selection::{CellRole, SelCtl, Selection};
 use super::toolbar::DataGridToolbar;
 use crate::apps::project::state::TabId;
@@ -122,13 +123,39 @@ pub struct DataGrid {
     row_base: usize,
     /// The tab this grid's Run belongs to — the toolbar's Trash clears its Run trigger.
     tab: TabId,
+    /// Find-in-results (P2-09): the popover state the toolbar renders and ⌘F / Esc drive.
+    find: FindState,
+    /// Absolute gutter numbers when the find filter reindexed the page (survivors keep
+    /// their original positions, so the gutter shows gaps); `None` = number by position.
+    row_nums: Option<Rc<Vec<usize>>>,
     density: Density,
     pub(crate) theme: Option<DataGridThemePartial>,
 }
 
 impl DataGrid {
-    pub fn new(run: Rc<GridData>, view: PageRead, row_base: usize, tab: TabId) -> Self {
-        Self { run, view, row_base, tab, density: Density::Comfortable, theme: None }
+    pub fn new(
+        run: Rc<GridData>,
+        view: PageRead,
+        row_base: usize,
+        tab: TabId,
+        find: FindState,
+    ) -> Self {
+        Self {
+            run,
+            view,
+            row_base,
+            tab,
+            find,
+            row_nums: None,
+            density: Density::Comfortable,
+            theme: None,
+        }
+    }
+
+    /// The filtered page's absolute gutter numbers (see [`Self::row_nums`]).
+    pub fn row_nums(mut self, row_nums: Option<Rc<Vec<usize>>>) -> Self {
+        self.row_nums = row_nums;
+        self
     }
 
     /// Cell padding density (default [`Comfortable`](Density::Comfortable)). Wire to a user setting
@@ -263,13 +290,16 @@ impl Component for DataGrid {
         header = header.child(rect().width(Size::flex(1.)).min_width(Size::px(TRAIL_W)).height(Size::fill()));
 
         // Virtualized body: the builder runs only for rows scrolled into view; it reads `widths` fresh
-        // so a resize reflows every visible row. The page's rows ride as `builder_data` (not a plain
-        // capture) so flipping pages — same length, new cells — rebuilds the visible rows.
+        // so a resize reflows every visible row. The page's rows — and the find filter's gutter
+        // numbers, which must swap in lockstep with them — ride as `builder_data` (not a plain
+        // capture) so flipping pages or retyping the filter rebuilds the visible rows.
         let len = data.rows.len();
         // Absolute row numbers: the gutter continues across pages (page 2 starts at page_size + 1).
         let row_base = self.row_base;
         let theme_b = theme.clone();
-        let body = VirtualScrollView::new_with_data(data.clone(), move |index, data| {
+        let body_data = (data.clone(), self.row_nums.clone());
+        let body = VirtualScrollView::new_with_data(body_data, move |index, page| {
+            let (data, row_nums) = page;
             let mut cells = rect()
                 .width(Size::fill())
                 .height(Size::flex(1.))
@@ -277,7 +307,13 @@ impl Component for DataGrid {
                 .content(Content::Flex)
                 .child(Cell {
                     width: Size::px(GUTTER_W),
-                    text: (row_base + index + 1).to_string(),
+                    // A filtered page numbers by the survivors' original positions; otherwise
+                    // by position from the page base.
+                    text: row_nums
+                        .as_ref()
+                        .and_then(|nums| nums.get(index).copied())
+                        .unwrap_or(row_base + index + 1)
+                        .to_string(),
                     color: theme_b.gutter_color,
                     mono: false,
                     cross: Alignment::Center,
@@ -394,17 +430,32 @@ impl Component for DataGrid {
             })
             .on_global_pointer_press(move |_: Event<PointerEventData>| sel_ctl.end_drag())
             .on_global_key_down({
-                // Esc = clear the selection — the tail of the dismiss chain (menus, a
-                // rename, and a running body all sit earlier in document order and
-                // consume first). Declines when nothing is selected, leaving the press
-                // unconsumed. The modifier mirroring is separate bookkeeping for the
-                // pointer events (which carry no modifiers), not a shortcut.
-                let mut esc = crate::keymap::on_command(settings, Command::Cancel, move || {
-                    let had = *sel_ctl.sel.peek() != Selection::None;
-                    if had {
-                        sel_ctl.clear();
+                // The results scope's shortcuts (P2-09): ⌘F toggles the toolbar's find
+                // popover; Esc dismisses that popover first (this node is the popover's
+                // ancestor, so it must arbitrate — the popover's own listener would fire
+                // too late), then falls through to clearing the selection — the tail of
+                // the dismiss chain (menus, a rename, and a running body all sit earlier
+                // in document order and consume first). Declines when neither applies,
+                // leaving the press unconsumed. The modifier mirroring is separate
+                // bookkeeping for the pointer events (which carry no modifiers).
+                let find = self.find;
+                let mut commands = crate::keymap::on_commands(settings, move |cmd| match cmd {
+                    Command::Find => {
+                        find.toggle();
+                        true
                     }
-                    had
+                    Command::Cancel if *find.open.peek() => {
+                        find.dismiss();
+                        true
+                    }
+                    Command::Cancel => {
+                        let had = *sel_ctl.sel.peek() != Selection::None;
+                        if had {
+                            sel_ctl.clear();
+                        }
+                        had
+                    }
+                    _ => false,
                 });
                 move |e: Event<KeyboardEventData>| {
                     match &e.key {
@@ -414,7 +465,7 @@ impl Component for DataGrid {
                         }
                         _ => {}
                     }
-                    esc(e);
+                    commands(e);
                 }
             })
             .on_global_key_up(move |e: Event<KeyboardEventData>| match &e.key {
@@ -422,7 +473,7 @@ impl Component for DataGrid {
                 Key::Named(NamedKey::Meta) | Key::Named(NamedKey::Control) => meta.set(false),
                 _ => {}
             })
-            .child(DataGridToolbar::new(self.tab))
+            .child(DataGridToolbar::new(self.tab, self.find))
             .child(scroll)
             .into_element()
     }
