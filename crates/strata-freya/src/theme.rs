@@ -1,12 +1,11 @@
-//! The Freya theme, loaded from Strata's **native** theme format (`themes/*.json`).
+//! The Freya theme — Strata's **native** theme format applied to Freya.
 //!
-//! Midnight/Daylight are built-ins (embedded); custom themes load the same shape from a
-//! plugin dir (roadmap). A theme file has: a `sheet` copied 1:1 into Freya's `ColorsSheet`
-//! (the palette every component references), a `components` map of per-component overrides
-//! keyed by **Freya component key**, `tokens` for our own not-yet-built components, and
-//! `fonts`. Each component field is a tagged `Preference` — `{ "specific": … }` or
-//! `{ "reference": "<sheet slot>" }` — applied as a *partial* merge over Freya's registered
-//! default.
+//! The theme **data model** (authored shapes, built-in loader, [`Typography`] resolution,
+//! schema generator) lives in [`strata_core::theme`] and is re-exported here; this module is
+//! the Freya-specific half: a theme file's `sheet` is copied 1:1 into Freya's `ColorsSheet`
+//! (the palette every component references), and each `components` entry — a tagged [`Pref`],
+//! `{ "specific": … }` or `{ "reference": "<sheet slot>" }` — is coerced into Freya
+//! `Preference`s and applied as a *partial* merge over Freya's registered default.
 //!
 //! One `theme_registry!` invocation is the single source of truth: it generates both the
 //! runtime override application and the [`REGISTRY`] data that [`generate_schema`] turns into
@@ -15,6 +14,8 @@
 //! `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`).
 
 use std::collections::BTreeMap;
+use std::ops::Deref;
+use std::sync::Arc;
 
 use crate::apps::project::{
     CancelButtonThemePreference, DataGridThemePreference, HeaderBarThemePreference,
@@ -22,204 +23,121 @@ use crate::apps::project::{
 };
 use crate::components::run_button::RunButtonThemePreference;
 use freya::prelude::*;
-use serde::Deserialize;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
 use strata_code_editor::prelude::EditorThemePreference;
+use strata_core::config::Settings;
+use strata_core::theme::{ThemeRegistry, SLOTS};
 
-const MIDNIGHT_JSON: &str = include_str!("../themes/midnight.json");
-const DAYLIGHT_JSON: &str = include_str!("../themes/daylight.json");
+pub use strata_core::theme::{
+    resolve_typography, typography, Kind, Mode, Pref, SheetDef, SpecificValue, StrataTheme,
+    TextStyle, Typography,
+};
 
-/// The 27 `ColorsSheet` slot names — reference targets + the required sheet keys.
-const SLOTS: &[&str] = &[
-    "primary", "secondary", "tertiary", "success", "warning", "error", "info",
-    "background", "surface_primary", "surface_secondary", "surface_tertiary",
-    "surface_inverse", "surface_inverse_secondary", "surface_inverse_tertiary",
-    "border", "border_focus", "border_disabled",
-    "text_primary", "text_secondary", "text_placeholder", "text_inverse", "text_highlight",
-    "focus", "active", "disabled", "overlay", "shadow",
-];
+/// The app-wide theme registry handle for context — an `Arc` over the discovered
+/// [`ThemeRegistry`], cheap to clone. Created **once** in `main` and provided at every
+/// window root, so all apps (project, launcher, settings, …) share the same discovery.
+/// Derefs to the registry, so callers use it directly (`themes.get_or_default(…)`,
+/// `themes.entries()`).
+#[derive(Clone)]
+pub struct ThemesCtx(Arc<ThemeRegistry>);
 
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    Dark,
-    Light,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-pub struct StrataTheme {
-    pub id: String,
-    pub name: String,
-    pub mode: Mode,
-    pub sheet: SheetDef,
-    #[serde(default)]
-    pub components: BTreeMap<String, BTreeMap<String, Pref>>,
-    #[serde(default)]
-    pub tokens: BTreeMap<String, BTreeMap<String, String>>,
-    #[serde(default)]
-    pub fonts: BTreeMap<String, String>,
-    /// The type scale — named roles (display · title · body · meta · …), each fixing a font
-    /// family (`ui`/`mono`, resolved via `fonts`), weight and size (+ optional line-height /
-    /// letter-spacing). A **top-level** section (not a `components` entry): its fields are
-    /// `TypeRole` objects, not the colour `Pref`s every `components.*` map holds. Consumed by the
-    /// typography components (`crate::components::typography`) via [`typography`].
-    #[serde(default)]
-    pub typography: BTreeMap<String, TypeRole>,
-}
-
-/// One authored typography role from the theme file. `family` is a `fonts` key (`ui`/`mono`);
-/// `weight`/`size` are required; `line_height`/`letter_spacing` are optional.
-#[derive(Deserialize, Clone)]
-pub struct TypeRole {
-    pub family: String,
-    pub weight: i32,
-    pub size: f32,
-    #[serde(default)]
-    pub line_height: Option<f32>,
-    #[serde(default)]
-    pub letter_spacing: Option<f32>,
-}
-
-/// A component field override — the `specific` / `reference` discriminated union.
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Pref {
-    Specific(SpecificValue),
-    Reference(String),
-}
-
-/// The payload of a `specific` — a colour/font string, a scalar, or four gap sides (distinct
-/// JSON types). Deserialized by hand through `serde_json::Value` rather than `#[serde(untagged)]`:
-/// untagged buffering breaks on non-integer numbers when serde_json's `arbitrary_precision`
-/// feature is enabled anywhere in the workspace (strata-core enables it), and `Value` handles it
-/// natively.
-pub enum SpecificValue {
-    Color(String),
-    Scalar(f32),
-    Sides([f32; 4]),
-}
-
-impl<'de> Deserialize<'de> for SpecificValue {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
-        match serde_json::Value::deserialize(d)? {
-            serde_json::Value::String(s) => Ok(Self::Color(s)),
-            serde_json::Value::Number(n) => {
-                Ok(Self::Scalar(n.as_f64().ok_or_else(|| {
-                    D::Error::custom("specific number out of range")
-                })? as f32))
-            }
-            serde_json::Value::Array(a) => {
-                let sides: Vec<f32> = a
-                    .iter()
-                    .map(|v| v.as_f64().map(|n| n as f32))
-                    .collect::<Option<_>>()
-                    .ok_or_else(|| D::Error::custom("specific sides must be numbers"))?;
-                let sides: [f32; 4] = sides.try_into().map_err(|_| {
-                    D::Error::custom("specific sides must have exactly 4 numbers")
-                })?;
-                Ok(Self::Sides(sides))
-            }
-            _ => Err(D::Error::custom(
-                "specific must be a colour/font string, a number, or a 4-number array",
-            )),
-        }
+impl ThemesCtx {
+    /// Discover the registry (built-ins + the user themes dir) and wrap it for context.
+    pub fn discover() -> Self {
+        Self(Arc::new(ThemeRegistry::discover()))
     }
 }
 
-/// A component field's value type — drives both the runtime coercion and the schema.
-#[derive(Clone, Copy)]
-pub enum Kind {
-    Color,
-    F32,
-    I32,
-    Gaps,
-    Corner,
-    /// A font family: a `fonts` key (`ui`/`mono`) resolved to the real family name, or a
-    /// literal family name.
-    Font,
-}
+impl Deref for ThemesCtx {
+    type Target = ThemeRegistry;
 
-/// The 27 fields of Freya's `ColorsSheet`, as authored colour strings.
-#[derive(Deserialize)]
-pub struct SheetDef {
-    pub primary: String,
-    pub secondary: String,
-    pub tertiary: String,
-    pub success: String,
-    pub warning: String,
-    pub error: String,
-    pub info: String,
-    pub background: String,
-    pub surface_primary: String,
-    pub surface_secondary: String,
-    pub surface_tertiary: String,
-    pub surface_inverse: String,
-    pub surface_inverse_secondary: String,
-    pub surface_inverse_tertiary: String,
-    pub border: String,
-    pub border_focus: String,
-    pub border_disabled: String,
-    pub text_primary: String,
-    pub text_secondary: String,
-    pub text_placeholder: String,
-    pub text_inverse: String,
-    pub text_highlight: String,
-    pub focus: String,
-    pub active: String,
-    pub disabled: String,
-    pub overlay: String,
-    pub shadow: String,
-}
-
-impl SheetDef {
-    fn to_colors_sheet(&self) -> ColorsSheet {
-        ColorsSheet {
-            primary: pc(&self.primary),
-            secondary: pc(&self.secondary),
-            tertiary: pc(&self.tertiary),
-            success: pc(&self.success),
-            warning: pc(&self.warning),
-            error: pc(&self.error),
-            info: pc(&self.info),
-            background: pc(&self.background),
-            surface_primary: pc(&self.surface_primary),
-            surface_secondary: pc(&self.surface_secondary),
-            surface_tertiary: pc(&self.surface_tertiary),
-            surface_inverse: pc(&self.surface_inverse),
-            surface_inverse_secondary: pc(&self.surface_inverse_secondary),
-            surface_inverse_tertiary: pc(&self.surface_inverse_tertiary),
-            border: pc(&self.border),
-            border_focus: pc(&self.border_focus),
-            border_disabled: pc(&self.border_disabled),
-            text_primary: pc(&self.text_primary),
-            text_secondary: pc(&self.text_secondary),
-            text_placeholder: pc(&self.text_placeholder),
-            text_inverse: pc(&self.text_inverse),
-            text_highlight: pc(&self.text_highlight),
-            focus: pc(&self.focus),
-            active: pc(&self.active),
-            disabled: pc(&self.disabled),
-            overlay: pc(&self.overlay),
-            shadow: pc(&self.shadow),
-        }
+    fn deref(&self) -> &ThemeRegistry {
+        &self.0
     }
 }
 
-/// Load a Strata theme by id ("midnight" / "daylight"), defaulting to Midnight.
-pub fn load(id: &str) -> StrataTheme {
-    let json = match id {
-        "daylight" => DAYLIGHT_JSON,
-        _ => MIDNIGHT_JSON,
-    };
-    serde_json::from_str(json).expect("strata theme json")
+/// Copy a theme file's `sheet` into Freya's palette (a free fn — `SheetDef` lives in
+/// `strata-core`, so an inherent impl isn't possible here).
+fn to_colors_sheet(sheet: &SheetDef) -> ColorsSheet {
+    ColorsSheet {
+        primary: pc(&sheet.primary),
+        secondary: pc(&sheet.secondary),
+        tertiary: pc(&sheet.tertiary),
+        success: pc(&sheet.success),
+        warning: pc(&sheet.warning),
+        error: pc(&sheet.error),
+        info: pc(&sheet.info),
+        background: pc(&sheet.background),
+        surface_primary: pc(&sheet.surface_primary),
+        surface_secondary: pc(&sheet.surface_secondary),
+        surface_tertiary: pc(&sheet.surface_tertiary),
+        surface_inverse: pc(&sheet.surface_inverse),
+        surface_inverse_secondary: pc(&sheet.surface_inverse_secondary),
+        surface_inverse_tertiary: pc(&sheet.surface_inverse_tertiary),
+        border: pc(&sheet.border),
+        border_focus: pc(&sheet.border_focus),
+        border_disabled: pc(&sheet.border_disabled),
+        text_primary: pc(&sheet.text_primary),
+        text_secondary: pc(&sheet.text_secondary),
+        text_placeholder: pc(&sheet.text_placeholder),
+        text_inverse: pc(&sheet.text_inverse),
+        text_highlight: pc(&sheet.text_highlight),
+        focus: pc(&sheet.focus),
+        active: pc(&sheet.active),
+        disabled: pc(&sheet.disabled),
+        overlay: pc(&sheet.overlay),
+        shadow: pc(&sheet.shadow),
+    }
 }
 
-/// A Freya `Theme` for the given Strata theme id: our `sheet` + `components` over Freya's
-/// light/dark base (which supplies every built-in's default + the layout/typography defaults).
-pub fn strata_theme(id: &str) -> Theme {
-    let t = load(id);
+/// The window-chrome background for a theme — its sheet `background` colour. Fed to
+/// `WindowConfig::with_background` so a resize never flashes the default white.
+pub fn window_background(t: &StrataTheme) -> Color {
+    pc(&t.sheet.background)
+}
+
+/// Install this window's Freya theme and keep it **derived** from the app-global
+/// reactive [`Settings`] selection (`theme` + `sync_os`) and — only while syncing — the
+/// OS appearance (this window's `Platform.preferred_theme`, seeded from the window's
+/// real theme and live via winit `ThemeChanged`). Every window root mounts this; Phase
+/// 4's Settings UI just writes the settings global and every window repaints.
+///
+/// There is no stored applied-theme id to keep coherent: windows stay consistent because
+/// each computes the same pure derivation (`effective_id`) of the same global inputs.
+/// The `Theme.name` guard (it carries the applied id) skips no-op rebuilds — including
+/// the mount-time echo of the id `use_init_theme` already resolved.
+pub fn use_strata_theme(themes: ThemesCtx, settings: State<Settings>) {
+    let platform = use_hook(Platform::get);
+    let preferred = platform.preferred_theme;
+    let mut theme = use_init_theme({
+        let themes = themes.clone();
+        // `peek`s — the side effect below owns reactivity.
+        move || {
+            let s = settings.peek();
+            let os_dark = s.sync_os && *preferred.peek() == PreferredTheme::Dark;
+            let id = strata_core::theme::effective_id(&s.theme, s.sync_os, os_dark);
+            strata_theme(themes.get_or_default(&id))
+        }
+    });
+    use_side_effect(move || {
+        let (id, sync_os) = {
+            let s = settings.read();
+            (s.theme.clone(), s.sync_os)
+        };
+        // Short-circuit: only subscribe to the OS appearance while actually syncing.
+        let os_dark = sync_os && *preferred.read() == PreferredTheme::Dark;
+        let id = strata_core::theme::effective_id(&id, sync_os, os_dark);
+        let applied = theme.peek().name;
+        if applied != id {
+            theme.set(strata_theme(themes.get_or_default(&id)));
+        }
+    });
+}
+
+/// A Freya `Theme` for the given Strata theme (resolved through the [`ThemesCtx`]
+/// registry): our `sheet` + `components` over Freya's light/dark base (which supplies
+/// every built-in's default + the layout/typography defaults).
+pub fn strata_theme(t: &StrataTheme) -> Theme {
     let mut th = match t.mode {
         Mode::Light => light_theme(),
         Mode::Dark => dark_theme(),
@@ -227,104 +145,19 @@ pub fn strata_theme(id: &str) -> Theme {
     // Freya's `Theme.name` is `&'static str`; the id is a runtime string (built-in or custom),
     // so leak it once (negligible, lives for the program).
     th.name = Box::leak(t.id.clone().into_boxed_str());
-    th.colors = t.sheet.to_colors_sheet();
+    th.colors = to_colors_sheet(&t.sheet);
     apply_component_overrides(&mut th, &t.components);
     register_component_themes(&mut th, &t.components, &t.fonts);
     // Install the resolved type scale onto the theme itself (its `Box<dyn Any>` component store), so
     // typography components read it with a standard `use_theme().get::<Typography>(..)` — no provider,
     // no cache. Keyed `strata_typography` to avoid Freya's built-in `typography`.
-    th.set(TYPOGRAPHY_KEY, resolve_typography(&t));
+    th.set(TYPOGRAPHY_KEY, resolve_typography(t));
     th
-}
-
-/// A resolved typography role, ready to paint: the **actual** font family name (looked up from
-/// `fonts`), plus the role's weight, size and optional line-height / letter-spacing.
-#[derive(Clone, PartialEq)]
-pub struct TextStyle {
-    pub family: String,
-    pub weight: i32,
-    pub size: f32,
-    pub line_height: Option<f32>,
-    pub letter_spacing: Option<f32>,
-}
-
-/// The resolved type scale for a theme — one [`TextStyle`] per role. Provided at the window root
-/// (see `project.rs`) and read by the typography components. Field names mirror the theme file's
-/// `typography.<role>` keys.
-#[derive(Clone, PartialEq)]
-pub struct Typography {
-    pub display: TextStyle,
-    pub title: TextStyle,
-    pub strong_body: TextStyle,
-    pub body_medium: TextStyle,
-    pub control: TextStyle,
-    pub body: TextStyle,
-    pub caption: TextStyle,
-    pub code_display: TextStyle,
-    pub data_display: TextStyle,
-    pub data_value: TextStyle,
-    pub code_block: TextStyle,
-    pub field_label: TextStyle,
-    pub meta: TextStyle,
-    pub mono_path: TextStyle,
 }
 
 /// The `Theme` key the resolved [`Typography`] scale is installed under (see [`strata_theme`]).
 /// Prefixed `strata_` so it never collides with Freya's built-in `typography` component theme.
 pub const TYPOGRAPHY_KEY: &str = "strata_typography";
-
-/// Load + resolve the [`Typography`] scale for a theme id. Used to seed the theme (in
-/// [`strata_theme`]) and as a defensive fallback; components read the installed copy off the active
-/// theme via `use_theme().read().get::<Typography>(`[`TYPOGRAPHY_KEY`]`)`.
-pub fn typography(id: &str) -> Typography {
-    resolve_typography(&load(id))
-}
-
-/// Resolve the scale from an already-loaded theme — each role's `family` key (`ui`/`mono`) looked up
-/// in `fonts` to the real family name. A role the file omits falls back to a neutral 13px UI style
-/// so text still renders (the theme owns the scale).
-fn resolve_typography(t: &StrataTheme) -> Typography {
-    let fam = |key: &str| -> String {
-        t.fonts
-         .get(key)
-         .cloned()
-         .unwrap_or_else(|| "IBM Plex Sans".to_string())
-    };
-    let role = |name: &str| -> TextStyle {
-        match t.typography.get(name) {
-            Some(r) => TextStyle {
-                family: fam(&r.family),
-                weight: r.weight,
-                size: r.size,
-                line_height: r.line_height,
-                letter_spacing: r.letter_spacing,
-            },
-            None => TextStyle {
-                family: fam("ui"),
-                weight: 400,
-                size: 13.0,
-                line_height: None,
-                letter_spacing: None,
-            },
-        }
-    };
-    Typography {
-        display: role("display"),
-        title: role("title"),
-        strong_body: role("strong_body"),
-        body_medium: role("body_medium"),
-        control: role("control"),
-        body: role("body"),
-        caption: role("caption"),
-        code_display: role("code_display"),
-        data_display: role("data_display"),
-        data_value: role("data_value"),
-        code_block: role("code_block"),
-        field_label: role("field_label"),
-        meta: role("meta"),
-        mono_path: role("mono_path"),
-    }
-}
 
 /// Our own `define_theme!` components — the ones Freya's base themes don't register. **Unlike the
 /// built-ins** (which inherit a Freya default and take *partial* `components` overrides), these are
@@ -438,11 +271,11 @@ strata_components! {
         font_family: font, font_size: f32, font_weight: i32, line_height: f32,
     },
     "code_editor_syntax" => EditorSyntaxThemePreference {
-        text, whitespace, attribute, boolean, comment, constant, constructor, escape, function, 
-        function_macro, function_method, keyword, label, module, number, operator, property, 
-        punctuation, punctuation_bracket, punctuation_delimiter, punctuation_special, string, 
-        string_escape, string_special, tag, text_literal, text_reference, text_title, text_uri, 
-        text_emphasis, type_, variable, variable_builtin, variable_parameter, 
+        text, whitespace, attribute, boolean, comment, constant, constructor, escape, function,
+        function_macro, function_method, keyword, label, module, number, operator, property,
+        punctuation, punctuation_bracket, punctuation_delimiter, punctuation_special, string,
+        string_escape, string_special, tag, text_literal, text_reference, text_title, text_uri,
+        text_emphasis, type_, variable, variable_builtin, variable_parameter,
     },
     // The Run button's three states (idle / disabled / running), each background + hover + fg.
     "run_button" => RunButtonThemePreference {
@@ -567,86 +400,12 @@ theme_registry! {
     // Freya component override.
 }
 
-/// Build the JSON schema from [`REGISTRY`] + the sheet slots. The `schema_in_sync` test keeps
-/// `themes/theme.schema.json` equal to this.
+/// The theme JSON schema for this app: the core model schema
+/// ([`strata_core::theme::generate_schema`]) over our two component registries — the builtin
+/// overrides ([`REGISTRY`]) and the custom components (`CUSTOM_REGISTRY`). The
+/// `schema_in_sync` test keeps `themes/theme.schema.json` equal to this.
 pub fn generate_schema() -> serde_json::Value {
-    use serde_json::{json, Map, Value};
-
-    let ref_for = |k: &Kind| match k {
-        Kind::Color => "#/$defs/colorPref",
-        Kind::F32 | Kind::I32 | Kind::Corner => "#/$defs/numberPref",
-        Kind::Gaps => "#/$defs/gapsPref",
-        Kind::Font => "#/$defs/fontPref",
-    };
-
-    let mut components = Map::new();
-    for (key, fields) in REGISTRY.iter().chain(CUSTOM_REGISTRY.iter()) {
-        let mut props = Map::new();
-        for (name, kind) in *fields {
-            props.insert((*name).to_string(), json!({ "$ref": ref_for(kind) }));
-        }
-        components.insert(
-            (*key).to_string(),
-            json!({ "type": "object", "additionalProperties": false, "properties": Value::Object(props) }),
-        );
-    }
-
-    let mut sheet_props = Map::new();
-    for s in SLOTS {
-        sheet_props.insert((*s).to_string(), json!({ "$ref": "#/$defs/color" }));
-    }
-    let slots = serde_json::to_value(SLOTS).unwrap();
-
-    // The type scale — a top-level `typography` section, one `typeRole` per named role.
-    const TYPE_ROLES: &[&str] = &[
-        "display", "title", "strong_body", "body_medium", "control", "body", "caption",
-        "code_display", "data_display", "data_value", "code_block", "field_label", "meta",
-        "mono_path",
-    ];
-    let mut typo_props = Map::new();
-    for r in TYPE_ROLES {
-        typo_props.insert((*r).to_string(), json!({ "$ref": "#/$defs/typeRole" }));
-    }
-
-    json!({
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "$id": "https://strata.dev/schemas/freya-theme.schema.json",
-        "title": "Strata (Freya) theme",
-        "type": "object",
-        "required": ["id", "name", "mode", "sheet"],
-        "additionalProperties": false,
-        "properties": {
-            "$schema": { "type": "string" },
-            "id": { "type": "string" },
-            "name": { "type": "string" },
-            "author": { "type": "string" },
-            "mode": { "enum": ["dark", "light"] },
-            "sheet": { "$ref": "#/$defs/sheet" },
-            "components": { "type": "object", "additionalProperties": false, "properties": Value::Object(components) },
-            "tokens": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/color" } } },
-            "fonts": { "type": "object", "properties": { "ui": { "type": "string" }, "mono": { "type": "string" } }, "additionalProperties": { "type": "string" } },
-            "typography": { "type": "object", "additionalProperties": false, "properties": Value::Object(typo_props) }
-        },
-        "$defs": {
-            "color": { "type": "string", "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|rgba\\([^)]*\\))$" },
-            "slot": { "enum": slots.clone() },
-            "colorPref": { "oneOf": [
-                { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "$ref": "#/$defs/color" } } },
-                { "type": "object", "required": ["reference"], "additionalProperties": false, "properties": { "reference": { "$ref": "#/$defs/slot" } } }
-            ] },
-            "numberPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "type": "number" } } },
-            "fontPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "type": "string", "description": "A fonts key (ui/mono) or a literal family name" } } },
-            "gapsPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "oneOf": [ { "type": "number" }, { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 } ] } } },
-            "sheet": { "type": "object", "additionalProperties": false, "required": slots, "properties": Value::Object(sheet_props) },
-            "typeRole": { "type": "object", "required": ["family", "weight", "size"], "additionalProperties": false, "properties": {
-                "family": { "type": "string", "enum": ["ui", "mono"] },
-                "weight": { "type": "number" },
-                "size": { "type": "number" },
-                "line_height": { "type": "number" },
-                "letter_spacing": { "type": "number" }
-            } }
-        }
-    })
+    strata_core::theme::generate_schema(&[REGISTRY, CUSTOM_REGISTRY])
 }
 
 fn set_color(dst: &mut Preference<Color>, f: &BTreeMap<String, Pref>, key: &str) {
@@ -734,13 +493,14 @@ fn pc(s: &str) -> Color {
 mod tests {
     use super::{generate_schema, Preference};
 
-    /// The committed `theme.schema.json` must equal what `generate_schema()` produces — so the
-    /// schema can't drift from the registration. Regenerate with
+    /// The committed `theme.schema.json` (root `themes/`, beside the theme files strata-core
+    /// embeds) must equal what `generate_schema()` produces — so the schema can't drift from
+    /// the registration. Regenerate with
     /// `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`.
     #[test]
     fn schema_in_sync() {
         let generated = generate_schema();
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/themes/theme.schema.json");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../themes/theme.schema.json");
         if std::env::var_os("UPDATE_SCHEMA").is_some() {
             let out = serde_json::to_string_pretty(&generated).unwrap() + "\n";
             std::fs::write(path, out).unwrap();
@@ -762,7 +522,7 @@ mod tests {
     #[test]
     fn theme_files_parse_end_to_end() {
         for id in ["midnight", "daylight"] {
-            let t = super::load(id);
+            let t = strata_core::theme::load(id);
             let editor = t.components.get("code_editor").expect("code_editor authored");
             match editor.get("line_height") {
                 Some(super::Pref::Specific(super::SpecificValue::Scalar(n))) => {
