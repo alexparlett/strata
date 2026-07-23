@@ -10,6 +10,7 @@
 //! lower-precedence Esc consumer must live on a node that comes *after* the
 //! higher-precedence one in document order, not on a shared ancestor.
 
+use freya::text_edit::{ChordKey, EditBindings, EditChord};
 use freya::prelude::*;
 use strata_core::config::{Command, KeyChord, Settings};
 
@@ -92,6 +93,54 @@ pub fn on_commands(
     }
 }
 
+/// The text-editing bindings derived from the settings: the effective chords of every
+/// editing command ([`Command::is_edit`]) converted for the freya-edit layer, which
+/// matches `EditBindings` in `process_key` instead of its old hardcoded
+/// ⌘A/⌘C/⌘X/⌘V/⌘Z/⌘Y. An unbound command yields no chord — that action's shortcut is
+/// disabled. Keep every mounted editor's data in sync with this (see the editor tab's
+/// side effect).
+pub fn edit_bindings(settings: &Settings) -> EditBindings {
+    let chords = |cmd| {
+        strata_core::keymap::effective_chord(settings, cmd)
+            .and_then(|chord| edit_chord(&chord))
+            .into_iter()
+            .collect()
+    };
+    EditBindings {
+        select_all: chords(Command::SelectAll),
+        copy: chords(Command::Copy),
+        cut: chords(Command::Cut),
+        paste: chords(Command::Paste),
+        undo: chords(Command::Undo),
+        redo: chords(Command::Redo),
+    }
+}
+
+/// A settings [`KeyChord`] as a freya-edit [`EditChord`]. `None` when the key name has
+/// no keyboard-types equivalent (the chord then simply doesn't drive the editor —
+/// better a dead shortcut than a mis-matched one).
+fn edit_chord(chord: &KeyChord) -> Option<EditChord> {
+    let mut chars = chord.key.chars();
+    let key = match (chars.next(), chars.next()) {
+        (Some(c), None) => ChordKey::Character(c),
+        // Named keys are stored by name ("Enter", "ArrowUp" — see `chord_from_event`),
+        // which is exactly keyboard-types' `NamedKey` `FromStr` vocabulary.
+        _ => match chord.key.parse::<NamedKey>() {
+            Ok(named) => ChordKey::Named(named),
+            Err(_) => {
+                tracing::warn!("no editor-chord equivalent for key {:?}", chord.key);
+                return None;
+            }
+        },
+    };
+    Some(EditChord {
+        primary: chord.primary,
+        shift: chord.shift,
+        alt: chord.alt,
+        key,
+    })
+}
+
 /// The effective hint string for `cmd` (`"⇧⌘T"`, `""` when unbound), reactively: the
 /// `.read()` subscribes this component to the settings global, so a rebind repaints
 /// every hint in every window.
@@ -168,6 +217,56 @@ mod test {
         for named in [NamedKey::Shift, NamedKey::Meta, NamedKey::Control, NamedKey::Alt] {
             assert!(chord_from_event(&event(Key::Named(named), Modifiers::META)).is_none());
         }
+    }
+
+    #[test]
+    fn edit_bindings_follow_settings() {
+        use strata_core::config::{KeyBind, KeyChord};
+
+        // Defaults: the full editing set, one chord each.
+        let bindings = edit_bindings(&Settings::default());
+        assert_eq!(bindings.select_all, vec![EditChord::primary('a')]);
+        assert_eq!(bindings.copy, vec![EditChord::primary('c')]);
+        assert_eq!(bindings.cut, vec![EditChord::primary('x')]);
+        assert_eq!(bindings.paste, vec![EditChord::primary('v')]);
+        assert_eq!(bindings.undo, vec![EditChord::primary('z')]);
+        assert_eq!(bindings.redo, vec![EditChord::primary_shift('z')]);
+
+        // Rebind redo to ⌘Y, unbind undo entirely: the editor follows.
+        let settings = Settings {
+            keybinds: vec![
+                KeyBind {
+                    command: Command::Redo,
+                    chord: Some(KeyChord {
+                        primary: true,
+                        shift: false,
+                        alt: false,
+                        key: "y".to_string(),
+                    }),
+                },
+                KeyBind { command: Command::Undo, chord: None },
+            ],
+            ..Settings::default()
+        };
+        let bindings = edit_bindings(&settings);
+        assert!(bindings.undo.is_empty());
+        assert_eq!(bindings.redo, vec![EditChord::primary('y')]);
+
+        // Named keys convert through keyboard-types' vocabulary.
+        let settings = Settings {
+            keybinds: vec![KeyBind {
+                command: Command::Undo,
+                chord: Some(KeyChord {
+                    primary: true,
+                    shift: false,
+                    alt: false,
+                    key: "Enter".to_string(),
+                }),
+            }],
+            ..Settings::default()
+        };
+        let bindings = edit_bindings(&settings);
+        assert_eq!(bindings.undo[0].key, ChordKey::Named(NamedKey::Enter));
     }
 
     #[test]

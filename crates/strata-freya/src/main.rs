@@ -36,8 +36,10 @@ fn main() {
     // — no stored applied-theme id to keep coherent.
     let settings = State::create_global(strata_core::config::load().settings);
     // The menubar builds on the event loop thread (`Send` closure), so it captures the
-    // resolved quit chord — plain data — not the settings handle.
-    let quit_chord = menu::quit_chord(&settings.peek());
+    // resolved chords — plain data — not the settings handle. The event *handler* runs
+    // on the renderer (main) thread and does capture `settings`, so Edit dispatch
+    // resolves live bindings.
+    let menu_chords = menu::menu_chords(&settings.peek());
     launch(
         LaunchConfig::new()
             // The muda menubar replaces winit's default menu at resume. Crucially its
@@ -47,7 +49,10 @@ fn main() {
             // `on_close` veto. (Known gap: a Dock-icon "Quit" still `terminate:`s
             // un-vetoed — winit 0.30 exposes no `applicationShouldTerminate`; its 0.31
             // "bring your own app delegate" closes this, see P6-02.)
-            .with_menu(move || menu::app_menu(quit_chord), menu::handle_menu_event)
+            .with_menu(
+                move || menu::app_menu(menu_chords),
+                move |event, ctx| menu::handle_menu_event(event, ctx, settings),
+            )
             .with_window(
                 ProjectApp::window(themes, settings)
             ),

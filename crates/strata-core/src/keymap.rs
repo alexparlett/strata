@@ -73,6 +73,12 @@ pub const COMMANDS: &[CommandMeta] = &[
     ),
     command!(RunQuery, "Run query", "Execute the current query", [primary] "Enter"),
     command!(SaveQuery, "Save query", "Save the active query to the project", [primary] "s"),
+    command!(Undo, "Undo", "Undo the last edit in the query editor", [primary] "z"),
+    command!(Redo, "Redo", "Redo the last undone edit in the query editor", [primary shift] "z"),
+    command!(Cut, "Cut", "Cut the selection in the query editor", [primary] "x"),
+    command!(Copy, "Copy", "Copy the selection in the query editor", [primary] "c"),
+    command!(Paste, "Paste", "Paste the clipboard into the query editor", [primary] "v"),
+    command!(SelectAll, "Select all", "Select the query editor's whole buffer", [primary] "a"),
     command!(Find, "Find in results", "Search within the results grid", [primary] "f"),
     command!(OpenSettings, "Open settings", "Open the settings window", [primary] ","),
     command!(
@@ -83,12 +89,6 @@ pub const COMMANDS: &[CommandMeta] = &[
     ),
     command!(Cancel, "Dismiss", "Close overlays and menus", [] "Escape", fixed),
 ];
-
-/// Keys the keymap can never bind with the primary modifier held: they belong to the
-/// text-editing layer (select all / copy / cut / paste / undo / redo — `z` also covers
-/// the ⇧-redo variant, `y` the ⌘Y one). The editor consumes these; binding them would
-/// make a shortcut and the editor fight over the same press.
-pub const RESERVED_KEYS: &[&str] = &["a", "c", "x", "v", "z", "y"];
 
 fn meta(cmd: Command) -> &'static CommandMeta {
     COMMANDS
@@ -119,8 +119,6 @@ pub enum BindError {
     /// Rebindable chords must hold the primary modifier (⌘/Ctrl) so they can't collide
     /// with plain typing.
     MissingPrimary,
-    /// The chord belongs to the text-editing layer (see [`RESERVED_KEYS`]).
-    Reserved,
 }
 
 impl std::fmt::Display for BindError {
@@ -128,7 +126,6 @@ impl std::fmt::Display for BindError {
         match self {
             Self::FixedCommand => write!(f, "this shortcut can't be changed"),
             Self::MissingPrimary => write!(f, "shortcuts need ⌘ (or Ctrl)"),
-            Self::Reserved => write!(f, "that combination belongs to text editing"),
         }
     }
 }
@@ -142,9 +139,6 @@ pub fn validate_bind(cmd: Command, chord: &KeyChord) -> Result<(), BindError> {
     }
     if !chord.primary {
         return Err(BindError::MissingPrimary);
-    }
-    if RESERVED_KEYS.contains(&chord.key.as_str()) {
-        return Err(BindError::Reserved);
     }
     Ok(())
 }
@@ -254,6 +248,12 @@ mod test {
             Command::CloseProject,
             Command::SaveQuery,
             Command::RunQuery,
+            Command::Undo,
+            Command::Redo,
+            Command::Cut,
+            Command::Copy,
+            Command::Paste,
+            Command::SelectAll,
             Command::CommandPalette,
             Command::OpenSettings,
             Command::CycleWindow,
@@ -262,7 +262,7 @@ mod test {
             let (label, desc) = describe(cmd);
             assert!(!label.is_empty() && !desc.is_empty(), "{cmd:?}");
         }
-        assert_eq!(COMMANDS.len(), 11);
+        assert_eq!(COMMANDS.len(), 17);
     }
 
     #[test]
@@ -273,7 +273,15 @@ mod test {
         assert_eq!(resolve(&s, &chord(true, false, "Enter")), Some(Command::RunQuery));
         assert_eq!(resolve(&s, &chord(false, false, "Escape")), Some(Command::Cancel));
         assert_eq!(resolve(&s, &chord(true, false, "`")), Some(Command::CycleWindow));
-        assert_eq!(resolve(&s, &chord(true, false, "x")), None);
+        // The text-editing commands are ordinary bindings now.
+        assert_eq!(resolve(&s, &chord(true, false, "z")), Some(Command::Undo));
+        assert_eq!(resolve(&s, &chord(true, true, "z")), Some(Command::Redo));
+        assert_eq!(resolve(&s, &chord(true, false, "x")), Some(Command::Cut));
+        assert_eq!(resolve(&s, &chord(true, false, "c")), Some(Command::Copy));
+        assert_eq!(resolve(&s, &chord(true, false, "v")), Some(Command::Paste));
+        assert_eq!(resolve(&s, &chord(true, false, "a")), Some(Command::SelectAll));
+        // ⌘Y was the text layer's legacy redo — unbound by default here.
+        assert_eq!(resolve(&s, &chord(true, false, "y")), None);
         // Bare keys never resolve to a rebindable command.
         assert_eq!(resolve(&s, &chord(false, false, "t")), None);
     }
@@ -290,6 +298,43 @@ mod test {
     }
 
     #[test]
+    fn edit_commands_are_rebindable() {
+        // The whole point of making the editing layer configurable: bind ⌘Y as undo
+        // and the default ⌘Z stops resolving (the editor gate then swallows it).
+        let s = settings_with(vec![KeyBind {
+            command: Command::Undo,
+            chord: Some(chord(true, false, "y")),
+        }]);
+        assert_eq!(resolve(&s, &chord(true, false, "y")), Some(Command::Undo));
+        assert_eq!(resolve(&s, &chord(true, false, "z")), None);
+        assert_eq!(resolve(&s, &chord(true, true, "z")), Some(Command::Redo));
+
+        // Same for the clipboard set.
+        let s = settings_with(vec![KeyBind {
+            command: Command::Paste,
+            chord: Some(chord(true, true, "v")),
+        }]);
+        assert_eq!(resolve(&s, &chord(true, true, "v")), Some(Command::Paste));
+        assert_eq!(resolve(&s, &chord(true, false, "v")), None);
+    }
+
+    #[test]
+    fn edit_classification() {
+        for cmd in [
+            Command::Undo,
+            Command::Redo,
+            Command::Cut,
+            Command::Copy,
+            Command::Paste,
+            Command::SelectAll,
+        ] {
+            assert!(cmd.is_edit(), "{cmd:?}");
+        }
+        assert!(!Command::RunQuery.is_edit());
+        assert!(!Command::Cancel.is_edit());
+    }
+
+    #[test]
     fn explicit_unbind() {
         let s = settings_with(vec![KeyBind {
             command: Command::SaveQuery,
@@ -302,18 +347,15 @@ mod test {
 
     #[test]
     fn invalid_overrides_fall_back_to_default() {
-        // No primary modifier / reserved editor key / any touch of a fixed command:
-        // all ignored, default restored.
-        for bad in [
-            KeyBind { command: Command::Find, chord: Some(chord(false, false, "f")) },
-            KeyBind { command: Command::Find, chord: Some(chord(true, false, "c")) },
-        ] {
-            let s = settings_with(vec![bad]);
-            assert_eq!(
-                effective_chord(&s, Command::Find),
-                Some(default_chord(Command::Find))
-            );
-        }
+        // No primary modifier / any touch of a fixed command: ignored, default restored.
+        let s = settings_with(vec![KeyBind {
+            command: Command::Find,
+            chord: Some(chord(false, false, "f")),
+        }]);
+        assert_eq!(
+            effective_chord(&s, Command::Find),
+            Some(default_chord(Command::Find))
+        );
         let s = settings_with(vec![
             KeyBind { command: Command::Cancel, chord: Some(chord(true, false, "d")) },
             KeyBind { command: Command::Cancel, chord: None },
@@ -334,13 +376,10 @@ mod test {
             validate_bind(Command::Find, &chord(false, false, "f")),
             Err(BindError::MissingPrimary)
         );
-        for key in RESERVED_KEYS {
-            assert_eq!(
-                validate_bind(Command::Find, &chord(true, false, key)),
-                Err(BindError::Reserved),
-                "{key}"
-            );
-        }
+        // Editing chords are no longer reserved: any primary chord may be bound to any
+        // rebindable command — duplicates resolve deterministically in COMMANDS order.
+        assert_eq!(validate_bind(Command::Find, &chord(true, false, "c")), Ok(()));
+        assert_eq!(validate_bind(Command::Undo, &chord(true, false, "y")), Ok(()));
         assert_eq!(validate_bind(Command::Find, &chord(true, true, "g")), Ok(()));
     }
 
@@ -363,5 +402,7 @@ mod test {
         assert_eq!(hint(&s, Command::Cancel), "Esc");
         assert_eq!(hint(&s, Command::CycleWindow), "⌘`");
         assert_eq!(hint(&s, Command::OpenSettings), "⌘,");
+        assert_eq!(hint(&s, Command::Undo), "⌘Z");
+        assert_eq!(hint(&s, Command::Redo), "⇧⌘Z");
     }
 }

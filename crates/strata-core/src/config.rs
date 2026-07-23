@@ -56,11 +56,37 @@ pub enum Command {
     CloseProject,
     SaveQuery,
     RunQuery,
+    /// Undo the last edit in the focused editor. Like every editing command (see
+    /// [`Command::is_edit`]) it is rebindable: the effective chords are synced into the
+    /// text layer's `EditBindings`, which replaced its hardcoded ⌘A/⌘C/⌘X/⌘V/⌘Z/⌘Y.
+    Undo,
+    /// Redo the last undone edit in the focused editor.
+    Redo,
+    /// Cut the selection in the focused editor.
+    Cut,
+    /// Copy the selection in the focused editor.
+    Copy,
+    /// Paste the clipboard into the focused editor.
+    Paste,
+    /// Select the focused editor's whole buffer.
+    SelectAll,
     CommandPalette,
     OpenSettings,
     CycleWindow,
     /// Esc — dismiss an open overlay, else cancel a running query. Fixed (not rebindable).
     Cancel,
+}
+
+impl Command {
+    /// Whether this command is a text-editing action — one the *focused editor* consumes
+    /// (via its synced `EditBindings`) rather than a global listener. The editor's key
+    /// gate lets exactly these chords through to the buffer.
+    pub fn is_edit(self) -> bool {
+        matches!(
+            self,
+            Self::Undo | Self::Redo | Self::Cut | Self::Copy | Self::Paste | Self::SelectAll
+        )
+    }
 }
 
 /// A normalized key chord. `primary` folds the platform primary modifier (⌘ on macOS /
