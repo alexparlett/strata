@@ -1,12 +1,13 @@
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, QuerySpec, RunId, DEFAULT_PAGE_SIZE};
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState, TabId};
+use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::run_button::{RunButton, RunState};
 use freya::components::use_theme;
 use freya::prelude::*;
-use freya::radio::use_radio;
+use freya::radio::{use_radio, use_radio_station};
 
 /// The editor query toolbar, built to the comp. The bar itself only needs the editor surface (its
 /// background) and the divider colour. The Run control is its own three-state `RunButton`; the rest
@@ -16,9 +17,12 @@ use freya::radio::use_radio;
 /// fresh-nonce [`QuerySpec`] in the workbench's `request` slot — the results pane's `use_query`
 /// picks it up (state-arch §6). While that press is in flight (the `running` mirror holds its
 /// nonce) Run wears its Cancel dress — pressing it aborts engine-side and drops the trigger,
-/// the same action as the Running body's control. A blank buffer disables Run. The editing
-/// actions (Format / Clear / Save) are stubbed until their layers land (P2-16), along with the
-/// dirty / validation gates that come with them.
+/// the same action as the Running body's control. A blank buffer disables Run.
+///
+/// The editing actions are wired to [`actions`] (P2-16): Format / Clear rewrite the buffer
+/// (history-tracked); Eye saves the buffer as a new `saved_view_N` catalog view; Save is the
+/// dispatch-on-origin (view → `CREATE OR REPLACE VIEW`, saved query → upsert by id,
+/// scratch → new saved query under the tab's name).
 #[derive(PartialEq)]
 pub struct EditorToolbar {
     pub id: TabId,
@@ -38,6 +42,9 @@ impl Component for EditorToolbar {
         };
         let radio = use_radio::<SessionState, Chan>(Chan::Tab(id));
         let engine = use_consume::<EngineCtx>();
+        // The Project store — save-target access only, so no channel subscription (the
+        // toolbar shows nothing catalog-derived).
+        let project = use_radio_station::<ProjectState, ProjChan>();
         let mut request = self.request;
 
         // This tab's press while it's still executing: the current request belongs to this
@@ -85,6 +92,10 @@ impl Component for EditorToolbar {
             RunState::Idle
         };
 
+        // The save actions' handles (the engine is moved into `run_press` below).
+        let save_engine = engine.clone();
+        let view_engine = engine.clone();
+
         // Running → the press is Cancel: engine-side abort (tag-guarded, S14 — a stale press
         // can't kill a newer run) + drop the trigger, unmounting the results body back to
         // Empty. Otherwise it's Run. Disabled never fires (RunButton swallows it).
@@ -123,11 +134,15 @@ impl Component for EditorToolbar {
                     .on_press(move |_| press(QueryMode::Explain { analyze: true })),
             )
             .child(Divider::vertical().length(Size::px(18.)).color(border))
-            .child(tool(IconName::Format))
-            .child(tool(IconName::Trash))
+            .child(tool(IconName::Format).on_press(move |_| actions::format(radio, id)))
+            .child(tool(IconName::Trash).on_press(move |_| actions::clear(radio, id)))
             .child(Divider::vertical().length(Size::px(18.)).color(border))
-            .child(tool(IconName::Eye))
-            .child(tool(IconName::Save));
+            .child(tool(IconName::Eye).on_press(move |_| {
+                actions::save_as_view(radio, project, view_engine.clone(), id)
+            }))
+            .child(tool(IconName::Save).on_press(move |_| {
+                actions::save(radio, project, save_engine.clone(), id)
+            }));
 
         rect()
             .width(Size::fill())

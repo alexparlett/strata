@@ -32,6 +32,11 @@ pub struct CodeEditorData {
     pub(crate) scrolls: (i32, i32),
     pub(crate) pending_edit: Option<InputEdit>,
     pub language: Option<EditorLanguage>,
+    /// The type last handed to [`measure`](Self::measure) (the mounted editor's
+    /// theme-resolved font), so programmatic rewrites ([`set_text`](Self::set_text))
+    /// can re-measure without their caller knowing the editor's type. `None` until
+    /// first mounted (headless data never measures).
+    pub(crate) measured_font: Option<(f32, String, i32)>,
 }
 
 impl CodeEditorData {
@@ -46,6 +51,7 @@ impl CodeEditorData {
             scrolls: (0, 0),
             pending_edit: None,
             language: language.into(),
+            measured_font: None,
         };
         data.configure_highlighter();
         data
@@ -79,8 +85,35 @@ impl CodeEditorData {
     }
 
     pub fn measure(&mut self, font_size: f32, font_family: &str, font_weight: i32) {
+        self.measured_font = Some((font_size, font_family.to_string(), font_weight));
         self.metrics
             .measure_longest_line(font_size, font_family, font_weight, &self.rope);
+    }
+
+    /// Replace the whole buffer with `text` — the programmatic edit behind Format /
+    /// Clear. Goes through the normal edit path (history-tracked, so undo restores the
+    /// previous text), collapses the cursor to the end, and rebuilds highlighting +
+    /// the longest-line measurement from scratch (a whole-buffer rewrite has no useful
+    /// incremental state).
+    pub fn set_text(&mut self, text: &str) {
+        // A programmatic rewrite is its own undo step (and its own history change, so
+        // dirty tracking sees it) — never merged into the last typing burst.
+        self.history.seal_transaction();
+        let len = self.rope.len_utf16_cu();
+        if len > 0 {
+            self.remove(0..len);
+        }
+        if !text.is_empty() {
+            self.insert(text, 0);
+        }
+        self.selection = TextSelection::new_cursor(self.rope.len_utf16_cu());
+        self.dragging = TextDragging::default();
+        self.pending_edit = None;
+        self.metrics.highlighter.invalidate_tree();
+        self.parse();
+        if let Some((size, family, weight)) = self.measured_font.clone() {
+            self.measure(size, &family, weight);
+        }
     }
 
     pub fn process(

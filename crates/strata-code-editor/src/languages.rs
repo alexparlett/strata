@@ -7,7 +7,10 @@ use tree_sitter::Language;
 /// Bring your own tree-sitter grammar and its highlights query, so the editor
 /// can highlight any language without the crate depending on specific grammars.
 ///
-/// ```no_run
+/// The example is `ignore`d: grammar crates are the caller's dependency, not this
+/// crate's.
+///
+/// ```ignore
 /// # use strata_code_editor::prelude::EditorLanguage;
 /// let language = EditorLanguage::new(
 ///     tree_sitter_rust::LANGUAGE,

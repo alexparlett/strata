@@ -10,7 +10,8 @@ use strata_code_editor::prelude::{CodeEditor, CodeEditorData, EditorLanguage, Ro
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a
 /// `Writable<CodeEditorData>` straight into the store on `Chan::Tab(id)`. Carries the
 /// workbench's Run trigger down to the toolbar (which writes a press into it), plus the
-/// `running` mirror the toolbar reads for its Run→Cancel flip.
+/// `running` mirror the toolbar reads for its Run→Cancel flip. (The ⌘S binding onto the
+/// toolbar's save dispatch is deliberately absent — the app-wide keymap is its own slice.)
 #[derive(PartialEq)]
 pub struct EditorTab {
     pub id: TabId,

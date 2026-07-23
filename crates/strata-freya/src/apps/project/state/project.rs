@@ -38,9 +38,8 @@ pub enum ProjChan {
     Meta,
     Tables,
     Views,
-    /// Feature reservoir: subscribed by the sidebar QUERIES section (Phase 3) and
-    /// notified by save-as-query (P2-16).
-    #[allow(dead_code)]
+    /// Notified by save-as-query (⌘S on a scratch / saved-query tab); subscribed by
+    /// the sidebar QUERIES section (Phase 3).
     Queries,
 }
 
@@ -169,9 +168,6 @@ impl ProjectState {
 
     /// The durable defs — a pure projection of the rows (what `.strata/project.json`
     /// stores; registration state never travels).
-    /// Feature reservoir (with `save_defs` and the def mutations below): consumed by
-    /// save-as-view / ⌘S (P2-16) and the catalog sidebar's add/remove flows (Phase 3).
-    #[allow(dead_code)]
     pub fn defs(&self) -> ProjectDefs {
         ProjectDefs {
             name: self.name.clone(),
@@ -183,7 +179,6 @@ impl ProjectState {
 
     /// Persist the defs to `.strata/project.json`. Call at def-mutation points
     /// (view/saved-query create · drop · register/deregister). No-op without a root.
-    #[allow(dead_code)]
     pub fn save_defs(&self) -> Result<(), String> {
         match &self.root {
             Some(root) => project_io::save_defs(root, &self.defs()),
@@ -201,9 +196,7 @@ impl ProjectState {
 
     /// Which section, if any, already owns `name` — tables and views share one SQL
     /// namespace, so a new name must be free in both; saved-query labels only clash
-    /// with themselves.
-    /// Feature reservoir: save-as / config-modal name validation (P2-16 / P4-11).
-    #[allow(dead_code)]
+    /// with themselves. (Also the config-modal name validation, P4-11.)
     pub fn name_in_use(&self, name: &str) -> Option<CatalogKind> {
         if self.tables.iter().any(|r| Self::same_name(&r.def.name, name)) {
             Some(CatalogKind::Table)
@@ -264,7 +257,6 @@ impl ProjectState {
 
     /// Insert-or-replace a view def by name, at its alphabetical slot. The row resets
     /// to `Loading` — a (re)written def is unanswered until the engine speaks.
-    #[allow(dead_code)]
     pub fn upsert_view(&mut self, def: ViewDef) {
         self.views.retain(|x| x.def.name != def.name);
         let at = self
@@ -281,7 +273,6 @@ impl ProjectState {
 
     /// Insert-or-replace a saved query by its stable `id`, keeping the alphabetical
     /// slot of its (possibly new) name.
-    #[allow(dead_code)]
     pub fn upsert_saved_query(&mut self, query: SavedQuery) {
         self.saved_queries.retain(|x| x.id != query.id);
         let at = self

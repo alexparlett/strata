@@ -164,6 +164,19 @@ impl SessionState {
         }
     }
 
+    /// A save landed: bind `id` to its save target and reset the editor's dirty
+    /// baseline to the text just saved (state-arch §4 — the only session mutation a
+    /// save makes). A Save-As passes `name` to also rename the tab to its target.
+    pub fn bind_saved(&mut self, id: TabId, name: Option<String>, origin: Origin) {
+        if let Some(t) = self.tabs.get_mut(&id) {
+            if let Some(name) = name {
+                t.name = name;
+            }
+            t.origin = origin;
+            t.editor.mark_as_saved();
+        }
+    }
+
     /// Drag-to-reorder: move `id` to the `insert` slot in the visible order.
     pub fn move_tab(&mut self, id: TabId, insert: usize) {
         let Some(from) = self.order.iter().position(|t| *t == id) else {
@@ -325,5 +338,30 @@ impl SessionState {
 
     fn name_taken(&self, name: &str) -> bool {
         self.tabs.values().any(|t| t.name == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The session side of a save (state-arch §4): the tab rebinds to its target, a
+    /// Save-As renames it, and the editor's dirty baseline resets to the saved text.
+    #[test]
+    fn bind_saved_rebinds_and_resets_dirty() {
+        let mut s = SessionState::default();
+        let id = s.open_named("query 1", "SELECT 1".into(), Origin::Scratch);
+
+        s.tabs.get_mut(&id).unwrap().editor.set_text("SELECT 2");
+        s.bind_saved(id, Some("saved_view_1".into()), Origin::View("saved_view_1".into()));
+
+        let t = &s.tabs[&id];
+        assert_eq!(t.name, "saved_view_1");
+        assert!(matches!(&t.origin, Origin::View(v) if v == "saved_view_1"));
+        assert!(!t.is_dirty(), "a save resets the dirty baseline");
+
+        // The next divergence reads dirty again — the baseline moved, not froze.
+        s.tabs.get_mut(&id).unwrap().editor.set_text("SELECT 3");
+        assert!(s.tabs[&id].is_dirty());
     }
 }
