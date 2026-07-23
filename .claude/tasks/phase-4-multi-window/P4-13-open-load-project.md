@@ -1,6 +1,16 @@
 # P4-13 · Open / create a project (`.strata/` load)
 
-**Phase:** 4 · **Status:** ⬜ `[core ✓ IO]` · **DEV_TASKS:** project lifecycle · **Depends on:** P4-01 · **Feeds:** Phase 2/3 (the window needs a real project)
+**Phase:** 4 · **Status:** 🟡 `[core ✓ IO]` **internals done, UI pending** · **DEV_TASKS:** project lifecycle · **Depends on:** P4-01 · **Feeds:** Phase 2/3 (the window needs a real project)
+
+> **🟡 Landed (internals, no UI):** `strata_core::project` (`.strata/project.json` defs IO:
+> load/save/scaffold + `resolve_source`/`relativize`), `Engine::create_view`/`drop_view` (consuming
+> the `plan_deps` reservoir), the per-window **`ProjectState`** Radio store (`ProjChan`), and
+> `use_init_project` in the window root: opens argv\[1\] (default the committed `sample/`),
+> scaffolds a fresh `.strata/` when absent, and registers tables → views (fixed-point retry for
+> view-on-view deps) as a background task, landing per-row `Loading → Ready/Failed`. Covered by
+> `strata-core/tests/project_load.rs` against `sample/`. **Remaining:** the open/new-project UI
+> (launcher P4-02 / Open Recent / folder pick), window title/switcher, session restore (P4-14),
+> and the re-open-in-place path guard below.
 
 > **Sequencing note:** this is the *load* half of project lifecycle. The launcher (P4-02) is one
 > entry point, but the project window can open a project directly — so the load path is a prerequisite

@@ -31,7 +31,7 @@ pub mod plan;
 pub mod sql;
 pub mod profile;
 
-pub use catalog::{TableMeta, TableSpec};
+pub use catalog::{TableMeta, TableSpec, ViewMeta};
 pub use query::purge_snapshot_root;
 
 /// The Arrow batch type engine results carry (the type-aware source for Copy/Export),
@@ -307,6 +307,51 @@ impl Engine {
     /// Drop a registered table.
     pub fn deregister(&self, table: &str) {
         let _ = self.ctx.deregister_table(table);
+    }
+
+    /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and
+    /// what it reads (D10). `CREATE OR REPLACE` — redefinition is the ⌘S-on-a-view path.
+    pub async fn create_view(&self, name: String, sql: String) -> Result<ViewMeta, String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move {
+                let stmt = format!("CREATE OR REPLACE VIEW {name} AS {sql}");
+                let df = ctx.sql(&stmt).await.map_err(|e| e.to_string())?;
+                // The DDL only takes effect when its (empty) result is driven.
+                let _ = df.collect().await;
+                // The freshly-registered view's own `DataFrame` gives both the columns
+                // and what it reads — the planner has already resolved it, so we never
+                // parse the SQL ourselves.
+                let t = ctx.table(name.as_str()).await.map_err(|e| e.to_string())?;
+                let deps = catalog::plan_deps(t.logical_plan());
+                let columns = t
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| catalog::column_info(f))
+                    .collect();
+                Ok(ViewMeta {
+                    columns,
+                    tables: deps.tables,
+                    aliases: deps.aliases,
+                })
+            })
+            .await
+            .map_err(|e| format!("create view task failed: {e}"))?
+    }
+
+    /// Drop the SQL view `name` (idempotent — `IF EXISTS`).
+    pub async fn drop_view(&self, name: String) -> Result<(), String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move {
+                ctx.sql(&format!("DROP VIEW IF EXISTS {name}"))
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| format!("drop view task failed: {e}"))?
     }
 
     // --- lifecycle --------------------------------------------------------

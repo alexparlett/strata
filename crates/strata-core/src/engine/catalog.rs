@@ -27,6 +27,19 @@ pub struct TableSpec {
     pub partitions: Vec<(String, String)>,
 }
 
+/// What creating a view learned: its columns and what it reads (D10). `tables` /
+/// `aliases` come straight from [`PlanDeps`] — `aliases` is raw (view inlines mixed
+/// with table-alias / CTE noise); the caller keeps only the names that are actually
+/// views.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewMeta {
+    pub columns: Vec<ColumnInfo>,
+    /// Base tables the view scans.
+    pub tables: Vec<String>,
+    /// Every `SubqueryAlias` name in its plan (see [`PlanDeps::aliases`]).
+    pub aliases: Vec<String>,
+}
+
 // ---- external table registration ----
 
 pub async fn register_external(ctx: &SessionContext, spec: &TableSpec) -> Result<TableMeta, String> {
@@ -144,8 +157,6 @@ pub async fn rebuild_listing(
 /// - **`.table()`, not `to_string()`.** A `TableReference` renders as written — `t`
 ///   here, `public.t` there — so `to_string()` yields two keys for one thing. The engine
 ///   owns a single schema, so the bare name is the identity.
-/// Feature reservoir: consumed by `Engine::create_view` (D10) when the views task lands.
-#[allow(dead_code)]
 pub struct PlanDeps {
     /// Base tables scanned — for profile invalidation and the table-drop warning.
     pub tables: Vec<String>,
@@ -157,8 +168,6 @@ pub struct PlanDeps {
     pub aliases: Vec<String>,
 }
 
-/// Feature reservoir: consumed by `Engine::create_view` (D10) when the views task lands.
-#[allow(dead_code)]
 pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     use datafusion::common::tree_node::TreeNodeRecursion;
     use datafusion::logical_expr::LogicalPlan;

@@ -6,6 +6,8 @@ description = "Strata core data vocabulary (schema, results, catalog, forms, log
 license = "MIT"
 
 # The leaf every other crate depends *down* onto. Only serde (the catalog/project
-# definitions persist to `.strata/`); deliberately no datafusion, no UI.
+# definitions persist to `.strata/`) + uuid (stable saved-query identity);
+# deliberately no datafusion, no UI.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v4", "serde"] }

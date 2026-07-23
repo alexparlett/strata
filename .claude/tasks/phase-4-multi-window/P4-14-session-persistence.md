@@ -9,6 +9,17 @@ Keep `.strata/session.json` (and the `project.json` defs) in sync as the user wo
 Not built (`session.rs`: "Persistence — a serde snapshot — is a later slice"). `SessionState` holds
 live `QueryTab`s whose `CodeEditorData` **isn't serde**, so persistence goes through a snapshot.
 
+> **Constraint (agreed 2026-07-23): history gets its own satellite store.** The Dioxus app
+> kept run history *on the Project store* but persisted it *in `session.json`* — don't copy
+> that straddle. History is a small satellite (state-arch §8): its own per-window store,
+> persisted with the session file (local, gitignored), never on `ProjectState`.
+>
+> Also inherited from the P4-13-internals refactor: the model types are now **pure defs**
+> (`TableDef`/`ViewDef`/`SavedQuery` — no `#[serde(skip)]` runtime fields), so the session
+> snapshot serializes defs and *only* defs; registration state (`Reg<T>` on the store rows)
+> is never persisted. `SavedQuery` identity is its `id: Uuid` (`Origin::SavedQuery(Uuid)`);
+> view identity is its name.
+
 ## Build (state-arch §4/§5)
 1. **`SessionSnapshot`** — a serde view of `SessionState`: each tab's **text + origin + language**,
    the order / active / closed stack, layout, inspector selection, per-tab view intent, and history.

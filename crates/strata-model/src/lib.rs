@@ -24,7 +24,7 @@ mod results;
 mod schema;
 
 pub use catalog::{
-    CatalogKind, CatalogTable, CatalogView, ColRef, RegStatus, RemoveKind, RemoveTarget,
+    CatalogKind, ColRef, RemoveKind, RemoveTarget, SavedQuery, TableDef, ViewDef,
 };
 pub use diagnostics::{DiagSource, Diagnostic, Severity};
 pub use form::{ConfigForm, ExportForm};

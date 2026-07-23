@@ -22,16 +22,17 @@ impl TabId {
     }
 }
 
-/// A reference to a saved project artifact (a View or SavedQuery), by key. `String` for now —
-/// promoted to a real key type when the Project store lands.
-pub type ArtifactKey = String;
-
 /// What a tab is bound to — its **save target** only. Dirty comes from the editor, not this.
+///
+/// Keys mirror the Project store's identity rules: a view's key is its **name** (the
+/// engine/SQL identity — a view rename goes through the Project store, which rewrites
+/// these), a saved query's is its stable **id** (its name is only a label, so renames
+/// can't dangle a tab).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Origin {
     Scratch,
-    View(ArtifactKey),
-    SavedQuery(ArtifactKey),
+    View(String),
+    SavedQuery(Uuid),
 }
 
 /// One query tab. Owns its editing buffer exactly like Valin's `EditorTab`.

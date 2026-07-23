@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::{use_init_session, Chan, SessionState, TabId};
+use crate::apps::project::state::{use_init_project, use_init_session, Chan, SessionState, TabId};
 use crate::apps::project::views::{HeaderBar, Workbench};
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -40,6 +40,11 @@ impl App for ProjectApp {
         // Spawn this window's engine into context — the direct-call facade the query
         // layer's capabilities await (state-arch §7).
         let engine = use_provide_context(|| EngineCtx::new());
+        // This window's Project store: opens the launch project (argv[1], default the
+        // committed `sample/`) and registers its defs on the engine as a background
+        // task — rows flip Loading → Ready/Failed as answers land (P4-13 internals;
+        // the launcher / open-dialog UI is a later slice).
+        let _project = use_init_project(&engine);
         // This window's Session store (opens one blank tab), provided via context.
         let session = use_init_session();
 

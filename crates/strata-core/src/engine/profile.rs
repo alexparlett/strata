@@ -18,8 +18,7 @@
 //! never descended into. Profiling a struct's elements would mean traversing
 //! arbitrarily deep data on a scan we already told the user was expensive.
 //!
-//! Results cache on the catalog entry ([`crate::project::CatalogTable::profile`] /
-//! [`crate::project::CatalogView::profile`]). A table's dies with its row when the
+//! Results cache on the UI project store's catalog rows. A table's dies with its row when the
 //! engine re-registers it; a view's dies when its SQL is rewritten. ⚠️ A view is also
 //! only as fresh as the tables beneath it, and nothing currently propagates that — see
 //! the view-dependency task in DEV_TASKS.
