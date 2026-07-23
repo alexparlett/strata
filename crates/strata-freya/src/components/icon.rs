@@ -28,6 +28,8 @@ pub enum IconName {
     Reload,
     Download,
     Alert,
+    Warning,
+    LogOut,
     Clock,
     First,
     Last,
@@ -57,6 +59,8 @@ impl IconName {
             IconName::Reload => RELOAD,
             IconName::Download => DOWNLOAD,
             IconName::Alert => ALERT,
+            IconName::Warning => WARNING,
+            IconName::LogOut => LOG_OUT,
             IconName::Clock => CLOCK,
             IconName::First => FIRST,
             IconName::Last => LAST,
@@ -138,6 +142,9 @@ const RELOAD: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 
 // Down arrow into a tray — the results **Download** (export) button.
 const DOWNLOAD: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 11l4 4 4-4M5 21h14"/></svg>"#;
 // Results error state (circle + exclamation).
+// The close-confirm dialog's warning triangle + the project variant's exit arrow (T2 comp).
+const WARNING: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>"#;
+const LOG_OUT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>"#;
 const ALERT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/></svg>"#;
 // Status-bar snapshot chip (clock face) + pager first/last (chevron against a stop bar).
 const CLOCK: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 1.5"/></svg>"#;

@@ -6,12 +6,15 @@
 //! slice.
 
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 
+use crate::apps::project::close::{close_bridge, CloseBridge, CloseTarget};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{use_init_project, use_init_session, Chan, SessionState, TabId};
-use crate::apps::project::views::{HeaderBar, Workbench};
+use crate::apps::project::views::{CloseConfirm, HeaderBar, Workbench};
 use crate::theme::ThemesCtx;
-use strata_core::config::Settings;
+use futures::StreamExt;
+use strata_core::config::{Command, Settings};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
@@ -25,6 +28,9 @@ pub struct ProjectApp {
     /// [`use_strata_theme`]: crate::theme::use_strata_theme
     pub themes: ThemesCtx,
     pub settings: State<Settings>,
+    /// The UI half of this window's close bridge (T2): the guard the winit `on_close`
+    /// hook reads + the veto-signal receiver the root drains into the confirm dialog.
+    pub close: CloseBridge,
 }
 
 impl ProjectApp {
@@ -41,12 +47,16 @@ impl ProjectApp {
             );
             crate::theme::window_background(themes.get_or_default(&id))
         };
-        WindowConfig::new_app(ProjectApp { themes, settings })
+        // This window's close bridge (T2): the hook vetoes an OS close while a query
+        // runs (and the confirm pref is on) and pings the UI to show the dialog.
+        let (close, on_close) = close_bridge(settings.peek().confirm_close_running);
+        WindowConfig::new_app(ProjectApp { themes, settings, close })
             .with_title("Strata")
 
             .with_size(880., 600.)
             .with_min_size(880., 600.)
             .with_background(background)
+            .with_on_close(on_close)
             .with_window_attributes(|attrs, _| {
                 attrs
                     .with_titlebar_transparent(true)
@@ -68,6 +78,42 @@ impl App for ProjectApp {
         // selection (+ OS appearance while syncing). Every window computes the same pure
         // derivation of the same globals, so they repaint consistently.
         crate::theme::use_strata_theme(themes.clone(), self.settings);
+        // The settings handle into context so deep consumers (shortcut listeners, keymap
+        // hints) reach it without prop-threading. `State` is `Copy` — this shares the one
+        // global, it doesn't fork it.
+        let settings = self.settings;
+        use_provide_context(move || settings);
+
+        // ── T2: the close bridge's UI half ─────────────────────────────────────────────
+        // The close guard + the confirm-dialog target into context (the workbench's ⌘W
+        // gate needs both), then the two mirrors and the veto drain.
+        let guard = use_provide_context({
+            let guard = self.close.guard.clone();
+            move || guard
+        });
+        let mut confirm = use_provide_context(|| State::create(None::<CloseTarget>));
+        // Mirror the confirm-close-running pref into the hook's atomic (subscribes, so a
+        // settings change reaches the next OS close immediately).
+        {
+            let guard = guard.clone();
+            use_side_effect(move || {
+                guard
+                    .confirm
+                    .store(settings.read().confirm_close_running, Ordering::Relaxed);
+            });
+        }
+        // Drain the hook's veto pings into the dialog. The receiver is taken exactly
+        // once; the task is scope-bound to this root.
+        let rx = self.close.take_rx();
+        use_hook(move || {
+            if let Some(mut rx) = rx {
+                spawn(async move {
+                    while rx.next().await.is_some() {
+                        confirm.set(Some(CloseTarget::Window));
+                    }
+                });
+            }
+        });
         // Spawn this window's engine into context — the direct-call facade the query
         // layer's capabilities await (state-arch §7).
         let engine = use_provide_context(|| EngineCtx::new());
@@ -103,7 +149,45 @@ impl App for ProjectApp {
             // floating menu). Mounted high so the menu inherits the app's styling; hugs to nothing
             // until a menu is open, so it doesn't disturb the header / workbench layout.
             .child(ContextMenuViewer::new())
+            // The close-while-running confirm (T2). Mounted second on purpose: while
+            // open, its barrier consumes keys before every listener below it in document
+            // order — including the ⌘Q/stub rect at the bottom, so the dialog can't be
+            // re-triggered or bypassed from the keyboard.
+            .child(CloseConfirm { confirm })
             .child(HeaderBar::new())
             .child(Workbench)
+            // ⌘Q + the shortcuts whose targets aren't built yet (palette P6, settings
+            // window + cycle-windows P4, find-in-results P2-09): the chords are live now —
+            // consumed with a note, so a press can't fall through to something else once
+            // those land. Deliberately the LAST child: same-name global listeners fire in
+            // document (pre-order) order, so every real consumer — and the close-confirm
+            // modal barrier — outranks this catch-all. (The root rect itself would fire
+            // FIRST.)
+            .child(rect().on_global_key_down(crate::keymap::on_commands(
+                self.settings,
+                move |cmd| match cmd {
+                    Command::CloseProject => {
+                        // The same predicate as the on_close hook: red button, dock quit
+                        // and ⌘Q share one dialog. Otherwise close now, bypassing the
+                        // veto (this *is* the deliberate close).
+                        if guard.running.load(Ordering::Relaxed)
+                            && settings.peek().confirm_close_running
+                        {
+                            confirm.set(Some(CloseTarget::Window));
+                        } else {
+                            Platform::get().close_current_window();
+                        }
+                        true
+                    }
+                    Command::CommandPalette
+                    | Command::OpenSettings
+                    | Command::CycleWindow
+                    | Command::Find => {
+                        tracing::debug!("shortcut {cmd:?}: target not built yet (stub)");
+                        true
+                    }
+                    _ => false,
+                },
+            )))
     }
 }

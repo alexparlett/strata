@@ -127,9 +127,15 @@ impl Component for StatusBar {
         };
 
         // Label + sub-label per state (comp `_statusVals`): the grid state leads with the real
-        // row count and trails the engine elapsed; the plan state counts operators.
+        // row count and trails the engine elapsed; the plan state counts operators. The empty
+        // state's run hint derives from the effective keymap (rebinds repaint it; unbound
+        // drops the sub-label).
+        let run_hint = crate::keymap::use_hint(strata_core::config::Command::RunQuery);
         let (label, sub): (String, Option<String>) = match self.state {
-            ResultsState::Empty => ("No query run".into(), Some("⌘↵ to run".into())),
+            ResultsState::Empty => (
+                "No query run".into(),
+                (!run_hint.is_empty()).then(|| format!("{run_hint} to run")),
+            ),
             ResultsState::Running => ("Running…".into(), Some("scanning sources".into())),
             ResultsState::Grid => match &self.info {
                 Some(info) => (

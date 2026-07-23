@@ -41,29 +41,32 @@ pub enum OpenPref {
     New,
 }
 
-/// A logical, rebindable command — the target of a key chord. The *what* (dispatch /
-/// direct call / context handler) lives in `crate::keymap`; this is just the stable,
-/// serializable id a binding points at. Serialized by variant name.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// A logical, rebindable command — the target of a key chord. The *what* (which listener
+/// acts on it) is distributed: each feature listens for its own command through
+/// `crate::keymap::resolve`; this is just the stable, serializable id a binding points at.
+/// Serialized by variant name.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum Command {
-    /// Find — context-dependent (results find today). Routed via the keymap registry.
+    /// Find — context-dependent (results find today).
     Find,
     NewTab,
     ReopenTab,
     CloseActiveTab,
+    /// Close the project window (⌘Q / red button / dock quit all route here).
+    CloseProject,
     SaveQuery,
     RunQuery,
     CommandPalette,
     OpenSettings,
     CycleWindow,
-    /// Esc — dismiss an open overlay, else cancel a running query.
+    /// Esc — dismiss an open overlay, else cancel a running query. Fixed (not rebindable).
     Cancel,
 }
 
 /// A normalized key chord. `primary` folds the platform primary modifier (⌘ on macOS /
 /// Ctrl elsewhere), matching how `handle_key` already treats `meta || ctrl`. `key` is a
 /// normalized key name (lowercased character, or `"Enter"` / `"Escape"`).
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct KeyChord {
     #[serde(default)]
     pub primary: bool,
@@ -77,7 +80,7 @@ pub struct KeyChord {
 /// A user override for a [`Command`] (persisted in [`Settings::keybinds`]). A command with
 /// no entry falls back to its built-in default chord; an entry with `chord: None` is an
 /// **explicit unbind** (the command has no shortcut — e.g. its chord was reassigned away).
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct KeyBind {
     pub command: Command,
     #[serde(default)]

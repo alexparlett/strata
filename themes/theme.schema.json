@@ -493,13 +493,22 @@
             "unselected_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "unselected_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "selected_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_border_fill": {
               "$ref": "#/$defs/colorPref"
             },
             "selected_icon_fill": {
               "$ref": "#/$defs/colorPref"
             },
-            "border_fill": {
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
               "$ref": "#/$defs/colorPref"
             }
           }

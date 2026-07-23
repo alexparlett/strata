@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use strata_core::config::{Command, Settings};
+
 use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
@@ -87,6 +89,8 @@ impl Component for Tab {
         let mut renaming = use_state(|| false);
         let mut draft = use_state(String::new);
         let a11y = use_a11y();
+        let settings = use_consume::<State<Settings>>();
+        let closer = use_consume::<crate::apps::project::close::TabCloser>();
         // Entering rename (from the menu or a double-click) just flips `renaming`. We react to that
         // here — in the tab's own scope, so it survives the menu closing: seed the draft with the
         // current name and focus the input (the focus lands after the input has mounted).
@@ -150,14 +154,15 @@ impl Component for Tab {
 
         // The close affordance: a flat 16×16 icon button (its icon inherits the flat-button colour +
         // hover tint). `stop_propagation` so pressing it closes the tab without also bubbling up to
-        // the tab-body switch.
+        // the tab-body switch. Closes through the shared gate — the T2 confirm when this
+        // tab's query is in flight.
         let close_button = Button::new()
             .flat()
             .width(Size::px(16.))
             .height(Size::px(16.))
             .on_press(move |e: Event<PressEventData>| {
                 e.stop_propagation();
-                radio.write().close_one(id);
+                closer.close(radio, settings, id);
             })
             .child(Icon::new(IconName::Close).size(11.));
 
@@ -212,16 +217,21 @@ impl Component for Tab {
                 e.stop_propagation();
                 ContextMenu::open_from_event(
                     &e,
-                    super::menu::tab_context_menu(id, radio, sep, renaming),
+                    super::menu::tab_context_menu(id, radio, sep, renaming, closer, settings),
                 );
             })
-            // While renaming: Escape cancels; a press anywhere outside the tab commits (like a blur).
+            // While renaming: Escape cancels (consumed — an Esc that ends a rename must
+            // not also cancel a running query further down the dismiss chain); a press
+            // anywhere outside the tab commits (like a blur).
             .maybe(*renaming.read(), |el| {
-                el.on_global_key_down(move |e: Event<KeyboardEventData>| {
-                    if e.key == Key::Named(NamedKey::Escape) {
+                el.on_global_key_down(crate::keymap::on_command(
+                    settings,
+                    Command::Cancel,
+                    move || {
                         renaming.set(false);
-                    }
-                })
+                        true
+                    },
+                ))
                   .on_global_pointer_press(move |e: Event<PointerEventData>| {
                       let p = e.data().global_location();
                       if let Some(a) = *area.peek() {

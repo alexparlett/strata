@@ -10,6 +10,8 @@ use async_io::Timer;
 use freya::components::{use_theme, CircularLoader};
 use freya::prelude::*;
 
+use strata_core::config::{Command, Settings};
+
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Body, Control, Path};
 
@@ -77,6 +79,9 @@ impl Component for Running {
         let mut hovered = use_state(|| false);
         let on_cancel = self.on_cancel.clone();
         let on_esc = on_cancel.clone();
+        let settings = use_consume::<State<Settings>>();
+        // Derived even though Cancel is fixed — one source for every glyph.
+        let esc_hint = crate::keymap::use_hint(Command::Cancel);
 
         rect()
             .width(Size::fill())
@@ -86,11 +91,13 @@ impl Component for Running {
             .cross_align(Alignment::Center)
             .spacing(16.)
             .background(background)
-            .on_global_key_down(move |e: Event<KeyboardEventData>| {
-                if e.key == Key::Named(NamedKey::Escape) {
-                    on_esc.call(());
-                }
-            })
+            // Esc = Cancel while the run is up. This body sits after the tab strip in
+            // document order, so an open menu or an in-progress rename claims the Esc
+            // first; when it reaches here it's consumed.
+            .on_global_key_down(crate::keymap::on_command(settings, Command::Cancel, move || {
+                on_esc.call(());
+                true
+            }))
             .child(CircularLoader::new().size(30.))
             .child(Body::new("Running query…").color(title_color))
             .child(Path::new(fmt_elapsed(elapsed())).color(sub_color))
@@ -108,7 +115,7 @@ impl Component for Running {
                     .on_pointer_leave(move |_| hovered.set(false))
                     .on_press(move |_| on_cancel.call(()))
                     .child(Icon::new(IconName::Stop).color(cancel.color).size(12.))
-                    .child(Control::new("Cancel · Esc").color(cancel.color)),
+                    .child(Control::new(format!("Cancel · {esc_hint}")).color(cancel.color)),
             )
     }
 }

@@ -369,7 +369,7 @@ theme_registry! {
     "switch" => SwitchColorsThemePreference { background: color, thumb_background: color, toggled_background: color, toggled_thumb_background: color, focus_border_fill: color },
     "switch_layout"          => SwitchLayoutThemePreference { margin: gaps, width: f32, height: f32, padding: f32, thumb_size: f32, toggled_thumb_size: f32, pressed_thumb_size_offset: f32, thumb_offset: f32, toggled_thumb_offset: f32 },
     "expanded_switch_layout" => SwitchLayoutThemePreference { margin: gaps, width: f32, height: f32, padding: f32, thumb_size: f32, toggled_thumb_size: f32, pressed_thumb_size_offset: f32, thumb_offset: f32, toggled_thumb_offset: f32 },
-    "checkbox" => CheckboxThemePreference { unselected_fill: color, selected_fill: color, selected_icon_fill: color, border_fill: color },
+    "checkbox" => CheckboxThemePreference { unselected_fill: color, unselected_border_fill: color, selected_fill: color, selected_border_fill: color, selected_icon_fill: color, hover_border_fill: color, focus_border_fill: color },
     "radio"    => RadioItemThemePreference { unselected_fill: color, selected_fill: color, border_fill: color },
     // Selection / overlays
     "select"         => SelectThemePreference { margin: gaps, list_margin: f32, select_background: color, background_button: color, hover_background: color, color: color, border_fill: color, focus_border_fill: color, arrow_fill: color },

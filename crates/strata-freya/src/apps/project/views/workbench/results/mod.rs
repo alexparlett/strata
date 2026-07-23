@@ -36,7 +36,7 @@ use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 use status_bar::{Pager, RunInfo};
 pub use datagrid::DataGridThemePreference;
-pub use running::CancelButtonThemePreference;
+pub use running::{CancelButtonThemePartial, CancelButtonThemePreference};
 pub use status_bar::StatusBarThemePreference;
 
 /// Which of the state bodies the results pane shows — the status bar's coarse view state.

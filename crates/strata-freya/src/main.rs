@@ -15,6 +15,8 @@ use apps::project::ProjectApp;
 use freya::prelude::*;
 
 mod apps;
+mod keymap;
+mod menu;
 mod theme;
 pub mod components;
 
@@ -33,8 +35,19 @@ fn main() {
     // on, via Freya's per-window `Platform.preferred_theme`) through the shared registry
     // — no stored applied-theme id to keep coherent.
     let settings = State::create_global(strata_core::config::load().settings);
+    // The menubar builds on the event loop thread (`Send` closure), so it captures the
+    // resolved quit chord — plain data — not the settings handle.
+    let quit_chord = menu::quit_chord(&settings.peek());
     launch(
         LaunchConfig::new()
+            // The muda menubar replaces winit's default menu at resume. Crucially its
+            // Quit is a *custom* item routed through the close-request path (red-button
+            // semantics, T2 confirm keeps its say) — winit's own Quit sent Cocoa's
+            // `terminate:` directly, swallowing ⌘Q before the keymap AND bypassing the
+            // `on_close` veto. (Known gap: a Dock-icon "Quit" still `terminate:`s
+            // un-vetoed — winit 0.30 exposes no `applicationShouldTerminate`; its 0.31
+            // "bring your own app delegate" closes this, see P6-02.)
+            .with_menu(move || menu::app_menu(quit_chord), menu::handle_menu_event)
             .with_window(
                 ProjectApp::window(themes, settings)
             ),

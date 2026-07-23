@@ -15,6 +15,7 @@ use engine::{plan, profile};
 
 pub mod config;
 pub mod engine;
+pub mod keymap;
 pub mod project;
 pub mod theme;
 pub mod util;
