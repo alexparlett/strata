@@ -24,7 +24,8 @@ It is **not** "UI done, plumbing missing." Three kinds of work remain:
   (`use_state(|| None::<QuerySpec>)`, threaded as props — no runs store), the results pane derives
   Empty / Running / Grid / ExplainPlan / **Error** from `use_query`'s state, a settled `Err`
   renders a real error body (`results/error.rs`), and page reads are `(snapshot, page, page_size,
-  sort)`-keyed queries. Remaining plumbing is per-surface: plan rendering (P2-05), sort (P2-13).
+  sort)`-keyed queries. Remaining plumbing is per-surface: plan rendering (P2-05); column sort
+  landed with P2-13.
   The toolbar's Run→Cancel flip landed with P2-15 (the running body's Cancel with P2-06).
 
 The logic behind every feature already lives in `strata-core` (`[core ✓]`). The snapshot design
@@ -47,7 +48,7 @@ now have their read model.
 | P2-10 | Gutter double-click → row detail (record view) | ⬜ | Rz5 | P2-03 |
 | P2-11 | Copy affordances (TSV/CSV/JSON/MD) | ⬜ | Rz4 | P2-03 |
 | P2-12 | Cell double-click → nested-data view | ⬜ | U5 | P2-03 |
-| P2-13 | Column sort | 🟢 | Rz6 | P2-01/03 |
+| P2-13 | Column sort | ✅ | Rz6 | P2-01/03 |
 | P2-14 | Clear results | ✅ | Rz8 | P2-02 |
 | P2-15 | Run / Explain / Analyze buttons wiring | ✅ | E4 | P2-01 |
 | P2-16 | Editor toolbar actions (Format/Preview/Save-as-view) | ✅ | — | P2-01 |

@@ -25,6 +25,7 @@ use strata_core::config::{Command, Settings};
 use super::error::ErrorState;
 use super::find::FindState;
 use super::selection::{CellRole, SelCtl, Selection};
+use super::sort::SortState;
 use super::toolbar::DataGridToolbar;
 use crate::apps::project::state::TabId;
 use crate::components::divider::Divider;
@@ -125,6 +126,9 @@ pub struct DataGrid {
     tab: TabId,
     /// Find-in-results (P2-09): the popover state the toolbar renders and ⌘F / Esc drive.
     find: FindState,
+    /// Column sort (P2-13): the intent the header chevrons cycle; the results pane folds it
+    /// into the snapshot read.
+    sort: SortState,
     /// Absolute gutter numbers when the find filter reindexed the page (survivors keep
     /// their original positions, so the gutter shows gaps); `None` = number by position.
     row_nums: Option<Rc<Vec<usize>>>,
@@ -139,6 +143,7 @@ impl DataGrid {
         row_base: usize,
         tab: TabId,
         find: FindState,
+        sort: SortState,
     ) -> Self {
         Self {
             run,
@@ -146,6 +151,7 @@ impl DataGrid {
             row_base,
             tab,
             find,
+            sort,
             row_nums: None,
             density: Density::Comfortable,
             theme: None,
@@ -274,6 +280,7 @@ impl Component for DataGrid {
                 viewport,
                 hold_w,
                 sel: sel_ctl,
+                sort: self.sort,
                 name_color: theme.header_color,
                 active_color: theme.header_active_color,
                 type_color: col.kind.type_color(&theme),

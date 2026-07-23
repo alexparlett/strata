@@ -18,6 +18,7 @@ pub enum IconName {
     Rows,
     Plus,
     ChevronDown,
+    ChevronUp,
     ChevronLeft,
     ChevronRight,
     Dots,
@@ -49,6 +50,7 @@ impl IconName {
             IconName::Rows => ROWS,
             IconName::Plus => PLUS,
             IconName::ChevronDown => CHEVRON_DOWN,
+            IconName::ChevronUp => CHEVRON_UP,
             IconName::ChevronLeft => CHEVRON_LEFT,
             IconName::ChevronRight => CHEVRON_RIGHT,
             IconName::Dots => DOTS,
@@ -128,6 +130,8 @@ const ROWS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24
 // New query (+), tab-list chevron, and tab-actions overflow dots — from the strip's right cluster.
 const PLUS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>"#;
 const CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
+// Header sort chevron, ascending (Rz6).
+const CHEVRON_UP: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>"#;
 // Status-bar pager prev/next.
 const CHEVRON_LEFT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>"#;
 const CHEVRON_RIGHT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>"#;

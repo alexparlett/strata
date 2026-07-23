@@ -7,6 +7,7 @@ use super::{
     DEFAULT_COL_W, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H, MAX_COL_W, MIN_COL_W, TRAIL_W,
 };
 use crate::apps::project::views::workbench::results::selection::SelCtl;
+use crate::apps::project::views::workbench::results::sort::SortState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Meta, MonoValue};
@@ -25,6 +26,7 @@ pub struct HeaderCell {
     pub viewport: State<Area>,
     pub hold_w: State<f32>,
     pub sel: SelCtl,
+    pub sort: SortState,
     pub name_color: Color,
     pub active_color: Color,
     pub type_color: Color,
@@ -46,6 +48,21 @@ impl Component for HeaderCell {
         // (activating this one *and* deactivating the previously-selected one).
         let active = sel.sel.read().cols().contains(&index);
         let name_color = if active { self.active_color } else { self.name_color };
+        // The sort chevron (Rz6): up = asc, down = desc / unsorted. Unsorted is invisible
+        // until the header is hovered (the comp's faint-on-hover reveal — the button stays
+        // mounted so the name row's layout never shifts); the sorted column's stays lit in
+        // the accent. A press cycles asc → desc → clear; `stop_propagation` on the down so
+        // grabbing it never selects the column (the Dioxus `col-sort` contract).
+        let sort = self.sort;
+        let dir = sort.dir(index);
+        let sort_icon = if dir == Some(true) { IconName::ChevronUp } else { IconName::ChevronDown };
+        let sort_color = if dir.is_some() {
+            self.active_color
+        } else if hovered() {
+            self.arrow
+        } else {
+            Color::TRANSPARENT
+        };
         rect()
             .width(Size::px(self.w))
             .height(Size::px(HEADER_H))
@@ -80,13 +97,20 @@ impl Component for HeaderCell {
                             .main_align(Alignment::SpaceBetween)
                             .cross_align(Alignment::Center)
                             .child(MonoValue::new(self.name.clone()).color(name_color).max_lines(1))
-                            // Decorative for the spike; the sort action wires up with the runs store.
                             .child(
-                                Button::new()
-                                    .flat()
-                                    .width(Size::px(16.))
-                                    .height(Size::px(16.))
-                                    .child(Icon::new(IconName::ChevronDown).size(11.)),
+                                TooltipContainer::new(Tooltip::new("Sort by this column"))
+                                    .position(AttachedPosition::Bottom)
+                                    .child(
+                                        Button::new()
+                                            .flat()
+                                            .width(Size::px(16.))
+                                            .height(Size::px(16.))
+                                            .on_pointer_down(|e: Event<PointerEventData>| {
+                                                e.stop_propagation();
+                                            })
+                                            .on_press(move |_| sort.cycle(index))
+                                            .child(Icon::new(sort_icon).size(11.).color(sort_color)),
+                                    ),
                             ),
                     )
                     .child(Meta::new(self.dtype.clone()).color(self.type_color)),

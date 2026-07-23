@@ -20,11 +20,13 @@ mod explain_plan;
 mod find;
 mod running;
 mod selection;
+mod sort;
 mod status_bar;
 mod toolbar;
 
 use datagrid::{DataGrid, GridData, PageRead};
 use find::FindState;
+use sort::SortState;
 use empty::EmptyState;
 use error::ErrorState;
 use running::Running;
@@ -183,6 +185,9 @@ impl Component for ResultsBody {
         // invariant the pager jump protects) — so it clears the selection.
         let find = FindState::use_new();
         let sel = use_consume::<State<Selection>>();
+        // Column sort (P2-13): per-press view intent, like the page — a new Run starts
+        // unsorted. Cycling clears the selection and jumps to page 1 itself (see `sort.rs`).
+        let sort = SortState::use_new(page, sel);
         use_side_effect(move || {
             let _ = find.query.read();
             let mut sel = sel;
@@ -197,22 +202,29 @@ impl Component for ResultsBody {
         // this read — but only while the page size still matches the Run's own: a page-size change
         // re-cuts the snapshot, so even page 1 must then be a real read. Disabled until the Run
         // settles rows — the placeholder id of a disabled read never reaches the engine.
-        let snapshot = match &*query.read().state() {
-            QueryStateData::Settled { res: Ok(QueryOutcome::Rows(rows)), .. } => {
-                rows.output.snapshot
-            }
-            _ => None,
+        // The sort intent resolves to the engine's `(column name, ascending)` here — the one
+        // boundary that knows the settled schema (the intent itself is index-keyed; an index
+        // the schema can't resolve falls back to unsorted rather than erroring the read).
+        let (snapshot, sort_key) = match &*query.read().state() {
+            QueryStateData::Settled { res: Ok(QueryOutcome::Rows(rows)), .. } => (
+                rows.output.snapshot,
+                (*sort.by.read()).and_then(|(ci, asc)| {
+                    rows.output.columns.get(ci).map(|c| (c.name.clone(), asc))
+                }),
+            ),
+            _ => (None, None),
         };
         let cur_page = *page.read();
         let cur_size = *page_size.read();
-        let native_page1 = cur_page == 1 && cur_size == run_size;
+        // A sorted read is never the Run's own page 1 — the snapshot re-orders under it.
+        let native_page1 = cur_page == 1 && cur_size == run_size && sort_key.is_none();
         let fetch = use_query(
             Query::new(
                 PageSpec {
                     snapshot: snapshot.unwrap_or(SnapshotId(0)),
                     page: cur_page,
                     page_size: cur_size,
-                    sort: None,
+                    sort: sort_key,
                 },
                 FetchSnapshotPage(engine.captured()),
             )
@@ -287,7 +299,7 @@ impl Component for ResultsBody {
                     })
                     .view(view.clone());
                 (
-                    DataGrid::new(run_grid, view, row_base, self.spec.tab, find)
+                    DataGrid::new(run_grid, view, row_base, self.spec.tab, find, sort)
                         .row_nums(row_nums)
                         .into(),
                     bar,
