@@ -1,7 +1,8 @@
-//! The icon segmented toggle (design `segmented_toggle`): a general two/three-option
-//! accent-tint segmented control — glyphs in one bordered pill with 1px dividers, the active
-//! segment an accent-tint fill + accent icon. First used as the results Table/Chart switcher
-//! (P2-07), but not specific to it — hence the shared component + its own theme component.
+//! The segmented toggle (design `segmented_toggle`): a general two/three-option accent-tint
+//! segmented control — glyph or text segments in one bordered pill with 1px dividers, the
+//! active segment an accent-tint fill + accent content. First used as the results Table/Chart
+//! switcher (P2-07, icons), then the plan view's Physical/Logical tabs (P2-05, text) — not
+//! specific to either, hence the shared component + its own theme component.
 //!
 //! Shaped like Freya's built-in `SegmentedButton`/`ButtonSegment`: the pill is a container,
 //! each [`ToggleSegment`] child carries its own `selected` + `on_press` — the caller owns the
@@ -11,6 +12,7 @@ use freya::components::use_theme;
 use freya::prelude::*;
 
 use crate::components::icon::{Icon, IconName};
+use crate::components::typography::Control;
 
 define_theme!(
     %[component]
@@ -74,12 +76,20 @@ impl Component for SegmentedToggle {
     }
 }
 
-/// One 32×24 segment: a glyph wearing its tooltip `title`, the active dress (accent tint +
-/// accent glyph) when `selected`, and the comp's soft hover (a 7% text-colour overlay,
-/// semantic — read from the palette) otherwise.
+/// What a segment shows: a 15px glyph (the 32×24 icon segment) or a control-role text label
+/// (the segment hugs it with 12px side padding).
+#[derive(PartialEq, Clone)]
+enum SegmentContent {
+    Icon(IconName),
+    Text(String),
+}
+
+/// One 24px-tall segment: a glyph or label wearing its tooltip `title`, the active dress
+/// (accent tint + accent content) when `selected`, and the comp's soft hover (a 7% text-colour
+/// overlay, semantic — read from the palette) otherwise.
 #[derive(PartialEq)]
 pub struct ToggleSegment {
-    icon: IconName,
+    content: SegmentContent,
     title: Option<String>,
     selected: bool,
     on_press: Option<EventHandler<Event<PressEventData>>>,
@@ -88,7 +98,18 @@ pub struct ToggleSegment {
 
 impl ToggleSegment {
     pub fn new(icon: IconName) -> Self {
-        Self { icon, title: None, selected: false, on_press: None, theme: None }
+        Self { content: SegmentContent::Icon(icon), title: None, selected: false, on_press: None, theme: None }
+    }
+
+    /// A text segment (`Control` typography) — e.g. the plan view's Physical/Logical tabs.
+    pub fn text(label: impl Into<String>) -> Self {
+        Self {
+            content: SegmentContent::Text(label.into()),
+            title: None,
+            selected: false,
+            on_press: None,
+            theme: None,
+        }
     }
 
     /// The tooltip this segment wears (the comp's `title=`).
@@ -122,8 +143,8 @@ impl Component for ToggleSegment {
             Color::TRANSPARENT
         };
         let on_press = self.on_press.clone();
+        let color = if self.selected { theme.item_active_color } else { theme.item_color };
         let segment = rect()
-            .width(Size::px(32.))
             .height(Size::px(24.))
             .center()
             .background(background)
@@ -133,12 +154,15 @@ impl Component for ToggleSegment {
                 if let Some(on_press) = &on_press {
                     on_press.call(e);
                 }
-            })
-            .child(
-                Icon::new(self.icon)
-                    .color(if self.selected { theme.item_active_color } else { theme.item_color })
-                    .size(15.),
-            );
+            });
+        let segment = match &self.content {
+            SegmentContent::Icon(icon) => {
+                segment.width(Size::px(32.)).child(Icon::new(*icon).color(color).size(15.))
+            }
+            SegmentContent::Text(label) => {
+                segment.padding((0., 12.)).child(Control::new(label.clone()).color(color))
+            }
+        };
         match &self.title {
             Some(title) => TooltipContainer::new(Tooltip::new(title.clone()))
                 .position(AttachedPosition::Bottom)

@@ -844,6 +844,65 @@
         "reference": "primary"
       }
     },
+    "explain_plan": {
+      "background": {
+        "specific": "#eceef2"
+      },
+      "card_background": {
+        "reference": "surface_secondary"
+      },
+      "border_fill": {
+        "specific": "#edeef1"
+      },
+      "group_background": {
+        "reference": "background"
+      },
+      "insight_background": {
+        "specific": "#fafbfc"
+      },
+      "color": {
+        "specific": "#5f6771"
+      },
+      "value_color": {
+        "reference": "text_primary"
+      },
+      "key_color": {
+        "specific": "#b2b7c0"
+      },
+      "muted_color": {
+        "reference": "text_placeholder"
+      },
+      "raw_color": {
+        "reference": "text_secondary"
+      },
+      "hot_color": {
+        "reference": "warning"
+      },
+      "warm_color": {
+        "specific": "#9a6700"
+      },
+      "type_str_color": {
+        "specific": "#0a7d33"
+      },
+      "type_num_color": {
+        "specific": "#0550ae"
+      },
+      "type_bool_color": {
+        "specific": "#8250df"
+      },
+      "type_ts_color": {
+        "specific": "#bc4c00"
+      },
+      "type_struct_color": {
+        "specific": "#bf3989"
+      },
+      "type_list_color": {
+        "specific": "#0969da"
+      },
+      "type_map_color": {
+        "specific": "#9a6700"
+      }
+    },
     "datagrid": {
       "background": {
         "reference": "surface_primary"

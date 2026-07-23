@@ -32,6 +32,7 @@ resolver = "2"
 [workspace.dependencies]
 freya = { path = "crates/freya/crates/freya" }
 freya-core = { path = "crates/freya/crates/freya-core" }
+freya-testing = { path = "crates/freya/crates/freya-testing" }
 freya-engine = { path = "crates/freya/crates/freya-engine" }
 freya-edit = { path = "crates/freya/crates/freya-edit" }
 freya-components = { path = "crates/freya/crates/freya-components" }

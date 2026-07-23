@@ -95,7 +95,7 @@ pub struct PlanNode {
 
 /// Which plan the EXPLAIN view shows (physical vs logical). `EXPLAIN ANALYZE`
 /// forces Physical (the "Plan with Metrics").
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum PlanTab {
     #[default]
     Physical,
