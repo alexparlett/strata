@@ -206,7 +206,7 @@ impl Component for ResultsBody {
                     })
                     .view(view.clone());
                 let row_base = (cur_page - 1) * cur_size;
-                (DataGrid::new(run_grid, view, row_base).into(), bar)
+                (DataGrid::new(run_grid, view, row_base, self.request).into(), bar)
             }
             // The plan body is a placeholder — P2-05 renders the settled `QueryPlan`.
             QueryStateData::Settled { res: Ok(QueryOutcome::Plan(plan)), .. } => (
