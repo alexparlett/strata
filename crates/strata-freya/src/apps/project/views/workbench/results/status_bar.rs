@@ -300,8 +300,10 @@ impl AggView {
     }
 }
 
-/// Aggregate the selection over the page's real cells — the Dioxus `selection_agg`, minus the
-/// find-in-results filter (P2-09). Numeric = a `Kind::Num` column's non-null cell; the engine
+/// Aggregate the selection over the page's real cells — the Dioxus `selection_agg`. The view
+/// handed in is the *find-filtered* page (P2-09), which the page-local selection indexes
+/// into, so the aggregate stays honest under an active filter.
+/// Numeric = a `Kind::Num` column's non-null cell; the engine
 /// formats numbers with thousands separators, so parsing strips the commas back out.
 fn selection_agg(sel: &Selection, data: &GridData) -> Option<AggView> {
     let ncols = data.columns.len();

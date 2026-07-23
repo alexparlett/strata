@@ -17,12 +17,14 @@ mod datagrid;
 mod empty;
 mod error;
 mod explain_plan;
+mod find;
 mod running;
 mod selection;
 mod status_bar;
 mod toolbar;
 
 use datagrid::{DataGrid, GridData, PageRead};
+use find::FindState;
 use empty::EmptyState;
 use error::ErrorState;
 use running::Running;
@@ -175,6 +177,20 @@ impl Component for ResultsBody {
         let run_size = self.spec.page_size;
         let page_size = use_state(move || run_size);
 
+        // Find-in-results (P2-09): per-press state, like the page number — a new Run starts
+        // unfiltered. A query change reshuffles the filtered rows under the page-local
+        // selection — the old indices would silently point at *different* cells (the same
+        // invariant the pager jump protects) — so it clears the selection.
+        let find = FindState::use_new();
+        let sel = use_consume::<State<Selection>>();
+        use_side_effect(move || {
+            let _ = find.query.read();
+            let mut sel = sel;
+            if *sel.peek() != Selection::None {
+                sel.set(Selection::None);
+            }
+        });
+
         // The current page's snapshot read (SNAPSHOT_SPEC §6): keyed by [`PageSpec`] and cached
         // forever (`stale_time(MAX)` — reads of an immutable snapshot never go stale), so a
         // revisited page settles straight from the cache. The Run's embedded page 1 short-circuits
@@ -250,6 +266,18 @@ impl Component for ResultsBody {
                         }
                     }
                 };
+                // The find filter narrows the *resolved* page (page-bounded — see `find`):
+                // the grid and the status bar's selection aggregate both see the filtered
+                // rows; the pager still walks the unfiltered snapshot.
+                let row_base = (cur_page - 1) * cur_size;
+                let needle = find.needle();
+                let (view, row_nums) = match &view {
+                    PageRead::Ready(data) => {
+                        let fv = find::filter_page(needle.as_deref(), data, row_base);
+                        (PageRead::Ready(fv.data), fv.row_nums)
+                    }
+                    other => (other.clone(), None),
+                };
                 let bar = StatusBar::new(ResultsState::Grid)
                     .pager(Pager { page, page_size, total: rows.output.total })
                     .info(RunInfo {
@@ -258,8 +286,12 @@ impl Component for ResultsBody {
                         settled: *settlement_instant,
                     })
                     .view(view.clone());
-                let row_base = (cur_page - 1) * cur_size;
-                (DataGrid::new(run_grid, view, row_base, self.spec.tab).into(), bar)
+                (
+                    DataGrid::new(run_grid, view, row_base, self.spec.tab, find)
+                        .row_nums(row_nums)
+                        .into(),
+                    bar,
+                )
             }
             // The plan body is a placeholder — P2-05 renders the settled `QueryPlan`.
             QueryStateData::Settled { res: Ok(QueryOutcome::Plan(plan)), .. } => (
