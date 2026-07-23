@@ -1,5 +1,5 @@
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{QueryMode, QuerySpec, RunId, DEFAULT_PAGE_SIZE};
+use crate::apps::project::query::{QueryMode, QuerySpec, RunId};
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState, TabId};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
@@ -45,7 +45,7 @@ impl Component for EditorToolbar {
         // The Project store — save-target access only, so no channel subscription (the
         // toolbar shows nothing catalog-derived).
         let project = use_radio_station::<ProjectState, ProjChan>();
-        let mut request = self.request;
+        let request = self.request;
 
         // This tab's press while it's still executing: the current request belongs to this
         // tab *and* the running mirror still holds its nonce (`request` alone can't tell —
@@ -66,23 +66,10 @@ impl Component for EditorToolbar {
             .get(&id)
             .is_none_or(|t| t.editor.rope.chars().all(|c| c.is_whitespace()));
 
-        // A press is an *action*: snapshot the editor text now, mint a fresh nonce, and
-        // set it as the window's current execution. The blank guard backs up the visual
-        // gate (Explain/Analyze share it). `read()` here is peek-equivalent: inside an
-        // event handler there's no reactive context, so it cannot subscribe.
-        let mut press = move |mode: QueryMode| {
-            let sql = radio.read().tabs.get(&id).map(|t| t.text()).unwrap_or_default();
-            if sql.trim().is_empty() {
-                return;
-            }
-            request.set(Some(QuerySpec {
-                tab: id,
-                run: RunId::new(),
-                sql,
-                mode,
-                page_size: DEFAULT_PAGE_SIZE,
-            }));
-        };
+        // A press is an *action* — `actions::press_query` snapshots the text, mints a
+        // fresh nonce, and sets the window's current execution; the ⌘↵ listener in the
+        // workbench dispatches the very same call.
+        let press = move |mode: QueryMode| actions::press_query(radio, id, request, mode);
 
         let run_state = if in_flight.is_some() {
             RunState::Running
@@ -96,14 +83,11 @@ impl Component for EditorToolbar {
         let save_engine = engine.clone();
         let view_engine = engine.clone();
 
-        // Running → the press is Cancel: engine-side abort (tag-guarded, S14 — a stale press
-        // can't kill a newer run) + drop the trigger, unmounting the results body back to
-        // Empty. Otherwise it's Run. Disabled never fires (RunButton swallows it).
+        // Running → the press is Cancel (`actions::cancel_run` — shared with the Running
+        // body's control and Esc). Otherwise it's Run. Disabled never fires (RunButton
+        // swallows it).
         let run_press = move |_| match in_flight {
-            Some(run) => {
-                engine.cancel(id.into(), run.into());
-                request.set(None);
-            }
+            Some(run) => actions::cancel_run(&engine, id, run, request),
             None => press(QueryMode::Run),
         };
 

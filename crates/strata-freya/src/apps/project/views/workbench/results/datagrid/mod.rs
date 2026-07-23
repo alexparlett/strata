@@ -20,6 +20,8 @@ use std::rc::Rc;
 use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
 
+use strata_core::config::{Command, Settings};
+
 use super::error::ErrorState;
 use super::selection::{CellRole, SelCtl, Selection};
 use super::toolbar::DataGridToolbar;
@@ -162,6 +164,7 @@ impl Component for DataGrid {
         // Shared selection state + a Copy controller the cells call on pointer events. Freya pointer
         // events carry no modifiers, so shift / ⌘ are tracked via the root's global key up/down below.
         let sel = use_consume::<State<Selection>>();
+        let settings = use_consume::<State<Settings>>();
         let anchor = use_state(|| None::<usize>);
         let drag = use_state(|| false);
         let mut shift = use_state(|| false);
@@ -395,11 +398,29 @@ impl Component for DataGrid {
                 }
             })
             .on_global_pointer_press(move |_: Event<PointerEventData>| sel_ctl.end_drag())
-            .on_global_key_down(move |e: Event<KeyboardEventData>| match &e.key {
-                Key::Named(NamedKey::Shift) => shift.set(true),
-                Key::Named(NamedKey::Meta) | Key::Named(NamedKey::Control) => meta.set(true),
-                Key::Named(NamedKey::Escape) => sel_ctl.clear(),
-                _ => {}
+            .on_global_key_down({
+                // Esc = clear the selection — the tail of the dismiss chain (menus, a
+                // rename, and a running body all sit earlier in document order and
+                // consume first). Declines when nothing is selected, leaving the press
+                // unconsumed. The modifier mirroring is separate bookkeeping for the
+                // pointer events (which carry no modifiers), not a shortcut.
+                let mut esc = crate::keymap::on_command(settings, Command::Cancel, move || {
+                    let had = *sel_ctl.sel.peek() != Selection::None;
+                    if had {
+                        sel_ctl.clear();
+                    }
+                    had
+                });
+                move |e: Event<KeyboardEventData>| {
+                    match &e.key {
+                        Key::Named(NamedKey::Shift) => shift.set(true),
+                        Key::Named(NamedKey::Meta) | Key::Named(NamedKey::Control) => {
+                            meta.set(true)
+                        }
+                        _ => {}
+                    }
+                    esc(e);
+                }
             })
             .on_global_key_up(move |e: Event<KeyboardEventData>| match &e.key {
                 Key::Named(NamedKey::Shift) => shift.set(false),

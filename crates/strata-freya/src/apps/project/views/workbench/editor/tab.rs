@@ -3,15 +3,19 @@ use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
 use freya::components::use_theme;
-use freya::prelude::{rect, use_a11y, ChildrenExt, Component, ContainerSizeExt, ContainerWithContentExt, Content, IntoElement, IntoWritable, Size, State};
+use freya::prelude::{
+    rect, use_a11y, ChildrenExt, Component, ContainerSizeExt, ContainerWithContentExt, Content,
+    Event, IntoElement, IntoWritable, Key, KeyboardEventData, Modifiers, NamedKey, Size, State,
+};
 use freya::radio::use_radio;
 use strata_code_editor::prelude::{CodeEditor, CodeEditorData, EditorLanguage, Rope};
 
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a
 /// `Writable<CodeEditorData>` straight into the store on `Chan::Tab(id)`. Carries the
 /// workbench's Run trigger down to the toolbar (which writes a press into it), plus the
-/// `running` mirror the toolbar reads for its Run→Cancel flip. (The ⌘S binding onto the
-/// toolbar's save dispatch is deliberately absent — the app-wide keymap is its own slice.)
+/// `running` mirror the toolbar reads for its Run→Cancel flip. The editor's pre-key gate
+/// keeps primary-held app chords (⌘T / ⌘↵ / …) out of the buffer while letting them reach
+/// the keymap's global listeners.
 #[derive(PartialEq)]
 pub struct EditorTab {
     pub id: TabId,
@@ -61,7 +65,31 @@ impl Component for EditorTab {
                             .a11y_auto_focus(true)
                             .gutter(true)
                             .show_whitespace(false)
-                            .highlight_current_line(false),
+                            .highlight_current_line(false)
+                            // Primary-held chords belong to the app keymap unless the
+                            // editor owns them (select / copy / cut / paste / undo /
+                            // redo): skip the editor's processing — otherwise ⌘T types a
+                            // "t" and ⌘↵ inserts a newline — while the global listeners
+                            // still fire (only `prevent_default` would cancel those, and
+                            // this calls only `stop_propagation`, like the default
+                            // pre-handler). Named keys keep flowing: Ctrl/Alt+arrows are
+                            // editor navigation.
+                            .on_pre_key_down(|e: Event<KeyboardEventData>| {
+                                e.stop_propagation();
+                                if let Key::Named(NamedKey::Tab) = &e.key {
+                                    e.prevent_default();
+                                }
+                                let primary = e
+                                    .modifiers
+                                    .intersects(Modifiers::META | Modifiers::CONTROL);
+                                let editor_owned = match &e.key {
+                                    Key::Character(c) => strata_core::keymap::RESERVED_KEYS
+                                        .contains(&c.to_lowercase().as_str()),
+                                    Key::Named(NamedKey::Enter) => false,
+                                    _ => true,
+                                };
+                                !(primary && !editor_owned)
+                            }),
                     )
             )
             .child(Divider::horizontal().color(border))

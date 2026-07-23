@@ -107,6 +107,8 @@ impl Component for NavMenu {
         let query = use_state(String::new);
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let palette = NavPalette::read();
+        let closer = use_consume::<crate::apps::project::close::TabCloser>();
+        let settings = use_consume::<State<strata_core::config::Settings>>();
 
         // Open tabs + status, filtered by the search box. Read once; the guard drops before we build.
         // The filter runs over *all* tabs, in strip order.
@@ -133,7 +135,9 @@ impl Component for NavMenu {
         let rows = matches.into_iter().take(10).fold(
             rect().vertical().spacing(2.),
             |col, (id, name, active, dirty)| {
-                col.child(tab_row(id, name, active, dirty, palette, radio, open))
+                col.child(tab_row(
+                    id, name, active, dirty, palette, radio, open, closer, settings,
+                ))
             },
         );
 
@@ -187,6 +191,8 @@ fn tab_row(
     palette: NavPalette,
     mut radio: Radio<SessionState, Chan>,
     mut open: State<bool>,
+    closer: crate::apps::project::close::TabCloser,
+    settings: State<strata_core::config::Settings>,
 ) -> impl IntoElement {
     let fg = palette.name_fg(active);
     let close_fg = palette.faint;
@@ -222,7 +228,9 @@ fn tab_row(
                         .cross_align(Alignment::Center)
                         .on_press(move |e: Event<PressEventData>| {
                             e.stop_propagation();
-                            radio.write().close_one(id);
+                            // Through the shared gate — the T2 confirm when this tab's
+                            // query is in flight.
+                            closer.close(radio, settings, id);
                         })
                         .child(Icon::new(IconName::Close).color(close_fg).size(12.)),
                 ),
@@ -265,7 +273,10 @@ impl Component for OverflowMenu {
                         radio.write().reopen_last();
                         open.set(false);
                     })
-                    .child(Prose::new("Reopen closed tab")),
+                    .child(super::menu::menu_row(
+                        "Reopen closed tab",
+                        strata_core::config::Command::ReopenTab,
+                    )),
             );
 
         Attached::new(cluster_button(IconName::Dots, 15.).on_press(move |_| open.toggle()))

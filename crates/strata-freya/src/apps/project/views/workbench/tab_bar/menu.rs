@@ -7,10 +7,26 @@
 
 use freya::prelude::*;
 use freya::radio::Radio;
+use strata_core::config::Command;
 
 use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::components::divider::Divider;
 use crate::components::typography::Prose;
+use crate::keymap::KeyHint;
+
+/// A menu row with a right-aligned, keymap-derived shortcut hint. The row fills the
+/// button (`MenuButton` is `fill_minimum`), so the hint hugs the menu's right edge and
+/// tracks any rebind reactively ([`KeyHint`] renders nothing when unbound).
+pub fn menu_row(label: &str, hint: Command) -> impl IntoElement {
+    rect()
+        .horizontal()
+        .width(Size::fill())
+        .cross_align(Alignment::Center)
+        .main_align(Alignment::SpaceBetween)
+        .spacing(16.)
+        .child(Prose::new(label))
+        .child(KeyHint(hint))
+}
 
 /// Build the tab context menu for tab `id`. `sep` is the separator colour, passed in because this runs
 /// from an event handler — no hooks, so it can't read the theme itself. `renaming` is the tab's own
@@ -22,6 +38,8 @@ pub fn tab_context_menu(
     mut radio: Radio<SessionState, Chan>,
     sep: Color,
     mut renaming: State<bool>,
+    closer: crate::apps::project::close::TabCloser,
+    settings: State<strata_core::config::Settings>,
 ) -> Menu {
     Menu::new()
         // Rename → just flip the tab into rename mode. The tab reacts (seeds the draft + focuses the
@@ -46,10 +64,12 @@ pub fn tab_context_menu(
         .child(
             MenuButton::new()
                 .on_press(move |_| {
-                    radio.write().close_one(id);
+                    // Through the shared gate — the T2 confirm when this tab's query
+                    // is in flight.
+                    closer.close(radio, settings, id);
                     ContextMenu::close();
                 })
-                .child(Prose::new("Close")),
+                .child(menu_row("Close", Command::CloseActiveTab)),
         )
         .child(
             MenuButton::new()
@@ -82,7 +102,7 @@ pub fn tab_context_menu(
                     radio.write().reopen_last();
                     ContextMenu::close();
                 })
-                .child(Prose::new("Reopen closed tab")),
+                .child(menu_row("Reopen closed tab", Command::ReopenTab)),
         )
 }
 

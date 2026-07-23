@@ -276,16 +276,25 @@
     },
     "checkbox": {
       "unselected_fill": {
-        "reference": "surface_secondary"
+        "specific": "rgba(0,0,0,0)"
+      },
+      "unselected_border_fill": {
+        "specific": "#c4c8d0"
       },
       "selected_fill": {
         "reference": "primary"
       },
-      "selected_icon_fill": {
-        "reference": "text_inverse"
+      "selected_border_fill": {
+        "reference": "primary"
       },
-      "border_fill": {
-        "specific": "#c4c8d0"
+      "selected_icon_fill": {
+        "specific": "#ffffff"
+      },
+      "hover_border_fill": {
+        "specific": "#aeb3bd"
+      },
+      "focus_border_fill": {
+        "reference": "border_focus"
       }
     },
     "radio": {
