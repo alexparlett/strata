@@ -1,13 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://strata.app/theme.schema.json",
-  "title": "Strata theme",
-  "description": "A Strata colour theme. Colours are authored in named groups for readability; the loader flattens every leaf into one token map keyed by the CSS-variable name (e.g. `bg` -> `--bg`). Group names are cosmetic. Missing tokens fall back to the mode's built-in default.",
+  "$id": "https://strata.dev/schemas/freya-theme.schema.json",
+  "title": "Strata (Freya) theme",
   "type": "object",
   "required": [
     "id",
     "name",
-    "mode"
+    "mode",
+    "sheet"
   ],
   "additionalProperties": false,
   "properties": {
@@ -15,241 +15,1312 @@
       "type": "string"
     },
     "id": {
-      "type": "string",
-      "description": "Stable unique id (lowercase, no spaces). Used to select and to `extends`.",
-      "pattern": "^[a-z0-9][a-z0-9-]*$"
+      "type": "string"
     },
     "name": {
-      "type": "string",
-      "description": "Display name shown in Settings."
+      "type": "string"
     },
     "author": {
       "type": "string"
     },
-    "extends": {
-      "type": "string",
-      "description": "Optional base theme id; this theme's tokens are layered over the base's."
-    },
     "mode": {
-      "type": "string",
       "enum": [
         "dark",
         "light"
-      ],
-      "description": "Light/dark grouping — drives 'Sync with OS' and per-mode fallback."
+      ]
     },
-    "colors": {
+    "sheet": {
+      "$ref": "#/$defs/sheet"
+    },
+    "components": {
       "type": "object",
-      "description": "Colour tokens grouped by role. Groups are for readability only — leaves are flattened by name.",
-      "additionalProperties": {
-        "$ref": "#/definitions/colorGroup"
-      },
+      "additionalProperties": false,
       "properties": {
-        "surface": {
-          "$ref": "#/definitions/colorGroup",
-          "description": "App surfaces from deepest to most elevated.",
+        "button": {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "bg": {
-              "$ref": "#/definitions/color"
+            "background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "panel": {
-              "$ref": "#/definitions/color"
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "main": {
-              "$ref": "#/definitions/color",
-              "description": "Primary content canvas (results grid / editor / active tab)."
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "surface": {
-              "$ref": "#/definitions/color",
-              "description": "Elevated containers (modals, popovers, cards, command palette)."
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
             },
-            "surface-sunk": {
-              "$ref": "#/definitions/color"
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
             },
-            "elev": {
-              "$ref": "#/definitions/color",
-              "description": "Interactive control base (buttons, inputs, chips)."
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
             },
-            "elev2": {
-              "$ref": "#/definitions/color"
+            "disabled_border_fill": {
+              "$ref": "#/$defs/colorPref"
             },
-            "elev3": {
-              "$ref": "#/definitions/color"
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },
-        "border": {
-          "$ref": "#/definitions/colorGroup",
+        "filled_button": {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "line": {
-              "$ref": "#/definitions/color"
+            "background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "line2": {
-              "$ref": "#/definitions/color"
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "line3": {
-              "$ref": "#/definitions/color"
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "line-hi": {
-              "$ref": "#/definitions/color"
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },
-        "text": {
-          "$ref": "#/definitions/colorGroup",
-          "description": "Text ramp from primary to faint.",
+        "outline_button": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "flat_button": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "button_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "margin": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "compact_button_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "margin": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "expanded_button_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "margin": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "filled_card": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "shadow": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "outline_card": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "shadow": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "card_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "compact_card_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "placeholder_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "filled_input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "placeholder_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "flat_input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "placeholder_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "input_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "inner_margin": {
+              "$ref": "#/$defs/gapsPref"
+            }
+          }
+        },
+        "compact_input_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "inner_margin": {
+              "$ref": "#/$defs/gapsPref"
+            }
+          }
+        },
+        "expanded_input_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "inner_margin": {
+              "$ref": "#/$defs/gapsPref"
+            }
+          }
+        },
+        "switch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "thumb_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "toggled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "toggled_thumb_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "switch_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "margin": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "width": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "height": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "padding": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "thumb_size": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "toggled_thumb_size": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "pressed_thumb_size_offset": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "thumb_offset": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "toggled_thumb_offset": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "expanded_switch_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "margin": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "width": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "height": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "padding": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "thumb_size": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "toggled_thumb_size": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "pressed_thumb_size_offset": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "thumb_offset": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "toggled_thumb_offset": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "checkbox": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "unselected_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_icon_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "radio": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "unselected_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "select": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "margin": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "list_margin": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "select_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "background_button": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "arrow_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "menu_container": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "shadow": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "menu_item": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "select_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "select_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "popup": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "spacing": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "tooltip": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "font_size": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "floating_tab": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "segmented_button": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "button_segment": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "selected_padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_icon_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "chip": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "margin": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_icon_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_icon_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "sidebar_item": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "focus_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "margin": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "padding": {
+              "$ref": "#/$defs/gapsPref"
+            }
+          }
+        },
+        "accordion": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "scrollbar": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "thumb_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_thumb_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_thumb_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "size": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "progressbar": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "progress_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "height": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "circular_loader": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "primary_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "skeleton": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "resizable_handle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "slider": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "thumb_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "thumb_inner_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "color_picker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "table": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "arrow_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "row_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_row_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "header_bar": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "code_editor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "gutter_selected": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "gutter_unselected": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "gutter_border": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "line_selected_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "cursor": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "highlight": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "whitespace": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "font_family": {
+              "$ref": "#/$defs/fontPref"
+            },
+            "font_size": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "font_weight": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "line_height": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
+        "code_editor_syntax": {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "text": {
-              "$ref": "#/definitions/color"
+              "$ref": "#/$defs/colorPref"
             },
-            "text2": {
-              "$ref": "#/definitions/color"
+            "whitespace": {
+              "$ref": "#/$defs/colorPref"
             },
-            "text3": {
-              "$ref": "#/definitions/color"
+            "attribute": {
+              "$ref": "#/$defs/colorPref"
             },
-            "dim": {
-              "$ref": "#/definitions/color"
+            "boolean": {
+              "$ref": "#/$defs/colorPref"
             },
-            "dim2": {
-              "$ref": "#/definitions/color"
+            "comment": {
+              "$ref": "#/$defs/colorPref"
             },
-            "dim3": {
-              "$ref": "#/definitions/color"
+            "constant": {
+              "$ref": "#/$defs/colorPref"
             },
-            "faint": {
-              "$ref": "#/definitions/color"
+            "constructor": {
+              "$ref": "#/$defs/colorPref"
             },
-            "faint2": {
-              "$ref": "#/definitions/color"
+            "escape": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "function": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "function_macro": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "function_method": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "keyword": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "label": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "module": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "number": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "operator": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "property": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "punctuation": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "punctuation_bracket": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "punctuation_delimiter": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "punctuation_special": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "string": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "string_escape": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "string_special": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "tag": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_literal": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_reference": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_title": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_uri": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "text_emphasis": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "variable": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "variable_builtin": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "variable_parameter": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },
-        "accent": {
-          "$ref": "#/definitions/colorGroup",
+        "run_button": {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "disabled_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "running_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "running_hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "running_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "cancel_button": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "tab_bar": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "tab": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_color": {
+              "$ref": "#/$defs/colorPref"
+            },
             "accent": {
-              "$ref": "#/definitions/color"
-            },
-            "accent-ink": {
-              "$ref": "#/definitions/color",
-              "description": "Text/ink drawn on top of the accent fill."
-            },
-            "accent-soft": {
-              "$ref": "#/definitions/color",
-              "description": "Accent tint (often an rgba/color-mix) for selected/active fills."
+              "$ref": "#/$defs/colorPref"
             }
           }
         },
-        "status": {
-          "$ref": "#/definitions/colorGroup",
+        "status_bar": {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "green": {
-              "$ref": "#/definitions/color"
+            "background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "red": {
-              "$ref": "#/definitions/color"
+            "color": {
+              "$ref": "#/$defs/colorPref"
             },
-            "red2": {
-              "$ref": "#/definitions/color"
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
             },
-            "orange": {
-              "$ref": "#/definitions/color"
+            "sub_color": {
+              "$ref": "#/$defs/colorPref"
             },
-            "purple": {
-              "$ref": "#/definitions/color"
-            },
-            "warm": {
-              "$ref": "#/definitions/color"
+            "control_color": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },
-        "dataType": {
-          "$ref": "#/definitions/colorGroup",
-          "description": "Arrow/data-type colours used in cells, the inspector and JSON views.",
+        "datagrid": {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "t-str": {
-              "$ref": "#/definitions/color"
+            "background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "t-num": {
-              "$ref": "#/definitions/color"
+            "arrow_fill": {
+              "$ref": "#/$defs/colorPref"
             },
-            "t-bool": {
-              "$ref": "#/definitions/color"
+            "row_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "t-ts": {
-              "$ref": "#/definitions/color"
+            "zebra_row_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "t-struct": {
-              "$ref": "#/definitions/color"
+            "cell_hover_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "t-list": {
-              "$ref": "#/definitions/color"
+            "selection_border_fill": {
+              "$ref": "#/$defs/colorPref"
             },
-            "t-map": {
-              "$ref": "#/definitions/color"
-            }
-          }
-        },
-        "syntax": {
-          "$ref": "#/definitions/colorGroup",
-          "description": "SQL editor syntax highlighting.",
-          "properties": {
-            "syn-keyword": {
-              "$ref": "#/definitions/color"
+            "gutter_color": {
+              "$ref": "#/$defs/colorPref"
             },
-            "syn-function": {
-              "$ref": "#/definitions/color"
+            "gutter_active_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "syn-string": {
-              "$ref": "#/definitions/color"
+            "gutter_active_color": {
+              "$ref": "#/$defs/colorPref"
             },
-            "syn-number": {
-              "$ref": "#/definitions/color"
+            "header_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "syn-comment": {
-              "$ref": "#/definitions/color"
+            "header_hover_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "syn-identifier": {
-              "$ref": "#/definitions/color"
+            "header_color": {
+              "$ref": "#/$defs/colorPref"
             },
-            "syn-punct": {
-              "$ref": "#/definitions/color"
-            }
-          }
-        },
-        "grid": {
-          "$ref": "#/definitions/colorGroup",
-          "description": "Results grid: cell text, dividers, hover and zebra striping.",
-          "properties": {
-            "cell": {
-              "$ref": "#/definitions/color"
+            "header_label_color": {
+              "$ref": "#/$defs/colorPref"
             },
-            "cell-num": {
-              "$ref": "#/definitions/color"
+            "header_active_background": {
+              "$ref": "#/$defs/colorPref"
             },
-            "cell-ts": {
-              "$ref": "#/definitions/color"
+            "header_active_color": {
+              "$ref": "#/$defs/colorPref"
             },
-            "grid-line": {
-              "$ref": "#/definitions/color"
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
             },
-            "row-hover": {
-              "$ref": "#/definitions/color"
+            "column_divider_fill": {
+              "$ref": "#/$defs/colorPref"
             },
-            "zebra": {
-              "$ref": "#/definitions/color"
+            "header_divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "cell_num_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "cell_ts_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_str_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_num_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_bool_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_ts_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_struct_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_list_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "type_map_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "comfortable_cell_padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "compact_cell_padding": {
+              "$ref": "#/$defs/gapsPref"
             }
           }
         }
       }
     },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/color"
+        }
+      }
+    },
     "fonts": {
       "type": "object",
-      "description": "Font stacks. `ui` drives the interface, `mono` the editor / data.",
-      "additionalProperties": {
-        "type": "string"
-      },
       "properties": {
         "ui": {
           "type": "string"
@@ -257,19 +1328,317 @@
         "mono": {
           "type": "string"
         }
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "typography": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "display": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "title": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "strong_body": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "body_medium": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "control": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "body": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "caption": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "code_display": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "data_display": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "data_value": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "code_block": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "field_label": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "meta": {
+          "$ref": "#/$defs/typeRole"
+        },
+        "mono_path": {
+          "$ref": "#/$defs/typeRole"
+        }
       }
     }
   },
-  "definitions": {
+  "$defs": {
     "color": {
       "type": "string",
-      "description": "A CSS colour: #rgb / #rgba / #rrggbb / #rrggbbaa, or rgb()/rgba()/hsl()/hsla().",
-      "pattern": "^(#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|(rgb|rgba|hsl|hsla)\\(.*\\))$"
+      "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|rgba\\([^)]*\\))$"
     },
-    "colorGroup": {
+    "slot": {
+      "enum": [
+        "primary",
+        "secondary",
+        "tertiary",
+        "success",
+        "warning",
+        "error",
+        "info",
+        "background",
+        "surface_primary",
+        "surface_secondary",
+        "surface_tertiary",
+        "surface_inverse",
+        "surface_inverse_secondary",
+        "surface_inverse_tertiary",
+        "border",
+        "border_focus",
+        "border_disabled",
+        "text_primary",
+        "text_secondary",
+        "text_placeholder",
+        "text_inverse",
+        "text_highlight",
+        "focus",
+        "active",
+        "disabled",
+        "overlay",
+        "shadow"
+      ]
+    },
+    "colorPref": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "specific"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "specific": {
+              "$ref": "#/$defs/color"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "reference"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "$ref": "#/$defs/slot"
+            }
+          }
+        }
+      ]
+    },
+    "numberPref": {
       "type": "object",
-      "additionalProperties": {
-        "$ref": "#/definitions/color"
+      "required": [
+        "specific"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "specific": {
+          "type": "number"
+        }
+      }
+    },
+    "fontPref": {
+      "type": "object",
+      "required": [
+        "specific"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "specific": {
+          "type": "string",
+          "description": "A fonts key (ui/mono) or a literal family name"
+        }
+      }
+    },
+    "gapsPref": {
+      "type": "object",
+      "required": [
+        "specific"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "specific": {
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 4,
+              "maxItems": 4
+            }
+          ]
+        }
+      }
+    },
+    "sheet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary",
+        "secondary",
+        "tertiary",
+        "success",
+        "warning",
+        "error",
+        "info",
+        "background",
+        "surface_primary",
+        "surface_secondary",
+        "surface_tertiary",
+        "surface_inverse",
+        "surface_inverse_secondary",
+        "surface_inverse_tertiary",
+        "border",
+        "border_focus",
+        "border_disabled",
+        "text_primary",
+        "text_secondary",
+        "text_placeholder",
+        "text_inverse",
+        "text_highlight",
+        "focus",
+        "active",
+        "disabled",
+        "overlay",
+        "shadow"
+      ],
+      "properties": {
+        "primary": {
+          "$ref": "#/$defs/color"
+        },
+        "secondary": {
+          "$ref": "#/$defs/color"
+        },
+        "tertiary": {
+          "$ref": "#/$defs/color"
+        },
+        "success": {
+          "$ref": "#/$defs/color"
+        },
+        "warning": {
+          "$ref": "#/$defs/color"
+        },
+        "error": {
+          "$ref": "#/$defs/color"
+        },
+        "info": {
+          "$ref": "#/$defs/color"
+        },
+        "background": {
+          "$ref": "#/$defs/color"
+        },
+        "surface_primary": {
+          "$ref": "#/$defs/color"
+        },
+        "surface_secondary": {
+          "$ref": "#/$defs/color"
+        },
+        "surface_tertiary": {
+          "$ref": "#/$defs/color"
+        },
+        "surface_inverse": {
+          "$ref": "#/$defs/color"
+        },
+        "surface_inverse_secondary": {
+          "$ref": "#/$defs/color"
+        },
+        "surface_inverse_tertiary": {
+          "$ref": "#/$defs/color"
+        },
+        "border": {
+          "$ref": "#/$defs/color"
+        },
+        "border_focus": {
+          "$ref": "#/$defs/color"
+        },
+        "border_disabled": {
+          "$ref": "#/$defs/color"
+        },
+        "text_primary": {
+          "$ref": "#/$defs/color"
+        },
+        "text_secondary": {
+          "$ref": "#/$defs/color"
+        },
+        "text_placeholder": {
+          "$ref": "#/$defs/color"
+        },
+        "text_inverse": {
+          "$ref": "#/$defs/color"
+        },
+        "text_highlight": {
+          "$ref": "#/$defs/color"
+        },
+        "focus": {
+          "$ref": "#/$defs/color"
+        },
+        "active": {
+          "$ref": "#/$defs/color"
+        },
+        "disabled": {
+          "$ref": "#/$defs/color"
+        },
+        "overlay": {
+          "$ref": "#/$defs/color"
+        },
+        "shadow": {
+          "$ref": "#/$defs/color"
+        }
+      }
+    },
+    "typeRole": {
+      "type": "object",
+      "required": [
+        "family",
+        "weight",
+        "size"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "type": "string",
+          "enum": [
+            "ui",
+            "mono"
+          ]
+        },
+        "weight": {
+          "type": "number"
+        },
+        "size": {
+          "type": "number"
+        },
+        "line_height": {
+          "type": "number"
+        },
+        "letter_spacing": {
+          "type": "number"
+        }
       }
     }
   }

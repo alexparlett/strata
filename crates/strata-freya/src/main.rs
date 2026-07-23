@@ -22,10 +22,21 @@ fn main() {
     // Clear snapshot leftovers from a previous crashed run (each live engine only ever
     // cleans its own subdirectory — safe only here, before any engine exists).
     strata_core::engine::purge_snapshot_root();
+    // Discover the theme registry once (built-ins + the user themes dir) — every window
+    // shares this one handle via context.
+    let themes = crate::theme::ThemesCtx::discover();
+    // The app-global **reactive settings**: loaded from disk once here, then written only
+    // by UI (the Phase 4 Settings window — which also persists via `config::save`; disk is
+    // a startup input, never a live source). Any write repaints every window that reads
+    // the changed field. The theme is pure *derived* state: each window's
+    // `use_strata_theme` resolves the selection (+ OS appearance while Sync-with-OS is
+    // on, via Freya's per-window `Platform.preferred_theme`) through the shared registry
+    // — no stored applied-theme id to keep coherent.
+    let settings = State::create_global(strata_core::config::load().settings);
     launch(
         LaunchConfig::new()
             .with_window(
-                ProjectApp::window()
+                ProjectApp::window(themes, settings)
             ),
     );
 }

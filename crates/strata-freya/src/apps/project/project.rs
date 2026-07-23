@@ -10,21 +10,43 @@ use std::collections::HashSet;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{use_init_session, Chan, SessionState, TabId};
 use crate::apps::project::views::{HeaderBar, Workbench};
+use crate::theme::ThemesCtx;
+use strata_core::config::Settings;
 use freya::prelude::*;
 use freya::radio::use_radio;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 
-pub struct ProjectApp;
+pub struct ProjectApp {
+    /// The shared theme registry (discovered once in `main`, the same `Arc` in every
+    /// window) and the app-global reactive [`Settings`] (any write repaints/reflows every
+    /// window that reads the changed field). The window's theme is **derived** from the
+    /// settings selection by [`use_strata_theme`] — no stored applied-theme id.
+    ///
+    /// [`use_strata_theme`]: crate::theme::use_strata_theme
+    pub themes: ThemesCtx,
+    pub settings: State<Settings>,
+}
 
 impl ProjectApp {
-    pub fn window() -> WindowConfig {
-        WindowConfig::new_app(ProjectApp)
+    pub fn window(themes: ThemesCtx, settings: State<Settings>) -> WindowConfig {
+        // Match the theme's window body so a resize doesn't flash the default white.
+        // Pre-launch there's no `Platform`, so the one-shot OS probe stands in for
+        // Sync-with-OS.
+        let background = {
+            let s = settings.peek();
+            let id = strata_core::theme::effective_id(
+                &s.theme,
+                s.sync_os,
+                strata_core::theme::os_is_dark(),
+            );
+            crate::theme::window_background(themes.get_or_default(&id))
+        };
+        WindowConfig::new_app(ProjectApp { themes, settings })
             .with_title("Strata")
 
             .with_size(880., 600.)
             .with_min_size(880., 600.)
-            // Match the Midnight window body so a resize doesn't flash the default white.
-            .with_background(Color::from_rgb(21, 24, 30))
+            .with_background(background)
             .with_window_attributes(|attrs, _| {
                 attrs
                     .with_titlebar_transparent(true)
@@ -36,7 +58,16 @@ impl ProjectApp {
 
 impl App for ProjectApp {
     fn render(&self) -> impl IntoElement {
-        use_init_theme(|| crate::theme::strata_theme("midnight"));
+        // The shared theme registry into context (Settings' theme list, future switching),
+        // then this window's theme resolved through it.
+        let themes = use_provide_context({
+            let themes = self.themes.clone();
+            move || themes
+        });
+        // This window's theme: installed + kept derived from the reactive settings
+        // selection (+ OS appearance while syncing). Every window computes the same pure
+        // derivation of the same globals, so they repaint consistently.
+        crate::theme::use_strata_theme(themes.clone(), self.settings);
         // Spawn this window's engine into context — the direct-call facade the query
         // layer's capabilities await (state-arch §7).
         let engine = use_provide_context(|| EngineCtx::new());

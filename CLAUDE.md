@@ -140,8 +140,15 @@ When writing Freya code, lean on these in roughly this order:
 ## strata-freya module map
 
 ```
-src/main.rs                      Freya launch + window config
-src/theme.rs                     native JSON theme loader + `theme_registry!` macro + schema gen
+src/main.rs                      Freya launch + window config; discovers ThemesCtx + creates the
+                                 app-global reactive Settings (`State::create_global`) — each
+                                 window's theme is pure derived state (`use_strata_theme`)
+src/theme.rs                     Freya theme application: `theme_registry!` / `strata_components!`
+                                 macros, Pref→Preference coercion, ThemesCtx (the shared
+                                 ThemeRegistry handle, discovered once in main, provided at every
+                                 window root), schema-sync test. The theme data model + loader +
+                                 ThemeRegistry (built-ins + user themes dir) + schema gen live in
+                                 `strata-core::theme`; the theme files themselves in root `themes/`
 src/components/                  shared component library
   divider, dot, icon, run_button, typography
 src/apps/project/                the project window (Valin-shaped)

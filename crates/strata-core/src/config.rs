@@ -123,18 +123,6 @@ pub struct Settings {
     pub engine: std::collections::BTreeMap<String, String>,
 }
 
-/// The live theme selection projected out of the persisted settings — the input to
-/// [`crate::theme::ThemeSel::effective`]. Lives here (not in `theme`) so `theme` needn't
-/// know about `Settings`; every frontend derives it the same way.
-impl From<&Settings> for crate::theme::ThemeSel {
-    fn from(s: &Settings) -> Self {
-        Self {
-            id: s.theme.clone(),
-            sync_os: s.sync_os,
-        }
-    }
-}
-
 fn default_theme() -> String {
     crate::theme::DEFAULT_THEME.to_string()
 }
