@@ -184,11 +184,11 @@ impl Component for ResultsBody {
         let page = use_state(|| 1usize);
         let run_size = self.spec.page_size;
         let page_size = use_state(move || run_size);
-        // The plan view's slots (P2-05): which tree shows and the Raw text toggle. Like the
-        // page, per-press — a new Run starts back on the tree, physical-first. They live here
-        // so the status bar's active-tab summary reads the same selection the view renders.
+        // The plan view's tree selection (P2-05). Like the page, per-press — a new Run
+        // starts back on physical. It lives here so the status bar's active-tab summary
+        // reads the same selection the view renders. (The Raw/Tree flag needs no lifting —
+        // the toolbar's ToggleButton owns it, mirrored inside the plan view.)
         let plan_tab = use_state(PlanTab::default);
-        let plan_raw = use_state(|| false);
 
         // The tab's Table/Chart view mode (P2-07) — per-tab (its own `Chan::View` channel),
         // so it survives re-runs and tab switches; the toolbar's toggle writes it.
@@ -344,7 +344,7 @@ impl Component for ResultsBody {
                     PlanTab::Logical => plan.logical.len(),
                 };
                 (
-                    ExplainPlan::new(plan.clone(), plan_tab, plan_raw).into(),
+                    ExplainPlan::new(plan.clone(), plan_tab).into(),
                     StatusBar::new(ResultsState::ExplainPlan).plan(ops, tab),
                 )
             }

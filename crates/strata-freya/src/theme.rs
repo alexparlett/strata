@@ -24,6 +24,7 @@ use crate::apps::project::{
 };
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
+use crate::components::toggle_button::ToggleButtonThemePreference;
 use freya::prelude::*;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
 use strata_code_editor::prelude::EditorThemePreference;
@@ -294,6 +295,11 @@ strata_components! {
     "segmented_toggle" => SegmentedToggleThemePreference {
         background, border_fill, divider_fill, item_color, item_active_background,
         item_active_color,
+    },
+    // The chrome-less icon toggle (plan Raw/Tree switch, reusable): rest bg + glyph, and the
+    // accent-tint active dress — matching the segmented toggle's selected look.
+    "toggle_button" => ToggleButtonThemePreference {
+        background, color, active_background, active_color,
     },
     // The editor tab strip: `tab_bar` is the container (bg + divider); `editor_tab` is one
     // tab's resting/hover/active bg, label colour, and active accent.

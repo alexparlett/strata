@@ -1194,6 +1194,24 @@
             }
           }
         },
+        "toggle_button": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "tab_bar": {
           "type": "object",
           "additionalProperties": false,

@@ -24,6 +24,7 @@ use strata_core::engine::plan::{
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
+use crate::components::toggle_button::{ChangeEventData, ToggleButton};
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue, Path, Readout};
 
 define_theme!(
@@ -157,20 +158,19 @@ fn key_col_width(parts: &[DetailPart]) -> f32 {
         .unwrap_or(0.)
 }
 
-/// The plan body for one settled EXPLAIN: toolbar over the tree (or raw text). The tab/raw
-/// slots live on the results pane (per-press, like the page number) so the status bar's
-/// summary can read the same selection.
+/// The plan body for one settled EXPLAIN: toolbar over the tree (or raw text). The tab slot
+/// lives on the results pane (per-press, like the page number) so the status bar's summary
+/// can read the same selection; the Raw flag is the [`ToggleButton`]'s own, mirrored here.
 #[derive(PartialEq)]
 pub struct ExplainPlan {
     plan: QueryPlan,
     tab: State<PlanTab>,
-    raw: State<bool>,
     theme: Option<ExplainPlanThemePartial>,
 }
 
 impl ExplainPlan {
-    pub fn new(plan: QueryPlan, tab: State<PlanTab>, raw: State<bool>) -> Self {
-        Self { plan, tab, raw, theme: None }
+    pub fn new(plan: QueryPlan, tab: State<PlanTab>) -> Self {
+        Self { plan, tab, theme: None }
     }
 }
 
@@ -186,7 +186,9 @@ impl Component for ExplainPlan {
             PlanPalette { theme: theme.clone(), accent, error, count_color };
 
         let mut tab = self.tab;
-        let mut raw = self.raw;
+        // The Raw/Tree flag: the ToggleButton owns the flip; this per-press mirror (the
+        // results body is keyed on the press's nonce) picks which body renders.
+        let mut raw = use_state(|| false);
         let raw_on = *raw.read();
         let eff = effective_tab(&self.plan, *tab.read());
         let physical = eff == PlanTab::Physical;
@@ -223,25 +225,13 @@ impl Component for ExplainPlan {
                 .child(Eyebrow::new("ANALYZE").color(theme.type_map_color))
         });
         let raw_title = if raw_on { "Show the plan tree" } else { "Show the raw plan text" };
-        // The results-toolbar outline icon button, wearing the accent `on` dress while the
-        // raw text shows (the Search trigger's open recipe — 13% / 55% accent tints).
-        let raw_toggle = TooltipContainer::new(Tooltip::new(raw_title))
-            .position(AttachedPosition::Bottom)
-            .child(
-                Button::new()
-                    .height(Size::px(28.))
-                    .width(Size::px(28.))
-                    .on_press(move |_| {
-                        let v = !*raw.peek();
-                        raw.set(v);
-                    })
-                    .maybe(raw_on, |b| {
-                        b.background(accent.with_a(33))
-                            .border_fill(accent.with_a(140))
-                            .color(accent)
-                    })
-                    .child(Icon::new(IconName::Lines).size(15.)),
-            );
+        // The standard toggle button (`toggle_button` theme): it flips, we echo the value
+        // back through `toggle` (the Button-`enabled` recipe) — never computing the flip.
+        let raw_toggle = ToggleButton::new()
+            .toggle(raw_on)
+            .title(raw_title)
+            .on_change(move |e: Event<ChangeEventData>| raw.set(e.value))
+            .child(Icon::new(IconName::Lines).size(15.));
         let toolbar = rect()
             .width(Size::fill())
             .height(Size::px(38.))
@@ -763,8 +753,7 @@ mod preview {
     fn app() -> impl IntoElement {
         use_init_theme(|| crate::theme::strata_theme(&strata_core::theme::load("midnight")));
         let tab = use_state(PlanTab::default);
-        let raw = use_state(|| false);
-        ExplainPlan::new(fixture(), tab, raw)
+        ExplainPlan::new(fixture(), tab)
     }
 
     #[test]
