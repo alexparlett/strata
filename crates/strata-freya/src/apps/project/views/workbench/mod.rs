@@ -7,8 +7,8 @@
 //! The toolbar is built to the `Editor.dc.html` comp from reusable `IconButton`s (accent Run +
 //! outlined Explain · Analyze │ Format · Clear │ Save-as-view · Save). Run / Explain / Analyze
 //! drive freya-query through the `request` slot (Run flips to Cancel mid-run via the `running`
-//! mirror); Format / Clear / Save stay stubbed until their layer lands (Save → the Project
-//! store, Format/Clear → editor commands), with the dirty / validation gates that come with them.
+//! mirror); Format / Clear / Save-as-view / Save go through `editor::actions` — buffer
+//! rewrites plus the dispatch-on-origin save into the Project store (⌘S lands with the keymap).
 
 use crate::apps::project::query::{QuerySpec, RunId};
 use crate::apps::project::state::{Chan, SessionState};
