@@ -17,19 +17,21 @@
 mod catalog;
 mod diagnostics;
 mod form;
+mod history;
 mod log;
 mod profile;
 mod query_error;
 mod results;
 mod schema;
+mod session;
 
-pub use catalog::{
-    CatalogKind, ColRef, RemoveKind, RemoveTarget, SavedQuery, TableDef, ViewDef,
-};
+pub use catalog::{CatalogKind, ColRef, RemoveKind, RemoveTarget, SavedQuery, TableDef, ViewDef};
 pub use diagnostics::{DiagSource, Diagnostic, Severity};
 pub use form::{ConfigForm, ExportForm};
+pub use history::HistoryEntry;
 pub use log::{LogEvent, LogKind, LogTab};
 pub use profile::CatalogProfile;
 pub use query_error::QueryError;
 pub use results::{Cell, QueryOutput, SnapshotId};
 pub use schema::{ColumnInfo, Kind, Stat, StatKey};
+pub use session::{Origin, ResultsView, SessionSnapshot, TabId, TabSnapshot, WindowGeom};

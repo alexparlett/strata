@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use strata_core::config::{Command, Settings};
 
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use strata_model::TabId;
+
+use crate::apps::project::state::{Chan, SessionState};
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Body, InputTypography};
@@ -69,7 +71,7 @@ impl Tab {
             key: DiffKey::None,
             theme: None,
         }
-            .key(id)
+        .key(id)
     }
 }
 
@@ -240,20 +242,20 @@ impl Component for Tab {
                         true
                     },
                 ))
-                  .on_global_pointer_press(move |e: Event<PointerEventData>| {
-                      let p = e.data().global_location();
-                      if let Some(a) = *area.peek() {
-                          let (px, py) = (p.x as f32, p.y as f32);
-                          let outside = px < a.origin.x
-                              || px > a.origin.x + a.size.width
-                              || py < a.origin.y
-                              || py > a.origin.y + a.size.height;
-                          if outside {
-                              radio.write().rename(id, draft.peek().clone());
-                              renaming.set(false);
-                          }
-                      }
-                  })
+                .on_global_pointer_press(move |e: Event<PointerEventData>| {
+                    let p = e.data().global_location();
+                    if let Some(a) = *area.peek() {
+                        let (px, py) = (p.x as f32, p.y as f32);
+                        let outside = px < a.origin.x
+                            || px > a.origin.x + a.size.width
+                            || py < a.origin.y
+                            || py > a.origin.y + a.size.height;
+                        if outside {
+                            radio.write().rename(id, draft.peek().clone());
+                            renaming.set(false);
+                        }
+                    }
+                })
             })
             // 2px top accent bar (active only) — the pinned-child idiom for a single edge.
             .child(
@@ -277,33 +279,32 @@ impl Component for Tab {
                     // `.tab-rename` (118px, body font via `InputTypography` — the `Input` paints
                     // no font of its own) so the text matches the tab name. Enter commits
                     // (`on_submit`); Escape / click-outside are handled on the tab root.
-                    row.child(
-                        InputTypography::body(
-                            Input::new(draft)
-                                .a11y_id(a11y)
-                                .flat()
-                                .compact()
-                                .auto_focus(true)
-                                .width(Size::px(118.))
-                                .on_submit(move |value: String| {
-                                    radio.write().rename(id, value);
-                                    renaming.set(false);
-                                }),
-                        ),
-                    )
+                    row.child(InputTypography::body(
+                        Input::new(draft)
+                            .a11y_id(a11y)
+                            .flat()
+                            .compact()
+                            .auto_focus(true)
+                            .width(Size::px(118.))
+                            .on_submit(move |value: String| {
+                                radio.write().rename(id, value);
+                                renaming.set(false);
+                            }),
+                    ))
                 } else {
-                    row.child(Body::new(self.name.clone()).color(fg)).child(close)
+                    row.child(Body::new(self.name.clone()).color(fg))
+                        .child(close)
                 }
             });
 
         // The tab owns its own drag: the ghost is a matching `TabChrome`, the tab collapses out of the
         // strip while dragging (`show_while_dragging(false)`), and dragging is disabled while renaming.
         DragZone::new(id, content)
-            .drag_element(
-                rect()
-                    .height(Size::px(TAB_HEIGHT))
-                    .child(TabChrome::new(self.name.clone(), self.active, self.dirty)),
-            )
+            .drag_element(rect().height(Size::px(TAB_HEIGHT)).child(TabChrome::new(
+                self.name.clone(),
+                self.active,
+                self.dirty,
+            )))
             .show_while_dragging(false)
             .enabled(!*renaming.read())
             .key(id)
@@ -327,7 +328,12 @@ pub struct TabChrome {
 
 impl TabChrome {
     pub fn new(name: String, active: bool, dirty: bool) -> Self {
-        Self { name, active, dirty, theme: None }
+        Self {
+            name,
+            active,
+            dirty,
+            theme: None,
+        }
     }
 }
 

@@ -75,7 +75,11 @@ impl Component for Cell {
         };
 
         let text = self.text.clone();
-        let text_color = if active { self.active_color.unwrap_or(self.color) } else { self.color };
+        let text_color = if active {
+            self.active_color.unwrap_or(self.color)
+        } else {
+            self.color
+        };
         let label: Element = if self.mono {
             MonoValue::new(text).color(text_color).max_lines(1).into()
         } else {
@@ -98,7 +102,9 @@ impl Component for Cell {
             .height(Size::fill())
             .direction(Direction::Horizontal)
             .content(Content::Flex)
-            .maybe(active, |el| el.background(self.active_background.unwrap_or(Color::TRANSPARENT)))
+            .maybe(active, |el| {
+                el.background(self.active_background.unwrap_or(Color::TRANSPARENT))
+            })
             .maybe(hovered(), |el| el.background(self.hover_bg))
             .border(border)
             .on_pointer_down({

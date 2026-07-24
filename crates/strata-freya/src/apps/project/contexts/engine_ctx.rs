@@ -9,15 +9,9 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use strata_core::engine::{Engine, WsId};
+use strata_core::engine::Engine;
 
-use crate::apps::project::state::TabId;
-
-impl From<TabId> for WsId {
-    fn from(tab: TabId) -> Self {
-        WsId(tab.0.as_u128())
-    }
-}
+use strata_model::TabId;
 
 /// A window's engine handle for context — an `Arc` over the shared [`Engine`], cheap to
 /// `Clone`, provided once via `use_provide_context`. Derefs to the engine, so callers

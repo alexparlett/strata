@@ -13,14 +13,17 @@
 //! [`resolve_source`] / [`relativize`].
 
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use strata_model::{SavedQuery, TableDef, ViewDef};
+use strata_model::{HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef};
 
 /// The project directory name inside a project folder.
 pub const STRATA_DIR: &str = ".strata";
 const PROJECT_JSON: &str = "project.json";
+const SESSION_JSON: &str = "session.json";
+const HISTORY_JSONL: &str = "history.jsonl";
 
 /// The committed definitions — the shape of `.strata/project.json`.
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
@@ -57,7 +60,8 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     defs.tables.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.views.sort_by(|a, b| name_ord(&a.name, &b.name));
-    defs.saved_queries.sort_by(|a, b| name_ord(&a.name, &b.name));
+    defs.saved_queries
+        .sort_by(|a, b| name_ord(&a.name, &b.name));
     Ok(defs)
 }
 
@@ -89,11 +93,114 @@ pub fn scaffold(root: &Path) -> Result<ProjectDefs, String> {
     Ok(defs)
 }
 
-/// Write `.strata/.gitignore` (ignoring the local session) if it's not there yet.
+/// The `.strata/session.json` of the project folder `root` — the **local** working
+/// session (open tabs + arrangement), gitignored and owned by the session-persistence
+/// slice (P4-14). Separate from the shared, committed [`project.json`](PROJECT_JSON).
+pub fn session_path(root: &Path) -> PathBuf {
+    strata_dir(root).join(SESSION_JSON)
+}
+
+/// Load the [`SessionSnapshot`] from `root`'s `.strata/`. `Ok(None)` when there's no
+/// session file yet (a fresh or never-saved project) — a first-class, expected state, not
+/// an error. `Err` **only** when the file exists but doesn't parse, so the caller can log
+/// it and fall back to a blank session rather than bricking the window on a corrupt file.
+/// Concrete over the model type, exactly like [`load_defs`].
+pub fn load_session(root: &Path) -> Result<Option<SessionSnapshot>, String> {
+    let path = session_path(root);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Write the [`SessionSnapshot`] into `root`'s `.strata/` (gitignored), creating the
+/// dir + its `.gitignore` if needed. The autosave side effect's sink (P4-14).
+pub fn save_session(root: &Path, snapshot: &SessionSnapshot) -> Result<(), String> {
+    let dir = strata_dir(root);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    ensure_gitignore(&dir);
+    let json = serde_json::to_string_pretty(snapshot).map_err(|e| e.to_string())?;
+    fs::write(session_path(root), json).map_err(|e| e.to_string())
+}
+
+/// The `.strata/history.jsonl` of the project folder `root` — the **local** append-only
+/// query-history log (gitignored, per-user), separate from the committed defs.
+pub fn history_path(root: &Path) -> PathBuf {
+    strata_dir(root).join(HISTORY_JSONL)
+}
+
+/// Append one history entry as a JSON line to `root`'s `history.jsonl` (creating the dir +
+/// `.gitignore` if needed). Append-only (DESIGN_SPEC §"History as `.jsonl`") so a completed
+/// run is one cheap `O_APPEND` write, not a whole-file rewrite; [`load_history`] bounds the
+/// file back down.
+pub fn append_history(root: &Path, entry: &HistoryEntry) -> Result<(), String> {
+    let dir = strata_dir(root);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    ensure_gitignore(&dir);
+    let mut line = serde_json::to_string(entry).map_err(|e| e.to_string())?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(history_path(root))
+        .map_err(|e| e.to_string())?;
+    file.write_all(line.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// Load history for `root`, newest entries capped to `cap` (keep-last-N). Absent file →
+/// empty (a project with no runs yet); a corrupt *line* is skipped, not fatal — one bad
+/// append can't lose the whole log. Returns entries in **file order** (oldest → newest).
+/// If the file has grown past `cap`, it's **rotated** in place to the kept window
+/// (DESIGN_SPEC: "rotate to bound size").
+pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String> {
+    let path = history_path(root);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let mut entries: Vec<HistoryEntry> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    if entries.len() > cap {
+        entries.drain(0..entries.len() - cap);
+        // Rewrite the file down to what we kept (rare — only when it overflowed).
+        let mut out = String::new();
+        for entry in &entries {
+            if let Ok(line) = serde_json::to_string(entry) {
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+        let _ = fs::write(&path, out);
+    }
+    Ok(entries)
+}
+
+/// Ensure `.strata/.gitignore` ignores the local, per-user files — the working session and
+/// the query-history log — adding any that are missing while preserving other lines. Run
+/// from every local-file write, so an older `.gitignore` (session-only) gets upgraded.
 fn ensure_gitignore(dir: &Path) {
     let gi = dir.join(".gitignore");
-    if !gi.exists() {
-        let _ = fs::write(gi, "session.json\n");
+    let existing = fs::read_to_string(&gi).unwrap_or_default();
+    let mut lines: Vec<&str> = existing.lines().collect();
+    let mut changed = false;
+    for wanted in [SESSION_JSON, HISTORY_JSONL] {
+        if !lines.iter().any(|l| l.trim() == wanted) {
+            lines.push(wanted);
+            changed = true;
+        }
+    }
+    if changed {
+        let mut out = lines.join("\n");
+        out.push('\n');
+        let _ = fs::write(&gi, out);
     }
 }
 
@@ -133,12 +240,14 @@ pub fn name_ord(a: &str, b: &str) -> std::cmp::Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strata_model::{Origin, ResultsView, TabId, TabSnapshot, WindowGeom};
 
     /// A fresh temp project folder, cleaned up on drop.
     struct TempRoot(PathBuf);
     impl TempRoot {
         fn new(tag: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("strata-project-test-{tag}-{}", std::process::id()));
+            let dir = std::env::temp_dir()
+                .join(format!("strata-project-test-{tag}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();
             Self(dir)
@@ -159,9 +268,9 @@ mod tests {
         assert!(defs.name.starts_with("strata-project-test-scaffold"));
         // Scaffolding is refused where a project already exists.
         assert!(scaffold(&root.0).is_err());
-        // The local session is gitignored from the start.
+        // The local, per-user files are gitignored from the start.
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
-        assert_eq!(gi, "session.json\n");
+        assert_eq!(gi, "session.json\nhistory.jsonl\n");
         // `assert!` over `assert_eq!` here and below: the model types are serde
         // vocabulary and deliberately don't derive `Debug`.
         let loaded = load_defs(&root.0).unwrap();
@@ -220,14 +329,127 @@ mod tests {
         assert!(load_defs(&root.0).is_err());
     }
 
+    /// One tab for a session snapshot.
+    fn tab(name: &str, text: &str) -> TabSnapshot {
+        TabSnapshot {
+            id: TabId::new(),
+            name: name.into(),
+            origin: Origin::Scratch,
+            text: text.into(),
+            view: ResultsView::Grid,
+        }
+    }
+
+    #[test]
+    fn session_round_trips_and_absence_is_none_not_error() {
+        let root = TempRoot::new("session");
+        // No file yet → Ok(None), a first-class state (a fresh / never-saved project).
+        assert!(load_session(&root.0).unwrap().is_none());
+
+        let t = tab("query 1", "SELECT 1");
+        let id = t.id;
+        let snap = SessionSnapshot {
+            tabs: vec![t, tab("events", "SELECT 2")],
+            active: Some(id),
+            window: Some(WindowGeom {
+                x: 10.0,
+                y: 20.0,
+                width: 800.0,
+                height: 600.0,
+            }),
+        };
+        save_session(&root.0, &snap).unwrap();
+        // (`SessionSnapshot` is serde vocabulary and doesn't derive `PartialEq` — check fields.)
+        let loaded = load_session(&root.0).unwrap().unwrap();
+        assert_eq!(loaded.tabs.len(), 2);
+        assert_eq!(loaded.tabs[0].text, "SELECT 1");
+        assert_eq!(loaded.active, Some(id));
+        assert_eq!(loaded.window.unwrap().width, 800.0);
+        // The session file is gitignored the moment it's written (alongside history).
+        let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
+        assert_eq!(gi, "session.json\nhistory.jsonl\n");
+    }
+
+    /// One history entry (timestamps irrelevant to the file-ordering tests).
+    fn run(sql: &str, rows: u64) -> HistoryEntry {
+        HistoryEntry {
+            sql: sql.into(),
+            ts_ms: 0,
+            elapsed_ms: 0,
+            rows,
+        }
+    }
+
+    #[test]
+    fn history_appends_and_loads_in_file_order() {
+        let root = TempRoot::new("history");
+        // Absent → empty, not an error.
+        assert!(load_history(&root.0, 100).unwrap().is_empty());
+
+        for i in 0..3 {
+            append_history(&root.0, &run(&format!("SELECT {i}"), i)).unwrap();
+        }
+        let loaded = load_history(&root.0, 100).unwrap();
+        let sqls: Vec<&str> = loaded.iter().map(|r| r.sql.as_str()).collect();
+        assert_eq!(
+            sqls,
+            ["SELECT 0", "SELECT 1", "SELECT 2"],
+            "oldest → newest"
+        );
+        // history.jsonl is gitignored alongside the session (upgraded in place).
+        let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
+        assert!(gi.lines().any(|l| l == "history.jsonl"));
+    }
+
+    #[test]
+    fn history_rotates_to_cap_on_load_and_skips_corrupt_lines() {
+        let root = TempRoot::new("history-rotate");
+        for i in 0..10 {
+            append_history(&root.0, &run(&format!("q{i}"), i)).unwrap();
+        }
+        // A garbage line mid-file must be skipped, not abort the whole load.
+        let path = history_path(&root.0);
+        let mut text = fs::read_to_string(&path).unwrap();
+        text.push_str("{ not json\n");
+        fs::write(&path, text).unwrap();
+
+        let loaded = load_history(&root.0, 3).unwrap();
+        let sqls: Vec<&str> = loaded.iter().map(|r| r.sql.as_str()).collect();
+        assert_eq!(
+            sqls,
+            ["q7", "q8", "q9"],
+            "keeps the last `cap` valid entries"
+        );
+        // Rotation rewrote the file down to the kept window (and dropped the garbage line).
+        let after = load_history(&root.0, 100).unwrap();
+        assert_eq!(after.len(), 3);
+    }
+
+    #[test]
+    fn corrupt_session_is_an_error_not_a_silent_none() {
+        let root = TempRoot::new("session-corrupt");
+        let dir = strata_dir(&root.0);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("session.json"), "{ not json").unwrap();
+        // A present-but-unparseable file must surface (the caller logs + falls back to a
+        // blank session), never masquerade as "no session".
+        assert!(load_session(&root.0).is_err());
+    }
+
     #[test]
     fn source_paths_resolve_and_relativize() {
         let root = Path::new("/proj");
         assert_eq!(resolve_source(root, "events"), "/proj/events");
-        assert_eq!(resolve_source(root, "/abs/data.parquet"), "/abs/data.parquet");
+        assert_eq!(
+            resolve_source(root, "/abs/data.parquet"),
+            "/abs/data.parquet"
+        );
         assert_eq!(relativize(root, "/proj/events"), "events");
         assert_eq!(relativize(root, "/elsewhere/x.csv"), "/elsewhere/x.csv");
         // Round trip: what the engine gets resolves back to what the file stores.
-        assert_eq!(relativize(root, &resolve_source(root, "sub/dir")), "sub/dir");
+        assert_eq!(
+            relativize(root, &resolve_source(root, "sub/dir")),
+            "sub/dir"
+        );
     }
 }

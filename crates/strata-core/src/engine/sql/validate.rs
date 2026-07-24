@@ -127,9 +127,10 @@ pub async fn validate(
                 // When the parser choked on a token that reads as a keyword typo, the
                 // hint is the better wording of the same fault — one diagnostic, not
                 // an error and a warning stacked on the same span.
-                if let Some((_, hint)) = hints.iter().find(|(span, _)| {
-                    d.span.as_ref().is_some_and(|s| overlaps(s, span))
-                }) {
+                if let Some((_, hint)) = hints
+                    .iter()
+                    .find(|(span, _)| d.span.as_ref().is_some_and(|s| overlaps(s, span)))
+                {
                     d.message = hint.clone();
                 }
                 out.push(d);
@@ -187,7 +188,9 @@ pub async fn validate(
     // redundant (the parse arm already took its wording, or the engine's message —
     // e.g. an unknown-column error on the same token — says it better).
     for (span, hint) in hints {
-        let covered = out.iter().any(|d| d.span.as_ref().is_some_and(|s| overlaps(s, &span)));
+        let covered = out
+            .iter()
+            .any(|d| d.span.as_ref().is_some_and(|s| overlaps(s, &span)));
         if !covered {
             out.push(diag(Severity::Warning, hint, span, sql));
         }
@@ -244,7 +247,10 @@ fn is_incomplete(err: &DataFusionError, slice: &str, stmt: &Range<usize>, toks: 
 fn statement_ranges(sql: &str, toks: &[Tok]) -> Vec<Range<usize>> {
     split_statements(toks, sql.len())
         .into_iter()
-        .filter(|r| toks.iter().any(|t| t.span.start >= r.start && t.span.end <= r.end))
+        .filter(|r| {
+            toks.iter()
+                .any(|t| t.span.start >= r.start && t.span.end <= r.end)
+        })
         .filter_map(|r| trim_range(sql, r))
         .collect()
 }
@@ -304,9 +310,9 @@ fn policy_block(stmt: &DFStatement) -> Option<String> {
                 .into(),
         ),
         SqlStatement::Drop { object_type, .. } => match object_type {
-            ObjectType::View => Some(
-                "DROP VIEW is not supported in the editor. Drop views from the catalog".into(),
-            ),
+            ObjectType::View => {
+                Some("DROP VIEW is not supported in the editor. Drop views from the catalog".into())
+            }
             _ => Some(
                 "DROP is not supported in the editor. Deregister tables from the catalog".into(),
             ),
@@ -320,9 +326,9 @@ fn policy_block(stmt: &DFStatement) -> Option<String> {
         SqlStatement::CreateDatabase { .. } | SqlStatement::CreateSchema { .. } => {
             Some("CREATE DATABASE and CREATE SCHEMA are not supported".into())
         }
-        SqlStatement::Set(_) => Some(
-            "SET is not supported in the editor. Engine options are set in Settings".into(),
-        ),
+        SqlStatement::Set(_) => {
+            Some("SET is not supported in the editor. Engine options are set in Settings".into())
+        }
         _ => Some(
             "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and \
              DESCRIBE can run here"
@@ -428,7 +434,11 @@ fn check_from_targets(
             }
             [one] => ctx.table_exist(one.text.as_str()),
             many if many.iter().all(|p| p.kind != TokKind::QuotedIdent) => {
-                let name = many.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join(".");
+                let name = many
+                    .iter()
+                    .map(|p| p.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
                 ctx.table_exist(name.as_str())
             }
             _ => continue,
@@ -520,10 +530,20 @@ fn widen_to_token(span: Range<usize>, toks: &[Tok]) -> Range<usize> {
 fn extract_line_col(message: &str) -> Option<(usize, usize)> {
     let at = message.rfind("Line: ")?;
     let rest = &message[at + "Line: ".len()..];
-    let line: usize = rest.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()?;
+    let line: usize = rest
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()?;
     let at = rest.find("Column: ")?;
     let rest = &rest[at + "Column: ".len()..];
-    let column: usize = rest.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()?;
+    let column: usize = rest
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()?;
     Some((line, column))
 }
 
@@ -547,7 +567,12 @@ fn check_parens(toks: &[Tok], sql: &str, out: &mut Vec<Diagnostic>) {
         }
     }
     for open in stack {
-        out.push(diag(Severity::Error, "Unclosed parenthesis".into(), open, sql));
+        out.push(diag(
+            Severity::Error,
+            "Unclosed parenthesis".into(),
+            open,
+            sql,
+        ));
     }
 }
 
@@ -805,18 +830,32 @@ mod tests {
     fn unknown_function_errors() {
         let out = run("SELECT not_a_function(id) FROM t");
         assert_eq!(out.len(), 1);
-        assert!(out[0].message.contains("not_a_function"), "{}", out[0].message);
+        assert!(
+            out[0].message.contains("not_a_function"),
+            "{}",
+            out[0].message
+        );
     }
 
     #[test]
     fn function_arity_is_checked() {
         // Too few and too many arguments both fail the signature at plan time.
         let out = run("SELECT upper() FROM t");
-        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            1,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(out[0].is_error());
 
         let out = run("SELECT upper(name, id) FROM t");
-        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            1,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(out[0].is_error());
     }
 
@@ -826,7 +865,12 @@ mod tests {
         // Note the bound is the engine's own coercion rules: e.g. Int64 into
         // `character_length` coerces and is deliberately NOT flagged.
         let out = run("SELECT array_length(id) FROM t");
-        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            1,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(out[0].is_error());
 
         // A correctly-typed call stays clean.
@@ -837,14 +881,24 @@ mod tests {
     fn expression_type_faults_are_checked() {
         // Un-coercible arithmetic (the analyzer's type-coercion pass).
         let out = run("SELECT name + INTERVAL '1 day' FROM t");
-        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            1,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(out[0].is_error());
     }
 
     #[test]
     fn bad_cast_errors() {
         let out = run("SELECT CAST(id AS notatype) FROM t");
-        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            1,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(out[0].is_error());
     }
 
@@ -852,7 +906,12 @@ mod tests {
     fn statements_accumulate_independently() {
         let sql = "SELECT * FROM nope; SELECT missing FROM t; SELECT id FROM t";
         let out = run(sql);
-        assert_eq!(out.len(), 2, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            2,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert_eq!(spanned(sql, &out[0]), "nope");
         assert_eq!(spanned(sql, &out[1]), "missing");
     }
@@ -863,7 +922,12 @@ mod tests {
         // incompleteness case, so it reports with a span.
         let sql = "SELECT id FROM t WHERE AND id = 1";
         let out = run(sql);
-        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            1,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(out[0].span.is_some());
         assert!(out[0].is_error());
     }
@@ -878,7 +942,12 @@ mod tests {
         // …but an incomplete statement followed by another one is a real fault.
         let sql = "SELECT id FROM t WHERE; SELECT id FROM t";
         let out = run(sql);
-        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            1,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(out[0].is_error());
     }
 
@@ -896,7 +965,12 @@ mod tests {
         // on `selct` (hint wording, no separate warning) and the `nope` lookup.
         let sql = "selct * from nope";
         let out = run(sql);
-        assert_eq!(out.len(), 2, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            2,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(
             out.iter().any(|d| d.is_error()
                 && d.message.contains("Did you mean 'SELECT'")
@@ -939,7 +1013,8 @@ mod tests {
         let sql = "selc * from event";
         let out = run(sql);
         assert!(
-            out.iter().any(|d| d.message.contains("not found") && spanned(sql, d) == "event"),
+            out.iter()
+                .any(|d| d.message.contains("not found") && spanned(sql, d) == "event"),
             "{:?}",
             out.iter().map(|d| &d.message).collect::<Vec<_>>()
         );
@@ -966,9 +1041,18 @@ mod tests {
         // parse error takes the hint's wording.
         let sql = "SELECT * FORM t";
         let out = run(sql);
-        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            1,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(out[0].is_error());
-        assert!(out[0].message.contains("Did you mean 'FROM'"), "{}", out[0].message);
+        assert!(
+            out[0].message.contains("Did you mean 'FROM'"),
+            "{}",
+            out[0].message
+        );
         assert_eq!(spanned(sql, &out[0]), "FORM");
     }
 
@@ -978,7 +1062,12 @@ mod tests {
         // authority — the speculative keyword hint must not add a second row.
         let sql = "SELECT fom FROM t";
         let out = run(sql);
-        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            out.len(),
+            1,
+            "{:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert!(out[0].is_error());
         assert_eq!(spanned(sql, &out[0]), "fom");
     }
@@ -988,7 +1077,11 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE x STORED AS PARQUET LOCATION 'f.parquet'";
         let out = run(sql);
         assert_eq!(out.len(), 1);
-        assert!(out[0].message.contains("Table Config"), "{}", out[0].message);
+        assert!(
+            out[0].message.contains("Table Config"),
+            "{}",
+            out[0].message
+        );
         assert_eq!(spanned(sql, &out[0]), "CREATE EXTERNAL TABLE");
 
         let out = run("INSERT INTO t VALUES (3, 'c')");
@@ -997,7 +1090,11 @@ mod tests {
 
         let out = run("CREATE TABLE copy_t AS SELECT * FROM t");
         assert_eq!(out.len(), 1);
-        assert!(out[0].message.contains("Table Config"), "{}", out[0].message);
+        assert!(
+            out[0].message.contains("Table Config"),
+            "{}",
+            out[0].message
+        );
 
         let out = run("CREATE DATABASE other");
         assert_eq!(out.len(), 1);

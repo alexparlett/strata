@@ -50,7 +50,11 @@ async fn fixture_project_registers_and_queries() {
     assert_eq!(failed, ["signups"]);
 
     // The hive-partitioned table carries its partition columns in the schema.
-    let events = defs.tables.iter().find(|t| t.name == "events").expect("events table");
+    let events = defs
+        .tables
+        .iter()
+        .find(|t| t.name == "events")
+        .expect("events table");
     assert_eq!(events.partition_cols.len(), 2);
 
     // Views: created over the registered tables, deps resolved by the planner.
@@ -72,7 +76,9 @@ async fn fixture_project_registers_and_queries() {
 
     // Dropping a view is idempotent and removes it.
     eng.drop_view("active_users".into()).await.expect("drop");
-    eng.drop_view("active_users".into()).await.expect("drop again (IF EXISTS)");
+    eng.drop_view("active_users".into())
+        .await
+        .expect("drop again (IF EXISTS)");
     assert!(
         eng.query(WsId(1), RunTag(2), "SELECT * FROM active_users".into(), 50)
             .await

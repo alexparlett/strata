@@ -88,10 +88,7 @@ impl ToggleButton {
     }
 
     /// Called after every flip with the new state (`ChangeEventData::value`).
-    pub fn on_change(
-        mut self,
-        on_change: impl Into<EventHandler<Event<ChangeEventData>>>,
-    ) -> Self {
+    pub fn on_change(mut self, on_change: impl Into<EventHandler<Event<ChangeEventData>>>) -> Self {
         self.on_change = Some(on_change.into());
         self
     }

@@ -67,7 +67,11 @@ pub struct CellView {
 
 impl CellView {
     pub fn new(value: CellValue, open: State<Option<CellValue>>) -> Self {
-        Self { value, open, theme: None }
+        Self {
+            value,
+            open,
+            theme: None,
+        }
     }
 }
 
@@ -103,15 +107,21 @@ impl Component for CellView {
                     .height(Size::px(28.))
                     .corner_radius(6.)
                     .center()
-                    .maybe(close_hover(), |el| el.background(theme.close_hover_background))
+                    .maybe(close_hover(), |el| {
+                        el.background(theme.close_hover_background)
+                    })
                     .on_pointer_enter(move |_| close_hover.set(true))
                     .on_pointer_leave(move |_| close_hover.set(false))
                     .on_press(close)
-                    .child(Icon::new(IconName::Close).size(13.).color(if close_hover() {
-                        theme.close_hover_color
-                    } else {
-                        theme.close_color
-                    })),
+                    .child(
+                        Icon::new(IconName::Close)
+                            .size(13.)
+                            .color(if close_hover() {
+                                theme.close_hover_color
+                            } else {
+                                theme.close_color
+                            }),
+                    ),
             );
 
         // Body: the sunken mono JSON block. Hugs short values; long ones cap at ~2/3 of
@@ -126,7 +136,11 @@ impl Component for CellView {
                     .width(Size::fill())
                     .background(theme.body_background)
                     .padding((12., 16.))
-                    .child(Readout::new(self.value.json.clone()).color(theme.body_color).wrap()),
+                    .child(
+                        Readout::new(self.value.json.clone())
+                            .color(theme.body_color)
+                            .wrap(),
+                    ),
             );
 
         let card = rect()
@@ -205,7 +219,10 @@ mod interaction {
         runner.sync_and_update();
         runner.click_cursor((450., 350.)); // centre of the centred card
         runner.sync_and_update();
-        assert!(open.peek().is_some(), "a press inside the card must not dismiss");
+        assert!(
+            open.peek().is_some(),
+            "a press inside the card must not dismiss"
+        );
         runner.click_cursor((30., 30.)); // the backdrop
         runner.sync_and_update();
         assert!(open.peek().is_none(), "a backdrop press dismisses");

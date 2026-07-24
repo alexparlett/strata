@@ -27,12 +27,33 @@ pub const DEFAULT_THEME: &str = "midnight";
 
 /// The 27 `ColorsSheet` slot names — reference targets + the required sheet keys.
 pub const SLOTS: &[&str] = &[
-    "primary", "secondary", "tertiary", "success", "warning", "error", "info",
-    "background", "surface_primary", "surface_secondary", "surface_tertiary",
-    "surface_inverse", "surface_inverse_secondary", "surface_inverse_tertiary",
-    "border", "border_focus", "border_disabled",
-    "text_primary", "text_secondary", "text_placeholder", "text_inverse", "text_highlight",
-    "focus", "active", "disabled", "overlay", "shadow",
+    "primary",
+    "secondary",
+    "tertiary",
+    "success",
+    "warning",
+    "error",
+    "info",
+    "background",
+    "surface_primary",
+    "surface_secondary",
+    "surface_tertiary",
+    "surface_inverse",
+    "surface_inverse_secondary",
+    "surface_inverse_tertiary",
+    "border",
+    "border_focus",
+    "border_disabled",
+    "text_primary",
+    "text_secondary",
+    "text_placeholder",
+    "text_inverse",
+    "text_highlight",
+    "focus",
+    "active",
+    "disabled",
+    "overlay",
+    "shadow",
 ];
 
 /// Light/dark grouping — picks the frontend's base theme and (later) the Sync-with-OS split.
@@ -102,20 +123,20 @@ impl<'de> Deserialize<'de> for SpecificValue {
         use serde::de::Error;
         match serde_json::Value::deserialize(d)? {
             serde_json::Value::String(s) => Ok(Self::Color(s)),
-            serde_json::Value::Number(n) => {
-                Ok(Self::Scalar(n.as_f64().ok_or_else(|| {
-                    D::Error::custom("specific number out of range")
-                })? as f32))
-            }
+            serde_json::Value::Number(n) => Ok(Self::Scalar(
+                n.as_f64()
+                    .ok_or_else(|| D::Error::custom("specific number out of range"))?
+                    as f32,
+            )),
             serde_json::Value::Array(a) => {
                 let sides: Vec<f32> = a
                     .iter()
                     .map(|v| v.as_f64().map(|n| n as f32))
                     .collect::<Option<_>>()
                     .ok_or_else(|| D::Error::custom("specific sides must be numbers"))?;
-                let sides: [f32; 4] = sides.try_into().map_err(|_| {
-                    D::Error::custom("specific sides must have exactly 4 numbers")
-                })?;
+                let sides: [f32; 4] = sides
+                    .try_into()
+                    .map_err(|_| D::Error::custom("specific sides must have exactly 4 numbers"))?;
                 Ok(Self::Sides(sides))
             }
             _ => Err(D::Error::custom(
@@ -228,7 +249,9 @@ impl ThemeRegistry {
             })
             .collect();
         for dir in dirs {
-            let Ok(rd) = std::fs::read_dir(dir) else { continue };
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                continue;
+            };
             let mut paths: Vec<PathBuf> = rd
                 .flatten()
                 .map(|e| e.path())
@@ -387,9 +410,9 @@ pub fn typography(id: &str) -> Typography {
 pub fn resolve_typography(t: &StrataTheme) -> Typography {
     let fam = |key: &str| -> String {
         t.fonts
-         .get(key)
-         .cloned()
-         .unwrap_or_else(|| "IBM Plex Sans".to_string())
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| "IBM Plex Sans".to_string())
     };
     let role = |name: &str| -> TextStyle {
         match t.typography.get(name) {
@@ -432,9 +455,7 @@ pub fn resolve_typography(t: &StrataTheme) -> Typography {
 /// set of `(component key, fields + kinds)` tables (e.g. Freya's builtin-override registry
 /// and its custom-component registry). The frontend's `schema_in_sync` test keeps
 /// `themes/theme.schema.json` equal to this.
-pub fn generate_schema(
-    component_registries: &[&[(&str, &[(&str, Kind)])]],
-) -> serde_json::Value {
+pub fn generate_schema(component_registries: &[&[(&str, &[(&str, Kind)])]]) -> serde_json::Value {
     use serde_json::{json, Map, Value};
 
     let ref_for = |k: &Kind| match k {
@@ -464,8 +485,19 @@ pub fn generate_schema(
 
     // The type scale — a top-level `typography` section, one `typeRole` per named role.
     const TYPE_ROLES: &[&str] = &[
-        "display", "title", "strong_body", "body_medium", "control", "body", "caption",
-        "code_display", "data_display", "data_value", "code_block", "field_label", "meta",
+        "display",
+        "title",
+        "strong_body",
+        "body_medium",
+        "control",
+        "body",
+        "caption",
+        "code_display",
+        "data_display",
+        "data_value",
+        "code_block",
+        "field_label",
+        "meta",
         "mono_path",
     ];
     let mut typo_props = Map::new();
@@ -556,7 +588,11 @@ mod tests {
         let ids: Vec<&str> = reg.entries().iter().map(|e| e.theme.id.as_str()).collect();
         assert_eq!(ids, ["midnight", "daylight", "custom"]);
         assert_eq!(reg.get("midnight").unwrap().name, "My Midnight");
-        assert_eq!(reg.entries()[0].source, Source::User, "override rebadges the entry");
+        assert_eq!(
+            reg.entries()[0].source,
+            Source::User,
+            "override rebadges the entry"
+        );
         assert_eq!(reg.entries()[2].source, Source::User);
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -42,7 +42,10 @@ pub struct ViewMeta {
 
 // ---- external table registration ----
 
-pub async fn register_external(ctx: &SessionContext, spec: &TableSpec) -> Result<TableMeta, String> {
+pub async fn register_external(
+    ctx: &SessionContext,
+    spec: &TableSpec,
+) -> Result<TableMeta, String> {
     use datafusion::datasource::file_format::arrow::ArrowFormat;
     use datafusion::datasource::file_format::csv::CsvFormat;
     use datafusion::datasource::file_format::json::JsonFormat;
@@ -107,7 +110,7 @@ pub async fn register_external(ctx: &SessionContext, spec: &TableSpec) -> Result
         .map_err(|e| e.to_string())?;
     let table = ListingTable::try_new(config).map_err(|e| e.to_string())?;
     ctx.register_table(spec.name.as_str(), Arc::new(table))
-       .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
 
     table_meta(ctx, spec.name.as_str()).await
 }
@@ -134,7 +137,7 @@ pub async fn rebuild_listing(
     let table = ListingTable::try_new(config).map_err(|e| e.to_string())?;
     let _ = ctx.deregister_table(name);
     ctx.register_table(name, Arc::new(table))
-       .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     table_meta(ctx, name).await
 }
 
@@ -203,7 +206,10 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
 /// expensive thing the user opted into.
 /// Feature reservoir: consumed by `Engine::profile` (D4) when the profiling task lands.
 #[allow(dead_code)]
-pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<crate::profile::CatalogProfile, String> {
+pub async fn run_profile(
+    ctx: &SessionContext,
+    name: &str,
+) -> Result<crate::profile::CatalogProfile, String> {
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
     let columns: Vec<ColumnInfo> = df
         .schema()
@@ -255,7 +261,11 @@ async fn free_stats(ctx: &SessionContext, name: &str, columns: &mut [ColumnInfo]
     let lt = provider.downcast_ref::<ListingTable>()?;
     let state = ctx.state();
     // `limit: None` — a limit would make the aggregate inexact.
-    let stats = lt.list_files_for_scan(&state, &[], None).await.ok()?.statistics;
+    let stats = lt
+        .list_files_for_scan(&state, &[], None)
+        .await
+        .ok()?
+        .statistics;
     let rows = stats.num_rows.get_value().map(|n| *n as u64);
     // Zip rather than index: DataFusion promises one entry per *table*-schema field, but
     // a table with no files short-circuits to `file_schema`, which omits the partition
@@ -275,10 +285,14 @@ async fn free_stats(ctx: &SessionContext, name: &str, columns: &mut [ColumnInfo]
             }),
             None => None,
         };
-        col.stats = [nulls, stat_of(StatKey::Min, &cs.min_value), stat_of(StatKey::Max, &cs.max_value)]
-            .into_iter()
-            .flatten()
-            .collect();
+        col.stats = [
+            nulls,
+            stat_of(StatKey::Min, &cs.min_value),
+            stat_of(StatKey::Max, &cs.max_value),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
     }
     rows
 }

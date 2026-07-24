@@ -77,7 +77,11 @@ pub struct ExplainPlan {
 
 impl ExplainPlan {
     pub fn new(plan: QueryPlan, tab: State<PlanTab>) -> Self {
-        Self { plan, tab, theme: None }
+        Self {
+            plan,
+            tab,
+            theme: None,
+        }
     }
 }
 
@@ -89,8 +93,12 @@ impl Component for ExplainPlan {
             let c = &app_theme.read().colors;
             (c.background, c.primary, c.error, c.text_secondary)
         };
-        let palette =
-            PlanPalette { theme: theme.clone(), accent, error, count_color };
+        let palette = PlanPalette {
+            theme: theme.clone(),
+            accent,
+            error,
+            count_color,
+        };
 
         let mut tab = self.tab;
         // The Raw/Tree flag: the ToggleButton owns the flip; this per-press mirror (the
@@ -131,7 +139,11 @@ impl Component for ExplainPlan {
                 .center()
                 .child(Eyebrow::new("ANALYZE").color(theme.type_map_color))
         });
-        let raw_title = if raw_on { "Show the plan tree" } else { "Show the raw plan text" };
+        let raw_title = if raw_on {
+            "Show the plan tree"
+        } else {
+            "Show the raw plan text"
+        };
         // The standard toggle button (`toggle_button` theme): it flips, we echo the value
         // back through `toggle` (the Button-`enabled` recipe) — never computing the flip.
         let raw_toggle = ToggleButton::new()
@@ -173,9 +185,10 @@ impl Component for ExplainPlan {
                 )
                 .into()
         } else {
-            let rows = nodes.iter().enumerate().map(|(i, node)| {
-                plan_row(node, &guide_rails(nodes, i), max_ms, &palette, i)
-            });
+            let rows = nodes
+                .iter()
+                .enumerate()
+                .map(|(i, node)| plan_row(node, &guide_rails(nodes, i), max_ms, &palette, i));
             ScrollView::new()
                 .child(
                     rect()
@@ -195,7 +208,12 @@ impl Component for ExplainPlan {
             .content(Content::Flex)
             .background(theme.background)
             .child(toolbar)
-            .child(rect().width(Size::fill()).height(Size::flex(1.)).child(body))
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.))
+                    .child(body),
+            )
     }
 }
 
@@ -223,9 +241,21 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(effective_tab(&both, PlanTab::Logical), PlanTab::Logical);
-        let physical_only = QueryPlan { physical: vec![node.clone()], ..Default::default() };
-        assert_eq!(effective_tab(&physical_only, PlanTab::Logical), PlanTab::Physical);
-        let logical_only = QueryPlan { logical: vec![node], ..Default::default() };
-        assert_eq!(effective_tab(&logical_only, PlanTab::Physical), PlanTab::Logical);
+        let physical_only = QueryPlan {
+            physical: vec![node.clone()],
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_tab(&physical_only, PlanTab::Logical),
+            PlanTab::Physical
+        );
+        let logical_only = QueryPlan {
+            logical: vec![node],
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_tab(&logical_only, PlanTab::Physical),
+            PlanTab::Logical
+        );
     }
 }

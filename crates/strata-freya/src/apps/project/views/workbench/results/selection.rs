@@ -11,7 +11,12 @@ use freya::prelude::*;
 pub enum Selection {
     None,
     /// Rectangle from anchor `(ar, ac)` to focus `(fr, fc)`.
-    Cell { ar: usize, ac: usize, fr: usize, fc: usize },
+    Cell {
+        ar: usize,
+        ac: usize,
+        fr: usize,
+        fc: usize,
+    },
     /// Whole rows, by row index.
     Rows(Vec<usize>),
     /// Whole columns, by column index.
@@ -22,9 +27,12 @@ impl Selection {
     /// Inclusive `(min_row, max_row, min_col, max_col)` of a `Cell` rectangle.
     pub fn cell_bounds(&self) -> Option<(usize, usize, usize, usize)> {
         match self {
-            Selection::Cell { ar, ac, fr, fc } => {
-                Some(((*ar).min(*fr), (*ar).max(*fr), (*ac).min(*fc), (*ac).max(*fc)))
-            }
+            Selection::Cell { ar, ac, fr, fc } => Some((
+                (*ar).min(*fr),
+                (*ar).max(*fr),
+                (*ac).min(*fc),
+                (*ac).max(*fc),
+            )),
             _ => None,
         }
     }
@@ -50,11 +58,9 @@ impl Selection {
     pub fn contains(&self, r: usize, c: usize) -> bool {
         match self {
             Selection::None => false,
-            Selection::Cell { .. } => self
-                .cell_bounds()
-                .is_some_and(|(minr, maxr, minc, maxc)| {
-                    r >= minr && r <= maxr && c >= minc && c <= maxc
-                }),
+            Selection::Cell { .. } => self.cell_bounds().is_some_and(|(minr, maxr, minc, maxc)| {
+                r >= minr && r <= maxr && c >= minc && c <= maxc
+            }),
             Selection::Rows(rows) => rows.contains(&r),
             Selection::Cols(cols) => cols.contains(&c),
         }
@@ -159,7 +165,12 @@ impl SelCtl {
         if *self.shift.peek() {
             self.cell_to(r, c);
         } else {
-            self.sel.set(Selection::Cell { ar: r, ac: c, fr: r, fc: c });
+            self.sel.set(Selection::Cell {
+                ar: r,
+                ac: c,
+                fr: r,
+                fc: c,
+            });
         }
         self.drag.set(true);
     }
@@ -170,7 +181,12 @@ impl SelCtl {
             Selection::Cell { ar, ac, .. } => (*ar, *ac),
             _ => (r, c),
         };
-        self.sel.set(Selection::Cell { ar, ac, fr: r, fc: c });
+        self.sel.set(Selection::Cell {
+            ar,
+            ac,
+            fr: r,
+            fc: c,
+        });
     }
 
     /// Drag-paint: extend the rectangle to `(r, c)` while a drag is active.
@@ -204,7 +220,11 @@ impl SelCtl {
                 }
                 None => rows.push(i),
             }
-            self.sel.set((!rows.is_empty()).then_some(Selection::Rows(rows)).unwrap_or(Selection::None));
+            self.sel.set(
+                (!rows.is_empty())
+                    .then_some(Selection::Rows(rows))
+                    .unwrap_or(Selection::None),
+            );
         } else {
             self.sel.set(Selection::Rows(vec![i]));
         }
@@ -235,7 +255,11 @@ impl SelCtl {
                 }
                 None => cols.push(ci),
             }
-            self.sel.set((!cols.is_empty()).then_some(Selection::Cols(cols)).unwrap_or(Selection::None));
+            self.sel.set(
+                (!cols.is_empty())
+                    .then_some(Selection::Cols(cols))
+                    .unwrap_or(Selection::None),
+            );
         } else {
             self.sel.set(Selection::Cols(vec![ci]));
         }

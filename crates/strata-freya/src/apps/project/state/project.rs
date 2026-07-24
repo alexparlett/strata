@@ -118,7 +118,8 @@ pub struct ViewInfo {
     #[allow(dead_code)]
     pub deps: Vec<String>,
     /// The views it reads (transitive), resolved from the engine's raw aliases.
-    #[allow(dead_code)] // Feature reservoir: the table-drop warning + reload ordering (Phase 3).
+    #[allow(dead_code)]
+    // Feature reservoir: the table-drop warning + reload ordering (Phase 3).
     pub view_deps: Vec<String>,
 }
 
@@ -139,13 +140,15 @@ impl ViewRow {
 
 /// The open project. Rows stay sorted by [`name_ord`] on their def names (the load
 /// sorts, and every upsert inserts at the sorted slot), so index-addressed rows can't
-/// shuffle.
-#[derive(Default)]
+/// shuffle. Always built **full, from load or scaffold** ([`from_defs`](Self::from_defs))
+/// — there is no `Default`: a project can't exist without a folder on disk, so a rootless
+/// in-memory project is not a representable state.
 pub struct ProjectState {
     pub name: String,
     /// The project folder — the parent of its `.strata/` dir, and the base relative
-    /// source paths resolve against. `None` = no project on disk (in-memory only).
-    pub root: Option<PathBuf>,
+    /// source paths resolve against. Always set: opening a project that can't be
+    /// canonicalized is an unrecoverable error, not a rootless fallback.
+    pub root: PathBuf,
     pub tables: Vec<TableRow>,
     pub views: Vec<ViewRow>,
     pub saved_queries: Vec<SavedQuery>,
@@ -157,7 +160,7 @@ impl ProjectState {
     pub fn from_defs(defs: ProjectDefs, root: PathBuf) -> Self {
         Self {
             name: defs.name,
-            root: Some(root),
+            root,
             tables: defs.tables.into_iter().map(TableRow::new).collect(),
             views: defs.views.into_iter().map(ViewRow::new).collect(),
             saved_queries: defs.saved_queries,
@@ -176,12 +179,9 @@ impl ProjectState {
     }
 
     /// Persist the defs to `.strata/project.json`. Call at def-mutation points
-    /// (view/saved-query create · drop · register/deregister). No-op without a root.
+    /// (view/saved-query create · drop · register/deregister).
     pub fn save_defs(&self) -> Result<(), String> {
-        match &self.root {
-            Some(root) => project_io::save_defs(root, &self.defs()),
-            None => Ok(()),
-        }
+        project_io::save_defs(&self.root, &self.defs())
     }
 
     // --- identity ------------------------------------------------------------------
@@ -196,11 +196,23 @@ impl ProjectState {
     /// namespace, so a new name must be free in both; saved-query labels only clash
     /// with themselves. (Also the config-modal name validation, P4-11.)
     pub fn name_in_use(&self, name: &str) -> Option<CatalogKind> {
-        if self.tables.iter().any(|r| Self::same_name(&r.def.name, name)) {
+        if self
+            .tables
+            .iter()
+            .any(|r| Self::same_name(&r.def.name, name))
+        {
             Some(CatalogKind::Table)
-        } else if self.views.iter().any(|r| Self::same_name(&r.def.name, name)) {
+        } else if self
+            .views
+            .iter()
+            .any(|r| Self::same_name(&r.def.name, name))
+        {
             Some(CatalogKind::View)
-        } else if self.saved_queries.iter().any(|q| Self::same_name(&q.name, name)) {
+        } else if self
+            .saved_queries
+            .iter()
+            .any(|q| Self::same_name(&q.name, name))
+        {
             Some(CatalogKind::Query)
         } else {
             None
@@ -233,7 +245,11 @@ impl ProjectState {
         let view_deps: Vec<String> = meta
             .aliases
             .into_iter()
-            .filter(|a| self.views.iter().any(|v| v.def.name == *a && v.def.name != name))
+            .filter(|a| {
+                self.views
+                    .iter()
+                    .any(|v| v.def.name == *a && v.def.name != name)
+            })
             .collect();
         if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
             v.reg = Reg::Ready(ViewInfo {

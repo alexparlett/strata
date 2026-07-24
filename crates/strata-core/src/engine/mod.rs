@@ -22,15 +22,15 @@
 //! `crates/strata-dioxus`, which is reference code and no longer builds.)
 
 mod catalog;
+pub mod config;
 mod explain;
 mod export;
 mod functions;
-mod query;
-pub mod config;
-pub mod serialize;
 pub mod plan;
-pub mod sql;
 pub mod profile;
+mod query;
+pub mod serialize;
+pub mod sql;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
 pub use query::purge_snapshot_root;
@@ -55,7 +55,7 @@ use tokio::task::AbortHandle;
 use crate::engine::plan::QueryPlan;
 use query::{retire_snapshot, run_and_snapshot, snapshot_dir, CellFormat};
 use sql::FunctionCatalog;
-use strata_model::{Cell, Diagnostic, QueryOutput, SnapshotId};
+use strata_model::{Cell, Diagnostic, QueryOutput, SnapshotId, TabId};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
 /// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
@@ -63,6 +63,13 @@ use strata_model::{Cell, Diagnostic, QueryOutput, SnapshotId};
 /// maintaining a parallel one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct WsId(pub u128);
+
+impl From<TabId> for WsId {
+    /// A tab *is* an engine workspace — its `Uuid` widened to the `u128` key.
+    fn from(tab: TabId) -> Self {
+        WsId(tab.0.as_u128())
+    }
+}
 
 /// One dispatched run's identity — the UI's per-press nonce (`QuerySpec::run`), passed
 /// down so [`Engine::cancel`] and the settle path can tell "still this run" from "a
@@ -249,7 +256,9 @@ impl Engine {
         let ctx = self.ctx.clone();
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
         self.rt()
-            .spawn(async move { query::fetch_page(&ctx, snapshot, page, page_size, sort, &fmt).await })
+            .spawn(
+                async move { query::fetch_page(&ctx, snapshot, page, page_size, sort, &fmt).await },
+            )
             .await
             .map_err(|e| format!("page task failed: {e}"))?
     }
@@ -264,10 +273,17 @@ impl Engine {
                 self.abort_inflight(prev);
             }
             let ctx = self.ctx.clone();
-            let task = self.rt().spawn(async move { explain::run_explain(&ctx, &sql).await });
+            let task = self
+                .rt()
+                .spawn(async move { explain::run_explain(&ctx, &sql).await });
             lc.inflight.insert(
                 ws,
-                InFlight { tag, snapshot: None, abort: task.abort_handle(), start: Instant::now() },
+                InFlight {
+                    tag,
+                    snapshot: None,
+                    abort: task.abort_handle(),
+                    start: Instant::now(),
+                },
             );
             task
         };

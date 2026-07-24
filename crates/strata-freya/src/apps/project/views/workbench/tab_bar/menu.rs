@@ -9,7 +9,9 @@ use freya::prelude::*;
 use freya::radio::Radio;
 use strata_core::config::Command;
 
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use strata_model::TabId;
+
+use crate::apps::project::state::{Chan, SessionState};
 use crate::components::divider::Divider;
 use crate::components::typography::Prose;
 use crate::keymap::KeyHint;

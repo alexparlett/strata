@@ -33,8 +33,8 @@ use super::record_view::RecordView;
 use super::selection::{SelCtl, Selection};
 use super::sort::SortState;
 use super::toolbar::ResultsToolbar;
-use crate::apps::project::state::TabId;
 use crate::components::divider::Divider;
+use strata_model::TabId;
 
 mod cell;
 mod header;
@@ -58,9 +58,9 @@ const MAX_COL_W: f32 = 2000.;
 const GRIP_W: f32 = 6.; // resize hot-zone width on a column's right edge
 const EDGE_MARGIN: f32 = 36.; // how close to the viewport edge a resize drag starts auto-scrolling
 const EDGE_STEP: f32 = 24.; // px scrolled per pointer-move tick while resizing at an edge
-// Wheel axis-lock threshold: a scroll commits to whichever axis dominates, so a mostly-vertical
-// gesture never drifts the horizontal pan (and vice-versa). 1.0 = lock to the larger axis; raise it
-// to allow more diagonal freedom before locking.
+                            // Wheel axis-lock threshold: a scroll commits to whichever axis dominates, so a mostly-vertical
+                            // gesture never drifts the horizontal pan (and vice-versa). 1.0 = lock to the larger axis; raise it
+                            // to allow more diagonal freedom before locking.
 const SCROLL_AXIS_LOCK: f32 = 1.0;
 define_theme!(
     %[component]
@@ -441,7 +441,12 @@ impl Component for DataGrid {
             .child(ResultsToolbar::new(self.tab, self.find))
             .child(scroll)
             // The open nested-cell modal (an overlay layer — it renders above everything).
-            .maybe_child(cell_view.read().clone().map(|value| CellView::new(value, cell_view)))
+            .maybe_child(
+                cell_view
+                    .read()
+                    .clone()
+                    .map(|value| CellView::new(value, cell_view)),
+            )
             // The open record view (P2-10) — a live pointer into the current page, clamped in
             // case a page flip / filter change shortened the page under it (an emptied page
             // has no row to show, so the modal simply doesn't render until one is back).
@@ -460,4 +465,3 @@ impl Component for DataGrid {
             .into_element()
     }
 }
-

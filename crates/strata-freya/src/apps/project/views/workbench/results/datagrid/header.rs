@@ -111,8 +111,12 @@ impl Component for HeaderRow {
         // Trailing dead space: keeps the last column's resize grip clear of the content's
         // right edge so it stays reachable, and gives somewhere to drag when widening the
         // last column.
-        header
-            .child(rect().width(Size::flex(1.)).min_width(Size::px(TRAIL_W)).height(Size::fill()))
+        header.child(
+            rect()
+                .width(Size::flex(1.))
+                .min_width(Size::px(TRAIL_W))
+                .height(Size::fill()),
+        )
     }
 }
 
@@ -151,7 +155,11 @@ impl Component for HeaderCell {
         // Read the selection reactively so this header re-renders when any column selection changes
         // (activating this one *and* deactivating the previously-selected one).
         let active = sel.sel.read().cols().contains(&index);
-        let name_color = if active { self.active_color } else { self.name_color };
+        let name_color = if active {
+            self.active_color
+        } else {
+            self.name_color
+        };
         // The sort chevron (Rz6): up = asc, down = desc / unsorted. Unsorted is invisible
         // until the header is hovered (the comp's faint-on-hover reveal — the button stays
         // mounted so the name row's layout never shifts); the sorted column's stays lit in
@@ -159,7 +167,11 @@ impl Component for HeaderCell {
         // grabbing it never selects the column (the Dioxus `col-sort` contract).
         let sort = self.sort;
         let dir = sort.dir(index);
-        let sort_icon = if dir == Some(true) { IconName::ChevronUp } else { IconName::ChevronDown };
+        let sort_icon = if dir == Some(true) {
+            IconName::ChevronUp
+        } else {
+            IconName::ChevronDown
+        };
         let sort_color = if dir.is_some() {
             self.active_color
         } else if hovered() {
@@ -200,7 +212,11 @@ impl Component for HeaderCell {
                             .direction(Direction::Horizontal)
                             .main_align(Alignment::SpaceBetween)
                             .cross_align(Alignment::Center)
-                            .child(MonoValue::new(self.name.clone()).color(name_color).max_lines(1))
+                            .child(
+                                MonoValue::new(self.name.clone())
+                                    .color(name_color)
+                                    .max_lines(1),
+                            )
                             .child(
                                 TooltipContainer::new(Tooltip::new("Sort by this column"))
                                     .position(AttachedPosition::Bottom)
@@ -213,7 +229,9 @@ impl Component for HeaderCell {
                                                 e.stop_propagation();
                                             })
                                             .on_press(move |_| sort.cycle(index))
-                                            .child(Icon::new(sort_icon).size(11.).color(sort_color)),
+                                            .child(
+                                                Icon::new(sort_icon).size(11.).color(sort_color),
+                                            ),
                                     ),
                             ),
                     )

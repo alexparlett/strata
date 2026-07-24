@@ -14,7 +14,11 @@ fn functions() -> FunctionCatalog {
 #[test]
 fn every_category_is_populated() {
     let f = functions();
-    assert!(f.scalar.len() > 100, "scalar built-ins enumerated: {}", f.scalar.len());
+    assert!(
+        f.scalar.len() > 100,
+        "scalar built-ins enumerated: {}",
+        f.scalar.len()
+    );
     assert!(!f.aggregate.is_empty(), "aggregates enumerated");
     assert!(!f.window.is_empty(), "window fns enumerated");
     // Names are unique-per-category and every sym carries its own name.
@@ -32,8 +36,16 @@ fn round_has_a_two_argument_overload_and_a_detail() {
         round.signatures
     );
     // The completion detail is the bracketed arity form, not the flat "function".
-    assert!(round.detail().starts_with('('), "arity detail: {}", round.detail());
-    assert!(round.detail().contains("[, "), "optional 2nd arg bracketed: {}", round.detail());
+    assert!(
+        round.detail().starts_with('('),
+        "arity detail: {}",
+        round.detail()
+    );
+    assert!(
+        round.detail().contains("[, "),
+        "optional 2nd arg bracketed: {}",
+        round.detail()
+    );
     // The docs body names the function and its category.
     assert!(round.doc().contains("round("), "{}", round.doc());
     assert!(round.doc().starts_with("scalar function"));
@@ -45,7 +57,10 @@ fn concat_is_variadic() {
     let concat = f.get("concat").expect("concat is registered");
     // A variadic tail is marked by the trailing ellipsis parameter.
     assert!(
-        concat.signatures.iter().any(|o| o.last().map(String::as_str) == Some("…")),
+        concat
+            .signatures
+            .iter()
+            .any(|o| o.last().map(String::as_str) == Some("…")),
         "concat renders a variadic tail: {:?}",
         concat.signatures
     );

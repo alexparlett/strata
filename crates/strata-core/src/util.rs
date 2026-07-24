@@ -12,7 +12,12 @@ pub fn now_hms() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0)
         % 86_400;
-    format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
 }
 
 /// A stable FNV-1a hash of the **trimmed** SQL — the tab dirty-tracking baseline.

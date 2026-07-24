@@ -2,8 +2,8 @@
 //! components built to the `design-handoff/` comps — grown in place, never thrown away.
 
 mod dialogs;
-mod workbench;
 mod header;
+mod workbench;
 
 pub use dialogs::CloseConfirm;
 pub use header::{HeaderBar, HeaderBarThemePreference};

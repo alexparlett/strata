@@ -12,7 +12,7 @@ use freya::prelude::*;
 use freya::query::{use_query, Query, QueryStateData};
 use freya::radio::use_radio;
 use strata_core::engine::plan::PlanTab;
-use strata_model::SnapshotId;
+use strata_model::{ResultsView, SnapshotId, TabId};
 
 mod cell_view;
 mod chart;
@@ -31,27 +31,27 @@ mod toolbar;
 
 use chart::ChartView;
 use datagrid::{DataGrid, GridData, PageRead};
-use find::FindState;
-use sort::SortState;
 use empty::EmptyState;
 use error::ErrorState;
+use find::FindState;
 use running::Running;
+use sort::SortState;
 use status_bar::StatusBar;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{
     FetchSnapshotPage, PageSpec, QueryOutcome, QuerySpec, RunId, RunQuery,
 };
-use crate::apps::project::state::{Chan, ResultsView, SessionState, TabId};
+use crate::apps::project::state::{use_history_recording, Chan, SessionState};
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
-use status_bar::{Pager, RunInfo};
 pub use cell_view::CellViewThemePreference;
 pub use datagrid::DataGridThemePreference;
-pub use record_view::RecordViewThemePreference;
 pub use explain_plan::ExplainPlanThemePreference;
+pub use record_view::RecordViewThemePreference;
 pub use running::{CancelButtonThemePartial, CancelButtonThemePreference};
 pub use status_bar::StatusBarThemePreference;
+use status_bar::{Pager, RunInfo};
 
 /// Which of the state bodies the results pane shows — the status bar's coarse view state.
 #[derive(PartialEq, Clone, Copy)]
@@ -86,7 +86,12 @@ impl Results {
     pub fn new(id: TabId, running: State<Option<RunId>>) -> Self {
         // Keyed by the tab, like `EditorTab`: the pane renders in one fixed slot, so without
         // a key a tab switch reuses the scope and the `Selection` context leaks across tabs.
-        Self { id, running, key: DiffKey::None }.key(id)
+        Self {
+            id,
+            running,
+            key: DiffKey::None,
+        }
+        .key(id)
     }
 }
 
@@ -151,8 +156,7 @@ impl Component for ResultsBody {
     fn render(&self) -> impl IntoElement {
         let engine = use_consume::<EngineCtx>();
         let query = use_query(
-            Query::new(self.spec.clone(), RunQuery(engine.captured()))
-                .stale_time(Duration::MAX),
+            Query::new(self.spec.clone(), RunQuery(engine.captured())).stale_time(Duration::MAX),
         );
 
         // Mirror the run's in-flight-ness into the workbench's `running` slot for the
@@ -182,6 +186,9 @@ impl Component for ResultsBody {
                 running.set(None);
             }
         });
+
+        // Query history (P4-14): record this run once when it settles `Ok(Rows)`.
+        use_history_recording(query, run, self.spec.sql.clone());
         // The 1-based snapshot page the grid shows and the rows-per-page it's cut into. They
         // live here — beside the status bar that pages them and the grid that reads them — and
         // reset for every press (this component is keyed by the press's nonce). `page_size`
@@ -228,7 +235,10 @@ impl Component for ResultsBody {
         // boundary that knows the settled schema (the intent itself is index-keyed; an index
         // the schema can't resolve falls back to unsorted rather than erroring the read).
         let (snapshot, sort_key) = match &*query.read().state() {
-            QueryStateData::Settled { res: Ok(QueryOutcome::Rows(rows)), .. } => (
+            QueryStateData::Settled {
+                res: Ok(QueryOutcome::Rows(rows)),
+                ..
+            } => (
                 rows.output.snapshot,
                 (*sort.by.read()).and_then(|(ci, asc)| {
                     rows.output.columns.get(ci).map(|c| (c.name.clone(), asc))
@@ -271,9 +281,10 @@ impl Component for ResultsBody {
 
         let reader = query.read();
         let (body, bar): (Element, StatusBar) = match &*reader.state() {
-            QueryStateData::Pending | QueryStateData::Loading { .. } => {
-                (Running::new(cancel).into(), StatusBar::new(ResultsState::Running))
-            }
+            QueryStateData::Pending | QueryStateData::Loading { .. } => (
+                Running::new(cancel).into(),
+                StatusBar::new(ResultsState::Running),
+            ),
             // Chart mode (P2-07): the placeholder body under the shared toolbar. The pager
             // and selection aggregate are grid concerns, so the bar keeps only the run
             // readouts; the page/find/sort state above stays put for the switch back.
@@ -299,13 +310,13 @@ impl Component for ResultsBody {
                     PageRead::Ready(run_grid.clone())
                 } else {
                     match &*fetch.read().state() {
-                        QueryStateData::Settled { res: Ok(fetched), .. } => {
-                            PageRead::Ready(Rc::new(GridData::from_page(
-                                rows.output.columns.clone(),
-                                fetched.rows.clone(),
-                                fetched.batch.clone(),
-                            )))
-                        }
+                        QueryStateData::Settled {
+                            res: Ok(fetched), ..
+                        } => PageRead::Ready(Rc::new(GridData::from_page(
+                            rows.output.columns.clone(),
+                            fetched.rows.clone(),
+                            fetched.batch.clone(),
+                        ))),
                         QueryStateData::Settled { res: Err(err), .. } => {
                             PageRead::Failed(err.clone())
                         }
@@ -327,7 +338,11 @@ impl Component for ResultsBody {
                     other => (other.clone(), None),
                 };
                 let bar = StatusBar::new(ResultsState::Grid)
-                    .pager(Pager { page, page_size, total: rows.output.total })
+                    .pager(Pager {
+                        page,
+                        page_size,
+                        total: rows.output.total,
+                    })
                     .info(RunInfo {
                         total: rows.output.total,
                         elapsed_ms: rows.output.elapsed_ms,
@@ -344,7 +359,10 @@ impl Component for ResultsBody {
             }
             // The settled EXPLAIN (P2-05): the three-tier plan card tree. The status bar's
             // summary counts the *shown* tree — the same effective tab the view resolves.
-            QueryStateData::Settled { res: Ok(QueryOutcome::Plan(plan)), .. } => {
+            QueryStateData::Settled {
+                res: Ok(QueryOutcome::Plan(plan)),
+                ..
+            } => {
                 let tab = explain_plan::effective_tab(plan, *plan_tab.read());
                 let ops = match tab {
                     PlanTab::Physical => plan.physical.len(),
@@ -355,9 +373,10 @@ impl Component for ResultsBody {
                     StatusBar::new(ResultsState::ExplainPlan).plan(ops, tab),
                 )
             }
-            QueryStateData::Settled { res: Err(err), .. } => {
-                (ErrorState::new(err.clone()).into(), StatusBar::new(ResultsState::Error))
-            }
+            QueryStateData::Settled { res: Err(err), .. } => (
+                ErrorState::new(err.clone()).into(),
+                StatusBar::new(ResultsState::Error),
+            ),
         };
 
         shell(body, bar)

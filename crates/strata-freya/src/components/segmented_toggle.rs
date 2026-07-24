@@ -43,7 +43,10 @@ impl Default for SegmentedToggle {
 
 impl SegmentedToggle {
     pub fn new() -> Self {
-        Self { children: Vec::new(), theme: None }
+        Self {
+            children: Vec::new(),
+            theme: None,
+        }
     }
 }
 
@@ -55,7 +58,11 @@ impl ChildrenExt for SegmentedToggle {
 
 impl Component for SegmentedToggle {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(&self.theme, SegmentedToggleThemePreference, "segmented_toggle");
+        let theme = get_theme!(
+            &self.theme,
+            SegmentedToggleThemePreference,
+            "segmented_toggle"
+        );
 
         let mut pill = rect()
             .horizontal()
@@ -67,7 +74,10 @@ impl Component for SegmentedToggle {
         for (i, segment) in self.children.iter().enumerate() {
             if i > 0 {
                 pill = pill.child(
-                    rect().width(Size::px(1.)).height(Size::px(24.)).background(theme.divider_fill),
+                    rect()
+                        .width(Size::px(1.))
+                        .height(Size::px(24.))
+                        .background(theme.divider_fill),
                 );
             }
             pill = pill.child(segment.clone());
@@ -98,7 +108,13 @@ pub struct ToggleSegment {
 
 impl ToggleSegment {
     pub fn new(icon: IconName) -> Self {
-        Self { content: SegmentContent::Icon(icon), title: None, selected: false, on_press: None, theme: None }
+        Self {
+            content: SegmentContent::Icon(icon),
+            title: None,
+            selected: false,
+            on_press: None,
+            theme: None,
+        }
     }
 
     /// A text segment (`Control` typography) — e.g. the plan view's Physical/Logical tabs.
@@ -131,7 +147,11 @@ impl ToggleSegment {
 
 impl Component for ToggleSegment {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(&self.theme, SegmentedToggleThemePreference, "segmented_toggle");
+        let theme = get_theme!(
+            &self.theme,
+            SegmentedToggleThemePreference,
+            "segmented_toggle"
+        );
         let hover = use_theme().read().colors.text_primary.with_a(18);
         let mut hovered = use_state(|| false);
 
@@ -143,7 +163,11 @@ impl Component for ToggleSegment {
             Color::TRANSPARENT
         };
         let on_press = self.on_press.clone();
-        let color = if self.selected { theme.item_active_color } else { theme.item_color };
+        let color = if self.selected {
+            theme.item_active_color
+        } else {
+            theme.item_color
+        };
         let segment = rect()
             .height(Size::px(24.))
             .center()
@@ -156,12 +180,12 @@ impl Component for ToggleSegment {
                 }
             });
         let segment = match &self.content {
-            SegmentContent::Icon(icon) => {
-                segment.width(Size::px(32.)).child(Icon::new(*icon).color(color).size(15.))
-            }
-            SegmentContent::Text(label) => {
-                segment.padding((0., 12.)).child(Control::new(label.clone()).color(color))
-            }
+            SegmentContent::Icon(icon) => segment
+                .width(Size::px(32.))
+                .child(Icon::new(*icon).color(color).size(15.)),
+            SegmentContent::Text(label) => segment
+                .padding((0., 12.))
+                .child(Control::new(label.clone()).color(color)),
         };
         match &self.title {
             Some(title) => TooltipContainer::new(Tooltip::new(title.clone()))

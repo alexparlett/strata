@@ -12,14 +12,12 @@
 
 use freya::prelude::spawn;
 use freya::radio::{Radio, RadioStation};
-use strata_model::{SavedQuery, ViewDef};
+use strata_model::{Origin, SavedQuery, TabId, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, QuerySpec, RunId, DEFAULT_PAGE_SIZE};
-use crate::apps::project::state::{
-    Chan, Origin, ProjChan, ProjectState, SessionState, TabId,
-};
+use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 
 /// A Run / Explain / Analyze press (P2-15 + ⌘↵): snapshot the tab's editor text *now*,
 /// mint a fresh nonce, and set it as the tab's run request — on `Chan::Request(id)`, so
@@ -33,13 +31,16 @@ pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: Quer
     if sql.trim().is_empty() {
         return;
     }
-    session.write_channel(Chan::Request(id)).set_request(id, QuerySpec {
-        tab: id,
-        run: RunId::new(),
-        sql,
-        mode,
-        page_size: DEFAULT_PAGE_SIZE,
-    });
+    session.write_channel(Chan::Request(id)).set_request(
+        id,
+        QuerySpec {
+            tab: id,
+            run: RunId::new(),
+            sql,
+            mode,
+            page_size: DEFAULT_PAGE_SIZE,
+        },
+    );
 }
 
 /// Cancel the in-flight request (the toolbar's Run→Cancel flip, the Running body's
@@ -132,10 +133,7 @@ pub fn save_as_view(
 
 /// The tab's savable state: `(sql, trimmed name, origin)`; `None` when the tab is
 /// gone or the buffer is blank (nothing to save).
-fn read_tab(
-    session: Radio<SessionState, Chan>,
-    id: TabId,
-) -> Option<(String, String, Origin)> {
+fn read_tab(session: Radio<SessionState, Chan>, id: TabId) -> Option<(String, String, Origin)> {
     let s = session.read();
     let t = s.tabs.get(&id)?;
     let sql = t.text();
@@ -160,7 +158,10 @@ fn save_view(
 ) {
     {
         let mut p = project.write_channel(ProjChan::Views);
-        p.upsert_view(ViewDef { name: name.clone(), sql: sql.clone() });
+        p.upsert_view(ViewDef {
+            name: name.clone(),
+            sql: sql.clone(),
+        });
         if let Err(e) = p.save_defs() {
             tracing::error!("save project defs: {e}");
         }
@@ -172,7 +173,9 @@ fn save_view(
     );
     spawn(async move {
         match engine.create_view(name.clone(), sql).await {
-            Ok(meta) => project.write_channel(ProjChan::Views).view_registered(&name, meta),
+            Ok(meta) => project
+                .write_channel(ProjChan::Views)
+                .view_registered(&name, meta),
             Err(e) => {
                 tracing::error!("create view '{name}' failed: {e}");
                 project.write_channel(ProjChan::Views).view_failed(&name, e);
@@ -202,7 +205,12 @@ fn save_query(
             .find(|q| q.id == qid)
             .map(|q| q.meta.clone())
             .unwrap_or_else(|| "—".into());
-        p.upsert_saved_query(SavedQuery { id: qid, name, sql, meta });
+        p.upsert_saved_query(SavedQuery {
+            id: qid,
+            name,
+            sql,
+            meta,
+        });
         if let Err(e) = p.save_defs() {
             tracing::error!("save project defs: {e}");
         }

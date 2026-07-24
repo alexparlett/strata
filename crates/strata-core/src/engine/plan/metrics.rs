@@ -210,7 +210,10 @@ pub fn insights(metrics: &[Metric]) -> Vec<Insight> {
     // Pushdown filter removed rows.
     if val("pushdown_rows_pruned") > 0 {
         out.push(Insight {
-            text: format!("pushdown removed {} rows", fmt_int(val("pushdown_rows_pruned"))),
+            text: format!(
+                "pushdown removed {} rows",
+                fmt_int(val("pushdown_rows_pruned"))
+            ),
             tone: InsightTone::Ok,
         });
     }

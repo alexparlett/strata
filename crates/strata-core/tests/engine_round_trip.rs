@@ -28,7 +28,9 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
     let eng = engine();
 
     let (output, batch) = eng.query(ws(1), tag(1), SQL.into(), 2).await.expect("run");
-    let snapshot = output.snapshot.expect("a non-empty result materializes a snapshot");
+    let snapshot = output
+        .snapshot
+        .expect("a non-empty result materializes a snapshot");
     assert_eq!(output.total, 5);
     assert_eq!(output.page, 1);
     assert_eq!(output.rows.len(), 2, "page 1 rides with the run");
@@ -43,7 +45,10 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
 
     // Same read again — the snapshot is immutable, so the same key yields the same rows
     // (this is what makes the UI-side cache keyed by (snapshot, page, …) sound).
-    let (again, _) = eng.fetch_page(snapshot, 3, 2, None).await.expect("page 3 again");
+    let (again, _) = eng
+        .fetch_page(snapshot, 3, 2, None)
+        .await
+        .expect("page 3 again");
     assert_eq!(rows[0][0].text, again[0][0].text);
 
     // A sorted read orders over the WHOLE snapshot before the page window.
@@ -59,14 +64,25 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
 async fn a_rerun_makes_a_new_snapshot_and_retires_the_old() {
     let eng = engine();
 
-    let (first, _) = eng.query(ws(1), tag(1), SQL.into(), 2).await.expect("run 1");
+    let (first, _) = eng
+        .query(ws(1), tag(1), SQL.into(), 2)
+        .await
+        .expect("run 1");
     let old = first.snapshot.unwrap();
 
-    let (second, _) = eng.query(ws(1), tag(2), SQL.into(), 2).await.expect("run 2");
+    let (second, _) = eng
+        .query(ws(1), tag(2), SQL.into(), 2)
+        .await
+        .expect("run 2");
     let new = second.snapshot.unwrap();
 
-    assert_ne!(old, new, "identical SQL still materializes a distinct snapshot");
-    eng.fetch_page(new, 1, 2, None).await.expect("new snapshot readable");
+    assert_ne!(
+        old, new,
+        "identical SQL still materializes a distinct snapshot"
+    );
+    eng.fetch_page(new, 1, 2, None)
+        .await
+        .expect("new snapshot readable");
     eng.fetch_page(old, 1, 2, None)
         .await
         .expect_err("old snapshot is retired on re-run dispatch");
@@ -83,8 +99,12 @@ async fn workspaces_are_independent_and_cleanup_retires() {
 
     // Closing one tab retires only its snapshot.
     eng.cleanup_ws(ws(1));
-    eng.fetch_page(snap_a, 1, 2, None).await.expect_err("ws 1 retired");
-    eng.fetch_page(snap_b, 1, 2, None).await.expect("ws 2 untouched");
+    eng.fetch_page(snap_a, 1, 2, None)
+        .await
+        .expect_err("ws 1 retired");
+    eng.fetch_page(snap_b, 1, 2, None)
+        .await
+        .expect("ws 2 untouched");
 }
 
 #[tokio::test]
@@ -95,7 +115,10 @@ async fn an_empty_result_materializes_nothing() {
         .await
         .expect("empty run");
     assert_eq!(output.total, 0);
-    assert!(output.snapshot.is_none(), "no rows → no snapshot, nothing to page");
+    assert!(
+        output.snapshot.is_none(),
+        "no rows → no snapshot, nothing to page"
+    );
     assert_eq!(output.columns.len(), 3, "schema still delivered");
 }
 

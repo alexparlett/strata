@@ -7,8 +7,7 @@
 use freya::prelude::*;
 
 use strata_core::engine::plan::{
-    detail_parts, fmt_int, insights, metric_group, DetailPart, PlanKind, PlanNode,
-    METRIC_GROUPS,
+    detail_parts, fmt_int, insights, metric_group, DetailPart, PlanKind, PlanNode, METRIC_GROUPS,
 };
 
 use super::palette::PlanPalette;
@@ -30,7 +29,12 @@ const DETAIL_CHAR_W: f32 = 6.6;
 
 /// A 1px top-edge-only border — the metrics box's row rule.
 fn top_border() -> BorderWidth {
-    BorderWidth { top: 1., right: 0., bottom: 0., left: 0. }
+    BorderWidth {
+        top: 1.,
+        right: 0.,
+        bottom: 0.,
+        left: 0.,
+    }
 }
 
 /// The detail grid's key-column width: the widest key at the mono estimate (0 when no row
@@ -56,7 +60,10 @@ pub fn plan_row(
     index: usize,
 ) -> Element {
     let line = palette.theme.border_fill;
-    let mut row = rect().width(Size::fill()).horizontal().content(Content::Fit);
+    let mut row = rect()
+        .width(Size::fill())
+        .horizontal()
+        .content(Content::Fit);
     for on in rails {
         row = row.child(
             rect()
@@ -64,7 +71,10 @@ pub fn plan_row(
                 .height(Size::fill_minimum())
                 .maybe(*on, |el| {
                     el.padding(Gaps::new(0., 11., 0., 10.)).child(
-                        rect().width(Size::fill()).height(Size::fill()).background(line),
+                        rect()
+                            .width(Size::fill())
+                            .height(Size::fill())
+                            .background(line),
                     )
                 }),
         );
@@ -166,7 +176,11 @@ impl Component for PlanNodeCard {
                         .width(Size::fill())
                         .horizontal()
                         .spacing(12.)
-                        .child(Path::new(part.key.clone()).color(t.key_color).width(Size::px(key_w)))
+                        .child(
+                            Path::new(part.key.clone())
+                                .color(t.key_color)
+                                .width(Size::px(key_w)),
+                        )
                         .child(value.width(Size::fill()))
                         .into_element()
                 } else {
@@ -190,7 +204,7 @@ impl Component for PlanNodeCard {
                     let v = !*detail_open.peek();
                     detail_open.set(v);
                 })
-                    .into(),
+                .into(),
             }
         });
 
@@ -209,7 +223,10 @@ impl Component for PlanNodeCard {
                             .horizontal()
                             .cross_align(Alignment::Center)
                             .spacing(3.)
-                            .child(Meta::new(rows_label.clone().unwrap_or_default()).color(t.value_color))
+                            .child(
+                                Meta::new(rows_label.clone().unwrap_or_default())
+                                    .color(t.value_color),
+                            )
                             .child(Meta::new("rows").color(t.color)),
                     )
                 })
@@ -228,7 +245,12 @@ impl Component for PlanNodeCard {
                 .corner_radius(2.)
                 .background(t.border_fill)
                 .overflow(Overflow::Clip)
-                .child(rect().width(Size::percent(pct)).height(Size::fill()).background(kind));
+                .child(
+                    rect()
+                        .width(Size::percent(pct))
+                        .height(Size::fill())
+                        .background(kind),
+                );
             rect()
                 .width(Size::fill())
                 .margin(Gaps::new(8., 0., 0., 0.))
@@ -268,7 +290,7 @@ impl Component for PlanNodeCard {
                     let v = !*metrics_open.peek();
                     metrics_open.set(v);
                 })
-                    .into(),
+                .into(),
             };
             let boxed = open.then(|| {
                 let show_all = *show_zeros.read();
@@ -317,8 +339,14 @@ impl Component for PlanNodeCard {
                                 .padding((4., 12.))
                                 .border(Border::new().width(top_border()).fill(t.border_fill))
                                 .maybe(m.zero, |el| el.opacity(0.55))
-                                .child(Meta::new(m.name.clone()).color(t.color).width(Size::flex(1.)))
-                                .child(Meta::new(m.label.clone()).color(self.palette.metric(m.kind))),
+                                .child(
+                                    Meta::new(m.name.clone())
+                                        .color(t.color)
+                                        .width(Size::flex(1.)),
+                                )
+                                .child(
+                                    Meta::new(m.label.clone()).color(self.palette.metric(m.kind)),
+                                ),
                         );
                     }
                 }
@@ -342,7 +370,7 @@ impl Component for PlanNodeCard {
                                     let v = !*show_zeros.peek();
                                     show_zeros.set(v);
                                 })
-                                    .into(),
+                                .into(),
                             }),
                     );
                 }
@@ -366,7 +394,12 @@ impl Component for PlanNodeCard {
             .overflow(Overflow::Clip)
             .horizontal()
             .content(Content::Fit)
-            .child(rect().width(Size::px(3.)).height(Size::fill_minimum()).background(kind))
+            .child(
+                rect()
+                    .width(Size::px(3.))
+                    .height(Size::fill_minimum())
+                    .background(kind),
+            )
             .child(
                 rect()
                     .width(Size::fill())
@@ -400,7 +433,11 @@ impl Component for PlanLink {
     fn render(&self) -> impl IntoElement {
         let mut hovered = use_state(|| false);
         let on_press = self.on_press.clone();
-        let color = if *hovered.read() { self.hover_color } else { self.color };
+        let color = if *hovered.read() {
+            self.hover_color
+        } else {
+            self.color
+        };
         rect()
             .margin(Gaps::new(8., 0., 0., 0.))
             .on_pointer_enter(move |_| hovered.set(true))
@@ -415,7 +452,11 @@ mod tests {
     use super::*;
 
     fn part(key: &str, val: &str, has_key: bool) -> DetailPart {
-        DetailPart { key: key.into(), val: val.into(), has_key }
+        DetailPart {
+            key: key.into(),
+            val: val.into(),
+            has_key,
+        }
     }
 
     #[test]

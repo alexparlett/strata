@@ -19,7 +19,7 @@ use strata_model::{Cell, QueryOutput, SnapshotId};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::TabId;
+use strata_model::TabId;
 
 /// Rows per page for a Run's snapshot (page 1 rides in the Run's own `QueryOutput`; later
 /// pages go through [`FetchSnapshotPage`]). Matches the Dioxus app's default.
@@ -90,11 +90,20 @@ impl QueryCapability for RunQuery {
         let engine = &self.0;
         match spec.mode {
             QueryMode::Run => engine
-                .query(spec.tab.into(), spec.run.into(), spec.sql.clone(), spec.page_size)
+                .query(
+                    spec.tab.into(),
+                    spec.run.into(),
+                    spec.sql.clone(),
+                    spec.page_size,
+                )
                 .await
                 .map(|(output, batch)| QueryOutcome::Rows(QueryPage { output, batch })),
             QueryMode::Explain { analyze } => engine
-                .explain(spec.tab.into(), spec.run.into(), as_explain(&spec.sql, analyze))
+                .explain(
+                    spec.tab.into(),
+                    spec.run.into(),
+                    as_explain(&spec.sql, analyze),
+                )
                 .await
                 .map(QueryOutcome::Plan),
         }
@@ -173,7 +182,12 @@ mod tests {
         let snapshot = page.output.snapshot.expect("snapshot handle");
 
         let pages = FetchSnapshotPage(engine.captured());
-        let read = PageSpec { snapshot, page: 2, page_size: 2, sort: None };
+        let read = PageSpec {
+            snapshot,
+            page: 2,
+            page_size: 2,
+            sort: None,
+        };
         let tail = block_on(pages.run(&read)).expect("page 2");
         assert_eq!(tail.rows.len(), 1);
 

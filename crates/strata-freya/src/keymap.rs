@@ -10,8 +10,8 @@
 //! lower-precedence Esc consumer must live on a node that comes *after* the
 //! higher-precedence one in document order, not on a shared ancestor.
 
-use freya::text_edit::{ChordKey, EditBindings, EditChord};
 use freya::prelude::*;
+use freya::text_edit::{ChordKey, EditBindings, EditChord};
 use strata_core::config::{Command, KeyChord, Settings};
 
 use crate::components::typography::Meta;
@@ -172,7 +172,9 @@ impl Component for KeyHint {
     fn render(&self) -> impl IntoElement {
         let hint = use_hint(self.0);
         let color = use_theme().read().colors.text_secondary;
-        rect().maybe(!hint.is_empty(), |el| el.child(Meta::new(hint).color(color)))
+        rect().maybe(!hint.is_empty(), |el| {
+            el.child(Meta::new(hint).color(color))
+        })
     }
 }
 
@@ -206,15 +208,20 @@ mod test {
     fn folds_named_keys_by_name() {
         let chord = chord_from_event(&event(Key::Named(NamedKey::Enter), Modifiers::META)).unwrap();
         assert_eq!(chord.key, "Enter");
-        let chord = chord_from_event(&event(Key::Named(NamedKey::Escape), Modifiers::empty()))
-            .unwrap();
+        let chord =
+            chord_from_event(&event(Key::Named(NamedKey::Escape), Modifiers::empty())).unwrap();
         assert_eq!(chord.key, "Escape");
         assert!(!chord.primary && !chord.shift && !chord.alt);
     }
 
     #[test]
     fn modifier_only_presses_fold_to_none() {
-        for named in [NamedKey::Shift, NamedKey::Meta, NamedKey::Control, NamedKey::Alt] {
+        for named in [
+            NamedKey::Shift,
+            NamedKey::Meta,
+            NamedKey::Control,
+            NamedKey::Alt,
+        ] {
             assert!(chord_from_event(&event(Key::Named(named), Modifiers::META)).is_none());
         }
     }
@@ -244,7 +251,10 @@ mod test {
                         key: "y".to_string(),
                     }),
                 },
-                KeyBind { command: Command::Undo, chord: None },
+                KeyBind {
+                    command: Command::Undo,
+                    chord: None,
+                },
             ],
             ..Settings::default()
         };

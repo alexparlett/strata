@@ -26,7 +26,11 @@ pub(super) const T_TAIL: u8 = 4;
 /// and the **written-demotion** (an item already referenced in the caret's own
 /// clause list is the less likely next pick). Every force is a demotion bit —
 /// candidates are only ever reordered, never removed. `None` = signal absent.
-pub(super) fn column_ord(affinity_miss: Option<bool>, cross_miss: Option<bool>, written: bool) -> usize {
+pub(super) fn column_ord(
+    affinity_miss: Option<bool>,
+    cross_miss: Option<bool>,
+    written: bool,
+) -> usize {
     (affinity_miss == Some(true)) as usize * 4
         + (cross_miss == Some(true)) as usize * 2
         + written as usize
@@ -59,7 +63,11 @@ pub(super) fn comparand_kind(ca: &CaretAnalysis, catalog: &Catalog) -> Option<Ki
 
 /// Column names offered by the in-scope relations **other than** `owner` — the
 /// candidate join keys at an ON position.
-pub(super) fn other_side_columns(ca: &CaretAnalysis, catalog: &Catalog, owner: &str) -> Vec<String> {
+pub(super) fn other_side_columns(
+    ca: &CaretAnalysis,
+    catalog: &Catalog,
+    owner: &str,
+) -> Vec<String> {
     let mut out = Vec::new();
     for rel in &ca.in_scope {
         if rel.eq_ignore_ascii_case(owner) {

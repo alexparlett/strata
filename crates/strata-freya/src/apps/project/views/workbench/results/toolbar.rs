@@ -1,4 +1,6 @@
-use crate::apps::project::state::{Chan, ResultsView, SessionState, TabId};
+use strata_model::{ResultsView, TabId};
+
+use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::InputTypography;
@@ -78,10 +80,7 @@ impl Component for ResultsToolbar {
                 .position(AttachedPosition::Bottom)
                 .child(button)
         };
-        let find_title = crate::keymap::use_hint_title(
-            "Find in results",
-            Command::Find,
-        );
+        let find_title = crate::keymap::use_hint_title("Find in results", Command::Find);
 
         // ── find (Search) ─────────────────────────────────────────────────────────────────
         let find = self.find;
@@ -162,7 +161,9 @@ impl Component for ResultsToolbar {
                     .title("Table")
                     .selected(view == ResultsView::Grid)
                     .on_press(move |_| {
-                        view_radio.write_channel(Chan::View(tab)).set_view(tab, ResultsView::Grid);
+                        view_radio
+                            .write_channel(Chan::View(tab))
+                            .set_view(tab, ResultsView::Grid);
                     }),
             )
             .child(
@@ -171,7 +172,9 @@ impl Component for ResultsToolbar {
                     .selected(view == ResultsView::Chart)
                     .on_press(move |_| {
                         find.dismiss();
-                        view_radio.write_channel(Chan::View(tab)).set_view(tab, ResultsView::Chart);
+                        view_radio
+                            .write_channel(Chan::View(tab))
+                            .set_view(tab, ResultsView::Chart);
                     }),
             );
 
@@ -206,9 +209,6 @@ impl Component for ResultsToolbar {
             ))
             .child(tip("Export results".into(), tool(IconName::Download)));
 
-        rect()
-            .width(Size::fill())
-            .vertical()
-            .child(row)
+        rect().width(Size::fill()).vertical().child(row)
     }
 }

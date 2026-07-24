@@ -52,8 +52,13 @@ pub enum Slot {
     /// The column's non-null count. Nulls are derived (`rows - non_null`) rather than
     /// aggregated: `count(col)` already skips nulls, so this is exact and avoids the
     /// `ExprFunctionExt` FILTER builder (and its fallible `build()`) for free.
-    NonNull { name: String },
-    Stat { name: String, key: StatKey },
+    NonNull {
+        name: String,
+    },
+    Stat {
+        name: String,
+        key: StatKey,
+    },
 }
 
 /// The aggregate expressions for one entry's profile, and what each output means.
@@ -87,7 +92,13 @@ pub fn aggregates(columns: &[ColumnInfo]) -> (Vec<Expr>, Vec<Slot>) {
         // it's a type error that would fail the *entire* aggregate, taking every other
         // column's facts with it.
         let wants = match c.kind {
-            Kind::Num => &[StatKey::Distinct, StatKey::Min, StatKey::Max, StatKey::Mean, StatKey::Median][..],
+            Kind::Num => &[
+                StatKey::Distinct,
+                StatKey::Min,
+                StatKey::Max,
+                StatKey::Mean,
+                StatKey::Median,
+            ][..],
             Kind::Ts | Kind::Str => &[StatKey::Distinct, StatKey::Min, StatKey::Max][..],
             // A boolean's distinct count is 1 or 2 and its min/max are `false`/`true`.
             // Its one real fact would be the share that are true, which needs a FILTER

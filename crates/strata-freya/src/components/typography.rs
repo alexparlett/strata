@@ -225,13 +225,21 @@ pub struct InputTypography {
 impl InputTypography {
     /// The UI text dress (`body`, ui · 400 · 12.5) — search / filter / rename inputs.
     pub fn body(input: impl IntoElement) -> Self {
-        Self { role: InputRole::Body, child: input.into_element(), width: None }
+        Self {
+            role: InputRole::Body,
+            child: input.into_element(),
+            width: None,
+        }
     }
 
     /// The mono data dress (`data_value`, mono · 500 · 12.5) — value inputs (e.g. the pager's
     /// page number).
     pub fn mono(input: impl IntoElement) -> Self {
-        Self { role: InputRole::Mono, child: input.into_element(), width: None }
+        Self {
+            role: InputRole::Mono,
+            child: input.into_element(),
+            width: None,
+        }
     }
 
     /// Size the wrapper (`Size::fill()` for a fill-width input; default: hug the input).

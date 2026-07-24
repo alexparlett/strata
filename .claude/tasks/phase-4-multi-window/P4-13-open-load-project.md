@@ -38,6 +38,11 @@ catalog **defs** (committed); `session.json` = local session state (gitignored).
 4. Set `project_path` on the Project store; window title / switcher reflect it.
 5. ⚠️ **Guard the re-open-in-place bug** (Known bugs): re-opening the already-open project must not
    mangle relative source paths / partition columns.
+6. **Unrecoverable open error → close the window, don't fall back.** A project can't exist without a
+   root, so `ProjectState` is always built full (no `Default`, no rootless in-memory project). A
+   folder that won't canonicalize — or a defs file that won't load / scaffold — currently **`panic!`s**
+   in `open_project` (interim). The real handling (close this window; open the launcher if it was the
+   last) is **P4-01 build item 5** — swap the panic for that close path when it exists.
 
 ## Acceptance
 - [ ] Opening a `.strata/` project registers its tables/views and restores tabs + history + layout.

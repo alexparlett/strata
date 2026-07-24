@@ -4,12 +4,12 @@
 //! submodules, re-exported.
 
 mod close;
-mod project;
 mod contexts;
+pub mod model;
+mod project;
 mod query;
 mod state;
 mod views;
-pub mod model;
 
 pub use project::ProjectApp;
 pub use views::{

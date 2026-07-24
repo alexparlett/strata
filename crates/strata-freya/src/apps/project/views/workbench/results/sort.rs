@@ -29,7 +29,11 @@ pub struct SortState {
 impl SortState {
     /// Hook: a fresh intent — unsorted.
     pub fn use_new(page: State<usize>, sel: State<Selection>) -> Self {
-        Self { by: use_state(|| None), page, sel }
+        Self {
+            by: use_state(|| None),
+            page,
+            sel,
+        }
     }
 
     /// The chevron press for column `ci`: advance the cycle, clear the page-local selection,

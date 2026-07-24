@@ -102,7 +102,15 @@ impl RecordView {
         row_base: usize,
         total: usize,
     ) -> Self {
-        Self { row, open, data, row_nums, row_base, total, theme: None }
+        Self {
+            row,
+            open,
+            data,
+            row_nums,
+            row_base,
+            total,
+            theme: None,
+        }
     }
 }
 
@@ -126,31 +134,35 @@ impl Component for RecordView {
         // This display row's position in the page batch (a find-filtered page maps back
         // through the survivors' gutter numbers) — the copy buttons and the nested blocks
         // below both read it.
-        let batch_row =
-            page_batch_row(self.row_nums.as_deref().map(Vec::as_slice), self.row_base, row);
+        let batch_row = page_batch_row(
+            self.row_nums.as_deref().map(Vec::as_slice),
+            self.row_base,
+            row,
+        );
 
         // ── header: label · copy JSON/CSV · divider · prev/next · ghost close ────────────
         // A copy button: outline dress (the theme's ghost-button recipe), copy glyph + label,
         // routing through the shared results-copy path (see the module doc).
-        let copy_button = |label: &'static str,
-                           title: &'static str,
-                           on_press: EventHandler<Event<PressEventData>>| {
-            TooltipContainer::new(Tooltip::new(title))
-                .position(AttachedPosition::Bottom)
-                .child(
-                    Button::new()
-                        .height(Size::px(28.))
-                        .on_press(move |e: Event<PressEventData>| on_press.call(e))
-                        .child(
-                            rect()
-                                .horizontal()
-                                .cross_align(Alignment::Center)
-                                .spacing(6.)
-                                .child(Icon::new(IconName::Copy).size(12.))
-                                .child(Path::new(label)),
-                        ),
-                )
-        };
+        let copy_button =
+            |label: &'static str,
+             title: &'static str,
+             on_press: EventHandler<Event<PressEventData>>| {
+                TooltipContainer::new(Tooltip::new(title))
+                    .position(AttachedPosition::Bottom)
+                    .child(
+                        Button::new()
+                            .height(Size::px(28.))
+                            .on_press(move |e: Event<PressEventData>| on_press.call(e))
+                            .child(
+                                rect()
+                                    .horizontal()
+                                    .cross_align(Alignment::Center)
+                                    .spacing(6.)
+                                    .child(Icon::new(IconName::Copy).size(12.))
+                                    .child(Path::new(label)),
+                            ),
+                    )
+            };
         // Prev/next re-point the open slot within the page (clamped — the standard outline
         // button's disabled dress covers the canvas's faint/no-cursor edge states).
         let step = |icon: IconName, title: &'static str, target: Option<usize>| {
@@ -196,9 +208,21 @@ impl Component for RecordView {
                 let data = self.data.clone();
                 EventHandler::new(move |_| copy::copy_record_csv(&data, batch_row))
             }))
-            .child(rect().height(Size::px(20.)).child(Divider::vertical().color(theme.divider_fill)))
-            .child(step(IconName::ChevronUp, "Previous row", row.checked_sub(1)))
-            .child(step(IconName::ChevronDown, "Next row", (row + 1 < len).then_some(row + 1)))
+            .child(
+                rect()
+                    .height(Size::px(20.))
+                    .child(Divider::vertical().color(theme.divider_fill)),
+            )
+            .child(step(
+                IconName::ChevronUp,
+                "Previous row",
+                row.checked_sub(1),
+            ))
+            .child(step(
+                IconName::ChevronDown,
+                "Next row",
+                (row + 1 < len).then_some(row + 1),
+            ))
             .child(close);
 
         // ── body: one field row per column ───────────────────────────────────────────────
@@ -212,8 +236,16 @@ impl Component for RecordView {
                 .vertical()
                 .spacing(2.)
                 .padding(Gaps::new(2., 0., 0., 0.))
-                .child(MonoValue::new(col.name.clone()).color(theme.name_color).wrap())
-                .child(Meta::new(col.dtype.clone()).color(kind_color(col.kind, &theme)).wrap());
+                .child(
+                    MonoValue::new(col.name.clone())
+                        .color(theme.name_color)
+                        .wrap(),
+                )
+                .child(
+                    Meta::new(col.dtype.clone())
+                        .color(kind_color(col.kind, &theme))
+                        .wrap(),
+                );
             // The value: a nested cell renders its pretty JSON in a sunken scroll block
             // (capped at 190px, per the canvas); a scalar renders as one wrapped mono run —
             // nulls in the dimmed tone, everything else in the value colour.
@@ -249,7 +281,11 @@ impl Component for RecordView {
                     .main_align(Alignment::Center)
                     .child(
                         MonoValue::new(cell.text.clone())
-                            .color(if cell.null { theme.null_color } else { theme.value_color })
+                            .color(if cell.null {
+                                theme.null_color
+                            } else {
+                                theme.value_color
+                            })
                             .wrap(),
                     )
                     .into()
@@ -333,9 +369,15 @@ mod interaction {
             children: Vec::new(),
             stats: Vec::new(),
         };
-        let cell = |text: &str, null: bool| Cell { text: text.into(), null };
+        let cell = |text: &str, null: bool| Cell {
+            text: text.into(),
+            null,
+        };
         Rc::new(GridData {
-            columns: vec![col("id", "Int64", Kind::Num), col("attrs", "Struct", Kind::Struct)],
+            columns: vec![
+                col("id", "Int64", Kind::Num),
+                col("attrs", "Struct", Kind::Struct),
+            ],
             rows: vec![
                 vec![cell("1", false), cell("{plan: pro}", false)],
                 vec![cell("2", false), cell("NULL", true)],
@@ -348,9 +390,10 @@ mod interaction {
     fn app() -> impl IntoElement {
         use_init_theme(|| crate::theme::strata_theme(&strata_core::theme::load("midnight")));
         let open = use_consume::<State<Option<usize>>>();
-        rect().width(Size::fill()).height(Size::fill()).maybe_child(
-            (*open.read()).map(|row| RecordView::new(row, open, page(), None, 0, 3)),
-        )
+        rect()
+            .width(Size::fill())
+            .height(Size::fill())
+            .maybe_child((*open.read()).map(|row| RecordView::new(row, open, page(), None, 0, 3)))
     }
 
     /// The dismissal paths the acceptance names: a backdrop press closes; a press inside the
@@ -366,7 +409,10 @@ mod interaction {
         runner.sync_and_update();
         runner.click_cursor((450., 350.)); // centre of the centred card
         runner.sync_and_update();
-        assert!(open.peek().is_some(), "a press inside the card must not dismiss");
+        assert!(
+            open.peek().is_some(),
+            "a press inside the card must not dismiss"
+        );
         runner.click_cursor((30., 30.)); // the backdrop
         runner.sync_and_update();
         assert!(open.peek().is_none(), "a backdrop press dismisses");

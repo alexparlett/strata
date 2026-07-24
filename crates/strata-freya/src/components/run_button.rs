@@ -75,7 +75,11 @@ impl Component for RunButton {
         // (resting, hover, foreground) for the current state.
         let (base, hover, fg) = match self.state {
             RunState::Idle => (background, hover_background, color),
-            RunState::Disabled => (disabled_background, disabled_hover_background, disabled_color),
+            RunState::Disabled => (
+                disabled_background,
+                disabled_hover_background,
+                disabled_color,
+            ),
             RunState::Running => (running_background, running_hover_background, running_color),
         };
 
