@@ -1,0 +1,5 @@
+user_id,action,amount
+1,purchase,20.5
+2,purchase,10.0
+3,purchase,99.0
+1,login,0.0
