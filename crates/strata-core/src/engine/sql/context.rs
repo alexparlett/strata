@@ -137,8 +137,27 @@ const JOIN_LEADINS: &[&str] = &[
 /// completion's identifier quoting (a column *named* `case` must be `"case"` —
 /// bare, these words mean their grammar, not the column).
 pub(crate) const OPERAND_EXPECTING: &[&str] = &[
-    "AND", "OR", "NOT", "IN", "IS", "LIKE", "ILIKE", "BETWEEN", "CASE", "WHEN", "THEN", "ELSE",
-    "DISTINCT", "ALL", "AS", "CAST", "INTERVAL", "OVER", "PARTITION", "BY", "EXISTS",
+    "AND",
+    "OR",
+    "NOT",
+    "IN",
+    "IS",
+    "LIKE",
+    "ILIKE",
+    "BETWEEN",
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "DISTINCT",
+    "ALL",
+    "AS",
+    "CAST",
+    "INTERVAL",
+    "OVER",
+    "PARTITION",
+    "BY",
+    "EXISTS",
 ];
 
 /// Literal/direction words — they *end* items (so the continuation test treats them
@@ -194,8 +213,7 @@ fn item_complete(prev: Option<&Tok>, prev2: Option<&Tok>) -> bool {
                 || (p.kind == TokKind::Punct && p.text == ",")
         }),
         TokKind::Keyword => {
-            (is_name_like(t) && !OPERAND_EXPECTING.iter().any(|w| t.eq_ci(w)))
-                || t.eq_ci("END")
+            (is_name_like(t) && !OPERAND_EXPECTING.iter().any(|w| t.eq_ci(w))) || t.eq_ci("END")
         }
         _ => false,
     }
@@ -770,7 +788,8 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
     // ref so completion can rank same-type-family candidates first.
     let comparand = prev
         .filter(|t| {
-            t.kind == TokKind::Op && matches!(t.text.as_str(), "=" | "<" | ">" | "<=" | ">=" | "<>" | "!=")
+            t.kind == TokKind::Op
+                && matches!(t.text.as_str(), "=" | "<" | ">" | "<=" | ">=" | "<>" | "!=")
         })
         .and_then(|_| {
             let n = before.len();
@@ -779,9 +798,10 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
                 return None;
             }
             // `qual . column` or bare `column`.
-            let dotted = before.get(n.wrapping_sub(3)).copied().filter(|d| {
-                d.kind == TokKind::Punct && d.text == "."
-            });
+            let dotted = before
+                .get(n.wrapping_sub(3))
+                .copied()
+                .filter(|d| d.kind == TokKind::Punct && d.text == ".");
             let qualifier = dotted
                 .and_then(|_| before.get(n.wrapping_sub(4)).copied())
                 .filter(|q| is_name_like(q))
@@ -866,7 +886,10 @@ mod tests {
     #[test]
     fn statement_start_and_select_list() {
         assert_eq!(at("|").context, Context::At(Clause::Start, Role::Operand));
-        assert_eq!(at("SELECT |").context, Context::At(Clause::Select, Role::Operand));
+        assert_eq!(
+            at("SELECT |").context,
+            Context::At(Clause::Select, Role::Operand)
+        );
         assert_eq!(
             at("SELECT a, | FROM t").context,
             Context::At(Clause::Select, Role::Operand)
@@ -875,8 +898,14 @@ mod tests {
 
     #[test]
     fn from_target_vs_from_continuation() {
-        assert_eq!(at("SELECT * FROM |").context, Context::At(Clause::From, Role::Operand));
-        assert_eq!(at("SELECT * FROM eve|").context, Context::At(Clause::From, Role::Operand));
+        assert_eq!(
+            at("SELECT * FROM |").context,
+            Context::At(Clause::From, Role::Operand)
+        );
+        assert_eq!(
+            at("SELECT * FROM eve|").context,
+            Context::At(Clause::From, Role::Operand)
+        );
         assert_eq!(
             at("SELECT * FROM events |").context,
             Context::At(Clause::From, Role::Continuation)
@@ -996,7 +1025,10 @@ mod tests {
 
     #[test]
     fn derived_table_paren_restarts_statement_context() {
-        assert_eq!(at("SELECT * FROM (|").context, Context::At(Clause::Start, Role::Operand));
+        assert_eq!(
+            at("SELECT * FROM (|").context,
+            Context::At(Clause::Start, Role::Operand)
+        );
         // A paren in an expression position is not a statement start.
         assert_eq!(
             at("SELECT * FROM t WHERE (|").context,
@@ -1058,7 +1090,10 @@ mod tests {
     #[test]
     fn select_aliases_captured() {
         let ca = at("SELECT sum(x) AS total, avg(y) AS mean FROM t ORDER BY |");
-        assert_eq!(ca.select_aliases, vec!["total".to_string(), "mean".to_string()]);
+        assert_eq!(
+            ca.select_aliases,
+            vec!["total".to_string(), "mean".to_string()]
+        );
     }
 
     #[test]
@@ -1081,13 +1116,19 @@ mod tests {
         let ca = at("WITH recent AS (SELECT amount, status FROM events) SELECT | FROM recent");
         assert_eq!(ca.ctes.len(), 1);
         assert_eq!(ca.ctes[0].name, "recent");
-        assert_eq!(ca.ctes[0].columns, vec!["amount".to_string(), "status".to_string()]);
+        assert_eq!(
+            ca.ctes[0].columns,
+            vec!["amount".to_string(), "status".to_string()]
+        );
     }
 
     #[test]
     fn cte_as_aliases_and_qualified_refs() {
         let ca = at("WITH r AS (SELECT sum(x) AS spend, t.name FROM t) SELECT | FROM r");
-        assert_eq!(ca.ctes[0].columns, vec!["spend".to_string(), "name".to_string()]);
+        assert_eq!(
+            ca.ctes[0].columns,
+            vec!["spend".to_string(), "name".to_string()]
+        );
     }
 
     #[test]

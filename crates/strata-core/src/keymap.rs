@@ -269,17 +269,32 @@ mod test {
     fn defaults_resolve() {
         let s = Settings::default();
         assert_eq!(resolve(&s, &chord(true, false, "t")), Some(Command::NewTab));
-        assert_eq!(resolve(&s, &chord(true, true, "t")), Some(Command::ReopenTab));
-        assert_eq!(resolve(&s, &chord(true, false, "Enter")), Some(Command::RunQuery));
-        assert_eq!(resolve(&s, &chord(false, false, "Escape")), Some(Command::Cancel));
-        assert_eq!(resolve(&s, &chord(true, false, "`")), Some(Command::CycleWindow));
+        assert_eq!(
+            resolve(&s, &chord(true, true, "t")),
+            Some(Command::ReopenTab)
+        );
+        assert_eq!(
+            resolve(&s, &chord(true, false, "Enter")),
+            Some(Command::RunQuery)
+        );
+        assert_eq!(
+            resolve(&s, &chord(false, false, "Escape")),
+            Some(Command::Cancel)
+        );
+        assert_eq!(
+            resolve(&s, &chord(true, false, "`")),
+            Some(Command::CycleWindow)
+        );
         // The text-editing commands are ordinary bindings now.
         assert_eq!(resolve(&s, &chord(true, false, "z")), Some(Command::Undo));
         assert_eq!(resolve(&s, &chord(true, true, "z")), Some(Command::Redo));
         assert_eq!(resolve(&s, &chord(true, false, "x")), Some(Command::Cut));
         assert_eq!(resolve(&s, &chord(true, false, "c")), Some(Command::Copy));
         assert_eq!(resolve(&s, &chord(true, false, "v")), Some(Command::Paste));
-        assert_eq!(resolve(&s, &chord(true, false, "a")), Some(Command::SelectAll));
+        assert_eq!(
+            resolve(&s, &chord(true, false, "a")),
+            Some(Command::SelectAll)
+        );
         // ⌘Y was the text layer's legacy redo — unbound by default here.
         assert_eq!(resolve(&s, &chord(true, false, "y")), None);
         // Bare keys never resolve to a rebindable command.
@@ -292,7 +307,10 @@ mod test {
             command: Command::RunQuery,
             chord: Some(chord(true, false, "r")),
         }]);
-        assert_eq!(resolve(&s, &chord(true, false, "r")), Some(Command::RunQuery));
+        assert_eq!(
+            resolve(&s, &chord(true, false, "r")),
+            Some(Command::RunQuery)
+        );
         // The default ⌘↵ no longer matches anything.
         assert_eq!(resolve(&s, &chord(true, false, "Enter")), None);
     }
@@ -357,8 +375,14 @@ mod test {
             Some(default_chord(Command::Find))
         );
         let s = settings_with(vec![
-            KeyBind { command: Command::Cancel, chord: Some(chord(true, false, "d")) },
-            KeyBind { command: Command::Cancel, chord: None },
+            KeyBind {
+                command: Command::Cancel,
+                chord: Some(chord(true, false, "d")),
+            },
+            KeyBind {
+                command: Command::Cancel,
+                chord: None,
+            },
         ]);
         assert_eq!(
             effective_chord(&s, Command::Cancel),
@@ -378,9 +402,18 @@ mod test {
         );
         // Editing chords are no longer reserved: any primary chord may be bound to any
         // rebindable command — duplicates resolve deterministically in COMMANDS order.
-        assert_eq!(validate_bind(Command::Find, &chord(true, false, "c")), Ok(()));
-        assert_eq!(validate_bind(Command::Undo, &chord(true, false, "y")), Ok(()));
-        assert_eq!(validate_bind(Command::Find, &chord(true, true, "g")), Ok(()));
+        assert_eq!(
+            validate_bind(Command::Find, &chord(true, false, "c")),
+            Ok(())
+        );
+        assert_eq!(
+            validate_bind(Command::Undo, &chord(true, false, "y")),
+            Ok(())
+        );
+        assert_eq!(
+            validate_bind(Command::Find, &chord(true, true, "g")),
+            Ok(())
+        );
     }
 
     #[test]
@@ -397,7 +430,10 @@ mod test {
     #[test]
     fn caps_and_hints() {
         let s = Settings::default();
-        assert_eq!(chord_caps(&default_chord(Command::ReopenTab)), ["⇧", "⌘", "T"]);
+        assert_eq!(
+            chord_caps(&default_chord(Command::ReopenTab)),
+            ["⇧", "⌘", "T"]
+        );
         assert_eq!(hint(&s, Command::RunQuery), "⌘↵");
         assert_eq!(hint(&s, Command::Cancel), "Esc");
         assert_eq!(hint(&s, Command::CycleWindow), "⌘`");

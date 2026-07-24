@@ -18,10 +18,19 @@ Only the project window exists. `main.rs` launches it. No cross-window state, no
 3. **Native close handling**: intercept `winit CloseRequested` (no objc) → the themed close-while-
    running confirm hooks in here (shares P2-20's close path).
 4. Each window is a Freya `App` root under `apps/<window>/` (symmetric; no project-window special case).
+5. **Unrecoverable per-window error → graceful close (owns the mechanism for P4-13/P4-14).** When a
+   window hits a fault it can't recover from — today: a project folder that won't open / a defs or
+   session file that won't load (`open_project` / `use_init_session` in
+   `apps/project/state/hooks.rs`) — it should **close that window**; if it was the **last** window,
+   open the **launcher** (P4-02) instead; otherwise the other windows just stay put. Until this lands,
+   those paths **`panic!`** as a loud interim placeholder (deliberately *not* a silent fallback — a
+   project can't exist without a root). Wire them through this close path when it exists.
 
 ## Acceptance
 - [ ] A change to shared settings/theme is seen by every open window at once.
 - [ ] Windows spawn/focus/close; native close (red button / ⌘Q / dock) routes through the confirm.
+- [ ] An unrecoverable open/restore error closes that window (→ launcher if it was the last), replacing
+      the interim `panic!` in `apps/project/state/hooks.rs`.
 
 ## Freya / references
 - Plan §4 (client/server split; `create_global` for singletons), §6 (multi-window), §8 (native menu

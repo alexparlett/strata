@@ -24,7 +24,10 @@ pub struct FindState {
 impl FindState {
     /// Hook: a fresh find — closed, empty query.
     pub fn use_new() -> Self {
-        Self { open: use_state(|| false), query: use_state(String::new) }
+        Self {
+            open: use_state(|| false),
+            query: use_state(String::new),
+        }
     }
 
     /// Close the popover **and clear the query** — every dismissal path (backdrop, Esc, the
@@ -67,7 +70,10 @@ pub struct FindView {
 /// renumbering. `None` (an empty/whitespace query) passes the page through untouched.
 pub fn filter_page(needle: Option<&str>, data: &Rc<GridData>, row_base: usize) -> FindView {
     let Some(needle) = needle else {
-        return FindView { data: data.clone(), row_nums: None };
+        return FindView {
+            data: data.clone(),
+            row_nums: None,
+        };
     };
     let mut rows = Vec::new();
     let mut nums = Vec::new();
@@ -80,7 +86,11 @@ pub fn filter_page(needle: Option<&str>, data: &Rc<GridData>, row_base: usize) -
     FindView {
         // The unfiltered page batch rides along untouched: survivors map back to it through
         // `row_nums` (see `cell_view::page_batch_row`).
-        data: Rc::new(GridData::from_page(data.columns.clone(), rows, data.batch.clone())),
+        data: Rc::new(GridData::from_page(
+            data.columns.clone(),
+            rows,
+            data.batch.clone(),
+        )),
         row_nums: Some(Rc::new(nums)),
     }
 }
@@ -103,7 +113,10 @@ mod tests {
             children: Vec::new(),
             stats: Vec::new(),
         };
-        let cell = |text: &str| Cell { text: text.into(), null: false };
+        let cell = |text: &str| Cell {
+            text: text.into(),
+            null: false,
+        };
         Rc::new(GridData {
             columns: vec![col("a"), col("b")],
             rows: vec![

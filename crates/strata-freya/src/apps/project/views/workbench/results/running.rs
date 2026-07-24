@@ -27,7 +27,6 @@ define_theme!(
     }
 );
 
-
 /// A run's elapsed time in the readout's dress: tenths under a minute, `Nm SSs` past it.
 fn fmt_elapsed(elapsed: Duration) -> String {
     let secs = elapsed.as_secs();
@@ -47,7 +46,10 @@ pub struct Running {
 
 impl Running {
     pub fn new(on_cancel: impl Into<EventHandler<()>>) -> Self {
-        Self { on_cancel: on_cancel.into(), theme: None }
+        Self {
+            on_cancel: on_cancel.into(),
+            theme: None,
+        }
     }
 }
 
@@ -94,10 +96,14 @@ impl Component for Running {
             // Esc = Cancel while the run is up. This body sits after the tab strip in
             // document order, so an open menu or an in-progress rename claims the Esc
             // first; when it reaches here it's consumed.
-            .on_global_key_down(crate::keymap::on_command(settings, Command::Cancel, move || {
-                on_esc.call(());
-                true
-            }))
+            .on_global_key_down(crate::keymap::on_command(
+                settings,
+                Command::Cancel,
+                move || {
+                    on_esc.call(());
+                    true
+                },
+            ))
             .child(CircularLoader::new().size(30.))
             .child(Body::new("Running query…").color(title_color))
             .child(Path::new(fmt_elapsed(elapsed())).color(sub_color))
@@ -109,7 +115,11 @@ impl Component for Running {
                     .horizontal()
                     .cross_align(Alignment::Center)
                     .spacing(8.)
-                    .background(if hovered() { cancel.hover_background } else { cancel.background })
+                    .background(if hovered() {
+                        cancel.hover_background
+                    } else {
+                        cancel.background
+                    })
                     .border(Border::new().width(1.).fill(cancel.border_fill))
                     .on_pointer_enter(move |_| hovered.set(true))
                     .on_pointer_leave(move |_| hovered.set(false))

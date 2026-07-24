@@ -1,6 +1,6 @@
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, RunId};
-use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState, TabId};
+use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -9,6 +9,7 @@ use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
 use strata_core::config::Command;
+use strata_model::TabId;
 
 /// The editor query toolbar, built to the comp. The bar itself only needs the editor surface (its
 /// background) and the divider colour. The Run control is its own three-state `RunButton`; the rest
@@ -154,9 +155,8 @@ impl Component for EditorToolbar {
             ))
             .child(tip(
                 save_title,
-                tool(IconName::Save).on_press(move |_| {
-                    actions::save(radio, project, save_engine.clone(), id)
-                }),
+                tool(IconName::Save)
+                    .on_press(move |_| actions::save(radio, project, save_engine.clone(), id)),
             ));
 
         rect()

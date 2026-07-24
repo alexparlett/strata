@@ -15,10 +15,10 @@ use async_io::Timer;
 use freya::prelude::{spawn, use_side_effect, use_state, TaskHandle, Writable, WritableUtils};
 use freya::radio::use_radio;
 use strata_code_editor::prelude::{CodeEditorData, DecorationSeverity};
-use strata_model::{Diagnostic, Severity};
+use strata_model::{Diagnostic, Severity, TabId};
 
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use crate::apps::project::state::{Chan, SessionState};
 
 /// How long the buffer must sit quiet before a pass fires. Every text change cancels
 /// and re-arms, so a typing burst validates once, on its settled text.

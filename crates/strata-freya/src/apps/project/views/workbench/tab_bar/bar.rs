@@ -1,11 +1,21 @@
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use strata_model::TabId;
+
+use crate::apps::project::state::{Chan, SessionState};
 use crate::apps::project::views::workbench::tab_bar::controls::TabControls;
 use crate::apps::project::views::workbench::tab_bar::drag;
 use crate::apps::project::views::workbench::tab_bar::tab::{Tab, TAB_HEIGHT};
 use crate::components::divider::Divider;
 use crate::components::typography::Body;
-use freya::components::{define_theme, get_theme, use_drag, use_scroll_controller, use_theme, DropZone, ScrollConfig, ScrollView};
-use freya::prelude::{rect, use_state, Alignment, Area, ChildrenExt, Color, Component, ContainerExt, ContainerSizeExt, ContainerWithContentExt, Content, Direction, Element, Event, EventHandlersExt, Gaps, IntoElement, PointerEventData, Size, SizedEventData, StyleExt, WritableUtils};
+use freya::components::{
+    define_theme, get_theme, use_drag, use_scroll_controller, use_theme, DropZone, ScrollConfig,
+    ScrollView,
+};
+use freya::prelude::{
+    rect, use_state, Alignment, Area, ChildrenExt, Color, Component, ContainerExt,
+    ContainerSizeExt, ContainerWithContentExt, Content, Direction, Element, Event,
+    EventHandlersExt, Gaps, IntoElement, PointerEventData, Size, SizedEventData, StyleExt,
+    WritableUtils,
+};
 use freya::radio::use_radio;
 use std::collections::HashMap;
 
@@ -13,7 +23,6 @@ use std::collections::HashMap;
 /// per pointer move. Ported from the Dioxus strip (52 / 16).
 const EDGE_MARGIN: f32 = 52.0;
 const EDGE_STEP: f32 = 16.0;
-
 
 define_theme!(
     %[component]
@@ -56,13 +65,13 @@ impl Component for TabBar {
         let tabs: Vec<(TabId, String, bool, bool)> = {
             let s = radio.read();
             s.order
-             .iter()
-             .filter_map(|id| {
-                 s.tabs
-                  .get(id)
-                  .map(|t| (*id, t.name.clone(), s.active == Some(*id), t.is_dirty()))
-             })
-             .collect()
+                .iter()
+                .filter_map(|id| {
+                    s.tabs
+                        .get(id)
+                        .map(|t| (*id, t.name.clone(), s.active == Some(*id), t.is_dirty()))
+                })
+                .collect()
         };
 
         // One `ScrollController` both drives the horizontal scroll and lets the *active* tab reveal
@@ -83,7 +92,11 @@ impl Component for TabBar {
         let insert_at = dragged.and(insert());
         // The dragged tab's name sizes the placeholder (rendered invisibly); its inverse surface fills.
         let dragged_name = dragged
-            .and_then(|d| tabs.iter().find(|(i, ..)| *i == d).map(|(_, n, ..)| n.clone()))
+            .and_then(|d| {
+                tabs.iter()
+                    .find(|(i, ..)| *i == d)
+                    .map(|(_, n, ..)| n.clone())
+            })
             .unwrap_or_default();
         let slot_bg = use_theme().read().colors.surface_inverse;
 

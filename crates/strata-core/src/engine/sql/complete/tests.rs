@@ -24,13 +24,14 @@ fn catalog() -> Catalog {
         col("status", "Utf8"),
         col("ts", "Timestamp"),
     ];
-    let users = [col("user_id", "Int64"), col("name", "Utf8"), col("guid", "Utf8")];
+    let users = [
+        col("user_id", "Int64"),
+        col("name", "Utf8"),
+        col("guid", "Utf8"),
+    ];
     let spenders = [col("user_id", "Int64"), col("total", "Float64")];
     Catalog::build(
-        [
-            ("events", &events[..]),
-            ("users", &users[..]),
-        ],
+        [("events", &events[..]), ("users", &users[..])],
         [("spenders", &spenders[..])],
         FunctionCatalog {
             scalar: vec!["round".into(), "lower".into(), "set_bit".into()],
@@ -124,7 +125,10 @@ fn fallback_columns_cluster_by_covering_table() {
     pos(&items, "total");
     // And a typed partial still filters within the clustering.
     let items = at("SELECT guid, n|");
-    assert_eq!(items[pos(&items, "name")].detail.as_deref(), Some("users · Utf8"));
+    assert_eq!(
+        items[pos(&items, "name")].detail.as_deref(),
+        Some("users · Utf8")
+    );
 }
 
 #[test]
@@ -488,12 +492,20 @@ fn already_written_columns_sink_in_their_clause() {
         );
     }
     pos(&items, "user_id"); // …but transformations reuse columns: never filtered.
-    // The same uniform rule in GROUP BY…
+                            // The same uniform rule in GROUP BY…
     let items = at("SELECT * FROM events GROUP BY status, |");
-    assert!(pos(&items, "amount") < pos(&items, "status"), "{:?}", labels(&items));
+    assert!(
+        pos(&items, "amount") < pos(&items, "status"),
+        "{:?}",
+        labels(&items)
+    );
     // …and (deliberately mildly) in WHERE.
     let items = at("SELECT * FROM events WHERE amount > 5 AND |");
-    assert!(pos(&items, "ts") < pos(&items, "amount"), "{:?}", labels(&items));
+    assert!(
+        pos(&items, "ts") < pos(&items, "amount"),
+        "{:?}",
+        labels(&items)
+    );
     pos(&items, "amount");
 }
 
@@ -509,8 +521,16 @@ fn select_list_refs_do_not_demote_in_where() {
 #[test]
 fn written_relations_sink_in_join_targets() {
     let items = at("SELECT * FROM events e JOIN |");
-    assert!(pos(&items, "users") < pos(&items, "events"), "{:?}", labels(&items));
-    assert!(pos(&items, "spenders") < pos(&items, "events"), "{:?}", labels(&items));
+    assert!(
+        pos(&items, "users") < pos(&items, "events"),
+        "{:?}",
+        labels(&items)
+    );
+    assert!(
+        pos(&items, "spenders") < pos(&items, "events"),
+        "{:?}",
+        labels(&items)
+    );
     pos(&items, "events"); // self-joins stay possible
 }
 
@@ -543,7 +563,11 @@ fn comparison_rhs_prefers_matching_type_family() {
         "{:?}",
         labels(&items)
     );
-    assert!(pos(&items, "user_id") < pos(&items, "ts"), "{:?}", labels(&items));
+    assert!(
+        pos(&items, "user_id") < pos(&items, "ts"),
+        "{:?}",
+        labels(&items)
+    );
     pos(&items, "status"); // casts stay possible — never filtered
 }
 
@@ -562,10 +586,18 @@ fn subquery_tails_are_governed_by_the_outer_clause() {
     // The subquery's FROM must not leak governance into the outer WHERE: this
     // is an operand position (columns lead), not a From-continuation (which
     // would put WHERE/JOIN first and no columns at all).
-    let items =
-        at("SELECT name FROM users WHERE user_id > (SELECT avg(amount) FROM events) AND |");
-    assert_eq!(items[0].kind, CompletionKind::Column, "{:?}", labels(&items));
-    assert!(pos(&items, "name") < pos(&items, "WHERE"), "{:?}", labels(&items));
+    let items = at("SELECT name FROM users WHERE user_id > (SELECT avg(amount) FROM events) AND |");
+    assert_eq!(
+        items[0].kind,
+        CompletionKind::Column,
+        "{:?}",
+        labels(&items)
+    );
+    assert!(
+        pos(&items, "name") < pos(&items, "WHERE"),
+        "{:?}",
+        labels(&items)
+    );
 }
 
 // ---- the cohesion-review fixes ----
@@ -663,15 +695,21 @@ fn policy_and_completion_agree_on_statement_leads() {
     // Spot contract with `validate::policy_block`: blocked statements' lead
     // keywords are never offered; allowed leads are never blocked. (The full
     // derivation is P2-23's resolver's job.)
-    for blocked in ["CREATE", "INSERT", "UPDATE", "DELETE", "COPY", "SET", "RESET"] {
+    for blocked in [
+        "CREATE", "INSERT", "UPDATE", "DELETE", "COPY", "SET", "RESET",
+    ] {
         assert!(
-            BLOCKED_KEYWORDS.iter().any(|b| b.eq_ignore_ascii_case(blocked)),
+            BLOCKED_KEYWORDS
+                .iter()
+                .any(|b| b.eq_ignore_ascii_case(blocked)),
             "{blocked} must be blocked"
         );
     }
     for allowed in ["SELECT", "WITH", "EXPLAIN", "SHOW", "DESCRIBE"] {
         assert!(
-            !BLOCKED_KEYWORDS.iter().any(|b| b.eq_ignore_ascii_case(allowed)),
+            !BLOCKED_KEYWORDS
+                .iter()
+                .any(|b| b.eq_ignore_ascii_case(allowed)),
             "{allowed} must stay offered"
         );
     }
@@ -685,14 +723,24 @@ fn policy_and_completion_agree_on_statement_leads() {
 #[test]
 fn function_first_argument_offers_columns() {
     let items = at("SELECT sum(| FROM events");
-    assert_eq!(items[0].kind, CompletionKind::Column, "{:?}", labels(&items));
+    assert_eq!(
+        items[0].kind,
+        CompletionKind::Column,
+        "{:?}",
+        labels(&items)
+    );
     pos(&items, "amount");
 }
 
 #[test]
 fn function_later_arguments_offer_columns_after_comma() {
     let items = at("SELECT round(amount, | FROM events");
-    assert_eq!(items[0].kind, CompletionKind::Column, "{:?}", labels(&items));
+    assert_eq!(
+        items[0].kind,
+        CompletionKind::Column,
+        "{:?}",
+        labels(&items)
+    );
 }
 
 #[test]
@@ -774,7 +822,12 @@ fn torture_probes_window_query() {
     // Inside OVER(PARTITION BY |) — an expression operand: columns lead.
     let sql = "SELECT user_id, sum(amount) OVER (PARTITION BY ";
     let items = complete(sql, sql.len(), &catalog(), false);
-    assert_eq!(items[0].kind, CompletionKind::Column, "{:?}", labels(&items));
+    assert_eq!(
+        items[0].kind,
+        CompletionKind::Column,
+        "{:?}",
+        labels(&items)
+    );
     // After `QUALIFY running > 100 ` — a continuation: the ladder onward.
     let sql = "SELECT user_id FROM events QUALIFY user_id > 100 o";
     let items = complete(sql, sql.len(), &catalog(), false);

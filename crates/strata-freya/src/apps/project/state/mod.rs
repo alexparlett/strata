@@ -3,11 +3,15 @@
 //! See `docs/FREYA_STATE_ARCHITECTURE.md` §2–§4.
 
 mod channel;
+mod history;
 mod hooks;
 mod project;
 mod session;
 
 pub use channel::Chan;
-pub use hooks::{use_init_project, use_init_session};
+pub use history::use_history_recording;
+pub use hooks::{
+    resolve_launch_root, use_autosave, use_init_history, use_init_project, use_init_session,
+};
 pub use project::{ProjChan, ProjectState};
-pub use session::{Origin, QueryTab, ResultsView, SessionState, TabId};
+pub use session::SessionState;

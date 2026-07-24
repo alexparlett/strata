@@ -159,7 +159,11 @@ impl Component for Row {
                 text: cell.text.clone(),
                 // Nulls render dimmed (the model keeps the flag exactly for this), in the
                 // gutter's muted tone; everything else takes its type colour.
-                color: if cell.null { theme.gutter_color } else { col.kind.cell_color(theme) },
+                color: if cell.null {
+                    theme.gutter_color
+                } else {
+                    col.kind.cell_color(theme)
+                },
                 mono: true,
                 cross: Alignment::Start,
                 pad: Gaps::new(0., self.cell_pad.right(), 0., self.cell_pad.left()),
@@ -175,8 +179,12 @@ impl Component for Row {
             });
         }
         // Trailing dead space (matches the header) so the row extends past the last column.
-        cells = cells
-            .child(rect().width(Size::flex(1.)).min_width(Size::px(TRAIL_W)).height(Size::fill()));
+        cells = cells.child(
+            rect()
+                .width(Size::flex(1.))
+                .min_width(Size::px(TRAIL_W))
+                .height(Size::fill()),
+        );
 
         rect()
             .width(Size::fill())

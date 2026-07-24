@@ -202,7 +202,12 @@ pub fn app_menu(chords: MenuChords) -> Menu {
     // An unbound command has no chord to dispatch through the keyboard pipeline, so
     // its item ships disabled — the shortcut and the menu stay one mechanism.
     let edit_item = |cmd: MenuCmd, label: &str, chord: &Option<KeyChord>| {
-        MenuItem::with_id(cmd, label, chord.is_some(), chord.as_ref().and_then(accelerator))
+        MenuItem::with_id(
+            cmd,
+            label,
+            chord.is_some(),
+            chord.as_ref().and_then(accelerator),
+        )
     };
     let edit = Submenu::new("Edit", true);
     let items: &[&dyn freya::menu::IsMenuItem] = &[
@@ -244,8 +249,7 @@ pub fn handle_menu_event(
             let Some(command) = cmd.edit_command() else {
                 return;
             };
-            let Some(chord) =
-                strata_core::keymap::effective_chord(&settings.peek(), command)
+            let Some(chord) = strata_core::keymap::effective_chord(&settings.peek(), command)
             else {
                 return;
             };
@@ -322,15 +326,13 @@ mod test {
         assert_eq!(key, Key::Named(NamedKey::Enter));
 
         // An unmappable name degrades to "no dispatch", not a panic.
-        assert!(
-            synthetic_key(&KeyChord {
-                primary: true,
-                shift: false,
-                alt: false,
-                key: "NoSuchKey".to_string(),
-            })
-            .is_none()
-        );
+        assert!(synthetic_key(&KeyChord {
+            primary: true,
+            shift: false,
+            alt: false,
+            key: "NoSuchKey".to_string(),
+        })
+        .is_none());
     }
 
     #[test]

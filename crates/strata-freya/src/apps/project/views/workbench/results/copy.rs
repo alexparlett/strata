@@ -81,7 +81,14 @@ pub fn copy_selection(
 pub fn copy_record_csv(data: &GridData, batch_row: usize) {
     let cols: Vec<usize> = (0..data.columns.len()).collect();
     let mut buf = Vec::new();
-    match write_selection(TextFormat::Csv, &data.batch, &[batch_row as u32], &cols, true, &mut buf) {
+    match write_selection(
+        TextFormat::Csv,
+        &data.batch,
+        &[batch_row as u32],
+        &cols,
+        true,
+        &mut buf,
+    ) {
         Ok(()) => commit(buf),
         Err(err) => tracing::warn!("record CSV copy failed to serialize: {err}"),
     }
@@ -137,10 +144,22 @@ pub fn copy_menu(
     };
     Menu::new()
         .min_width(Size::px(HINT_MENU_WIDTH))
-        .child(item(menu_row("Copy as TSV", Command::Copy).into_element(), TextFormat::Tsv))
-        .child(item(Prose::new("Copy as CSV").into_element(), TextFormat::Csv))
-        .child(item(Prose::new("Copy as JSON").into_element(), TextFormat::Json))
-        .child(item(Prose::new("Copy as Markdown").into_element(), TextFormat::Markdown))
+        .child(item(
+            menu_row("Copy as TSV", Command::Copy).into_element(),
+            TextFormat::Tsv,
+        ))
+        .child(item(
+            Prose::new("Copy as CSV").into_element(),
+            TextFormat::Csv,
+        ))
+        .child(item(
+            Prose::new("Copy as JSON").into_element(),
+            TextFormat::Json,
+        ))
+        .child(item(
+            Prose::new("Copy as Markdown").into_element(),
+            TextFormat::Markdown,
+        ))
 }
 
 #[cfg(test)]
@@ -153,7 +172,16 @@ mod tests {
     fn resolve_covers_every_selection_shape() {
         assert_eq!(resolve(&Selection::None, 3, 2), None);
         assert_eq!(
-            resolve(&Selection::Cell { ar: 2, ac: 1, fr: 1, fc: 0 }, 3, 2),
+            resolve(
+                &Selection::Cell {
+                    ar: 2,
+                    ac: 1,
+                    fr: 1,
+                    fc: 0
+                },
+                3,
+                2
+            ),
             Some((vec![1, 2], vec![0, 1]))
         );
         assert_eq!(
@@ -169,7 +197,10 @@ mod tests {
     #[test]
     fn resolve_prunes_rows_that_outlived_the_page() {
         // A row pick from a longer page: the stale index drops, the valid one survives.
-        assert_eq!(resolve(&Selection::Rows(vec![7, 1]), 3, 2), Some((vec![1], vec![0, 1])));
+        assert_eq!(
+            resolve(&Selection::Rows(vec![7, 1]), 3, 2),
+            Some((vec![1], vec![0, 1]))
+        );
         // Nothing left in-page → nothing to copy.
         assert_eq!(resolve(&Selection::Rows(vec![7]), 3, 2), None);
     }

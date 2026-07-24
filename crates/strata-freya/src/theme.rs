@@ -181,33 +181,71 @@ trait ComponentTheme {
 // `strata_components!` (custom) and `theme_registry!` (builtin). Defined above `strata_components!`'s
 // invocation so the custom macro can delegate to them rather than re-listing the mapping.
 macro_rules! set_field {
-    (color,  $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
-    (font,   $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_font($dst, $f, $key, $fonts) };
-    (f32,    $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_f32($dst, $f, $key) };
-    (i32,    $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_i32($dst, $f, $key) };
-    (gaps,   $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_gaps($dst, $f, $key) };
-    (corner, $fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_corner($dst, $f, $key) };
+    (color,  $fonts:expr, $dst:expr, $f:expr, $key:expr) => {
+        set_color($dst, $f, $key)
+    };
+    (font,   $fonts:expr, $dst:expr, $f:expr, $key:expr) => {
+        set_font($dst, $f, $key, $fonts)
+    };
+    (f32,    $fonts:expr, $dst:expr, $f:expr, $key:expr) => {
+        set_f32($dst, $f, $key)
+    };
+    (i32,    $fonts:expr, $dst:expr, $f:expr, $key:expr) => {
+        set_i32($dst, $f, $key)
+    };
+    (gaps,   $fonts:expr, $dst:expr, $f:expr, $key:expr) => {
+        set_gaps($dst, $f, $key)
+    };
+    (corner, $fonts:expr, $dst:expr, $f:expr, $key:expr) => {
+        set_corner($dst, $f, $key)
+    };
 }
 
 macro_rules! kind_of {
-    (color)  => { Kind::Color };
-    (font)   => { Kind::Font };
-    (f32)    => { Kind::F32 };
-    (i32)    => { Kind::I32 };
-    (gaps)   => { Kind::Gaps };
-    (corner) => { Kind::Corner };
+    (color) => {
+        Kind::Color
+    };
+    (font) => {
+        Kind::Font
+    };
+    (f32) => {
+        Kind::F32
+    };
+    (i32) => {
+        Kind::I32
+    };
+    (gaps) => {
+        Kind::Gaps
+    };
+    (corner) => {
+        Kind::Corner
+    };
 }
 
 /// Placeholder value for a custom-component field of the given kind — magenta for a colour (so an
 /// omission is glaringly visible), else a zeroed scalar/gaps/corner. A bare field defaults to colour.
 macro_rules! strata_placeholder {
-    () => { Preference::Specific(Color::from_rgb(255, 0, 255)) };
-    (color) => { Preference::Specific(Color::from_rgb(255, 0, 255)) };
-    (f32) => { Preference::Specific(0.0_f32) };
-    (i32) => { Preference::Specific(0_i32) };
-    (gaps) => { Preference::Specific(Gaps::default()) };
-    (corner) => { Preference::Specific(CornerRadius::default()) };
-    (font) => { Preference::Specific(String::new()) };
+    () => {
+        Preference::Specific(Color::from_rgb(255, 0, 255))
+    };
+    (color) => {
+        Preference::Specific(Color::from_rgb(255, 0, 255))
+    };
+    (f32) => {
+        Preference::Specific(0.0_f32)
+    };
+    (i32) => {
+        Preference::Specific(0_i32)
+    };
+    (gaps) => {
+        Preference::Specific(Gaps::default())
+    };
+    (corner) => {
+        Preference::Specific(CornerRadius::default())
+    };
+    (font) => {
+        Preference::Specific(String::new())
+    };
 }
 
 /// Thin adapters over the shared `set_field!` / `kind_of!` so a *bare* field (no `: kind`) defaults to
@@ -215,14 +253,24 @@ macro_rules! strata_placeholder {
 /// once, in `set_field!` / `kind_of!` (`font` included: it resolves through the theme's `fonts`
 /// map, threaded through both macros).
 macro_rules! strata_set {
-    ($fonts:expr, $dst:expr, $f:expr, $key:expr) => { set_color($dst, $f, $key) };
-    ($fonts:expr, $dst:expr, $f:expr, $key:expr, $kind:ident) => { set_field!($kind, $fonts, $dst, $f, $key) };
+    ($fonts:expr, $dst:expr, $f:expr, $key:expr) => {
+        set_color($dst, $f, $key)
+    };
+    ($fonts:expr, $dst:expr, $f:expr, $key:expr, $kind:ident) => {
+        set_field!($kind, $fonts, $dst, $f, $key)
+    };
 }
 
 macro_rules! strata_kind {
-    () => { Kind::Color };
-    (font) => { Kind::Font };
-    ($kind:ident) => { kind_of!($kind) };
+    () => {
+        Kind::Color
+    };
+    (font) => {
+        Kind::Font
+    };
+    ($kind:ident) => {
+        kind_of!($kind)
+    };
 }
 
 macro_rules! strata_components {
@@ -497,7 +545,9 @@ fn set_i32(dst: &mut Preference<i32>, f: &BTreeMap<String, Pref>, key: &str) {
 
 fn set_gaps(dst: &mut Preference<Gaps>, f: &BTreeMap<String, Pref>, key: &str) {
     match f.get(key) {
-        Some(Pref::Specific(SpecificValue::Scalar(n))) => *dst = Preference::Specific(Gaps::new_all(*n)),
+        Some(Pref::Specific(SpecificValue::Scalar(n))) => {
+            *dst = Preference::Specific(Gaps::new_all(*n))
+        }
         Some(Pref::Specific(SpecificValue::Sides([t, r, b, l]))) => {
             *dst = Preference::Specific(Gaps::new(*t, *r, *b, *l))
         }
@@ -514,7 +564,11 @@ fn set_corner(dst: &mut Preference<CornerRadius>, f: &BTreeMap<String, Pref>, ke
 /// Map a `reference` slot name to the `&'static str` Freya's `Preference::Reference` needs
 /// (the 27 `ColorsSheet` slots; unknown → `primary`, so a typo shows).
 fn sheet_slot(s: &str) -> &'static str {
-    SLOTS.iter().copied().find(|&slot| slot == s).unwrap_or("primary")
+    SLOTS
+        .iter()
+        .copied()
+        .find(|&slot| slot == s)
+        .unwrap_or("primary")
 }
 
 /// Parse an authored colour: `#rrggbb`, `#rrggbbaa`, or `rgba(r,g,b,a)`. Anything else →
@@ -551,7 +605,10 @@ mod tests {
     #[test]
     fn schema_in_sync() {
         let generated = generate_schema();
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../themes/theme.schema.json");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../themes/theme.schema.json"
+        );
         if std::env::var_os("UPDATE_SCHEMA").is_some() {
             let out = serde_json::to_string_pretty(&generated).unwrap() + "\n";
             std::fs::write(path, out).unwrap();
@@ -574,7 +631,10 @@ mod tests {
     fn theme_files_parse_end_to_end() {
         for id in ["midnight", "daylight"] {
             let t = strata_core::theme::load(id);
-            let editor = t.components.get("code_editor").expect("code_editor authored");
+            let editor = t
+                .components
+                .get("code_editor")
+                .expect("code_editor authored");
             match editor.get("line_height") {
                 Some(super::Pref::Specific(super::SpecificValue::Scalar(n))) => {
                     assert!((n - 1.6).abs() < f32::EPSILON, "{id}: line_height value")

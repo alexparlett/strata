@@ -21,7 +21,9 @@ use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use strata_core::config::Settings;
 
 use crate::apps::project::query::RunId;
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use strata_model::TabId;
+
+use crate::apps::project::state::{Chan, SessionState};
 
 /// Shared with the winit `on_close` hook. The UI mirrors reactive state in
 /// (`running` ← the workbench's in-flight derivation, `confirm` ← the
@@ -104,7 +106,12 @@ pub struct TabCloser {
 
 impl TabCloser {
     /// Close `id` — via the confirm when its query is in flight and the pref is on.
-    pub fn close(&self, mut radio: Radio<SessionState, Chan>, settings: State<Settings>, id: TabId) {
+    pub fn close(
+        &self,
+        mut radio: Radio<SessionState, Chan>,
+        settings: State<Settings>,
+        id: TabId,
+    ) {
         // `read()` is peek-equivalent here: close() runs in event handlers, no reactive scope.
         let in_flight = radio
             .read()
@@ -118,4 +125,3 @@ impl TabCloser {
         }
     }
 }
-

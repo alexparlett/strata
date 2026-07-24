@@ -151,8 +151,8 @@ async fn materialize(
     if let Some(w) = writer {
         w.close().map_err(|e| e.to_string())?;
         ctx.register_parquet(snap.as_str(), file.as_str(), ParquetReadOptions::default())
-           .await
-           .map_err(|e| e.to_string())?;
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     let page1_batch = datafusion::arrow::compute::concat_batches(&arrow_schema, &page1_batches)

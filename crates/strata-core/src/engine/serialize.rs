@@ -194,8 +194,16 @@ impl<W: Write> RecordBatchWriter for MarkdownWriter<W> {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         let schema = batch.schema();
         if self.header.is_empty() {
-            self.header = schema.fields().iter().map(|f| md_escape(f.name())).collect();
-            self.right = schema.fields().iter().map(|f| is_numeric(f.data_type())).collect();
+            self.header = schema
+                .fields()
+                .iter()
+                .map(|f| md_escape(f.name()))
+                .collect();
+            self.right = schema
+                .fields()
+                .iter()
+                .map(|f| is_numeric(f.data_type()))
+                .collect();
         }
         let opts = FormatOptions::default();
         let fmts = batch
@@ -269,7 +277,7 @@ impl<W: Write> RecordBatchWriter for MarkdownWriter<W> {
             out.push('\n');
         }
         w.write_all(out.as_bytes())
-         .map_err(|e| ArrowError::ExternalError(Box::new(e)))
+            .map_err(|e| ArrowError::ExternalError(Box::new(e)))
     }
 }
 
@@ -412,7 +420,10 @@ mod tests {
     #[test]
     fn row_pretty_json_is_a_bare_object_in_schema_order() {
         let json = row_pretty_json(&row_batch(), 0).expect("row 0 serializes");
-        assert_eq!(json, "{\n  \"id\": 1,\n  \"attrs\": {\n    \"plan\": \"pro\"\n  }\n}");
+        assert_eq!(
+            json,
+            "{\n  \"id\": 1,\n  \"attrs\": {\n    \"plan\": \"pro\"\n  }\n}"
+        );
     }
 
     #[test]

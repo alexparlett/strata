@@ -6,18 +6,25 @@
 //! slice.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseTarget};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::{use_init_project, use_init_session, Chan, SessionState, TabId};
+use crate::apps::project::state::{
+    resolve_launch_root, use_autosave, use_init_history, use_init_project, use_init_session, Chan,
+    SessionState,
+};
 use crate::apps::project::views::{CloseConfirm, HeaderBar, Workbench};
 use crate::theme::ThemesCtx;
-use futures::StreamExt;
-use strata_core::config::{Command, Settings};
 use freya::prelude::*;
 use freya::radio::use_radio;
+use freya::winit::dpi::LogicalPosition;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
+use futures::StreamExt;
+use strata_core::config::{Command, Settings};
+use strata_core::project as project_io;
+use strata_model::TabId;
 
 pub struct ProjectApp {
     /// The shared theme registry (discovered once in `main`, the same `Arc` in every
@@ -31,6 +38,10 @@ pub struct ProjectApp {
     /// The UI half of this window's close bridge (T2): the guard the winit `on_close`
     /// hook reads + the veto-signal receiver the root drains into the confirm dialog.
     pub close: CloseBridge,
+    /// The open project's folder — resolved once in [`window`](Self::window) and reused by
+    /// `use_init_project` (so the root is decided before the window opens, in time to
+    /// restore its geometry).
+    pub root: PathBuf,
 }
 
 impl ProjectApp {
@@ -50,19 +61,38 @@ impl ProjectApp {
         // This window's close bridge (T2): the hook vetoes an OS close while a query
         // runs (and the confirm pref is on) and pings the UI to show the dialog.
         let (close, on_close) = close_bridge(settings.peek().confirm_close_running);
-        WindowConfig::new_app(ProjectApp { themes, settings, close })
-            .with_title("Strata")
-
-            .with_size(880., 600.)
-            .with_min_size(880., 600.)
-            .with_background(background)
-            .with_on_close(on_close)
-            .with_window_attributes(|attrs, _| {
-                attrs
-                    .with_titlebar_transparent(true)
-                    .with_fullsize_content_view(true)
-                    .with_title_hidden(true)
-            })
+        // Resolve the project folder now (before the window exists) so its saved geometry
+        // can seed the window — Freya has no runtime resize/move from the app, so restore
+        // must happen at creation. A fresh / never-saved project has no geometry yet → the
+        // built-in default size, OS-placed.
+        let root = resolve_launch_root();
+        let geom = project_io::load_session(&root)
+            .ok()
+            .flatten()
+            .and_then(|snapshot| snapshot.window);
+        let (width, height) = geom.map_or((880., 600.), |g| (g.width as f64, g.height as f64));
+        WindowConfig::new_app(ProjectApp {
+            themes,
+            settings,
+            close,
+            root,
+        })
+        .with_title("Strata")
+        .with_size(width, height)
+        .with_min_size(880., 600.)
+        .with_background(background)
+        .with_on_close(on_close)
+        .with_window_attributes(move |attrs, _| {
+            let attrs = attrs
+                .with_titlebar_transparent(true)
+                .with_fullsize_content_view(true)
+                .with_title_hidden(true);
+            // Reopen where it was last left; a fresh project lets the OS place it.
+            match geom {
+                Some(g) => attrs.with_position(LogicalPosition::new(g.x as f64, g.y as f64)),
+                None => attrs,
+            }
+        })
     }
 }
 
@@ -121,9 +151,17 @@ impl App for ProjectApp {
         // committed `sample/`) and registers its defs on the engine as a background
         // task — rows flip Loading → Ready/Failed as answers land (P4-13 internals;
         // the launcher / open-dialog UI is a later slice).
-        let _project = use_init_project(&engine);
-        // This window's Session store (opens one blank tab), provided via context.
-        let session = use_init_session();
+        let _project = use_init_project(&engine, self.root.clone());
+        // This window's Session store: restore the open project's `.strata/session.json`
+        // (its tabs / order / active — P4-14), else one blank tab. Pulls the project root
+        // from the store just provided above; provided via context.
+        use_init_session();
+        // Debounced autosave of that session back to `.strata/session.json` (P4-14). Its
+        // subscription is inside the effect's own scope, so it never re-renders this root.
+        use_autosave();
+        // The window's query-history satellite (P4-14): loads `.strata/history.jsonl` and
+        // holds recent runs; the results pane appends to it as runs complete.
+        use_init_history();
 
         // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
         // structural change and retire the engine state of tabs that are gone. One

@@ -27,10 +27,10 @@ use results::Results;
 use strata_core::config::{Command, Settings};
 use tab_bar::bar::TabBar;
 
+pub mod editor;
 mod empty;
 mod results;
 mod tab_bar;
-pub mod editor;
 
 pub use results::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
@@ -67,7 +67,9 @@ impl Component for Workbench {
         {
             let close_guard = close_guard.clone();
             use_side_effect(move || {
-                close_guard.running.store(running.read().is_some(), Ordering::Relaxed);
+                close_guard
+                    .running
+                    .store(running.read().is_some(), Ordering::Relaxed);
             });
         }
         let confirm = use_consume::<State<Option<CloseTarget>>>();

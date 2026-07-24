@@ -2,7 +2,9 @@ use freya::components::{use_theme, ScrollController};
 use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
 
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use strata_model::TabId;
+
+use crate::apps::project::state::{Chan, SessionState};
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Caption, InputTypography, Prose};
@@ -128,14 +130,16 @@ impl Component for NavMenu {
         let matches: Vec<(TabId, String, bool, bool)> = {
             let s = radio.read();
             s.order
-             .iter()
-             .filter_map(|id| {
-                 s.tabs
-                  .get(id)
-                  .map(|t| (*id, t.name.clone(), s.active == Some(*id), t.is_dirty()))
-             })
-             .filter(|(_, name, _, _)| needle.is_empty() || name.to_lowercase().contains(&needle))
-             .collect()
+                .iter()
+                .filter_map(|id| {
+                    s.tabs
+                        .get(id)
+                        .map(|t| (*id, t.name.clone(), s.active == Some(*id), t.is_dirty()))
+                })
+                .filter(|(_, name, _, _)| {
+                    needle.is_empty() || name.to_lowercase().contains(&needle)
+                })
+                .collect()
         };
         let is_empty = matches.is_empty();
         // Always cap the visible list at 10; when more than 10 match you narrow with a more specific
@@ -157,22 +161,21 @@ impl Component for NavMenu {
             .vertical()
             .width(Size::px(300.))
             .child(nav_search(query, palette.faint))
-            .maybe(is_empty, |el| el.child(nav_notice("No matching tabs", palette.faint)))
+            .maybe(is_empty, |el| {
+                el.child(nav_notice("No matching tabs", palette.faint))
+            })
             .maybe(!is_empty, |el| el.child(rows))
             .maybe(overflow > 0, |el| {
-                el.child(nav_notice(
-                    format!("+{overflow} more..."),
-                    palette.faint,
-                ))
+                el.child(nav_notice(format!("+{overflow} more..."), palette.faint))
             });
 
         Attached::new(tip(
             "Show all tabs",
             cluster_button(IconName::ChevronDown, 14.).on_press(move |_| open.toggle()),
         ))
-            .bottom()
-            .align_end()
-            .maybe_child(open().then(|| Menu::new().on_close(move |_| open.set(false)).child(panel)))
+        .bottom()
+        .align_end()
+        .maybe_child(open().then(|| Menu::new().on_close(move |_| open.set(false)).child(panel)))
     }
 }
 
@@ -231,9 +234,12 @@ fn tab_row(
                     color: palette.dot(active, dirty),
                 })
                 .child(
-                    rect()
-                        .width(Size::flex(1.))
-                        .child(Prose::new(name).color(fg).text_overflow(TextOverflow::Ellipsis)))
+                    rect().width(Size::flex(1.)).child(
+                        Prose::new(name)
+                            .color(fg)
+                            .text_overflow(TextOverflow::Ellipsis),
+                    ),
+                )
                 .child(
                     rect()
                         .width(Size::px(20.))
@@ -327,8 +333,8 @@ impl Component for OverflowMenu {
             "Tab actions",
             cluster_button(IconName::Dots, 15.).on_press(move |_| open.toggle()),
         ))
-            .bottom()
-            .align_end()
-            .maybe_child(open().then(|| menu))
+        .bottom()
+        .align_end()
+        .maybe_child(open().then(|| menu))
     }
 }

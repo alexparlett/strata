@@ -1,5 +1,5 @@
+pub mod bar;
 mod controls;
-pub mod tab;
 mod drag;
 pub mod menu;
-pub mod bar;
+pub mod tab;

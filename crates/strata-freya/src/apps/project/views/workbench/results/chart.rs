@@ -8,9 +8,9 @@ use freya::prelude::*;
 
 use super::find::FindState;
 use super::toolbar::ResultsToolbar;
-use crate::apps::project::state::TabId;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Prose, Title};
+use strata_model::TabId;
 
 /// The chart body: toolbar on top, centered placeholder tile below (the empty state's dress).
 #[derive(PartialEq)]

@@ -205,7 +205,11 @@ mod function_sym_tests {
 
     #[test]
     fn detail_brackets_the_optional_tail() {
-        let round = sym("round", &[&["Float64"], &["Float64", "Int64"]], Some("Float64"));
+        let round = sym(
+            "round",
+            &[&["Float64"], &["Float64", "Int64"]],
+            Some("Float64"),
+        );
         assert_eq!(round.detail(), "(Float64[, Int64])");
     }
 
@@ -224,7 +228,11 @@ mod function_sym_tests {
 
     #[test]
     fn doc_lists_every_overload_with_the_return_type() {
-        let round = sym("round", &[&["Float64"], &["Float64", "Int64"]], Some("Float64"));
+        let round = sym(
+            "round",
+            &[&["Float64"], &["Float64", "Int64"]],
+            Some("Float64"),
+        );
         let doc = round.doc();
         assert!(doc.starts_with("scalar function"), "{doc}");
         assert!(doc.contains("round(Float64) → Float64"), "{doc}");

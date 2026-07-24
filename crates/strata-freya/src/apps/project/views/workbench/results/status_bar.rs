@@ -48,7 +48,11 @@ pub struct Pager {
 impl Pager {
     fn pages(self) -> usize {
         let size = (*self.page_size.read()).max(1);
-        if self.total == 0 { 1 } else { self.total.div_ceil(size) }
+        if self.total == 0 {
+            1
+        } else {
+            self.total.div_ceil(size)
+        }
     }
 }
 
@@ -80,7 +84,14 @@ pub struct StatusBar {
 
 impl StatusBar {
     pub fn new(state: ResultsState) -> Self {
-        Self { state, pager: None, info: None, plan: None, view: None, theme: None }
+        Self {
+            state,
+            pager: None,
+            info: None,
+            plan: None,
+            view: None,
+            theme: None,
+        }
     }
 
     /// Show the pager cluster (the grid state passes it; every other state passes nothing).
@@ -235,7 +246,11 @@ impl Component for StatusBar {
                             })),
                     )
                     .map(self.pager, |el, pager| {
-                        el.child(PagerCluster { pager, theme: theme.clone(), accent })
+                        el.child(PagerCluster {
+                            pager,
+                            theme: theme.clone(),
+                            accent,
+                        })
                     }),
             )
     }
@@ -351,7 +366,13 @@ fn selection_agg(sel: &Selection, data: &GridData) -> Option<AggView> {
         }
     }
 
-    let mut agg = AggView { cells: 0, numeric: 0, sum: 0.0, min: f64::INFINITY, max: f64::NEG_INFINITY };
+    let mut agg = AggView {
+        cells: 0,
+        numeric: 0,
+        sum: 0.0,
+        min: f64::INFINITY,
+        max: f64::NEG_INFINITY,
+    };
     for (r, c) in coords {
         let Some(cell) = data.rows.get(r).and_then(|row| row.get(c)) else {
             continue;
@@ -428,7 +449,11 @@ impl Component for PagerCluster {
                     })
                     .child({
                         let label = Meta::new(format!("{n} / page"));
-                        if n == size { label.color(accent) } else { label }
+                        if n == size {
+                            label.color(accent)
+                        } else {
+                            label
+                        }
                     })
                     .into()
             }));
@@ -481,7 +506,12 @@ impl Component for PagerCluster {
             .cross_align(Alignment::Center)
             .spacing(12.)
             .child(dropdown)
-            .child(rect().width(Size::px(1.)).height(Size::px(18.)).background(self.theme.border_fill))
+            .child(
+                rect()
+                    .width(Size::px(1.))
+                    .height(Size::px(18.))
+                    .background(self.theme.border_fill),
+            )
             .child(
                 rect()
                     .direction(Direction::Horizontal)
@@ -591,12 +621,21 @@ mod tests {
             children: Vec::new(),
             stats: Vec::new(),
         };
-        let cell = |text: &str| Cell { text: text.into(), null: false };
+        let cell = |text: &str| Cell {
+            text: text.into(),
+            null: false,
+        };
         GridData {
             columns: vec![col("n", Kind::Num), col("s", Kind::Str)],
             rows: vec![
                 vec![cell("1,000"), cell("a")],
-                vec![Cell { text: "".into(), null: true }, cell("b")],
+                vec![
+                    Cell {
+                        text: "".into(),
+                        null: true,
+                    },
+                    cell("b"),
+                ],
                 vec![cell("2.5"), cell("c")],
             ],
             batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
@@ -607,14 +646,22 @@ mod tests {
     fn cell_rectangle_aggregates_numeric_cells_only() {
         let data = grid();
         // Whole grid: 6 cells, numeric column has 1,000 and 2.5 (one null skipped).
-        let sel = Selection::Cell { ar: 0, ac: 0, fr: 2, fc: 1 };
+        let sel = Selection::Cell {
+            ar: 0,
+            ac: 0,
+            fr: 2,
+            fc: 1,
+        };
         let agg = selection_agg(&sel, &data).expect("cells selected");
         assert_eq!(agg.cells, 6);
         assert_eq!(agg.numeric, 2);
         assert_eq!(agg.sum, 1002.5);
         assert_eq!(agg.min, 2.5);
         assert_eq!(agg.max, 1000.0);
-        assert_eq!(agg.label(), "6 cells  ·  Σ 1002.5  ·  avg 501.25  ·  min 2.5  ·  max 1000");
+        assert_eq!(
+            agg.label(),
+            "6 cells  ·  Σ 1002.5  ·  avg 501.25  ·  min 2.5  ·  max 1000"
+        );
     }
 
     #[test]
@@ -630,7 +677,12 @@ mod tests {
     #[test]
     fn single_cell_reads_singular() {
         let data = grid();
-        let sel = Selection::Cell { ar: 0, ac: 1, fr: 0, fc: 1 };
+        let sel = Selection::Cell {
+            ar: 0,
+            ac: 1,
+            fr: 0,
+            fc: 1,
+        };
         let agg = selection_agg(&sel, &data).expect("cell selected");
         assert_eq!(agg.label(), "1 cell");
     }

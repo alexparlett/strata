@@ -4,49 +4,18 @@
 //! a stateful [`QueryTab`] that **owns its editor buffer** ([`CodeEditorData`]) — the Valin
 //! pattern: the buffer lives in the store, keyed by [`TabId`], and the editor slices a
 //! `Writable` into it. Dirty is the editor's own `is_edited()`; closing/reopening **moves** the
-//! whole tab (no snapshot). Persistence (a serde snapshot) is a later slice.
+//! whole tab (no snapshot).
+//!
+//! Persistence mirrors the Project store's (`project.rs`): the live tabs project to a serde
+//! [`SessionSnapshot`] (`strata_model`) and rebuild from one — [`SessionState::snapshot`] /
+//! [`SessionState::from_snapshot`]. The `.strata/session.json` IO is `strata-core::project`.
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
 use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
-use strata_model::Diagnostic;
-use uuid::Uuid;
+use strata_model::{Diagnostic, Origin, ResultsView, SessionSnapshot, TabId, TabSnapshot};
 
 use crate::apps::project::query::QuerySpec;
-
-/// Stable per-tab identity — real identity, so no allocator and no duplicate-id repair.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct TabId(pub Uuid);
-
-impl TabId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-}
-
-/// What a tab is bound to — its **save target** only. Dirty comes from the editor, not this.
-///
-/// Keys mirror the Project store's identity rules: a view's key is its **name** (the
-/// engine/SQL identity — a view rename goes through the Project store, which rewrites
-/// these), a saved query's is its stable **id** (its name is only a label, so renames
-/// can't dangle a tab).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Origin {
-    Scratch,
-    View(String),
-    SavedQuery(Uuid),
-}
-
-/// Which body the results pane shows for a settled rows outcome — the toolbar's Table/Chart
-/// segmented toggle (P2-07). Per **tab** (CHART_SPEC §1): switching tabs restores the mode,
-/// and it survives re-runs; the chart *config* will be per result set (Chart workstream).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
-pub enum ResultsView {
-    #[default]
-    Grid,
-    Chart,
-}
 
 /// One query tab. Owns its editing buffer exactly like Valin's `EditorTab`, and its own
 /// Run trigger — the latest run request, whose results the tab's pane shows.
@@ -114,6 +83,33 @@ impl QueryTab {
         Self::new(name, String::new(), Origin::Scratch)
     }
 
+    /// Rebuild a tab from a persisted snapshot (P4-14 load). Like [`new`](Self::new) but
+    /// **keeps the original [`TabId`]** — so the snapshot's `active` / order still resolve
+    /// against it — and restores its results-view intent. Marked saved at the restored
+    /// text (a reopened project starts clean, like a freshly loaded artifact); the
+    /// validation pass re-derives diagnostics once the pane mounts.
+    pub fn restored(
+        id: TabId,
+        name: String,
+        sql: String,
+        origin: Origin,
+        view: ResultsView,
+    ) -> Self {
+        let mut editor = CodeEditorData::new(Rope::from_str(&sql), Some(sql_language()));
+        editor.parse();
+        editor.mark_as_saved();
+        Self {
+            id,
+            name,
+            editor,
+            origin,
+            request: None,
+            view,
+            diagnostics: Vec::new(),
+            diagnostics_rev: None,
+        }
+    }
+
     /// The current editor text.
     pub fn text(&self) -> String {
         self.editor.rope.to_string()
@@ -134,7 +130,7 @@ const CLOSED_CAP: usize = 20;
 #[derive(Default)]
 pub struct SessionState {
     pub tabs: HashMap<TabId, QueryTab>,
-    pub order: Vec<TabId>,     // strip order (drag-reorder)
+    pub order: Vec<TabId>, // strip order (drag-reorder)
     pub active: Option<TabId>,
     pub closed: Vec<(usize, QueryTab)>, // reopen stack — parked tab + its strip index at close
     /// A throwaway editor buffer the [`EditorTab`](crate::apps::project::views::workbench) slice
@@ -180,7 +176,10 @@ impl SessionState {
     /// The tab's current validation diagnostics (P2-18). Read on
     /// [`Chan::Diagnostics(id)`](super::Chan).
     pub fn diagnostics(&self, id: TabId) -> &[Diagnostic] {
-        self.tabs.get(&id).map(|t| t.diagnostics.as_slice()).unwrap_or(&[])
+        self.tabs
+            .get(&id)
+            .map(|t| t.diagnostics.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Replace `id`'s validation diagnostics (a validation pass settling), stamped
@@ -446,6 +445,61 @@ impl SessionState {
         self.tabs.values().any(|t| t.name == name)
             || self.closed.iter().any(|(_, t)| t.name == name)
     }
+
+    // --- persistence (project.rs mirrors this for the Project store) -------
+
+    /// Project the live session to its serde [`SessionSnapshot`] (state-arch §5), walking
+    /// tabs in strip order so the file preserves the visible arrangement. Window geometry
+    /// isn't in `SessionState` — the autosave hook fills it from `Platform` before writing.
+    pub fn snapshot(&self) -> SessionSnapshot {
+        let tabs = self
+            .order
+            .iter()
+            .filter_map(|id| self.tabs.get(id))
+            .map(|t| TabSnapshot {
+                id: t.id,
+                name: t.name.clone(),
+                origin: t.origin.clone(),
+                text: t.text(),
+                view: t.view,
+            })
+            .collect();
+        SessionSnapshot {
+            tabs,
+            active: self.active,
+            window: None,
+        }
+    }
+
+    /// Rebuild a session from a persisted snapshot (state-arch §5). Each tab comes back with
+    /// its full editor buffer (marked clean — its saved baseline is the persisted text).
+    /// `active` is validated against the restored tabs: a dangling id falls back to the first
+    /// tab, never leaving the session pointed at a tab that isn't there. The reopen stack
+    /// starts empty. `None` when the snapshot has no tabs, so the caller can open a fresh
+    /// blank one instead of restoring an empty window.
+    pub fn from_snapshot(snap: SessionSnapshot) -> Option<Self> {
+        if snap.tabs.is_empty() {
+            return None;
+        }
+        let mut tabs = HashMap::with_capacity(snap.tabs.len());
+        let mut order = Vec::with_capacity(snap.tabs.len());
+        for t in snap.tabs {
+            let tab = QueryTab::restored(t.id, t.name, t.text, t.origin, t.view);
+            order.push(tab.id);
+            tabs.insert(tab.id, tab);
+        }
+        let active = snap
+            .active
+            .filter(|id| tabs.contains_key(id))
+            .or_else(|| order.first().copied());
+        Some(SessionState {
+            tabs,
+            order,
+            active,
+            closed: Vec::new(),
+            scratch: None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -460,7 +514,11 @@ mod tests {
         let id = s.open_named("query 1", "SELECT 1".into(), Origin::Scratch);
 
         s.tabs.get_mut(&id).unwrap().editor.set_text("SELECT 2");
-        s.bind_saved(id, Some("saved_view_1".into()), Origin::View("saved_view_1".into()));
+        s.bind_saved(
+            id,
+            Some("saved_view_1".into()),
+            Origin::View("saved_view_1".into()),
+        );
 
         let t = &s.tabs[&id];
         assert_eq!(t.name, "saved_view_1");
@@ -490,7 +548,10 @@ mod tests {
         s.reopen_last();
         let names: Vec<&str> = s.order.iter().map(|id| s.tabs[id].name.as_str()).collect();
         assert_eq!(names.len(), 2, "both tabs are open");
-        assert!(names.contains(&"query 1") && names.contains(&"query 2"), "no duplicate name");
+        assert!(
+            names.contains(&"query 1") && names.contains(&"query 2"),
+            "no duplicate name"
+        );
     }
 
     /// The Run gate (P2-18): current errors block, stale ones (buffer edited since the
@@ -519,5 +580,53 @@ mod tests {
         // An edit outdates the pass — a just-fixed buffer must not stay locked.
         s.tabs.get_mut(&id).unwrap().editor.set_text("SELECT 1");
         assert!(!s.blocking_errors(id), "stale errors never block");
+    }
+
+    /// Snapshot → restore preserves order, active, text, origin and view; the reopen stack
+    /// and diagnostics do not travel.
+    #[test]
+    fn snapshot_round_trips_tabs_order_active_and_view() {
+        let mut s = SessionState::default();
+        let a = s.open_named("alpha", "SELECT 1".into(), Origin::View("alpha".into()));
+        let b = s.open_named("beta", "SELECT 2".into(), Origin::Scratch);
+        s.set_view(b, ResultsView::Chart);
+        s.switch(a);
+
+        let restored =
+            SessionState::from_snapshot(s.snapshot()).expect("non-empty snapshot restores");
+
+        assert_eq!(restored.order, vec![a, b], "strip order preserved");
+        assert_eq!(restored.active, Some(a), "active tab preserved");
+        assert!(restored.closed.is_empty(), "reopen stack is not persisted");
+
+        let ra = &restored.tabs[&a];
+        assert_eq!(ra.text(), "SELECT 1");
+        assert!(matches!(&ra.origin, Origin::View(v) if v == "alpha"));
+        assert_eq!(ra.view, ResultsView::Grid);
+        assert!(!ra.is_dirty(), "a restored bound tab starts clean");
+
+        let rb = &restored.tabs[&b];
+        assert_eq!(rb.text(), "SELECT 2");
+        assert_eq!(rb.view, ResultsView::Chart, "per-tab view intent preserved");
+    }
+
+    /// A dangling `active` (its tab dropped from the snapshot) falls back to the first tab
+    /// rather than restoring a session pointed at nothing.
+    #[test]
+    fn from_snapshot_repairs_dangling_active() {
+        let mut s = SessionState::default();
+        let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        let _b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
+        let mut snap = s.snapshot();
+        snap.active = Some(TabId::new()); // a tab that's no longer in the list
+
+        let restored = SessionState::from_snapshot(snap).unwrap();
+        assert_eq!(restored.active, Some(a), "falls back to the first tab");
+    }
+
+    /// An empty snapshot restores nothing — the caller opens a fresh blank tab instead.
+    #[test]
+    fn empty_snapshot_is_none() {
+        assert!(SessionState::from_snapshot(SessionSnapshot::default()).is_none());
     }
 }

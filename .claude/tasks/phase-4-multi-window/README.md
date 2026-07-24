@@ -31,7 +31,7 @@ Freya rebuild.
 | P4-11 | Config / register-table modal | ⬜ | U14/D7 | — |
 | P4-12 | Import (read) options (CSV/JSON) | ⬜ | D8 | P4-11 |
 | P4-13 | Open / create a project (`.strata/` load) | 🟡 internals done (defs load/scaffold + engine registration, sample-by-default); UI pending | lifecycle | P4-01 · *pull early* |
-| P4-14 | Session persistence + autosave | ⬜ | lifecycle | P4-13 |
+| P4-14 | Session persistence + autosave | 🟡 tabs + history + window geometry done (load + autosave); layout awaits its store | lifecycle | P4-13 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

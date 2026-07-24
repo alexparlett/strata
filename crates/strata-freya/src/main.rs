@@ -15,10 +15,10 @@ use apps::project::ProjectApp;
 use freya::prelude::*;
 
 mod apps;
+pub mod components;
 mod keymap;
 mod menu;
 mod theme;
-pub mod components;
 
 fn main() {
     // Clear snapshot leftovers from a previous crashed run (each live engine only ever
@@ -53,8 +53,6 @@ fn main() {
                 move || menu::app_menu(menu_chords),
                 move |event, ctx| menu::handle_menu_event(event, ctx, settings),
             )
-            .with_window(
-                ProjectApp::window(themes, settings)
-            ),
+            .with_window(ProjectApp::window(themes, settings)),
     );
 }

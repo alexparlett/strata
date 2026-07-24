@@ -76,13 +76,21 @@ impl GridData {
     /// Page 1, riding in the Run's own [`QueryOutput`] — no page fetch on first paint. The
     /// batch is the Run's page-1 batch (`QueryPage::batch`), cheap to clone (`Arc`'d arrays).
     pub fn from_run(output: &QueryOutput, batch: &RecordBatch) -> Self {
-        Self { columns: output.columns.clone(), rows: output.rows.clone(), batch: batch.clone() }
+        Self {
+            columns: output.columns.clone(),
+            rows: output.rows.clone(),
+            batch: batch.clone(),
+        }
     }
 
     /// A later page read from the immutable snapshot; the schema is the Run's (a page fetch
     /// carries only rows + their batch).
     pub fn from_page(columns: Vec<ColumnInfo>, rows: Vec<Vec<Cell>>, batch: RecordBatch) -> Self {
-        Self { columns, rows, batch }
+        Self {
+            columns,
+            rows,
+            batch,
+        }
     }
 }
 

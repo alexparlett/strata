@@ -1,13 +1,13 @@
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{use_validation, RunId};
-use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState, TabId};
+use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
 use freya::components::use_theme;
 use freya::prelude::{
-    rect, use_a11y, use_consume, use_side_effect, use_state, ChildrenExt, Component,
-    ContainerSizeExt, ContainerWithContentExt, Content, ComponentKey, DiffKey, Event, IntoElement,
-    IntoWritable, Key, KeyExt, KeyboardEventData, Modifiers, NamedKey, Size, State,
+    rect, use_a11y, use_consume, use_side_effect, use_state, ChildrenExt, Component, ComponentKey,
+    ContainerSizeExt, ContainerWithContentExt, Content, DiffKey, Event, IntoElement, IntoWritable,
+    Key, KeyExt, KeyboardEventData, Modifiers, NamedKey, Size, State,
 };
 use freya::radio::{use_radio, use_radio_station};
 use strata_code_editor::prelude::{
@@ -16,6 +16,7 @@ use strata_code_editor::prelude::{
 };
 use strata_core::config::{Command, Settings};
 use strata_core::engine::sql;
+use strata_model::TabId;
 
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a
 /// `Writable<CodeEditorData>` straight into the store on `Chan::Tab(id)`. Carries the
@@ -36,7 +37,12 @@ impl EditorTab {
         // Keyed by the tab: the pane renders in one fixed slot, and without a key a tab
         // switch would reuse the scope — the mounted `CodeEditor`'s props all compare equal
         // (`Writable` is always-equal), so it would keep the *previous* tab's buffer binding.
-        Self { id, running, key: DiffKey::None }.key(id)
+        Self {
+            id,
+            running,
+            key: DiffKey::None,
+        }
+        .key(id)
     }
 }
 
@@ -60,8 +66,9 @@ impl Component for EditorTab {
             if s.tabs.contains_key(&id) {
                 &mut s.tabs.get_mut(&id).unwrap().editor
             } else {
-                s.scratch
-                 .get_or_insert_with(|| CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>))
+                s.scratch.get_or_insert_with(|| {
+                    CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>)
+                })
             }
         });
         let editor = editor.into_writable();
@@ -123,56 +130,55 @@ impl Component for EditorTab {
             .expanded()
             .vertical()
             .content(Content::Flex)
-            .child(EditorToolbar { id, running: self.running })
+            .child(EditorToolbar {
+                id,
+                running: self.running,
+            })
             .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::flex(1.))
-                    .child(
-                        // Type (family · size · weight · line height) comes from the
-                        // `code_editor` theme — the editor dresses and measures itself.
-                        CodeEditor::new(editor, a11y_id)
-                            .a11y_auto_focus(true)
-                            .gutter(true)
-                            .show_whitespace(false)
-                            .highlight_current_line(false)
-                            .on_completions(on_completions)
-                            // Primary-held chords belong to the app keymap unless the
-                            // editor owns them: skip the editor's processing —
-                            // otherwise ⌘T types a "t" and ⌘↵ inserts a newline — while
-                            // the global listeners still fire (only `prevent_default`
-                            // would cancel those, and this calls only
-                            // `stop_propagation`, like the default pre-handler). The
-                            // editor owns exactly the chords that currently resolve to
-                            // an editing command (`Command::is_edit` — select all /
-                            // copy / cut / paste / undo / redo, all rebindable): those
-                            // flow through to `process_key`, where the buffer's own
-                            // `EditBindings` (synced from these same settings above)
-                            // match them. Named keys keep flowing: Ctrl/Alt+arrows are
-                            // editor navigation. (⌃Space/⌘Space and the popup's nav
-                            // keys never reach this gate — the editor's completion
-                            // branch consumes them first.)
-                            .on_pre_key_down(move |e: Event<KeyboardEventData>| {
-                                e.stop_propagation();
-                                if let Key::Named(NamedKey::Tab) = &e.key {
-                                    e.prevent_default();
-                                }
-                                let primary = e
-                                    .modifiers
-                                    .intersects(Modifiers::META | Modifiers::CONTROL);
-                                let editor_owned = crate::keymap::chord_from_event(&e)
-                                    .and_then(|chord| {
-                                        strata_core::keymap::resolve(&settings.peek(), &chord)
-                                    })
-                                    .is_some_and(Command::is_edit)
-                                    || match &e.key {
-                                        Key::Character(_) => false,
-                                        Key::Named(NamedKey::Enter) => false,
-                                        _ => true,
-                                    };
-                                !(primary && !editor_owned)
-                            }),
-                    )
+                rect().width(Size::fill()).height(Size::flex(1.)).child(
+                    // Type (family · size · weight · line height) comes from the
+                    // `code_editor` theme — the editor dresses and measures itself.
+                    CodeEditor::new(editor, a11y_id)
+                        .a11y_auto_focus(true)
+                        .gutter(true)
+                        .show_whitespace(false)
+                        .highlight_current_line(false)
+                        .on_completions(on_completions)
+                        // Primary-held chords belong to the app keymap unless the
+                        // editor owns them: skip the editor's processing —
+                        // otherwise ⌘T types a "t" and ⌘↵ inserts a newline — while
+                        // the global listeners still fire (only `prevent_default`
+                        // would cancel those, and this calls only
+                        // `stop_propagation`, like the default pre-handler). The
+                        // editor owns exactly the chords that currently resolve to
+                        // an editing command (`Command::is_edit` — select all /
+                        // copy / cut / paste / undo / redo, all rebindable): those
+                        // flow through to `process_key`, where the buffer's own
+                        // `EditBindings` (synced from these same settings above)
+                        // match them. Named keys keep flowing: Ctrl/Alt+arrows are
+                        // editor navigation. (⌃Space/⌘Space and the popup's nav
+                        // keys never reach this gate — the editor's completion
+                        // branch consumes them first.)
+                        .on_pre_key_down(move |e: Event<KeyboardEventData>| {
+                            e.stop_propagation();
+                            if let Key::Named(NamedKey::Tab) = &e.key {
+                                e.prevent_default();
+                            }
+                            let primary =
+                                e.modifiers.intersects(Modifiers::META | Modifiers::CONTROL);
+                            let editor_owned = crate::keymap::chord_from_event(&e)
+                                .and_then(|chord| {
+                                    strata_core::keymap::resolve(&settings.peek(), &chord)
+                                })
+                                .is_some_and(Command::is_edit)
+                                || match &e.key {
+                                    Key::Character(_) => false,
+                                    Key::Named(NamedKey::Enter) => false,
+                                    _ => true,
+                                };
+                            !(primary && !editor_owned)
+                        }),
+                ),
             )
             .child(Divider::horizontal().color(border))
     }

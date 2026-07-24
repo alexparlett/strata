@@ -91,16 +91,13 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
             // composed column forces: type affinity when completing a comparison
             // side, cross-side key likelihood at ON positions, written-demotion.
             let affinity = comparand_kind(&ca, catalog);
-            let cross = (ca.governing == Clause::On)
-                .then(|| other_side_columns(&ca, catalog, rel));
+            let cross = (ca.governing == Clause::On).then(|| other_side_columns(&ca, catalog, rel));
             let cross_miss = |name: &str| {
                 cross
                     .as_ref()
                     .map(|c| !c.iter().any(|x| x.eq_ignore_ascii_case(name)))
             };
-            let written = |name: &str| {
-                ca.clause_refs.iter().any(|w| w.eq_ignore_ascii_case(name))
-            };
+            let written = |name: &str| ca.clause_refs.iter().any(|w| w.eq_ignore_ascii_case(name));
             if let Some(inline) = ca.inline_relation(rel) {
                 for name in &inline.columns {
                     pool.push(Cand::ordered(
@@ -353,7 +350,9 @@ fn needs_quoting(name: &str) -> bool {
     };
     !plain
         || crate::engine::sql::lex::is_reserved_in_name_position(name)
-        || OPERAND_EXPECTING.iter().any(|w| w.eq_ignore_ascii_case(name))
+        || OPERAND_EXPECTING
+            .iter()
+            .any(|w| w.eq_ignore_ascii_case(name))
         || LITERAL_WORDS.iter().any(|w| w.eq_ignore_ascii_case(name))
 }
 

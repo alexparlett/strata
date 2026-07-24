@@ -8,9 +8,7 @@
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::registry::FunctionRegistry;
-use datafusion::logical_expr::{
-    AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF,
-};
+use datafusion::logical_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use datafusion::prelude::SessionContext;
 
 use crate::engine::sql::{FnKind, FunctionCatalog, FunctionSym, VARIADIC};
