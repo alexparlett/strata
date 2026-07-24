@@ -127,6 +127,10 @@ pub(super) fn continuation_keywords(clause: Clause) -> Vec<&'static str> {
         }
         // `DESCRIBE t` is complete — nothing follows.
         Clause::Describe => {}
+        // Inside `OVER (PARTITION BY x |)` — the window spec's own continuations.
+        Clause::PartitionBy => {
+            v.extend(["ORDER BY", "ROWS", "RANGE", "GROUPS"]);
+        }
         Clause::Start | Clause::Unknown => {
             v.extend(ladder_after(Clause::Select));
             v.extend(EXPR_OPS);

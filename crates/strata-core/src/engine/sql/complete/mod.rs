@@ -88,8 +88,12 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         Context::Dot(rel) => {
             // Only columns of the qualified relation: inline relations (CTEs,
             // derived-table aliases) first, then catalog. Sub-ranked by the
-            // composed column forces: type affinity when completing a comparison
-            // side, cross-side key likelihood at ON positions, written-demotion.
+            // composed column forces — the comparand's own name strongest
+            // (`ON e.user_id = u.|` floats `user_id` even among several shared
+            // keys), then type affinity, cross-side keys at ON, written-demotion.
+            let cmp_name = ca.comparand.as_ref().map(|(_, c)| c.clone());
+            let name_miss =
+                |name: &str| cmp_name.as_deref().map(|n| !n.eq_ignore_ascii_case(name));
             let affinity = comparand_kind(&ca, catalog);
             let cross = (ca.governing == Clause::On)
                 .then(|| other_side_columns(&ca, catalog, rel));
@@ -101,26 +105,33 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
             let written = |name: &str| {
                 ca.clause_refs.iter().any(|w| w.eq_ignore_ascii_case(name))
             };
-            if let Some(inline) = ca.inline_relation(rel) {
-                for name in &inline.columns {
-                    pool.push(Cand::ordered(
-                        column_item(name, Some("cte"), &replace),
-                        T_PRIMARY,
-                        column_ord(affinity.map(|_| true), cross_miss(name), written(name)),
-                    ));
+            match resolve_relation(&ca, catalog, rel) {
+                RelCols::Inline(inline) => {
+                    for name in &inline.columns {
+                        pool.push(Cand::ordered(
+                            column_item(name, Some("cte"), &replace),
+                            T_PRIMARY,
+                            // Inline columns carry no dtype: the affinity signal
+                            // is absent there, never a fabricated miss.
+                            column_ord(name_miss(name), None, cross_miss(name), written(name)),
+                        ));
+                    }
                 }
-            } else if let Some(t) = catalog.table(rel) {
-                for c in &t.columns {
-                    pool.push(Cand::ordered(
-                        column_item(&c.name, Some(&c.dtype), &replace),
-                        T_PRIMARY,
-                        column_ord(
-                            affinity.map(|k| Kind::from_arrow(&c.dtype) != k),
-                            cross_miss(&c.name),
-                            written(&c.name),
-                        ),
-                    ));
+                RelCols::Table(t) => {
+                    for c in &t.columns {
+                        pool.push(Cand::ordered(
+                            column_item(&c.name, Some(&c.dtype), &replace),
+                            T_PRIMARY,
+                            column_ord(
+                                name_miss(&c.name),
+                                affinity.map(|k| Kind::from_arrow(&c.dtype) != k),
+                                cross_miss(&c.name),
+                                written(&c.name),
+                            ),
+                        ));
+                    }
                 }
+                RelCols::Missing => {}
             }
         }
         // An item is complete — the grammar wants operators / the onward ladder,
@@ -231,6 +242,8 @@ fn push_scope_columns(
     replace: &Range<usize>,
     partial: &str,
 ) {
+    let cmp_name = ca.comparand.as_ref().map(|(_, c)| c.clone());
+    let name_miss = |name: &str| cmp_name.as_deref().map(|n| !n.eq_ignore_ascii_case(name));
     let affinity = comparand_kind(ca, catalog);
     let on_clause = ca.governing == Clause::On;
     let written = |name: &str| ca.clause_refs.iter().any(|w| w.eq_ignore_ascii_case(name));
@@ -242,28 +255,34 @@ fn push_scope_columns(
                 .as_ref()
                 .map(|c| !c.iter().any(|x| x.eq_ignore_ascii_case(name)))
         };
-        if let Some(inline) = ca.inline_relation(tname) {
-            for name in &inline.columns {
-                any = true;
-                pool.push(Cand::ordered(
-                    column_item(name, Some(&format!("{} · cte", inline.name)), replace),
-                    T_PRIMARY,
-                    column_ord(affinity.map(|_| true), cross_miss(name), written(name)),
-                ));
+        match resolve_relation(ca, catalog, tname) {
+            RelCols::Inline(inline) => {
+                for name in &inline.columns {
+                    any = true;
+                    pool.push(Cand::ordered(
+                        column_item(name, Some(&format!("{} · cte", inline.name)), replace),
+                        T_PRIMARY,
+                        // Affinity is signal-absent for dtype-less inline columns.
+                        column_ord(name_miss(name), None, cross_miss(name), written(name)),
+                    ));
+                }
             }
-        } else if let Some(t) = catalog.table(tname) {
-            for c in &t.columns {
-                any = true;
-                pool.push(Cand::ordered(
-                    column_item(&c.name, Some(&format!("{} · {}", t.name, c.dtype)), replace),
-                    T_PRIMARY,
-                    column_ord(
-                        affinity.map(|k| Kind::from_arrow(&c.dtype) != k),
-                        cross_miss(&c.name),
-                        written(&c.name),
-                    ),
-                ));
+            RelCols::Table(t) => {
+                for c in &t.columns {
+                    any = true;
+                    pool.push(Cand::ordered(
+                        column_item(&c.name, Some(&format!("{} · {}", t.name, c.dtype)), replace),
+                        T_PRIMARY,
+                        column_ord(
+                            name_miss(&c.name),
+                            affinity.map(|k| Kind::from_arrow(&c.dtype) != k),
+                            cross_miss(&c.name),
+                            written(&c.name),
+                        ),
+                    ));
+                }
             }
+            RelCols::Missing => {}
         }
     }
     if !any {

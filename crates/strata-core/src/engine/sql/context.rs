@@ -26,6 +26,10 @@ pub enum Clause {
     /// `DESCRIBE <relation>` — an inspection statement whose operand is a relation
     /// name, like a FROM target.
     Describe,
+    /// `OVER (PARTITION BY …)` — the window spec's key list. Its own region (the
+    /// select list's refs don't demote a partition key) with window-shaped
+    /// continuations.
+    PartitionBy,
     Unknown,
 }
 
@@ -152,7 +156,12 @@ pub(crate) const LITERAL_WORDS: &[&str] = &["NULL", "TRUE", "FALSE", "ASC", "DES
 /// prefix.
 const SET_OP_WORDS: &[&str] = &["UNION", "EXCEPT", "INTERSECT"];
 
-/// Map a clause keyword (from the [`last_clause`] scan) to its [`Clause`].
+/// Comparison operators as sqlparser renders them — one token each (`>=`, `<>`;
+/// a source `!=` arrives as the `<>` rendering). The comparand capture keys off
+/// these.
+const COMPARISON_OPS: &[&str] = &["=", "<", ">", "<=", ">=", "<>"];
+
+/// Map a clause keyword (from the [`governing_clause`] scan) to its [`Clause`].
 fn clause_of(word: &str) -> Clause {
     let w = word.to_ascii_uppercase();
     match w.as_str() {
@@ -168,6 +177,7 @@ fn clause_of(word: &str) -> Clause {
         "LIMIT" => Clause::Limit,
         "OFFSET" => Clause::Offset,
         "DESCRIBE" => Clause::Describe,
+        "PARTITION" => Clause::PartitionBy,
         _ => Clause::Unknown,
     }
 }
@@ -254,14 +264,22 @@ fn statement_bounds(toks: &[Tok], sql_len: usize, caret: usize) -> (usize, usize
     (start, end)
 }
 
-/// Extract `alias → relation` from the FROM/JOIN items of the token slice. Best-effort:
-/// after a `FROM`/`JOIN` keyword, read `ident [AS] [alias]`.
+/// Extract `alias → relation` from the FROM/JOIN items of the token slice's **own
+/// level** (depth 0 relative to the slice — pass the caret's scope region and a
+/// nested subquery's FROM binds nothing here). Best-effort: after a `FROM`/`JOIN`
+/// keyword, read `ident [AS] [alias]`.
 fn aliases_of(toks: &[Tok]) -> Vec<(String, String)> {
     let mut out = Vec::new();
+    let mut depth = 0i32;
     let mut i = 0;
     while i < toks.len() {
-        let is_from = toks[i].kind == TokKind::Keyword && toks[i].eq_ci("FROM");
-        let is_join = toks[i].kind == TokKind::Keyword && toks[i].eq_ci("JOIN");
+        match toks[i].kind {
+            TokKind::Punct if toks[i].text == "(" => depth += 1,
+            TokKind::Punct if toks[i].text == ")" => depth -= 1,
+            _ => {}
+        }
+        let is_from = depth == 0 && toks[i].kind == TokKind::Keyword && toks[i].eq_ci("FROM");
+        let is_join = depth == 0 && toks[i].kind == TokKind::Keyword && toks[i].eq_ci("JOIN");
         if is_from || is_join {
             // The relation name is the next identifier-ish token.
             if let Some(tbl) = toks.get(i + 1).filter(|t| is_name_like(t)) {
@@ -438,16 +456,17 @@ fn scopes(toks: &[Tok]) -> Vec<i32> {
     out
 }
 
-/// The clause keyword governing the caret: the nearest one **in the caret's own
-/// paren scope**, scanning back. Leaving an enclosing group rebases the scope
-/// outward — so a grouping paren (`WHERE (a AND |`) defers to the outer clause,
-/// while a subquery's inner clauses govern only inside it and never leak out
-/// (`… > (SELECT x FROM t) AND |` is governed by WHERE, not the subquery's FROM).
-fn governing_clause(
+/// Walk the scope chain backwards from `limit`, rebasing outward at every scope
+/// drop, and return the first token at the current scope satisfying `pred` — the
+/// shared scan behind clause governance and select-list location. A grouping
+/// paren (`WHERE (a AND |`) defers outward; a subquery's tokens never leak out
+/// (`… > (SELECT x FROM t) AND |` is governed by WHERE, not the inner FROM).
+fn scope_chain_rfind(
     branch: &[Tok],
     branch_scopes: &[i32],
     limit: usize,
     caret_scope: i32,
+    pred: impl Fn(&Tok) -> bool,
 ) -> Option<usize> {
     let mut scope = caret_scope;
     for i in (0..branch.len()).rev() {
@@ -458,14 +477,48 @@ fn governing_clause(
         if s < scope {
             scope = s;
         }
-        if s == scope
-            && branch[i].kind == TokKind::Keyword
-            && clause_of(&branch[i].text) != Clause::Unknown
-        {
+        if s == scope && pred(&branch[i]) {
             return Some(i);
         }
     }
     None
+}
+
+/// The clause keyword governing the caret (see [`scope_chain_rfind`]).
+fn governing_clause(
+    branch: &[Tok],
+    branch_scopes: &[i32],
+    limit: usize,
+    caret_scope: i32,
+) -> Option<usize> {
+    scope_chain_rfind(branch, branch_scopes, limit, caret_scope, |t| {
+        t.kind == TokKind::Keyword && clause_of(&t.text) != Clause::Unknown
+    })
+}
+
+/// Token-index range of the caret's **enclosing paren scope** within the branch —
+/// the whole branch at top level, the contents of the caret's innermost paren
+/// otherwise. Name binding (FROM/JOIN aliases, derived tables, select aliases) is
+/// scoped here: a subquery's base tables bind *its* scope and never leak outward,
+/// and the outer scope's don't shadow the inner's.
+fn scope_region(
+    branch: &[Tok],
+    branch_scopes: &[i32],
+    limit: usize,
+    caret_scope: i32,
+) -> std::ops::Range<usize> {
+    let Some(idx) = branch.iter().rposition(|t| t.span.end <= limit) else {
+        return 0..branch.len();
+    };
+    let mut start = idx + 1;
+    while start > 0 && branch_scopes[start - 1] >= caret_scope {
+        start -= 1;
+    }
+    let mut end = idx + 1;
+    while end < branch.len() && branch_scopes[end] >= caret_scope {
+        end += 1;
+    }
+    start..end
 }
 
 /// Token-index range of the clause list led by the clause keyword at `gov`: up to
@@ -534,21 +587,14 @@ fn select_refs(
     limit: usize,
     caret_scope: i32,
 ) -> Vec<String> {
-    let mut scope = caret_scope;
-    for i in (0..branch.len()).rev() {
-        if branch[i].span.end > limit {
-            continue;
-        }
-        let s = branch_scopes[i];
-        if s < scope {
-            scope = s;
-        }
-        if s == scope && branch[i].kind == TokKind::Keyword && branch[i].eq_ci("SELECT") {
-            let region = clause_region(branch, branch_scopes, i);
-            return refs_in(branch, branch_scopes, region, s);
-        }
-    }
-    Vec::new()
+    scope_chain_rfind(branch, branch_scopes, limit, caret_scope, |t| {
+        t.kind == TokKind::Keyword && t.eq_ci("SELECT")
+    })
+    .map(|i| {
+        let region = clause_region(branch, branch_scopes, i);
+        refs_in(branch, branch_scopes, region, branch_scopes[i])
+    })
+    .unwrap_or_default()
 }
 
 /// Capture the statement's CTEs: `WITH [RECURSIVE] name [(col, …)] AS ( body )`,
@@ -640,9 +686,16 @@ fn ctes_of(stmt: &[Tok]) -> Vec<CteSym> {
 fn derived_tables(branch: &[Tok]) -> (Vec<CteSym>, Vec<(String, String)>) {
     let mut out = Vec::new();
     let mut binds = Vec::new();
+    let mut depth = 0i32;
     let mut i = 0;
     while i < branch.len() {
-        let lead = branch[i].kind == TokKind::Keyword
+        match branch[i].kind {
+            TokKind::Punct if branch[i].text == "(" => depth += 1,
+            TokKind::Punct if branch[i].text == ")" => depth -= 1,
+            _ => {}
+        }
+        let lead = depth == 0
+            && branch[i].kind == TokKind::Keyword
             && (branch[i].eq_ci("FROM") || branch[i].eq_ci("JOIN"));
         if lead
             && branch
@@ -709,11 +762,6 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         .collect();
     let branch_scopes = scopes(&branch);
 
-    let mut aliases = aliases_of(&branch);
-    let (derived, derived_binds) = derived_tables(&branch);
-    aliases.extend(derived_binds);
-    let in_scope: Vec<String> = aliases.iter().map(|(_, t)| t.clone()).collect();
-    let select_aliases = column_aliases(&branch);
     let ctes = ctes_of(&stmt);
 
     // The partial word = a name/keyword token whose span ends exactly at the caret
@@ -751,6 +799,15 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
             TokKind::Punct if t.text == ")" => d - 1,
             _ => d,
         });
+    // Name binding is scoped to the caret's enclosing paren scope: inside a CTE
+    // body or subquery its own FROMs bind; outside, they don't leak.
+    let scope_toks = &branch[scope_region(&branch, &branch_scopes, replace.start, caret_scope)];
+    let mut aliases = aliases_of(scope_toks);
+    let (derived, derived_binds) = derived_tables(scope_toks);
+    aliases.extend(derived_binds);
+    let in_scope: Vec<String> = aliases.iter().map(|(_, t)| t.clone()).collect();
+    let select_aliases = column_aliases(scope_toks);
+
     let gov_idx = governing_clause(&branch, &branch_scopes, replace.start, caret_scope);
     let governing = gov_idx
         .map(|i| clause_of(&branch[i].text))
@@ -766,28 +823,42 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         .unwrap_or_default();
     let projection = select_refs(&branch, &branch_scopes, replace.start, caret_scope);
 
-    // A trailing comparison (`… e.user_id = |`): capture the other side's column
-    // ref so completion can rank same-type-family candidates first.
-    let comparand = prev
-        .filter(|t| {
-            t.kind == TokKind::Op && matches!(t.text.as_str(), "=" | "<" | ">" | "<=" | ">=" | "<>" | "!=")
-        })
-        .and_then(|_| {
-            let n = before.len();
-            let operand = before.get(n.wrapping_sub(2)).copied()?;
-            if !is_name_like(operand) {
-                return None;
-            }
-            // `qual . column` or bare `column`.
-            let dotted = before.get(n.wrapping_sub(3)).copied().filter(|d| {
-                d.kind == TokKind::Punct && d.text == "."
-            });
-            let qualifier = dotted
-                .and_then(|_| before.get(n.wrapping_sub(4)).copied())
-                .filter(|q| is_name_like(q))
-                .map(|q| q.text.clone());
-            Some((qualifier, operand.text.clone()))
-        });
+    // A trailing comparison — `… e.user_id = |` or `… e.user_id = u.|` (the caret
+    // may already be inside the far side's qualifier): capture the other side's
+    // column ref so completion can rank same-name and same-type-family candidates
+    // first. The dot-qualified caret shape is trimmed first, so the capture works
+    // identically at bare and dotted positions.
+    let comparand = {
+        let mut tail: &[&Tok] = &before;
+        // Strip a trailing `qualifier .` (the caret's own side of the comparison).
+        if tail
+            .last()
+            .is_some_and(|t| t.kind == TokKind::Punct && t.text == ".")
+            && tail.len() >= 2
+            && is_name_like(tail[tail.len() - 2])
+        {
+            tail = &tail[..tail.len() - 2];
+        }
+        tail.last()
+            .filter(|t| t.kind == TokKind::Op && COMPARISON_OPS.iter().any(|op| t.text == *op))
+            .and_then(|_| {
+                let n = tail.len();
+                let operand = tail.get(n.wrapping_sub(2)).copied()?;
+                if !is_name_like(operand) {
+                    return None;
+                }
+                // `qual . column` or bare `column`.
+                let dotted = tail
+                    .get(n.wrapping_sub(3))
+                    .copied()
+                    .filter(|d| d.kind == TokKind::Punct && d.text == ".");
+                let qualifier = dotted
+                    .and_then(|_| tail.get(n.wrapping_sub(4)).copied())
+                    .filter(|q| is_name_like(q))
+                    .map(|q| q.text.clone());
+                Some((qualifier, operand.text.clone()))
+            })
+    };
 
     let context = if prev.is_none() {
         Context::At(Clause::Start, Role::Operand)
@@ -1116,5 +1187,40 @@ mod tests {
     fn cte_resolvable_via_helper() {
         let ca = at("WITH Recent AS (SELECT x FROM t) SELECT | FROM Recent");
         assert!(ca.cte("recent").is_some(), "case-insensitive lookup");
+    }
+
+    #[test]
+    fn comparand_captured_bare_and_through_the_dot() {
+        // Right after the operator…
+        let ca = at("SELECT * FROM events e JOIN users u ON e.user_id = |");
+        assert_eq!(ca.comparand, Some((Some("e".into()), "user_id".into())));
+        // …and with the caret already inside the far side's qualifier.
+        let ca = at("SELECT * FROM events e JOIN users u ON e.user_id = u.|");
+        assert_eq!(ca.comparand, Some((Some("e".into()), "user_id".into())));
+        assert_eq!(ca.governing, Clause::On);
+        // Literals are not comparands.
+        assert_eq!(at("SELECT * FROM t WHERE 5 = |").comparand, None);
+    }
+
+    #[test]
+    fn partition_by_is_its_own_region() {
+        let ca = at("SELECT user_id, sum(amount) OVER (PARTITION BY |");
+        assert_eq!(ca.context, Context::At(Clause::PartitionBy, Role::Operand));
+        // The select list's refs are NOT this region's — a projected column is
+        // the *likely* partition key, never demoted here.
+        assert!(ca.clause_refs.is_empty(), "{:?}", ca.clause_refs);
+    }
+
+    #[test]
+    fn name_binding_is_scoped_to_the_caret() {
+        // Inside a CTE body: its own FROM binds.
+        let ca = at("WITH r AS (SELECT | FROM events)");
+        assert_eq!(ca.in_scope, vec!["events".to_string()]);
+        // Outside: only the top-level FROM binds — no leak from the body.
+        let ca = at("WITH r AS (SELECT amount FROM events) SELECT | FROM r");
+        assert_eq!(ca.in_scope, vec!["r".to_string()]);
+        // A subquery's FROM stays inside its parens.
+        let ca = at("SELECT name FROM users WHERE user_id > (SELECT avg(amount) FROM events) AND |");
+        assert_eq!(ca.in_scope, vec!["users".to_string()]);
     }
 }

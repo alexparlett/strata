@@ -535,6 +535,42 @@ fn on_positions_prefer_cross_side_join_keys() {
 }
 
 #[test]
+fn comparand_name_dominates_among_multiple_shared_keys() {
+    // The delta review's inversion case: with TWO shared Int64 keys, cross-side
+    // and affinity tie — only the comparand's own name picks the equation's
+    // other half, and it must outrank the written-demotion the comparand incurs.
+    fn col(name: &str, dtype: &str) -> ColumnInfo {
+        ColumnInfo {
+            name: name.into(),
+            dtype: dtype.into(),
+            kind: strata_model::Kind::from_arrow(dtype),
+            nullable: true,
+            children: Vec::new(),
+            stats: Vec::new(),
+        }
+    }
+    let a = [
+        col("user_id", "Int64"),
+        col("account_id", "Int64"),
+        col("amount", "Float64"),
+    ];
+    let b = [
+        col("user_id", "Int64"),
+        col("account_id", "Int64"),
+        col("name", "Utf8"),
+    ];
+    let cat = Catalog::build([("a", &a[..]), ("b", &b[..])], [], FunctionCatalog::default());
+    // Dotted far side…
+    let sql = "SELECT * FROM a JOIN b ON a.user_id = b.";
+    let items = complete(sql, sql.len(), &cat, false);
+    assert_eq!(items[0].label, "user_id", "{:?}", labels(&items));
+    // …and the bare position right after the operator.
+    let sql = "SELECT * FROM a JOIN b ON a.user_id = ";
+    let items = complete(sql, sql.len(), &cat, false);
+    assert_eq!(items[0].label, "user_id", "{:?}", labels(&items));
+}
+
+#[test]
 fn comparison_rhs_prefers_matching_type_family() {
     // `amount` is Float64 → numeric candidates float; Utf8/Timestamp sink.
     let items = at("SELECT * FROM events WHERE amount > |");
@@ -551,10 +587,26 @@ fn comparison_rhs_prefers_matching_type_family() {
 fn derived_table_aliases_resolve_like_inline_ctes() {
     let items = at("SELECT t.| FROM (SELECT user_id, amount FROM events) t");
     assert_eq!(labels(&items), vec!["amount", "user_id"]);
-    // And their columns resolve in scope.
+    // Their columns resolve in scope — and the subquery's base table does NOT
+    // leak its other columns through the derived encapsulation.
     let items = at("SELECT | FROM (SELECT user_id, amount FROM events) t");
     pos(&items, "user_id");
     pos(&items, "amount");
+    absent(&items, "status");
+    absent(&items, "ts");
+}
+
+#[test]
+fn scope_binding_follows_the_caret() {
+    // Inside a CTE body, its own FROM binds…
+    let items = at("WITH r AS (SELECT | FROM events)");
+    assert_eq!(items[0].kind, CompletionKind::Column, "{:?}", labels(&items));
+    pos(&items, "amount");
+    // …and outside, only the CTE itself is in scope (the body's base table
+    // no longer leaks upward).
+    let items = at("WITH r AS (SELECT amount FROM events) SELECT | FROM r");
+    pos(&items, "amount"); // r's projected column
+    absent(&items, "status"); // events' unprojected column stays inside
 }
 
 #[test]

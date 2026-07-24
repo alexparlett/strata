@@ -149,13 +149,20 @@ the inner FROM).
   never demote in WHERE, where reuse is idiomatic.
 - **Join-key affinity** (ON positions): a column whose name exists on the *other*
   side of the join is the probable equi-key — floats at `ON |` and `ON e.|`.
-- **Comparison type affinity** (any comparison side, WHERE included): when the caret
-  follows `= < > …` with a resolvable column ref on the other side (`comparand`),
-  same-type-family candidates (the `Kind` vocabulary — Num/Str/Ts/…) float;
-  `a.int = b.string` sinks without vanishing.
+- **Comparand forces** (any comparison side, WHERE included): the captured column
+  ref across a trailing `= < > …` (working bare *and* through the caret's own
+  dot-qualifier — `ON e.user_id = u.|`) contributes two signals: its **name**
+  (completing the written half of the equation — dominant, so two shared keys
+  can't invert the answer) and its **type family** (the `Kind` vocabulary;
+  `a.int = b.string` sinks without vanishing).
 
-Column forces compose in one helper — `column_ord`: affinity-miss ×4, cross-key-miss
-×2, written ×1 (a declared strength order, strongest signal first).
+Column forces compose in one helper — `column_ord`: comparand-name-miss ×8,
+affinity-miss ×4, cross-key-miss ×2, written ×1 (a declared strength order,
+strongest signal first; an unknown dtype is signal-**absent**, never a fabricated
+miss). **Name binding shares the scope discipline**: FROM/JOIN aliases, derived
+tables, and select-aliases bind in the caret's enclosing paren scope — a
+subquery's base tables never leak outward, and inside a CTE body its own FROM
+governs the offer.
 
 ## 6. Insert semantics
 
@@ -245,10 +252,18 @@ is categorically out — the provider lives in-process.
   one curated list; a "mid-join-phrase" micro-position isn't worth a fourth role).
 - Caret-x is `col × char_width` (monospace product) — wide glyphs drift by a few px,
   the same estimate class the diagnostics panel accepts.
-- The comparand scan is a fixed token window looking **left** of the operator only
-  (`x = |` ranks by x's type; `| = x` has no other side yet); inline-relation columns
-  carry no dtypes and count as affinity misses (uniform within their list, so
-  relative order is unharmed).
+- The comparand scan is a fixed token window looking **left** of the operator
+  (`x = |` and `x = u.|` rank by x; a not-yet-written left side has no signal);
+  inline-relation columns carry no dtypes, so the type-affinity signal is absent
+  (neutral) for them — only their names participate.
+- Written-refs inside grouping parens (`WHERE (a AND |`) sit one scope deeper than
+  the clause region and don't demote — neutral, and narrower than the headline
+  "caret's own clause list" phrasing. A trailing ORDER BY after a set-op is
+  scoped to the last branch (SQL scopes it to the whole set-op) — a consequence
+  of the branch rule, declared here.
+- `PARTITION BY` inside `OVER (…)` is its own clause region (window-shaped
+  continuations: ORDER BY/ROWS/RANGE/GROUPS); frame details beyond that are
+  unmodeled.
 - `column_ord`'s 4/2/1 force weights are a declared priority, not derived — one
   documented constant, revisited only with evidence.
 - `SHOW`'s nouns (`TABLES`, `COLUMNS FROM …`) are unmodeled — the Binding role keeps

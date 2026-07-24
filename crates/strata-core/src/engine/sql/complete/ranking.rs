@@ -4,9 +4,9 @@
 
 use std::collections::HashSet;
 
-use crate::engine::sql::context::CaretAnalysis;
+use crate::engine::sql::context::{CaretAnalysis, CteSym};
 use crate::engine::sql::fuzzy::match_tier;
-use crate::engine::sql::symbols::Catalog;
+use crate::engine::sql::symbols::{Catalog, TableSym};
 use strata_model::Kind;
 
 use super::{Completion, CompletionKind};
@@ -20,14 +20,23 @@ pub(super) const T_KEYWORD: u8 = 3;
 pub(super) const T_TAIL: u8 = 4;
 
 /// The composed column sub-rank — the ranking forces acting *within* a tier,
-/// strongest first: **comparison type-affinity** (`a.int = b.string` is legal but
-/// rarely meant — same type family floats), **cross-side key likelihood** at ON
-/// positions (a name present on both sides of a join is the probable equi-key),
-/// and the **written-demotion** (an item already referenced in the caret's own
-/// clause list is the less likely next pick). Every force is a demotion bit —
-/// candidates are only ever reordered, never removed. `None` = signal absent.
-pub(super) fn column_ord(affinity_miss: Option<bool>, cross_miss: Option<bool>, written: bool) -> usize {
-    (affinity_miss == Some(true)) as usize * 4
+/// strongest first: the **comparand's name** (`e.user_id = u.|` — completing the
+/// written half of an equation, the explicit strongest intent; it also outranks
+/// the written-demotion the comparand itself incurs), **comparison type-affinity**
+/// (`a.int = b.string` is legal but rarely meant — same type family floats),
+/// **cross-side key likelihood** at ON positions (a name present on both sides of
+/// a join is the probable equi-key), and the **written-demotion** (an item already
+/// referenced in the caret's own clause list is the less likely next pick). Every
+/// force is a demotion bit — candidates are only ever reordered, never removed.
+/// `None` = signal absent (an unknown dtype is *absent*, never a fabricated miss).
+pub(super) fn column_ord(
+    name_miss: Option<bool>,
+    affinity_miss: Option<bool>,
+    cross_miss: Option<bool>,
+    written: bool,
+) -> usize {
+    (name_miss == Some(true)) as usize * 8
+        + (affinity_miss == Some(true)) as usize * 4
         + (cross_miss == Some(true)) as usize * 2
         + written as usize
 }
@@ -57,6 +66,29 @@ pub(super) fn comparand_kind(ca: &CaretAnalysis, catalog: &Catalog) -> Option<Ki
     Some(Kind::from_arrow(&dtype))
 }
 
+/// A resolved relation for column listing — the one resolution order (inline
+/// CTE/derived alias first, then catalog), shared by the dot arm, scope columns,
+/// and the ON cross-side set.
+pub(super) enum RelCols<'a> {
+    Inline(&'a CteSym),
+    Table(&'a TableSym),
+    Missing,
+}
+
+pub(super) fn resolve_relation<'a>(
+    ca: &'a CaretAnalysis,
+    catalog: &'a Catalog,
+    name: &str,
+) -> RelCols<'a> {
+    if let Some(inline) = ca.inline_relation(name) {
+        RelCols::Inline(inline)
+    } else if let Some(t) = catalog.table(name) {
+        RelCols::Table(t)
+    } else {
+        RelCols::Missing
+    }
+}
+
 /// Column names offered by the in-scope relations **other than** `owner` — the
 /// candidate join keys at an ON position.
 pub(super) fn other_side_columns(ca: &CaretAnalysis, catalog: &Catalog, owner: &str) -> Vec<String> {
@@ -65,10 +97,10 @@ pub(super) fn other_side_columns(ca: &CaretAnalysis, catalog: &Catalog, owner: &
         if rel.eq_ignore_ascii_case(owner) {
             continue;
         }
-        if let Some(inline) = ca.inline_relation(rel) {
-            out.extend(inline.columns.iter().cloned());
-        } else if let Some(t) = catalog.table(rel) {
-            out.extend(t.columns.iter().map(|c| c.name.clone()));
+        match resolve_relation(ca, catalog, rel) {
+            RelCols::Inline(inline) => out.extend(inline.columns.iter().cloned()),
+            RelCols::Table(t) => out.extend(t.columns.iter().map(|c| c.name.clone())),
+            RelCols::Missing => {}
         }
     }
     out
