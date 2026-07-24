@@ -18,6 +18,7 @@
 
 pub mod complete;
 pub mod context;
+mod fuzzy;
 pub mod lex;
 pub mod symbols;
 pub mod validate;

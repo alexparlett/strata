@@ -274,6 +274,9 @@ strata_components! {
         cursor, highlight, text, whitespace,
         diagnostic_error, diagnostic_warning, diagnostic_info,
         panel_background, panel_border,
+        completion_background, completion_border, completion_selected_background,
+        completion_detail, completion_kind_table, completion_kind_view, completion_kind_column,
+        completion_kind_function, completion_kind_keyword,
         font_family: font, font_size: f32, font_weight: i32, line_height: f32,
     },
     "code_editor_syntax" => EditorSyntaxThemePreference {

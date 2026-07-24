@@ -7,6 +7,7 @@ use freya_components::{
 };
 use freya_core::prelude::Color;
 
+use crate::completion::CompletionItemKind;
 use crate::editor_data::DecorationSeverity;
 use crate::editor_ui::CodeEditor;
 use crate::syntax::SyntaxKind;
@@ -31,6 +32,17 @@ define_theme! {
         /// The caret-line diagnostics panel (the floating message context).
         panel_background: Color,
         panel_border: Color,
+        /// The completion popup: surface, selected row, dim detail text, and the
+        /// per-kind glyph/chip colours (chip tint derived at render via alpha).
+        completion_background: Color,
+        completion_border: Color,
+        completion_selected_background: Color,
+        completion_detail: Color,
+        completion_kind_table: Color,
+        completion_kind_view: Color,
+        completion_kind_column: Color,
+        completion_kind_function: Color,
+        completion_kind_keyword: Color,
         /// The editor's type — themed like every other component, so the editor dresses itself
         /// (the `CodeEditor` builders remain as per-instance overrides).
         font_family: String,
@@ -94,6 +106,17 @@ impl EditorTheme {
         }
     }
 
+    /// The completion glyph/chip colour for a candidate kind.
+    pub fn completion_kind(&self, kind: CompletionItemKind) -> Color {
+        match kind {
+            CompletionItemKind::Table => self.completion_kind_table,
+            CompletionItemKind::View => self.completion_kind_view,
+            CompletionItemKind::Column => self.completion_kind_column,
+            CompletionItemKind::Function => self.completion_kind_function,
+            CompletionItemKind::Keyword => self.completion_kind_keyword,
+        }
+    }
+
     /// The default type, shared by both stock palettes.
     fn default_type() -> (String, f32, i32, f32) {
         ("JetBrains Mono".to_string(), 14.0, 400, 1.4)
@@ -116,6 +139,15 @@ impl EditorTheme {
             diagnostic_info: Color::from_rgb(55, 148, 255),
             panel_background: Color::from_rgb(38, 42, 48),
             panel_border: Color::from_rgb(60, 60, 60),
+            completion_background: Color::from_rgb(38, 42, 48),
+            completion_border: Color::from_rgb(60, 60, 60),
+            completion_selected_background: Color::from_af32rgb(0.09, 255, 255, 255),
+            completion_detail: Color::from_rgb(140, 148, 158),
+            completion_kind_table: Color::from_rgb(121, 192, 255),
+            completion_kind_view: Color::from_rgb(201, 165, 255),
+            completion_kind_column: Color::from_rgb(126, 231, 135),
+            completion_kind_function: Color::from_rgb(255, 207, 107),
+            completion_kind_keyword: Color::from_rgb(210, 168, 255),
             font_family,
             font_size,
             font_weight,
@@ -140,6 +172,15 @@ impl EditorTheme {
             diagnostic_info: Color::from_rgb(26, 133, 255),
             panel_background: Color::WHITE,
             panel_border: Color::from_rgb(210, 213, 218),
+            completion_background: Color::WHITE,
+            completion_border: Color::from_rgb(210, 213, 218),
+            completion_selected_background: Color::from_af32rgb(0.06, 0, 0, 0),
+            completion_detail: Color::from_rgb(110, 119, 129),
+            completion_kind_table: Color::from_rgb(5, 80, 174),
+            completion_kind_view: Color::from_rgb(124, 58, 237),
+            completion_kind_column: Color::from_rgb(26, 127, 55),
+            completion_kind_function: Color::from_rgb(138, 109, 0),
+            completion_kind_keyword: Color::from_rgb(130, 80, 223),
             font_family,
             font_size,
             font_weight,
@@ -301,6 +342,15 @@ impl From<EditorTheme> for EditorThemePreference {
             diagnostic_info: Preference::Specific(theme.diagnostic_info),
             panel_background: Preference::Specific(theme.panel_background),
             panel_border: Preference::Specific(theme.panel_border),
+            completion_background: Preference::Specific(theme.completion_background),
+            completion_border: Preference::Specific(theme.completion_border),
+            completion_selected_background: Preference::Specific(theme.completion_selected_background),
+            completion_detail: Preference::Specific(theme.completion_detail),
+            completion_kind_table: Preference::Specific(theme.completion_kind_table),
+            completion_kind_view: Preference::Specific(theme.completion_kind_view),
+            completion_kind_column: Preference::Specific(theme.completion_kind_column),
+            completion_kind_function: Preference::Specific(theme.completion_kind_function),
+            completion_kind_keyword: Preference::Specific(theme.completion_kind_keyword),
             font_family: Preference::Specific(theme.font_family),
             font_size: Preference::Specific(theme.font_size),
             font_weight: Preference::Specific(theme.font_weight),

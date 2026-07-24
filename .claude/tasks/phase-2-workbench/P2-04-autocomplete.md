@@ -1,26 +1,26 @@
 # P2-04 · SQL autocomplete (completions + follow-ups)
 
-**Phase:** 2 — Workbench · **Status:** ⬜ · **DEV_TASKS:** E2 · **Depends on:** — · **Related:** P2-18 (validation/squiggles)
+**Phase:** 2 — Workbench · **Status:** ✅ · **DEV_TASKS:** E2 · **Depends on:** — · **Related:** P2-18 (validation/squiggles), P2-22 (docs/signatures), P2-23 (validator fitness)
 
 ## Goal
 Editor completions from the shared `strata-core::sql` service, follow-ups included — no later pass.
-(Syntax **highlighting is already wired**; this task is autocomplete only.)
 
-## Current state
-- **Done:** `state/session.rs::sql_language()` builds the `tree_sitter_sequel` `EditorLanguage`, and
-  each `QueryTab`'s editor is `CodeEditorData::new(text, Some(sql_language()))` — so SQL is
-  highlighted. (The `None::<EditorLanguage>` in `editor/tab.rs` is only the scratch fallback.)
-- **Missing:** nothing in `strata-freya` calls `sql::complete`.
-
-## Build
-1. Bind `sql::complete` (candidates from catalog symbols + keywords) to the editor as an overlay.
-2. **Follow-ups now** (E2, not later): **⌘Space** manual trigger, **flip-up** near the viewport bottom
-   edge, **caret-after-accept** placed correctly after inserting a candidate.
+## Outcome (see `docs/COMPLETION_SPEC.md` — the as-built design)
+- **Core** rebuilt as a clause×role grammar model (`engine/sql/complete/` module:
+  vocabulary tables, composed ranking forces, guards) — context-aware pools, fuzzy
+  match tiers, CTE/derived-table resolution, join-key + type affinity, written
+  demotion, projection-coverage ranking; first-ever `complete()` test suite incl. a
+  torture corpus with an every-caret sweep.
+- **Editor** (`strata-code-editor`) owns a generic synchronous popup: word-start
+  anchor, overlay flip-up, single-undo accept, accept-chaining, ⌃/⌘Space.
+- **App** wires the provider with a memoized `Catalog`; validation stays quiet on
+  FROM-less drafts.
 
 ## Acceptance
-- [ ] Completions appear (tables/columns/keywords) and insert correctly.
-- [ ] ⌘Space triggers them; the list flips up near the edge; the caret lands correctly after accept.
+- [x] Completions appear (tables/columns/keywords) and insert correctly.
+- [x] Manual trigger (⌃Space, plus ⌘Space where Spotlight is remapped); the list
+      flips up near the edge; the caret lands correctly after accept.
 
 ## Freya / references
-- Core `strata-core::sql::complete` — do not re-implement. Freya `CodeEditor` completion flow.
-- `state/session.rs` (language), `editor/tab.rs` (editor mount).
+- `docs/COMPLETION_SPEC.md` · `strata-core::engine::sql::complete` ·
+  `strata-code-editor::{completion, editor_ui}` · `editor/tab.rs` (provider mount).

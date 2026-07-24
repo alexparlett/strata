@@ -8,6 +8,9 @@ use crate::syntax::*;
 pub struct EditorMetrics {
     pub(crate) syntax_blocks: SyntaxBlocks,
     pub(crate) longest_width: f32,
+    /// The measured monospace glyph advance (0.0 until the first measure) — the
+    /// completion popup's `column → x` factor.
+    pub(crate) char_width: f32,
     pub(crate) highlighter: SyntaxHighlighter,
 }
 
@@ -22,6 +25,7 @@ impl EditorMetrics {
         Self {
             syntax_blocks: SyntaxBlocks::default(),
             longest_width: 0.0,
+            char_width: 0.0,
             highlighter: SyntaxHighlighter::new(),
         }
     }
@@ -59,6 +63,7 @@ impl EditorMetrics {
         // Find the line with the maximum character count
         let max_chars = rope.lines().map(|line| line.len_chars()).max().unwrap_or(0);
 
+        self.char_width = char_width;
         self.longest_width = max_chars as f32 * char_width;
     }
 

@@ -184,6 +184,11 @@ to select the token, not just switch tabs. Validation runs on the existing per-t
 
 ## 4. S7 — autocomplete (consumer 2)
 
+> **Superseded by [`COMPLETION_SPEC.md`](COMPLETION_SPEC.md)** — the as-built P2-04
+> design (clause×role position model, ladder-derived continuations, fuzzy tiers,
+> synchronous pipeline, ⌃/⌘Space). This section is the pre-build plan, kept for
+> history; where they disagree, `COMPLETION_SPEC.md` is the truth.
+
 - **Trigger.** ⌘Space anywhere; auto after typing an identifier char or `.`
   (debounced ~120ms); never inside a string/comment token.
 - **Candidates by context** (from clause-context + symbols): `AfterFrom/AfterJoin` → table + view names;

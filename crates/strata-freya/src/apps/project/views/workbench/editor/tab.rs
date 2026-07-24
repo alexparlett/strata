@@ -1,17 +1,21 @@
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{use_validation, RunId};
-use crate::apps::project::state::{Chan, SessionState, TabId};
+use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState, TabId};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
 use freya::components::use_theme;
 use freya::prelude::{
-    rect, use_a11y, use_consume, use_side_effect, ChildrenExt, Component, ContainerSizeExt,
-    ContainerWithContentExt, Content, ComponentKey, DiffKey, Event, IntoElement, IntoWritable, Key,
-    KeyExt, KeyboardEventData, Modifiers, NamedKey, Size, State,
+    rect, use_a11y, use_consume, use_side_effect, use_state, ChildrenExt, Component,
+    ContainerSizeExt, ContainerWithContentExt, Content, ComponentKey, DiffKey, Event, IntoElement,
+    IntoWritable, Key, KeyExt, KeyboardEventData, Modifiers, NamedKey, Size, State,
 };
-use freya::radio::use_radio;
-use strata_code_editor::prelude::{CodeEditor, CodeEditorData, EditorLanguage, Rope};
+use freya::radio::{use_radio, use_radio_station};
+use strata_code_editor::prelude::{
+    CodeEditor, CodeEditorData, CompletionItem, CompletionItemKind, CompletionRequest,
+    EditorLanguage, Rope,
+};
 use strata_core::config::{Command, Settings};
+use strata_core::engine::sql;
 
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a
 /// `Writable<CodeEditorData>` straight into the store on `Chan::Tab(id)`. Carries the
@@ -74,7 +78,45 @@ impl Component for EditorTab {
         }
         // Live validation (P2-18): the debounced engine dry-plan over this buffer —
         // squiggles into the editor's decorations, diagnostics onto the tab.
-        use_validation(id, editor.clone(), use_consume::<EngineCtx>());
+        let engine = use_consume::<EngineCtx>();
+        use_validation(id, editor.clone(), engine.clone());
+        // Autocomplete (P2-04): the editor calls this provider synchronously per
+        // qualifying keystroke / ⌃⌘Space. The `Catalog` snapshot is **memoized** —
+        // rebuilt only when the project catalog actually changes (a registration
+        // landing, a view saved), never per keystroke: the rebuild clones every
+        // name/dtype in the catalog, and at scale (hundreds of tables × thousands
+        // of columns) paying that per character would be the one thing that could
+        // make the synchronous pipeline felt. The effect subscribes to the project
+        // station; the provider just peeks the cached snapshot.
+        let project = use_radio_station::<ProjectState, ProjChan>();
+        let mut catalog = use_state(sql::Catalog::default);
+        {
+            let engine = engine.clone();
+            use_side_effect(move || {
+                let p = project.read();
+                *catalog.write() = sql::Catalog::build(
+                    p.tables.iter().map(|t| {
+                        (
+                            t.def.name.as_str(),
+                            t.reg.ready().map(|m| m.columns.as_slice()).unwrap_or(&[]),
+                        )
+                    }),
+                    p.views.iter().map(|v| {
+                        (
+                            v.def.name.as_str(),
+                            v.reg.ready().map(|i| i.columns.as_slice()).unwrap_or(&[]),
+                        )
+                    }),
+                    engine.functions().clone(),
+                );
+            });
+        }
+        let on_completions = move |req: CompletionRequest| {
+            sql::complete(&req.text, req.caret_byte, &catalog.peek(), req.manual)
+                .into_iter()
+                .map(to_completion_item)
+                .collect::<Vec<_>>()
+        };
         let border = use_theme().read().colors.border;
 
         rect()
@@ -94,6 +136,7 @@ impl Component for EditorTab {
                             .gutter(true)
                             .show_whitespace(false)
                             .highlight_current_line(false)
+                            .on_completions(on_completions)
                             // Primary-held chords belong to the app keymap unless the
                             // editor owns them: skip the editor's processing —
                             // otherwise ⌘T types a "t" and ⌘↵ inserts a newline — while
@@ -106,7 +149,9 @@ impl Component for EditorTab {
                             // flow through to `process_key`, where the buffer's own
                             // `EditBindings` (synced from these same settings above)
                             // match them. Named keys keep flowing: Ctrl/Alt+arrows are
-                            // editor navigation.
+                            // editor navigation. (⌃Space/⌘Space and the popup's nav
+                            // keys never reach this gate — the editor's completion
+                            // branch consumes them first.)
                             .on_pre_key_down(move |e: Event<KeyboardEventData>| {
                                 e.stop_propagation();
                                 if let Key::Named(NamedKey::Tab) = &e.key {
@@ -134,5 +179,22 @@ impl Component for EditorTab {
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
+    }
+}
+
+/// The 1:1 map from the language service's candidate to the editor's row model.
+fn to_completion_item(c: sql::Completion) -> CompletionItem {
+    CompletionItem {
+        label: c.label,
+        insert: c.insert,
+        kind: match c.kind {
+            sql::CompletionKind::Table => CompletionItemKind::Table,
+            sql::CompletionKind::View => CompletionItemKind::View,
+            sql::CompletionKind::Column => CompletionItemKind::Column,
+            sql::CompletionKind::Function => CompletionItemKind::Function,
+            sql::CompletionKind::Keyword => CompletionItemKind::Keyword,
+        },
+        detail: c.detail,
+        replace: c.replace,
     }
 }

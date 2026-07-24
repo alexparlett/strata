@@ -833,6 +833,33 @@
       },
       "panel_border": {
         "reference": "border"
+      },
+      "completion_background": {
+        "reference": "surface_tertiary"
+      },
+      "completion_border": {
+        "reference": "border"
+      },
+      "completion_selected_background": {
+        "specific": "rgba(0,0,0,.06)"
+      },
+      "completion_detail": {
+        "reference": "text_secondary"
+      },
+      "completion_kind_table": {
+        "specific": "#0550ae"
+      },
+      "completion_kind_view": {
+        "specific": "#7c3aed"
+      },
+      "completion_kind_column": {
+        "specific": "#1a7f37"
+      },
+      "completion_kind_function": {
+        "specific": "#8a6d00"
+      },
+      "completion_kind_keyword": {
+        "specific": "#8250df"
       }
     },
     "code_editor_syntax": {

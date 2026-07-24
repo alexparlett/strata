@@ -59,7 +59,6 @@ pub enum Reg<T> {
 
 impl<T> Reg<T> {
     /// The landed answer, if any.
-    #[allow(dead_code)]
     pub fn ready(&self) -> Option<&T> {
         match self {
             Reg::Ready(t) => Some(t),
@@ -112,8 +111,7 @@ impl TableRow {
 
 /// What creating a view learned, with its aliases already resolved to actual views.
 pub struct ViewInfo {
-    /// Feature reservoir: the autocomplete symbol catalog (P2-04) + inspector (Phase 3).
-    #[allow(dead_code)]
+    /// The autocomplete symbol catalog (P2-04); the inspector reads it too (Phase 3).
     pub columns: Vec<ColumnInfo>,
     /// The base tables it reads (transitive — the planner inlines nested views).
     /// Feature reservoir: the table-drop warning + profile invalidation (Phase 3).
