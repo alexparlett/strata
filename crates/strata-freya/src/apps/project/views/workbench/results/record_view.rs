@@ -10,10 +10,10 @@
 //! body always renders the current page's row — the canvas's `rowAt(gi)` semantics.
 //!
 //! Header per the canvas: `Row n of total` + **Copy row as JSON** / **Copy row as CSV** +
-//! divider + prev / next + ghost close. The copy buttons are **inert until P2-11** lands the
-//! shared results-copy path (selection → core serializers → clipboard); they then route
-//! through it (`serialize::row_pretty_json` for the row object, `serialize::write_selection`
-//! for the header+row CSV) rather than growing a local clipboard wiring here.
+//! divider + prev / next + ghost close. The copy buttons route through the shared
+//! results-copy path (P2-11, the sibling `copy` module → core serializers → the window's
+//! Freya clipboard): CSV is the header + this batch row through `write_selection`, JSON the
+//! bare `{column: value}` row object (`row_pretty_json`) — no local clipboard wiring here.
 
 use std::rc::Rc;
 
@@ -24,6 +24,7 @@ use strata_core::engine::serialize::cell_pretty_json;
 use strata_model::Kind;
 
 use super::cell_view::page_batch_row;
+use super::copy;
 use super::datagrid::GridData;
 use super::status_bar::fmt_int;
 use crate::components::divider::Divider;
@@ -122,22 +123,32 @@ impl Component for RecordView {
             .and_then(|nums| nums.get(row).copied())
             .unwrap_or(self.row_base + row + 1);
 
+        // This display row's position in the page batch (a find-filtered page maps back
+        // through the survivors' gutter numbers) — the copy buttons and the nested blocks
+        // below both read it.
+        let batch_row =
+            page_batch_row(self.row_nums.as_deref().map(Vec::as_slice), self.row_base, row);
+
         // ── header: label · copy JSON/CSV · divider · prev/next · ghost close ────────────
-        // A copy button: outline dress (the theme's ghost-button recipe), copy glyph + label.
-        // No-op for now — the clipboard wiring is P2-11's shared copy path (see the module
-        // doc); these buttons pick it up when it lands rather than one-off plumbing here.
-        let copy_button = |label: &'static str, title: &'static str| {
+        // A copy button: outline dress (the theme's ghost-button recipe), copy glyph + label,
+        // routing through the shared results-copy path (see the module doc).
+        let copy_button = |label: &'static str,
+                           title: &'static str,
+                           on_press: EventHandler<Event<PressEventData>>| {
             TooltipContainer::new(Tooltip::new(title))
                 .position(AttachedPosition::Bottom)
                 .child(
-                    Button::new().height(Size::px(28.)).child(
-                        rect()
-                            .horizontal()
-                            .cross_align(Alignment::Center)
-                            .spacing(6.)
-                            .child(Icon::new(IconName::Copy).size(12.))
-                            .child(Path::new(label)),
-                    ),
+                    Button::new()
+                        .height(Size::px(28.))
+                        .on_press(move |e: Event<PressEventData>| on_press.call(e))
+                        .child(
+                            rect()
+                                .horizontal()
+                                .cross_align(Alignment::Center)
+                                .spacing(6.)
+                                .child(Icon::new(IconName::Copy).size(12.))
+                                .child(Path::new(label)),
+                        ),
                 )
         };
         // Prev/next re-point the open slot within the page (clamped — the standard outline
@@ -177,16 +188,20 @@ impl Component for RecordView {
                     .color(theme.label_color),
             )
             .child(rect().width(Size::flex(1.)))
-            .child(copy_button("JSON", "Copy row as JSON"))
-            .child(copy_button("CSV", "Copy row as CSV"))
+            .child(copy_button("JSON", "Copy row as JSON", {
+                let data = self.data.clone();
+                EventHandler::new(move |_| copy::copy_record_json(&data, batch_row))
+            }))
+            .child(copy_button("CSV", "Copy row as CSV", {
+                let data = self.data.clone();
+                EventHandler::new(move |_| copy::copy_record_csv(&data, batch_row))
+            }))
             .child(rect().height(Size::px(20.)).child(Divider::vertical().color(theme.divider_fill)))
             .child(step(IconName::ChevronUp, "Previous row", row.checked_sub(1)))
             .child(step(IconName::ChevronDown, "Next row", (row + 1 < len).then_some(row + 1)))
             .child(close);
 
         // ── body: one field row per column ───────────────────────────────────────────────
-        let batch_row =
-            page_batch_row(self.row_nums.as_deref().map(Vec::as_slice), self.row_base, row);
         let mut fields = rect().width(Size::fill()).vertical();
         for (ci, col) in self.data.columns.iter().enumerate() {
             let cell = &self.data.rows[row][ci];

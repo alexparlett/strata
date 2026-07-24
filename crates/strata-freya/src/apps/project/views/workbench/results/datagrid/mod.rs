@@ -21,10 +21,11 @@ use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
 
 use strata_core::config::{Command, Settings};
-use strata_core::engine::serialize::cell_pretty_json;
+use strata_core::engine::serialize::{cell_pretty_json, TextFormat};
 use strata_model::Kind;
 
 use super::cell_view::{page_batch_row, CellValue, CellView};
+use super::copy;
 use super::error::ErrorState;
 use super::find::FindState;
 use super::record_view::RecordView;
@@ -210,6 +211,10 @@ impl Component for DataGrid {
         let drag = use_state(|| false);
         let mut shift = use_state(|| false);
         let mut meta = use_state(|| false);
+        // The grid surface's a11y identity (P2-11): selection interactions focus it (via SelCtl),
+        // and the focused `on_key_down` below is what routes ⌘A / ⌘C here — text surfaces keep
+        // both whenever *they* hold the focus, with no menu-side coordination.
+        let a11y = use_a11y();
         // The nested-cell view (P2-12): the value a double-clicked nested cell snapshotted;
         // `None` = closed. Lives here — beside the widths — so it survives page flips, and the
         // Esc arm below can arbitrate it ahead of find / the selection.
@@ -256,6 +261,7 @@ impl Component for DataGrid {
             meta,
             nrows: data.rows.len(),
             ncols: data.columns.len(),
+            a11y,
         };
         // (No selection snapshot here: each cell reads the selection reactively and styles itself, so a
         // selection change re-renders only the affected cells — the grid itself doesn't re-render.)
@@ -289,6 +295,7 @@ impl Component for DataGrid {
                 active_color: None,
                 active_background: None,
                 on_open: None,
+                on_secondary: None,
             });
         for (ci, col) in data.columns.iter().enumerate() {
             let w = widths.read().get(ci).copied().unwrap_or(DEFAULT_COL_W);
@@ -329,6 +336,31 @@ impl Component for DataGrid {
         let body_data = (data.clone(), self.row_nums.clone());
         let body = VirtualScrollView::new_with_data(body_data, move |index, page| {
             let (data, row_nums) = page;
+            // Right-click → the copy context menu over the selection (P2-11). A press on a
+            // cell *outside* the current selection retargets it first (Excel semantics: the
+            // gutter takes the whole row, a body cell a single-cell rectangle — both focus
+            // the grid via SelCtl); the menu's actions then read the live selection.
+            let open_copy_menu = {
+                let data = data.clone();
+                let row_nums = row_nums.clone();
+                move || {
+                    ContextMenu::open(copy::copy_menu(
+                        data.clone(),
+                        row_nums.clone(),
+                        row_base,
+                        sel_ctl.sel,
+                    ));
+                }
+            };
+            let on_menu_row = Some(EventHandler::new({
+                let open_copy_menu = open_copy_menu.clone();
+                move |_: Event<PointerEventData>| {
+                    if !sel_ctl.sel.peek().rows().contains(&index) {
+                        sel_ctl.row(index);
+                    }
+                    open_copy_menu();
+                }
+            }));
             let mut cells = rect()
                 .width(Size::fill())
                 .height(Size::flex(1.))
@@ -360,6 +392,7 @@ impl Component for DataGrid {
                         let mut record_view = record_view;
                         record_view.set(Some(index));
                     })),
+                    on_secondary: on_menu_row,
                 });
 
             for (ci, col) in data.columns.iter().enumerate() {
@@ -389,6 +422,16 @@ impl Component for DataGrid {
                         }));
                     })
                 });
+                let on_menu_cell = Some(EventHandler::new({
+                    let open_copy_menu = open_copy_menu.clone();
+                    move |_: Event<PointerEventData>| {
+                        if !sel_ctl.sel.peek().contains(index, ci) {
+                            sel_ctl.cell_down(index, ci);
+                            sel_ctl.end_drag();
+                        }
+                        open_copy_menu();
+                    }
+                }));
                 cells = cells.child(Cell {
                     width: Size::px(w),
                     text: cell.text.clone(),
@@ -410,6 +453,7 @@ impl Component for DataGrid {
                     active_color: None,
                     active_background: None,
                     on_open: on_nested,
+                    on_secondary: on_menu_cell,
                 });
             }
             // Trailing dead space (matches the header) so the row extends past the last column.
@@ -461,6 +505,32 @@ impl Component for DataGrid {
         // Measure the viewport (screen coords) so a resize grip knows when the drag nears an edge.
         rect()
             .expanded()
+            // The grid is an a11y-focusable surface: selection interactions focus it (SelCtl),
+            // and keyboard dispatch routes location-less key events by a11y focus — so the
+            // focused `on_key_down` below claims the edit chords exactly while the grid holds
+            // focus, and the SQL editor / inputs keep them whenever they do.
+            .a11y_id(a11y)
+            .a11y_focusable(true)
+            .on_key_down({
+                // The grid-focused edit chords (P2-11): ⌘A selects every cell, ⌘C copies the
+                // selection as TSV (declining when empty, so the press stays unconsumed).
+                let data = data.clone();
+                let row_nums = self.row_nums.clone();
+                crate::keymap::on_commands(settings, move |cmd| match cmd {
+                    Command::SelectAll => {
+                        sel_ctl.all();
+                        true
+                    }
+                    Command::Copy => copy::copy_selection(
+                        TextFormat::Tsv,
+                        &data,
+                        row_nums.as_ref().map(|n| n.as_slice()),
+                        row_base,
+                        &sel_ctl.sel.peek(),
+                    ),
+                    _ => false,
+                })
+            })
             .on_sized(move |e: Event<SizedEventData>| viewport.set(e.area))
             // A primary press that reaches here (not consumed by a cell) is on the grid background →
             // clear. A release anywhere ends a drag-paint. Shift / ⌘ are tracked globally (pointer
@@ -565,5 +635,148 @@ impl Component for DataGrid {
                 })
             }))
             .into_element()
+    }
+}
+
+#[cfg(test)]
+mod interaction {
+    use std::sync::Arc;
+
+    use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
+    use freya_testing::TestingRunner;
+    use strata_core::engine::{RecordBatch, Schema};
+    use strata_model::{Cell as CellData, ColumnInfo, Kind};
+
+    use super::super::find::FindState;
+    use super::super::sort::SortState;
+    use super::*;
+    use crate::apps::project::state::{use_init_session, Chan, SessionState};
+
+    /// A 2×2 page (scalar columns, empty batch — ⌘A is pure selection, no serialization).
+    fn page() -> Rc<GridData> {
+        let col = |name: &str, dtype: &str, kind: Kind| ColumnInfo {
+            name: name.into(),
+            dtype: dtype.into(),
+            kind,
+            nullable: true,
+            children: Vec::new(),
+            stats: Vec::new(),
+        };
+        let cell = |text: &str| CellData { text: text.into(), null: false };
+        Rc::new(GridData {
+            columns: vec![col("id", "Int64", Kind::Num), col("name", "Utf8", Kind::Str)],
+            rows: vec![vec![cell("1"), cell("a")], vec![cell("2"), cell("b")]],
+            batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
+        })
+    }
+
+    /// The grid stood up like the results pane does: session radio (for the toolbar), its
+    /// own find/sort state, the page as `PageRead::Ready`, the window's context-menu host
+    /// (the right-click copy menu opens into it). Settings + the shared selection come in
+    /// as root contexts from the runner.
+    fn app() -> impl IntoElement {
+        use_init_theme(|| crate::theme::strata_theme(&strata_core::theme::load("midnight")));
+        let _station = use_init_session();
+        let session = freya::radio::use_radio::<SessionState, Chan>(Chan::Tabs);
+        let tab = session.read().active.expect("open tab");
+        let find = FindState::use_new();
+        let page_no = use_state(|| 1usize);
+        let sel = use_consume::<State<Selection>>();
+        let sort = SortState::use_new(page_no, sel);
+        let data = page();
+        rect()
+            .expanded()
+            .child(ContextMenuViewer::new())
+            .child(DataGrid::new(data.clone(), PageRead::Ready(data), 0, tab, find, sort).total(2))
+    }
+
+    fn primary_a() -> PlatformEvent {
+        PlatformEvent::Keyboard {
+            name: KeyboardEventName::KeyDown,
+            key: Key::Character("a".into()),
+            code: Code::KeyA,
+            modifiers: Modifiers::META,
+        }
+    }
+
+    /// The focused edit-chord routing (P2-11 acceptance): ⌘A does nothing while the grid is
+    /// unfocused; a cell press focuses the grid (and starts a rectangle); ⌘A then selects
+    /// every cell.
+    #[test]
+    fn cell_press_focuses_the_grid_and_cmd_a_selects_all() {
+        let (mut runner, sel) = TestingRunner::new(
+            app,
+            (900., 700.).into(),
+            |r| {
+                r.provide_root_context(|| State::create(strata_core::config::Settings::default()));
+                r.provide_root_context(|| State::create(Selection::None))
+            },
+            1.,
+        );
+        // Two passes: the virtual scroller builds its visible rows off the first layout.
+        runner.sync_and_update();
+        runner.sync_and_update();
+
+        // Unfocused grid: the chord routes by a11y focus, so nothing happens.
+        runner.send_event(primary_a());
+        runner.sync_and_update();
+        assert_eq!(*sel.peek(), Selection::None, "⌘A must not reach an unfocused grid");
+
+        // Press the first body cell (toolbar 38 + header 46, first data column past the
+        // 52px gutter): a single-cell rectangle, and the grid takes a11y focus.
+        runner.move_cursor((100., 100.));
+        runner.click_cursor((100., 100.));
+        runner.sync_and_update();
+        assert_eq!(*sel.peek(), Selection::Cell { ar: 0, ac: 0, fr: 0, fc: 0 });
+
+        // Focused grid: ⌘A selects the whole page.
+        runner.send_event(primary_a());
+        runner.sync_and_update();
+        assert_eq!(*sel.peek(), Selection::Cell { ar: 0, ac: 0, fr: 1, fc: 1 });
+    }
+
+    /// Right-click retargets a selection that doesn't contain the pressed cell (Excel
+    /// semantics) and opens the copy menu into the mounted `ContextMenuViewer` — a menu
+    /// row ("Copy as TSV") is findable afterwards. A right-click *inside* the selection
+    /// keeps it.
+    #[test]
+    fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
+        let (mut runner, sel) = TestingRunner::new(
+            app,
+            (900., 700.).into(),
+            |r| {
+                r.provide_root_context(|| State::create(strata_core::config::Settings::default()));
+                r.provide_root_context(|| State::create(Selection::None))
+            },
+            1.,
+        );
+        runner.sync_and_update();
+        runner.sync_and_update();
+
+        let right_down = |cursor: (f64, f64)| PlatformEvent::Mouse {
+            name: MouseEventName::MouseDown,
+            cursor: cursor.into(),
+            button: Some(MouseButton::Right),
+        };
+
+        // Select cell (0, 0), then right-click row 1 in the second column: outside the
+        // selection → it retargets to that single cell.
+        runner.click_cursor((100., 100.));
+        runner.sync_and_update();
+        runner.send_event(right_down((260., 130.)));
+        runner.sync_and_update();
+        assert_eq!(*sel.peek(), Selection::Cell { ar: 1, ac: 1, fr: 1, fc: 1 });
+
+        // The copy menu is open: its TSV row exists in the tree.
+        runner
+            .find(|node, element| {
+                Label::try_downcast(element).filter(|l| l.text == "Copy as TSV").map(|_| node)
+            })
+            .expect("the copy menu is open with its TSV row");
+
+        // Right-click *inside* the selection keeps it.
+        runner.send_event(right_down((260., 130.)));
+        runner.sync_and_update();
+        assert_eq!(*sel.peek(), Selection::Cell { ar: 1, ac: 1, fr: 1, fc: 1 });
     }
 }

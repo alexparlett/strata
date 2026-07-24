@@ -7,7 +7,7 @@
 use freya::prelude::*;
 
 /// Page-local selection: a cell rectangle (anchor → focus), whole rows, or whole columns.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Selection {
     None,
     /// Rectangle from anchor `(ar, ac)` to focus `(fr, fc)`.
@@ -42,6 +42,21 @@ impl Selection {
         match self {
             Selection::Cols(v) => v,
             _ => &[],
+        }
+    }
+
+    /// Whether body cell `(r, c)` falls inside the selection — a right-click outside it
+    /// retargets the selection first (Excel semantics), inside it keeps it.
+    pub fn contains(&self, r: usize, c: usize) -> bool {
+        match self {
+            Selection::None => false,
+            Selection::Cell { .. } => self
+                .cell_bounds()
+                .is_some_and(|(minr, maxr, minc, maxc)| {
+                    r >= minr && r <= maxr && c >= minc && c <= maxc
+                }),
+            Selection::Rows(rows) => rows.contains(&r),
+            Selection::Cols(cols) => cols.contains(&c),
         }
     }
 }
@@ -121,7 +136,9 @@ pub enum CellRole {
 }
 
 /// Shared selection state + the pointer / keyboard mutators — the Dioxus `sel_*` fns as methods on a
-/// `Copy` handle. `nrows` / `ncols` are the grid dimensions (for select-all).
+/// `Copy` handle. `nrows` / `ncols` are the grid dimensions (for select-all). `a11y` is the grid
+/// surface's accessibility id: every selection-starting interaction focuses the grid, which is what
+/// routes the focused edit chords (⌘A / ⌘C) here instead of to the last-focused text element.
 #[derive(Clone, Copy, PartialEq)]
 pub struct SelCtl {
     pub sel: State<Selection>,
@@ -131,12 +148,14 @@ pub struct SelCtl {
     pub meta: State<bool>,
     pub nrows: usize,
     pub ncols: usize,
+    pub a11y: AccessibilityId,
 }
 
 impl SelCtl {
     /// Primary mousedown on a body cell: start a rectangle (or extend it if shift is held), and begin a
     /// drag-paint.
     pub fn cell_down(mut self, r: usize, c: usize) {
+        self.a11y.request_focus();
         if *self.shift.peek() {
             self.cell_to(r, c);
         } else {
@@ -163,6 +182,7 @@ impl SelCtl {
 
     /// Select row `i` (gutter click): plain = only it, ⌘/Ctrl = toggle, shift = range from the anchor.
     pub fn row(mut self, i: usize) {
+        self.a11y.request_focus();
         let add = *self.meta.peek();
         let extend = *self.shift.peek();
         let is_rows = matches!(&*self.sel.peek(), Selection::Rows(_));
@@ -193,6 +213,7 @@ impl SelCtl {
 
     /// Select column `ci` (header click): plain / ⌘-toggle / shift-range, mirroring [`row`](Self::row).
     pub fn col(mut self, ci: usize) {
+        self.a11y.request_focus();
         let add = *self.meta.peek();
         let extend = *self.shift.peek();
         let is_cols = matches!(&*self.sel.peek(), Selection::Cols(_));
@@ -221,8 +242,9 @@ impl SelCtl {
         self.anchor.set(Some(ci));
     }
 
-    /// Select every cell (the `#` corner).
+    /// Select every cell (the `#` corner, and the focused ⌘A).
     pub fn all(mut self) {
+        self.a11y.request_focus();
         if self.nrows > 0 && self.ncols > 0 {
             self.sel.set(Selection::Cell {
                 ar: 0,

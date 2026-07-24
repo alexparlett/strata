@@ -40,6 +40,12 @@ pub struct Cell {
     /// everywhere else. The standard optional event-prop shape (`Button::on_press`), fed the
     /// double-click's pointer event.
     pub on_open: Option<EventHandler<Event<PointerEventData>>>,
+    /// Right-click → the copy context menu (P2-11). The grid builds the handler (it owns
+    /// the batch + the selection); `None` on cells with no copy story (the `#` corner,
+    /// the trailing filler). Handled *inside* the pointer-down handler below — an element
+    /// holds one handler per event name and `on_secondary_down` is sugar over
+    /// `on_pointer_down`, so a second listener would silently replace the selection one.
+    pub on_secondary: Option<EventHandler<Event<PointerEventData>>>,
 }
 
 impl Component for Cell {
@@ -97,7 +103,18 @@ impl Component for Cell {
             .border(border)
             .on_pointer_down({
                 let on_open = self.on_open.clone();
+                let on_secondary = self.on_secondary.clone();
                 move |e: Event<PointerEventData>| {
+                    // Right-click → the copy menu (see the `on_secondary` field doc for
+                    // why it lives in this handler). Consumed so the press can't fall
+                    // through to the grid background's click-to-deselect.
+                    if e.data().button() == Some(MouseButton::Right) {
+                        if let Some(on_secondary) = &on_secondary {
+                            e.stop_propagation();
+                            on_secondary.call(e);
+                        }
+                        return;
+                    }
                     if !e.data().is_primary() {
                         return;
                     }
