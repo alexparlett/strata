@@ -19,7 +19,6 @@ serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision
 # `config`: app config (recent projects + prefs) in the OS user-config dir.
 preferences = "2"
 tracing = "0.1.44"
-arboard = "3.6.1"
 
 [dev-dependencies]
 # Tests mint saved-query ids (the type itself reaches the API via strata-model).

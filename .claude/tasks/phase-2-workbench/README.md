@@ -46,7 +46,7 @@ now have their read model.
 | P2-08 | Status bar — pager + info + aggregate | ✅ | U6/Rz3 | P2-03 |
 | P2-09 | Find in results | ✅ | U6c | P2-03 |
 | P2-10 | Gutter double-click → row detail (record view) | ✅ | Rz5 | P2-03 |
-| P2-11 | Copy affordances (TSV/CSV/JSON/MD) | ⬜ | Rz4 | P2-03 |
+| P2-11 | Copy affordances (TSV/CSV/JSON/MD) | ✅ | Rz4 | P2-03 |
 | P2-12 | Cell double-click → nested-data view | ✅ | U5 | P2-03 |
 | P2-13 | Column sort | ✅ | Rz6 | P2-01/03 |
 | P2-14 | Clear results | ✅ | Rz8 | P2-02 |

@@ -1,6 +1,6 @@
-//! Results serialization for the grid's **Copy** (Rz4) — clipboard only, bounded to the current
-//! page. The source is always an Arrow [`RecordBatch`] (projected/sliced to the selected cells);
-//! each format is a [`RecordBatchWriter`], so types and nesting come straight from Arrow,
+//! Results serialization for the grid's **Copy** (Rz4 / P2-11) — text only, bounded to the
+//! current page. The source is always an Arrow [`RecordBatch`] (projected/sliced to the selected
+//! cells); each format is a [`RecordBatchWriter`], so types and nesting come straight from Arrow,
 //! uniformly:
 //!
 //! - **CSV/TSV** → `arrow-csv`'s writer.
@@ -13,8 +13,9 @@
 //! CSV/TSV/Markdown can't represent nesting, so nested columns are first flattened to compact
 //! JSON strings ([`flatten_nested`]) — which round-trips, unlike an Arrow debug blob.
 //!
-//! [`ClipboardWriter`] is the `Write` **sink** the format writer targets, committing its bytes
-//! to the system clipboard on [`ClipboardWriter::commit`].
+//! This module produces **text**; the clipboard side effect lives with the UI (the Freya app
+//! commits via `freya::clipboard`, the same per-window provider its text inputs use), so callers
+//! hand `write_batch` / `write_selection` any `io::Write` sink — typically a `Vec<u8>`.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -148,40 +149,24 @@ pub fn cell_pretty_json(batch: &RecordBatch, col: usize, row: usize) -> Option<S
     serde_json::to_string_pretty(val).ok()
 }
 
-/// A `std::io::Write` sink that lands its bytes on the system clipboard (Rz4). Plug it in as
-/// the writer for [`write_batch`], then [`commit`](Self::commit).
-pub struct ClipboardWriter {
-    buf: Vec<u8>,
-}
-
-impl ClipboardWriter {
-    pub fn new() -> Self {
-        Self { buf: Vec::new() }
+/// Pretty-print one whole row of `batch` as a **bare `{column: value}` object** — the record
+/// view's "Copy row as JSON" (the canvas `buildRowJSON` shape: a single object, not
+/// [`write_batch`]'s array-of-objects). Nulls are explicit (`"col": null` — every column is
+/// present), nested values stay real JSON, and field order follows the schema (`preserve_order`).
+/// `None` only on a serialization failure — a null *row* still yields a full object.
+pub fn row_pretty_json(batch: &RecordBatch, row: usize) -> Option<String> {
+    let one = batch.slice(row, 1);
+    let mut buf = Vec::new();
+    {
+        let mut w = datafusion::arrow::json::WriterBuilder::new()
+            .with_explicit_nulls(true)
+            .build::<_, datafusion::arrow::json::writer::JsonArray>(&mut buf);
+        w.write(&one).ok()?;
+        w.finish().ok()?;
     }
-
-    /// Push the accumulated bytes to the clipboard.
-    pub fn commit(self) -> Result<(), String> {
-        let text = String::from_utf8(self.buf).map_err(|e| e.to_string())?;
-        arboard::Clipboard::new()
-            .and_then(|mut c| c.set_text(text))
-            .map_err(|e| e.to_string())
-    }
-}
-
-impl Default for ClipboardWriter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Write for ClipboardWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.buf.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
+    // arrow-json emits `[{...}]`; pull the single row object out and indent it.
+    let arr: serde_json::Value = serde_json::from_slice(&buf).ok()?;
+    serde_json::to_string_pretty(arr.get(0)?).ok()
 }
 
 /// GitHub-flavoured markdown table writer. Buffers formatted rows across `write` calls and, on
@@ -403,5 +388,36 @@ mod tests {
     #[test]
     fn cell_pretty_json_is_none_for_a_null_value() {
         assert!(cell_pretty_json(&nested_batch(), 0, 1).is_none());
+    }
+
+    /// A 2-row batch with a scalar + a nested column — the record view's copy shape.
+    fn row_batch() -> RecordBatch {
+        let fields = Fields::from(vec![Field::new("plan", DataType::Utf8, false)]);
+        let strct = StructArray::new(
+            fields.clone(),
+            vec![Arc::new(StringArray::from(vec!["pro", "free"])) as ArrayRef],
+            Some(vec![true, false].into()),
+        );
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("attrs", DataType::Struct(fields), true),
+        ]);
+        RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2])), Arc::new(strct)],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn row_pretty_json_is_a_bare_object_in_schema_order() {
+        let json = row_pretty_json(&row_batch(), 0).expect("row 0 serializes");
+        assert_eq!(json, "{\n  \"id\": 1,\n  \"attrs\": {\n    \"plan\": \"pro\"\n  }\n}");
+    }
+
+    #[test]
+    fn row_pretty_json_keeps_null_columns_explicit() {
+        let json = row_pretty_json(&row_batch(), 1).expect("row 1 serializes");
+        assert_eq!(json, "{\n  \"id\": 2,\n  \"attrs\": null\n}");
     }
 }

@@ -16,6 +16,7 @@ use strata_model::SnapshotId;
 
 mod cell_view;
 mod chart;
+mod copy;
 mod datagrid;
 mod empty;
 mod error;

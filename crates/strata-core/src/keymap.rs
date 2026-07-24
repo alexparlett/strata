@@ -76,9 +76,9 @@ pub const COMMANDS: &[CommandMeta] = &[
     command!(Undo, "Undo", "Undo the last edit in the query editor", [primary] "z"),
     command!(Redo, "Redo", "Redo the last undone edit in the query editor", [primary shift] "z"),
     command!(Cut, "Cut", "Cut the selection in the query editor", [primary] "x"),
-    command!(Copy, "Copy", "Copy the selection in the query editor", [primary] "c"),
+    command!(Copy, "Copy", "Copy the selection in the query editor or results grid", [primary] "c"),
     command!(Paste, "Paste", "Paste the clipboard into the query editor", [primary] "v"),
-    command!(SelectAll, "Select all", "Select the query editor's whole buffer", [primary] "a"),
+    command!(SelectAll, "Select all", "Select the query editor's whole buffer or every results cell", [primary] "a"),
     command!(Find, "Find in results", "Search within the results grid", [primary] "f"),
     command!(OpenSettings, "Open settings", "Open the settings window", [primary] ","),
     command!(
