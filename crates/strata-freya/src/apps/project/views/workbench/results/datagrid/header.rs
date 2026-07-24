@@ -1,16 +1,120 @@
-//! The header column ([`HeaderCell`]) — name + dtype label + sort chevron, with column-select on
-//! mousedown and the accent-name active state — and its right-edge drag-to-resize grip ([`ColGrip`]).
+//! The sticky header row ([`HeaderRow`]): the `#` corner + one [`HeaderCell`] per column —
+//! name + dtype label + sort chevron, with column-select on mousedown and the accent-name
+//! active state — each with its right-edge drag-to-resize grip ([`ColGrip`]).
+
+use std::rc::Rc;
 
 use freya::prelude::*;
 
+use super::cell::Cell;
+use super::model::KindColors;
 use super::{
-    DEFAULT_COL_W, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H, MAX_COL_W, MIN_COL_W, TRAIL_W,
+    DataGridTheme, GridData, DEFAULT_COL_W, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H,
+    MAX_COL_W, MIN_COL_W, TRAIL_W,
 };
-use crate::apps::project::views::workbench::results::selection::SelCtl;
+use crate::apps::project::views::workbench::results::selection::{CellRole, SelCtl};
 use crate::apps::project::views::workbench::results::sort::SortState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Meta, MonoValue};
+
+// Content auto-fit (double-click a resize grip): a char-count estimate, à la the Dioxus
+// `col_autofit`.
+const AUTOFIT_CHAR_W: f32 = 7.6; // mono char-width estimate
+const AUTOFIT_PAD: f32 = 28.; // cell horizontal padding + affordance
+
+/// Per-column content auto-fit width — `max(header name + 3, widest cell) × char-width +
+/// padding`, clamped to the resize bounds. Recomputed per page (a grip double-click fits the
+/// *visible* cells).
+fn autofit_widths(data: &GridData) -> Vec<f32> {
+    (0..data.columns.len())
+        .map(|ci| {
+            let mut max_len = data.columns[ci].name.chars().count() + 3;
+            for row in &data.rows {
+                if let Some(cell) = row.get(ci) {
+                    max_len = max_len.max(cell.text.chars().count());
+                }
+            }
+            (max_len as f32 * AUTOFIT_CHAR_W + AUTOFIT_PAD).clamp(MIN_COL_W, MAX_COL_W)
+        })
+        .collect()
+}
+
+/// The sticky header row: `#` gutter (select-all corner) + per-column [`HeaderCell`]s +
+/// the trailing dead zone that keeps the last grip reachable. Pans horizontally with the
+/// body (shared horizontal scroll) but not vertically (it sits above the scroll region).
+#[derive(PartialEq)]
+pub struct HeaderRow {
+    /// The resolved page — column names/types, and the cells the auto-fit measures.
+    pub data: Rc<GridData>,
+    pub widths: State<Vec<f32>>,
+    pub controller: ScrollController,
+    pub viewport: State<Area>,
+    pub hold_w: State<f32>,
+    pub sel: SelCtl,
+    pub sort: SortState,
+    pub theme: DataGridTheme,
+}
+
+impl Component for HeaderRow {
+    fn render(&self) -> impl IntoElement {
+        let theme = &self.theme;
+        // Per-column content auto-fit widths (grip double-click), from this page's cells.
+        let autofit = autofit_widths(&self.data);
+        let mut header = rect()
+            .width(Size::fill())
+            .height(Size::px(HEADER_H))
+            .direction(Direction::Horizontal)
+            .content(Content::Flex)
+            .background(theme.header_background)
+            .child(Cell {
+                width: Size::px(GUTTER_W),
+                text: "#".to_string(),
+                color: theme.header_label_color,
+                mono: false,
+                cross: Alignment::Center,
+                pad: Gaps::default(),
+                hover_bg: theme.header_hover_background,
+                divider: theme.header_divider_fill,
+                role: CellRole::Corner,
+                sel: self.sel,
+                sel_border: theme.selection_border_fill,
+                active_color: None,
+                active_background: None,
+                on_open: None,
+                on_secondary: None,
+            });
+        for (ci, col) in self.data.columns.iter().enumerate() {
+            let w = self.widths.read().get(ci).copied().unwrap_or(DEFAULT_COL_W);
+            header = header.child(HeaderCell {
+                index: ci,
+                name: col.name.clone(),
+                dtype: col.dtype.clone(),
+                w,
+                widths: self.widths,
+                controller: self.controller,
+                viewport: self.viewport,
+                hold_w: self.hold_w,
+                sel: self.sel,
+                sort: self.sort,
+                name_color: theme.header_color,
+                active_color: theme.header_active_color,
+                type_color: col.kind.type_color(theme),
+                arrow: theme.arrow_fill,
+                divider: theme.header_divider_fill,
+                grip: theme.selection_border_fill,
+                hover_bg: theme.header_hover_background,
+                active_bg: theme.header_active_background,
+                autofit_w: autofit.get(ci).copied().unwrap_or(DEFAULT_COL_W),
+            });
+        }
+        // Trailing dead space: keeps the last column's resize grip clear of the content's
+        // right edge so it stays reachable, and gives somewhere to drag when widening the
+        // last column.
+        header
+            .child(rect().width(Size::flex(1.)).min_width(Size::px(TRAIL_W)).height(Size::fill()))
+    }
+}
 
 /// One header column: name + sort chevron on top, dtype label below, a trailing column rule, and an
 /// absolutely-positioned [`ColGrip`] on the right edge for drag-to-resize. Owns its hover locally, like
