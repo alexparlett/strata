@@ -37,6 +37,7 @@ pub enum IconName {
     Grid,
     Chart,
     Lines,
+    Copy,
 }
 
 impl IconName {
@@ -72,6 +73,7 @@ impl IconName {
             IconName::Grid => GRID,
             IconName::Chart => CHART,
             IconName::Lines => LINES,
+            IconName::Copy => COPY,
         }
     }
 }
@@ -165,3 +167,5 @@ const CHART: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 2
 const LAST: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 6l6 6-6 6M16 6v12"/></svg>"#;
 // Ragged text lines — the plan view's Raw/Tree toggle.
 const LINES: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h10M4 17h13"/></svg>"#;
+// Two overlapped sheets — the record view's Copy row as JSON / CSV buttons.
+const COPY: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>"#;

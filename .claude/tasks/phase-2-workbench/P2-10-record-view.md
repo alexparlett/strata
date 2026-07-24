@@ -1,6 +1,6 @@
 # P2-10 · Gutter double-click → row detail (record view)
 
-**Phase:** 2 — Workbench · **Status:** ⬜ `[core ✓]` · **DEV_TASKS:** Rz5 · **Depends on:** P2-03 · **Related:** P2-12 (cell → nested)
+**Phase:** 2 — Workbench · **Status:** ✅ **built** (copy buttons inert → P2-11) · **DEV_TASKS:** Rz5 · **Depends on:** P2-03 · **Related:** P2-12 (cell → nested)
 
 ## Goal
 **Double-clicking the row-number gutter** (`onRowOpen`) opens the **entire row** in the record view.
@@ -29,8 +29,11 @@ A **centred backdrop modal** (same overlay pattern as P2-12, not a popover):
    fuller format set is the grid-selection copy, P2-11).
 
 ## Acceptance
-- [ ] Double-click a row number → centred modal with all columns; nested cells show pretty JSON.
-- [ ] Prev/next move within the page; Copy JSON/CSV produce the row.
+- [x] Double-click a row number → centred modal with all columns; nested cells show pretty JSON.
+- [x] Prev/next move within the page (clamped; standard disabled dress at the edges).
+- [ ] Copy JSON/CSV produce the row — the buttons render per the canvas but are **no-ops**:
+      they wire into P2-11's shared copy path (selection → core serializers → clipboard) when
+      it lands; P2-11 defines the row formats (see its build step 6).
 
 ## Freya / references
 - `datagrid/cell.rs` (`CellRole::Row` double-click). Freya overlay/`Dialog` family. Core

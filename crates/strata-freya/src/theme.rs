@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use crate::apps::project::{
     CancelButtonThemePreference, CellViewThemePreference, DataGridThemePreference,
-    ExplainPlanThemePreference, HeaderBarThemePreference, StatusBarThemePreference,
-    TabBarThemePreference, TabThemePreference,
+    ExplainPlanThemePreference, HeaderBarThemePreference, RecordViewThemePreference,
+    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
@@ -332,6 +332,16 @@ strata_components! {
         backdrop, background, border_fill, divider_fill, name_color, badge_color,
         badge_background, close_color, close_hover_background, close_hover_color,
         body_background, body_color,
+    },
+    // The whole-row record view (P2-10): the same modal dress as `cell_view` (backdrop / card /
+    // header divider), plus the field list — name / value / null text tones, the sunken nested
+    // block, the field-row hairline, and the dtype labels' categorical `type_*_color` palette
+    // (the datagrid header's set). Its buttons are entirely the standard button themes.
+    "record_view" => RecordViewThemePreference {
+        backdrop, background, border_fill, divider_fill, row_divider_fill, label_color,
+        name_color, value_color, null_color, nested_background, nested_color,
+        type_str_color, type_num_color, type_bool_color, type_ts_color, type_struct_color,
+        type_list_color, type_map_color,
     },
     // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
     // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and

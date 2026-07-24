@@ -23,6 +23,12 @@ Not built. Selection exists (`SelCtl`); no context menu, no clipboard wiring. Th
    `crate::serialize` writers (arrow-csv, `PrettyJsonWriter`, `MarkdownWriter`); nested cells stay
    real JSON, flattened to compact JSON for flat formats; all carry headers.
 5. Copy to the clipboard (arboard, in core). Clipboard is **page-bounded** (no export-to-clipboard).
+6. Wire the **record view's** header buttons (P2-10 — rendered, currently no-ops) into this
+   same path: Copy row as CSV = `write_selection` over one page-batch row, all columns, with
+   header; Copy row as JSON = a **bare row object** per the canvas (`buildRowJSON`: single
+   `{col: value}`, nulls explicit — not `write_selection`'s array-of-objects), as a new core
+   serializer beside `cell_pretty_json`. Map a find-filtered display row back through
+   `cell_view::page_batch_row` first, as the record view's nested blocks already do.
 
 ## Acceptance
 - [ ] Right-click selection → four copy formats produce correct, header-carrying output.

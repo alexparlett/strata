@@ -508,8 +508,9 @@ impl Component for PagerCluster {
 
 // ── formatting ────────────────────────────────────────────────────────────────────────────────
 
-/// Thousands-separated integer ("12847" → "12,847").
-fn fmt_int(n: usize) -> String {
+/// Thousands-separated integer ("12847" → "12,847"). Shared with the record view's
+/// `Row n of total` label (P2-10).
+pub fn fmt_int(n: usize) -> String {
     let s = n.to_string();
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
