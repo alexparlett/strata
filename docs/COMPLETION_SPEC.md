@@ -4,7 +4,9 @@
 `strata-core::engine::sql` (the language side), `strata-code-editor` (the popup), and
 `strata-freya` (the wiring). It **supersedes `SQL_LANGUAGE_SPEC.md` §4** (which described
 the pre-build plan: a debounced async pipeline, substring ranking, ⌘Space-only). Follow-on
-work: `P2-22` (docs panel + signature help), `P2-23` (validator fitness — multi-error).
+work: `P2-22` shipped **function signatures in the completion detail** (an enriched
+engine `FunctionSym` catalog; the docs-panel + signature-help popups were dropped —
+see the task file); `P2-23` (validator fitness — multi-error).
 
 ## 1. Principles
 
@@ -266,4 +268,7 @@ is categorically out — the provider lives in-process.
   its class (now depth-0-scoped so CTE drafts keep the grace) — consciously superseded
   by **P2-23** (native multi-error name resolution in front of the planner).
 - Type-aware argument narrowing (only numeric columns inside `sum(`) needs registry
-  signature metadata — **P2-22**, together with the docs panel and signature help.
+  signature metadata. **P2-22** landed that metadata (`FunctionSym.signatures`, from the
+  DataFusion registry) — currently used only for the completion detail; narrowing the
+  argument offer against it is the open follow-on (the docs-panel + signature-help UX
+  that would have consumed it was dropped).

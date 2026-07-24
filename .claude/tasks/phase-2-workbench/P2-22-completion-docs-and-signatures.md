@@ -1,53 +1,50 @@
-# P2-22 · Completion docs + function signature help
+# P2-22 · Function signatures in autocomplete
 
-**Phase:** 2 — Workbench · **Status:** ⬜ · **DEV_TASKS:** E2 (polish) · **Depends on:** P2-04 · **Related:** P2-18
+**Phase:** 2 — Workbench · **Status:** ✅ (narrowed scope) · **DEV_TASKS:** E2 (polish) · **Depends on:** P2-04 · **Related:** P2-18
 
-## Goal
-Two follow-ons to P2-04's completion popup, both about **telling the user more than a name**:
+## Outcome (as shipped)
+The valuable half of the original goal landed: **the completion popup now shows a
+function's signature, not just its name.**
 
-1. **Docs panel on completion items** — a side panel beside the popup (VS Code's
-   `expandSuggestionDocs` / JetBrains' auto-docs) showing, for the selected row:
-   functions → signature(s) + return type; columns → dtype/nullability (+ stats when known);
-   tables/views → column count / source. Toggle with ⌃Space while open (VS Code convention),
-   or auto-show after a short dwell (JetBrains).
-2. **Signature help while typing arguments** — after `fn(` and on `,`, a small popup above
-   the caret showing `round(value [, decimals])` with the **active parameter highlighted**
-   (LSP `signatureHelp` UX). Dismiss on `)` / Esc; re-anchor per argument.
+- **Core — enriched function catalog.** `FunctionCatalog` holds
+  `FunctionSym { name, kind, signatures: Vec<Vec<String>>, ret, description }` instead
+  of bare names. `Engine::new` snapshots every registered built-in from the live
+  DataFusion registry (`ScalarUDF`/`AggregateUDF`/`WindowUDF` `signature()` /
+  `return_type()` / `documentation()`) into display strings — engine-side, so the UI
+  never touches DataFusion (`strata-core::engine::functions`). A `short_type` renderer
+  collapses arrow's verbose spellings (`Timestamp(Nanosecond, "+TZ")` → `Timestamp`,
+  `Decimal128(38, 10)` → `Decimal`, `List(..)` → `List`) so signatures stay readable;
+  return types resolve from the signature's own example arg types, guarded against the
+  UDFs that panic on an empty slice.
+- **Completion detail = the arity form.** `Completion.detail` for a function is
+  `round(Float64[, Int32])` / `date_bin(Interval, Timestamp[, Timestamp])` instead of
+  the flat `"function"` (`FunctionSym::detail()`).
+- **Wider popup.** The completion popup was widened (300 → 480px) and the name/detail
+  labels capped single-line, so a long signature can never collide with the name.
 
-## Current state
-- P2-04 accept-chaining already re-triggers completion after `fn(` — the *argument value*
-  suggestions (columns) pop, but nothing tells you the function's arity/types.
-- `FunctionCatalog` (`strata-core::sql`) carries **names only** (`scalar/aggregate/window:
-  Vec<String>`, pushed from the engine registry at startup).
+## Dropped / deferred (explicitly)
+The two floating-popup surfaces in the original plan were prototyped and **removed** —
+they fought the editor's per-line pointer model and the resizable-split overlay/clip
+behaviour, and the attempt to fold docs into the diagnostics hover panel broke that
+panel. Alex called the in-autocomplete signatures "good enough" and we stopped there.
 
-## Build
-1. **Core: enrich the function catalog.** DataFusion's `ScalarUDF`/`AggregateUDF`/`WindowUDF`
-   expose `signature()` (`TypeSignature` — arg counts/types, variadic forms) and
-   `return_type(args)`. Render each to a display string at registry-snapshot time
-   (`FunctionSym { name, signatures: Vec<String>, ret: Option<String> }`); keep it engine-side
-   so the UI never touches DataFusion. `Completion.detail` for functions can then show the
-   arity form (`round(x [, d])`) instead of the flat "function".
-2. **Core: signature-at-caret.** `sql::signature_help(sql, caret, catalog) ->
-   Option<SignatureHelp { label, active_param }>` — token-scan back from the caret to the
-   innermost unclosed call (`ident (` at depth), count top-level commas for the active
-   parameter. Pure + unit-tested like `complete`.
-3. **Editor: docs side panel.** A second overlay rect beside the popup (right, flip to left
-   near the edge — reuse `flip_and_clamp`), fed by a `docs_for(item) -> Option<String>`
-   callback prop (generic, like `on_completions`). ⌃Space toggles while open.
-4. **Editor: signature popup.** Small single-line overlay above the caret line (same anchor
-   math), driven by an `on_signature: Callback<CompletionRequest, Option<SignatureHelp>>`
-   prop; recompute on `(`/`,`/`)`/caret-move; suppressed while the completion popup is open.
-5. Theme: `completion_docs_*` / reuse `panel_*`; schema regen.
+- ~~Docs side-panel on completion items (⌃Space toggle)~~ — dropped.
+- ~~Signature-help popup while typing arguments (active-param highlight)~~ — dropped;
+  `sql::signature_help` and `sql::hover_docs` were built then removed.
+- The diagnostics (squiggle) hover popup is **unchanged** from P2-18 — deliberately not
+  generalised to fire on functions (that's what caused the breakage).
 
-## Acceptance
-- [ ] Selecting a function row shows its signature(s) + return type in a docs panel; columns
-      show dtype; ⌃Space toggles the panel.
-- [ ] Typing inside `round(|` shows `round(value [, decimals])` with the first param
-      highlighted; the highlight advances on `,`; closes on `)`.
-- [ ] Signature + docs sources are engine-authoritative (DataFusion registry), never
-      hand-listed; both features fully off when the props aren't wired.
+If richer docs/signature UX is wanted later, extend the autocomplete surface rather
+than the diagnostics hover, and treat any change to the editor's
+`hover`/`update_hover`/pointer handlers as high-risk (verify diagnostics still work).
+
+## Original scope (for reference)
+Two follow-ons to P2-04's completion popup, both about telling the user more than a
+name: (1) a docs side-panel showing signatures/return/dtype for the selected row, and
+(2) signature help while typing arguments (`round(value [, decimals])` with the active
+parameter highlighted). Only the underlying **signature metadata** (build step 1) and
+its use in the completion detail shipped.
 
 ## Freya / references
-- P2-04's popup (`strata-code-editor::completion`, `editor_ui.rs` overlay + flip math).
-- DataFusion `ScalarUDF::signature()/return_type()`, `TypeSignature` rendering.
-- VS Code `toggleSuggestionDetails` / LSP `textDocument/signatureHelp` for UX shape.
+- P2-04's popup (`strata-code-editor::completion`, `editor_ui.rs`).
+- DataFusion `ScalarUDF::signature()/return_type()/documentation()`, `TypeSignature`.
