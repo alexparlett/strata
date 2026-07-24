@@ -58,6 +58,11 @@ pub fn tab_context_menu(
     closer: crate::apps::project::close::TabCloser,
     settings: State<strata_core::config::Settings>,
 ) -> Menu {
+    // Built from an event handler (no reactive context), so this `read` is a peek: the reopen
+    // stack can't change while this transient menu is up (reopening dismisses it), so the state
+    // at open time is the state for its whole life.
+    let can_reopen = !radio.read().closed.is_empty();
+
     Menu::new()
         .min_width(Size::px(HINT_MENU_WIDTH))
         // Rename → just flip the tab into rename mode. The tab reacts (seeds the draft + focuses the
@@ -116,6 +121,7 @@ pub fn tab_context_menu(
         .child(menu_sep(sep))
         .child(
             MenuButton::new()
+                .enabled(can_reopen)
                 .on_press(move |_| {
                     radio.write().reopen_last();
                     ContextMenu::close();
@@ -127,7 +133,7 @@ pub fn tab_context_menu(
 /// A menu divider: the shared [`Divider`] configured for a hug-content menu — `fill_minimum` (a plain
 /// `fill` would blow the menu out to the window width, since the container hugs its children) with a
 /// little vertical breathing room.
-fn menu_sep(color: Color) -> Divider {
+pub fn menu_sep(color: Color) -> Divider {
     Divider::horizontal()
         .length(Size::fill_minimum())
         .color(color)

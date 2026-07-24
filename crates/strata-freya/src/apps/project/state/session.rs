@@ -437,8 +437,14 @@ impl SessionState {
             .unwrap()
     }
 
+    /// Whether any tab — open **or** parked on the reopen stack — already wears `name`. Parked
+    /// tabs must count: otherwise a name freed by closing gets handed to a new tab, and reopening
+    /// the closed original resurrects a duplicate (close "query 1", open a new tab → "query 1",
+    /// reopen → two "query 1"s). Both auto-naming paths ([`next_query_name`](Self::next_query_name)
+    /// and [`unique_name`](Self::unique_name)) route through here.
     fn name_taken(&self, name: &str) -> bool {
         self.tabs.values().any(|t| t.name == name)
+            || self.closed.iter().any(|(_, t)| t.name == name)
     }
 }
 
@@ -464,6 +470,27 @@ mod tests {
         // The next divergence reads dirty again — the baseline moved, not froze.
         s.tabs.get_mut(&id).unwrap().editor.set_text("SELECT 3");
         assert!(s.tabs[&id].is_dirty());
+    }
+
+    /// Auto-naming accounts for parked (closed) tabs, so reopening never resurrects a
+    /// duplicate: close "query 1", open a fresh tab, reopen — the reopened tab keeps its
+    /// name and the new one took the next free index instead of colliding.
+    #[test]
+    fn auto_name_skips_parked_tabs_so_reopen_never_collides() {
+        let mut s = SessionState::default();
+
+        let id1 = s.open_blank();
+        assert_eq!(s.tabs[&id1].name, "query 1");
+
+        s.close_one(id1);
+        // The freed name is still parked, so the new tab must not reuse it.
+        let id2 = s.open_blank();
+        assert_eq!(s.tabs[&id2].name, "query 2");
+
+        s.reopen_last();
+        let names: Vec<&str> = s.order.iter().map(|id| s.tabs[id].name.as_str()).collect();
+        assert_eq!(names.len(), 2, "both tabs are open");
+        assert!(names.contains(&"query 1") && names.contains(&"query 2"), "no duplicate name");
     }
 
     /// The Run gate (P2-18): current errors block, stale ones (buffer edited since the

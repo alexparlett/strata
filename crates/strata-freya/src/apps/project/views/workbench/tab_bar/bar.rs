@@ -171,7 +171,9 @@ impl Component for TabBar {
             .content(Content::Flex)
             .child(tabs_area)
             .child(Divider::vertical().color(divider_fill))
-            .child(TabControls::new());
+            // The controller carries the strip's overflow verdict, so the cluster's quick-navigate
+            // button can show only when the tabs actually need scrolling.
+            .child(TabControls::new(controller));
 
         rect()
             .background(background)
