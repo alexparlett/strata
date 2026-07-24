@@ -1,6 +1,35 @@
 # P2-23 · Validation engine fitness — multi-error + mid-edit semantics
 
-**Phase:** 2 — Workbench · **Status:** ⬜ · **DEV_TASKS:** E1 (follow-on) · **Depends on:** P2-18 · **Related:** P2-04
+**Phase:** 2 — Workbench · **Status:** ✅ · **DEV_TASKS:** E1 (follow-on) · **Depends on:** P2-18 · **Related:** P2-04
+
+> **As built (2026-07-24):** Direction A. New `sql::resolve` — an AST walk over the parsed
+> statement resolving every table/column reference (catalog + CTEs + aliases + derived
+> tables + correlated scopes), multi-error with byte spans, silent where scope is
+> unknowable (`Resolution::complete=false` generalizes the no-FROM grace and replaces
+> `has_from`). Dry-plan stays behind it: skipped when the resolver found name faults;
+> its `FieldNotFound` suppressed only when the walk was incomplete. All three review
+> addenda absorbed: splitters unified into `lex::split_statements`/`statement_at`,
+> `check_from_targets` aligned to `lex::is_reserved_in_name_position`, `is_incomplete`
+> hardened to a positional test (parser choked past the last written token).
+>
+> **Sweep hardening (same day):** `tests/sql_validation_sweep.rs` — four property
+> batteries over a realistic multi-table catalog (structs, lists, dates, keyword-named
+> tables, views): ~85 valid queries must stay clean (each guarded to genuinely plan),
+> ~30 bad-name cases must produce exactly the expected spans *and* fail the real
+> planner (the resolver never invents an error the engine wouldn't), mid-edit drafts
+> stay quiet, and every prefix of every valid query validates with well-formed spans.
+> The sweep found and fixed: `CompoundFieldAccess` roots (`c.address['zip']`) checked
+> as bare columns; the lex-error span overrunning the buffer at EOF; the keyword-typo
+> lint second-guessing legitimate aliases (`FROM orders od`) and qualified refs
+> (`od.amount`); non-recursive CTEs shadowing the table they read
+> (`WITH t AS (SELECT … FROM t)`). Industry-alignment audit vs DataGrip/DBeaver/
+> mssql/sqlfluff/BigQuery: policy matches IDE convention (errors for unresolved names
+> with authoritative catalog, all-per-statement, token spans, engine-truth types);
+> one divergence found — Strata gated Run on errors, industry is unanimously
+> advisory-only — resolved by **removing the Run gate** (Alex's call): diagnostics
+> advise, the engine decides. `SessionState::blocking_errors` + `diagnostics_rev`
+> deleted; Run disables only for a blank buffer or an in-flight run; safety holds
+> because `Engine::query` refuses DDL/DML/statements via `SQLOptions` regardless.
 
 ## The question
 P2-18 validates by **dry-planning through DataFusion** (`statement_to_plan` + `optimize`).

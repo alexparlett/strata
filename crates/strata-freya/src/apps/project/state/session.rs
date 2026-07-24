@@ -69,12 +69,9 @@ pub struct QueryTab {
     /// dry-plan pass over the editor text. Its own channel
     /// ([`Chan::Diagnostics`](super::Chan)); the editor's squiggles are the same
     /// facts, carried as decorations *inside* the buffer (set by the same pass).
+    /// Purely advisory — Run is never gated on them (P2-23: diagnostics advise,
+    /// the engine decides; a doomed run fails at plan time with the same error).
     pub diagnostics: Vec<Diagnostic>,
-    /// The buffer [`revision`](CodeEditorData::revision) `diagnostics` was computed
-    /// for — what makes them checkable for staleness: the Run gate only blocks on
-    /// errors that describe the buffer *as it stands* (see
-    /// [`SessionState::blocking_errors`]), never on leftovers from text since edited.
-    pub diagnostics_rev: Option<u64>,
 }
 
 /// The SQL grammar (derekstride/tree-sitter-sql via `tree-sitter-sequel`) + its highlights query,
@@ -105,7 +102,6 @@ impl QueryTab {
             request: None,
             view: ResultsView::default(),
             diagnostics: Vec::new(),
-            diagnostics_rev: None,
         }
     }
 
@@ -183,25 +179,12 @@ impl SessionState {
         self.tabs.get(&id).map(|t| t.diagnostics.as_slice()).unwrap_or(&[])
     }
 
-    /// Replace `id`'s validation diagnostics (a validation pass settling), stamped
-    /// with the buffer revision they were computed for. Write on
+    /// Replace `id`'s validation diagnostics (a validation pass settling). Write on
     /// [`Chan::Diagnostics(id)`](super::Chan).
-    pub fn set_diagnostics(&mut self, id: TabId, diagnostics: Vec<Diagnostic>, rev: u64) {
+    pub fn set_diagnostics(&mut self, id: TabId, diagnostics: Vec<Diagnostic>) {
         if let Some(t) = self.tabs.get_mut(&id) {
             t.diagnostics = diagnostics;
-            t.diagnostics_rev = Some(rev);
         }
-    }
-
-    /// Whether `id` has validation **errors** that describe the buffer as it stands —
-    /// the Run gate. Stale diagnostics (the buffer was edited since the last pass)
-    /// never block: a just-fixed query runs immediately, and a just-broken one is the
-    /// engine's to reject like before. Warnings never block.
-    pub fn blocking_errors(&self, id: TabId) -> bool {
-        self.tabs.get(&id).is_some_and(|t| {
-            t.diagnostics_rev == Some(t.editor.revision())
-                && t.diagnostics.iter().any(|d| d.is_error())
-        })
     }
 
     /// Flip `id`'s results view (the toolbar's Table/Chart toggle). Write on
@@ -493,31 +476,4 @@ mod tests {
         assert!(names.contains(&"query 1") && names.contains(&"query 2"), "no duplicate name");
     }
 
-    /// The Run gate (P2-18): current errors block, stale ones (buffer edited since the
-    /// pass) don't, and warnings never do.
-    #[test]
-    fn blocking_errors_respects_buffer_revision_and_severity() {
-        use strata_model::{DiagSource, Severity};
-
-        let mut s = SessionState::default();
-        let id = s.open_named("q", "SELECT * FROM nope".into(), Origin::Scratch);
-        let diag = |severity| Diagnostic {
-            severity,
-            source: DiagSource::Validation,
-            message: "x".into(),
-            loc: None,
-            span: None,
-        };
-
-        let rev = s.tabs[&id].editor.revision();
-        s.set_diagnostics(id, vec![diag(Severity::Warning)], rev);
-        assert!(!s.blocking_errors(id), "warnings never block");
-
-        s.set_diagnostics(id, vec![diag(Severity::Error)], rev);
-        assert!(s.blocking_errors(id), "a current error blocks");
-
-        // An edit outdates the pass — a just-fixed buffer must not stay locked.
-        s.tabs.get_mut(&id).unwrap().editor.set_text("SELECT 1");
-        assert!(!s.blocking_errors(id), "stale errors never block");
-    }
 }

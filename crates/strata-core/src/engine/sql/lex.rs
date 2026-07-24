@@ -162,6 +162,48 @@ pub struct LexError {
     pub span: Range<usize>,
 }
 
+// ---- statement split -------------------------------------------------------
+
+/// Byte ranges partitioning `0..sql_len` on top-level `;` tokens — the one splitter
+/// shared by validation (all statements) and the context analyzer (statement under
+/// the caret). Token-level, so `;` inside strings never splits. Untrimmed: segments
+/// may be empty or comment-only; callers filter to taste.
+pub(crate) fn split_statements(toks: &[Tok], sql_len: usize) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    for t in toks {
+        if t.kind == TokKind::Punct && t.text == ";" {
+            ranges.push(start..t.span.start);
+            start = t.span.end;
+        }
+    }
+    ranges.push(start..sql_len);
+    ranges
+}
+
+/// The segment of [`split_statements`] containing `caret` (a caret on the `;` itself
+/// belongs to the statement it terminates; one just after it starts the next).
+pub(crate) fn statement_at(toks: &[Tok], sql_len: usize, caret: usize) -> Range<usize> {
+    split_statements(toks, sql_len)
+        .into_iter()
+        .find(|r| caret <= r.end)
+        .unwrap_or(0..sql_len) // unreachable: the final segment ends at sql_len
+}
+
+/// Byte offset of 1-based (`line`, `column`) within `slice` (clamped to its end).
+/// Columns count characters; for ASCII SQL that's exact, non-ASCII is approximate —
+/// the same convention as the token mapping above.
+pub(crate) fn rel_offset(slice: &str, line: u64, column: u64) -> usize {
+    let line = (line.max(1) - 1) as usize;
+    let column = (column.max(1) - 1) as usize;
+    let base = slice
+        .split_inclusive('\n')
+        .take(line)
+        .map(|l| l.len())
+        .sum::<usize>();
+    (base + column).min(slice.len())
+}
+
 /// Tokenise `sql`, dropping whitespace/comments. On a tokenizer error returns the
 /// tokens gathered so far plus the error (so completion/validation degrade instead of
 /// bailing on mid-edit text).
@@ -186,13 +228,15 @@ pub fn lex(sql: &str) -> (Vec<Tok>, Option<LexError>) {
             None,
         ),
         Err(e) => {
-            // sqlparser's TokenizerError carries a message + a location.
-            let at = offset(&starts, e.location);
+            // sqlparser's TokenizerError carries a message + a location — which
+            // can sit one past the end (unterminated string/comment at EOF), so
+            // clamp the one-byte span inside the buffer.
+            let end = offset(&starts, e.location).saturating_add(1).min(sql.len());
             (
                 Vec::new(),
                 Some(LexError {
                     message: e.message,
-                    span: at..at.saturating_add(1),
+                    span: end.saturating_sub(1)..end,
                 }),
             )
         }
