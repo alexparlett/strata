@@ -7,8 +7,12 @@
 //! - [`symbols`] — the [`Catalog`] (tables/views/columns from `state.project` +
 //!   registered functions) and in-statement alias resolution.
 //! - [`validate`] — [`validate::validate`] the full diagnostics pass: lexical lints +
-//!   managed-DDL policy + the engine **dry-plan** (parse → resolve → analyze against
-//!   the live `SessionContext`, never executing). Byte-spanned for squiggles.
+//!   managed-DDL policy + the native name [`resolve`]r + the engine **dry-plan**
+//!   (parse → resolve → analyze against the live `SessionContext`, never
+//!   executing). Byte-spanned for squiggles.
+//! - [`resolve`] — the AST name resolver behind validation: every unknown
+//!   table/column in a parsed statement (multi-error, mid-edit tolerant), leaving
+//!   types/casts/arity to the dry-plan.
 //! - [`complete`] — [`complete`] ranked completions for a caret position.
 //!
 //! Completion resolves against a [`Catalog`] snapshot (cheap to build on the UI
@@ -20,6 +24,7 @@ pub mod complete;
 pub mod context;
 mod fuzzy;
 pub mod lex;
+mod resolve;
 pub mod symbols;
 pub mod validate;
 

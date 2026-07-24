@@ -8,7 +8,7 @@
 //! overwrites its query by id, and a scratch tab Save-As-es into a new saved query
 //! under the tab's name. Save-as-view (the Eye button) is the explicit view path,
 //! minting the first free `saved_view_N` name. The buffer is never DDL-classified —
-//! DDL is blocked at Run, and Save saves the text as-is.
+//! the engine refuses DDL at Run (`SQLOptions`), and Save saves the text as-is.
 
 use freya::prelude::spawn;
 use freya::radio::{Radio, RadioStation};
@@ -21,17 +21,14 @@ use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 
 /// A Run / Explain / Analyze press (P2-15 + ⌘↵): snapshot the tab's editor text *now*,
 /// mint a fresh nonce, and set it as the tab's run request — on `Chan::Request(id)`, so
-/// only the tab's results pane and toolbar wake. A blank buffer never runs, and neither
-/// does one with current validation errors (P2-18) — both back up the toolbar's visual
-/// gate, and this shared funnel covers ⌘↵ and the Explain buttons too.
+/// only the tab's results pane and toolbar wake. A blank buffer never runs — backing up
+/// the toolbar's visual gate; this shared funnel covers ⌘↵ and the Explain buttons too.
+/// Validation errors never block a run (P2-23): diagnostics advise, the engine decides
+/// — a doomed statement fails at plan time with the same error in the results pane, and
+/// DDL/DML is refused by the engine's own `SQLOptions` regardless.
 pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: QueryMode) {
-    let sql = session
-        .read()
-        .tabs
-        .get(&id)
-        .map(|t| t.text())
-        .unwrap_or_default();
-    if sql.trim().is_empty() || session.read().blocking_errors(id) {
+    let sql = session.read().tabs.get(&id).map(|t| t.text()).unwrap_or_default();
+    if sql.trim().is_empty() {
         return;
     }
     session.write_channel(Chan::Request(id)).set_request(

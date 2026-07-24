@@ -80,11 +80,7 @@ pub fn use_validation(id: TabId, editor: Writable<CodeEditorData>, engine: Engin
                 }))
             });
             let mut radio = radio;
-            // Always write: even an identical list must re-stamp the revision it was
-            // computed for — the Run gate compares it against the live buffer.
-            radio
-                .write_channel(Chan::Diagnostics(id))
-                .set_diagnostics(id, diagnostics, revision);
+            radio.write_channel(Chan::Diagnostics(id)).set_diagnostics(id, diagnostics);
         });
         let mut pending = pending;
         pending.set(Some(task));

@@ -1,6 +1,6 @@
 //! The SQL **validator** (S25 / P2-18) — everything the editor squiggles.
 //!
-//! One entry point, [`validate`], accumulating three tiers of diagnostics:
+//! One entry point, [`validate`], accumulating four tiers of diagnostics:
 //!
 //! 1. **Lexical** — the tokenizer's own faults (unterminated string / quoted ident),
 //!    unbalanced parentheses, and the keyword-typo lint (`FORM` → `FROM`).
@@ -11,13 +11,18 @@
 //!    `CREATE OR REPLACE VIEW` itself), `CREATE EXTERNAL TABLE`, CTAS, `INSERT`,
 //!    `COPY`, `SET`, `CREATE DATABASE`/`SCHEMA` and other DDL/DML — gets a policy
 //!    diagnostic pointing at the right surface instead of a confusing engine error.
-//! 3. **Semantic** — the allowed statements are **dry-planned** against the live
+//! 3. **Names** — the native [`resolve`](crate::engine::sql::resolve)r walks the
+//!    parsed AST and reports **every** unknown table/column with a span (the planner
+//!    below is fail-fast: one name per statement), staying quiet where a mid-edit
+//!    scope is unknowable. When it finds name faults, the dry-plan is skipped.
+//! 4. **Semantic** — the allowed statements are **dry-planned** against the live
 //!    `SessionContext` ([`SessionState::statement_to_plan`], then
 //!    [`SessionState::optimize`] for the analyzer's type coercion): unknown
-//!    tables/views/columns/functions, bad casts and un-coercible expressions surface
-//!    as the *same* errors a Run would hit — zero drift, nothing executes and no
-//!    snapshot materializes. DF 54 attaches spanned [`Diagnostic`]s to resolution
-//!    errors (the engine enables `collect_spans`), which map straight onto squiggles.
+//!    functions, bad casts, arity/coercion faults and name semantics the resolver
+//!    skips (ambiguity, exact case) surface as the *same* errors a Run would hit —
+//!    zero drift, nothing executes and no snapshot materializes. DF 54 attaches
+//!    spanned [`Diagnostic`]s to resolution errors (the engine enables
+//!    `collect_spans`), which map straight onto squiggles.
 //!
 //! Statements are split on top-level `;` and validated independently, so one broken
 //! statement never hides the others' diagnostics.
@@ -30,7 +35,10 @@ use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::sqlparser::ast::{ObjectType, Statement as SqlStatement};
 use datafusion::sql::sqlparser::parser::ParserError;
 
-use crate::engine::sql::lex::{lex, Tok, TokKind};
+use crate::engine::sql::lex::{
+    is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
+};
+use crate::engine::sql::resolve::resolve;
 use crate::engine::sql::FunctionCatalog;
 use strata_model::{DiagSource, Diagnostic, Severity};
 
@@ -111,7 +119,7 @@ pub async fn validate(
                 // — the user is mid-thought, not mistaken. Stay quiet (Run still
                 // rejects it); an incomplete statement *followed by* another one is a
                 // real fault and keeps its error. Name checks below run either way.
-                if idx == last && is_incomplete(&err) {
+                if idx == last && is_incomplete(&err, slice, &stmt_range, &toks) {
                     check_from_targets(ctx, &toks, &stmt_range, sql, &mut out);
                     continue;
                 }
@@ -143,6 +151,16 @@ pub async fn validate(
             ));
             continue;
         }
+        // The native name resolver first: every unknown table/column in the
+        // statement, not just the one the planner would fail-fast on. When it
+        // finds name faults the dry-plan is skipped — the planner would stop at
+        // the same first name, and types are meaningless against unknown columns
+        // (they surface on the next pass, once the names are fixed).
+        let resolution = resolve(ctx, &stmt, slice, stmt_range.start, sql).await;
+        if !resolution.diags.is_empty() {
+            out.extend(resolution.diags);
+            continue;
+        }
         let planned = match state.statement_to_plan(stmt).await {
             // The analyzer pass (type coercion, subquery checks) only runs in
             // `optimize` — it's what catches statically-bad casts and expressions.
@@ -150,14 +168,16 @@ pub async fn validate(
             Err(err) => Err(err),
         };
         if let Err(err) = planned {
-            // `SELECT name, tags` with no FROM written yet resolves every column
-            // against an empty schema — "column not found" there is premature, not
-            // wrong (the same valid-prefix stance as the incomplete trailing
-            // statement above). Unresolved-column errors stay quiet until the
-            // statement has a FROM to resolve against; everything else (unknown
-            // functions, bad casts, policy) still surfaces, and a Run of a
-            // FROM-less projection reports the real engine error in the results.
-            let premature = is_unresolved_column(&err) && !has_from(&toks, &stmt_range);
+            // The resolver found nothing wrong. If it also had *full* knowledge of
+            // every scope, a planner field error is engine truth the walk skipped
+            // (ambiguity, exact-case semantics) and surfaces. But where the walk
+            // went quiet — a FROM-less draft, a table function, an underivable
+            // projection — "column not found" is premature, not wrong (`SELECT
+            // name, tags` mid-composition resolves against an empty schema): the
+            // same valid-prefix stance as the incomplete trailing statement above.
+            // Everything else (unknown functions, bad casts) still surfaces, and a
+            // Run reports the real engine error in the results.
+            let premature = is_unresolved_column(&err) && !resolution.complete;
             if !premature {
                 out.push(df_error_diag(&err, sql, slice, &stmt_range, &toks));
             }
@@ -193,38 +213,30 @@ fn is_unresolved_column(err: &DataFusionError) -> bool {
     )
 }
 
-/// Whether the statement's **main query** has a `FROM` — resolution context for its
-/// column references. Paren depth 0 only: a FROM inside a CTE body or subquery
-/// resolves *that* scope, not the outer projection (`WITH x AS (… FROM t) SELECT
-/// draft|` is still a FROM-less draft and keeps the mid-edit grace).
-fn has_from(toks: &[Tok], stmt: &Range<usize>) -> bool {
-    let mut depth = 0i32;
-    for t in toks {
-        if t.span.start < stmt.start || t.span.end > stmt.end {
-            continue;
-        }
-        match t.kind {
-            TokKind::Punct if t.text == "(" => depth += 1,
-            TokKind::Punct if t.text == ")" => depth -= 1,
-            TokKind::Keyword if depth == 0 && t.eq_ci("FROM") => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
 /// A parse failure at end-of-input — the statement is a valid *prefix* of something,
-/// i.e. incomplete rather than wrong (sqlparser reports the offending token as `EOF`).
-fn is_incomplete(err: &DataFusionError) -> bool {
-    match err.find_root() {
+/// i.e. incomplete rather than wrong. Structural test first: the parser's reported
+/// position (the `Line: N, Column: M` suffix sqlparser appends to every parse error —
+/// the same contract [`df_error_diag`] spans rely on) sits at or past the statement's
+/// last token, meaning the parser consumed everything written and wanted more. A
+/// message with no position falls back to sqlparser's `found: EOF` wording.
+fn is_incomplete(err: &DataFusionError, slice: &str, stmt: &Range<usize>, toks: &[Tok]) -> bool {
+    let msg = match err.find_root() {
         DataFusionError::SQL(pe, _) => match pe.as_ref() {
-            ParserError::ParserError(s) | ParserError::TokenizerError(s) => {
-                s.contains("found: EOF")
-            }
-            ParserError::RecursionLimitExceeded => false,
+            ParserError::ParserError(s) | ParserError::TokenizerError(s) => s,
+            ParserError::RecursionLimitExceeded => return false,
         },
-        _ => false,
+        _ => return false,
+    };
+    if let Some((line, col)) = extract_line_col(msg) {
+        let at = rel_offset(slice, line as u64, col as u64);
+        let last_tok_end = toks
+            .iter()
+            .filter(|t| t.span.start >= stmt.start && t.span.end <= stmt.end)
+            .map(|t| t.span.end - stmt.start)
+            .max();
+        return last_tok_end.is_none_or(|end| at >= end);
     }
+    msg.contains("found: EOF")
 }
 
 // ---- statement split -------------------------------------------------------
@@ -233,16 +245,7 @@ fn is_incomplete(err: &DataFusionError) -> bool {
 /// Token-level, so `;` inside strings/comments never splits, and whitespace- or
 /// comment-only segments (no tokens) are dropped rather than "validated".
 fn statement_ranges(sql: &str, toks: &[Tok]) -> Vec<Range<usize>> {
-    let mut ranges = Vec::new();
-    let mut start = 0usize;
-    for t in toks {
-        if t.kind == TokKind::Punct && t.text == ";" {
-            ranges.push(start..t.span.start);
-            start = t.span.end;
-        }
-    }
-    ranges.push(start..sql.len());
-    ranges
+    split_statements(toks, sql.len())
         .into_iter()
         .filter(|r| {
             toks.iter()
@@ -370,11 +373,12 @@ fn check_from_targets(
     // A token usable as a table name. sqlparser classes every word in its keyword
     // dictionary as a keyword — including non-reserved ones that are perfectly
     // legal table names (`event`, `user`, `day`, …) — so keyword tokens count as
-    // names here too, except the clause keywords that actually end a FROM item.
+    // names here too, except the words the parser itself reserves in name position
+    // (the same authority the context analyzer's name captures use).
     fn is_name(t: &Tok) -> bool {
         match t.kind {
             TokKind::Ident | TokKind::QuotedIdent => true,
-            TokKind::Keyword => !CLAUSE_KEYWORDS.iter().any(|k| t.eq_ci(k)),
+            TokKind::Keyword => !is_reserved_in_name_position(&t.text),
             _ => false,
         }
     }
@@ -510,20 +514,6 @@ fn df_error_diag(
     diag(Severity::Error, message, span, sql)
 }
 
-/// Byte offset of 1-based (`line`, `column`) within `slice` (clamped to its end).
-/// Columns count characters; for ASCII SQL that's exact, non-ASCII is approximate —
-/// same convention as the tokenizer mapping in [`lex`].
-fn rel_offset(slice: &str, line: u64, column: u64) -> usize {
-    let line = (line.max(1) - 1) as usize;
-    let column = (column.max(1) - 1) as usize;
-    let base = slice
-        .split_inclusive('\n')
-        .take(line)
-        .map(|l| l.len())
-        .sum::<usize>();
-    (base + column).min(slice.len())
-}
-
 /// Grow a (possibly empty) span to the full token under its start, so squiggles cover
 /// the offending word rather than a single character. Leaves real ranges alone.
 fn widen_to_token(span: Range<usize>, toks: &[Tok]) -> Range<usize> {
@@ -596,13 +586,35 @@ fn keyword_typo_hints(
     ctx: &SessionContext,
     functions: &FunctionCatalog,
 ) -> Vec<(Range<usize>, String)> {
+    /// A token usable as a name — what an alias or a typo'd keyword's *operand*
+    /// looks like.
+    fn name_like(t: Option<&Tok>) -> bool {
+        t.is_some_and(|t| match t.kind {
+            TokKind::Ident | TokKind::QuotedIdent => true,
+            TokKind::Keyword => !is_reserved_in_name_position(&t.text),
+            _ => false,
+        })
+    }
     let mut hints = Vec::new();
-    for t in toks {
+    for (i, t) in toks.iter().enumerate() {
         if t.kind != TokKind::Ident || t.text.len() < 2 {
             continue;
         }
         // Don't second-guess something that actually resolves.
         if ctx.table_exist(t.text.as_str()).unwrap_or(false) || functions.contains(&t.text) {
+            continue;
+        }
+        // An identifier right after a name with nothing name-like following is an
+        // alias slot (`FROM orders od WHERE …`), not a typo'd clause keyword — a
+        // typo'd keyword would still be followed by its operand (`FORM t`).
+        if name_like(i.checked_sub(1).and_then(|p| toks.get(p))) && !name_like(toks.get(i + 1)) {
+            continue;
+        }
+        // A dotted position (`od.amount`, `t.od`) is a qualified reference —
+        // clause keywords never touch a dot. Unknown qualifiers are the
+        // resolver's finding, with the better message.
+        let dot = |t: Option<&Tok>| t.is_some_and(|t| t.kind == TokKind::Punct && t.text == ".");
+        if dot(toks.get(i + 1)) || dot(i.checked_sub(1).and_then(|p| toks.get(p))) {
             continue;
         }
         let up = t.text.to_ascii_uppercase();
@@ -619,7 +631,7 @@ fn keyword_typo_hints(
     hints
 }
 
-fn diag(severity: Severity, message: String, span: Range<usize>, sql: &str) -> Diagnostic {
+pub(crate) fn diag(severity: Severity, message: String, span: Range<usize>, sql: &str) -> Diagnostic {
     Diagnostic {
         severity,
         source: DiagSource::Validation,
@@ -1125,5 +1137,202 @@ mod tests {
         let sql = "SELECT sum(id FROM t";
         let out = run(sql);
         assert!(out.iter().any(|d| d.message.contains("Unclosed")));
+    }
+
+    // ---- the native resolver in front of the dry-plan (P2-23) --------------
+
+    fn messages(out: &[Diagnostic]) -> Vec<&str> {
+        out.iter().map(|d| d.message.as_str()).collect()
+    }
+
+    #[test]
+    fn multiple_unknown_columns_all_squiggle() {
+        // The headline: the planner stops at the first bad name; the resolver
+        // reports them all.
+        let sql = "SELECT nme, product_idd FROM t";
+        let out = run(sql);
+        assert_eq!(out.len(), 2, "{:?}", messages(&out));
+        assert!(out.iter().all(|d| d.is_error()));
+        assert_eq!(spanned(sql, &out[0]), "nme");
+        assert_eq!(spanned(sql, &out[1]), "product_idd");
+    }
+
+    #[test]
+    fn unknown_table_mutes_its_columns() {
+        // The table is the fault; its columns have nothing to resolve against.
+        let sql = "SELECT missing FROM nope";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "nope");
+    }
+
+    #[test]
+    fn qualified_unknown_columns_are_spanned() {
+        let sql = "SELECT t.missing FROM t";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "t.missing");
+
+        let sql = "SELECT e.missing FROM t e";
+        let out = run(sql);
+        assert_eq!(out.len(), 1);
+        assert_eq!(spanned(sql, &out[0]), "e.missing");
+
+        assert!(run("SELECT e.id FROM t e").is_empty());
+    }
+
+    #[test]
+    fn unknown_qualifier_is_flagged() {
+        let sql = "SELECT x.id FROM t";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "x.id");
+    }
+
+    #[test]
+    fn cte_columns_resolve() {
+        let sql = "WITH c AS (SELECT id FROM t) SELECT missing FROM c";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "missing");
+
+        assert!(run("WITH c AS (SELECT id FROM t) SELECT id FROM c").is_empty());
+    }
+
+    #[test]
+    fn cte_body_columns_are_checked() {
+        // The main query is a FROM-less draft (quiet), but the CTE body has a
+        // FROM of its own and resolves.
+        let sql = "WITH c AS (SELECT missing FROM t) SELECT draft";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "missing");
+    }
+
+    #[test]
+    fn derived_table_columns_resolve() {
+        let sql = "SELECT d.missing FROM (SELECT id FROM t) d";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "d.missing");
+
+        // A wildcard body still expands to checkable columns…
+        let sql = "SELECT d.missing FROM (SELECT * FROM t) d";
+        let out = run(sql);
+        assert_eq!(out.len(), 1);
+        assert_eq!(spanned(sql, &out[0]), "d.missing");
+
+        // …while a computed projection is unknowable — quiet, and the planner's
+        // own field error is suppressed as mid-edit noise.
+        assert!(run("SELECT d.x FROM (SELECT id + 1 FROM t) d").is_empty());
+    }
+
+    #[test]
+    fn set_op_branches_each_checked() {
+        let sql = "SELECT nme FROM t UNION ALL SELECT idd FROM t";
+        let out = run(sql);
+        assert_eq!(out.len(), 2, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "nme");
+        assert_eq!(spanned(sql, &out[1]), "idd");
+    }
+
+    #[test]
+    fn correlated_subqueries_see_the_outer_scope() {
+        assert!(run("SELECT id FROM t WHERE EXISTS (SELECT 1 FROM t u WHERE u.id = t.id)")
+            .is_empty());
+
+        let sql = "SELECT id FROM t WHERE EXISTS (SELECT 1 FROM t u WHERE u.missing = t.id)";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "u.missing");
+    }
+
+    #[test]
+    fn select_aliases_are_legal_in_order_and_group() {
+        assert!(run("SELECT id AS a FROM t ORDER BY a").is_empty());
+        assert!(run("SELECT id FROM t GROUP BY 1").is_empty());
+
+        let sql = "SELECT id AS a FROM t ORDER BY missing";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "missing");
+    }
+
+    #[test]
+    fn name_faults_defer_type_faults() {
+        // With a bad name in the statement the dry-plan is skipped — the type
+        // fault surfaces on the next pass, once the name is fixed (the planner
+        // never co-reported them either: it fail-fasts on the name).
+        let sql = "SELECT nme, name + INTERVAL '1 day' FROM t";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "nme");
+        // And with the name fixed, the type fault is the diagnostic.
+        assert!(!run("SELECT name + INTERVAL '1 day' FROM t").is_empty());
+    }
+
+    #[test]
+    fn dangling_join_stays_quiet() {
+        // Half-written JOINs are valid prefixes — the trailing-incomplete grace.
+        assert!(run("SELECT id FROM t JOIN").is_empty());
+        assert!(run("SELECT id FROM t LEFT JOIN").is_empty());
+    }
+
+    #[test]
+    fn half_written_cte_stays_quiet() {
+        assert!(run("WITH x AS (SELECT id FROM t)").is_empty());
+        assert!(run("WITH x AS (SELECT id FROM t) SELECT").is_empty());
+    }
+
+    #[test]
+    fn ambiguity_is_still_engine_authoritative() {
+        // The resolver proves names exist; *ambiguity* between relations is the
+        // planner's judgement and still surfaces.
+        let ctx = ctx();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1_i64])),
+                Arc::new(StringArray::from(vec!["x"])),
+            ],
+        )
+        .unwrap();
+        ctx.register_batch("t2", batch).unwrap();
+        let out = block_on(validate(
+            &ctx,
+            &FunctionCatalog::default(),
+            "SELECT name FROM t JOIN t2 ON t.id = t2.id",
+        ));
+        assert_eq!(out.len(), 1, "{:?}", messages(&out));
+        assert!(out[0].message.to_lowercase().contains("ambiguous"), "{}", out[0].message);
+    }
+
+    #[test]
+    fn views_get_multi_error_parity() {
+        let ctx = ctx_with_view();
+        let sql = "SELECT nme, idd FROM v";
+        let out = block_on(validate(&ctx, &FunctionCatalog::default(), sql));
+        assert_eq!(out.len(), 2, "{:?}", messages(&out));
+        assert_eq!(spanned(sql, &out[0]), "nme");
+        assert_eq!(spanned(sql, &out[1]), "idd");
+    }
+
+    #[test]
+    fn aliases_near_keywords_are_not_second_guessed() {
+        // `od` is one edit from `ON`, but it sits in an alias slot — flagging a
+        // legitimate alias as a keyword typo is lint noise, not help.
+        assert!(run("SELECT od.id FROM t od WHERE od.id > 0").is_empty());
+        assert!(run("SELECT id AS od FROM t").is_empty());
+    }
+
+    #[test]
+    fn incompleteness_is_positional_not_textual() {
+        // The parser choking *past* the written tokens is incomplete (quiet)…
+        assert!(run("SELECT id FROM t WHERE").is_empty());
+        // …choking *on* a written token is a real fault, even at the very end.
+        assert!(!run("SELECT id FROM t WHERE ORDER").is_empty());
     }
 }
