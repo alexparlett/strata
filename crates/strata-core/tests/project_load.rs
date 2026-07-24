@@ -1,23 +1,28 @@
-//! Project open against the real engine (P4-13 internals acceptance): load the
-//! committed `sample/` project's defs, register every table (relative sources resolved
-//! against the project folder), create every view, and query through one — the same
-//! chain the Freya window root drives on launch, with no UI framework involved.
+//! Project open against the real engine (P4-13 internals acceptance): load a committed
+//! fixture project's defs, register every table (relative sources resolved against the
+//! project folder), create every view, and query through one — the same chain the Freya
+//! window root drives on launch, with no UI framework involved.
+//!
+//! This drives a **dedicated test fixture** (`tests/fixtures/loadfix/`), not the app's
+//! real `sample/` project: the fixture is free to carry a deliberately-malformed source
+//! to exercise the per-table Failed path, without wedging a broken file into the live
+//! sample project.
 
 use std::path::Path;
 
 use strata_core::engine::{Engine, RunTag, TableSpec, WsId};
 use strata_core::project::{load_defs, resolve_source};
 
-/// The repo's committed sample project folder.
-fn sample_root() -> &'static Path {
-    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../sample"))
+/// The dedicated project-load fixture (see the module doc + its `README.md`).
+fn fixture_root() -> &'static Path {
+    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/loadfix"))
 }
 
 #[tokio::test]
-async fn sample_project_registers_and_queries() {
-    let root = sample_root();
-    let defs = load_defs(root).expect("sample project loads");
-    assert_eq!(defs.name, "sample");
+async fn fixture_project_registers_and_queries() {
+    let root = fixture_root();
+    let defs = load_defs(root).expect("fixture project loads");
+    assert_eq!(defs.name, "loadfix");
     assert!(!defs.tables.is_empty());
     assert!(!defs.views.is_empty());
     assert!(!defs.saved_queries.is_empty());
@@ -40,7 +45,7 @@ async fn sample_project_registers_and_queries() {
             Err(_) => failed.push(t.name.clone()),
         }
     }
-    // The sample's one deliberate dud: `signups.json` is pretty-printed JSON and
+    // The fixture's one deliberate dud: `signups.json` is pretty-printed JSON and
     // DataFusion's JSON format reads NDJSON — a useful Failed-state fixture.
     assert_eq!(failed, ["signups"]);
 
