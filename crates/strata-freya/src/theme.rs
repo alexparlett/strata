@@ -272,6 +272,8 @@ strata_components! {
     "code_editor" => EditorThemePreference {
         background, gutter_selected, gutter_unselected, gutter_border, line_selected_background,
         cursor, highlight, text, whitespace,
+        diagnostic_error, diagnostic_warning, diagnostic_info,
+        panel_background, panel_border,
         font_family: font, font_size: f32, font_weight: i32, line_height: f32,
     },
     "code_editor_syntax" => EditorSyntaxThemePreference {

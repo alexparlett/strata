@@ -724,6 +724,21 @@
       },
       "whitespace": {
         "reference": "text_placeholder"
+      },
+      "diagnostic_error": {
+        "reference": "error"
+      },
+      "diagnostic_warning": {
+        "reference": "warning"
+      },
+      "diagnostic_info": {
+        "reference": "info"
+      },
+      "panel_background": {
+        "reference": "surface_secondary"
+      },
+      "panel_border": {
+        "reference": "border"
       }
     },
     "code_editor_syntax": {

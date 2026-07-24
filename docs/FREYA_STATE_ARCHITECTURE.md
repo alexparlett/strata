@@ -390,9 +390,13 @@ originated, so the user sees them in place. Both happen; not either/or.
 | Registration via configure form | yes | the form's submit error (`use_mutation(RegisterSource)::Err`); `on_settled` invalidates `FetchCatalog` |
 | Registration at load | yes | a per-source marker on the sidebar catalog item (+ one load-summary notice) |
 
-SQL validation is the exception — client-side language-service analysis, derived per-tab from
-the editor text (a memo, not stored, not logged). A tab's Problems view is
-`validation(editor.text) ∪ query_error(tab)`.
+SQL validation is the exception — derived per-tab from the editor text and not logged. As built
+(P2-18) it is an **engine dry-plan**, not a client-side memo: a debounced cancel-and-rearm pass
+(`query::use_validation`, gated on the buffer's text revision) calls `Engine::validate` — lexical
+lints + managed-DDL policy + parse/resolve/analyze against the live session, never executing —
+and applies the byte-spanned result twice: squiggle decorations inside the tab's own
+`CodeEditorData`, and `QueryTab::diagnostics` on `Chan::Diagnostics(id)`. A tab's Problems view
+is `diagnostics(tab) ∪ query_error(tab)`.
 
 ---
 

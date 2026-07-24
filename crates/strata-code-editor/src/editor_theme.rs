@@ -7,6 +7,7 @@ use freya_components::{
 };
 use freya_core::prelude::Color;
 
+use crate::editor_data::DecorationSeverity;
 use crate::editor_ui::CodeEditor;
 use crate::syntax::SyntaxKind;
 
@@ -23,6 +24,13 @@ define_theme! {
         highlight: Color,
         text: Color,
         whitespace: Color,
+        /// Squiggle colours for diagnostic decorations, by severity.
+        diagnostic_error: Color,
+        diagnostic_warning: Color,
+        diagnostic_info: Color,
+        /// The caret-line diagnostics panel (the floating message context).
+        panel_background: Color,
+        panel_border: Color,
         /// The editor's type — themed like every other component, so the editor dresses itself
         /// (the `CodeEditor` builders remain as per-instance overrides).
         font_family: String,
@@ -76,6 +84,16 @@ define_theme! {
 }
 
 impl EditorTheme {
+    /// The squiggle colour for a decoration severity — the render-time map, like
+    /// [`EditorSyntaxTheme::color`].
+    pub fn diagnostic(&self, severity: DecorationSeverity) -> Color {
+        match severity {
+            DecorationSeverity::Error => self.diagnostic_error,
+            DecorationSeverity::Warning => self.diagnostic_warning,
+            DecorationSeverity::Info => self.diagnostic_info,
+        }
+    }
+
     /// The default type, shared by both stock palettes.
     fn default_type() -> (String, f32, i32, f32) {
         ("JetBrains Mono".to_string(), 14.0, 400, 1.4)
@@ -93,6 +111,11 @@ impl EditorTheme {
             highlight: Color::from_rgb(80, 80, 80),
             text: Color::WHITE,
             whitespace: Color::from_af32rgb(0.2, 223, 191, 142),
+            diagnostic_error: Color::from_rgb(241, 76, 76),
+            diagnostic_warning: Color::from_rgb(204, 167, 0),
+            diagnostic_info: Color::from_rgb(55, 148, 255),
+            panel_background: Color::from_rgb(38, 42, 48),
+            panel_border: Color::from_rgb(60, 60, 60),
             font_family,
             font_size,
             font_weight,
@@ -112,6 +135,11 @@ impl EditorTheme {
             highlight: Color::from_rgb(200, 225, 255),
             text: Color::from_rgb(36, 41, 46),
             whitespace: Color::from_af32rgb(0.3, 106, 115, 125),
+            diagnostic_error: Color::from_rgb(229, 20, 0),
+            diagnostic_warning: Color::from_rgb(191, 136, 3),
+            diagnostic_info: Color::from_rgb(26, 133, 255),
+            panel_background: Color::WHITE,
+            panel_border: Color::from_rgb(210, 213, 218),
             font_family,
             font_size,
             font_weight,
@@ -268,6 +296,11 @@ impl From<EditorTheme> for EditorThemePreference {
             highlight: Preference::Specific(theme.highlight),
             text: Preference::Specific(theme.text),
             whitespace: Preference::Specific(theme.whitespace),
+            diagnostic_error: Preference::Specific(theme.diagnostic_error),
+            diagnostic_warning: Preference::Specific(theme.diagnostic_warning),
+            diagnostic_info: Preference::Specific(theme.diagnostic_info),
+            panel_background: Preference::Specific(theme.panel_background),
+            panel_border: Preference::Specific(theme.panel_border),
             font_family: Preference::Specific(theme.font_family),
             font_size: Preference::Specific(theme.font_size),
             font_weight: Preference::Specific(theme.font_weight),

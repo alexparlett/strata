@@ -67,6 +67,13 @@ impl Component for EditorToolbar {
             .tabs
             .get(&id)
             .is_none_or(|t| t.editor.rope.chars().all(|c| c.is_whitespace()));
+        // Neither can a buffer with current validation errors (P2-18). Subscribed on
+        // `Chan::Diagnostics(id)` for pass settles; the staleness check inside
+        // `blocking_errors` rides the `Chan::Tab` subscription above (revision moves
+        // with every edit), so a fix re-enables Run at the keystroke, not the re-pass.
+        let errors = use_radio::<SessionState, Chan>(Chan::Diagnostics(id))
+            .read()
+            .blocking_errors(id);
 
         // A press is an *action* — `actions::press_query` snapshots the text, mints a
         // fresh nonce, and sets the tab's current execution; the ⌘↵ listener in the
@@ -75,7 +82,7 @@ impl Component for EditorToolbar {
 
         let run_state = if in_flight.is_some() {
             RunState::Running
-        } else if blank {
+        } else if blank || errors {
             RunState::Disabled
         } else {
             RunState::Idle

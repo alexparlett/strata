@@ -143,7 +143,10 @@ pub fn is_restart_key(name: &str) -> bool {
 pub fn is_owned_key(name: &str) -> bool {
     matches!(
         name.trim(),
-        "datafusion.catalog.default_catalog" | "datafusion.catalog.default_schema"
+        "datafusion.catalog.default_catalog"
+            | "datafusion.catalog.default_schema"
+            // Planner source spans feed the editor's diagnostics (P2-18).
+            | "datafusion.sql_parser.collect_spans"
     )
 }
 

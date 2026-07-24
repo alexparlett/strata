@@ -23,11 +23,12 @@ use crate::apps::project::state::{
 
 /// A Run / Explain / Analyze press (P2-15 + ⌘↵): snapshot the tab's editor text *now*,
 /// mint a fresh nonce, and set it as the tab's run request — on `Chan::Request(id)`, so
-/// only the tab's results pane and toolbar wake. A blank buffer never runs (backs up
-/// the toolbar's visual gate).
+/// only the tab's results pane and toolbar wake. A blank buffer never runs, and neither
+/// does one with current validation errors (P2-18) — both back up the toolbar's visual
+/// gate, and this shared funnel covers ⌘↵ and the Explain buttons too.
 pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: QueryMode) {
     let sql = session.read().tabs.get(&id).map(|t| t.text()).unwrap_or_default();
-    if sql.trim().is_empty() {
+    if sql.trim().is_empty() || session.read().blocking_errors(id) {
         return;
     }
     session.write_channel(Chan::Request(id)).set_request(id, QuerySpec {
