@@ -1,6 +1,6 @@
 # P2-21 · Tabs & split — remaining nits
 
-**Phase:** 2 — Workbench · **Status:** 🟡 · **Depends on:** —
+**Phase:** 2 — Workbench · **Status:** ✅ · **Depends on:** —
 
 ## Goal
 Close the small gaps on the otherwise-complete tab strip + workbench split.

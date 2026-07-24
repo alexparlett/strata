@@ -55,7 +55,7 @@ now have their read model.
 | P2-18 | SQL validation + inline squiggles | ✅ | E1 | — |
 | P2-19 | Undo/redo per tab | ✅ | E3 | — |
 | P2-20 | Keyboard shortcuts + OS-close intercept | ✅ | W4/T2 | — |
-| P2-21 | Tabs & split — remaining nits | 🟡 | — | — |
+| P2-21 | Tabs & split — remaining nits | ✅ | — | — |
 | P2-22 | Completion docs + function signature help | ⬜ | E2 | P2-04 |
 | P2-23 | Validation engine fitness — multi-error + mid-edit semantics | ⬜ | E1 | P2-18 |
 
