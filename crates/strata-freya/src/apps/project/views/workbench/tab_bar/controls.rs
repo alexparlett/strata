@@ -1,4 +1,4 @@
-use freya::components::use_theme;
+use freya::components::{use_theme, ScrollController};
 use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
 
@@ -26,34 +26,35 @@ fn tip(title: &'static str, button: Button) -> TooltipContainer {
 }
 
 /// The tab strip's pinned right cluster: **new-query** · **quick-navigate** · **overflow**. The two
-/// menus are their own components below — this is just the row.
+/// menus are their own components below — this is just the row. Holds the strip's
+/// [`ScrollController`] so it can drop the quick-navigate button when the tabs all fit.
 #[derive(PartialEq)]
-pub struct TabControls;
+pub struct TabControls {
+    pub controller: ScrollController,
+}
 
 impl TabControls {
-    pub fn new() -> Self {
-        Self
+    pub fn new(controller: ScrollController) -> Self {
+        Self { controller }
     }
 }
 
 impl Component for TabControls {
     fn render(&self) -> impl IntoElement {
-        let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
-        let new_tab = tip(
-            "New query",
-            cluster_button(IconName::Plus, 15.).on_press(move |_| {
-                radio.write().open_blank();
-            }),
-        );
+        // The quick-navigate switcher earns its place only once the strip overflows and the far
+        // tabs need scrolling into view; while every tab is visible it would be redundant with the
+        // strip itself. Reading the controller here re-renders the cluster as the verdict flips.
+        let overflowing = self.controller.is_scrollable(Direction::Horizontal);
 
+        // New-query lives inside the overflow menu (with its ⌘T chord), so the resting cluster is
+        // just the ⋯ actions menu — plus the ⌄ switcher only while the strip overflows.
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
             .height(Size::fill())
             .spacing(2.)
             .padding(Gaps::new(0., 8., 0., 8.))
-            .child(new_tab)
-            .child(NavMenu)
+            .maybe(overflowing, |el| el.child(NavMenu))
             .child(OverflowMenu)
     }
 }
@@ -261,8 +262,8 @@ fn nav_notice(text: impl Into<String>, faint: Color) -> impl IntoElement {
         .child(Caption::new(text.into()).color(faint))
 }
 
-/// The overflow (⋯) dropdown — whole-strip actions. (TODO: disabled reopen when nothing's closed;
-/// close-all / close-others.)
+/// The overflow (⋯) dropdown — whole-strip actions: **New query** · **Close all tabs** ·
+/// **Reopen closed tab** (the latter two disabled when there's nothing to act on).
 #[derive(PartialEq)]
 struct OverflowMenu;
 
@@ -270,6 +271,17 @@ impl Component for OverflowMenu {
     fn render(&self) -> impl IntoElement {
         let mut open = use_state(|| false);
         let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
+        // Close-all / Reopen are each only actionable with something to act on: Close-all needs an
+        // open tab, Reopen needs something parked on the stack. Read on `Chan::Tabs` (the channel
+        // every open/close/reopen writes), so the rows track the strip live — even with the menu
+        // open. New query is always available.
+        let (can_close_all, can_reopen) = {
+            let s = radio.read();
+            (!s.order.is_empty(), !s.closed.is_empty())
+        };
+        // The context menu's separator colour, read here (Component scope) to divide the create
+        // action from the close/reopen group.
+        let sep = use_theme().read().colors.text_inverse;
 
         let menu = Menu::new()
             // Room for the hint row's chord (see `HINT_MENU_WIDTH`) — the Attached
@@ -280,6 +292,19 @@ impl Component for OverflowMenu {
             .child(
                 MenuButton::new()
                     .on_press(move |_| {
+                        radio.write().open_blank();
+                        open.set(false);
+                    })
+                    .child(super::menu::menu_row(
+                        "New query",
+                        strata_core::config::Command::NewTab,
+                    )),
+            )
+            .child(super::menu::menu_sep(sep))
+            .child(
+                MenuButton::new()
+                    .enabled(can_close_all)
+                    .on_press(move |_| {
                         radio.write().close_all();
                         open.set(false);
                     })
@@ -287,6 +312,7 @@ impl Component for OverflowMenu {
             )
             .child(
                 MenuButton::new()
+                    .enabled(can_reopen)
                     .on_press(move |_| {
                         radio.write().reopen_last();
                         open.set(false);
