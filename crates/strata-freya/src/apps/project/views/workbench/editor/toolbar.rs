@@ -61,19 +61,14 @@ impl Component for EditorToolbar {
 
         // A blank buffer can't run — the button gates to Disabled. Subscribed on
         // `Chan::Tab(id)`, so typing re-derives it; `chars().all` early-exits on the first
-        // real character (no rope→String materialise per keystroke).
+        // real character (no rope→String materialise per keystroke). Validation
+        // diagnostics never gate Run (P2-23): they advise, the engine decides — a
+        // doomed run fails at plan time with the same error in the results pane.
         let blank = radio
             .read()
             .tabs
             .get(&id)
             .is_none_or(|t| t.editor.rope.chars().all(|c| c.is_whitespace()));
-        // Neither can a buffer with current validation errors (P2-18). Subscribed on
-        // `Chan::Diagnostics(id)` for pass settles; the staleness check inside
-        // `blocking_errors` rides the `Chan::Tab` subscription above (revision moves
-        // with every edit), so a fix re-enables Run at the keystroke, not the re-pass.
-        let errors = use_radio::<SessionState, Chan>(Chan::Diagnostics(id))
-            .read()
-            .blocking_errors(id);
 
         // A press is an *action* — `actions::press_query` snapshots the text, mints a
         // fresh nonce, and sets the tab's current execution; the ⌘↵ listener in the
@@ -82,7 +77,7 @@ impl Component for EditorToolbar {
 
         let run_state = if in_flight.is_some() {
             RunState::Running
-        } else if blank || errors {
+        } else if blank {
             RunState::Disabled
         } else {
             RunState::Idle

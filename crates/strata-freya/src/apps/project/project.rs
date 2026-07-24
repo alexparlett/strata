@@ -123,7 +123,7 @@ impl App for ProjectApp {
         // the launcher / open-dialog UI is a later slice).
         let _project = use_init_project(&engine);
         // This window's Session store (opens one blank tab), provided via context.
-        let session = use_init_session();
+        let _session = use_init_session();
 
         // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
         // structural change and retire the engine state of tabs that are gone. One

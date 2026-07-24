@@ -239,19 +239,8 @@ fn role_at(clause: Clause, prev: Option<&Tok>, prev2: Option<&Tok>) -> Role {
 
 /// Byte range of the statement containing `caret` (split on top-level `;`).
 fn statement_bounds(toks: &[Tok], sql_len: usize, caret: usize) -> (usize, usize) {
-    let mut start = 0usize;
-    let mut end = sql_len;
-    for t in toks {
-        if t.kind == TokKind::Punct && t.text == ";" {
-            if t.span.end <= caret {
-                start = t.span.end;
-            } else {
-                end = t.span.start;
-                break;
-            }
-        }
-    }
-    (start, end)
+    let r = crate::engine::sql::lex::statement_at(toks, sql_len, caret);
+    (r.start, r.end)
 }
 
 /// Extract `alias → relation` from the FROM/JOIN items of the token slice. Best-effort:
