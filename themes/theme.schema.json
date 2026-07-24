@@ -1012,6 +1012,33 @@
             "panel_border": {
               "$ref": "#/$defs/colorPref"
             },
+            "completion_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "completion_border": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "completion_selected_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "completion_detail": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "completion_kind_table": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "completion_kind_view": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "completion_kind_column": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "completion_kind_function": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "completion_kind_keyword": {
+              "$ref": "#/$defs/colorPref"
+            },
             "font_family": {
               "$ref": "#/$defs/fontPref"
             },

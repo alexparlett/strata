@@ -149,7 +149,17 @@ pub async fn validate(
             Err(err) => Err(err),
         };
         if let Err(err) = planned {
-            out.push(df_error_diag(&err, sql, slice, &stmt_range, &toks));
+            // `SELECT name, tags` with no FROM written yet resolves every column
+            // against an empty schema — "column not found" there is premature, not
+            // wrong (the same valid-prefix stance as the incomplete trailing
+            // statement above). Unresolved-column errors stay quiet until the
+            // statement has a FROM to resolve against; everything else (unknown
+            // functions, bad casts, policy) still surfaces, and a Run of a
+            // FROM-less projection reports the real engine error in the results.
+            let premature = is_unresolved_column(&err) && !has_from(&toks, &stmt_range);
+            if !premature {
+                out.push(df_error_diag(&err, sql, slice, &stmt_range, &toks));
+            }
         }
     }
 
@@ -168,6 +178,36 @@ pub async fn validate(
 /// Whether two byte ranges intersect.
 fn overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
+}
+
+/// The planner failed to resolve a column reference (`Schema error: No field
+/// named …`) — matched by variant, not message text.
+fn is_unresolved_column(err: &DataFusionError) -> bool {
+    matches!(
+        err.find_root(),
+        DataFusionError::SchemaError(e, _)
+            if matches!(e.as_ref(), datafusion::common::SchemaError::FieldNotFound { .. })
+    )
+}
+
+/// Whether the statement's **main query** has a `FROM` — resolution context for its
+/// column references. Paren depth 0 only: a FROM inside a CTE body or subquery
+/// resolves *that* scope, not the outer projection (`WITH x AS (… FROM t) SELECT
+/// draft|` is still a FROM-less draft and keeps the mid-edit grace).
+fn has_from(toks: &[Tok], stmt: &Range<usize>) -> bool {
+    let mut depth = 0i32;
+    for t in toks {
+        if t.span.start < stmt.start || t.span.end > stmt.end {
+            continue;
+        }
+        match t.kind {
+            TokKind::Punct if t.text == "(" => depth += 1,
+            TokKind::Punct if t.text == ")" => depth -= 1,
+            TokKind::Keyword if depth == 0 && t.eq_ci("FROM") => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// A parse failure at end-of-input — the statement is a valid *prefix* of something,
@@ -698,6 +738,27 @@ mod tests {
         let out = run(sql);
         assert_eq!(out.len(), 1);
         assert_eq!(spanned(sql, &out[0]), "missing");
+    }
+
+    #[test]
+    fn cte_drafts_keep_the_no_from_grace() {
+        // The FROM inside the CTE body resolves *that* scope — the main query is
+        // still a FROM-less draft and keeps its mid-edit grace.
+        assert!(run("WITH x AS (SELECT id FROM t) SELECT draft_col").is_empty());
+    }
+
+    #[test]
+    fn columns_before_from_stay_quiet() {
+        // Mid-composition: no FROM yet, so column references have nothing to
+        // resolve against — flagging them is premature, not helpful.
+        assert!(run("SELECT name, tags").is_empty());
+        assert!(run("SELECT missing").is_empty());
+        // Non-column faults still surface without a FROM…
+        assert!(!run("SELECT nosuchfn(1)").is_empty());
+        // …and once a FROM exists, unknown columns are real again (see
+        // `unknown_column_is_spanned`); a FROM-less literal projection stays
+        // valid as ever.
+        assert!(run("SELECT 1 + 2").is_empty());
     }
 
     /// The base context plus a registered view `v` over `t` — the Save flow's result.

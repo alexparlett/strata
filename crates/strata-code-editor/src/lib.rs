@@ -9,6 +9,7 @@
 //! Kept close to upstream on purpose so diffs stay legible; Strata-specific changes are called out
 //! where they land (`editor_line` = cursor/gutter/highlight/squiggles, `editor_ui` = autocomplete).
 
+pub mod completion;
 pub mod constants;
 pub mod editor_data;
 pub mod editor_line;
@@ -24,6 +25,11 @@ pub mod prelude {
     pub use ropey::Rope;
 
     pub use crate::{
+        completion::{
+            CompletionItem,
+            CompletionItemKind,
+            CompletionRequest,
+        },
         constants::{
             BASE_FONT_SIZE,
             MAX_FONT_SIZE,

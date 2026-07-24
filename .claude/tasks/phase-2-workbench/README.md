@@ -17,8 +17,8 @@ It is **not** "UI done, plumbing missing." Three kinds of work remain:
   real now; `running.rs` is built — spinner, live elapsed, Cancel/Esc, P2-06; the status bar is
   built to the comp — toned label, snapshot chip, live selection aggregate, and the full pager
   with page-size select + page input, P2-08); there's no
-  Table/Chart switcher, find popover, record view, cell/gutter double-click views, or copy menu; and the
-  editor has **no completions/diagnostics** binding (SQL highlighting *is* wired).
+  record view, gutter double-click view, or copy menu. The editor is fully wired:
+  highlighting, diagnostics (P2-18), and completions (P2-04).
 - **Plumbing: done (P2-01 + P2-02 + P2-03).** Editor → Run/Explain/Analyze press → engine facade →
   results grid is wired end-to-end via freya-query: the workbench holds the `request` slot
   (`use_state(|| None::<QuerySpec>)`, threaded as props — no runs store), the results pane derives
@@ -39,7 +39,7 @@ now have their read model.
 | P2-01 | **Query round-trip + result snapshot system (design + build)** | ✅ | — | — |
 | P2-02 | Results driven by `use_query` (no runs store) | ✅ | — | P2-01 |
 | P2-03 | `QueryPage` → grid model (kill fixture) | ✅ | — | P2-01 |
-| P2-04 | SQL autocomplete (completions + follow-ups) | ⬜ | E2 | — |
+| P2-04 | SQL autocomplete (completions + follow-ups) | ✅ | E2 | — |
 | P2-05 | Explain-plan view | ✅ | Rz-plan/U8 | P2-02/03 |
 | P2-06 | Running state (spinner + elapsed + cancel) | ✅ | — | P2-02 |
 | P2-07 | Table/Chart switcher | ✅ | U6a | P2-02 |
@@ -56,6 +56,8 @@ now have their read model.
 | P2-19 | Undo/redo per tab | ✅ | E3 | — |
 | P2-20 | Keyboard shortcuts + OS-close intercept | ✅ | W4/T2 | — |
 | P2-21 | Tabs & split — remaining nits | 🟡 | — | — |
+| P2-22 | Completion docs + function signature help | ⬜ | E2 | P2-04 |
+| P2-23 | Validation engine fitness — multi-error + mid-edit semantics | ⬜ | E1 | P2-18 |
 
 **Already done (no task file):** datagrid core, cell/row/col selection (`selection.rs` + `SelCtl`),
 resizable columns + autofit, tab strip (`tab_bar/*`).

@@ -209,8 +209,10 @@ a per-bundle README. The DEV_TASKS Part-1 audit and `DESIGN_SPEC.md` are derived
 Read the `.dc.html` source directly (dimensions/colours/layout are spelled out there); don't render
 or screenshot them unless asked.
 
-Feature specs: `CONNECTIONS_SPEC.md`, `EXPLAIN_PLAN_SPEC.md`, `EXPORT_OPTIONS.md`,
-`IMPORT_OPTIONS.md`, `SQL_LANGUAGE_SPEC.md`, `EDITOR_LANG_SPIKE.md`, `F7-shared-state.md`.
+Feature specs: `COMPLETION_SPEC.md` (the as-built P2-04 completion design — supersedes
+`SQL_LANGUAGE_SPEC.md` §4), `CONNECTIONS_SPEC.md`, `EXPLAIN_PLAN_SPEC.md`,
+`EXPORT_OPTIONS.md`, `IMPORT_OPTIONS.md`, `SQL_LANGUAGE_SPEC.md`, `EDITOR_LANG_SPIKE.md`,
+`F7-shared-state.md`.
 
 ---
 

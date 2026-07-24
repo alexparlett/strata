@@ -184,6 +184,39 @@ impl CodeEditorData {
         }
     }
 
+    /// Replace `range_utf16` with `text` as **one undo step**, leaving the caret at
+    /// the end of the inserted text — the completion-accept edit. Sealed on both
+    /// sides so it neither merges into the preceding typing burst nor absorbs the
+    /// typing that follows. The remove+insert pair lands two `pending_edit`s in a
+    /// one-slot field, so incremental parse state is discarded and rebuilt, exactly
+    /// like `set_text` (SQL buffers are small; a full re-parse is invisible).
+    pub fn replace_range(&mut self, range_utf16: Range<usize>, text: &str) {
+        let len = self.rope.len_utf16_cu();
+        let start = range_utf16.start.min(len);
+        let end = range_utf16.end.clamp(start, len);
+        self.history.seal_transaction();
+        if start < end {
+            self.remove(start..end);
+        }
+        let inserted = if text.is_empty() {
+            0
+        } else {
+            self.insert(text, start)
+        };
+        self.history.seal_transaction();
+        self.selection = TextSelection::new_cursor(start + inserted);
+        self.dragging = TextDragging::default();
+        self.pending_edit = None;
+        // Decoration spans around the edit may have shifted; the popup hover must not
+        // pin to stale facts. The squiggles themselves refresh on the next validation.
+        self.hover = None;
+        self.metrics.highlighter.invalidate_tree();
+        self.parse();
+        if let Some((size, family, weight)) = self.measured_font.clone() {
+            self.measure(size, &family, weight);
+        }
+    }
+
     /// Replace the diagnostic squiggles wholesale from **byte** spans into the current
     /// text (the shape diagnostics arrive in). Spans are clamped to the rope and
     /// converted to char ranges; empty/out-of-range spans are dropped. Returns whether
@@ -484,6 +517,48 @@ mod tests {
         data.undo_edit();
         let r3 = data.revision();
         assert!(r2 < r3, "undo is a text change too");
+    }
+
+    /// The completion-accept edit: one undo step, isolated from the typing burst
+    /// around it, caret at the end of the inserted text.
+    #[test]
+    fn replace_range_is_single_undo_step() {
+        let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
+        // A typing burst (merges into one history transaction)…
+        data.insert("se", 0);
+        data.insert("l", 2);
+        assert_eq!(data.history.current_change(), 1);
+
+        // …then the accept replaces the partial word.
+        data.replace_range(0..3, "SELECT");
+        assert_eq!(data.rope.to_string(), "SELECT");
+        assert_eq!(data.cursor_pos(), "SELECT".len());
+
+        // One undo restores the typed prefix (the accept was exactly one step)…
+        data.undo_edit();
+        assert_eq!(data.rope.to_string(), "sel");
+        // …and the next removes the burst.
+        data.undo_edit();
+        assert_eq!(data.rope.to_string(), "");
+
+        data.redo_edit();
+        data.redo_edit();
+        assert_eq!(data.rope.to_string(), "SELECT");
+    }
+
+    /// Typing right after an accept starts a fresh transaction (the trailing seal):
+    /// undo peels the typing first, then the accept.
+    #[test]
+    fn replace_range_does_not_absorb_subsequent_typing() {
+        let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
+        data.insert("fr", 0);
+        data.replace_range(0..2, "FROM");
+        data.insert(" t", 4);
+
+        data.undo_edit();
+        assert_eq!(data.rope.to_string(), "FROM");
+        data.undo_edit();
+        assert_eq!(data.rope.to_string(), "fr");
     }
 }
 

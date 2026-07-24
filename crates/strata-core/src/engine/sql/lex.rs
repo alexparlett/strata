@@ -21,6 +21,105 @@ pub fn is_word_char(ch: char) -> bool {
     GenericDialect {}.is_identifier_part(ch)
 }
 
+/// Whether `word` is **reserved in name positions** (terminates a table/column-alias
+/// slot) per DataFusion's own parser tables — the authoritative "can this be an
+/// identifier here", shared by the context scanner's name captures and completion's
+/// identifier quoting. Everything else sqlparser merely *knows* as a keyword
+/// (`name`, `status`, `type`, …) is a perfectly good identifier.
+pub(crate) fn is_reserved_in_name_position(word: &str) -> bool {
+    use datafusion::sql::sqlparser::keywords::{
+        ALL_KEYWORDS, ALL_KEYWORDS_INDEX, RESERVED_FOR_COLUMN_ALIAS, RESERVED_FOR_TABLE_ALIAS,
+    };
+    match ALL_KEYWORDS.binary_search(&word.to_ascii_uppercase().as_str()) {
+        Ok(i) => {
+            let kw = ALL_KEYWORDS_INDEX[i];
+            RESERVED_FOR_COLUMN_ALIAS.contains(&kw) || RESERVED_FOR_TABLE_ALIAS.contains(&kw)
+        }
+        Err(_) => false,
+    }
+}
+
+/// Whether the caret sits inside a string literal or comment — including regions left
+/// **unterminated** at end-of-input (an open `'…` fails the whole tokenize, so the
+/// token stream can't answer this; comments are dropped by [`lex`] entirely). One
+/// linear scan: `'…'` strings with `''` escapes, `--` line comments, `/* … */` block
+/// comments (non-nesting, per the generic dialect). `"quoted idents"` are skipped as
+/// opaque regions (they may contain `--` etc.) but do **not** count as inside —
+/// completion may legitimately fire there.
+pub fn caret_in_string_or_comment(sql: &str, caret: usize) -> bool {
+    let b = sql.as_bytes();
+    let mut i = 0usize;
+    while i < b.len() && i < caret {
+        match b[i] {
+            b'\'' => {
+                let start = i;
+                i += 1;
+                let mut end = None; // byte after the closing quote
+                while i < b.len() {
+                    if b[i] == b'\'' {
+                        if b.get(i + 1) == Some(&b'\'') {
+                            i += 2; // '' escape
+                        } else {
+                            i += 1;
+                            end = Some(i);
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                match end {
+                    Some(e) if caret < e => return caret > start,
+                    Some(_) => {}
+                    None => return caret > start, // unterminated → inside to EOF
+                }
+            }
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                let start = i;
+                match sql[i..].find('\n') {
+                    Some(n) => {
+                        let end = i + n + 1; // first byte of the next line
+                        if caret > start && caret < end {
+                            return true;
+                        }
+                        i = end;
+                    }
+                    None => return caret > start, // comment runs to EOF
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let start = i;
+                let end = sql[i + 2..].find("*/").map(|n| i + 2 + n + 2);
+                match end {
+                    Some(e) if caret < e => return caret > start,
+                    Some(e) => i = e,
+                    None => return caret > start, // unterminated → inside to EOF
+                }
+            }
+            b'"' => {
+                // Opaque quoted-identifier region; skip (not a suppression zone).
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += 1;
+                }
+                i += 1; // past the closing quote (or EOF)
+            }
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+/// Whether the caret extends a numeric literal mid-shape — `1.|`, the dot absorbed
+/// into the number token — a position where nothing can complete. Token-authoritative
+/// (an ident's dot lexes as a separate `.` and is a qualifier); lives here beside the
+/// string/comment scanner because it is the same kind of fact: "the caret is inside
+/// a literal, stay quiet".
+pub(crate) fn caret_extends_numeric_literal(toks: &[Tok], caret: usize) -> bool {
+    toks.iter()
+        .any(|t| t.kind == TokKind::Num && t.span.end == caret && t.text.ends_with('.'))
+}
+
 /// One lexical token with a byte-offset span into the source.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tok {
@@ -147,4 +246,68 @@ fn offset(starts: &[usize], loc: datafusion::sql::sqlparser::tokenizer::Location
     let line = (loc.line.max(1) - 1) as usize;
     let base = starts.get(line).copied().unwrap_or(0);
     base + (loc.column.max(1) - 1) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::caret_in_string_or_comment as guard;
+
+    /// Caret at the `|` marker.
+    fn at(sql_with_caret: &str) -> bool {
+        let caret = sql_with_caret.find('|').expect("caret marker");
+        let sql = sql_with_caret.replace('|', "");
+        guard(&sql, caret)
+    }
+
+    #[test]
+    fn plain_code_is_not_suppressed() {
+        assert!(!at("SELECT |a FROM t"));
+        assert!(!at("|SELECT 'x'"));
+    }
+
+    #[test]
+    fn inside_a_closed_string() {
+        assert!(at("SELECT 'ab|c' FROM t"));
+        assert!(at("SELECT 'abc|' FROM t")); // before the closing quote
+        assert!(!at("SELECT 'abc'| FROM t")); // after the closing quote
+        assert!(!at("SELECT |'abc' FROM t")); // before the opening quote
+    }
+
+    #[test]
+    fn doubled_quote_escape_stays_inside() {
+        assert!(at("SELECT 'ab''c|d' FROM t"));
+        assert!(!at("SELECT 'ab''cd'| FROM t"));
+    }
+
+    #[test]
+    fn unterminated_string_runs_to_eof() {
+        assert!(at("SELECT 'ab|"));
+        assert!(at("SELECT 'ab|c"));
+    }
+
+    #[test]
+    fn line_comment() {
+        assert!(at("SELECT a -- no|te"));
+        assert!(at("SELECT a -- note|"));
+        assert!(at("SELECT a --|"));
+        assert!(!at("SELECT a |-- note"));
+        // The next line is code again.
+        assert!(!at("SELECT a -- note\n|FROM t"));
+        assert!(!at("SELECT a -- note\nFROM |t"));
+    }
+
+    #[test]
+    fn block_comment() {
+        assert!(at("SELECT /* no|te */ a"));
+        assert!(!at("SELECT /* note */ |a"));
+        assert!(at("SELECT /* unterminated |"));
+    }
+
+    #[test]
+    fn quoted_idents_are_opaque_but_not_suppressing() {
+        // A `--` inside a quoted identifier is not a comment.
+        assert!(!at("SELECT \"a -- b\", |c FROM t"));
+        // And the caret inside a quoted identifier is a legit completion position.
+        assert!(!at("SELECT \"my col|umn\" FROM t"));
+    }
 }

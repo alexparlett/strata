@@ -22,6 +22,21 @@ use crate::{
     syntax::TextNode,
 };
 
+/// The gutter's number-column width in em (× `font_size`) and its right margin —
+/// the line layout's definition, shared by every overlay that must anchor at the
+/// text origin (diagnostics panel, completion popup).
+pub(crate) const GUTTER_WIDTH_EM: f32 = 3.0;
+pub(crate) const GUTTER_MARGIN: f32 = 8.0;
+
+/// The gutter's total horizontal footprint — the x origin of the text content.
+pub(crate) fn gutter_offset(font_size: f32, gutter: bool) -> f32 {
+    if gutter {
+        GUTTER_WIDTH_EM * font_size + GUTTER_MARGIN
+    } else {
+        0.0
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub struct EditorLineUI {
     pub(crate) editor: Writable<CodeEditorData>,
@@ -68,7 +83,7 @@ impl Component for EditorLineUI {
         let longest_width = editor_data.metrics.longest_width;
         let line = editor_data.metrics.syntax_blocks.get_line(line_index);
         let highlights = editor_data.get_visible_selection(EditorLine::Paragraph(line_index));
-        let gutter_width = font_size * 3.0;
+        let gutter_width = GUTTER_WIDTH_EM * font_size;
         let is_line_selected = editor_data.cursor_row() == line_index;
 
         let on_tap = {
@@ -156,7 +171,7 @@ impl Component for EditorLineUI {
                         .horizontal()
                         .main_align(Alignment::Center)
                         .cross_align(Alignment::Center)
-                        .margin(Gaps::new(0., 8., 0., 0.))
+                        .margin(Gaps::new(0., GUTTER_MARGIN, 0., 0.))
                         .child(
                             label()
                                 .font_family(font_family.clone())
