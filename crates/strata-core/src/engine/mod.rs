@@ -24,6 +24,7 @@
 mod catalog;
 mod explain;
 mod export;
+mod functions;
 mod query;
 pub mod config;
 pub mod serialize;
@@ -123,16 +124,7 @@ impl Engine {
             .build()
             .expect("tokio runtime");
         let ctx = build_context(&overrides);
-        let functions = {
-            use datafusion::execution::registry::FunctionRegistry;
-            let mut scalar: Vec<String> = ctx.udfs().into_iter().collect();
-            let mut aggregate: Vec<String> = ctx.udafs().into_iter().collect();
-            let mut window: Vec<String> = ctx.udwfs().into_iter().collect();
-            scalar.sort();
-            aggregate.sort();
-            window.sort();
-            FunctionCatalog { scalar, aggregate, window }
-        };
+        let functions = functions::snapshot(&ctx);
         Engine {
             engine_id,
             rt: Some(rt),
