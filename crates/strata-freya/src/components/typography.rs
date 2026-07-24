@@ -16,7 +16,7 @@
 //! `label()` — `.color()`, `.align()`, `.width()`/`.max_width()`, `.max_lines()`/`.wrap()`,
 //! `.text_overflow()` — so layout tweaks never mean dropping back to a raw `label()`.
 
-use crate::theme::{TextStyle, Typography};
+use crate::theme::{typography, TextStyle, Typography, TYPOGRAPHY_KEY};
 use freya::components::use_theme;
 use freya::prelude::*;
 
@@ -30,9 +30,9 @@ fn scale() -> Typography {
     let theme = use_theme();
     let theme = theme.read();
     theme
-        .get::<Typography>(crate::theme::TYPOGRAPHY_KEY)
+        .get::<Typography>(TYPOGRAPHY_KEY)
         .cloned()
-        .unwrap_or_else(|| crate::theme::typography(theme.name))
+        .unwrap_or_else(|| typography(theme.name))
 }
 
 /// The overridable `label()` properties every typography role exposes. Every field is opt-in

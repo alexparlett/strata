@@ -354,9 +354,11 @@ mod interaction {
 
     use freya_testing::TestingRunner;
     use strata_core::engine::{RecordBatch, Schema};
+    use strata_core::theme::load;
     use strata_model::{Cell, ColumnInfo, Kind};
 
     use super::*;
+    use crate::theme::strata_theme;
 
     /// A 3-row page: a scalar column, a nested column (empty batch — the pretty-JSON read
     /// falls back to the display text, which is all the interaction test needs), a null.
@@ -388,7 +390,7 @@ mod interaction {
     }
 
     fn app() -> impl IntoElement {
-        use_init_theme(|| crate::theme::strata_theme(&strata_core::theme::load("midnight")));
+        use_init_theme(|| strata_theme(&load("midnight")));
         let open = use_consume::<State<Option<usize>>>();
         rect()
             .width(Size::fill())

@@ -2,8 +2,10 @@
 //! fixes, join intelligence, and the torture corpus with its every-caret sweep.
 
 use super::*;
+use std::collections::HashSet;
+
 use crate::engine::sql::FunctionCatalog;
-use strata_model::ColumnInfo;
+use strata_model::{ColumnInfo, Kind};
 
 /// `events(user_id, amount, status, ts)` + `users(user_id, name, guid)` + a saved
 /// view `spenders(user_id, total)` + a few functions.
@@ -12,7 +14,7 @@ fn catalog() -> Catalog {
         ColumnInfo {
             name: name.into(),
             dtype: dtype.into(),
-            kind: strata_model::Kind::from_arrow(dtype),
+            kind: Kind::from_arrow(dtype),
             nullable: true,
             children: Vec::new(),
             stats: Vec::new(),
@@ -408,7 +410,7 @@ fn mid_word_caret_yields_no_partial_and_stays_quiet_on_symbols() {
 #[test]
 fn no_duplicate_kind_label_pairs() {
     let items = at("SELECT * FROM events uni|");
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     for c in &items {
         assert!(
             seen.insert((c.kind, c.label.to_ascii_lowercase())),
@@ -457,7 +459,7 @@ fn weird_identifiers_insert_quoted() {
         ColumnInfo {
             name: name.into(),
             dtype: "Utf8".into(),
-            kind: strata_model::Kind::Str,
+            kind: Kind::Str,
             nullable: true,
             children: Vec::new(),
             stats: Vec::new(),
@@ -611,7 +613,7 @@ fn grammar_vocabulary_columns_insert_quoted() {
         ColumnInfo {
             name: name.into(),
             dtype: "Utf8".into(),
-            kind: strata_model::Kind::Str,
+            kind: Kind::Str,
             nullable: true,
             children: Vec::new(),
             stats: Vec::new(),

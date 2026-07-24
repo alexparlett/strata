@@ -6,7 +6,7 @@
 //! is runtime state and lives with the UI's project store, wrapped around these — not
 //! here as skipped fields.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 /// What a pending removal targets — drives the confirm dialog's wording and the
@@ -76,7 +76,7 @@ impl ColRef {
 /// files keep loading. Serialization always emits the typed form.
 fn de_partition_cols<'de, D>(d: D) -> Result<Vec<(String, String)>, D::Error>
 where
-    D: serde::Deserializer<'de>,
+    D: Deserializer<'de>,
 {
     #[derive(Deserialize)]
     #[serde(untagged)]

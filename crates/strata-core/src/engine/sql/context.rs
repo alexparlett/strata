@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use crate::engine::sql::lex::{Tok, TokKind};
+use crate::engine::sql::lex::{is_reserved_in_name_position, statement_at, Tok, TokKind};
 
 /// The clause governing the caret — one rung of the statement's clause ladder
 /// (`SELECT → FROM → WHERE → GROUP BY → HAVING → QUALIFY → ORDER BY → LIMIT →
@@ -257,7 +257,7 @@ fn role_at(clause: Clause, prev: Option<&Tok>, prev2: Option<&Tok>) -> Role {
 
 /// Byte range of the statement containing `caret` (split on top-level `;`).
 fn statement_bounds(toks: &[Tok], sql_len: usize, caret: usize) -> (usize, usize) {
-    let r = crate::engine::sql::lex::statement_at(toks, sql_len, caret);
+    let r = statement_at(toks, sql_len, caret);
     (r.start, r.end)
 }
 
@@ -303,7 +303,7 @@ fn is_name(t: &Tok) -> bool {
 fn is_name_like(t: &Tok) -> bool {
     is_name(t)
         || (t.kind == TokKind::Keyword
-            && !crate::engine::sql::lex::is_reserved_in_name_position(&t.text))
+            && !is_reserved_in_name_position(&t.text))
 }
 
 /// Column aliases from the **main** SELECT projection list (`… AS <ident>`, between
@@ -478,7 +478,7 @@ fn governing_clause(
 /// Token-index range of the clause list led by the clause keyword at `gov`: up to
 /// the next clause keyword in the same scope, the scope's closing paren, or the
 /// branch end.
-fn clause_region(branch: &[Tok], branch_scopes: &[i32], gov: usize) -> std::ops::Range<usize> {
+fn clause_region(branch: &[Tok], branch_scopes: &[i32], gov: usize) -> Range<usize> {
     let scope = branch_scopes[gov];
     let mut end = branch.len();
     for (i, t) in branch.iter().enumerate().skip(gov + 1) {
@@ -505,7 +505,7 @@ fn clause_region(branch: &[Tok], branch_scopes: &[i32], gov: usize) -> std::ops:
 fn refs_in(
     branch: &[Tok],
     branch_scopes: &[i32],
-    region: std::ops::Range<usize>,
+    region: Range<usize>,
     scope: i32,
 ) -> Vec<String> {
     let mut out = Vec::new();

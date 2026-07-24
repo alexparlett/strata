@@ -16,7 +16,8 @@ use crate::apps::project::state::{
     SessionState,
 };
 use crate::apps::project::views::{CloseConfirm, HeaderBar, Workbench};
-use crate::theme::ThemesCtx;
+use crate::keymap::on_commands;
+use crate::theme::{use_strata_theme, window_background, ThemesCtx};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use freya::winit::dpi::LogicalPosition;
@@ -24,6 +25,7 @@ use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use futures::StreamExt;
 use strata_core::config::{Command, Settings};
 use strata_core::project as project_io;
+use strata_core::theme::{effective_id, os_is_dark};
 use strata_model::TabId;
 
 pub struct ProjectApp {
@@ -51,12 +53,8 @@ impl ProjectApp {
         // Sync-with-OS.
         let background = {
             let s = settings.peek();
-            let id = strata_core::theme::effective_id(
-                &s.theme,
-                s.sync_os,
-                strata_core::theme::os_is_dark(),
-            );
-            crate::theme::window_background(themes.get_or_default(&id))
+            let id = effective_id(&s.theme, s.sync_os, os_is_dark());
+            window_background(themes.get_or_default(&id))
         };
         // This window's close bridge (T2): the hook vetoes an OS close while a query
         // runs (and the confirm pref is on) and pings the UI to show the dialog.
@@ -107,7 +105,7 @@ impl App for ProjectApp {
         // This window's theme: installed + kept derived from the reactive settings
         // selection (+ OS appearance while syncing). Every window computes the same pure
         // derivation of the same globals, so they repaint consistently.
-        crate::theme::use_strata_theme(themes.clone(), self.settings);
+        use_strata_theme(themes.clone(), self.settings);
         // The settings handle into context so deep consumers (shortcut listeners, keymap
         // hints) reach it without prop-threading. `State` is `Copy` — this shares the one
         // global, it doesn't fork it.
@@ -201,7 +199,7 @@ impl App for ProjectApp {
             // document (pre-order) order, so every real consumer — and the close-confirm
             // modal barrier — outranks this catch-all. (The root rect itself would fire
             // FIRST.)
-            .child(rect().on_global_key_down(crate::keymap::on_commands(
+            .child(rect().on_global_key_down(on_commands(
                 self.settings,
                 move |cmd| match cmd {
                     Command::CloseProject => {

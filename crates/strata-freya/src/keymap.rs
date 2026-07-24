@@ -13,6 +13,7 @@
 use freya::prelude::*;
 use freya::text_edit::{ChordKey, EditBindings, EditChord};
 use strata_core::config::{Command, KeyChord, Settings};
+use strata_core::keymap::{effective_chord, resolve};
 
 use crate::components::typography::Meta;
 
@@ -66,7 +67,7 @@ pub fn on_command(
         let Some(chord) = chord_from_event(&e) else {
             return;
         };
-        if strata_core::keymap::resolve(&settings.peek(), &chord) == Some(cmd) && action() {
+        if resolve(&settings.peek(), &chord) == Some(cmd) && action() {
             e.prevent_default();
         }
     }
@@ -84,7 +85,7 @@ pub fn on_commands(
         let Some(chord) = chord_from_event(&e) else {
             return;
         };
-        let Some(cmd) = strata_core::keymap::resolve(&settings.peek(), &chord) else {
+        let Some(cmd) = resolve(&settings.peek(), &chord) else {
             return;
         };
         if dispatch(cmd) {
@@ -101,7 +102,7 @@ pub fn on_commands(
 /// side effect).
 pub fn edit_bindings(settings: &Settings) -> EditBindings {
     let chords = |cmd| {
-        strata_core::keymap::effective_chord(settings, cmd)
+        effective_chord(settings, cmd)
             .and_then(|chord| edit_chord(&chord))
             .into_iter()
             .collect()
@@ -288,7 +289,7 @@ mod test {
         ))
         .unwrap();
         assert_eq!(
-            strata_core::keymap::resolve(&settings, &chord),
+            resolve(&settings, &chord),
             Some(Command::ReopenTab)
         );
     }

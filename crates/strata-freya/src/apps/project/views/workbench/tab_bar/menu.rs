@@ -7,10 +7,11 @@
 
 use freya::prelude::*;
 use freya::radio::Radio;
-use strata_core::config::Command;
+use strata_core::config::{Command, Settings};
 
 use strata_model::TabId;
 
+use crate::apps::project::close::TabCloser;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::divider::Divider;
 use crate::components::typography::Prose;
@@ -57,8 +58,8 @@ pub fn tab_context_menu(
     mut radio: Radio<SessionState, Chan>,
     sep: Color,
     mut renaming: State<bool>,
-    closer: crate::apps::project::close::TabCloser,
-    settings: State<strata_core::config::Settings>,
+    closer: TabCloser,
+    settings: State<Settings>,
 ) -> Menu {
     // Built from an event handler (no reactive context), so this `read` is a peek: the reopen
     // stack can't change while this transient menu is up (reopening dismisses it), so the state

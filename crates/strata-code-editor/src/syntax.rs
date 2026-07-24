@@ -6,11 +6,13 @@ use smallvec::SmallVec;
 use tree_sitter::{
     InputEdit,
     Language,
+    Node,
     Parser,
     Point,
     Query,
     QueryCursor,
     StreamingIterator,
+    TextProvider,
     Tree,
 };
 
@@ -407,10 +409,10 @@ pub struct RopeTextProvider<'a> {
     rope: &'a Rope,
 }
 
-impl<'a> tree_sitter::TextProvider<&'a [u8]> for RopeTextProvider<'a> {
+impl<'a> TextProvider<&'a [u8]> for RopeTextProvider<'a> {
     type I = RopeChunkIter<'a>;
 
-    fn text(&mut self, node: tree_sitter::Node) -> Self::I {
+    fn text(&mut self, node: Node) -> Self::I {
         let start = node.start_byte();
         let end = node.end_byte();
         RopeChunkIter {

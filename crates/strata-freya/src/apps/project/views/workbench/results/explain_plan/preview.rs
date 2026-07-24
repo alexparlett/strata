@@ -5,8 +5,10 @@
 
 use freya_testing::TestingRunner;
 use strata_core::engine::plan::{fmt_ms, self_time_ms, Metric, MetricKind, PlanKind, PlanNode};
+use strata_core::theme::load;
 
 use super::*;
+use crate::theme::strata_theme;
 
 fn m(name: &str, value: u64, kind: MetricKind) -> Metric {
     Metric {
@@ -91,7 +93,7 @@ fn fixture() -> QueryPlan {
 }
 
 fn app() -> impl IntoElement {
-    use_init_theme(|| crate::theme::strata_theme(&strata_core::theme::load("midnight")));
+    use_init_theme(|| strata_theme(&load("midnight")));
     let tab = use_state(PlanTab::default);
     ExplainPlan::new(fixture(), tab)
 }

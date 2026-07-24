@@ -12,11 +12,13 @@
 //! to absolute against the project folder when handed to the engine / filesystem:
 //! [`resolve_source`] / [`relativize`].
 
+use std::cmp::Ordering;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{from_str, to_string, to_string_pretty};
 use strata_model::{HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef};
 
 /// The project directory name inside a project folder.
@@ -57,7 +59,7 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     let path = strata_dir(root).join(PROJECT_JSON);
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut defs: ProjectDefs =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     defs.tables.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.views.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.saved_queries
@@ -71,7 +73,7 @@ pub fn save_defs(root: &Path, defs: &ProjectDefs) -> Result<(), String> {
     let dir = strata_dir(root);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     ensure_gitignore(&dir);
-    let json = serde_json::to_string_pretty(defs).map_err(|e| e.to_string())?;
+    let json = to_string_pretty(defs).map_err(|e| e.to_string())?;
     fs::write(dir.join(PROJECT_JSON), json).map_err(|e| e.to_string())
 }
 
@@ -112,7 +114,7 @@ pub fn load_session(root: &Path) -> Result<Option<SessionSnapshot>, String> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
-    serde_json::from_str(&text)
+    from_str(&text)
         .map(Some)
         .map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -123,7 +125,7 @@ pub fn save_session(root: &Path, snapshot: &SessionSnapshot) -> Result<(), Strin
     let dir = strata_dir(root);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     ensure_gitignore(&dir);
-    let json = serde_json::to_string_pretty(snapshot).map_err(|e| e.to_string())?;
+    let json = to_string_pretty(snapshot).map_err(|e| e.to_string())?;
     fs::write(session_path(root), json).map_err(|e| e.to_string())
 }
 
@@ -141,7 +143,7 @@ pub fn append_history(root: &Path, entry: &HistoryEntry) -> Result<(), String> {
     let dir = strata_dir(root);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     ensure_gitignore(&dir);
-    let mut line = serde_json::to_string(entry).map_err(|e| e.to_string())?;
+    let mut line = to_string(entry).map_err(|e| e.to_string())?;
     line.push('\n');
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -166,14 +168,14 @@ pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String
     let mut entries: Vec<HistoryEntry> = text
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str(l).ok())
+        .filter_map(|l| from_str(l).ok())
         .collect();
     if entries.len() > cap {
         entries.drain(0..entries.len() - cap);
         // Rewrite the file down to what we kept (rare — only when it overflowed).
         let mut out = String::new();
         for entry in &entries {
-            if let Ok(line) = serde_json::to_string(entry) {
+            if let Ok(line) = to_string(entry) {
                 out.push_str(&line);
                 out.push('\n');
             }
@@ -229,7 +231,7 @@ pub fn relativize(root: &Path, abs: &str) -> String {
 /// Case-insensitive alphabetical ordering for catalog names — how tables, views and
 /// saved queries are presented. Kept sorted at the mutation points (not at render), so
 /// index-addressed rows can't desync and an upsert can't shuffle rows under the user.
-pub fn name_ord(a: &str, b: &str) -> std::cmp::Ordering {
+pub fn name_ord(a: &str, b: &str) -> Ordering {
     a.chars()
         .flat_map(char::to_lowercase)
         .cmp(b.chars().flat_map(char::to_lowercase))
@@ -240,14 +242,17 @@ pub fn name_ord(a: &str, b: &str) -> std::cmp::Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::process;
     use strata_model::{Origin, ResultsView, TabId, TabSnapshot, WindowGeom};
+    use uuid::Uuid;
 
     /// A fresh temp project folder, cleaned up on drop.
     struct TempRoot(PathBuf);
     impl TempRoot {
         fn new(tag: &str) -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("strata-project-test-{tag}-{}", std::process::id()));
+            let dir = env::temp_dir()
+                .join(format!("strata-project-test-{tag}-{}", process::id()));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();
             Self(dir)
@@ -291,7 +296,7 @@ mod tests {
             });
         }
         defs.saved_queries.push(SavedQuery {
-            id: uuid::Uuid::new_v4(),
+            id: Uuid::new_v4(),
             name: "q".into(),
             sql: "select 1".into(),
             meta: "—".into(),

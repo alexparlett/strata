@@ -186,8 +186,10 @@ impl Component for CellView {
 #[cfg(test)]
 mod interaction {
     use freya_testing::TestingRunner;
+    use strata_core::theme::load;
 
     use super::*;
+    use crate::theme::strata_theme;
 
     fn value() -> CellValue {
         CellValue {
@@ -198,7 +200,7 @@ mod interaction {
     }
 
     fn app() -> impl IntoElement {
-        use_init_theme(|| crate::theme::strata_theme(&strata_core::theme::load("midnight")));
+        use_init_theme(|| strata_theme(&load("midnight")));
         let open = use_consume::<State<Option<CellValue>>>();
         rect()
             .width(Size::fill())

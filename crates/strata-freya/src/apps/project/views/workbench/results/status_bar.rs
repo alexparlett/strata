@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use async_io::Timer;
 use freya::components::use_theme;
 use freya::prelude::*;
+use strata_core::config::Command;
 use strata_core::engine::plan::PlanTab;
 use strata_model::Kind;
 
@@ -19,6 +20,7 @@ use super::ResultsState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{InputTypography, Meta, Path};
+use crate::keymap::use_hint;
 
 define_theme!(
     %[component]
@@ -143,7 +145,7 @@ impl Component for StatusBar {
         // row count and trails the engine elapsed; the plan state counts operators. The empty
         // state's run hint derives from the effective keymap (rebinds repaint it; unbound
         // drops the sub-label).
-        let run_hint = crate::keymap::use_hint(strata_core::config::Command::RunQuery);
+        let run_hint = use_hint(Command::RunQuery);
         let (label, sub): (String, Option<String>) = match self.state {
             ResultsState::Empty => (
                 "No query run".into(),

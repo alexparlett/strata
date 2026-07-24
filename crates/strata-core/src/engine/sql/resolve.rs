@@ -22,7 +22,8 @@
 //! covers those fail-fast).
 
 use std::collections::HashMap;
-use std::ops::Range;
+use std::iter;
+use std::ops::{ControlFlow, Range};
 
 use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::Statement as DFStatement;
@@ -109,7 +110,7 @@ async fn prefetch(ctx: &SessionContext, stmt: &SqlStatement, normalize: bool) ->
     let mut names: Vec<ObjectName> = Vec::new();
     let _ = visit_relations(stmt, |name: &ObjectName| {
         names.push(name.clone());
-        std::ops::ControlFlow::<()>::Continue(())
+        ControlFlow::<()>::Continue(())
     });
     let mut map = SchemaMap::new();
     for name in names {
@@ -199,7 +200,7 @@ struct Scope<'p> {
 
 impl<'p> Scope<'p> {
     fn chain(&self) -> impl Iterator<Item = &Scope<'p>> {
-        std::iter::successors(Some(self), |s| s.parent)
+        iter::successors(Some(self), |s| s.parent)
     }
     /// No relations anywhere in the chain — a pure draft; nothing to check against.
     fn chain_is_empty(&self) -> bool {
@@ -649,7 +650,7 @@ impl Resolver<'_> {
                     if matches!(x, Expr::Identifier(_) | Expr::CompoundIdentifier(_)) {
                         idents.push(x.clone());
                     }
-                    std::ops::ControlFlow::<()>::Continue(())
+                    ControlFlow::<()>::Continue(())
                 });
                 for x in &idents {
                     match x {
@@ -828,9 +829,9 @@ fn contains_unwalkable(e: &Expr) -> bool {
                 | Expr::CompoundFieldAccess { .. }
         ) {
             found = true;
-            return std::ops::ControlFlow::Break(());
+            return ControlFlow::Break(());
         }
-        std::ops::ControlFlow::<()>::Continue(())
+        ControlFlow::<()>::Continue(())
     });
     found
 }

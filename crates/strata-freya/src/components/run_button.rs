@@ -9,6 +9,7 @@ use freya::prelude::*;
 use strata_core::config::Command;
 
 use crate::components::icon::{Icon, IconName};
+use crate::keymap::use_hint_title;
 
 define_theme!(
     %[component]
@@ -102,8 +103,8 @@ impl Component for RunButton {
 
         // The comp's state-dependent `runTitle`. Both hints resolve unconditionally (hooks),
         // then the state picks.
-        let run_title = crate::keymap::use_hint_title("Run", Command::RunQuery);
-        let cancel_title = crate::keymap::use_hint_title("Cancel query", Command::Cancel);
+        let run_title = use_hint_title("Run", Command::RunQuery);
+        let cancel_title = use_hint_title("Cancel query", Command::Cancel);
         let title = match self.state {
             RunState::Idle => run_title,
             RunState::Running => cancel_title,

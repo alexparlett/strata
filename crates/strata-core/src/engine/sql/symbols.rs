@@ -3,6 +3,7 @@
 //! (from the engine, F5). Cheap to build on the UI thread each analysis pass.
 
 use crate::engine::sql::FunctionCatalog;
+use strata_model::ColumnInfo;
 
 #[derive(Clone, Default, PartialEq)]
 pub struct ColumnSym {
@@ -19,7 +20,7 @@ pub struct TableSym {
 }
 
 impl TableSym {
-    fn from_cols(name: &str, is_view: bool, cols: &[strata_model::ColumnInfo]) -> Self {
+    fn from_cols(name: &str, is_view: bool, cols: &[ColumnInfo]) -> Self {
         TableSym {
             name: name.to_string(),
             is_view,
@@ -53,8 +54,8 @@ impl Catalog {
     /// `(name, columns)` pairs — the columns are what registration *learned* (they live
     /// on the UI project store's rows, not on the defs), so the caller projects them.
     pub fn build<'a>(
-        tables: impl IntoIterator<Item = (&'a str, &'a [strata_model::ColumnInfo])>,
-        views: impl IntoIterator<Item = (&'a str, &'a [strata_model::ColumnInfo])>,
+        tables: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
+        views: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
         functions: FunctionCatalog,
     ) -> Self {
         let mut out = Vec::new();

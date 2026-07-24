@@ -34,6 +34,7 @@ use super::selection::{SelCtl, Selection};
 use super::sort::SortState;
 use super::toolbar::ResultsToolbar;
 use crate::components::divider::Divider;
+use crate::keymap::on_commands;
 use strata_model::TabId;
 
 mod cell;
@@ -339,7 +340,7 @@ impl Component for DataGrid {
                 // selection as TSV (declining when empty, so the press stays unconsumed).
                 let data = data.clone();
                 let row_nums = self.row_nums.clone();
-                crate::keymap::on_commands(settings, move |cmd| match cmd {
+                on_commands(settings, move |cmd| match cmd {
                     Command::SelectAll => {
                         sel_ctl.all();
                         true
@@ -392,7 +393,7 @@ impl Component for DataGrid {
                 // leaving the press unconsumed. The modifier mirroring is separate
                 // bookkeeping for the pointer events (which carry no modifiers).
                 let find = self.find;
-                let mut commands = crate::keymap::on_commands(settings, move |cmd| match cmd {
+                let mut commands = on_commands(settings, move |cmd| match cmd {
                     // The modals sit above the popover, so they dismiss first (only one is
                     // ever open — each opens off its own double-click target).
                     Command::Cancel if cell_view.peek().is_some() => {

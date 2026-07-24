@@ -27,9 +27,11 @@
 //! Statements are split on top-level `;` and validated independently, so one broken
 //! statement never hides the others' diagnostics.
 
+use std::cmp::Ordering;
 use std::ops::Range;
 
-use datafusion::common::{DataFusionError, TableReference};
+use datafusion::common::diagnostic::DiagnosticKind;
+use datafusion::common::{DataFusionError, SchemaError, TableReference};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::sqlparser::ast::{ObjectType, Statement as SqlStatement};
@@ -209,7 +211,7 @@ fn is_unresolved_column(err: &DataFusionError) -> bool {
     matches!(
         err.find_root(),
         DataFusionError::SchemaError(e, _)
-            if matches!(e.as_ref(), datafusion::common::SchemaError::FieldNotFound { .. })
+            if matches!(e.as_ref(), SchemaError::FieldNotFound { .. })
     )
 }
 
@@ -470,8 +472,8 @@ fn df_error_diag(
 ) -> Diagnostic {
     if let Some(d) = err.diagnostic() {
         let severity = match d.kind {
-            datafusion::common::diagnostic::DiagnosticKind::Error => Severity::Error,
-            datafusion::common::diagnostic::DiagnosticKind::Warning => Severity::Warning,
+            DiagnosticKind::Error => Severity::Error,
+            DiagnosticKind::Warning => Severity::Warning,
         };
         let span = d
             .span
@@ -688,9 +690,9 @@ fn edit_distance_at_most_1(a: &[char], b: &[char]) -> bool {
             }
             edits += 1;
             match la.cmp(&lb) {
-                std::cmp::Ordering::Greater => i += 1,
-                std::cmp::Ordering::Less => j += 1,
-                std::cmp::Ordering::Equal => {
+                Ordering::Greater => i += 1,
+                Ordering::Less => j += 1,
+                Ordering::Equal => {
                     i += 1;
                     j += 1;
                 }
@@ -720,12 +722,13 @@ mod tests {
     use datafusion::arrow::array::{Int64Array, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::prelude::SessionConfig;
     use futures::executor::block_on;
     use std::sync::Arc;
 
     /// A context shaped like the engine's: `collect_spans` on, one table `t(id, name)`.
     fn ctx() -> SessionContext {
-        let mut config = datafusion::prelude::SessionConfig::new();
+        let mut config = SessionConfig::new();
         config.options_mut().sql_parser.collect_spans = true;
         let ctx = SessionContext::new_with_config(config);
         let batch = RecordBatch::try_new(

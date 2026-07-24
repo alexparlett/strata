@@ -9,6 +9,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
+use freya::query::Captured;
 use strata_core::engine::Engine;
 
 use strata_model::TabId;
@@ -32,8 +33,8 @@ impl EngineCtx {
     /// Wrap this handle for a freya-query capability field — invisible to cache identity.
     /// (Consumed by the results pane's `use_query` wiring, P2-02.)
     #[allow(dead_code)]
-    pub fn captured(&self) -> freya::query::Captured<EngineCtx> {
-        freya::query::Captured(self.clone())
+    pub fn captured(&self) -> Captured<EngineCtx> {
+        Captured(self.clone())
     }
 
     /// Tear down a closed tab's engine-side state — abort its in-flight run and retire

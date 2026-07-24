@@ -13,7 +13,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
+use syn::{parse_macro_input, Data, DeriveInput, Error, Field, Fields, LitStr, Path};
 
 #[proc_macro_derive(Form, attributes(field))]
 pub fn derive_form(input: TokenStream) -> TokenStream {
@@ -27,10 +27,10 @@ struct FieldSpec {
     skip: bool,
     list: bool,
     id: Option<String>,
-    validate: Option<syn::Path>,
+    validate: Option<Path>,
 }
 
-fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldSpec> {
+fn parse_field_attrs(field: &Field) -> syn::Result<FieldSpec> {
     let mut spec = FieldSpec {
         skip: false,
         list: false,
@@ -49,10 +49,10 @@ fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldSpec> {
                 spec.list = true;
                 Ok(())
             } else if meta.path.is_ident("id") {
-                spec.id = Some(meta.value()?.parse::<syn::LitStr>()?.value());
+                spec.id = Some(meta.value()?.parse::<LitStr>()?.value());
                 Ok(())
             } else if meta.path.is_ident("validate") {
-                spec.validate = Some(meta.value()?.parse::<syn::Path>()?);
+                spec.validate = Some(meta.value()?.parse::<Path>()?);
                 Ok(())
             } else {
                 Err(meta.error("unknown #[field] key (expected id, skip, list, or validate)"))
@@ -67,18 +67,18 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     let (impl_g, ty_g, where_c) = input.generics.split_for_impl();
 
     let data = match &input.data {
-        syn::Data::Struct(s) => s,
+        Data::Struct(s) => s,
         _ => {
-            return Err(syn::Error::new_spanned(
+            return Err(Error::new_spanned(
                 &input,
                 "#[derive(Form)] supports structs only",
             ))
         }
     };
     let fields = match &data.fields {
-        syn::Fields::Named(n) => &n.named,
+        Fields::Named(n) => &n.named,
         _ => {
-            return Err(syn::Error::new_spanned(
+            return Err(Error::new_spanned(
                 &input,
                 "#[derive(Form)] requires named fields",
             ))

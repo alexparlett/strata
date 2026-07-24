@@ -13,6 +13,10 @@
 
 use apps::project::ProjectApp;
 use freya::prelude::*;
+use strata_core::config::load;
+use strata_core::engine::purge_snapshot_root;
+
+use crate::theme::ThemesCtx;
 
 mod apps;
 pub mod components;
@@ -23,10 +27,10 @@ mod theme;
 fn main() {
     // Clear snapshot leftovers from a previous crashed run (each live engine only ever
     // cleans its own subdirectory — safe only here, before any engine exists).
-    strata_core::engine::purge_snapshot_root();
+    purge_snapshot_root();
     // Discover the theme registry once (built-ins + the user themes dir) — every window
     // shares this one handle via context.
-    let themes = crate::theme::ThemesCtx::discover();
+    let themes = ThemesCtx::discover();
     // The app-global **reactive settings**: loaded from disk once here, then written only
     // by UI (the Phase 4 Settings window — which also persists via `config::save`; disk is
     // a startup input, never a live source). Any write repaints every window that reads
@@ -34,7 +38,7 @@ fn main() {
     // `use_strata_theme` resolves the selection (+ OS appearance while Sync-with-OS is
     // on, via Freya's per-window `Platform.preferred_theme`) through the shared registry
     // — no stored applied-theme id to keep coherent.
-    let settings = State::create_global(strata_core::config::load().settings);
+    let settings = State::create_global(load().settings);
     // The menubar builds on the event loop thread (`Send` closure), so it captures the
     // resolved chords — plain data — not the settings handle. The event *handler* runs
     // on the renderer (main) thread and does capture `settings`, so Edit dispatch

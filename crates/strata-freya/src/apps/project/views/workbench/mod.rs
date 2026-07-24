@@ -18,6 +18,7 @@ use crate::apps::project::close::{CloseGuard, CloseTarget, TabCloser};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, RunId};
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
+use crate::keymap::on_commands;
 use editor::actions;
 use editor::tab::EditorTab;
 use empty::EmptyState;
@@ -87,7 +88,7 @@ impl Component for Workbench {
         let engine = use_consume::<EngineCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
         let mut cmd_radio = radio;
-        let shortcuts = crate::keymap::on_commands(settings, move |cmd| {
+        let shortcuts = on_commands(settings, move |cmd| {
             // `read()` is peek-equivalent here: event handlers have no reactive context.
             let active = cmd_radio.read().active;
             match cmd {

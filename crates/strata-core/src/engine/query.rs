@@ -9,17 +9,24 @@
 //! [`retire_snapshot`]) is the worker loop's bookkeeping.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::env;
+use std::fs;
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::process;
 use std::time::Instant;
 
 use datafusion::arrow::array::Array;
+use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+use datafusion::common::Column;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::prelude::*;
 use futures::StreamExt;
 
 use super::catalog::column_info;
+use super::config::effective;
 use strata_model::{Cell, ColumnInfo, QueryOutput, SnapshotId};
 
 /// Max characters kept per display cell (the grid truncates with an ellipsis).
@@ -32,7 +39,7 @@ pub fn snapshot_name(snapshot: SnapshotId) -> String {
 }
 
 fn snapshots_root() -> String {
-    let mut d = std::env::temp_dir();
+    let mut d = env::temp_dir();
     d.push("strata_snapshots");
     d.to_string_lossy().into_owned()
 }
@@ -43,13 +50,13 @@ fn snapshots_root() -> String {
 /// both allocate `e_0`, `e_1`, … and one process's cleanup deletes the other's live
 /// snapshots.
 pub fn snapshot_dir(engine_id: u64) -> String {
-    let mut d = std::path::PathBuf::from(snapshots_root());
-    d.push(format!("e_{}_{engine_id}", std::process::id()));
+    let mut d = PathBuf::from(snapshots_root());
+    d.push(format!("e_{}_{engine_id}", process::id()));
     d.to_string_lossy().into_owned()
 }
 
 pub fn snapshot_file(engine_id: u64, snapshot: SnapshotId) -> String {
-    let mut d = std::path::PathBuf::from(snapshot_dir(engine_id));
+    let mut d = PathBuf::from(snapshot_dir(engine_id));
     d.push(format!("s_{snapshot}.parquet"));
     d.to_string_lossy().into_owned()
 }
@@ -59,13 +66,13 @@ pub fn snapshot_file(engine_id: u64, snapshot: SnapshotId) -> String {
 /// are best-effort.
 pub fn retire_snapshot(ctx: &SessionContext, engine_id: u64, snapshot: SnapshotId) {
     let _ = ctx.deregister_table(snapshot_name(snapshot).as_str());
-    let _ = std::fs::remove_file(snapshot_file(engine_id, snapshot));
+    let _ = fs::remove_file(snapshot_file(engine_id, snapshot));
 }
 
 /// Remove *all* engines' snapshots. Safe only at process startup, before any
 /// engine exists — at runtime an engine only ever cleans its own `snapshot_dir`.
 pub fn purge_snapshot_root() {
-    let _ = std::fs::remove_dir_all(snapshots_root());
+    let _ = fs::remove_dir_all(snapshots_root());
 }
 
 /// Run the query **once**, streaming every batch straight to a fresh parquet snapshot
@@ -85,7 +92,7 @@ pub async fn run_and_snapshot(
     if result.is_err() {
         // The stream may have died mid-spool — drop the partial file (no table was
         // registered yet, so the id is simply never a readable snapshot).
-        let _ = std::fs::remove_file(snapshot_file(engine_id, snapshot));
+        let _ = fs::remove_file(snapshot_file(engine_id, snapshot));
     }
     result
 }
@@ -103,7 +110,7 @@ async fn materialize(
     let file = snapshot_file(engine_id, snapshot);
 
     if let Some(parent) = Path::new(&file).parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
     let opts = SQLOptions::new()
@@ -127,7 +134,7 @@ async fn materialize(
     let arrow_schema = df.schema().inner().clone();
     let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
 
-    let mut writer: Option<ArrowWriter<std::fs::File>> = None;
+    let mut writer: Option<ArrowWriter<File>> = None;
     let mut total = 0usize;
     let mut page1: Vec<Vec<Cell>> = Vec::new();
     let mut page1_batches: Vec<RecordBatch> = Vec::new();
@@ -135,7 +142,7 @@ async fn materialize(
         let batch = batch.map_err(|e| e.to_string())?;
         total += batch.num_rows();
         if writer.is_none() {
-            let out = std::fs::File::create(&file).map_err(|e| e.to_string())?;
+            let out = File::create(&file).map_err(|e| e.to_string())?;
             writer =
                 Some(ArrowWriter::try_new(out, batch.schema(), None).map_err(|e| e.to_string())?);
         }
@@ -155,7 +162,7 @@ async fn materialize(
             .map_err(|e| e.to_string())?;
     }
 
-    let page1_batch = datafusion::arrow::compute::concat_batches(&arrow_schema, &page1_batches)
+    let page1_batch = concat_batches(&arrow_schema, &page1_batches)
         .map_err(|e| e.to_string())?;
     Ok((
         QueryOutput {
@@ -183,7 +190,7 @@ pub struct CellFormat {
 
 impl CellFormat {
     pub fn new(overrides: &BTreeMap<String, String>) -> Self {
-        let eff = |k: &str| crate::engine::config::effective(overrides, k).unwrap_or_default();
+        let eff = |k: &str| effective(overrides, k).unwrap_or_default();
         Self {
             null: eff("datafusion.format.null"),
             date: eff("datafusion.format.date_format"),
@@ -270,7 +277,7 @@ async fn read_page(
         // ORDER BY the chosen column over the whole snapshot, then take the page window.
         // `Column::from_name` avoids identifier parsing on odd column names; `nulls_first =
         // false` ⇒ nulls always sort last, both directions (Rz6).
-        let expr = col(datafusion::common::Column::from_name(name)).sort(asc, false);
+        let expr = col(Column::from_name(name)).sort(asc, false);
         df = df.sort(vec![expr]).map_err(|e| e.to_string())?;
     }
     let batches = df
@@ -279,8 +286,7 @@ async fn read_page(
         .collect()
         .await
         .map_err(|e| e.to_string())?;
-    let batch =
-        datafusion::arrow::compute::concat_batches(&schema, &batches).map_err(|e| e.to_string())?;
+    let batch = concat_batches(&schema, &batches).map_err(|e| e.to_string())?;
     let rows = batches_to_rows(&batches, fmt)?;
     Ok((rows, batch))
 }

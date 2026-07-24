@@ -1,13 +1,18 @@
 //! Catalog side of the engine: registering external tables, reading their free
 //! (footer) statistics, view-dependency extraction (D10), and full-scan profiling (D4).
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::common::stats::Precision;
+use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
 
 use strata_model::{ColumnInfo, Kind, Stat, StatKey};
+
+use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
 /// (`None` when the source doesn't report one).
@@ -174,8 +179,8 @@ pub struct PlanDeps {
 pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     use datafusion::common::tree_node::TreeNodeRecursion;
     use datafusion::logical_expr::LogicalPlan;
-    let mut tables = std::collections::BTreeSet::new();
-    let mut aliases = std::collections::BTreeSet::new();
+    let mut tables = BTreeSet::new();
+    let mut aliases = BTreeSet::new();
     let _ = plan.apply_with_subqueries(|node| {
         match node {
             LogicalPlan::TableScan(scan) => {
@@ -209,7 +214,7 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
 pub async fn run_profile(
     ctx: &SessionContext,
     name: &str,
-) -> Result<crate::profile::CatalogProfile, String> {
+) -> Result<CatalogProfile, String> {
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
     let columns: Vec<ColumnInfo> = df
         .schema()
@@ -217,11 +222,11 @@ pub async fn run_profile(
         .iter()
         .map(|f| column_info(f))
         .collect();
-    let (exprs, slots) = crate::profile::aggregates(&columns);
+    let (exprs, slots) = aggregates(&columns);
     // Render *before* executing, from the same `Expr`s that are about to run, so "view
     // as query" can't drift from the facts it produced. Not `plan_to_sql` on the whole
     // plan: that inlines a view's body and names no view (see `profile_sql`).
-    let sql = crate::profile::profile_sql(name, &exprs);
+    let sql = profile_sql(name, &exprs);
     let batches = df
         .aggregate(vec![], exprs)
         .map_err(|e| e.to_string())?
@@ -229,7 +234,7 @@ pub async fn run_profile(
         .await
         .map_err(|e| e.to_string())?;
     let batch = batches.first().ok_or("profile returned no batches")?;
-    let mut profile = crate::profile::decode(&slots, batch, &columns)?;
+    let mut profile = decode(&slots, batch, &columns)?;
     profile.sql = sql;
     Ok(profile)
 }
@@ -302,7 +307,7 @@ async fn free_stats(ctx: &SessionContext, name: &str, columns: &mut [ColumnInfo]
 /// own (schema evolution) — also nothing to report. `Inexact` carries through flagged.
 fn stat_of(
     key: StatKey,
-    p: &datafusion::common::stats::Precision<datafusion::common::ScalarValue>,
+    p: &Precision<ScalarValue>,
 ) -> Option<Stat> {
     let v = p.get_value()?;
     if v.is_null() {

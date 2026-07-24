@@ -7,12 +7,14 @@ use std::sync::Arc;
 use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
 use strata_core::engine::{RecordBatch, Schema};
+use strata_core::theme::load;
 use strata_model::{Cell as CellData, ColumnInfo, Kind};
 
 use super::super::find::FindState;
 use super::super::sort::SortState;
 use super::*;
 use crate::apps::project::state::{Chan, SessionState};
+use crate::theme::strata_theme;
 
 /// A 2×2 page (scalar columns, empty batch — ⌘A is pure selection, no serialization).
 fn page() -> Rc<GridData> {
@@ -43,7 +45,7 @@ fn page() -> Rc<GridData> {
 /// (the right-click copy menu opens into it). Settings + the shared selection come in
 /// as root contexts from the runner.
 fn app() -> impl IntoElement {
-    use_init_theme(|| crate::theme::strata_theme(&strata_core::theme::load("midnight")));
+    use_init_theme(|| strata_theme(&load("midnight")));
     // The grid only needs a session with one open tab — build it directly rather than
     // routing through `use_init_session` (which reads a project root from context and does
     // disk IO, neither of which belongs in a datagrid interaction test).
@@ -83,7 +85,7 @@ fn cell_press_focuses_the_grid_and_cmd_a_selects_all() {
         app,
         (900., 700.).into(),
         |r| {
-            r.provide_root_context(|| State::create(strata_core::config::Settings::default()));
+            r.provide_root_context(|| State::create(Settings::default()));
             r.provide_root_context(|| State::create(Selection::None))
         },
         1.,
@@ -140,7 +142,7 @@ fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
         app,
         (900., 700.).into(),
         |r| {
-            r.provide_root_context(|| State::create(strata_core::config::Settings::default()));
+            r.provide_root_context(|| State::create(Settings::default()));
             r.provide_root_context(|| State::create(Selection::None))
         },
         1.,

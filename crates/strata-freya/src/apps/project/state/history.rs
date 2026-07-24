@@ -129,6 +129,10 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
+    use std::process;
+
     use super::*;
 
     fn entry(sql: &str) -> HistoryEntry {
@@ -154,14 +158,14 @@ mod tests {
     /// Load flips file-order (oldest → newest) to newest-first for display.
     #[test]
     fn load_is_newest_first() {
-        let root = std::env::temp_dir().join(format!("strata-history-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = env::temp_dir().join(format!("strata-history-test-{}", process::id()));
+        let _ = fs::remove_dir_all(&root);
         for s in ["old", "mid", "new"] {
             project_io::append_history(&root, &entry(s)).unwrap();
         }
         let h = History::load(&root);
         let sqls: Vec<&str> = h.entries.iter().map(|x| x.sql.as_str()).collect();
         assert_eq!(sqls, ["new", "mid", "old"]);
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&root);
     }
 }
