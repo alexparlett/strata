@@ -82,6 +82,10 @@ impl ProjectApp {
         .with_min_size(880., 600.)
         .with_background(background)
         .with_on_close(on_close)
+        // Offset from AppKit's default (≈7, 6): close button lands at (13, 16) —
+        // x matches the Dioxus app's placement, y centers the 16px buttons in the
+        // 48px header bar.
+        .with_traffic_light_inset(6., 10.)
         .with_window_attributes(move |attrs, _| {
             let attrs = attrs
                 .with_titlebar_transparent(true)
