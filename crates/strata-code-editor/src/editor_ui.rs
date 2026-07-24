@@ -28,7 +28,7 @@ use crate::{
         TriggerDecision,
     },
     editor_data::{CodeEditorData, DecorationSeverity},
-    editor_line::EditorLineUI,
+    editor_line::{gutter_offset, EditorLineUI},
     editor_theme::{
         EditorTheme,
         EditorThemePartial,
@@ -340,7 +340,7 @@ impl Component for CodeEditor {
                 est_h += (text_w / text_w_cap).ceil().max(1.0) * ROW_H + 4.0;
             }
 
-            let gutter_offset = crate::editor_line::gutter_offset(font_size, gutter);
+            let gutter_offset = gutter_offset(font_size, gutter);
             let pointer_x = editor_data.scrolls.0 as f32 + gutter_offset + h.x;
             let scroll_y = editor_data.scrolls.1 as f32;
             let line_top = h.line as f32 * line_height + scroll_y;
@@ -404,7 +404,7 @@ impl Component for CodeEditor {
             const PAD: f32 = 4.0;
 
             let popup_h = (open.items.len() as f32 * ROW_H + PAD * 2.0).min(MAX_H);
-            let gutter_offset = crate::editor_line::gutter_offset(font_size, gutter);
+            let gutter_offset = gutter_offset(font_size, gutter);
             let char_width = editor_data.metrics.char_width;
             let origin = (*editor_area.read())
                 .map(|a| (a.min_x(), a.min_y()))

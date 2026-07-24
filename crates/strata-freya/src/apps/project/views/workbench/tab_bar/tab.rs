@@ -4,10 +4,12 @@ use strata_core::config::{Command, Settings};
 
 use strata_model::TabId;
 
+use crate::apps::project::close::TabCloser;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Body, InputTypography};
+use crate::keymap::on_command;
 use freya::components::{use_theme, DragZone};
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -92,7 +94,7 @@ impl Component for Tab {
         let mut draft = use_state(String::new);
         let a11y = use_a11y();
         let settings = use_consume::<State<Settings>>();
-        let closer = use_consume::<crate::apps::project::close::TabCloser>();
+        let closer = use_consume::<TabCloser>();
         // Entering rename (from the menu or a double-click) just flips `renaming`. We react to that
         // here — in the tab's own scope, so it survives the menu closing: seed the draft with the
         // current name and focus the input (the focus lands after the input has mounted).
@@ -234,7 +236,7 @@ impl Component for Tab {
             // not also cancel a running query further down the dismiss chain); a press
             // anywhere outside the tab commits (like a blur).
             .maybe(*renaming.read(), |el| {
-                el.on_global_key_down(crate::keymap::on_command(
+                el.on_global_key_down(on_command(
                     settings,
                     Command::Cancel,
                     move || {

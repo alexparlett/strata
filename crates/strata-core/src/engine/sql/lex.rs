@@ -11,7 +11,7 @@ use std::ops::Range;
 
 use datafusion::sql::sqlparser::dialect::{Dialect, GenericDialect};
 use datafusion::sql::sqlparser::keywords::Keyword;
-use datafusion::sql::sqlparser::tokenizer::{Token, Tokenizer};
+use datafusion::sql::sqlparser::tokenizer::{Location, Token, Tokenizer};
 
 /// Whether `ch` continues a SQL identifier/word, per DataFusion's parser dialect
 /// (`GenericDialect` — its default; the tokeniser below uses the same one). Used for
@@ -286,7 +286,7 @@ fn line_starts(sql: &str) -> Vec<usize> {
     v
 }
 
-fn offset(starts: &[usize], loc: datafusion::sql::sqlparser::tokenizer::Location) -> usize {
+fn offset(starts: &[usize], loc: Location) -> usize {
     let line = (loc.line.max(1) - 1) as usize;
     let base = starts.get(line).copied().unwrap_or(0);
     base + (loc.column.max(1) - 1) as usize

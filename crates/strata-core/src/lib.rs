@@ -11,7 +11,7 @@
 //! - [`profile`] — the profiling scan logic (aggregate exprs + result decode).
 //! - [`engine`] — the DataFusion worker, `Command`/`Event` protocol, and connection handle.
 
-use engine::{plan, profile};
+use engine::profile;
 
 pub mod config;
 pub mod engine;

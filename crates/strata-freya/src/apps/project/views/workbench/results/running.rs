@@ -14,6 +14,7 @@ use strata_core::config::{Command, Settings};
 
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Body, Control, Path};
+use crate::keymap::{on_command, use_hint};
 
 define_theme!(
     %[no_ext]
@@ -83,7 +84,7 @@ impl Component for Running {
         let on_esc = on_cancel.clone();
         let settings = use_consume::<State<Settings>>();
         // Derived even though Cancel is fixed — one source for every glyph.
-        let esc_hint = crate::keymap::use_hint(Command::Cancel);
+        let esc_hint = use_hint(Command::Cancel);
 
         rect()
             .width(Size::fill())
@@ -96,7 +97,7 @@ impl Component for Running {
             // Esc = Cancel while the run is up. This body sits after the tab strip in
             // document order, so an open menu or an in-progress rename claims the Esc
             // first; when it reaches here it's consumed.
-            .on_global_key_down(crate::keymap::on_command(
+            .on_global_key_down(on_command(
                 settings,
                 Command::Cancel,
                 move || {

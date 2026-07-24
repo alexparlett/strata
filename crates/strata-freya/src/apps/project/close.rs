@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use freya::prelude::*;
 use freya::radio::Radio;
+use freya::winit::window::WindowId;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use strata_core::config::Settings;
 
@@ -63,7 +64,7 @@ pub fn close_bridge(
     confirm_seed: bool,
 ) -> (
     CloseBridge,
-    impl FnMut(RendererContext, freya::winit::window::WindowId) -> CloseDecision + Send + 'static,
+    impl FnMut(RendererContext, WindowId) -> CloseDecision + Send + 'static,
 ) {
     let (tx, rx) = unbounded();
     let guard = Arc::new(CloseGuard {
@@ -73,7 +74,7 @@ pub fn close_bridge(
     let hook_guard = guard.clone();
     // The parameter annotations keep the closure generic over `RendererContext`'s
     // lifetime (plain inference would pin it and fail the `for<'a> FnMut` bound).
-    let hook = move |_ctx: RendererContext<'_>, _id: freya::winit::window::WindowId| {
+    let hook = move |_ctx: RendererContext<'_>, _id: WindowId| {
         if hook_guard.running.load(Ordering::Relaxed) && hook_guard.confirm.load(Ordering::Relaxed)
         {
             // A query is in flight and the user wants the confirm: veto the close and

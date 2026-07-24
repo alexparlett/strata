@@ -11,6 +11,7 @@
 //! [`SessionState::from_snapshot`]. The `.strata/session.json` IO is `strata-core::project`.
 
 use std::collections::HashMap;
+use std::mem;
 
 use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
 use strata_model::{Diagnostic, Origin, ResultsView, SessionSnapshot, TabId, TabSnapshot};
@@ -301,7 +302,7 @@ impl SessionState {
     /// Close every open tab, parking each (with its strip index) on the reopen stack so they can be
     /// brought back one-by-one; leaves the session empty.
     pub fn close_all(&mut self) {
-        for (at, id) in std::mem::take(&mut self.order).into_iter().enumerate() {
+        for (at, id) in mem::take(&mut self.order).into_iter().enumerate() {
             if let Some(mut tab) = self.tabs.remove(&id) {
                 tab.request = None;
                 self.closed.push((at, tab));

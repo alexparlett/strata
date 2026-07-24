@@ -315,11 +315,13 @@ pub mod validators {
     /// specifiers. Requires the `chrono` feature.
     #[cfg(feature = "chrono")]
     pub fn strftime(pattern: &str) -> Result<(), String> {
+        use chrono::format::{Item, StrftimeItems};
+
         if pattern.trim().is_empty() {
             return Err("Required.".to_string());
         }
-        for item in chrono::format::StrftimeItems::new(pattern) {
-            if matches!(item, chrono::format::Item::Error) {
+        for item in StrftimeItems::new(pattern) {
+            if matches!(item, Item::Error) {
                 return Err("Not a valid date/time format.".to_string());
             }
         }

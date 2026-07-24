@@ -2,8 +2,10 @@ use freya::components::{use_theme, ScrollController};
 use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
 
+use strata_core::config::{Command, Settings};
 use strata_model::TabId;
 
+use crate::apps::project::close::TabCloser;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
@@ -121,8 +123,8 @@ impl Component for NavMenu {
         let query = use_state(String::new);
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let palette = NavPalette::read();
-        let closer = use_consume::<crate::apps::project::close::TabCloser>();
-        let settings = use_consume::<State<strata_core::config::Settings>>();
+        let closer = use_consume::<TabCloser>();
+        let settings = use_consume::<State<Settings>>();
 
         // Open tabs + status, filtered by the search box. Read once; the guard drops before we build.
         // The filter runs over *all* tabs, in strip order.
@@ -209,8 +211,8 @@ fn tab_row(
     palette: NavPalette,
     mut radio: Radio<SessionState, Chan>,
     mut open: State<bool>,
-    closer: crate::apps::project::close::TabCloser,
-    settings: State<strata_core::config::Settings>,
+    closer: TabCloser,
+    settings: State<Settings>,
 ) -> impl IntoElement {
     let fg = palette.name_fg(active);
     let close_fg = palette.faint;
@@ -301,10 +303,7 @@ impl Component for OverflowMenu {
                         radio.write().open_blank();
                         open.set(false);
                     })
-                    .child(super::menu::menu_row(
-                        "New query",
-                        strata_core::config::Command::NewTab,
-                    )),
+                    .child(super::menu::menu_row("New query", Command::NewTab)),
             )
             .child(super::menu::menu_sep(sep))
             .child(
@@ -323,10 +322,7 @@ impl Component for OverflowMenu {
                         radio.write().reopen_last();
                         open.set(false);
                     })
-                    .child(super::menu::menu_row(
-                        "Reopen closed tab",
-                        strata_core::config::Command::ReopenTab,
-                    )),
+                    .child(super::menu::menu_row("Reopen closed tab", Command::ReopenTab)),
             );
 
         Attached::new(tip(

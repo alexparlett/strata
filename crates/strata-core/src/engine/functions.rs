@@ -6,6 +6,9 @@
 //! plain display strings at registry-snapshot time, so the language service and UI
 //! never depend on DataFusion's type model. Called once per engine (`Engine::new`).
 
+use std::collections::HashSet;
+use std::iter;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion::logical_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
@@ -44,7 +47,7 @@ pub(crate) fn snapshot(ctx: &SessionContext) -> FunctionCatalog {
     }
 }
 
-fn sorted(names: std::collections::HashSet<String>) -> Vec<String> {
+fn sorted(names: HashSet<String>) -> Vec<String> {
     let mut v: Vec<String> = names.into_iter().collect();
     v.sort();
     v
@@ -128,7 +131,7 @@ where
 /// open-ended tail.
 fn render(ts: &TypeSignature) -> Vec<Vec<String>> {
     use TypeSignature as TS;
-    let repeat = |label: &str, n: usize| vec![std::iter::repeat_n(label.to_string(), n).collect()];
+    let repeat = |label: &str, n: usize| vec![iter::repeat_n(label.to_string(), n).collect()];
     match ts {
         TS::Nullary => vec![vec![]],
         TS::Exact(types) => vec![types.iter().map(short_type).collect()],

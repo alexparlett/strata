@@ -29,7 +29,7 @@ use freya::prelude::*;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
 use strata_code_editor::prelude::EditorThemePreference;
 use strata_core::config::Settings;
-use strata_core::theme::{ThemeRegistry, SLOTS};
+use strata_core::theme::{effective_id, ThemeRegistry, SLOTS};
 
 pub use strata_core::theme::{
     resolve_typography, typography, Kind, Mode, Pref, SheetDef, SpecificValue, StrataTheme,
@@ -118,7 +118,7 @@ pub fn use_strata_theme(themes: ThemesCtx, settings: State<Settings>) {
         move || {
             let s = settings.peek();
             let os_dark = s.sync_os && *preferred.peek() == PreferredTheme::Dark;
-            let id = strata_core::theme::effective_id(&s.theme, s.sync_os, os_dark);
+            let id = effective_id(&s.theme, s.sync_os, os_dark);
             strata_theme(themes.get_or_default(&id))
         }
     });
@@ -129,7 +129,7 @@ pub fn use_strata_theme(themes: ThemesCtx, settings: State<Settings>) {
         };
         // Short-circuit: only subscribe to the OS appearance while actually syncing.
         let os_dark = sync_os && *preferred.read() == PreferredTheme::Dark;
-        let id = strata_core::theme::effective_id(&id, sync_os, os_dark);
+        let id = effective_id(&id, sync_os, os_dark);
         let applied = theme.peek().name;
         if applied != id {
             theme.set(strata_theme(themes.get_or_default(&id)));
@@ -596,6 +596,11 @@ fn pc(s: &str) -> Color {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
+
+    use strata_core::theme::load;
+
     use super::{generate_schema, Preference};
 
     /// The committed `theme.schema.json` (root `themes/`, beside the theme files strata-core
@@ -609,12 +614,12 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../themes/theme.schema.json"
         );
-        if std::env::var_os("UPDATE_SCHEMA").is_some() {
+        if env::var_os("UPDATE_SCHEMA").is_some() {
             let out = serde_json::to_string_pretty(&generated).unwrap() + "\n";
-            std::fs::write(path, out).unwrap();
+            fs::write(path, out).unwrap();
         } else {
             let committed: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+                serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
             assert_eq!(
                 committed, generated,
                 "theme.schema.json is stale — run `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`"
@@ -630,7 +635,7 @@ mod tests {
     #[test]
     fn theme_files_parse_end_to_end() {
         for id in ["midnight", "daylight"] {
-            let t = strata_core::theme::load(id);
+            let t = load(id);
             let editor = t
                 .components
                 .get("code_editor")

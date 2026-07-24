@@ -15,9 +15,13 @@
 //! Freya-specific — coercing [`Pref`]s into `Preference<Color>`s, the component registries
 //! themselves, schema sync — lives in `strata-freya`'s `theme` module.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use serde_json::from_str;
 use std::collections::BTreeMap;
+use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const MIDNIGHT_JSON: &str = include_str!("../../../themes/midnight.json");
 const DAYLIGHT_JSON: &str = include_str!("../../../themes/daylight.json");
@@ -119,7 +123,7 @@ pub enum SpecificValue {
 }
 
 impl<'de> Deserialize<'de> for SpecificValue {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         use serde::de::Error;
         match serde_json::Value::deserialize(d)? {
             serde_json::Value::String(s) => Ok(Self::Color(s)),
@@ -200,7 +204,7 @@ pub fn load(id: &str) -> StrataTheme {
         "daylight" => DAYLIGHT_JSON,
         _ => MIDNIGHT_JSON,
     };
-    serde_json::from_str(json).expect("strata theme json")
+    from_str(json).expect("strata theme json")
 }
 
 /// Where a theme was discovered — drives the Settings source badge. (Plugin-contributed
@@ -232,7 +236,7 @@ impl ThemeRegistry {
     pub fn discover() -> Self {
         let dirs: Vec<PathBuf> = user_themes_dir().into_iter().collect();
         for dir in &dirs {
-            let _ = std::fs::create_dir_all(dir);
+            let _ = fs::create_dir_all(dir);
         }
         Self::with_dirs(&dirs)
     }
@@ -244,12 +248,12 @@ impl ThemeRegistry {
         let mut entries: Vec<ThemeEntry> = [MIDNIGHT_JSON, DAYLIGHT_JSON]
             .iter()
             .map(|raw| ThemeEntry {
-                theme: serde_json::from_str(raw).expect("built-in theme json"),
+                theme: from_str(raw).expect("built-in theme json"),
                 source: Source::Builtin,
             })
             .collect();
         for dir in dirs {
-            let Ok(rd) = std::fs::read_dir(dir) else {
+            let Ok(rd) = fs::read_dir(dir) else {
                 continue;
             };
             let mut paths: Vec<PathBuf> = rd
@@ -295,8 +299,8 @@ impl ThemeRegistry {
 }
 
 fn parse_theme_file(path: &Path) -> Result<StrataTheme, String> {
-    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+    let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    from_str(&raw).map_err(|e| e.to_string())
 }
 
 /// Insert a discovered theme: same-id replaces in place (keeps display position), new ids
@@ -311,7 +315,7 @@ fn upsert(entries: &mut Vec<ThemeEntry>, theme: StrataTheme, source: Source) {
 /// The user themes directory (`<app-config>/Strata/themes`). Drop a `*.json` theme here to
 /// add your own (or override a built-in by reusing its id).
 pub fn user_themes_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
+    let home = env::var_os("HOME")?;
     let base = PathBuf::from(home);
     #[cfg(target_os = "macos")]
     let dir = base.join("Library/Application Support/Strata/themes");
@@ -323,13 +327,13 @@ pub fn user_themes_dir() -> Option<PathBuf> {
 /// Reveal the user themes folder in the OS file manager (creating it first).
 pub fn open_user_themes_dir() {
     if let Some(dir) = user_themes_dir() {
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
         #[cfg(target_os = "macos")]
-        let _ = std::process::Command::new("open").arg(&dir).spawn();
+        let _ = Command::new("open").arg(&dir).spawn();
         #[cfg(target_os = "windows")]
-        let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+        let _ = Command::new("explorer").arg(&dir).spawn();
         #[cfg(all(unix, not(target_os = "macos")))]
-        let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+        let _ = Command::new("xdg-open").arg(&dir).spawn();
     }
 }
 
@@ -356,7 +360,7 @@ pub fn effective_id(theme_id: &str, sync_os: bool, os_dark: bool) -> String {
 pub fn os_is_dark() -> bool {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("defaults")
+        Command::new("defaults")
             .args(["read", "-g", "AppleInterfaceStyle"])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).contains("Dark"))
@@ -549,15 +553,16 @@ pub fn generate_schema(component_registries: &[&[(&str, &[(&str, Kind)])]]) -> s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process;
 
     /// A fresh, empty scratch dir under the OS temp dir (no tempfile dep for two tests).
     fn scratch_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = env::temp_dir().join(format!(
             "strata-theme-registry-{}-{tag}",
-            std::process::id()
+            process::id()
         ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
         dir
     }
 
@@ -576,13 +581,13 @@ mod tests {
         // A new user theme: the midnight file under a fresh id.
         let custom = MIDNIGHT_JSON.replace(r#""id": "midnight""#, r#""id": "custom""#);
         assert_ne!(custom, MIDNIGHT_JSON, "id marker must match the fixture");
-        std::fs::write(dir.join("custom.json"), custom).unwrap();
+        fs::write(dir.join("custom.json"), custom).unwrap();
         // An override: a user file reusing the built-in id replaces it in place.
         let renamed = MIDNIGHT_JSON.replace(r#""name": "Midnight""#, r#""name": "My Midnight""#);
         assert_ne!(renamed, MIDNIGHT_JSON, "name marker must match the fixture");
-        std::fs::write(dir.join("midnight-tweak.json"), renamed).unwrap();
+        fs::write(dir.join("midnight-tweak.json"), renamed).unwrap();
         // Broken files are skipped, never fatal.
-        std::fs::write(dir.join("broken.json"), "{ not json").unwrap();
+        fs::write(dir.join("broken.json"), "{ not json").unwrap();
 
         let reg = ThemeRegistry::with_dirs(std::slice::from_ref(&dir));
         let ids: Vec<&str> = reg.entries().iter().map(|e| e.theme.id.as_str()).collect();
@@ -595,6 +600,6 @@ mod tests {
         );
         assert_eq!(reg.entries()[2].source, Source::User);
 
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

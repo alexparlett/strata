@@ -21,10 +21,14 @@ use std::io::Write;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray, UInt32Array};
+use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::error::ArrowError;
+use datafusion::arrow::json::writer::JsonArray;
+use datafusion::arrow::json::{ArrayWriter, LineDelimitedWriter};
 use datafusion::arrow::record_batch::RecordBatchWriter;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+use serde_json::{from_slice, to_string, to_string_pretty, to_writer_pretty, Value};
 
 /// Clipboard / text serialization format.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -44,14 +48,14 @@ pub enum TextFormat {
 /// nested interiors included. Slots into [`drive`] like the CSV / Markdown writers.
 struct PrettyJsonWriter<W: Write> {
     sink: W,
-    buf: datafusion::arrow::json::ArrayWriter<Vec<u8>>,
+    buf: ArrayWriter<Vec<u8>>,
 }
 
 impl<W: Write> PrettyJsonWriter<W> {
     fn new(sink: W) -> Self {
         Self {
             sink,
-            buf: datafusion::arrow::json::ArrayWriter::new(Vec::new()),
+            buf: ArrayWriter::new(Vec::new()),
         }
     }
 }
@@ -65,10 +69,9 @@ impl<W: Write> RecordBatchWriter for PrettyJsonWriter<W> {
         let PrettyJsonWriter { sink, mut buf } = self;
         buf.finish()?; // close the JSON array
         let bytes = buf.into_inner(); // the complete compact document
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
-        serde_json::to_writer_pretty(sink, &value)
-            .map_err(|e| ArrowError::ExternalError(Box::new(e)))
+        let value: Value =
+            from_slice(&bytes).map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+        to_writer_pretty(sink, &value).map_err(|e| ArrowError::ExternalError(Box::new(e)))
     }
 }
 
@@ -118,7 +121,7 @@ pub fn write_selection<W: Write>(
     let taken: Vec<ArrayRef> = projected
         .columns()
         .iter()
-        .map(|c| datafusion::arrow::compute::take(&**c, &indices, None))
+        .map(|c| take(&**c, &indices, None))
         .collect::<Result<_, _>>()?;
     let sub = RecordBatch::try_new(projected.schema(), taken)?;
     write_batch(fmt, &sub, header, w)
@@ -139,14 +142,14 @@ pub fn cell_pretty_json(batch: &RecordBatch, col: usize, row: usize) -> Option<S
     let one = batch.project(&[col]).ok()?.slice(row, 1);
     let mut buf = Vec::new();
     {
-        let mut w = datafusion::arrow::json::ArrayWriter::new(&mut buf);
+        let mut w = ArrayWriter::new(&mut buf);
         w.write(&one).ok()?;
         w.finish().ok()?;
     }
     // arrow-json emits `[{"<col>": <value>}]`; pull the single value out and indent it.
-    let arr: serde_json::Value = serde_json::from_slice(&buf).ok()?;
+    let arr: Value = from_slice(&buf).ok()?;
     let val = arr.get(0)?.as_object()?.values().next()?;
-    serde_json::to_string_pretty(val).ok()
+    to_string_pretty(val).ok()
 }
 
 /// Pretty-print one whole row of `batch` as a **bare `{column: value}` object** — the record
@@ -160,13 +163,13 @@ pub fn row_pretty_json(batch: &RecordBatch, row: usize) -> Option<String> {
     {
         let mut w = datafusion::arrow::json::WriterBuilder::new()
             .with_explicit_nulls(true)
-            .build::<_, datafusion::arrow::json::writer::JsonArray>(&mut buf);
+            .build::<_, JsonArray>(&mut buf);
         w.write(&one).ok()?;
         w.finish().ok()?;
     }
     // arrow-json emits `[{...}]`; pull the single row object out and indent it.
-    let arr: serde_json::Value = serde_json::from_slice(&buf).ok()?;
-    serde_json::to_string_pretty(arr.get(0)?).ok()
+    let arr: Value = from_slice(&buf).ok()?;
+    to_string_pretty(arr.get(0)?).ok()
 }
 
 /// GitHub-flavoured markdown table writer. Buffers formatted rows across `write` calls and, on
@@ -297,14 +300,14 @@ fn flatten_nested(batch: &RecordBatch) -> Result<RecordBatch, ArrowError> {
     // One ndjson pass gives every cell's type-aware JSON value.
     let mut buf = Vec::new();
     {
-        let mut jw = datafusion::arrow::json::LineDelimitedWriter::new(&mut buf);
+        let mut jw = LineDelimitedWriter::new(&mut buf);
         jw.write(batch)?;
         jw.finish()?;
     }
-    let rows: Vec<serde_json::Value> = buf
+    let rows: Vec<Value> = buf
         .split(|&b| b == b'\n')
         .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_slice(l).unwrap_or(serde_json::Value::Null))
+        .map(|l| from_slice(l).unwrap_or(Value::Null))
         .collect();
 
     let mut cols: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
@@ -315,7 +318,7 @@ fn flatten_nested(batch: &RecordBatch) -> Result<RecordBatch, ArrowError> {
             let strs: Vec<Option<String>> = rows
                 .iter()
                 .map(|obj| match obj.get(name) {
-                    Some(v) if !v.is_null() => Some(serde_json::to_string(v).unwrap_or_default()),
+                    Some(v) if !v.is_null() => Some(to_string(v).unwrap_or_default()),
                     _ => None,
                 })
                 .collect();

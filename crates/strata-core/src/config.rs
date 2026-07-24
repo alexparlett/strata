@@ -2,9 +2,11 @@
 //! persisted as JSON in the OS user-config dir via the `preferences` crate.
 //! Distinct from a `Project` — this is per-machine, never inside a `.psproj`.
 
+use crate::theme::DEFAULT_THEME;
 use crate::util;
 use preferences::{AppInfo, Preferences};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 const APP_INFO: AppInfo = AppInfo {
     name: "Strata",
@@ -149,11 +151,11 @@ pub struct Settings {
     /// each window's `SessionContext` (W2). Keyed by `datafusion.*` option name; see
     /// [`crate::engine::config`].
     #[serde(default)]
-    pub engine: std::collections::BTreeMap<String, String>,
+    pub engine: BTreeMap<String, String>,
 }
 
 fn default_theme() -> String {
-    crate::theme::DEFAULT_THEME.to_string()
+    DEFAULT_THEME.to_string()
 }
 fn default_row_limit() -> usize {
     100
@@ -182,7 +184,7 @@ impl Default for Settings {
             open_pref: OpenPref::Ask,
             confirm_close_running: true,
             keybinds: Vec::new(),
-            engine: std::collections::BTreeMap::new(),
+            engine: BTreeMap::new(),
         }
     }
 }

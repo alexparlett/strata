@@ -45,11 +45,14 @@ pub use datafusion::arrow::record_batch::RecordBatch;
 pub use datafusion::arrow::datatypes::Schema;
 
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::*;
+use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
 
 use crate::engine::plan::QueryPlan;
@@ -106,7 +109,7 @@ pub struct Engine {
     /// `Option` only so `Drop` can take it for a context-safe `shutdown_background`
     /// (a plain field drop panics when the engine is dropped inside another runtime,
     /// e.g. a `#[tokio::test]`); always `Some` while the engine lives.
-    rt: Option<tokio::runtime::Runtime>,
+    rt: Option<Runtime>,
     ctx: SessionContext,
     /// The `datafusion.*` config overrides this engine runs with (W2). Mutex'd so a
     /// future live `set_config` doesn't change the field's shape.
@@ -124,7 +127,7 @@ impl Engine {
     /// Build a window's engine, honouring the given `datafusion.*` `overrides` (W2).
     pub fn new(overrides: BTreeMap<String, String>) -> Engine {
         let engine_id = ENGINE_SEQ.fetch_add(1, Ordering::Relaxed);
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        let rt = Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name(format!("df-engine-{engine_id}"))
             .enable_all()
@@ -162,7 +165,7 @@ impl Engine {
     }
 
     /// The engine's runtime (always present while the engine lives — see the field).
-    fn rt(&self) -> &tokio::runtime::Runtime {
+    fn rt(&self) -> &Runtime {
         self.rt.as_ref().expect("engine runtime")
     }
 
@@ -420,7 +423,7 @@ impl Drop for Engine {
         if let Some(rt) = self.rt.take() {
             rt.shutdown_background();
         }
-        let _ = std::fs::remove_dir_all(snapshot_dir(self.engine_id));
+        let _ = fs::remove_dir_all(snapshot_dir(self.engine_id));
     }
 }
 
@@ -467,7 +470,7 @@ const SCHEMA: &str = "public";
 /// set (default runtime). Sizes ("2G", "100G") parse via `parse_capacity_limit`.
 fn build_runtime(
     overrides: &BTreeMap<String, String>,
-) -> Result<Option<std::sync::Arc<datafusion::execution::runtime_env::RuntimeEnv>>, String> {
+) -> Result<Option<Arc<RuntimeEnv>>, String> {
     use datafusion::execution::runtime_env::RuntimeEnvBuilder;
     let val = |k: &str| {
         overrides

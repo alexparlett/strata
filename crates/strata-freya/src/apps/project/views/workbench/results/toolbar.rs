@@ -4,6 +4,7 @@ use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::InputTypography;
+use crate::keymap::use_hint_title;
 use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -80,7 +81,7 @@ impl Component for ResultsToolbar {
                 .position(AttachedPosition::Bottom)
                 .child(button)
         };
-        let find_title = crate::keymap::use_hint_title("Find in results", Command::Find);
+        let find_title = use_hint_title("Find in results", Command::Find);
 
         // ── find (Search) ─────────────────────────────────────────────────────────────────
         let find = self.find;

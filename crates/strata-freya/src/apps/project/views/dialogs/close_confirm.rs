@@ -9,7 +9,7 @@
 use freya::components::{get_theme, use_theme};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
-use strata_core::config::Settings;
+use strata_core::config::{load, save, Settings};
 
 use crate::apps::project::close::CloseTarget;
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
@@ -108,9 +108,9 @@ impl Component for CloseConfirm {
         let toggle_dont_ask = move |_: Event<PressEventData>| {
             let now = !settings.peek().confirm_close_running;
             settings.write().confirm_close_running = now;
-            let mut cfg = strata_core::config::load();
+            let mut cfg = load();
             cfg.settings = settings.peek().clone();
-            strata_core::config::save(&cfg);
+            save(&cfg);
         };
 
         let header = rect()

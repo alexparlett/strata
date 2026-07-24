@@ -33,9 +33,14 @@
 //! its chord→`Code` table have no job here.
 
 use freya::menu::accelerator::Accelerator;
-use freya::menu::{AboutMetadata, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
-use freya::prelude::{Code, Key, Modifiers, ModifiersExt, NamedKey, NativeEventExt, State};
+use freya::menu::{
+    AboutMetadata, IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
+};
+use freya::prelude::{
+    Code, Key, Modifiers, ModifiersExt, NamedKey, NativeEventExt, RendererContext, State,
+};
 use strata_core::config::{Command, KeyChord, Settings};
+use strata_core::keymap::effective_chord;
 
 /// A custom menubar item — the typed vocabulary the builder and the event handler
 /// share, so dispatch is an exhaustive `match`, not string comparison (the Dioxus
@@ -158,7 +163,7 @@ pub struct MenuChords {
 
 /// The effective menubar chords, resolved from settings at launch.
 pub fn menu_chords(settings: &Settings) -> MenuChords {
-    let chord = |cmd| strata_core::keymap::effective_chord(settings, cmd);
+    let chord = |cmd| effective_chord(settings, cmd);
     MenuChords {
         quit: chord(Command::CloseProject),
         undo: chord(Command::Undo),
@@ -179,7 +184,7 @@ pub fn app_menu(chords: MenuChords) -> Menu {
         chords.quit.as_ref().and_then(accelerator),
     );
     let app = Submenu::new("Strata", true);
-    let items: &[&dyn freya::menu::IsMenuItem] = &[
+    let items: &[&dyn IsMenuItem] = &[
         &PredefinedMenuItem::about(
             Some("About Strata"),
             Some(AboutMetadata {
@@ -210,7 +215,7 @@ pub fn app_menu(chords: MenuChords) -> Menu {
         )
     };
     let edit = Submenu::new("Edit", true);
-    let items: &[&dyn freya::menu::IsMenuItem] = &[
+    let items: &[&dyn IsMenuItem] = &[
         &edit_item(MenuCmd::Undo, "Undo", &chords.undo),
         &edit_item(MenuCmd::Redo, "Redo", &chords.redo),
         &PredefinedMenuItem::separator(),
@@ -240,7 +245,7 @@ pub fn app_menu(chords: MenuChords) -> Menu {
 /// same path as typed keys.
 pub fn handle_menu_event(
     event: MenuEvent,
-    mut ctx: freya::prelude::RendererContext,
+    mut ctx: RendererContext,
     settings: State<Settings>,
 ) {
     match MenuCmd::parse(event.id()) {
@@ -249,8 +254,7 @@ pub fn handle_menu_event(
             let Some(command) = cmd.edit_command() else {
                 return;
             };
-            let Some(chord) = strata_core::keymap::effective_chord(&settings.peek(), command)
-            else {
+            let Some(chord) = effective_chord(&settings.peek(), command) else {
                 return;
             };
             let Some((key, modifiers)) = synthetic_key(&chord) else {

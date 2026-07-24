@@ -12,6 +12,7 @@ use strata_core::config::Command;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Control, Meta, Prose, Title};
+use crate::keymap::use_hint;
 
 /// The centre-pane placeholder when the session has no open tabs.
 #[derive(PartialEq)]
@@ -28,7 +29,7 @@ impl Component for EmptyState {
         let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         // The tab a reopen would restore — drives both the button and its named tooltip.
         let last_closed = radio.read().closed.last().map(|(_, t)| t.name.clone());
-        let new_hint = crate::keymap::use_hint(Command::NewTab);
+        let new_hint = use_hint(Command::NewTab);
 
         let (background, tile_bg, tile_border, icon_c, title_c, sub_c, chip_c) = {
             let c = &use_theme().read().colors;

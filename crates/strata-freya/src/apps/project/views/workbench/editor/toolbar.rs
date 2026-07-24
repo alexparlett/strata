@@ -5,6 +5,7 @@ use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::run_button::{RunButton, RunState};
+use crate::keymap::use_hint_title;
 use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
@@ -111,7 +112,7 @@ impl Component for EditorToolbar {
                 .position(AttachedPosition::Bottom)
                 .child(button)
         };
-        let save_title = crate::keymap::use_hint_title("Save query", Command::SaveQuery);
+        let save_title = use_hint_title("Save query", Command::SaveQuery);
 
         let row = rect()
             .width(Size::fill())

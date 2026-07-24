@@ -3,6 +3,7 @@ use crate::apps::project::query::{use_validation, RunId};
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
+use crate::keymap::{chord_from_event, edit_bindings};
 use freya::components::use_theme;
 use freya::prelude::{
     rect, use_a11y, use_consume, use_side_effect, use_state, ChildrenExt, Component, ComponentKey,
@@ -16,6 +17,7 @@ use strata_code_editor::prelude::{
 };
 use strata_core::config::{Command, Settings};
 use strata_core::engine::sql;
+use strata_core::keymap::resolve;
 use strata_model::TabId;
 
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a
@@ -79,7 +81,7 @@ impl Component for EditorTab {
         {
             let mut editor = editor.clone();
             use_side_effect(move || {
-                let bindings = crate::keymap::edit_bindings(&settings.read());
+                let bindings = edit_bindings(&settings.read());
                 editor.write_if(|mut data| data.set_edit_bindings(bindings));
             });
         }
@@ -166,10 +168,8 @@ impl Component for EditorTab {
                             }
                             let primary =
                                 e.modifiers.intersects(Modifiers::META | Modifiers::CONTROL);
-                            let editor_owned = crate::keymap::chord_from_event(&e)
-                                .and_then(|chord| {
-                                    strata_core::keymap::resolve(&settings.peek(), &chord)
-                                })
+                            let editor_owned = chord_from_event(&e)
+                                .and_then(|chord| resolve(&settings.peek(), &chord))
                                 .is_some_and(Command::is_edit)
                                 || match &e.key {
                                     Key::Character(_) => false,

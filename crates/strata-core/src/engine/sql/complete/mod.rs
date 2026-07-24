@@ -20,8 +20,11 @@ use crate::engine::sql::context::{
     analyze_caret, CaretAnalysis, Clause, Context, Role, LITERAL_WORDS, OPERAND_EXPECTING,
 };
 use crate::engine::sql::fuzzy::match_tier;
-use crate::engine::sql::lex::{caret_extends_numeric_literal, caret_in_string_or_comment, lex};
+use crate::engine::sql::lex::{
+    caret_extends_numeric_literal, caret_in_string_or_comment, is_reserved_in_name_position, lex,
+};
 use crate::engine::sql::symbols::{Catalog, TableSym};
+use crate::engine::sql::FunctionSym;
 use strata_model::Kind;
 
 mod ranking;
@@ -349,7 +352,7 @@ fn needs_quoting(name: &str) -> bool {
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     };
     !plain
-        || crate::engine::sql::lex::is_reserved_in_name_position(name)
+        || is_reserved_in_name_position(name)
         || OPERAND_EXPECTING
             .iter()
             .any(|w| w.eq_ignore_ascii_case(name))
@@ -398,7 +401,7 @@ fn column_item(name: &str, detail: Option<&str>, replace: &Range<usize>) -> Comp
     }
 }
 
-fn function_item(f: &crate::engine::sql::FunctionSym, replace: &Range<usize>) -> Completion {
+fn function_item(f: &FunctionSym, replace: &Range<usize>) -> Completion {
     Completion {
         label: f.name.clone(),
         insert: format!("{}(", f.name),

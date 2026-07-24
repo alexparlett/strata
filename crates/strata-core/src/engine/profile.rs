@@ -34,6 +34,7 @@ use datafusion::functions_aggregate::expr_fn::{
     approx_percentile_cont, avg, count, count_distinct, max, min,
 };
 use datafusion::prelude::{ident, lit, Expr};
+use datafusion::sql::unparser::expr_to_sql;
 
 use strata_model::Kind;
 use strata_model::{ColumnInfo, Stat, StatKey};
@@ -144,7 +145,7 @@ pub fn aggregates(columns: &[ColumnInfo]) -> (Vec<Expr>, Vec<Slot>) {
 pub fn profile_sql(owner: &str, exprs: &[Expr]) -> String {
     let mut parts = Vec::with_capacity(exprs.len());
     for e in exprs {
-        match datafusion::sql::unparser::expr_to_sql(e) {
+        match expr_to_sql(e) {
             Ok(ast) => parts.push(format!("  {ast}")),
             Err(_) => return String::new(),
         }
