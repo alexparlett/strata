@@ -34,11 +34,12 @@ pub struct Cell {
     pub active_color: Option<Color>,
     /// Fill colour when active (the gutter's `gutter_active_background`); `None` = no fill.
     pub active_background: Option<Color>,
-    /// Double-click → the nested-cell view (P2-12). `Some` only for a data cell whose column
-    /// is nested (`struct`/`list`/`map`) and whose value is non-null; the grid builds the
-    /// handler (it owns the batch + the open state). The standard optional event-prop shape
-    /// (`Button::on_press`), fed the double-click's pointer event.
-    pub on_nested_open: Option<EventHandler<Event<PointerEventData>>>,
+    /// Double-click → open: the nested-cell view for a data cell whose column is nested
+    /// (`struct`/`list`/`map`) and non-null (P2-12), the whole-row record view for a gutter
+    /// cell (P2-10). The grid builds the handler (it owns the batch + the open state); `None`
+    /// everywhere else. The standard optional event-prop shape (`Button::on_press`), fed the
+    /// double-click's pointer event.
+    pub on_open: Option<EventHandler<Event<PointerEventData>>>,
 }
 
 impl Component for Cell {
@@ -95,7 +96,7 @@ impl Component for Cell {
             .maybe(hovered(), |el| el.background(self.hover_bg))
             .border(border)
             .on_pointer_down({
-                let on_nested_open = self.on_nested_open.clone();
+                let on_open = self.on_open.clone();
                 move |e: Event<PointerEventData>| {
                     if !e.data().is_primary() {
                         return;
@@ -108,10 +109,10 @@ impl Component for Cell {
                         CellRole::Corner => sel.all(),
                         CellRole::None => {}
                     }
-                    // Double-click on a nested cell opens its value view. Detected here — inside
+                    // Double-click opens (nested cell value / whole row). Detected here — inside
                     // the same handler as the single-click selection (à la the resize grip), so
                     // the first press of the pair still selects and the second just opens.
-                    if let Some(open) = &on_nested_open {
+                    if let Some(open) = &on_open {
                         if EventsCombos::pressed(e.global_location()).is_double() {
                             open.call(e);
                         }

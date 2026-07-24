@@ -21,6 +21,7 @@ mod empty;
 mod error;
 mod explain_plan;
 mod find;
+mod record_view;
 mod running;
 mod selection;
 mod sort;
@@ -46,6 +47,7 @@ use crate::apps::project::views::workbench::results::selection::Selection;
 use status_bar::{Pager, RunInfo};
 pub use cell_view::CellViewThemePreference;
 pub use datagrid::DataGridThemePreference;
+pub use record_view::RecordViewThemePreference;
 pub use explain_plan::ExplainPlanThemePreference;
 pub use running::{CancelButtonThemePartial, CancelButtonThemePreference};
 pub use status_bar::StatusBarThemePreference;
@@ -334,6 +336,7 @@ impl Component for ResultsBody {
                 (
                     DataGrid::new(run_grid, view, row_base, self.spec.tab, find, sort)
                         .row_nums(row_nums)
+                        .total(rows.output.total)
                         .into(),
                     bar,
                 )

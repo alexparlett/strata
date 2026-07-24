@@ -27,6 +27,7 @@ use strata_model::Kind;
 use super::cell_view::{page_batch_row, CellValue, CellView};
 use super::error::ErrorState;
 use super::find::FindState;
+use super::record_view::RecordView;
 use super::selection::{CellRole, SelCtl, Selection};
 use super::sort::SortState;
 use super::toolbar::ResultsToolbar;
@@ -135,6 +136,8 @@ pub struct DataGrid {
     /// Absolute gutter numbers when the find filter reindexed the page (survivors keep
     /// their original positions, so the gutter shows gaps); `None` = number by position.
     row_nums: Option<Rc<Vec<usize>>>,
+    /// The snapshot's total row count — the record view's `Row n of total` label (P2-10).
+    total: usize,
     density: Density,
     pub(crate) theme: Option<DataGridThemePartial>,
 }
@@ -156,6 +159,7 @@ impl DataGrid {
             find,
             sort,
             row_nums: None,
+            total: 0,
             density: Density::Comfortable,
             theme: None,
         }
@@ -164,6 +168,12 @@ impl DataGrid {
     /// The filtered page's absolute gutter numbers (see [`Self::row_nums`]).
     pub fn row_nums(mut self, row_nums: Option<Rc<Vec<usize>>>) -> Self {
         self.row_nums = row_nums;
+        self
+    }
+
+    /// The snapshot's total row count (see [`Self::total`]).
+    pub fn total(mut self, total: usize) -> Self {
+        self.total = total;
         self
     }
 
@@ -204,6 +214,10 @@ impl Component for DataGrid {
         // `None` = closed. Lives here — beside the widths — so it survives page flips, and the
         // Esc arm below can arbitrate it ahead of find / the selection.
         let cell_view = use_state(|| None::<CellValue>);
+        // The record view (P2-10): the page row index a double-clicked gutter cell opened;
+        // `None` = closed. Same placement rationale — but unlike the snapshotted cell view it
+        // is a *live* pointer: the modal renders whatever the current page holds at that index.
+        let record_view = use_state(|| None::<usize>);
 
         // The datagrid theme is used directly (no parallel palette): the header + outer scroll borrow
         // it, and the body closure — which must own its captures — takes a cheap clone (all `Color`).
@@ -274,7 +288,7 @@ impl Component for DataGrid {
                 sel_border: theme.selection_border_fill,
                 active_color: None,
                 active_background: None,
-                on_nested_open: None,
+                on_open: None,
             });
         for (ci, col) in data.columns.iter().enumerate() {
             let w = widths.read().get(ci).copied().unwrap_or(DEFAULT_COL_W);
@@ -340,7 +354,12 @@ impl Component for DataGrid {
                     sel_border: theme_b.selection_border_fill,
                     active_color: Some(theme_b.gutter_active_color),
                     active_background: Some(theme_b.gutter_active_background),
-                    on_nested_open: None,
+                    // Double-click on the gutter opens the whole row in the record view
+                    // (P2-10) — a live page-row pointer, so no snapshot is taken here.
+                    on_open: Some(EventHandler::new(move |_: Event<PointerEventData>| {
+                        let mut record_view = record_view;
+                        record_view.set(Some(index));
+                    })),
                 });
 
             for (ci, col) in data.columns.iter().enumerate() {
@@ -352,7 +371,7 @@ impl Component for DataGrid {
                 // value from the page batch (a filtered page maps back through `row_nums`).
                 let nested =
                     matches!(col.kind, Kind::Struct | Kind::List | Kind::Map) && !cell.null;
-                let on_nested_open = nested.then(|| {
+                let on_nested = nested.then(|| {
                     let data = data.clone();
                     let row_nums = row_nums.clone();
                     let name = col.name.clone();
@@ -390,7 +409,7 @@ impl Component for DataGrid {
                     sel_border: theme_b.selection_border_fill,
                     active_color: None,
                     active_background: None,
-                    on_nested_open,
+                    on_open: on_nested,
                 });
             }
             // Trailing dead space (matches the header) so the row extends past the last column.
@@ -481,10 +500,16 @@ impl Component for DataGrid {
                 // bookkeeping for the pointer events (which carry no modifiers).
                 let find = self.find;
                 let mut commands = crate::keymap::on_commands(settings, move |cmd| match cmd {
-                    // The nested-cell modal sits above the popover, so it dismisses first.
+                    // The modals sit above the popover, so they dismiss first (only one is
+                    // ever open — each opens off its own double-click target).
                     Command::Cancel if cell_view.peek().is_some() => {
                         let mut cell_view = cell_view;
                         cell_view.set(None);
+                        true
+                    }
+                    Command::Cancel if record_view.peek().is_some() => {
+                        let mut record_view = record_view;
+                        record_view.set(None);
                         true
                     }
                     Command::Find => {
@@ -524,6 +549,21 @@ impl Component for DataGrid {
             .child(scroll)
             // The open nested-cell modal (an overlay layer — it renders above everything).
             .maybe_child(cell_view.read().clone().map(|value| CellView::new(value, cell_view)))
+            // The open record view (P2-10) — a live pointer into the current page, clamped in
+            // case a page flip / filter change shortened the page under it (an emptied page
+            // has no row to show, so the modal simply doesn't render until one is back).
+            .maybe_child((*record_view.read()).and_then(|row| {
+                (!data.rows.is_empty()).then(|| {
+                    RecordView::new(
+                        row.min(data.rows.len() - 1),
+                        record_view,
+                        data.clone(),
+                        self.row_nums.clone(),
+                        row_base,
+                        self.total,
+                    )
+                })
+            }))
             .into_element()
     }
 }

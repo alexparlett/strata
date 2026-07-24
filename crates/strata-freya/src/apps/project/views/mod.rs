@@ -9,6 +9,6 @@ pub use dialogs::CloseConfirm;
 pub use header::{HeaderBar, HeaderBarThemePreference};
 pub use workbench::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
-    DataGridThemePreference, ExplainPlanThemePreference, StatusBarThemePreference,
-    TabBarThemePreference, TabThemePreference, Workbench,
+    DataGridThemePreference, ExplainPlanThemePreference, RecordViewThemePreference,
+    StatusBarThemePreference, TabBarThemePreference, TabThemePreference, Workbench,
 };

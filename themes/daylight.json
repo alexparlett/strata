@@ -155,6 +155,62 @@
         "reference": "text_secondary"
       }
     },
+    "record_view": {
+      "backdrop": {
+        "reference": "overlay"
+      },
+      "background": {
+        "reference": "surface_secondary"
+      },
+      "border_fill": {
+        "specific": "#c4c8d0"
+      },
+      "divider_fill": {
+        "reference": "border"
+      },
+      "row_divider_fill": {
+        "reference": "border"
+      },
+      "label_color": {
+        "reference": "text_primary"
+      },
+      "name_color": {
+        "reference": "text_primary"
+      },
+      "value_color": {
+        "reference": "text_secondary"
+      },
+      "null_color": {
+        "reference": "text_placeholder"
+      },
+      "nested_background": {
+        "reference": "surface_primary"
+      },
+      "nested_color": {
+        "reference": "text_secondary"
+      },
+      "type_str_color": {
+        "specific": "#7ee787"
+      },
+      "type_num_color": {
+        "specific": "#79c0ff"
+      },
+      "type_bool_color": {
+        "specific": "#d2a8ff"
+      },
+      "type_ts_color": {
+        "specific": "#ffa657"
+      },
+      "type_struct_color": {
+        "specific": "#f0a5c0"
+      },
+      "type_list_color": {
+        "specific": "#8ad4ff"
+      },
+      "type_map_color": {
+        "specific": "#ffcf6b"
+      }
+    },
     "outline_button": {
       "background": {
         "specific": "rgba(0,0,0,0)"
