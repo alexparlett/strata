@@ -34,4 +34,7 @@ pub use profile::CatalogProfile;
 pub use query_error::QueryError;
 pub use results::{Cell, QueryOutput, SnapshotId};
 pub use schema::{ColumnInfo, Kind, Stat, StatKey};
-pub use session::{Origin, ResultsView, SessionSnapshot, TabId, TabSnapshot, WindowGeom};
+pub use session::{
+    DrawerTab, Layout, Origin, ResultsView, SessionSnapshot, SidebarPane, TabId, TabSnapshot,
+    WindowGeom,
+};

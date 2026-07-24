@@ -15,7 +15,7 @@ use crate::apps::project::state::{
     resolve_launch_root, use_autosave, use_init_history, use_init_project, use_init_session, Chan,
     SessionState,
 };
-use crate::apps::project::views::{CloseConfirm, HeaderBar, Workbench};
+use crate::apps::project::views::{CloseConfirm, HeaderBar, Shell};
 use crate::keymap::on_commands;
 use crate::theme::{use_strata_theme, window_background, ThemesCtx};
 use freya::prelude::*;
@@ -68,7 +68,10 @@ impl ProjectApp {
             .ok()
             .flatten()
             .and_then(|snapshot| snapshot.window);
-        let (width, height) = geom.map_or((880., 600.), |g| (g.width as f64, g.height as f64));
+        // First-run default is roomy enough to show the whole rail · sidebar · workbench ·
+        // inspector · drawer frame without cramping the workbench; a saved geometry (once the
+        // window has been sized) wins, and `min_size` still honours the small-window story.
+        let (width, height) = geom.map_or((1200., 780.), |g| (g.width as f64, g.height as f64));
         WindowConfig::new_app(ProjectApp {
             themes,
             settings,
@@ -191,7 +194,7 @@ impl App for ProjectApp {
             // re-triggered or bypassed from the keyboard.
             .child(CloseConfirm { confirm })
             .child(HeaderBar::new())
-            .child(Workbench)
+            .child(Shell::new())
             // ⌘Q + the shortcuts whose targets aren't built yet (palette P6, settings
             // window + cycle-windows P4, find-in-results P2-09): the chords are live now —
             // consumed with a note, so a press can't fall through to something else once

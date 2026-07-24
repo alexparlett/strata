@@ -38,6 +38,8 @@ pub enum IconName {
     Chart,
     Lines,
     Copy,
+    Connections,
+    Problems,
 }
 
 impl IconName {
@@ -74,6 +76,8 @@ impl IconName {
             IconName::Chart => CHART,
             IconName::Lines => LINES,
             IconName::Copy => COPY,
+            IconName::Connections => CONNECTIONS,
+            IconName::Problems => PROBLEMS,
         }
     }
 }
@@ -169,3 +173,7 @@ const LAST: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24
 const LINES: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h10M4 17h13"/></svg>"#;
 // Two overlapped sheets — the record view's Copy row as JSON / CSV buttons.
 const COPY: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>"#;
+// The activity rail's Connections pane (cloud + up-arrow — an object store the project reads from).
+const CONNECTIONS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97 6 6 0 0 0-11.64-1.6A4 4 0 0 0 6 16.5"/><path d="M12 12v6"/><path d="m9 15 3-3 3 3"/></svg>"#;
+// The activity rail's Problems drawer (octagon + exclamation).
+const PROBLEMS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 2.5h7L21.5 8.5v7L15.5 21.5h-7L2.5 15.5v-7z"/><path d="M12 8v4.5"/><path d="M12 16h.01"/></svg>"#;

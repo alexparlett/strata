@@ -14,7 +14,10 @@ use std::collections::HashMap;
 use std::mem;
 
 use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
-use strata_model::{Diagnostic, Origin, ResultsView, SessionSnapshot, TabId, TabSnapshot};
+use strata_model::{
+    Diagnostic, DrawerTab, Layout, Origin, ResultsView, SessionSnapshot, SidebarPane, TabId,
+    TabSnapshot,
+};
 
 use crate::apps::project::query::QuerySpec;
 
@@ -134,6 +137,12 @@ pub struct SessionState {
     /// fires the editor's commit-on-click-outside *after* the close removed the tab, so its
     /// slice write lands here (and is discarded) instead of panicking on a missing tab.
     pub scratch: Option<CodeEditorData>,
+    /// The window's panel-layout arrangement (P3-01): which side panels / drawer are open, on
+    /// which pane / tab, and each resizable panel's last size. Structure changes write on
+    /// [`Chan::Layout`](super::Chan) (the shell + rail subscribe); size captures write on
+    /// [`Chan::LayoutSize`](super::Chan) (nobody subscribes — the shell peeks it to seed panel
+    /// sizes). Both derive [`Chan::Persist`](super::Chan), so it rides session autosave.
+    pub layout: Layout,
 }
 
 impl SessionState {
@@ -192,6 +201,52 @@ impl SessionState {
         if let Some(t) = self.tabs.get_mut(&id) {
             t.view = view;
         }
+    }
+
+    // --- layout (P3-01) ---------------------------------------------------
+    // Structure toggles write on `Chan::Layout`; the size setters on `Chan::LayoutSize`.
+
+    /// The rail's top-group toggle (design `onRailPane`): open the sidebar on `pane`, or —
+    /// if it's already showing `pane` — collapse it.
+    pub fn toggle_pane(&mut self, pane: SidebarPane) {
+        self.layout.sidebar = (self.layout.sidebar != Some(pane)).then_some(pane);
+    }
+
+    /// Collapse the sidebar (design `onToggleSidebar` / the sidebar header ×).
+    pub fn close_sidebar(&mut self) {
+        self.layout.sidebar = None;
+    }
+
+    /// The rail's bottom-group toggle (design `onOpen{Problems,Events,History}`): open the
+    /// drawer on `tab`, or — if it's already showing `tab` — collapse it.
+    pub fn toggle_drawer(&mut self, tab: DrawerTab) {
+        self.layout.drawer = (self.layout.drawer != Some(tab)).then_some(tab);
+    }
+
+    /// Collapse the drawer (its header ×).
+    pub fn close_drawer(&mut self) {
+        self.layout.drawer = None;
+    }
+
+    /// Collapse the inspector (its header ×). Reopening is a column selection (P3-08).
+    pub fn close_inspector(&mut self) {
+        self.layout.inspector_open = false;
+    }
+
+    /// Remember the sidebar's dragged width (a `ResizableContainer` resize). Write on
+    /// [`Chan::LayoutSize`](super::Chan) so it persists without waking the shell.
+    pub fn set_sidebar_w(&mut self, w: f32) {
+        self.layout.sidebar_w = w;
+    }
+
+    /// Remember the inspector's dragged width. Write on [`Chan::LayoutSize`](super::Chan).
+    pub fn set_inspector_w(&mut self, w: f32) {
+        self.layout.inspector_w = w;
+    }
+
+    /// Remember the drawer's dragged height. Write on [`Chan::LayoutSize`](super::Chan).
+    pub fn set_drawer_h(&mut self, h: f32) {
+        self.layout.drawer_h = h;
     }
 
     // --- structural mutations (each leaves a valid `active`) --------------
@@ -451,6 +506,7 @@ impl SessionState {
             tabs,
             active: self.active,
             window: None,
+            layout: self.layout,
         }
     }
 
@@ -481,6 +537,7 @@ impl SessionState {
             active,
             closed: Vec::new(),
             scratch: None,
+            layout: snap.layout,
         })
     }
 }
@@ -563,6 +620,61 @@ mod tests {
         let rb = &restored.tabs[&b];
         assert_eq!(rb.text(), "SELECT 2");
         assert_eq!(rb.view, ResultsView::Chart, "per-tab view intent preserved");
+    }
+
+    /// The rail toggles follow the design's `onRailPane` / `onOpen*` semantics: toggling the
+    /// active pane/tab collapses it, toggling another switches to it, and the × closers
+    /// collapse.
+    #[test]
+    fn layout_toggles_follow_design_semantics() {
+        let mut s = SessionState::default();
+        // Defaults: sidebar open on Catalog, inspector open, drawer collapsed.
+        assert_eq!(s.layout.sidebar, Some(SidebarPane::Catalog));
+        assert!(s.layout.inspector_open);
+        assert_eq!(s.layout.drawer, None);
+
+        // Toggling the *active* pane collapses the sidebar; toggling while collapsed reopens
+        // it on that pane; toggling a *different* pane switches without collapsing.
+        s.toggle_pane(SidebarPane::Catalog);
+        assert_eq!(s.layout.sidebar, None);
+        s.toggle_pane(SidebarPane::Connections);
+        assert_eq!(s.layout.sidebar, Some(SidebarPane::Connections));
+        s.toggle_pane(SidebarPane::Catalog);
+        assert_eq!(s.layout.sidebar, Some(SidebarPane::Catalog));
+        s.close_sidebar();
+        assert_eq!(s.layout.sidebar, None);
+
+        // Drawer: open on a tab, switch tabs, then toggle the active tab off.
+        s.toggle_drawer(DrawerTab::Problems);
+        assert_eq!(s.layout.drawer, Some(DrawerTab::Problems));
+        s.toggle_drawer(DrawerTab::History);
+        assert_eq!(s.layout.drawer, Some(DrawerTab::History));
+        s.toggle_drawer(DrawerTab::History);
+        assert_eq!(s.layout.drawer, None);
+
+        s.close_inspector();
+        assert!(!s.layout.inspector_open);
+    }
+
+    /// Layout (open panes + sizes) survives the snapshot round-trip alongside the tabs — so a
+    /// restart restores the same shell arrangement.
+    #[test]
+    fn snapshot_round_trips_layout() {
+        let mut s = SessionState::default();
+        s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        s.toggle_pane(SidebarPane::Connections);
+        s.close_inspector();
+        s.toggle_drawer(DrawerTab::Events);
+        s.set_sidebar_w(333.0);
+        s.set_drawer_h(199.0);
+
+        let restored =
+            SessionState::from_snapshot(s.snapshot()).expect("non-empty snapshot restores");
+        assert_eq!(restored.layout.sidebar, Some(SidebarPane::Connections));
+        assert!(!restored.layout.inspector_open);
+        assert_eq!(restored.layout.drawer, Some(DrawerTab::Events));
+        assert_eq!(restored.layout.sidebar_w, 333.0);
+        assert_eq!(restored.layout.drawer_h, 199.0);
     }
 
     /// A dangling `active` (its tab dropped from the snapshot) falls back to the first tab

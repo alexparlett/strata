@@ -40,8 +40,8 @@ pub enum ResultsView {
     Chart,
 }
 
-/// The serde view of a session: the open tabs in strip order, which is active, and the
-/// window's geometry. This *is* the shape of `.strata/session.json`.
+/// The serde view of a session: the open tabs in strip order, which is active, the
+/// window's geometry, and the panel layout. This *is* the shape of `.strata/session.json`.
 #[derive(Serialize, Deserialize, Default)]
 pub struct SessionSnapshot {
     #[serde(default)]
@@ -52,6 +52,74 @@ pub struct SessionSnapshot {
     /// save (a fresh project).
     #[serde(default)]
     pub window: Option<WindowGeom>,
+    /// The window's panel layout (which side panels / drawer are open, and their sizes),
+    /// so a reopen restores the same shell arrangement. Defaults (a fresh project or an
+    /// older session file) come from [`Layout::default`].
+    #[serde(default)]
+    pub layout: Layout,
+}
+
+/// Which tool pane the left sidebar shows. The rail's top group selects it; `None` on
+/// [`Layout::sidebar`] means the sidebar is collapsed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum SidebarPane {
+    Catalog,
+    Connections,
+}
+
+/// Which tab the bottom drawer shows. The rail's bottom group selects it; `None` on
+/// [`Layout::drawer`] means the drawer is collapsed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum DrawerTab {
+    Problems,
+    Events,
+    History,
+}
+
+/// The window's panel-layout arrangement — which side panels / drawer are open (and on
+/// which pane/tab), plus each resizable panel's last size. Sizes are **logical** px (like
+/// [`WindowGeom`]). `ResizableContainer` owns live resizing; these persist the last size so
+/// a collapse→reopen or a restart restores it. Defaults match the design's initial state.
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Layout {
+    /// The open sidebar pane, or `None` when collapsed.
+    #[serde(default)]
+    pub sidebar: Option<SidebarPane>,
+    /// Whether the right column inspector is open.
+    #[serde(default)]
+    pub inspector_open: bool,
+    /// The open drawer tab, or `None` when collapsed.
+    #[serde(default)]
+    pub drawer: Option<DrawerTab>,
+    #[serde(default = "default_sidebar_w")]
+    pub sidebar_w: f32,
+    #[serde(default = "default_inspector_w")]
+    pub inspector_w: f32,
+    #[serde(default = "default_drawer_h")]
+    pub drawer_h: f32,
+}
+
+fn default_sidebar_w() -> f32 {
+    288.0
+}
+fn default_inspector_w() -> f32 {
+    292.0
+}
+fn default_drawer_h() -> f32 {
+    240.0
+}
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            sidebar: Some(SidebarPane::Catalog),
+            inspector_open: true,
+            drawer: None,
+            sidebar_w: default_sidebar_w(),
+            inspector_w: default_inspector_w(),
+            drawer_h: default_drawer_h(),
+        }
+    }
 }
 
 /// One persisted tab — enough to rebuild its live tab: identity (so `active` / order still
