@@ -548,6 +548,9 @@ fn ago_label(d: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use strata_core::engine::{RecordBatch, Schema};
     use strata_model::{Cell, ColumnInfo};
 
     use super::*;
@@ -595,6 +598,7 @@ mod tests {
                 vec![Cell { text: "".into(), null: true }, cell("b")],
                 vec![cell("2.5"), cell("c")],
             ],
+            batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
         }
     }
 

@@ -8,7 +8,7 @@ mod header;
 pub use dialogs::CloseConfirm;
 pub use header::{HeaderBar, HeaderBarThemePreference};
 pub use workbench::{
-    CancelButtonThemePartial, CancelButtonThemePreference, DataGridThemePreference,
-    ExplainPlanThemePreference, StatusBarThemePreference, TabBarThemePreference,
-    TabThemePreference, Workbench,
+    CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
+    DataGridThemePreference, ExplainPlanThemePreference, StatusBarThemePreference,
+    TabBarThemePreference, TabThemePreference, Workbench,
 };

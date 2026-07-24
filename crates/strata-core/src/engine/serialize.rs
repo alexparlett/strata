@@ -367,3 +367,41 @@ fn is_nested(dt: &DataType) -> bool {
 fn md_escape(s: &str) -> String {
     s.replace('|', "\\|").replace(['\n', '\r'], " ")
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{Int32Array, StructArray};
+    use datafusion::arrow::datatypes::Fields;
+
+    use super::*;
+
+    /// A 2-row batch with one struct column, the second row null — the nested-cell view's
+    /// exact read shape.
+    fn nested_batch() -> RecordBatch {
+        let fields = Fields::from(vec![
+            Field::new("plan", DataType::Utf8, false),
+            Field::new("seats", DataType::Int32, false),
+        ]);
+        let strct = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["pro", "free"])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![12, 1])) as ArrayRef,
+            ],
+            Some(vec![true, false].into()),
+        );
+        let schema = Schema::new(vec![Field::new("attrs", DataType::Struct(fields), true)]);
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(strct)]).unwrap()
+    }
+
+    #[test]
+    fn cell_pretty_json_indents_one_nested_value() {
+        let json = cell_pretty_json(&nested_batch(), 0, 0).expect("non-null cell");
+        assert_eq!(json, "{\n  \"plan\": \"pro\",\n  \"seats\": 12\n}");
+    }
+
+    #[test]
+    fn cell_pretty_json_is_none_for_a_null_value() {
+        assert!(cell_pretty_json(&nested_batch(), 0, 1).is_none());
+    }
+}

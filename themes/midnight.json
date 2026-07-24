@@ -117,6 +117,44 @@
         "specific": "#ff8a8a"
       }
     },
+    "cell_view": {
+      "backdrop": {
+        "specific": "rgba(4,6,10,.6)"
+      },
+      "background": {
+        "specific": "#262c35"
+      },
+      "border_fill": {
+        "specific": "#414a57"
+      },
+      "divider_fill": {
+        "reference": "border"
+      },
+      "name_color": {
+        "reference": "text_primary"
+      },
+      "badge_color": {
+        "specific": "#8ad4ff"
+      },
+      "badge_background": {
+        "specific": "rgba(138,212,255,.12)"
+      },
+      "close_color": {
+        "reference": "text_placeholder"
+      },
+      "close_hover_background": {
+        "reference": "active"
+      },
+      "close_hover_color": {
+        "reference": "text_primary"
+      },
+      "body_background": {
+        "reference": "surface_primary"
+      },
+      "body_color": {
+        "reference": "text_secondary"
+      }
+    },
     "outline_button": {
       "background": {
         "specific": "rgba(0,0,0,0)"

@@ -34,6 +34,11 @@ pub struct Cell {
     pub active_color: Option<Color>,
     /// Fill colour when active (the gutter's `gutter_active_background`); `None` = no fill.
     pub active_background: Option<Color>,
+    /// Double-click → the nested-cell view (P2-12). `Some` only for a data cell whose column
+    /// is nested (`struct`/`list`/`map`) and whose value is non-null; the grid builds the
+    /// handler (it owns the batch + the open state). The standard optional event-prop shape
+    /// (`Button::on_press`), fed the double-click's pointer event.
+    pub on_nested_open: Option<EventHandler<Event<PointerEventData>>>,
 }
 
 impl Component for Cell {
@@ -89,17 +94,28 @@ impl Component for Cell {
             .maybe(active, |el| el.background(self.active_background.unwrap_or(Color::TRANSPARENT)))
             .maybe(hovered(), |el| el.background(self.hover_bg))
             .border(border)
-            .on_pointer_down(move |e: Event<PointerEventData>| {
-                if !e.data().is_primary() {
-                    return;
-                }
-                // Consume so the grid-background handler doesn't treat this as a click-to-deselect.
-                e.stop_propagation();
-                match role {
-                    CellRole::Data(r, c) => sel.cell_down(r, c),
-                    CellRole::Row(r) => sel.row(r),
-                    CellRole::Corner => sel.all(),
-                    CellRole::None => {}
+            .on_pointer_down({
+                let on_nested_open = self.on_nested_open.clone();
+                move |e: Event<PointerEventData>| {
+                    if !e.data().is_primary() {
+                        return;
+                    }
+                    // Consume so the grid-background handler doesn't treat this as a click-to-deselect.
+                    e.stop_propagation();
+                    match role {
+                        CellRole::Data(r, c) => sel.cell_down(r, c),
+                        CellRole::Row(r) => sel.row(r),
+                        CellRole::Corner => sel.all(),
+                        CellRole::None => {}
+                    }
+                    // Double-click on a nested cell opens its value view. Detected here — inside
+                    // the same handler as the single-click selection (à la the resize grip), so
+                    // the first press of the pair still selects and the second just opens.
+                    if let Some(open) = &on_nested_open {
+                        if EventsCombos::pressed(e.global_location()).is_double() {
+                            open.call(e);
+                        }
+                    }
                 }
             })
             .on_pointer_enter(move |_| {

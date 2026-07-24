@@ -39,6 +39,10 @@ pub use query::purge_snapshot_root;
 /// crate is the one DataFusion boundary).
 pub use datafusion::arrow::record_batch::RecordBatch;
 
+/// The Arrow schema type, re-exported for the same reason — code (and tests) holding a
+/// [`RecordBatch`] sometimes needs to name its schema.
+pub use datafusion::arrow::datatypes::Schema;
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;

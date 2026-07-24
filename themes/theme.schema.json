@@ -1332,6 +1332,48 @@
             }
           }
         },
+        "cell_view": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "backdrop": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "name_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "badge_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "badge_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "close_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "close_hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "close_hover_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "body_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "body_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "datagrid": {
           "type": "object",
           "additionalProperties": false,

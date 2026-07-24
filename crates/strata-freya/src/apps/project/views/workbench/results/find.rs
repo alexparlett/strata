@@ -78,13 +78,18 @@ pub fn filter_page(needle: Option<&str>, data: &Rc<GridData>, row_base: usize) -
         }
     }
     FindView {
-        data: Rc::new(GridData::from_page(data.columns.clone(), rows)),
+        // The unfiltered page batch rides along untouched: survivors map back to it through
+        // `row_nums` (see `cell_view::page_batch_row`).
+        data: Rc::new(GridData::from_page(data.columns.clone(), rows, data.batch.clone())),
         row_nums: Some(Rc::new(nums)),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use strata_core::engine::{RecordBatch, Schema};
     use strata_model::{Cell, ColumnInfo, Kind};
 
     use super::*;
@@ -106,6 +111,7 @@ mod tests {
                 vec![cell("beta"), cell("y")],
                 vec![cell("gamma"), cell("ALPHABET")],
             ],
+            batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
         })
     }
 

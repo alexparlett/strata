@@ -33,8 +33,8 @@ mod tab_bar;
 pub mod editor;
 
 pub use results::{
-    CancelButtonThemePartial, CancelButtonThemePreference, DataGridThemePreference,
-    ExplainPlanThemePreference, StatusBarThemePreference,
+    CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
+    DataGridThemePreference, ExplainPlanThemePreference, StatusBarThemePreference,
 };
 pub use tab_bar::bar::TabBarThemePreference;
 pub use tab_bar::tab::TabThemePreference;
