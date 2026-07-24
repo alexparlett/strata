@@ -399,12 +399,18 @@ fn column_item(name: &str, detail: Option<&str>, replace: &Range<usize>) -> Comp
     }
 }
 
-fn function_item(name: &str, replace: &Range<usize>) -> Completion {
+fn function_item(f: &crate::engine::sql::FunctionSym, replace: &Range<usize>) -> Completion {
     Completion {
-        label: name.to_string(),
-        insert: format!("{name}("),
+        label: f.name.clone(),
+        insert: format!("{}(", f.name),
         kind: CompletionKind::Function,
-        detail: Some("function".into()),
+        // The arity form (`(Float64[, Int64])`) when we rendered one; the flat
+        // "function" only for a name-only symbol (no signatures resolved).
+        detail: Some(if f.signatures.is_empty() {
+            "function".into()
+        } else {
+            f.detail()
+        }),
         replace: replace.clone(),
     }
 }

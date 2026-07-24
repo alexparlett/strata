@@ -398,7 +398,7 @@ impl Component for CodeEditor {
         // typed. Overlay layer + global position: escapes the editor pane and paints
         // above the results split; flip-up + horizontal clamp against the window.
         let completion_popup: Option<Element> = completion.read().open.as_ref().map(|open| {
-            const POPUP_W: f32 = 300.0;
+            const POPUP_W: f32 = 480.0;
             const MAX_H: f32 = 224.0;
             const ROW_H: f32 = 30.0;
             const PAD: f32 = 4.0;
@@ -503,9 +503,12 @@ impl Component for CodeEditor {
                             .color(theme.text)
                             .font_family(font_family.clone())
                             .font_size(12.5)
-                            .max_lines(1),
+                            .max_lines(1)
+                            .max_width(TorinSize::px(200.)),
                     )
                     .child(rect().width(TorinSize::flex(1.)))
+                    // Capped + single-line so a long signature can't collide with the
+                    // name — a guaranteed gap between them.
                     .maybe_child(item.detail.clone().map(|detail| {
                         label()
                             .text(detail)
@@ -513,6 +516,7 @@ impl Component for CodeEditor {
                             .font_family(font_family.clone())
                             .font_size(10.)
                             .max_lines(1)
+                            .max_width(TorinSize::px(POPUP_W - 224.))
                             .into_element()
                     }))
                     .into_element()
