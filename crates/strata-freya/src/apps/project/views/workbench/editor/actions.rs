@@ -27,7 +27,12 @@ use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 /// — a doomed statement fails at plan time with the same error in the results pane, and
 /// DDL/DML is refused by the engine's own `SQLOptions` regardless.
 pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: QueryMode) {
-    let sql = session.read().tabs.get(&id).map(|t| t.text()).unwrap_or_default();
+    let sql = session
+        .read()
+        .tabs
+        .get(&id)
+        .map(|t| t.text())
+        .unwrap_or_default();
     if sql.trim().is_empty() {
         return;
     }

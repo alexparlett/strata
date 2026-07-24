@@ -144,9 +144,21 @@ async fn fixture() -> SessionContext {
 fn function_catalog(ctx: &SessionContext) -> FunctionCatalog {
     let state = ctx.state();
     FunctionCatalog {
-        scalar: state.scalar_functions().keys().map(|n| n.as_str().into()).collect(),
-        aggregate: state.aggregate_functions().keys().map(|n| n.as_str().into()).collect(),
-        window: state.window_functions().keys().map(|n| n.as_str().into()).collect(),
+        scalar: state
+            .scalar_functions()
+            .keys()
+            .map(|n| n.as_str().into())
+            .collect(),
+        aggregate: state
+            .aggregate_functions()
+            .keys()
+            .map(|n| n.as_str().into())
+            .collect(),
+        window: state
+            .window_functions()
+            .keys()
+            .map(|n| n.as_str().into())
+            .collect(),
     }
 }
 
@@ -158,7 +170,10 @@ async fn run(ctx: &SessionContext, sql: &str) -> Vec<Diagnostic> {
 /// the validator's dry-plan uses.
 async fn engine_accepts(ctx: &SessionContext, sql: &str) -> Result<(), String> {
     let state = ctx.state();
-    let plan = state.create_logical_plan(sql).await.map_err(|e| e.to_string())?;
+    let plan = state
+        .create_logical_plan(sql)
+        .await
+        .map_err(|e| e.to_string())?;
     state.optimize(&plan).map(|_| ()).map_err(|e| e.to_string())
 }
 
@@ -294,7 +309,11 @@ async fn valid_queries_stay_clean() {
             panic!("corpus entry does not plan — fix the corpus: {sql:?}: {e}");
         }
         let out = run(&ctx, sql).await;
-        assert!(out.is_empty(), "false positive on {sql:?}: {}", messages(&out));
+        assert!(
+            out.is_empty(),
+            "false positive on {sql:?}: {}",
+            messages(&out)
+        );
     }
 }
 
@@ -305,29 +324,53 @@ async fn valid_queries_stay_clean() {
 const BAD: &[(&str, &[&str])] = &[
     ("SELECT nme, product_idd FROM t", &["nme", "product_idd"]),
     ("SELECT missing FROM nope", &["nope"]),
-    ("SELECT missing FROM nope, also_nope", &["nope", "also_nope"]),
+    (
+        "SELECT missing FROM nope, also_nope",
+        &["nope", "also_nope"],
+    ),
     ("SELECT u.nme FROM users u", &["u.nme"]),
     ("SELECT users.nme FROM users", &["users.nme"]),
     ("SELECT x.user_id FROM users u", &["x.user_id"]),
     ("SELECT id FROM t WHERE nmae = 'x'", &["nmae"]),
-    ("SELECT id FROM t WHERE id = 1 AND wrong > 2 OR also_wrong < 3", &["wrong", "also_wrong"]),
-    ("WITH c AS (SELECT user_id FROM users) SELECT nme FROM c", &["nme"]),
+    (
+        "SELECT id FROM t WHERE id = 1 AND wrong > 2 OR also_wrong < 3",
+        &["wrong", "also_wrong"],
+    ),
+    (
+        "WITH c AS (SELECT user_id FROM users) SELECT nme FROM c",
+        &["nme"],
+    ),
     ("WITH c AS (SELECT bogus FROM users) SELECT 1", &["bogus"]),
     ("WITH c(x) AS (SELECT id FROM t) SELECT y FROM c", &["y"]),
-    ("SELECT d.wrong FROM (SELECT user_id FROM users) d", &["d.wrong"]),
+    (
+        "SELECT d.wrong FROM (SELECT user_id FROM users) d",
+        &["d.wrong"],
+    ),
     ("SELECT wrong FROM (VALUES (1, 2)) v(a, b)", &["wrong"]),
     ("SELECT wrong FROM (SELECT * FROM users) u", &["wrong"]),
     ("SELECT a FROM t UNION ALL SELECT b FROM users", &["a", "b"]),
     ("SELECT id FROM t ORDER BY wrongcol", &["wrongcol"]),
     ("SELECT id FROM t GROUP BY wrongcol", &["wrongcol"]),
-    ("SELECT id, count(wrongcol) FROM t GROUP BY id", &["wrongcol"]),
-    ("SELECT id FROM t JOIN users ON t.id = users.wrong", &["users.wrong"]),
-    ("SELECT id FROM t WHERE id IN (SELECT wrong FROM users)", &["wrong"]),
+    (
+        "SELECT id, count(wrongcol) FROM t GROUP BY id",
+        &["wrongcol"],
+    ),
+    (
+        "SELECT id FROM t JOIN users ON t.id = users.wrong",
+        &["users.wrong"],
+    ),
+    (
+        "SELECT id FROM t WHERE id IN (SELECT wrong FROM users)",
+        &["wrong"],
+    ),
     (
         "SELECT id FROM t WHERE EXISTS (SELECT 1 FROM users u WHERE u.wrong = t.id)",
         &["u.wrong"],
     ),
-    ("SELECT t2.wrong FROM t JOIN t AS t2 ON t.id = t2.id", &["t2.wrong"]),
+    (
+        "SELECT t2.wrong FROM t JOIN t AS t2 ON t.id = t2.id",
+        &["t2.wrong"],
+    ),
     ("SELECT wrong FROM v_users", &["wrong"]),
     ("EXPLAIN SELECT wrong FROM t", &["wrong"]),
     ("SELECT nme FROM t; SELECT idd FROM users", &["nme", "idd"]),
@@ -335,8 +378,14 @@ const BAD: &[(&str, &[&str])] = &[
         "SELECT sum(amount) OVER (PARTITION BY wrong ORDER BY order_id) FROM orders",
         &["wrong"],
     ),
-    ("SELECT row_number() OVER (ORDER BY wrong) FROM t", &["wrong"]),
-    ("SELECT id FROM t WHERE t.id = users.user_id", &["users.user_id"]),
+    (
+        "SELECT row_number() OVER (ORDER BY wrong) FROM t",
+        &["wrong"],
+    ),
+    (
+        "SELECT id FROM t WHERE t.id = users.user_id",
+        &["users.user_id"],
+    ),
     ("SELECT c.wrong['zip'] FROM customers c", &["c.wrong"]),
     ("SELECT wrong['zip'] FROM customers", &["wrong"]),
 ];
@@ -347,14 +396,20 @@ async fn bad_names_all_reported_and_engine_agrees() {
     for (sql, expected) in BAD {
         let out = run(&ctx, sql).await;
         assert_spans_wellformed(sql, &out);
-        let spans: Vec<&str> =
-            out.iter().filter_map(|d| d.span.clone().map(|s| &sql[s])).collect();
+        let spans: Vec<&str> = out
+            .iter()
+            .filter_map(|d| d.span.clone().map(|s| &sql[s]))
+            .collect();
         assert_eq!(
-            &spans, expected,
+            &spans,
+            expected,
             "wrong faults for {sql:?}: {} (expected {expected:?})",
             messages(&out)
         );
-        assert!(out.iter().all(|d| d.is_error()), "non-error fault in {sql:?}");
+        assert!(
+            out.iter().all(|d| d.is_error()),
+            "non-error fault in {sql:?}"
+        );
         // The resolver must never invent an error the engine wouldn't hit.
         assert!(
             engine_accepts(&ctx, sql).await.is_err(),
@@ -403,7 +458,11 @@ async fn mid_edit_drafts_stay_quiet() {
     let ctx = fixture().await;
     for sql in DRAFTS {
         let out = run(&ctx, sql).await;
-        assert!(out.is_empty(), "premature diagnostics on draft {sql:?}: {}", messages(&out));
+        assert!(
+            out.is_empty(),
+            "premature diagnostics on draft {sql:?}: {}",
+            messages(&out)
+        );
     }
 }
 

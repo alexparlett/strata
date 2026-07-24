@@ -15,7 +15,7 @@ use async_io::Timer;
 use freya::prelude::{spawn, use_side_effect, use_state, TaskHandle, Writable, WritableUtils};
 use freya::radio::use_radio;
 use strata_code_editor::prelude::{CodeEditorData, DecorationSeverity};
-use strata_model::{Diagnostic, Severity, TabId};
+use strata_model::{Severity, TabId};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, SessionState};
@@ -80,7 +80,9 @@ pub fn use_validation(id: TabId, editor: Writable<CodeEditorData>, engine: Engin
                 }))
             });
             let mut radio = radio;
-            radio.write_channel(Chan::Diagnostics(id)).set_diagnostics(id, diagnostics);
+            radio
+                .write_channel(Chan::Diagnostics(id))
+                .set_diagnostics(id, diagnostics);
         });
         let mut pending = pending;
         pending.set(Some(task));

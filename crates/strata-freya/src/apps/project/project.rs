@@ -199,9 +199,8 @@ impl App for ProjectApp {
             // document (pre-order) order, so every real consumer — and the close-confirm
             // modal barrier — outranks this catch-all. (The root rect itself would fire
             // FIRST.)
-            .child(rect().on_global_key_down(on_commands(
-                self.settings,
-                move |cmd| match cmd {
+            .child(
+                rect().on_global_key_down(on_commands(self.settings, move |cmd| match cmd {
                     Command::CloseProject => {
                         // The same predicate as the on_close hook: red button, dock quit
                         // and ⌘Q share one dialog. Otherwise close now, bypassing the
@@ -223,7 +222,7 @@ impl App for ProjectApp {
                         true
                     }
                     _ => false,
-                },
-            )))
+                })),
+            )
     }
 }

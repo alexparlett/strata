@@ -211,10 +211,7 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
 /// expensive thing the user opted into.
 /// Feature reservoir: consumed by `Engine::profile` (D4) when the profiling task lands.
 #[allow(dead_code)]
-pub async fn run_profile(
-    ctx: &SessionContext,
-    name: &str,
-) -> Result<CatalogProfile, String> {
+pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProfile, String> {
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
     let columns: Vec<ColumnInfo> = df
         .schema()
@@ -305,10 +302,7 @@ async fn free_stats(ctx: &SessionContext, name: &str, columns: &mut [ColumnInfo]
 /// A `Precision<ScalarValue>` as a display [`Stat`]. `Absent` → `None` (say nothing).
 /// A null value means the column is in the arrow schema but absent from the source's
 /// own (schema evolution) — also nothing to report. `Inexact` carries through flagged.
-fn stat_of(
-    key: StatKey,
-    p: &Precision<ScalarValue>,
-) -> Option<Stat> {
+fn stat_of(key: StatKey, p: &Precision<ScalarValue>) -> Option<Stat> {
     let v = p.get_value()?;
     if v.is_null() {
         return None;

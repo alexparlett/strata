@@ -15,7 +15,10 @@ use strata_core::project::{load_defs, resolve_source};
 
 /// The dedicated project-load fixture (see the module doc + its `README.md`).
 fn fixture_root() -> &'static Path {
-    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/loadfix"))
+    Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/loadfix"
+    ))
 }
 
 #[tokio::test]

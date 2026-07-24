@@ -288,9 +288,6 @@ mod test {
             Modifiers::META | Modifiers::SHIFT,
         ))
         .unwrap();
-        assert_eq!(
-            resolve(&settings, &chord),
-            Some(Command::ReopenTab)
-        );
+        assert_eq!(resolve(&settings, &chord), Some(Command::ReopenTab));
     }
 }

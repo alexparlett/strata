@@ -54,7 +54,10 @@ pub(crate) struct Resolution {
 impl Resolution {
     /// Nothing to report, planner is the authority (non-query statements).
     fn clean() -> Self {
-        Resolution { diags: Vec::new(), complete: true }
+        Resolution {
+            diags: Vec::new(),
+            complete: true,
+        }
     }
 }
 
@@ -83,7 +86,11 @@ pub(crate) async fn resolve(
     let Some(inner) = unwrap_statement(stmt) else {
         return Resolution::clean();
     };
-    let normalize = ctx.state().config_options().sql_parser.enable_ident_normalization;
+    let normalize = ctx
+        .state()
+        .config_options()
+        .sql_parser
+        .enable_ident_normalization;
     let schemas = prefetch(ctx, inner, normalize).await;
     resolve_statement(inner, &schemas, normalize, slice, stmt_start, sql)
 }
@@ -123,7 +130,12 @@ async fn prefetch(ctx: &SessionContext, stmt: &SqlStatement, normalize: bool) ->
         }
         let entry = match ctx.table_provider(table_ref.clone()).await {
             Ok(provider) => SchemaEntry::Known(
-                provider.schema().fields().iter().map(|f| f.name().clone()).collect(),
+                provider
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().clone())
+                    .collect(),
             ),
             // A provider error is not proof of absence — only `table_exist` is.
             Err(_) => match ctx.table_exist(table_ref) {
@@ -159,7 +171,10 @@ fn resolve_statement(
         complete: true,
     };
     r.query(query, None);
-    Resolution { diags: r.diags, complete: r.complete }
+    Resolution {
+        diags: r.diags,
+        complete: r.complete,
+    }
 }
 
 // ---- scope model -----------------------------------------------------------
@@ -208,16 +223,20 @@ impl<'p> Scope<'p> {
     }
     /// Any relation in the chain with unknowable columns — proof is impossible.
     fn chain_has_unknown(&self) -> bool {
-        self.chain().any(|s| s.relations.iter().any(|r| matches!(r.cols, Cols::Unknown)))
+        self.chain()
+            .any(|s| s.relations.iter().any(|r| matches!(r.cols, Cols::Unknown)))
     }
     fn chain_has_column(&self, name: &str) -> bool {
-        self.chain().any(|s| s.relations.iter().any(|r| r.cols.contains(name)))
+        self.chain()
+            .any(|s| s.relations.iter().any(|r| r.cols.contains(name)))
     }
     fn chain_binding(&self, name: &str) -> Option<&Rel> {
         self.chain().find_map(|s| {
-            s.relations
-                .iter()
-                .find(|r| r.binding.as_deref().is_some_and(|b| b.eq_ignore_ascii_case(name)))
+            s.relations.iter().find(|r| {
+                r.binding
+                    .as_deref()
+                    .is_some_and(|b| b.eq_ignore_ascii_case(name))
+            })
         })
     }
 }
@@ -275,7 +294,12 @@ impl Resolver<'_> {
     /// Walk a query body. `order_by` is the owning query's ORDER BY — checked only
     /// against a plain-select body (each set-op branch is its own scope, and an
     /// ORDER BY over the combined result is left to the planner).
-    fn set_expr(&mut self, body: &SetExpr, order_by: Option<&OrderBy>, outer: Option<&Scope>) -> Cols {
+    fn set_expr(
+        &mut self,
+        body: &SetExpr,
+        order_by: Option<&OrderBy>,
+        outer: Option<&Scope>,
+    ) -> Cols {
         match body {
             SetExpr::Select(s) => self.select(s, order_by, outer),
             SetExpr::Query(q) => self.query(q, outer),
@@ -301,7 +325,11 @@ impl Resolver<'_> {
             self.complete = false;
         }
 
-        let mut scope = Scope { parent: outer, relations, aliases: Vec::new() };
+        let mut scope = Scope {
+            parent: outer,
+            relations,
+            aliases: Vec::new(),
+        };
         // A draft with no relations anywhere in the chain has nothing to resolve
         // against — every column check in this select stays quiet (the no-FROM
         // grace, at the layer that understands nesting). Subqueries below still
@@ -363,7 +391,11 @@ impl Resolver<'_> {
         for obe in &s.sort_by {
             self.order_by_expr(obe, &scope, checkable);
         }
-        if let Some(OrderBy { kind: OrderByKind::Expressions(exprs), .. }) = order_by {
+        if let Some(OrderBy {
+            kind: OrderByKind::Expressions(exprs),
+            ..
+        }) = order_by
+        {
             for obe in exprs {
                 self.order_by_expr(obe, &scope, checkable);
             }
@@ -382,22 +414,35 @@ impl Resolver<'_> {
     /// Bind one FROM/JOIN item into `relations`.
     fn table_factor(&mut self, tf: &TableFactor, relations: &mut Vec<Rel>, outer: Option<&Scope>) {
         match tf {
-            TableFactor::Table { name, alias, args, .. } => {
+            TableFactor::Table {
+                name, alias, args, ..
+            } => {
                 // A table function call: its output shape is the engine's business.
                 if args.is_some() {
-                    relations.push(Rel { binding: binding_of(alias, name), cols: Cols::Unknown });
+                    relations.push(Rel {
+                        binding: binding_of(alias, name),
+                        cols: Cols::Unknown,
+                    });
                     return;
                 }
                 let cols = self.relation_cols(name);
                 let cols = alias_cols_opt(alias).unwrap_or(cols);
-                relations.push(Rel { binding: binding_of(alias, name), cols });
+                relations.push(Rel {
+                    binding: binding_of(alias, name),
+                    cols,
+                });
             }
-            TableFactor::Derived { subquery, alias, .. } => {
+            TableFactor::Derived {
+                subquery, alias, ..
+            } => {
                 // The subquery sees the relations bound so far — exact for LATERAL,
                 // merely quieter for a non-lateral (whose sibling refs the planner
                 // rejects itself, with `complete` still true).
-                let tmp =
-                    Scope { parent: outer, relations: relations.clone(), aliases: Vec::new() };
+                let tmp = Scope {
+                    parent: outer,
+                    relations: relations.clone(),
+                    aliases: Vec::new(),
+                };
                 let derived = self.query(subquery, Some(&tmp));
                 let cols = alias_cols_opt(alias).unwrap_or(derived);
                 relations.push(Rel {
@@ -405,7 +450,10 @@ impl Resolver<'_> {
                     cols,
                 });
             }
-            TableFactor::NestedJoin { table_with_joins, alias } => {
+            TableFactor::NestedJoin {
+                table_with_joins,
+                alias,
+            } => {
                 if alias.is_some() {
                     // An aliased join tree re-exposes columns under one name —
                     // uncommon; treat as unknowable rather than model it.
@@ -421,7 +469,10 @@ impl Resolver<'_> {
                 }
             }
             // UNNEST, JsonTable, PIVOT, … — shapes the resolver doesn't model.
-            _ => relations.push(Rel { binding: None, cols: Cols::Unknown }),
+            _ => relations.push(Rel {
+                binding: None,
+                cols: Cols::Unknown,
+            }),
         }
     }
 
@@ -431,8 +482,11 @@ impl Resolver<'_> {
         if let [part] = name.0.as_slice() {
             if let Some(id) = part.as_ident() {
                 // Innermost CTE of that name wins.
-                if let Some((_, cols)) =
-                    self.ctes.iter().rev().find(|(n, _)| n.eq_ignore_ascii_case(&id.value))
+                if let Some((_, cols)) = self
+                    .ctes
+                    .iter()
+                    .rev()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(&id.value))
                 {
                     return cols.clone();
                 }
@@ -555,7 +609,9 @@ impl Resolver<'_> {
                 self.expr(a, scope, allow_aliases, checkable);
                 self.expr(b, scope, allow_aliases, checkable);
             }
-            Expr::Between { expr, low, high, .. } => {
+            Expr::Between {
+                expr, low, high, ..
+            } => {
                 self.expr(expr, scope, allow_aliases, checkable);
                 self.expr(low, scope, allow_aliases, checkable);
                 self.expr(high, scope, allow_aliases, checkable);
@@ -572,7 +628,12 @@ impl Resolver<'_> {
                 self.expr(expr, scope, allow_aliases, checkable);
                 self.expr(pattern, scope, allow_aliases, checkable);
             }
-            Expr::Case { operand, conditions, else_result, .. } => {
+            Expr::Case {
+                operand,
+                conditions,
+                else_result,
+                ..
+            } => {
                 if let Some(op) = operand {
                     self.expr(op, scope, allow_aliases, checkable);
                 }
@@ -623,7 +684,11 @@ impl Resolver<'_> {
                             Subscript::Index { index } => {
                                 self.expr(index, scope, allow_aliases, checkable)
                             }
-                            Subscript::Slice { lower_bound, upper_bound, stride } => {
+                            Subscript::Slice {
+                                lower_bound,
+                                upper_bound,
+                                stride,
+                            } => {
                                 for e in [lower_bound, upper_bound, stride].into_iter().flatten() {
                                     self.expr(e, scope, allow_aliases, checkable);
                                 }
@@ -671,14 +736,25 @@ impl Resolver<'_> {
 
     /// A bare column reference: flag only when the whole scope chain is fully
     /// known and nothing — column, legal alias, outer scope — matches.
-    fn check_unqualified(&mut self, id: &Ident, scope: &Scope, allow_aliases: bool, checkable: bool) {
+    fn check_unqualified(
+        &mut self,
+        id: &Ident,
+        scope: &Scope,
+        allow_aliases: bool,
+        checkable: bool,
+    ) {
         if !checkable || scope.chain_has_unknown() {
             return;
         }
         if scope.chain_has_column(&id.value) {
             return;
         }
-        if allow_aliases && scope.aliases.iter().any(|a| a.eq_ignore_ascii_case(&id.value)) {
+        if allow_aliases
+            && scope
+                .aliases
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(&id.value))
+        {
             return;
         }
         let span = self.byte_span(id.span);
@@ -703,10 +779,7 @@ impl Resolver<'_> {
                     if !cols.contains(&column.value) {
                         let span = self.byte_span(qualifier.span.union(&column.span));
                         self.push(
-                            format!(
-                                "Column '{}.{}' not found",
-                                qualifier.value, column.value
-                            ),
+                            format!("Column '{}.{}' not found", qualifier.value, column.value),
                             span,
                         );
                     }
@@ -770,7 +843,8 @@ impl Resolver<'_> {
             let head = self.stmt_start;
             head..(head + self.slice.trim_end().len()).max(head + 1)
         });
-        self.diags.push(diag(Severity::Error, message, span, self.sql));
+        self.diags
+            .push(diag(Severity::Error, message, span, self.sql));
     }
 }
 
@@ -791,7 +865,10 @@ fn binding_of(alias: &Option<TableAlias>, name: &ObjectName) -> Option<String> {
     if let Some(a) = alias {
         return Some(a.name.value.clone());
     }
-    name.0.last().and_then(|p| p.as_ident()).map(|id| id.value.clone())
+    name.0
+        .last()
+        .and_then(|p| p.as_ident())
+        .map(|id| id.value.clone())
 }
 
 /// The join's ON/USING constraint, where its operator carries one.
@@ -867,7 +944,12 @@ mod tests {
     fn every_unknown_name_is_reported() {
         let sql = "SELECT nme, product_idd FROM t";
         let r = run_with(sql, &[("t", &["id", "name"])]);
-        assert_eq!(r.diags.len(), 2, "{:?}", r.diags.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            r.diags.len(),
+            2,
+            "{:?}",
+            r.diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert_eq!(spanned(sql, &r.diags[0]), "nme");
         assert_eq!(spanned(sql, &r.diags[1]), "product_idd");
         assert!(r.complete);
@@ -876,14 +958,22 @@ mod tests {
     #[test]
     fn typo_shaped_misses_get_a_suggestion() {
         let r = run_with("SELECT nme FROM t", &[("t", &["id", "name"])]);
-        assert!(r.diags[0].message.contains("Did you mean 'name'?"), "{}", r.diags[0].message);
+        assert!(
+            r.diags[0].message.contains("Did you mean 'name'?"),
+            "{}",
+            r.diags[0].message
+        );
     }
 
     #[test]
     fn struct_field_access_stays_quiet() {
         // `address.city` where `address` is a column, not a relation.
         let r = run_with("SELECT address.city FROM s", &[("s", &["address"])]);
-        assert!(r.diags.is_empty(), "{:?}", r.diags.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert!(
+            r.diags.is_empty(),
+            "{:?}",
+            r.diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -909,7 +999,10 @@ mod tests {
 
     #[test]
     fn computed_derived_projections_stay_quiet() {
-        let r = run_with("SELECT d.x FROM (SELECT id + 1 FROM s) d", &[("s", &["id"])]);
+        let r = run_with(
+            "SELECT d.x FROM (SELECT id + 1 FROM s) d",
+            &[("s", &["id"])],
+        );
         assert!(r.diags.is_empty());
         assert!(!r.complete);
     }
@@ -920,7 +1013,11 @@ mod tests {
             "WITH RECURSIVE r AS (SELECT id FROM r) SELECT id FROM r",
             &[("s", &["id"])],
         );
-        assert!(r.diags.is_empty(), "{:?}", r.diags.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert!(
+            r.diags.is_empty(),
+            "{:?}",
+            r.diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -932,9 +1029,17 @@ mod tests {
         // The body's `missing` is a real fault against the table; the outer
         // `missing` then resolves against the CTE's projection (which *is*
         // `missing`) — exactly one diagnostic.
-        assert_eq!(r.diags.len(), 1, "{:?}", r.diags.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(
+            r.diags.len(),
+            1,
+            "{:?}",
+            r.diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
         assert_eq!(spanned(sql, &r.diags[0]), "missing");
-        assert_eq!(r.diags[0].span.clone().unwrap().start, "WITH t AS (SELECT ".len());
+        assert_eq!(
+            r.diags[0].span.clone().unwrap().start,
+            "WITH t AS (SELECT ".len()
+        );
     }
 
     #[test]
@@ -944,9 +1049,11 @@ mod tests {
         let r = run_with(sql, &[("t", &["id", "name"])]);
         assert_eq!(r.diags.len(), 1);
         assert_eq!(spanned(sql, &r.diags[0]), "x.id");
-        assert!(run_with("SELECT x.a FROM t AS x(a, b)", &[("t", &["id", "name"])])
-            .diags
-            .is_empty());
+        assert!(
+            run_with("SELECT x.a FROM t AS x(a, b)", &[("t", &["id", "name"])])
+                .diags
+                .is_empty()
+        );
     }
 
     #[test]

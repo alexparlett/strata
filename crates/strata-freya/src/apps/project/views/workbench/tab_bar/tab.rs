@@ -236,14 +236,10 @@ impl Component for Tab {
             // not also cancel a running query further down the dismiss chain); a press
             // anywhere outside the tab commits (like a blur).
             .maybe(*renaming.read(), |el| {
-                el.on_global_key_down(on_command(
-                    settings,
-                    Command::Cancel,
-                    move || {
-                        renaming.set(false);
-                        true
-                    },
-                ))
+                el.on_global_key_down(on_command(settings, Command::Cancel, move || {
+                    renaming.set(false);
+                    true
+                }))
                 .on_global_pointer_press(move |e: Event<PointerEventData>| {
                     let p = e.data().global_location();
                     if let Some(a) = *area.peek() {

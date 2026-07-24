@@ -243,11 +243,7 @@ pub fn app_menu(chords: MenuChords) -> Menu {
 /// Edit items synthesize their command's *live* effective chord into the focused
 /// window's keyboard pipeline, so the focused element and its bindings decide — the
 /// same path as typed keys.
-pub fn handle_menu_event(
-    event: MenuEvent,
-    mut ctx: RendererContext,
-    settings: State<Settings>,
-) {
+pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, settings: State<Settings>) {
     match MenuCmd::parse(event.id()) {
         Some(MenuCmd::Quit) => ctx.request_close_window(None),
         Some(cmd) => {

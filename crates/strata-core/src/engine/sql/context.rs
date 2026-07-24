@@ -301,9 +301,7 @@ fn is_name(t: &Tok) -> bool {
 /// positions accept keywords unless the parser's own reserved-for-alias tables say
 /// they terminate the slot ([`crate::engine::sql::lex::is_reserved_in_name_position`]).
 fn is_name_like(t: &Tok) -> bool {
-    is_name(t)
-        || (t.kind == TokKind::Keyword
-            && !is_reserved_in_name_position(&t.text))
+    is_name(t) || (t.kind == TokKind::Keyword && !is_reserved_in_name_position(&t.text))
 }
 
 /// Column aliases from the **main** SELECT projection list (`… AS <ident>`, between
@@ -502,12 +500,7 @@ fn clause_region(branch: &[Tok], branch_scopes: &[i32], gov: usize) -> Range<usi
 /// contributes `name`), or grammar words (shared tables). Deliberately loose —
 /// `a + b` contributes both — because consumers only *rank* with these (the
 /// coverage boost and the written-demotion), never filter.
-fn refs_in(
-    branch: &[Tok],
-    branch_scopes: &[i32],
-    region: Range<usize>,
-    scope: i32,
-) -> Vec<String> {
+fn refs_in(branch: &[Tok], branch_scopes: &[i32], region: Range<usize>, scope: i32) -> Vec<String> {
     let mut out = Vec::new();
     for i in region {
         let t = &branch[i];

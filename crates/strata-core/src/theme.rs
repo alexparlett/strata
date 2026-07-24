@@ -557,10 +557,7 @@ mod tests {
 
     /// A fresh, empty scratch dir under the OS temp dir (no tempfile dep for two tests).
     fn scratch_dir(tag: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!(
-            "strata-theme-registry-{}-{tag}",
-            process::id()
-        ));
+        let dir = env::temp_dir().join(format!("strata-theme-registry-{}-{tag}", process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

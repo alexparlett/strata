@@ -11,7 +11,6 @@ mod run_query;
 mod validate;
 
 pub use run_query::{
-    FetchSnapshotPage, PageSpec, QueryMode, QueryOutcome, QueryPage, QuerySpec, RunId, RunQuery,
-    SnapshotPage, DEFAULT_PAGE_SIZE,
+    FetchSnapshotPage, PageSpec, QueryMode, QueryOutcome, QuerySpec, RunId, RunQuery, DEFAULT_PAGE_SIZE,
 };
 pub use validate::use_validation;

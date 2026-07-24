@@ -58,8 +58,7 @@ pub fn exists_at(root: &Path) -> bool {
 pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     let path = strata_dir(root).join(PROJECT_JSON);
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut defs: ProjectDefs =
-        from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut defs: ProjectDefs = from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     defs.tables.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.views.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.saved_queries
@@ -251,8 +250,7 @@ mod tests {
     struct TempRoot(PathBuf);
     impl TempRoot {
         fn new(tag: &str) -> Self {
-            let dir = env::temp_dir()
-                .join(format!("strata-project-test-{tag}-{}", process::id()));
+            let dir = env::temp_dir().join(format!("strata-project-test-{tag}-{}", process::id()));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();
             Self(dir)

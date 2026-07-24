@@ -162,8 +162,7 @@ async fn materialize(
             .map_err(|e| e.to_string())?;
     }
 
-    let page1_batch = concat_batches(&arrow_schema, &page1_batches)
-        .map_err(|e| e.to_string())?;
+    let page1_batch = concat_batches(&arrow_schema, &page1_batches).map_err(|e| e.to_string())?;
     Ok((
         QueryOutput {
             snapshot: materialized.then_some(snapshot),

@@ -273,9 +273,9 @@ pub mod validators {
     /// A non-negative whole number.
     pub fn whole(v: &str) -> Result<(), String> {
         v.trim()
-         .parse::<u64>()
-         .map(|_| ())
-         .map_err(|_| "Enter a whole number (0 or more).".to_string())
+            .parse::<u64>()
+            .map(|_| ())
+            .map_err(|_| "Enter a whole number (0 or more).".to_string())
     }
 
     /// A byte size like `2G`, `512M`, or a plain byte count (blank allowed).

@@ -633,7 +633,12 @@ fn keyword_typo_hints(
     hints
 }
 
-pub(crate) fn diag(severity: Severity, message: String, span: Range<usize>, sql: &str) -> Diagnostic {
+pub(crate) fn diag(
+    severity: Severity,
+    message: String,
+    span: Range<usize>,
+    sql: &str,
+) -> Diagnostic {
     Diagnostic {
         severity,
         source: DiagSource::Validation,
@@ -1241,8 +1246,9 @@ mod tests {
 
     #[test]
     fn correlated_subqueries_see_the_outer_scope() {
-        assert!(run("SELECT id FROM t WHERE EXISTS (SELECT 1 FROM t u WHERE u.id = t.id)")
-            .is_empty());
+        assert!(
+            run("SELECT id FROM t WHERE EXISTS (SELECT 1 FROM t u WHERE u.id = t.id)").is_empty()
+        );
 
         let sql = "SELECT id FROM t WHERE EXISTS (SELECT 1 FROM t u WHERE u.missing = t.id)";
         let out = run(sql);
@@ -1310,7 +1316,11 @@ mod tests {
             "SELECT name FROM t JOIN t2 ON t.id = t2.id",
         ));
         assert_eq!(out.len(), 1, "{:?}", messages(&out));
-        assert!(out[0].message.to_lowercase().contains("ambiguous"), "{}", out[0].message);
+        assert!(
+            out[0].message.to_lowercase().contains("ambiguous"),
+            "{}",
+            out[0].message
+        );
     }
 
     #[test]

@@ -468,9 +468,7 @@ const SCHEMA: &str = "public";
 
 /// A `RuntimeEnv` from the `datafusion.runtime.*` overrides, or `None` when none are
 /// set (default runtime). Sizes ("2G", "100G") parse via `parse_capacity_limit`.
-fn build_runtime(
-    overrides: &BTreeMap<String, String>,
-) -> Result<Option<Arc<RuntimeEnv>>, String> {
+fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<RuntimeEnv>>, String> {
     use datafusion::execution::runtime_env::RuntimeEnvBuilder;
     let val = |k: &str| {
         overrides

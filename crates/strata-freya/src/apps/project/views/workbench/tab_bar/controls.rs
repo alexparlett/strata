@@ -322,7 +322,10 @@ impl Component for OverflowMenu {
                         radio.write().reopen_last();
                         open.set(false);
                     })
-                    .child(super::menu::menu_row("Reopen closed tab", Command::ReopenTab)),
+                    .child(super::menu::menu_row(
+                        "Reopen closed tab",
+                        Command::ReopenTab,
+                    )),
             );
 
         Attached::new(tip(
