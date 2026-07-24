@@ -1,4 +1,5 @@
-use crate::apps::project::query::RunId;
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::query::{use_validation, RunId};
 use crate::apps::project::state::{Chan, SessionState, TabId};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
@@ -71,6 +72,9 @@ impl Component for EditorTab {
                 editor.write_if(|mut data| data.set_edit_bindings(bindings));
             });
         }
+        // Live validation (P2-18): the debounced engine dry-plan over this buffer —
+        // squiggles into the editor's decorations, diagnostics onto the tab.
+        use_validation(id, editor.clone(), use_consume::<EngineCtx>());
         let border = use_theme().read().colors.border;
 
         rect()

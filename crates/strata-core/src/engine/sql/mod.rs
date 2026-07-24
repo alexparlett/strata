@@ -6,11 +6,15 @@
 //! - [`context`] — split statements + classify the caret's clause context.
 //! - [`symbols`] — the [`Catalog`] (tables/views/columns from `state.project` +
 //!   registered functions) and in-statement alias resolution.
-//! - [`validate`] — [`analyze`] structural + lint diagnostics (feeds `crate::diagnostics`).
+//! - [`validate`] — [`validate::validate`] the full diagnostics pass: lexical lints +
+//!   managed-DDL policy + the engine **dry-plan** (parse → resolve → analyze against
+//!   the live `SessionContext`, never executing). Byte-spanned for squiggles.
 //! - [`complete`] — [`complete`] ranked completions for a caret position.
 //!
-//! Nothing here touches the engine or the UI directly: callers pass a [`Catalog`]
-//! snapshot (cheap to build on the UI thread) and get plain data back.
+//! Completion resolves against a [`Catalog`] snapshot (cheap to build on the UI
+//! thread); validation runs engine-side via [`Engine::validate`](crate::engine::Engine)
+//! so unknown tables/columns/functions and type faults are the *same* errors a Run
+//! would hit.
 
 pub mod complete;
 pub mod context;
@@ -21,7 +25,7 @@ pub mod validate;
 pub use complete::{complete, Completion, CompletionKind};
 pub use lex::is_word_char;
 pub use symbols::Catalog;
-pub use validate::analyze;
+pub use validate::validate;
 
 /// The engine's registered functions (built-ins + any UDFs), by category — names
 /// only. Pushed once from the engine on startup (`engine::Event::Functions`, F5)

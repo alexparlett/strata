@@ -1,4 +1,7 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    ops::{Mul, Range},
+};
 
 use freya_core::prelude::*;
 use freya_edit::{
@@ -6,6 +9,7 @@ use freya_edit::{
     EditorLine,
     TextEditor,
 };
+use smallvec::SmallVec;
 use torin::{
     gaps::Gaps,
     prelude::Alignment,
@@ -13,7 +17,7 @@ use torin::{
 };
 
 use crate::{
-    editor_data::CodeEditorData,
+    editor_data::{CodeEditorData, Decoration, DecorationSeverity},
     editor_theme::{EditorSyntaxTheme, EditorTheme},
     syntax::TextNode,
 };
@@ -104,6 +108,21 @@ impl Component for EditorLineUI {
                         },
                     )
                 });
+                // Diagnostics hover: which glyph the pointer sits on plus the pointer's
+                // x (the popup's anchor). Unchanged positions are a free `write_if`.
+                let location = e.element_location();
+                let local = holder.read().0.borrow().as_ref().map(|inner| {
+                    let glyph = inner
+                        .paragraph
+                        .get_glyph_position_at_coordinate(
+                            location.mul(inner.scale_factor).to_i32().to_tuple(),
+                        )
+                        .position as usize;
+                    (glyph, location.x as f32)
+                });
+                editor.write_if(|mut editor_editor| {
+                    editor_editor.update_hover(line_index, local)
+                });
             }
         };
 
@@ -166,21 +185,146 @@ impl Component for EditorLineUI {
                     .font_weight(font_weight)
                     .max_lines(1)
                     .color(theme.text)
-                    .spans_iter(line.iter().map(|span| {
-                        let text: Cow<str> = match &span.1 {
+                    .spans_iter(line.iter().flat_map(|span| {
+                        // A syntax run splits where a diagnostic decoration starts or
+                        // ends — the decorated pieces get their wavy underline, the
+                        // rest render exactly as before.
+                        let mut spans: SmallVec<[Span<'static>; 2]> = SmallVec::new();
+                        match &span.1 {
                             TextNode::Range(word_pos) => {
-                                editor_data.rope.slice(word_pos.clone()).into()
-                            }
-                            TextNode::LineOfChars { len, char } => {
-                                if show_whitespace {
-                                    Cow::Owned(char.to_string().repeat(*len))
-                                } else {
-                                    Cow::Owned(" ".repeat(*len))
+                                for (piece, severity) in
+                                    decorate_range(word_pos.clone(), &editor_data.decorations)
+                                {
+                                    let text = editor_data.rope.slice(piece).to_string();
+                                    spans.push(
+                                        Span::new(Cow::Owned(text))
+                                            .color(syntax_theme.color(span.0))
+                                            .map(severity, |s, severity| {
+                                                s.text_decoration(TextDecoration::Underline)
+                                                    .text_decoration_style(
+                                                        TextDecorationStyle::Wavy,
+                                                    )
+                                                    .text_decoration_color(
+                                                        theme.diagnostic(severity),
+                                                    )
+                                            }),
+                                    );
                                 }
                             }
-                        };
-                        Span::new(Cow::Owned(text.to_string())).color(syntax_theme.color(span.0))
+                            TextNode::LineOfChars { len, char } => {
+                                let text = if show_whitespace {
+                                    char.to_string().repeat(*len)
+                                } else {
+                                    " ".repeat(*len)
+                                };
+                                spans.push(
+                                    Span::new(Cow::Owned(text)).color(syntax_theme.color(span.0)),
+                                );
+                            }
+                        }
+                        spans
                     })),
             )
+    }
+}
+
+/// Split a syntax run's char `range` at the boundaries of the overlapping
+/// `decorations`, yielding sub-ranges tagged with the highest-severity decoration
+/// covering each (`None` for plain segments). The paragraph needs one [`Span`] per
+/// styling change, so a squiggle inside a run becomes its own span; runs with no
+/// overlapping decoration come back whole.
+fn decorate_range(
+    range: Range<usize>,
+    decorations: &[Decoration],
+) -> SmallVec<[(Range<usize>, Option<DecorationSeverity>); 2]> {
+    let mut out = SmallVec::new();
+    let overlapping: SmallVec<[&Decoration; 2]> = decorations
+        .iter()
+        .filter(|d| d.range.start < range.end && d.range.end > range.start)
+        .collect();
+    if overlapping.is_empty() {
+        out.push((range, None));
+        return out;
+    }
+    let mut cuts: SmallVec<[usize; 6]> = SmallVec::new();
+    cuts.push(range.start);
+    cuts.push(range.end);
+    for d in &overlapping {
+        for p in [d.range.start, d.range.end] {
+            if p > range.start && p < range.end {
+                cuts.push(p);
+            }
+        }
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    for pair in cuts.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        // Boundaries all sit on cut points, so a decoration either covers the whole
+        // sub-range or none of it; overlaps resolve to the highest severity.
+        let severity = overlapping
+            .iter()
+            .filter(|d| d.range.start <= a && b <= d.range.end)
+            .map(|d| d.severity)
+            .max();
+        out.push((a..b, severity));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deco(range: Range<usize>, severity: DecorationSeverity) -> Decoration {
+        Decoration { range, severity, message: String::new() }
+    }
+
+    #[test]
+    fn undecorated_run_stays_whole() {
+        let out = decorate_range(0..10, &[deco(20..25, DecorationSeverity::Error)]);
+        assert_eq!(out.as_slice(), &[(0..10, None)]);
+    }
+
+    #[test]
+    fn decoration_inside_a_run_splits_it() {
+        let out = decorate_range(0..10, &[deco(3..6, DecorationSeverity::Error)]);
+        assert_eq!(
+            out.as_slice(),
+            &[
+                (0..3, None),
+                (3..6, Some(DecorationSeverity::Error)),
+                (6..10, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn decoration_spanning_past_the_run_clamps_to_it() {
+        // e.g. a multi-line squiggle: this line's runs only see their own slice.
+        let out = decorate_range(5..10, &[deco(0..8, DecorationSeverity::Warning)]);
+        assert_eq!(
+            out.as_slice(),
+            &[(5..8, Some(DecorationSeverity::Warning)), (8..10, None)]
+        );
+    }
+
+    #[test]
+    fn overlapping_decorations_resolve_to_the_highest_severity() {
+        let out = decorate_range(
+            0..10,
+            &[
+                deco(0..10, DecorationSeverity::Info),
+                deco(4..6, DecorationSeverity::Error),
+            ],
+        );
+        assert_eq!(
+            out.as_slice(),
+            &[
+                (0..4, Some(DecorationSeverity::Info)),
+                (4..6, Some(DecorationSeverity::Error)),
+                (6..10, Some(DecorationSeverity::Info)),
+            ]
+        );
     }
 }

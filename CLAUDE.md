@@ -247,9 +247,11 @@ UI-side runtime, no channels, no request ids. freya-query capabilities call the 
 (`engine.query(…)`, `engine.fetch_page(…)`); snapshot lifecycle (supersede / cancel / retire) is
 the facade's own bookkeeping — see **`docs/SNAPSHOT_SPEC.md`**. In Freya the handle is `EngineCtx`
 (an `Arc<Engine>` + Deref) held in context — not stored in any god-object `AppState`. Managed DDL
-policy: the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE`, captures `CREATE`/`DROP VIEW`, blocks
-`CREATE EXTERNAL TABLE` / CTAS / `INSERT` (use Table Config) and hard-blocks
-`CREATE DATABASE`/`SCHEMA`.
+policy: the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` **only**. Views are Save's artifact,
+never typed DDL — ⌘S / Save-as-view wraps the buffer's *plain query* in `CREATE OR REPLACE VIEW`
+itself (`Engine::create_view`), so typed `CREATE`/`DROP VIEW` is blocked (validation points at
+Save / the catalog), like `CREATE EXTERNAL TABLE` / CTAS / `INSERT` (use Table Config) and the
+hard-blocked `CREATE DATABASE`/`SCHEMA`.
 
 > The Dioxus-era `Command`/`Event` channel protocol + worker loop was **deleted from
 > `strata-core`** with P2-01. `crates/strata-dioxus` still references it and therefore **no longer

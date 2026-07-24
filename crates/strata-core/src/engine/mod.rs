@@ -54,7 +54,7 @@ use tokio::task::AbortHandle;
 use crate::engine::plan::QueryPlan;
 use query::{retire_snapshot, run_and_snapshot, snapshot_dir, CellFormat};
 use sql::FunctionCatalog;
-use strata_model::{Cell, QueryOutput, SnapshotId};
+use strata_model::{Cell, Diagnostic, QueryOutput, SnapshotId};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
 /// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
@@ -147,6 +147,19 @@ impl Engine {
     /// The registered SQL functions (the editor's language catalog).
     pub fn functions(&self) -> &FunctionCatalog {
         &self.functions
+    }
+
+    /// Validate `sql` against this engine's live session (P2-18): lexical lints,
+    /// managed-DDL policy, and a **dry-plan** of each statement — parse → resolve →
+    /// analyze, never execute — so the diagnostics are exactly the errors a Run would
+    /// hit. Total by design: faults come back as `Diagnostic`s, not an `Err`.
+    pub async fn validate(&self, sql: String) -> Vec<Diagnostic> {
+        let ctx = self.ctx.clone();
+        let functions = self.functions.clone();
+        self.rt()
+            .spawn(async move { sql::validate(&ctx, &functions, &sql).await })
+            .await
+            .unwrap_or_default()
     }
 
     /// The engine's runtime (always present while the engine lives — see the field).
@@ -424,7 +437,10 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     // renameable via `datafusion.catalog.default_*`, which would move our tables out
     // from under name-based lookups; `is_owned_key` fences those keys out of the apply
     // paths so the naming holds.
-    let config = config.with_default_catalog_and_schema(CATALOG, SCHEMA);
+    let mut config = config.with_default_catalog_and_schema(CATALOG, SCHEMA);
+    // Source spans on planner errors power the validator's squiggles (P2-18) — owned,
+    // like the catalog names, so an override can't silently degrade diagnostics.
+    config.options_mut().sql_parser.collect_spans = true;
     match build_runtime(overrides) {
         Ok(Some(rt)) => SessionContext::new_with_config_rt(config, rt),
         Ok(None) => SessionContext::new_with_config(config),

@@ -22,6 +22,29 @@ use crate::{
     syntax::InputEditExt,
 };
 
+/// Severity of a diagnostic decoration — mapped to a squiggle colour by the
+/// [`EditorTheme`](crate::editor_theme::EditorTheme) at render time, so the buffer
+/// stays theme-independent (like syntax highlighting).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum DecorationSeverity {
+    /// Lowest paint priority.
+    Info,
+    Warning,
+    /// Highest paint priority — wins where ranges overlap.
+    Error,
+}
+
+/// One diagnostic: a **char** range into the rope, its severity, and the message.
+/// Rendered by [`EditorLineUI`](crate::editor_line::EditorLineUI) as a wavy underline
+/// on the glyphs it covers, and surfaced by the editor's caret-line panel (the
+/// floating "what's wrong here" context under the line being edited).
+#[derive(Clone, PartialEq, Debug)]
+pub struct Decoration {
+    pub range: Range<usize>,
+    pub severity: DecorationSeverity,
+    pub message: String,
+}
+
 pub struct CodeEditorData {
     pub(crate) history: EditorHistory,
     pub rope: Rope,
@@ -42,6 +65,30 @@ pub struct CodeEditorData {
     /// hardcoding ⌘A/⌘C/⌘X/⌘V/⌘Z/⌘Y, so the app can drive them from its own
     /// configurable shortcuts (see [`set_edit_bindings`](Self::set_edit_bindings)).
     pub(crate) bindings: EditBindings,
+    /// Diagnostic squiggles (char ranges), replaced wholesale by each validation pass
+    /// (see [`set_decorations`](Self::set_decorations)). May lag the rope briefly while
+    /// typing — rendering intersects them with real line spans, so drift is clamped.
+    pub(crate) decorations: Vec<Decoration>,
+    /// Monotonic **text version**: bumped by every rope mutation (typing, paste,
+    /// delete, undo/redo, programmatic set). Deliberately not the history's change
+    /// counter — that one is transaction-*grouped* (a typing burst within the merge
+    /// window is one transaction), which is undo granularity, not text identity.
+    pub(crate) revision: u64,
+    /// The pointer's rest on a decorated span — what the hover popup keys off
+    /// (`None` = no popup). Maintained by the per-line pointer handlers via
+    /// [`update_hover`](Self::update_hover).
+    pub(crate) hover: Option<Hover>,
+}
+
+/// Where the diagnostics popup anchors: the hovered char (whose covering decorations
+/// it lists), its line, and the pointer's x within the line's paragraph. Frozen while
+/// the pointer stays on the same decoration, so the popup doesn't chase the mouse.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) struct Hover {
+    pub char: usize,
+    pub deco: usize,
+    pub line: usize,
+    pub x: f32,
 }
 
 impl CodeEditorData {
@@ -58,6 +105,9 @@ impl CodeEditorData {
             language: language.into(),
             measured_font: None,
             bindings: EditBindings::default(),
+            decorations: Vec::new(),
+            revision: 0,
+            hover: None,
         };
         data.configure_highlighter();
         data
@@ -79,6 +129,15 @@ impl CodeEditorData {
 
     pub fn is_edited(&self) -> bool {
         self.history.current_change() != self.last_saved_history_change
+    }
+
+    /// A marker of the buffer's **text** state: it moves on every edit / undo / redo
+    /// but not on cursor or selection changes — what validation's change-gate
+    /// compares, so caret traffic never re-validates. Per **mutation**, not per
+    /// history transaction: the history groups a typing burst into one undo step,
+    /// which would make a burst read as a single change and starve the change-gate.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn mark_as_saved(&mut self) {
@@ -115,10 +174,84 @@ impl CodeEditorData {
         self.selection = TextSelection::new_cursor(self.rope.len_utf16_cu());
         self.dragging = TextDragging::default();
         self.pending_edit = None;
+        // A whole-buffer rewrite invalidates every span; validation re-derives them.
+        self.decorations.clear();
+        self.hover = None;
         self.metrics.highlighter.invalidate_tree();
         self.parse();
         if let Some((size, family, weight)) = self.measured_font.clone() {
             self.measure(size, &family, weight);
+        }
+    }
+
+    /// Replace the diagnostic squiggles wholesale from **byte** spans into the current
+    /// text (the shape diagnostics arrive in). Spans are clamped to the rope and
+    /// converted to char ranges; empty/out-of-range spans are dropped. Returns whether
+    /// anything changed (`write_if`-friendly), so a validation pass can apply
+    /// unconditionally without spurious re-renders.
+    pub fn set_decorations(
+        &mut self,
+        spans: impl IntoIterator<Item=(Range<usize>, DecorationSeverity, String)>,
+    ) -> bool {
+        let len_bytes = self.rope.len_bytes();
+        let decorations: Vec<Decoration> = spans
+            .into_iter()
+            .filter_map(|(span, severity, message)| {
+                let (start, end) = (span.start.min(len_bytes), span.end.min(len_bytes));
+                if start >= end {
+                    return None;
+                }
+                let start = self.rope.byte_to_char(start);
+                // `byte_to_char` floors a mid-char byte; keep at least one char covered,
+                // clamped back inside the rope.
+                let end = self
+                    .rope
+                    .byte_to_char(end)
+                    .max(start + 1)
+                    .min(self.rope.len_chars());
+                (start < end).then(|| Decoration { range: start..end, severity, message })
+            })
+            .collect();
+        if self.decorations == decorations {
+            return false;
+        }
+        self.decorations = decorations;
+        // The spans under the mouse may be gone/moved — don't leave a popup pinned to
+        // stale facts; the next pointer move re-establishes it.
+        self.hover = None;
+        true
+    }
+
+    /// Track the mouse for the diagnostics hover popup: `local` is the glyph position
+    /// within line `line_index` plus the pointer's x in the paragraph, or `None` when
+    /// the pointer left the text. A hover exists only while the pointer sits on a
+    /// decorated span — never during a drag-selection — and its anchor freezes while
+    /// the pointer stays on the same decoration, so the popup doesn't chase the mouse.
+    /// Returns whether it changed (`write_if`-friendly; unchanged moves are free).
+    pub fn update_hover(&mut self, line_index: usize, local: Option<(usize, f32)>) -> bool {
+        let target = if self.dragging.clicked || self.decorations.is_empty() {
+            None
+        } else {
+            local.and_then(|(local_utf16, x)| {
+                let line_start = self.rope.char_to_utf16_cu(self.rope.line_to_char(
+                    line_index.min(self.rope.len_lines().saturating_sub(1)),
+                ));
+                let at = (line_start + local_utf16).min(self.rope.len_utf16_cu());
+                let ch = self.rope.utf16_cu_to_char(at);
+                self.decorations
+                    .iter()
+                    .position(|d| d.range.contains(&ch))
+                    .map(|deco| Hover { char: ch, deco, line: line_index, x })
+            })
+        };
+        match (&self.hover, &target) {
+            (None, None) => false,
+            // Same decoration under the pointer — keep the frozen anchor.
+            (Some(h), Some(t)) if h.deco == t.deco => false,
+            _ => {
+                self.hover = target;
+                true
+            }
         }
     }
 
@@ -303,6 +436,57 @@ impl Display for CodeEditorData {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::languages::EditorLanguage;
+
+    #[test]
+    fn set_decorations_maps_bytes_to_chars_and_clamps() {
+        let mut data =
+            CodeEditorData::new(Rope::from_str("sél x\nfrom t"), None::<EditorLanguage>);
+
+        let msg = || "boom".to_string();
+        // "sél" is 4 bytes (é is 2) but 3 chars.
+        assert!(data.set_decorations([(0..4, DecorationSeverity::Error, msg())]));
+        assert_eq!(
+            data.decorations,
+            vec![Decoration { range: 0..3, severity: DecorationSeverity::Error, message: msg() }]
+        );
+
+        // Re-applying the same spans reports no change (write_if-friendly).
+        assert!(!data.set_decorations([(0..4, DecorationSeverity::Error, msg())]));
+
+        // A span past the end of the text is dropped, not panicked on.
+        assert!(data.set_decorations([(100..104, DecorationSeverity::Warning, msg())]));
+        assert!(data.decorations.is_empty());
+    }
+
+    /// The regression behind the "validation stops firing mid-burst" bug: the history
+    /// groups a typing burst into one transaction, so its change counter is *undo*
+    /// granularity — the revision must move on every mutation regardless.
+    #[test]
+    fn revision_bumps_per_mutation_not_per_history_transaction() {
+        let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
+        let r0 = data.revision();
+        data.insert("se", 0);
+        let r1 = data.revision();
+        // Same history transaction (within the merge window) — still a new revision.
+        data.insert("lct", 2);
+        let r2 = data.revision();
+        assert!(r0 < r1 && r1 < r2);
+        assert_eq!(
+            data.history.current_change(),
+            1,
+            "precondition: the burst merged into one history transaction"
+        );
+
+        data.undo_edit();
+        let r3 = data.revision();
+        assert!(r2 < r3, "undo is a text change too");
+    }
+}
+
 impl TextEditor for CodeEditorData {
     type LinesIterator<'a>
         = LinesIterator<'a>
@@ -351,6 +535,7 @@ impl TextEditor for CodeEditorData {
             len: inserted_text_len,
             selection,
         });
+        self.revision += 1;
 
         inserted_text_len
     }
@@ -394,6 +579,7 @@ impl TextEditor for CodeEditorData {
             len: inserted_text_len,
             selection,
         });
+        self.revision += 1;
 
         inserted_text_len
     }
@@ -436,6 +622,7 @@ impl TextEditor for CodeEditorData {
             len: removed_text_len,
             selection,
         });
+        self.revision += 1;
 
         removed_text_len
     }
@@ -491,6 +678,7 @@ impl TextEditor for CodeEditorData {
     fn set(&mut self, text: &str) {
         self.rope.remove(0..);
         self.rope.insert(0, text);
+        self.revision += 1;
     }
 
     fn clear_selection(&mut self) {
@@ -533,14 +721,22 @@ impl TextEditor for CodeEditorData {
         // Undo can make arbitrary changes — invalidate the tree for a full re-parse.
         self.pending_edit = None;
         self.metrics.highlighter.invalidate_tree();
-        self.history.undo(&mut self.rope)
+        let undone = self.history.undo(&mut self.rope);
+        if undone.is_some() {
+            self.revision += 1;
+        }
+        undone
     }
 
     fn redo(&mut self) -> Option<TextSelection> {
         // Redo can make arbitrary changes — invalidate the tree for a full re-parse.
         self.pending_edit = None;
         self.metrics.highlighter.invalidate_tree();
-        self.history.redo(&mut self.rope)
+        let redone = self.history.redo(&mut self.rope);
+        if redone.is_some() {
+            self.revision += 1;
+        }
+        redone
     }
 
     fn editor_history(&mut self) -> &mut EditorHistory {

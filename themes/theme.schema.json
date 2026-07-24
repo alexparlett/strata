@@ -997,6 +997,21 @@
             "whitespace": {
               "$ref": "#/$defs/colorPref"
             },
+            "diagnostic_error": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "diagnostic_warning": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "diagnostic_info": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "panel_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "panel_border": {
+              "$ref": "#/$defs/colorPref"
+            },
             "font_family": {
               "$ref": "#/$defs/fontPref"
             },

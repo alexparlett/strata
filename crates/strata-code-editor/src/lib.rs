@@ -28,7 +28,11 @@ pub mod prelude {
             BASE_FONT_SIZE,
             MAX_FONT_SIZE,
         },
-        editor_data::CodeEditorData,
+        editor_data::{
+            CodeEditorData,
+            Decoration,
+            DecorationSeverity,
+        },
         editor_line::EditorLineUI,
         editor_theme::{
             CodeEditorThemeExt,
