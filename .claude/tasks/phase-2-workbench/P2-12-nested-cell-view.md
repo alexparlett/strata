@@ -1,6 +1,6 @@
 # P2-12 · Cell double-click → nested-data view
 
-**Phase:** 2 — Workbench · **Status:** ⬜ · **DEV_TASKS:** U5 · **Depends on:** P2-03 · **Related:** P2-10 (gutter → whole row)
+**Phase:** 2 — Workbench · **Status:** ✅ **built** · **DEV_TASKS:** U5 · **Depends on:** P2-03 · **Related:** P2-10 (gutter → whole row)
 
 ## Goal
 **Double-clicking a cell** (`onCellDbl` in the canvas) opens the cell's value in the **nested-cell
@@ -29,8 +29,16 @@ A **centred backdrop modal** — **not** an anchored popover:
    centred card / `Dialog`) matching the tokens above.
 
 ## Acceptance
-- [ ] Double-clicking a cell opens the centred modal with the value as pretty JSON; backdrop/close dismiss.
-- [ ] Single-click still selects; double-click doesn't corrupt the selection.
+- [x] Double-clicking a cell opens the centred modal with the value as pretty JSON; backdrop/close dismiss.
+- [x] Single-click still selects; double-click doesn't corrupt the selection.
+
+## Built (2026-07)
+`results/cell_view.rs`: the `CellView` modal (own `cell_view` theme component, authored in both
+theme files) + `page_batch_row` (filtered-page → batch-row mapping). `GridData` now carries the
+page `RecordBatch` (identity-compared); body cells take an `on_nested_open` handler — `Some` only
+for nested non-null cells — that snapshots `serialize::cell_pretty_json` at press time. Esc joins
+the datagrid's `Command::Cancel` dismiss chain ahead of find/selection. Headless interaction test
++ ignored `cell_view_preview` PNG harness.
 
 ## Freya / references
 - `datagrid/cell.rs`, `EventsCombos::is_double()` (as the resize grip uses). Freya overlay/`Dialog`

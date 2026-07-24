@@ -21,7 +21,10 @@ use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
 
 use strata_core::config::{Command, Settings};
+use strata_core::engine::serialize::cell_pretty_json;
+use strata_model::Kind;
 
+use super::cell_view::{page_batch_row, CellValue, CellView};
 use super::error::ErrorState;
 use super::find::FindState;
 use super::selection::{CellRole, SelCtl, Selection};
@@ -197,6 +200,10 @@ impl Component for DataGrid {
         let drag = use_state(|| false);
         let mut shift = use_state(|| false);
         let mut meta = use_state(|| false);
+        // The nested-cell view (P2-12): the value a double-clicked nested cell snapshotted;
+        // `None` = closed. Lives here — beside the widths — so it survives page flips, and the
+        // Esc arm below can arbitrate it ahead of find / the selection.
+        let cell_view = use_state(|| None::<CellValue>);
 
         // The datagrid theme is used directly (no parallel palette): the header + outer scroll borrow
         // it, and the body closure — which must own its captures — takes a cheap clone (all `Color`).
@@ -267,6 +274,7 @@ impl Component for DataGrid {
                 sel_border: theme.selection_border_fill,
                 active_color: None,
                 active_background: None,
+                on_nested_open: None,
             });
         for (ci, col) in data.columns.iter().enumerate() {
             let w = widths.read().get(ci).copied().unwrap_or(DEFAULT_COL_W);
@@ -332,11 +340,36 @@ impl Component for DataGrid {
                     sel_border: theme_b.selection_border_fill,
                     active_color: Some(theme_b.gutter_active_color),
                     active_background: Some(theme_b.gutter_active_background),
+                    on_nested_open: None,
                 });
 
             for (ci, col) in data.columns.iter().enumerate() {
                 let w = widths.read().get(ci).copied().unwrap_or(DEFAULT_COL_W);
                 let cell = &data.rows[index][ci];
+                // Nested non-null value → double-click opens the cell view (P2-12). The
+                // handler snapshots the pretty JSON **at press time** (the canvas semantics —
+                // a later filter/page shift can't retarget an open modal), reading the typed
+                // value from the page batch (a filtered page maps back through `row_nums`).
+                let nested =
+                    matches!(col.kind, Kind::Struct | Kind::List | Kind::Map) && !cell.null;
+                let on_nested_open = nested.then(|| {
+                    let data = data.clone();
+                    let row_nums = row_nums.clone();
+                    let name = col.name.clone();
+                    let dtype = col.dtype.clone();
+                    let mut cell_view = cell_view;
+                    EventHandler::new(move |_: Event<PointerEventData>| {
+                        let row =
+                            page_batch_row(row_nums.as_ref().map(|n| n.as_slice()), row_base, index);
+                        let json = cell_pretty_json(&data.batch, ci, row)
+                            .unwrap_or_else(|| data.rows[index][ci].text.clone());
+                        cell_view.set(Some(CellValue {
+                            name: name.clone(),
+                            dtype: dtype.clone(),
+                            json,
+                        }));
+                    })
+                });
                 cells = cells.child(Cell {
                     width: Size::px(w),
                     text: cell.text.clone(),
@@ -357,6 +390,7 @@ impl Component for DataGrid {
                     sel_border: theme_b.selection_border_fill,
                     active_color: None,
                     active_background: None,
+                    on_nested_open,
                 });
             }
             // Trailing dead space (matches the header) so the row extends past the last column.
@@ -447,6 +481,12 @@ impl Component for DataGrid {
                 // bookkeeping for the pointer events (which carry no modifiers).
                 let find = self.find;
                 let mut commands = crate::keymap::on_commands(settings, move |cmd| match cmd {
+                    // The nested-cell modal sits above the popover, so it dismisses first.
+                    Command::Cancel if cell_view.peek().is_some() => {
+                        let mut cell_view = cell_view;
+                        cell_view.set(None);
+                        true
+                    }
                     Command::Find => {
                         find.toggle();
                         true
@@ -482,6 +522,8 @@ impl Component for DataGrid {
             })
             .child(ResultsToolbar::new(self.tab, self.find))
             .child(scroll)
+            // The open nested-cell modal (an overlay layer — it renders above everything).
+            .maybe_child(cell_view.read().clone().map(|value| CellView::new(value, cell_view)))
             .into_element()
     }
 }

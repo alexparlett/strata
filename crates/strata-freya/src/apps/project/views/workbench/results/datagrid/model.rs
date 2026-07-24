@@ -3,8 +3,10 @@
 //! mapping ([`KindColors`]), and the cell-padding [`Density`].
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use freya::prelude::*;
+use strata_core::engine::RecordBatch;
 use strata_model::{Cell, ColumnInfo, Kind, QueryOutput};
 
 use super::DataGridTheme;
@@ -42,23 +44,45 @@ impl KindColors for Kind {
     }
 }
 
-/// The grid's input: one page of a run — the result schema plus that page's formatted cells.
-#[derive(PartialEq)]
+/// The grid's input: one page of a run — the result schema plus that page's formatted cells,
+/// and the Arrow batch those cells were formatted from.
 pub struct GridData {
     pub columns: Vec<ColumnInfo>,
     pub rows: Vec<Vec<Cell>>,
+    /// The page's typed source — `cell_pretty_json` for the nested-cell view (P2-12); Copy /
+    /// Export later. A find-filtered page keeps the **unfiltered** page batch: map a filtered
+    /// row index back through `row_nums` (see `cell_view::page_batch_row`).
+    pub batch: RecordBatch,
+}
+
+impl PartialEq for GridData {
+    fn eq(&self, other: &Self) -> bool {
+        // The batch compares by *identity* (the same underlying Arrow arrays — clones of one
+        // batch share them), not by content: the display rows already deep-compare, and a
+        // content compare of the arrays would double the diffing cost for nothing.
+        self.columns == other.columns
+            && self.rows == other.rows
+            && self.batch.columns().len() == other.batch.columns().len()
+            && self
+                .batch
+                .columns()
+                .iter()
+                .zip(other.batch.columns())
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+    }
 }
 
 impl GridData {
-    /// Page 1, riding in the Run's own [`QueryOutput`] — no page fetch on first paint.
-    pub fn from_run(output: &QueryOutput) -> Self {
-        Self { columns: output.columns.clone(), rows: output.rows.clone() }
+    /// Page 1, riding in the Run's own [`QueryOutput`] — no page fetch on first paint. The
+    /// batch is the Run's page-1 batch (`QueryPage::batch`), cheap to clone (`Arc`'d arrays).
+    pub fn from_run(output: &QueryOutput, batch: &RecordBatch) -> Self {
+        Self { columns: output.columns.clone(), rows: output.rows.clone(), batch: batch.clone() }
     }
 
     /// A later page read from the immutable snapshot; the schema is the Run's (a page fetch
-    /// carries only rows).
-    pub fn from_page(columns: Vec<ColumnInfo>, rows: Vec<Vec<Cell>>) -> Self {
-        Self { columns, rows }
+    /// carries only rows + their batch).
+    pub fn from_page(columns: Vec<ColumnInfo>, rows: Vec<Vec<Cell>>, batch: RecordBatch) -> Self {
+        Self { columns, rows, batch }
     }
 }
 

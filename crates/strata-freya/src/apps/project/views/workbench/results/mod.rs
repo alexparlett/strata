@@ -14,6 +14,7 @@ use freya::radio::use_radio;
 use strata_core::engine::plan::PlanTab;
 use strata_model::SnapshotId;
 
+mod cell_view;
 mod chart;
 mod datagrid;
 mod empty;
@@ -43,6 +44,7 @@ use crate::apps::project::state::{Chan, ResultsView, SessionState, TabId};
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 use status_bar::{Pager, RunInfo};
+pub use cell_view::CellViewThemePreference;
 pub use datagrid::DataGridThemePreference;
 pub use explain_plan::ExplainPlanThemePreference;
 pub use running::{CancelButtonThemePartial, CancelButtonThemePreference};
@@ -289,7 +291,7 @@ impl Component for ResultsBody {
             } => {
                 // Resolve the page both consumers share: the grid renders it, the status bar
                 // aggregates the selection over it (see `PageRead`).
-                let run_grid = Rc::new(GridData::from_run(&rows.output));
+                let run_grid = Rc::new(GridData::from_run(&rows.output, &rows.batch));
                 let view = if native_page1 {
                     PageRead::Ready(run_grid.clone())
                 } else {
@@ -298,6 +300,7 @@ impl Component for ResultsBody {
                             PageRead::Ready(Rc::new(GridData::from_page(
                                 rows.output.columns.clone(),
                                 fetched.rows.clone(),
+                                fetched.batch.clone(),
                             )))
                         }
                         QueryStateData::Settled { res: Err(err), .. } => {
