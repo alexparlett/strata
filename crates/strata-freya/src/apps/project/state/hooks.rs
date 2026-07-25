@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use async_io::Timer;
 use freya::prelude::{
-    spawn, use_provide_context, use_side_effect, use_state, Platform, State, TaskHandle,
+    spawn, use_drop, use_provide_context, use_side_effect, use_state, Platform, State, TaskHandle,
     WritableUtils,
 };
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
@@ -436,6 +436,11 @@ const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 ///
 /// The subscription is inside the effect's reactive scope, not the caller's render, so a
 /// keystroke re-runs only this effect — the root render is untouched.
+///
+/// **And one last save on the way down.** The debounce is a task, and a task dies with its
+/// scope, so a project that goes away inside the debounce window would lose whatever was
+/// typed in it. Both ways it can go are ordinary — the window closing, and the window opening
+/// another project in place — so the settled session is written once more from `use_drop`.
 pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
     // One handle to subscribe the effect (Persist), one to peek the value at fire time.
     let subscribe = use_radio::<SessionState, Chan>(Chan::Persist);
@@ -450,6 +455,10 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
     let is_fullscreen = platform.is_fullscreen;
     let mut pending = use_state(|| None::<TaskHandle>);
     let mut armed = use_state(|| false);
+    // Whether anything has actually changed since the load — what the final save on the way
+    // down tests. `armed` can't answer it: it goes true on the mount pass itself, which is
+    // exactly the pass that means "nothing has changed yet".
+    let mut dirty = use_state(|| false);
     // The last geometry the window had while neither filled nor fullscreen — what a restart
     // restores to. Seeded with what the window opened at, so filling before ever resizing still
     // persists the real size rather than dropping it.
@@ -470,6 +479,11 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
         if !*armed.peek() {
             armed.set(true);
             return;
+        }
+        // Nothing subscribes to this, so the guard is only to keep a keystroke stream from
+        // notifying an audience of nobody on every character.
+        if !*dirty.peek() {
+            dirty.set(true);
         }
         if let Some(task) = *pending.peek() {
             task.cancel();
@@ -498,6 +512,30 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
             }
         });
         pending.set(Some(task));
+    });
+
+    // The debounce is a *task*, and a task dies with its scope — so a project that goes away
+    // inside the debounce window loses whatever was typed in it. Both ways it can go away are
+    // ordinary: closing the window, and re-rooting it to another project
+    // (`OpenCtx::reroot`), which unmounts this project's whole subtree. So the settled state
+    // is written once more on the way down.
+    //
+    // Geometry comes from the last recorded *normal* geometry rather than a live read:
+    // `Platform`'s signals belong to a window that may already be tearing down, while
+    // `normal_geom` is this scope's own. Nothing is lost by it — a resize is not the edit at
+    // risk here, and the timer would have written the same value.
+    use_drop(move || {
+        // Nothing changed means the loaded session is still exactly what is on disk, so
+        // writing would only rewrite it with itself.
+        if !*dirty.peek() {
+            return;
+        }
+        let root = project.peek().root.clone();
+        let mut snapshot = session.peek().snapshot();
+        snapshot.window = *normal_geom.peek();
+        if let Err(e) = project_io::save_session(&root, &snapshot) {
+            tracing::error!("save session on close: {e}");
+        }
     });
 }
 

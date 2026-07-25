@@ -4,6 +4,8 @@
 
 mod close_confirm;
 mod drop_confirm;
+mod open_prompt;
 
 pub use close_confirm::CloseConfirm;
 pub use drop_confirm::{DropConfirm, DropTarget};
+pub use open_prompt::OpenPrompt;

@@ -167,17 +167,16 @@ pub struct Settings {
     #[serde(default = "default_max_history")]
     pub max_history: usize,
     /// Reopen the projects that had a window at last exit ([`AppConfig::open_projects`]).
-    /// **Not read yet:** restoring a *set* of windows is P4-01 (multi-window shell) — with
-    /// one window per process there is nothing to restore into.
+    /// Read by the Freya app's startup routing, one window per project.
     #[serde(default = "default_true")]
     pub reopen_on_startup: bool,
     /// Where the folder picker starts when opening or creating a project (empty = the OS
-    /// default). **Not read yet:** the picker is P4-13 (open / create a project), reached
-    /// from the launcher (P4-02).
+    /// default). Read by every Open… path (`platform::pick_project_folder`).
     #[serde(default)]
     pub default_project_dir: String,
-    /// Where "Open Project" opens when this window already has one. **Not read yet:** the
-    /// This/New prompt it chooses between is P4-13, on top of P4-01's second window.
+    /// Where "Open Project" opens when this window already has one. Read by the project
+    /// window's open path (`platform::open`), which resolves it to that window, a new one,
+    /// or the This/New prompt. The launcher never asks: it has nothing to displace.
     #[serde(default)]
     pub open_pref: OpenPref,
     #[serde(default = "default_true")]

@@ -10,7 +10,8 @@
 //! - the live window registry — which windows exist and what they show
 //!   ([`crate::platform::windows`]);
 //! - the menubar's mutable handles, so the focused window can keep the File menu pointed at
-//!   itself ([`crate::menu`]).
+//!   itself ([`crate::menu`]) — plus the open path it points Open Recent at
+//!   ([`crate::platform::open`]).
 //!
 //! Plus the theme registry, which is immutable after discovery and so is a plain `Arc`
 //! rather than a store.
@@ -20,7 +21,7 @@ mod config;
 pub use config::*;
 
 use crate::menu::MenuState;
-use crate::platform::WindowRegistry;
+use crate::platform::{FocusedOpen, WindowRegistry};
 use crate::theme::ThemesCtx;
 
 /// Everything `main` creates once and every window needs: the app-globals plus the shared
@@ -36,6 +37,11 @@ pub struct AppCtx {
     pub config: ConfigStation,
     pub windows: WindowRegistry,
     pub menu: MenuState,
+    /// The focused window's open path, parked by `use_file_menu` — see [`FocusedOpen`]. It
+    /// sits beside `menu` because it exists for the same reason: the File menu is app-global
+    /// but its contents belong to one window, and Open Recent is the item that carries data
+    /// rather than a chord.
+    pub open: FocusedOpen,
 }
 
 /// Every field is a handle on a process-wide singleton created before the first window, so

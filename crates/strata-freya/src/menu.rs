@@ -38,14 +38,14 @@ use freya::menu::{
     AboutMetadata, IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
 };
 use freya::prelude::{
-    use_hook, use_side_effect, Code, Key, Modifiers, ModifiersExt, NamedKey, NativeEventExt,
-    Platform, RendererContext, State,
+    use_drop, use_hook, use_side_effect, Code, Key, Modifiers, ModifiersExt, NamedKey,
+    NativeEventExt, Platform, RendererContext, State, WritableUtils,
 };
 use strata_core::config::{Command, KeyChord, RecentProject, Settings};
 use strata_core::keymap::effective_chord;
 
 use crate::apps::project::ProjectApp;
-use crate::platform;
+use crate::platform::{self, OpenCtx, OpenTarget};
 use crate::state::{use_config, AppCtx, ConfigChan};
 
 /// A custom menubar item — the typed vocabulary the builder and the event handler
@@ -260,24 +260,45 @@ pub fn create_global_menu() -> MenuState {
     State::create_global(None)
 }
 
-/// Keep the File menu pointed at this window for as long as it is focused: its recents, and
-/// whether it has a project to close. Call once in a window root, with `closable` set for a
-/// window that owns a project.
+/// Keep the File menu pointed at this window for as long as it is focused: its recents,
+/// whether it has a project to close, and where Open Recent opens. Call once in a window
+/// root, passing this window's [`OpenCtx`] — `Some` for a project window, `None` for the
+/// launcher.
+///
+/// One parameter for both halves because they are the same fact: a window with a project has
+/// something to close **and** somewhere to open into, and a window without has neither.
 ///
 /// Focus is the gate because the menubar is app-global but its File half is about *one*
 /// window — so exactly one window drives it at a time, and a window that isn't focused
 /// never fights the one that is. (Freya's `Platform` is per-window, so despite its name
 /// `is_app_focused` is this window's focus.)
-pub fn use_file_menu(mut menu: MenuState, closable: bool) {
+pub fn use_file_menu(app: &AppCtx, open: Option<OpenCtx>) {
     let focused = use_hook(Platform::get).is_app_focused;
     let config = use_config(ConfigChan::Recents);
+    let mut menu = app.menu;
+    let mut focused_open = app.open;
     use_side_effect(move || {
         if !*focused.read() {
             return;
         }
+        // Nothing subscribes to this slot — the menubar's handler `peek`s it on the renderer
+        // thread — so parking it here can't wake a render.
+        focused_open.set(open);
         let recents = config.read();
         if let Some(handles) = menu.write().as_mut() {
-            handles.sync(&recents.recent_projects, closable);
+            handles.sync(&recents.recent_projects, open.is_some());
+        }
+    });
+    // A window that goes must not leave its open path parked: those are its own `State`s, and
+    // a menubar press that reached a dead one would panic rather than open anything. Only
+    // ours is cleared — by the time this runs, another window may already have parked its
+    // own. (Comparing first, into a value: a `peek()` temporary held across the `set` is a
+    // borrow panic on the same slot. `State`'s equality is handle identity, so this never
+    // reads the dead window's value.)
+    use_drop(move || {
+        let parked = *focused_open.peek();
+        if parked == open {
+            focused_open.set(None);
         }
     });
 }
@@ -452,10 +473,19 @@ pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, app: AppCtx
     }
 }
 
-/// Open a recent from the menubar. This runs on the renderer, which has no `Platform` to
-/// hand [`platform::open_project`], so it does the same two steps directly against the
-/// window map: focus the window that already has this project, else launch one. A launcher
-/// window standing in front of it then stands down, exactly as pressing the row would.
+/// Open a recent from the menubar — the one File item that carries data rather than
+/// synthesizing a chord, so it can't reach the focused window through the keyboard pipeline
+/// the way Open… does.
+///
+/// When a **project** window is focused it parked its open path in [`AppCtx::open`], and the
+/// recent goes through that: same rules as ⌘O and the header switcher, which means
+/// `OpenPref` — this window, a new one, or the prompt. The decision is
+/// [`OpenCtx::decide`]'s, but carrying it out is ours: this runs on the renderer, which has
+/// no `Platform`, so the two window outcomes are done directly against the window map (which
+/// is exactly what `open_project` would do with one).
+///
+/// With the **launcher** focused there is no open path — a recent simply opens a window, and
+/// the launcher stands down behind it, as pressing one of its own rows would.
 fn open_recent(ctx: &mut RendererContext, app: AppCtx, path: &str) {
     // Normalise *before* the registry lookup: windows are registered under the canonical
     // root, while a recent's stored path may be a symlink or the pre-Freya `.strata` shape
@@ -467,12 +497,38 @@ fn open_recent(ctx: &mut RendererContext, app: AppCtx, path: &str) {
         return;
     };
     let launcher = app.windows.peek().launcher();
-    if let Some(id) = app.windows.peek().project(&root.to_string_lossy()) {
-        if let Some(window) = ctx.windows.get_mut(&id) {
-            window.window().focus_window();
+    let focused = *app.open.peek();
+    let target = match focused {
+        Some(open) => open.decide(&app, root),
+        // No open path: whatever window the recent needs is a new one, unless the project
+        // already has one.
+        None => match app.windows.peek().project(&root.to_string_lossy()) {
+            Some(id) => OpenTarget::Focus(id),
+            None => OpenTarget::NewWindow(root),
+        },
+    };
+    match target {
+        OpenTarget::Nothing => {}
+        OpenTarget::Focus(id) => {
+            if let Some(window) = ctx.windows.get_mut(&id) {
+                window.window().focus_window();
+            }
         }
-    } else {
-        ctx.launch_window(ProjectApp::window(app, root));
+        OpenTarget::NewWindow(root) => {
+            ctx.launch_window(ProjectApp::window(app, root));
+        }
+        // Both of these are the focused window's own state, so they need no window handle —
+        // and `focused` is `Some` by construction, since only its `decide` returns them.
+        OpenTarget::ThisWindow(root) => {
+            if let Some(open) = focused {
+                open.reroot(root);
+            }
+        }
+        OpenTarget::Ask(root) => {
+            if let Some(open) = focused {
+                open.ask(root);
+            }
+        }
     }
     // The launcher exists only while there's nothing else to look at.
     if let Some(id) = launcher {

@@ -102,10 +102,12 @@ impl App for LauncherApp {
         });
         // Join the live window registry, so "open the launcher" finds this one instead of
         // opening a second, and a project window can tell whether it is the last one.
-        platform::use_register_window(self.app.windows, WindowKind::Launcher);
+        platform::use_register_window(self.app.windows, || WindowKind::Launcher);
         // While this window is focused the File menu is *its* File menu: the recents it
-        // lists, and no Close Project — there is no project here to close.
-        use_file_menu(self.app.menu, false);
+        // lists, and neither Close Project nor an open path — there is no project here to
+        // close, and nothing to open *into*, so a recent opens a window and this one stands
+        // down.
+        use_file_menu(&self.app, None);
 
         let theme = get_theme!(
             &None::<LauncherThemePartial>,
