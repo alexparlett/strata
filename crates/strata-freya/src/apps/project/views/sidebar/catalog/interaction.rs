@@ -1042,10 +1042,10 @@ fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
         !shows(&runner, "signup funnel"),
         "the label gave way to the rename input"
     );
-    // Typed at the caret, which Freya's `Input` leaves at the start of a seeded value — the tab
-    // strip's rename opens the same way. Written as a prefix so the assertion states what the
-    // app actually does rather than what it would do with a select-on-focus input.
-    runner.write_text("weekly ");
+    // The seeded name arrives **selected** (`Input::select_all_on_init`), so this replaces it
+    // rather than landing in front of it. That is the whole behaviour: a rename opens over the
+    // old label.
+    runner.write_text("funnel v2");
     runner.sync_and_update();
     runner.press_key(Key::Named(NamedKey::Enter));
     settle(&mut runner);
@@ -1056,18 +1056,15 @@ fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
         .iter()
         .find(|q| q.id == Uuid::from_u128(2))
         .expect("the query is still there, under its new label");
-    assert_eq!(q.name, "weekly signup funnel");
+    assert_eq!(q.name, "funnel v2", "the typing replaced the name, it did not prepend to it");
     assert_eq!(
         q.sql, "SELECT 4",
         "a rename touches the label and nothing else"
     );
-    assert!(
-        shows(&runner, "weekly signup funnel"),
-        "and the row shows it"
-    );
+    assert!(shows(&runner, "funnel v2"), "and the row shows it");
     assert_eq!(
-        p.saved_queries[0].name, "orders by region",
-        "the section is still in name order — `weekly …` sorts after it"
+        p.saved_queries[0].name, "funnel v2",
+        "the section is still in name order — the relabelled row sorts first now"
     );
 }
 
@@ -1078,7 +1075,7 @@ fn escape_abandons_a_rename() {
     right_click_row(&mut runner, "signup funnel");
     click_text(&mut runner, "Rename");
 
-    runner.write_text("weekly ");
+    runner.write_text("funnel v2");
     runner.sync_and_update();
     runner.press_key(Key::Named(NamedKey::Escape));
     settle(&mut runner);

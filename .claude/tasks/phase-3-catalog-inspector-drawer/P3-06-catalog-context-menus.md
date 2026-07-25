@@ -39,10 +39,21 @@ cancels, a press outside commits. `ProjectState::rename_saved_query` relabels **
 re-sorts — no origin rewriting, and no collision rule, because ⌘S already mints saved queries under
 whatever the tab is called and ids are what anything actually holds.
 
-> Rough edge, shared with the tab strip's rename: Freya's `Input` leaves the caret at the *start*
-> of a seeded value, so typing prepends. The fix is a fork-side `select-on-focus` (or
-> caret-to-end) on `Input`, which would improve both; not done here because it is a submodule
-> change well outside this task.
+**A rename opens with the name selected**, so the first keystroke replaces it. That took a fork
+change — `Input` had no way to start anywhere but the caret at position 0, so typing landed *in
+front of* the name being renamed:
+
+- `EditableConfig::with_select_all_on_init` + `UseEditable::create` computing the initial
+  `TextSelection` from it (UTF-16 code units, the unit selections are in);
+- `Input::select_all_on_init`, opt-in and mount-time only — a value that changes underneath the
+  input later still syncs as a plain edit, so nothing else moves. Two tests in the fork's
+  `tests/input.rs`: the new behaviour, and a guard that the default is unchanged.
+
+The **tab strip's rename** had the same bug and now shares the fix. It seeded its draft
+reactively, which hands the input an empty string at mount and syncs the name in afterwards — so
+the selection had nothing to land on. Its input moved into a `TabRename` child that mounts only
+while renaming, which makes `use_hook` the honest place to seed (the shape `QueryRename` already
+had).
 
 ### Drop opens P3-05's confirm — there is no second drop path
 

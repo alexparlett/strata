@@ -92,20 +92,10 @@ impl Component for Tab {
         // This tab's own inline-rename state — local, never shared: whether it's being renamed and the
         // draft name. The context menu / double-click flip `renaming`; the input binds `draft`.
         let mut renaming = use_state(|| false);
-        let mut draft = use_state(String::new);
+        let draft = use_state(String::new);
         let a11y = use_a11y();
         let config = use_config_station();
         let closer = use_consume::<TabCloser>();
-        // Entering rename (from the menu or a double-click) just flips `renaming`. We react to that
-        // here — in the tab's own scope, so it survives the menu closing: seed the draft with the
-        // current name and focus the input (the focus lands after the input has mounted).
-        let seed = self.name.clone();
-        use_side_effect(move || {
-            if renaming() {
-                draft.set(seed.clone());
-                a11y.request_focus();
-            }
-        });
         // Hover state for the close slot — a dirty tab's unsaved dot swaps to the × while hovered.
         let mut hovered = use_state(|| false);
 
@@ -270,22 +260,13 @@ impl Component for Tab {
                     .padding(Gaps::new(0., 12., 0., 12.))
                     .spacing(8.);
                 if *renaming.read() {
-                    // A fixed-width box that scrolls when the name is longer — matching the Dioxus
-                    // `.tab-rename` (118px, body font via `InputTypography` — the `Input` paints
-                    // no font of its own) so the text matches the tab name. Enter commits
-                    // (`on_submit`); Escape / click-outside are handled on the tab root.
-                    row.child(InputTypography::body(
-                        Input::new(draft)
-                            .a11y_id(a11y)
-                            .flat()
-                            .compact()
-                            .auto_focus(true)
-                            .width(Size::px(118.))
-                            .on_submit(move |value: String| {
-                                radio.write().rename(id, value);
-                                renaming.set(false);
-                            }),
-                    ))
+                    row.child(TabRename {
+                        id,
+                        name: self.name.clone(),
+                        draft,
+                        renaming,
+                        a11y,
+                    })
                 } else {
                     row.child(Body::new(self.name.clone()).color(fg))
                         .child(close)
@@ -307,6 +288,52 @@ impl Component for Tab {
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
+    }
+}
+
+/// The tab's inline-rename field: a fixed-width box that scrolls when the name is longer —
+/// matching the Dioxus `.tab-rename` (118px, body font via [`InputTypography`], since the `Input`
+/// paints no font of its own) so the text matches the tab name. Enter commits; Escape and
+/// click-outside are the tab root's, which still owns `draft`.
+///
+/// **Its own component so the draft is seeded before the input mounts.** `Input` takes its
+/// starting selection from the value it is created with, so seeding reactively — as this did —
+/// hands it an empty string and then syncs the name in as a plain edit, leaving the caret at
+/// position 0 and the first keystroke landing *in front of* the name being renamed. Mounting only
+/// while renaming makes `use_hook` the honest place to seed, and the selection lands with it.
+#[derive(PartialEq)]
+struct TabRename {
+    id: TabId,
+    name: String,
+    draft: State<String>,
+    renaming: State<bool>,
+    a11y: AccessibilityId,
+}
+
+impl Component for TabRename {
+    fn render(&self) -> impl IntoElement {
+        let id = self.id;
+        let mut draft = self.draft;
+        let mut renaming = self.renaming;
+        let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
+
+        let seed = self.name.clone();
+        use_hook(move || draft.set(seed.clone()));
+
+        InputTypography::body(
+            Input::new(draft)
+                .a11y_id(self.a11y)
+                .flat()
+                .compact()
+                .auto_focus(true)
+                // The name arrives selected, so typing replaces it rather than prepending.
+                .select_all_on_init(true)
+                .width(Size::px(118.))
+                .on_submit(move |value: String| {
+                    radio.write().rename(id, value);
+                    renaming.set(false);
+                }),
+        )
     }
 }
 

@@ -633,6 +633,9 @@ impl Component for QueryRename {
                     .flat()
                     .compact()
                     .auto_focus(true)
+                    // The name arrives selected, so the first keystroke replaces it — a rename
+                    // opens over the old label, it doesn't invite you to type in front of it.
+                    .select_all_on_init(true)
                     .width(Size::flex(1.))
                     .on_submit(move |value: String| {
                         rename_saved_query(&actions, id, &value);
