@@ -4,12 +4,14 @@
 //!
 //! Modules (filled in over the port's phase 0):
 //! - [`sql`] — the SQL language service (lex / context / symbols / validate / complete).
-//! - [`util`] — small pure helpers (hashing, byte/duration/timezone parsing, names).
+//! - [`util`] — small shared helpers (hashing, byte/duration/timezone parsing, names) plus
+//!   the crash-safe file write every persisted file goes through.
 //! - [`plan`] — the query-plan (EXPLAIN) model + formatting.
 //! - [`config`] — disk app config + settings/keymap definitions.
 //! - [`project`] — `.strata/` project persistence (the durable catalog defs).
 //! - [`profile`] — the profiling scan logic (aggregate exprs + result decode).
-//! - [`engine`] — the DataFusion worker, `Command`/`Event` protocol, and connection handle.
+//! - [`engine`] — the DataFusion boundary: the direct-call async [`engine::Engine`] facade
+//!   (query / plan / profile / serialize) and its snapshot lifecycle.
 
 use engine::profile;
 

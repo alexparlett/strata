@@ -40,14 +40,33 @@ of the process. It is the snapshot's identity and its storage name:
 - table: `__snap_{id}` (registered in the engine's `strata.public` schema)
 - file: `<tmp>/strata_snapshots/e_{pid}_{engine_id}/s_{id}.parquet` (pid-scoped: engine ids
   are only process-unique, and the temp root is machine-shared)
+- lock: `<tmp>/strata_snapshots/e_{pid}_{engine_id}.lock` — a **sibling** of the directory,
+  opened and exclusively locked by `Engine::new` and held open for the engine's whole life
 
 Because every *execution* allocates a fresh id, snapshot ids are never reused — a re-run of
 identical SQL produces a **new** snapshot. (This deliberately drops state-arch §6's "two tabs
 running the same spec share a cache entry": sharing by SQL identity is exactly the freshness bug
 in §1.)
 
-The `engine_id` directory scoping is unchanged: each window's engine only ever touches its own
-subdirectory; `purge_snapshot_root()` at process start clears leftovers from a crashed run.
+Each window's engine only ever touches its own subdirectory. The **lock file** is what makes that
+survive a *second process*: a pid can be recycled, so the directory name alone never proves its
+owner is alive, but an advisory lock is released by the OS on exit or crash and by nothing else.
+So the startup sweep is **selective**, not a `remove_dir_all` of the root:
+
+- claim order is lock-then-`mkdir`, so any directory a concurrent sweep can see already has a
+  held lock — a starting engine never looks abandoned (a lock file *inside* the directory would
+  have exactly that window);
+- `purge_snapshot_root()` deletes a directory only when it can *take* that directory's lock.
+  A lock held by a live engine (another instance, a parallel test binary) means skip. A lock it
+  can neither take nor find held — an unwritable root, a filesystem with no working advisory
+  locking — also means skip, but is logged: nothing is deleted on a guess, because deleting a
+  running instance's results is worse than leaking temp files, and a sweep that can never resolve
+  anything must not fail invisibly;
+- anything under the root that is neither an `e_*` directory nor its `e_*.lock` file is a stray
+  and is removed.
+
+An engine whose own claim fails still runs (the directory is created on demand) but is
+unprotected against another instance's sweep — `Engine::new` warns with the reason.
 
 ## 3. The handle
 
@@ -82,8 +101,8 @@ Retirement (deregister the table + delete the file) happens at exactly these poi
 | **`cancel(ws, tag)`** | the aborted run's partial file; the previous snapshot is already gone (retire-on-dispatch) |
 | **Run fails** | the failed run's partial file (cleaned by the run itself) |
 | **`cleanup_ws(ws)`** (tab close) | the ws's current snapshot + any in-flight partial |
-| **engine drop** (window close) | the engine's whole `e_{pid}_{engine_id}` directory |
-| **process start** | `purge_snapshot_root()` — all engines' leftovers from a previous crash |
+| **engine drop** (window close) | the engine's whole `e_{pid}_{engine_id}` directory + its `.lock` sibling |
+| **process start** | `purge_snapshot_root()` — every *dead* engine's leftovers (§2: lock-gated, live directories spared) |
 
 **Retire-on-dispatch**: the previous snapshot is dropped when the new Run *starts*, not when it
 succeeds — one lock owns the whole lifecycle, never held across an await. During the run — and
@@ -107,7 +126,8 @@ The engine (`strata_core::engine::Engine`) is a **direct-call async facade**: it
 multi-thread Tokio runtime (DataFusion's operators require a Tokio context, and query CPU must
 never run on the render thread), spawns each call onto it, and awaits the `JoinHandle` — which is
 executor-agnostic, so Freya's non-Tokio UI executor awaits engine calls like any async fn. No
-channels, no request ids, no event stream.
+channels, no event stream, and no request ids *crossing the boundary* — the caller awaits its own
+call's return value (the engine's private dispatch id, below, is bookkeeping the UI never sees).
 
 ```rust
 // Run: execute once → spool a fresh snapshot → page 1 + handle back.
@@ -120,13 +140,24 @@ async fn fetch_page(snapshot, page, page_size, sort: Option<(String, bool)>)
 // Explain: parsed plan tree, no snapshot.
 async fn explain(ws: WsId, tag: RunTag, sql) -> Result<QueryPlan, String>
 
-// Lifecycle: cancel is scoped to the dispatch `tag` (S14 — a stale cancel can't abort a
+// Lifecycle: cancel is scoped to the run `tag` (S14 — a stale cancel can't abort a
 // just-started newer run); cleanup_ws is the tab-close hook; Drop clears everything.
 fn cancel(ws, tag) -> Option<elapsed_ms> · fn cleanup_ws(ws) · impl Drop
 ```
 
-`RunTag` is the UI's per-press nonce (§6) passed down, so "is this still the run I mean" needs no
-parallel request-id scheme. `WsId` is wide enough (`u128`) to carry each frontend's native tab id.
+`RunTag` is the UI's per-press nonce (§6) passed down; `WsId` is wide enough (`u128`) to carry
+each frontend's native tab id.
+
+**Two identities, and they are not interchangeable.** `RunTag` names *the run the caller can
+see*, so it is what `cancel` matches on: a Cancel press means "stop the run I'm looking at". It
+is **not** unique engine-side — freya-query re-runs an entry when a subscriber remounts while it
+is still in flight, so one logical run can be dispatched twice under the same tag. Supersede
+checks therefore key on `InFlight::dispatch`, an engine-private monotonic id from
+`Engine::dispatch_seq` allocated per `query`/`explain` call. Keying them on the tag instead let
+the first call's settle path adopt the *second* call's `InFlight` entry, tear down a perfectly
+good run and fail both. (This is the one request-id-shaped thing in the facade, and it is
+deliberately engine-internal: it never crosses the boundary, has no UI representation, and
+replaces nothing the tag can do.)
 
 `sort` stays a read-time parameter (an `ORDER BY` over the whole snapshot before the page
 window — Rz6), never a rewrite of the snapshot. **Filter** (P2-09/P2-13's find/filter work)

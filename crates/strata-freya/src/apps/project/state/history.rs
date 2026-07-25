@@ -22,11 +22,19 @@ use strata_core::project as project_io;
 use strata_model::HistoryEntry;
 
 use crate::apps::project::query::{QueryOutcome, RunId, RunQuery};
+use crate::state::{use_config_station, ConfigStation};
 
 use super::{ProjChan, ProjectState};
 
-/// Recent runs kept in memory and on disk — the file rotates to this window on load.
-const HISTORY_CAP: usize = 200;
+/// How many recent runs are kept, in memory and on disk: the user's `max_history` setting
+/// (design24 System ▸ History), which is the *only* source — a second constant here would
+/// silently outrank the control P4-06 is about to put on it.
+///
+/// Floored at 1 because a `0` (only reachable by hand-editing the config) would make the
+/// next load rotate `history.jsonl` down to nothing — a setting shouldn't delete the log.
+pub fn history_cap(config: ConfigStation) -> usize {
+    config.peek().settings.max_history.max(1)
+}
 
 /// The window's query-history satellite: recent runs newest-first, plus a dedup guard so a
 /// results-pane re-mount can't re-log a run.
@@ -36,11 +44,11 @@ pub struct History {
 }
 
 impl History {
-    /// Load the persisted history for `root` (newest capped to [`HISTORY_CAP`]) into a fresh
-    /// satellite. A load error logs and yields an empty history rather than blocking the
-    /// window — history is regenerable, unlike the project.
-    pub fn load(root: &Path) -> Self {
-        let loaded = project_io::load_history(root, HISTORY_CAP).unwrap_or_else(|e| {
+    /// Load the persisted history for `root` (newest `cap` entries — see
+    /// [`history_cap`]) into a fresh satellite. A load error logs and yields an empty
+    /// history rather than blocking the window — history is regenerable, unlike the project.
+    pub fn load(root: &Path, cap: usize) -> Self {
+        let loaded = project_io::load_history(root, cap).unwrap_or_else(|e| {
             tracing::error!("load history: {e}");
             Vec::new()
         });
@@ -51,13 +59,16 @@ impl History {
         }
     }
 
-    /// Record `run` once, newest-first, capping the in-memory window. Repeats (the same run
-    /// re-served after a re-mount) are no-ops — the caller peeks [`seen`](Self::seen) first,
-    /// so reaching here means it's genuinely new.
-    fn push(&mut self, run: RunId, entry: HistoryEntry) {
+    /// Record `run` once, newest-first, trimming the in-memory window to `cap`. Repeats (the
+    /// same run re-served after a re-mount) are no-ops — the caller peeks
+    /// [`seen`](Self::seen) first, so reaching here means it's genuinely new.
+    ///
+    /// `cap` is passed per call rather than stored: it is a live setting, so lowering it
+    /// takes effect on the next recorded run instead of waiting for the window to reopen.
+    fn push(&mut self, run: RunId, entry: HistoryEntry, cap: usize) {
         self.seen.insert(run);
         self.entries.push_front(entry);
-        while self.entries.len() > HISTORY_CAP {
+        while self.entries.len() > cap {
             self.entries.pop_back();
         }
     }
@@ -75,6 +86,9 @@ pub type HistoryCtx = State<History>;
 pub fn use_history_recording(query: UseQuery<RunQuery>, run: RunId, sql: String) {
     let history = use_consume::<HistoryCtx>();
     let project = use_radio_station::<ProjectState, ProjChan>();
+    // Peeked at record time, never subscribed: the cap decides how much to keep, and a
+    // settings change has no business re-rendering a results pane.
+    let config = use_config_station();
     let mut recorded = use_state(|| false);
     use_side_effect(move || {
         if *recorded.peek() {
@@ -97,21 +111,27 @@ pub fn use_history_recording(query: UseQuery<RunQuery>, run: RunId, sql: String)
                 elapsed_ms,
                 rows,
             };
-            record_run(history, project.peek().root.clone(), run, entry);
+            record_run(
+                history,
+                project.peek().root.clone(),
+                run,
+                entry,
+                history_cap(config),
+            );
         }
     });
 }
 
 /// Record a completed successful run: prepend it to the in-memory satellite (deduped by
-/// `run`, so a re-mount can't double-log) and, if newly recorded, append it to
-/// `history.jsonl`.
-fn record_run(mut history: HistoryCtx, root: PathBuf, run: RunId, entry: HistoryEntry) {
+/// `run`, so a re-mount can't double-log, and trimmed to `cap`) and, if newly recorded,
+/// append it to `history.jsonl`.
+fn record_run(mut history: HistoryCtx, root: PathBuf, run: RunId, entry: HistoryEntry, cap: usize) {
     // Peek first: an already-seen run must not take a write lock (which would wake the
     // history subscribers for nothing).
     if history.peek().seen.contains(&run) {
         return;
     }
-    history.write().push(run, entry.clone());
+    history.write().push(run, entry.clone(), cap);
     spawn(async move {
         if let Err(e) = project_io::append_history(&root, &entry) {
             tracing::error!("append history: {e}");
@@ -147,12 +167,24 @@ mod tests {
     /// Dedup by run id: the same run recorded twice (a results-pane re-mount) lands once.
     #[test]
     fn push_is_deduped_by_run_id() {
-        let mut h = History::load(Path::new("/nonexistent")); // absent → empty
+        let mut h = History::load(Path::new("/nonexistent"), 100); // absent → empty
         let run = RunId::new();
-        h.push(run, entry("SELECT 1"));
+        h.push(run, entry("SELECT 1"), 100);
         // `record_run` guards on `seen` before pushing; simulate its check.
         assert!(h.seen.contains(&run));
         assert_eq!(h.entries.len(), 1);
+    }
+
+    /// The in-memory window is trimmed to the cap the *caller* passed — the live
+    /// `Settings::max_history`, so lowering it takes effect on the next run.
+    #[test]
+    fn push_trims_to_the_cap_it_is_given() {
+        let mut h = History::load(Path::new("/nonexistent"), 2);
+        for sql in ["a", "b", "c"] {
+            h.push(RunId::new(), entry(sql), 2);
+        }
+        let sqls: Vec<&str> = h.entries.iter().map(|x| x.sql.as_str()).collect();
+        assert_eq!(sqls, ["c", "b"], "newest kept, oldest dropped");
     }
 
     /// Load flips file-order (oldest → newest) to newest-first for display.
@@ -163,7 +195,7 @@ mod tests {
         for s in ["old", "mid", "new"] {
             project_io::append_history(&root, &entry(s)).unwrap();
         }
-        let h = History::load(&root);
+        let h = History::load(&root, 100);
         let sqls: Vec<&str> = h.entries.iter().map(|x| x.sql.as_str()).collect();
         assert_eq!(sqls, ["new", "mid", "old"]);
         let _ = fs::remove_dir_all(&root);

@@ -10,8 +10,9 @@
 //! origins honest: a view rename rewrites matching `Origin::View` keys (no rename entry
 //! point exists yet — when Phase 3 adds one, route it here); a saved-query rename is
 //! free (ids don't move). User-entered names compare case-insensitively
-//! ([`ProjectState::same_name`]) — DataFusion folds unquoted identifiers — while
-//! landing engine answers matches exactly (round-trips of our own strings).
+//! ([`ProjectState::same_name`]) — DataFusion folds unquoted identifiers — and that rule
+//! governs **every** def-identity decision: `name_in_use`, the upserts and the removes.
+//! Only **landing engine answers** matches exactly (round-trips of our own strings).
 //!
 //! Mutations happen through methods (like `SessionState`) via a `write_channel` guard;
 //! persistence is [`ProjectState::save_defs`] — called at the def-mutation points
@@ -305,18 +306,25 @@ impl ProjectState {
 
     /// Insert-or-replace a view def by name, at its alphabetical slot. The row resets
     /// to `Loading` — a (re)written def is unanswered until the engine speaks.
+    ///
+    /// Replacement uses [`same_name`](Self::same_name), like every other user-entered-name
+    /// comparison: the engine folds unquoted identifiers, so saving `Orders` over an
+    /// existing `orders` replaces *one* view there — an exact-match dedup would leave two
+    /// catalog rows over it, one of them a permanent lie.
     pub fn upsert_view(&mut self, def: ViewDef) {
-        self.views.retain(|x| x.def.name != def.name);
+        self.views
+            .retain(|x| !Self::same_name(&x.def.name, &def.name));
         let at = self
             .views
             .partition_point(|x| name_ord(&x.def.name, &def.name).is_lt());
         self.views.insert(at, ViewRow::new(def));
     }
 
-    /// Drop the view named `name`.
+    /// Drop the view named `name` — matched like [`upsert_view`](Self::upsert_view), so a
+    /// drop names the same row a save would have replaced.
     #[allow(dead_code)]
     pub fn remove_view(&mut self, name: &str) {
-        self.views.retain(|v| v.def.name != name);
+        self.views.retain(|v| !Self::same_name(&v.def.name, name));
     }
 
     /// Insert-or-replace a saved query by its stable `id`, keeping the alphabetical
@@ -336,20 +344,22 @@ impl ProjectState {
     }
 
     /// Insert-or-replace a table def by name (registration / config save), at its
-    /// alphabetical slot. Resets the row to `Loading` like `upsert_view`.
+    /// alphabetical slot. Resets the row to `Loading`, and dedups by
+    /// [`same_name`](Self::same_name), like `upsert_view`.
     #[allow(dead_code)]
     pub fn upsert_table(&mut self, def: TableDef) {
-        self.tables.retain(|x| x.def.name != def.name);
+        self.tables
+            .retain(|x| !Self::same_name(&x.def.name, &def.name));
         let at = self
             .tables
             .partition_point(|x| name_ord(&x.def.name, &def.name).is_lt());
         self.tables.insert(at, TableRow::new(def));
     }
 
-    /// Drop the table named `name`.
+    /// Drop the table named `name` — matched like [`upsert_table`](Self::upsert_table).
     #[allow(dead_code)]
     pub fn remove_table(&mut self, name: &str) {
-        self.tables.retain(|t| t.def.name != name);
+        self.tables.retain(|t| !Self::same_name(&t.def.name, name));
     }
 }
 
@@ -446,6 +456,37 @@ mod tests {
         // Saved queries aren't engine-registered at all, so a re-scan can't reach them.
         assert_eq!(before.saved_queries.len(), after.saved_queries.len());
         assert_eq!(before.saved_queries[0].id, after.saved_queries[0].id);
+    }
+
+    /// Def identity is `same_name`, not `==`. The engine folds unquoted identifiers, so
+    /// saving a view as `Orders_Daily` when `orders_daily` exists replaces the *one* view
+    /// the engine will replace — an exact-match dedup left a second catalog row over it,
+    /// permanently describing a def that no longer exists.
+    #[test]
+    fn def_mutations_match_names_the_way_the_engine_does() {
+        let mut p = settled();
+
+        p.upsert_view(ViewDef {
+            name: "Orders_Daily".into(),
+            sql: "SELECT 2".into(),
+        });
+        assert_eq!(p.views.len(), 1, "one row per folded name");
+        assert_eq!(p.views[0].def.name, "Orders_Daily", "the new spelling wins");
+        assert_eq!(p.views[0].def.sql, "SELECT 2");
+
+        p.upsert_table(table_def("ORDERS"));
+        let names: Vec<&str> = p.tables.iter().map(|t| t.def.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["ORDERS", "users"],
+            "replaced in place, still sorted"
+        );
+
+        // And a drop names the same row a save would have replaced.
+        p.remove_view("orders_daily");
+        p.remove_table("orders");
+        assert!(p.views.is_empty());
+        assert_eq!(p.tables.len(), 1);
     }
 
     /// A landing answer replaces `Loading` in place — the second half of the round trip, so

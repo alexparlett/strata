@@ -37,6 +37,8 @@ use datafusion::prelude::{ident, lit, Expr};
 use datafusion::sql::unparser::expr_to_sql;
 
 use strata_model::Kind;
+
+use super::quote_ident;
 use strata_model::{ColumnInfo, Stat, StatKey};
 
 // The profile *result* type is shared vocabulary — it lives in `strata-model`. This module
@@ -141,6 +143,17 @@ pub fn aggregates(columns: &[ColumnInfo]) -> (Vec<Expr>, Vec<Slot>) {
 /// clicked on `active_users` is technically the plan and practically useless. `FROM
 /// active_users` is the same query and the one they can actually work with.
 ///
+/// The `FROM` name goes through the engine's shared [`quote_ident`], which is what makes
+/// the printed query actually *run*: it renders `owner` to the name the engine resolves the
+/// entry under ([`super::fold_ident`]), for tables and views alike. A table the user named
+/// `MyTable` registered as `mytable` (`register_table` takes an `&str` through
+/// `TableReference::parse_str`, which lower-cases a bare word), and `quote_ident` prints
+/// exactly that — `FROM mytable`. An always-quote helper printed `FROM "MyTable"`, which
+/// resolves to nothing; only a name that can't be said bare (`FROM "Sales 2024"`) is quoted.
+///
+/// That matters because this SQL is not display-only: "view as query" drops it into a
+/// scratch tab for the user to edit and re-run.
+///
 /// Empty on any expression the unparser can't render — no button beats a broken query.
 pub fn profile_sql(owner: &str, exprs: &[Expr]) -> String {
     let mut parts = Vec::with_capacity(exprs.len());
@@ -155,13 +168,6 @@ pub fn profile_sql(owner: &str, exprs: &[Expr]) -> String {
         parts.join(",\n"),
         quote_ident(owner)
     )
-}
-
-/// Quote an identifier for the generated SQL. Catalog names come from the user, so this
-/// is the one place we hand-write an identifier rather than let `ident`/the unparser do
-/// it — double any embedded quote.
-fn quote_ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 /// Decode the aggregate's single result row into per-column facts.

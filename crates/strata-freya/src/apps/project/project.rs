@@ -159,8 +159,19 @@ impl App for ProjectApp {
             }
         });
         // Spawn this window's engine into context — the direct-call facade the query
-        // layer's capabilities await (state-arch §7).
-        let engine = use_provide_context(|| EngineCtx::new());
+        // layer's capabilities await (state-arch §7) — and hand it the close guard's
+        // in-flight flag on the way. The engine is the only thing that knows what is
+        // executing across *all* tabs (the UI mounts only the active one's results), and
+        // the `on_close` hook can read nothing but an atomic; from here on the engine
+        // publishes into it on every dispatch / settle / cancel / cleanup.
+        let engine = use_provide_context({
+            let running = guard.running.clone();
+            move || {
+                let engine = EngineCtx::new();
+                engine.watch_inflight(running);
+                engine
+            }
+        });
         // This window's Project store: opens the launch project (argv[1], default the
         // committed `sample/`) and registers its defs on the engine as a background
         // task — rows flip Loading → Ready/Failed as answers land (P4-13 internals;
@@ -184,8 +195,9 @@ impl App for ProjectApp {
         // had while neither app-filled nor fullscreen (see the hook).
         use_autosave(self.geometry, filled_by_app);
         // The window's query-history satellite (P4-14): loads `.strata/history.jsonl` and
-        // holds recent runs; the results pane appends to it as runs complete.
-        use_init_history();
+        // holds recent runs (capped by `Settings::max_history`, hence the config); the
+        // results pane appends to it as runs complete.
+        use_init_history(config);
         // The inspected-column slot (P3-02): the catalog sidebar writes it, the inspector
         // (P3-08) reads it. A context signal, not a store — see `state/catalog.rs`.
         use_init_catalog_selection();

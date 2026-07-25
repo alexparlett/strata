@@ -43,6 +43,12 @@ pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: Quer
             run: RunId::new(),
             sql,
             mode,
+            // NOT `Settings::row_limit`: that setting is the `LIMIT` clause *generated*
+            // queries carry ("Default row limit … so a stray SELECT * can't pull a whole
+            // file into memory. Set to 0 for no limit" — `Settings.dc.html`), which P3-06's
+            // View-table action will emit. The page size is per-run and user-changeable
+            // from the status-bar pager; seeding it from that setting would silently
+            // reinterpret a persisted field and turn "0 = no limit" into a broken page.
             page_size: DEFAULT_PAGE_SIZE,
         },
     );

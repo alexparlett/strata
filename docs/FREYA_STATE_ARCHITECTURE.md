@@ -328,16 +328,24 @@ handles (`EngineCtx`, theme) and deep/open-ended trees (`Selection`).
 
 **Run→Cancel (P2-15).** The toolbar's Run control flips to Cancel while the press is in flight —
 but it can't derive that from `request` (which stays `Some` after settle, keeping the grid
-mounted), and it **must not** subscribe the run's `use_query` itself: freya-query re-runs *stale*
-entries when a subscriber mounts, and a `Pending`/`Loading` entry reads as stale, so a second
-enabled subscriber would double-execute the run (nor can it share state via `.enable(false)` —
-`enabled` is part of `Query`'s cache identity, so that's a different, never-running entry). So
-the workbench holds a component-local slot, `running: State<Option<RunId>>`, threaded as props;
-`ResultsBody` — the query's sole subscriber — mirrors the lifecycle into it with a
-`use_side_effect` (the press's nonce while in flight, `None` on settle) plus a nonce-guarded
-`use_drop` (a stale body's unmount can't clobber a newer press's flag). Cancel from either
-surface is the same action: `engine.cancel(tab, run)` + `clear_request(tab)` on
-`Chan::Request(tab)`.
+mounted), and it doesn't subscribe the run's `use_query` either: `enabled` is part of `Query`'s
+cache identity, so `.enable(false)` reads a *different*, never-running entry — there is no
+"watch without running" subscription to make. So the workbench holds a component-local slot,
+`running: State<Option<RunId>>`, threaded as props; `ResultsBody` — the query's sole subscriber —
+mirrors the lifecycle into it with a `use_side_effect` (the press's nonce while in flight, `None`
+on settle) plus a nonce-guarded `use_drop` (a stale body's unmount can't clobber a newer press's
+flag). Cancel from either surface is the same action: `engine.cancel(tab, run)` +
+`clear_request(tab)` on `Chan::Request(tab)`.
+
+> **Corrected (post-P2-16).** This section used to give a stronger reason: that an enabled second
+> subscriber would **double-execute** the run, because freya-query re-ran an entry a mounting
+> subscriber found stale and a `Pending`/`Loading` entry reads as stale. That was true, and it is
+> no longer: our fork counts in-flight executions behind a `RunningGuard` and has a mounting
+> subscriber **attach** to one instead of dispatching a duplicate
+> (`freya-query/tests/query_inflight_dedup.rs`). The mirror stays because of the `enabled`-identity
+> point above and because one resolver beats every consumer knowing about queries — not because a
+> second subscriber is dangerous. Note the fork fix also covers a real case here: a results body
+> that unmounts and remounts mid-run (a tab switch) no longer re-executes the press.
 
 ---
 

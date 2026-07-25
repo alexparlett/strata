@@ -13,6 +13,7 @@
 //! [`resolve_source`] / [`relativize`].
 
 use std::cmp::Ordering;
+use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -21,10 +22,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string, to_string_pretty};
 use strata_model::{HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef};
 
+use crate::util::{sweep_stale_temps, write_atomic, TEMP_GLOB};
+
 /// The project directory name inside a project folder.
 pub const STRATA_DIR: &str = ".strata";
 const PROJECT_JSON: &str = "project.json";
 const SESSION_JSON: &str = "session.json";
+/// Where a `session.json` that read fine and isn't a session is kept aside (see
+/// [`corrupt_session_path`] and [`SessionLoadError::Corrupt`] — a file that merely couldn't
+/// be *read* is never moved). Named here, beside the session file itself, because two
+/// places have to agree on it: the window that moves the file aside, and
+/// [`ensure_gitignore`] — a `.gitignore` line matches literally, so `session.json` does
+/// **not** cover this name and the kept file would otherwise surface as untracked in a
+/// committed project folder.
+const SESSION_JSON_CORRUPT: &str = "session.json.corrupt";
 const HISTORY_JSONL: &str = "history.jsonl";
 
 /// The committed definitions — the shape of `.strata/project.json`.
@@ -52,9 +63,13 @@ pub fn exists_at(root: &Path) -> bool {
     strata_dir(root).join(PROJECT_JSON).exists()
 }
 
-/// Load the defs from project folder `root`. `Err` when the file is missing or doesn't
-/// parse. Catalog lists come back sorted ([`name_ord`]) — the file's order is just
-/// whatever it was last written in.
+/// Load the defs from project folder `root`. `Err` when the file can't be read (missing
+/// included — an absent `project.json` means "not a project here", which [`exists_at`]
+/// answers before this is called) or doesn't parse. The two are not split the way
+/// [`load_session`]'s are, because the caller does the same thing either way: there is no
+/// project without its defs, so every `Err` fails the open loud, and nothing here moves,
+/// replaces or overwrites the file. Catalog lists come back sorted ([`name_ord`]) — the
+/// file's order is just whatever it was last written in.
 pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     let path = strata_dir(root).join(PROJECT_JSON);
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -66,14 +81,17 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     Ok(defs)
 }
 
-/// Write the defs into `root`'s `.strata/` dir, creating it and its `.gitignore`
-/// (ignoring the local `session.json`) if needed.
+/// Write the defs into `root`'s `.strata/` dir, creating it and tidying it
+/// ([`tidy_strata_dir`] — `.gitignore` + stale temps) if needed. Written **atomically**
+/// ([`write_atomic`]): this is the user's whole catalog, so a crash mid-save must leave the
+/// last good file rather than a truncated one.
 pub fn save_defs(root: &Path, defs: &ProjectDefs) -> Result<(), String> {
     let dir = strata_dir(root);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    ensure_gitignore(&dir);
+    tidy_strata_dir(&dir);
     let json = to_string_pretty(defs).map_err(|e| e.to_string())?;
-    fs::write(dir.join(PROJECT_JSON), json).map_err(|e| e.to_string())
+    let path = dir.join(PROJECT_JSON);
+    write_atomic(&path, json.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Scaffold a **new** project in folder `root`: an empty defs file named after the
@@ -101,31 +119,98 @@ pub fn session_path(root: &Path) -> PathBuf {
     strata_dir(root).join(SESSION_JSON)
 }
 
-/// Load the [`SessionSnapshot`] from `root`'s `.strata/`. `Ok(None)` when there's no
-/// session file yet (a fresh or never-saved project) — a first-class, expected state, not
-/// an error. `Err` **only** when the file exists but doesn't parse, so the caller can log
-/// it and fall back to a blank session rather than bricking the window on a corrupt file.
-/// Concrete over the model type, exactly like [`load_defs`].
-pub fn load_session(root: &Path) -> Result<Option<SessionSnapshot>, String> {
-    let path = session_path(root);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
-    };
-    from_str(&text)
-        .map(Some)
-        .map_err(|e| format!("{}: {e}", path.display()))
+/// The `.strata/session.json.corrupt` of `root` — where a session file that **was read and
+/// is not a session** ([`SessionLoadError::Corrupt`]) is moved aside on restore, so the
+/// autosave that follows the open can't overwrite the only copy of the user's tabs. One
+/// fixed name, not a numbered series: the *current* corruption is the one worth keeping.
+/// Gitignored like the session itself ([`ensure_gitignore`]).
+///
+/// Only for damaged data. A session file that merely *couldn't be read*
+/// ([`SessionLoadError::Unreadable`]) must be left exactly where it is — its contents are
+/// unknown and probably fine, and setting it aside would turn a transient IO failure into
+/// permanent tab loss.
+pub fn corrupt_session_path(root: &Path) -> PathBuf {
+    strata_dir(root).join(SESSION_JSON_CORRUPT)
 }
 
-/// Write the [`SessionSnapshot`] into `root`'s `.strata/` (gitignored), creating the
-/// dir + its `.gitignore` if needed. The autosave side effect's sink (P4-14).
+/// Why a project's `session.json` didn't load. A type rather than a message because the
+/// caller must **act** differently on the two: one of them licenses setting the file aside
+/// and overwriting it, and the other forbids it.
+#[derive(Debug)]
+pub enum SessionLoadError {
+    /// **Damaged data.** The bytes were read and are not a [`SessionSnapshot`] (not UTF-8,
+    /// or not the JSON we write). Re-reading can only produce the same answer, so the file
+    /// is a write-off: the caller may move it aside ([`corrupt_session_path`]) and open a
+    /// blank session, and the autosave that follows overwrites nothing of value.
+    Corrupt(String),
+    /// **A failed read.** Permission denied, an IO error, a network mount that has gone
+    /// away, a file whose data hasn't landed yet on a synced volume. The contents are
+    /// unknown and very probably intact, so the caller must **not** move, replace or
+    /// overwrite the file — opening a blank session is fine, *persisting* that blank
+    /// session over the file is how a transient failure becomes permanent tab loss.
+    Unreadable(String),
+}
+
+impl fmt::Display for SessionLoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Corrupt(m) => write!(f, "corrupt: {m}"),
+            Self::Unreadable(m) => write!(f, "unreadable: {m}"),
+        }
+    }
+}
+
+/// Load the [`SessionSnapshot`] from `root`'s `.strata/`. Three outcomes, and the caller is
+/// expected to treat all three differently:
+///
+/// * `Ok(None)` — **no session file.** A fresh or never-saved project: a first-class,
+///   expected state, not an error. Open blank and autosave normally.
+/// * `Err(`[`SessionLoadError::Corrupt`]`)` — the file is there and isn't a session. Log
+///   it, set it aside ([`corrupt_session_path`]) and open blank, rather than bricking the
+///   window on a file a kill mid-autosave could have produced.
+/// * `Err(`[`SessionLoadError::Unreadable`]`)` — the file couldn't be read at all. Log it
+///   and leave the file exactly where it is; see the variant for what the caller owes it.
+///
+/// The split is drawn on the **bytes**, not on an `io::ErrorKind`: a read that fails is
+/// `Unreadable`, and bytes that aren't UTF-8 or aren't a snapshot are `Corrupt`. That is
+/// why this reads with [`fs::read`] and decodes itself — [`fs::read_to_string`] folds a
+/// decode failure into the same `io::Error` as a disk failure, which is exactly the
+/// conflation this type exists to undo.
+///
+/// Concrete over the model type, exactly like [`load_defs`].
+pub fn load_session(root: &Path) -> Result<Option<SessionSnapshot>, SessionLoadError> {
+    let path = session_path(root);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(SessionLoadError::Unreadable(format!(
+                "{}: {e}",
+                path.display()
+            )))
+        }
+    };
+    // Past the read, everything is the file's fault, not the filesystem's.
+    let text = String::from_utf8(bytes)
+        .map_err(|e| SessionLoadError::Corrupt(format!("{}: {e}", path.display())))?;
+    from_str(&text)
+        .map(Some)
+        .map_err(|e| SessionLoadError::Corrupt(format!("{}: {e}", path.display())))
+}
+
+/// Write the [`SessionSnapshot`] into `root`'s `.strata/` (gitignored), creating and
+/// tidying the dir ([`tidy_strata_dir`]) if needed. The autosave side effect's sink
+/// (P4-14) — it fires shortly after every edit, so the write is **atomic**
+/// ([`write_atomic`]): a kill or power
+/// loss lands on one of those writes eventually, and a truncated `session.json` would cost
+/// the user their open tabs.
 pub fn save_session(root: &Path, snapshot: &SessionSnapshot) -> Result<(), String> {
     let dir = strata_dir(root);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    ensure_gitignore(&dir);
+    tidy_strata_dir(&dir);
     let json = to_string_pretty(snapshot).map_err(|e| e.to_string())?;
-    fs::write(session_path(root), json).map_err(|e| e.to_string())
+    let path = session_path(root);
+    write_atomic(&path, json.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// The `.strata/history.jsonl` of the project folder `root` — the **local** append-only
@@ -134,14 +219,14 @@ pub fn history_path(root: &Path) -> PathBuf {
     strata_dir(root).join(HISTORY_JSONL)
 }
 
-/// Append one history entry as a JSON line to `root`'s `history.jsonl` (creating the dir +
-/// `.gitignore` if needed). Append-only (DESIGN_SPEC §"History as `.jsonl`") so a completed
+/// Append one history entry as a JSON line to `root`'s `history.jsonl` (creating and
+/// tidying the dir — [`tidy_strata_dir`] — if needed). Append-only (DESIGN_SPEC §"History as `.jsonl`") so a completed
 /// run is one cheap `O_APPEND` write, not a whole-file rewrite; [`load_history`] bounds the
 /// file back down.
 pub fn append_history(root: &Path, entry: &HistoryEntry) -> Result<(), String> {
     let dir = strata_dir(root);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    ensure_gitignore(&dir);
+    tidy_strata_dir(&dir);
     let mut line = to_string(entry).map_err(|e| e.to_string())?;
     line.push('\n');
     let mut file = fs::OpenOptions::new()
@@ -155,8 +240,17 @@ pub fn append_history(root: &Path, entry: &HistoryEntry) -> Result<(), String> {
 /// Load history for `root`, newest entries capped to `cap` (keep-last-N). Absent file →
 /// empty (a project with no runs yet); a corrupt *line* is skipped, not fatal — one bad
 /// append can't lose the whole log. Returns entries in **file order** (oldest → newest).
-/// If the file has grown past `cap`, it's **rotated** in place to the kept window
-/// (DESIGN_SPEC: "rotate to bound size").
+/// If the file has grown past `cap`, it's **rotated** to the kept window (DESIGN_SPEC:
+/// "rotate to bound size").
+///
+/// The rotation replaces the file through [`write_atomic`], so it is all-or-nothing: a crash
+/// mid-rotation leaves the un-rotated log, never a truncated one. It is **not** locked
+/// against other writers, and that residual race is deliberate: every other writer opens the
+/// log `O_APPEND` ([`append_history`]), so an entry another window appends between this read
+/// and the rename lands in the file we then replace (now unlinked) and is lost. Bounded by
+/// design — only a *rotating* load can drop entries (rare: the log must be over `cap`), only
+/// the runs completed in that millisecond, and only from history, which is regenerable. The
+/// alternative is a lock file every append has to take, which is not worth it here.
 pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String> {
     let path = history_path(root);
     let text = match fs::read_to_string(&path) {
@@ -171,7 +265,8 @@ pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String
         .collect();
     if entries.len() > cap {
         entries.drain(0..entries.len() - cap);
-        // Rewrite the file down to what we kept (rare — only when it overflowed).
+        // Replace the file with what we kept (rare — only when it overflowed). Best-effort:
+        // a rotation that fails just leaves an over-long log, which the next load retries.
         let mut out = String::new();
         for entry in &entries {
             if let Ok(line) = to_string(entry) {
@@ -179,20 +274,43 @@ pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String
                 out.push('\n');
             }
         }
-        let _ = fs::write(&path, out);
+        let _ = write_atomic(&path, out.as_bytes());
     }
     Ok(entries)
 }
 
-/// Ensure `.strata/.gitignore` ignores the local, per-user files — the working session and
-/// the query-history log — adding any that are missing while preserving other lines. Run
-/// from every local-file write, so an older `.gitignore` (session-only) gets upgraded.
+/// The housekeeping every durable `.strata/` write does on its way in: keep the
+/// `.gitignore` current, and clear out any [`write_atomic`] temp a killed process left
+/// behind ([`sweep_stale_temps`] decides which of those are safe to touch). Both are
+/// best-effort and neither can fail the save that called it.
+///
+/// It rides the write path rather than the project open so it is self-contained — the dir
+/// exists by this point, and a `read_dir` of a five-entry directory is nothing beside the
+/// `fsync` the write is about to do.
+fn tidy_strata_dir(dir: &Path) {
+    ensure_gitignore(dir);
+    sweep_stale_temps(dir);
+}
+
+/// Ensure `.strata/.gitignore` ignores the local, per-user files — the working session,
+/// the copy kept aside when that session won't parse, the query-history log, and the
+/// in-flight temp of any [`write_atomic`] ([`TEMP_GLOB`]) — adding any that are missing
+/// while preserving other lines. Run from every local-file write, so an older `.gitignore`
+/// (session-only) gets upgraded.
+///
+/// The names are literal but [`TEMP_GLOB`] is a pattern, and both are taken from the one
+/// place that defines them, because a gitignore line matches literally: `session.json` does
+/// not cover `session.json.corrupt`, and nothing here covers a temp whose name carries the
+/// writer's pid.
+///
+/// Rewritten atomically like the rest: it's a read-modify-write of a file the user may have
+/// added their own lines to, so a truncating write could lose them.
 fn ensure_gitignore(dir: &Path) {
     let gi = dir.join(".gitignore");
     let existing = fs::read_to_string(&gi).unwrap_or_default();
     let mut lines: Vec<&str> = existing.lines().collect();
     let mut changed = false;
-    for wanted in [SESSION_JSON, HISTORY_JSONL] {
+    for wanted in [SESSION_JSON, SESSION_JSON_CORRUPT, HISTORY_JSONL, TEMP_GLOB] {
         if !lines.iter().any(|l| l.trim() == wanted) {
             lines.push(wanted);
             changed = true;
@@ -201,7 +319,7 @@ fn ensure_gitignore(dir: &Path) {
     if changed {
         let mut out = lines.join("\n");
         out.push('\n');
-        let _ = fs::write(&gi, out);
+        let _ = write_atomic(&gi, out.as_bytes());
     }
 }
 
@@ -271,9 +389,14 @@ mod tests {
         assert!(defs.name.starts_with("strata-project-test-scaffold"));
         // Scaffolding is refused where a project already exists.
         assert!(scaffold(&root.0).is_err());
-        // The local, per-user files are gitignored from the start.
+        // The local, per-user files are gitignored from the start — including the copy a
+        // failed session restore keeps aside and the in-flight temp of an atomic write,
+        // neither of which the `session.json` line covers.
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
-        assert_eq!(gi, "session.json\nhistory.jsonl\n");
+        assert_eq!(
+            gi,
+            "session.json\nsession.json.corrupt\nhistory.jsonl\n.*.tmp\n"
+        );
         // `assert!` over `assert_eq!` here and below: the model types are serde
         // vocabulary and deliberately don't derive `Debug`.
         let loaded = load_defs(&root.0).unwrap();
@@ -369,9 +492,13 @@ mod tests {
         assert_eq!(loaded.tabs[0].text, "SELECT 1");
         assert_eq!(loaded.active, Some(id));
         assert_eq!(loaded.window.unwrap().width, 800.0);
-        // The session file is gitignored the moment it's written (alongside history).
+        // The session file is gitignored the moment it's written (alongside its
+        // kept-aside corrupt copy, history, and any stranded write temp).
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
-        assert_eq!(gi, "session.json\nhistory.jsonl\n");
+        assert_eq!(
+            gi,
+            "session.json\nsession.json.corrupt\nhistory.jsonl\n.*.tmp\n"
+        );
     }
 
     /// One history entry (timestamps irrelevant to the file-ordering tests).
@@ -429,15 +556,147 @@ mod tests {
         assert_eq!(after.len(), 3);
     }
 
+    /// A present-but-unparseable file must surface as **damage**, never masquerade as "no
+    /// session": that `Corrupt` is what licenses the caller to keep the file aside and open
+    /// blank.
     #[test]
-    fn corrupt_session_is_an_error_not_a_silent_none() {
+    fn an_unparseable_session_is_corrupt_not_unreadable() {
         let root = TempRoot::new("session-corrupt");
         let dir = strata_dir(&root.0);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("session.json"), "{ not json").unwrap();
-        // A present-but-unparseable file must surface (the caller logs + falls back to a
-        // blank session), never masquerade as "no session".
-        assert!(load_session(&root.0).is_err());
+        assert!(matches!(
+            load_session(&root.0),
+            Err(SessionLoadError::Corrupt(_))
+        ));
+        // Bytes that aren't even UTF-8 are damage too, not a failed read — the distinction
+        // `read_to_string` cannot make, which is why the load decodes the bytes itself.
+        fs::write(dir.join("session.json"), [0x7b, 0xff, 0xfe]).unwrap();
+        assert!(matches!(
+            load_session(&root.0),
+            Err(SessionLoadError::Corrupt(_))
+        ));
+    }
+
+    /// A file that can't be *read* — permissions, an IO error, a mount that went away — is
+    /// a different answer entirely: its contents are unknown and probably fine, so the
+    /// caller must leave it alone. (A directory in the session file's place fails the read
+    /// on every platform and regardless of privilege, which `chmod 000` does not.)
+    #[test]
+    fn a_session_that_cannot_be_read_is_unreadable_not_corrupt() {
+        let root = TempRoot::new("session-unreadable");
+        let dir = strata_dir(&root.0);
+        fs::create_dir_all(dir.join("session.json")).unwrap();
+        assert!(matches!(
+            load_session(&root.0),
+            Err(SessionLoadError::Unreadable(_))
+        ));
+    }
+
+    /// The `.strata/` entries of `root`, sorted.
+    fn strata_entries(root: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(strata_dir(root))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Every durable write goes temp-file + rename, so no `.tmp` may outlive a save —
+    /// including the rotating history load, which replaces an append-only file.
+    #[test]
+    fn durable_writes_strand_no_temp_files() {
+        let root = TempRoot::new("atomic");
+        scaffold(&root.0).unwrap();
+        save_defs(&root.0, &load_defs(&root.0).unwrap()).unwrap();
+        save_session(
+            &root.0,
+            &SessionSnapshot {
+                tabs: vec![tab("query 1", "SELECT 1")],
+                active: None,
+                window: None,
+                layout: Layout::default(),
+            },
+        )
+        .unwrap();
+        for i in 0..4 {
+            append_history(&root.0, &run(&format!("q{i}"), i)).unwrap();
+        }
+        assert_eq!(load_history(&root.0, 2).unwrap().len(), 2, "rotated");
+        assert_eq!(
+            strata_entries(&root.0),
+            [
+                ".gitignore",
+                "history.jsonl",
+                "project.json",
+                "session.json"
+            ]
+        );
+    }
+
+    /// A save that can't be written must leave the last good `project.json` in place — the
+    /// whole point of writing through the temp: the target isn't touched until the rename.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_save_keeps_the_previous_defs() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = TempRoot::new("atomic-fail");
+        let defs = scaffold(&root.0).unwrap();
+        let dir = strata_dir(&root.0);
+        // Read-only `.strata/` — the temp can't be created, so the write fails before the
+        // rename (`create_dir_all` on an existing dir still succeeds).
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).unwrap();
+        let res = save_defs(
+            &root.0,
+            &ProjectDefs {
+                name: "clobbered".into(),
+                ..Default::default()
+            },
+        );
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(res.is_err());
+        assert!(load_defs(&root.0).unwrap() == defs);
+        assert_eq!(strata_entries(&root.0), [".gitignore", "project.json"]);
+    }
+
+    /// A kill between an atomic write's `create` and its `rename` has no error path to run,
+    /// so it strands a temp in `.strata/`. The next save clears it — this is the wiring
+    /// half; which temps are *safe* to remove is `crate::util`'s own tests.
+    #[test]
+    fn a_save_sweeps_a_temp_a_dead_writer_left_behind() {
+        use std::time::{Duration, SystemTime};
+        let root = TempRoot::new("sweep-wiring");
+        scaffold(&root.0).unwrap();
+        // Another process's temp (ours is never swept — it could be a write in flight),
+        // back-dated well past the staleness threshold.
+        let stranded = strata_dir(&root.0).join(format!(
+            ".session.json.{}.0.tmp",
+            process::id().wrapping_add(1)
+        ));
+        let file = fs::File::create(&stranded).unwrap();
+        file.set_times(
+            fs::FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(48 * 3600)),
+        )
+        .unwrap();
+        drop(file);
+
+        save_session(
+            &root.0,
+            &SessionSnapshot {
+                tabs: vec![tab("query 1", "SELECT 1")],
+                active: None,
+                window: None,
+                layout: Layout::default(),
+            },
+        )
+        .unwrap();
+
+        assert!(!stranded.exists(), "the stranded temp is gone");
+        assert_eq!(
+            strata_entries(&root.0),
+            [".gitignore", "project.json", "session.json"]
+        );
     }
 
     #[test]

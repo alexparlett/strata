@@ -145,6 +145,11 @@ pub fn use_open_project(station: ConfigStation, name: &str, root: &Path) {
     });
 }
 
+/// Every audience — the fallback [`write_config`] uses when a caller names none. Extend it
+/// when a [`ConfigChan`] is added.
+const ALL_AUDIENCES: [ConfigChan; 3] =
+    [ConfigChan::Settings, ConfigChan::Recents, ConfigChan::Open];
+
 /// Mutate the app-global config and persist it — **the** write path; nothing else calls
 /// [`config::save`].
 ///
@@ -162,14 +167,27 @@ pub fn write_config(
     channels: &[ConfigChan],
     edit: impl FnOnce(&mut AppConfig),
 ) {
-    let mut edit = Some(edit);
+    // A `RadioStation` is only mutable *through* a channel guard, so an empty `channels`
+    // has no write path of its own — and running the edit inside the per-channel loop ran
+    // it zero times there, then persisted the untouched config: a silently dropped edit.
+    // Every field belongs to an audience, so naming none is a caller bug; take the
+    // conservative reading (all of them, so nothing can be left stale) and say so.
+    let channels = if channels.is_empty() {
+        tracing::error!("write_config: no audience named; notifying all of them");
+        &ALL_AUDIENCES[..]
+    } else {
+        channels
+    };
+    let mut channels = channels.iter();
+    // The edit runs exactly once, under the first channel's guard — whose drop is that
+    // channel's notification. Non-empty by construction, so it always runs.
+    if let Some(first) = channels.next() {
+        edit(&mut station.write_channel(*first));
+    }
     for chan in channels {
-        // Each guard notifies its channel when it drops — so the borrow must end inside
-        // the loop before the next `write_channel` takes it again.
-        let mut guard = station.write_channel(*chan);
-        if let Some(edit) = edit.take() {
-            edit(&mut guard);
-        }
+        // The remaining audiences: an empty write, taken and dropped one at a time (each
+        // guard holds the value borrow until it notifies).
+        drop(station.write_channel(*chan));
     }
     config::save(&station.peek());
 }

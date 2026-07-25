@@ -133,19 +133,44 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub zebra: bool,
     /// Default results-grid column width in px (V20). Per-column overrides live on the run
-    /// (session-scoped); this is the starting width. No UI control yet — struct-only.
+    /// (session-scoped); this is the starting width the grid seeds every column from
+    /// (`DataGrid::render`, clamped to the grid's min/max). No UI control yet — the
+    /// Settings ▸ Data display input is P4-05.
+    ///
+    /// Its default is the grid's own `DEFAULT_COL_W` and must stay that way: the setting
+    /// took over a hardcoded width, so a default that differs would silently re-render
+    /// every user's grid at a size they never chose and have no control to undo.
     #[serde(default = "default_col_width")]
     pub default_col_width: f64,
+    /// The `LIMIT` clause **generated** queries carry, so a stray `SELECT *` can't pull a
+    /// whole file into memory; `0` = no limit (design24 Data-display ▸ "Default row
+    /// limit"). Deliberately *not* the results page size — that is per-run and lives on
+    /// `QuerySpec`. **Not read yet:** the only generator is the catalog's View-table
+    /// action, P3-06; its control is P4-05 (Settings ▸ Data display).
     #[serde(default = "default_row_limit")]
     pub row_limit: usize,
-    /// Query-history cap (design24 System ▸ History): oldest runs drop off once the count
-    /// exceeds this. Surfaced as a 25/50/100/200 segmented control.
+    /// Query-history cap (design24 System ▸ History): the newest runs kept, both in the
+    /// window's satellite and in `.strata/history.jsonl`, which the load rotates down to
+    /// it. The control is P4-06 (Settings ▸ System) — a numeric input, as W3 shipped it.
+    ///
+    /// Its default is the `HISTORY_CAP` this setting took over from and must stay that way,
+    /// with more force than the others: the cap drives the **rotation**, so a lower default
+    /// doesn't just show less history, it rewrites `history.jsonl` down to the smaller
+    /// window on the next open — the entries in between are gone for good.
     #[serde(default = "default_max_history")]
     pub max_history: usize,
+    /// Reopen the projects that had a window at last exit ([`AppConfig::open_projects`]).
+    /// **Not read yet:** restoring a *set* of windows is P4-01 (multi-window shell) — with
+    /// one window per process there is nothing to restore into.
     #[serde(default = "default_true")]
     pub reopen_on_startup: bool,
+    /// Where the folder picker starts when opening or creating a project (empty = the OS
+    /// default). **Not read yet:** the picker is P4-13 (open / create a project), reached
+    /// from the launcher (P4-02).
     #[serde(default)]
     pub default_project_dir: String,
+    /// Where "Open Project" opens when this window already has one. **Not read yet:** the
+    /// This/New prompt it chooses between is P4-13, on top of P4-01's second window.
     #[serde(default)]
     pub open_pref: OpenPref,
     #[serde(default = "default_true")]
@@ -166,11 +191,15 @@ fn default_theme() -> String {
 fn default_row_limit() -> usize {
     100
 }
+/// Matches the `HISTORY_CAP` the history satellite used before the setting was wired to it
+/// (see [`Settings::max_history`] — the mismatch is destructive, not cosmetic).
 fn default_max_history() -> usize {
-    100
+    200
 }
+/// Matches the results grid's `DEFAULT_COL_W`, the width it hardcoded before the setting
+/// was wired to it (see [`Settings::default_col_width`]).
 fn default_col_width() -> f64 {
-    150.0
+    168.0
 }
 fn default_true() -> bool {
     true
@@ -202,6 +231,11 @@ impl Default for Settings {
 /// file to answer a question. [`load`] is a startup input, not a live source.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// Schema version of the file this was loaded from — the gate [`AppConfig::migrate`]
+    /// dispatches its one-shot repairs on. Absent (pre-versioning) files read as `0`;
+    /// [`load`] stamps [`CONFIG_VERSION`] after migrating, and the next [`save`] persists it.
+    #[serde(default)]
+    pub version: u32,
     #[serde(default)]
     pub recent_projects: Vec<RecentProject>,
     /// Project folders (see [`RecentProject::path`]) with an open window right now, so
@@ -268,6 +302,31 @@ impl AppConfig {
         self.recent_projects.first()
     }
 
+    /// Bring a loaded config up to [`CONFIG_VERSION`], then stamp it.
+    ///
+    /// Each repair is gated on the version of the file it came *from*, so it runs once and
+    /// never again — `if self.version < N { … }`, then bump [`CONFIG_VERSION`] to `N`. Steps
+    /// must stay idempotent anyway: nothing persists until the next [`save`], so a launch
+    /// that never saves replays them.
+    ///
+    /// **The case this exists for.** `#[serde(default = "…")]` fires only when a key is
+    /// *absent*, and [`Settings`] serializes every field unconditionally while `write_config`
+    /// persists on every project open — so any config the app has ever written pins every
+    /// setting at whatever the default was *then*. Changing a `default_*` fn therefore does
+    /// not reach existing files. When a setting gains its first real consumer and that
+    /// consumer previously hardcoded a different constant (`max_history` vs the history
+    /// satellite's old `HISTORY_CAP`, `default_col_width` vs the grid's `DEFAULT_COL_W`),
+    /// the value repair belongs *here*, not in the default — otherwise the wiring silently
+    /// changes behaviour for anyone already running the app. Nothing needs that repair today
+    /// (pre-release, no installs to preserve), which is the only reason v1 carries just the
+    /// path rewrite.
+    fn migrate(&mut self) {
+        if self.version < 1 {
+            self.migrate_paths();
+        }
+        self.version = CONFIG_VERSION;
+    }
+
     /// Rewrite project paths written by the pre-Freya app, which stored the project's
     /// `.strata` dir where we now store the project folder ([`RecentProject::path`]).
     /// Left alone, those entries name a folder that can't be opened as a project *and*
@@ -300,11 +359,15 @@ fn project_folder(path: &str) -> String {
     }
 }
 
-/// Load the app config (empty default if missing or unreadable), with legacy project
-/// paths migrated ([`AppConfig::migrate_paths`]).
+/// The schema version this build writes. Bump it when you add a repair to
+/// [`AppConfig::migrate`]; the new step is gated on the version it repairs *from*.
+const CONFIG_VERSION: u32 = 1;
+
+/// Load the app config (empty default if missing or unreadable), brought up to
+/// [`CONFIG_VERSION`] by [`AppConfig::migrate`].
 pub fn load() -> AppConfig {
     let mut cfg = AppConfig::load(&APP_INFO, KEY).unwrap_or_default();
-    cfg.migrate_paths();
+    cfg.migrate();
     cfg
 }
 
@@ -330,9 +393,28 @@ mod tests {
         }
     }
 
+    /// Wiring a setting to a consumer that had a hardcoded constant must be
+    /// behaviour-preserving: the default *is* what the app already did. Both of these took
+    /// over a constant in `strata-freya` (which this crate can't name from here, hence the
+    /// literals): the results grid's `DEFAULT_COL_W` and the history satellite's old
+    /// `HISTORY_CAP`. Changing either of these numbers without changing the constant it
+    /// mirrors silently changes behaviour for every existing user — and for `max_history`
+    /// it also truncates their `history.jsonl` on the next open.
+    #[test]
+    fn defaults_match_the_constants_the_settings_took_over() {
+        let d = Settings::default();
+        assert_eq!(d.default_col_width, 168.0, "datagrid DEFAULT_COL_W");
+        assert_eq!(
+            d.max_history, 200,
+            "the history satellite's old HISTORY_CAP"
+        );
+    }
+
     #[test]
     fn legacy_strata_dir_paths_migrate_to_project_folders() {
         let mut cfg = AppConfig {
+            // A pre-versioning file: no `version` key, so it reads as 0 and the v1 gate fires.
+            version: 0,
             recent_projects: vec![
                 recent("sample", "/data/sample/.strata"),
                 recent("events", "/data/sample/events"),
@@ -340,17 +422,36 @@ mod tests {
             open_projects: vec!["/data/sample/.strata".into()],
             settings: Settings::default(),
         };
-        cfg.migrate_paths();
+        cfg.migrate();
 
         let paths: Vec<&str> = cfg.recent_projects.iter().map(|r| &*r.path).collect();
         // The legacy entry loses its `.strata`; the already-migrated one is untouched.
         assert_eq!(paths, ["/data/sample", "/data/sample/events"]);
         assert_eq!(cfg.open_projects, ["/data/sample"]);
+        assert_eq!(cfg.version, CONFIG_VERSION, "migrating stamps the version");
+    }
+
+    /// The gate is what makes a repair one-shot: a file already at [`CONFIG_VERSION`] must not
+    /// have v1 replayed over it. Proven with a path that the v1 rewrite *would* rewrite — a
+    /// project legitimately named `.strata` would lose its own folder name if the step ran again.
+    #[test]
+    fn a_current_version_config_is_left_alone() {
+        let mut cfg = AppConfig {
+            version: CONFIG_VERSION,
+            recent_projects: vec![recent("odd", "/data/.strata")],
+            open_projects: vec!["/data/.strata".into()],
+            settings: Settings::default(),
+        };
+        cfg.migrate();
+
+        assert_eq!(cfg.recent_projects[0].path, "/data/.strata");
+        assert_eq!(cfg.open_projects, ["/data/.strata"]);
     }
 
     #[test]
     fn migration_collapses_both_spellings_of_one_project() {
         let mut cfg = AppConfig {
+            version: 0,
             // The same project under both spellings — the newer (first) entry wins, so a
             // re-open through the new path doesn't resurrect the stale row behind it.
             recent_projects: vec![
@@ -360,7 +461,7 @@ mod tests {
             open_projects: vec!["/data/sample".into(), "/data/sample/.strata".into()],
             settings: Settings::default(),
         };
-        cfg.migrate_paths();
+        cfg.migrate();
 
         assert_eq!(cfg.recent_projects.len(), 1);
         assert_eq!(cfg.recent_projects[0].path, "/data/sample");
