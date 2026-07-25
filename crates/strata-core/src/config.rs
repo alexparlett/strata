@@ -309,6 +309,26 @@ impl AppConfig {
         self.recent_projects.first()
     }
 
+    /// Drop the recents whose project folder no longer exists on disk. Called by [`load`]
+    /// on every launch — an environmental check, not a one-shot [`AppConfig::migrate`]
+    /// repair, because a project can be deleted between any two runs.
+    ///
+    /// The test is deliberately "is a directory", not [`crate::project::exists_at`]: a
+    /// folder that merely lost its `.strata/` still exists and can be opened again (and
+    /// re-scaffolded), while a folder that is gone can never open — only the latter
+    /// forfeits its entry. `open_projects` is left alone: it is the reopen set, which the
+    /// app's startup filter checks against the stricter is-a-project test and reports
+    /// what it skips.
+    pub fn prune_missing(&mut self) {
+        self.recent_projects.retain(|r| {
+            let keep = Path::new(&r.path).is_dir();
+            if !keep {
+                tracing::info!("dropping recent `{}`: folder no longer exists", r.path);
+            }
+            keep
+        });
+    }
+
     /// Bring a loaded config up to [`CONFIG_VERSION`], then stamp it.
     ///
     /// Each repair is gated on the version of the file it came *from*, so it runs once and
@@ -371,10 +391,13 @@ fn project_folder(path: &str) -> String {
 const CONFIG_VERSION: u32 = 1;
 
 /// Load the app config (empty default if missing or unreadable), brought up to
-/// [`CONFIG_VERSION`] by [`AppConfig::migrate`].
+/// [`CONFIG_VERSION`] by [`AppConfig::migrate`], with the recents whose folder is gone
+/// pruned ([`AppConfig::prune_missing`] — after the migration, so legacy `.strata` paths
+/// are checked in their repaired shape).
 pub fn load() -> AppConfig {
     let mut cfg = AppConfig::load(&APP_INFO, KEY).unwrap_or_default();
     cfg.migrate();
+    cfg.prune_missing();
     cfg
 }
 
@@ -390,6 +413,8 @@ pub fn save(cfg: &AppConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::{env, fs, process};
 
     fn recent(name: &str, path: &str) -> RecentProject {
         RecentProject {
@@ -398,6 +423,52 @@ mod tests {
             last_opened: 0,
             pinned: false,
         }
+    }
+
+    /// A fresh temp folder standing in for projects on disk, cleaned up on drop.
+    struct TempRoot(PathBuf);
+    impl TempRoot {
+        fn new(tag: &str) -> Self {
+            let dir = env::temp_dir().join(format!("strata-config-test-{tag}-{}", process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn recents_whose_folder_is_gone_are_pruned() {
+        let root = TempRoot::new("prune");
+        let alive = root.0.join("alive");
+        fs::create_dir_all(&alive).unwrap();
+        let gone = root.0.join("gone");
+        let file = root.0.join("plain.txt");
+        fs::write(&file, "not a folder").unwrap();
+
+        let mut cfg = AppConfig {
+            version: CONFIG_VERSION,
+            recent_projects: vec![
+                recent("alive", alive.to_str().unwrap()),
+                // Deleted outright, and replaced by a plain file — neither can open, and a
+                // pin doesn't save an entry whose folder is gone.
+                recent("gone", gone.to_str().unwrap()),
+                recent("file", file.to_str().unwrap()),
+            ],
+            open_projects: vec![gone.to_string_lossy().into_owned()],
+            settings: Settings::default(),
+        };
+        cfg.recent_projects[1].pinned = true;
+        cfg.prune_missing();
+
+        let names: Vec<&str> = cfg.recent_projects.iter().map(|r| &*r.name).collect();
+        assert_eq!(names, ["alive"]);
+        // The reopen set is the startup filter's to validate (and report) — not pruned here.
+        assert_eq!(cfg.open_projects.len(), 1);
     }
 
     /// Wiring a setting to a consumer that had a hardcoded constant must be

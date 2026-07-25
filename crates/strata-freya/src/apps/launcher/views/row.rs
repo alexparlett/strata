@@ -72,7 +72,7 @@ impl Component for ProjectRowView {
         let on_reveal = move || reveal(&reveal_path);
         let open_path = path.clone();
         let on_open =
-            move |_: Event<PressEventData>| open_and_close(app.clone(), open_path.clone().into());
+            move |_: Event<PressEventData>| open_and_close(app.clone(), open_path.clone());
 
         rect()
             .width(Size::fill())

@@ -33,7 +33,7 @@ use strata_core::project::STRATA_DIR;
 
 use crate::apps::launcher::LauncherApp;
 use crate::apps::project::ProjectApp;
-use crate::state::AppCtx;
+use crate::state::{write_config, AppCtx, ConfigChan, ConfigStation};
 
 /// What a window is showing. The project variant carries its folder (the
 /// `RecentProject::path` string), which is how "is this project open?" is answered.
@@ -248,6 +248,24 @@ pub fn resolve_project_folder(picked: &Path) -> Option<PathBuf> {
             None
         }
     }
+}
+
+/// [`resolve_project_folder`] for a **stored recent** — the recents surfaces' shared open
+/// step (the launcher's rows, the header switcher, the menubar's Open Recent), which adds
+/// the rule that a project no longer on disk forfeits its entry: the failed resolve is
+/// what proves the row dead, so it is dropped from the recents (waking every list that
+/// renders them) rather than left to fail identically forever. Startup prunes the same way
+/// (`AppConfig::prune_missing`); this covers a project deleted while the app is running.
+///
+/// Only an entry whose folder is actually *gone* is dropped — a resolve that failed for
+/// any other reason (permissions, say) keeps its row, with the failure reported by
+/// [`resolve_project_folder`] as usual.
+pub fn resolve_recent(config: ConfigStation, path: &str) -> Option<PathBuf> {
+    let root = resolve_project_folder(Path::new(path));
+    if root.is_none() && !Path::new(path).exists() {
+        write_config(config, &[ConfigChan::Recents], |cfg| cfg.remove_recent(path));
+    }
+    root
 }
 
 /// The project folder a picked path names: the `.strata` directory's parent, or the path

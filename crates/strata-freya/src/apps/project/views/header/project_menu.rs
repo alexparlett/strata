@@ -19,8 +19,6 @@
 //! [`OpenPref`]: strata_core::config::OpenPref
 //! [`platform::open_project`]: crate::platform::open_project
 
-use std::path::Path as FsPath;
-
 use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_core::config::AppConfig;
@@ -248,10 +246,11 @@ fn project_row(
         .padding(Gaps::new(8., 12., 8., 12.))
         .on_press(move |_| {
             if !current {
-                // Through the shared path: an already-open project is focused, and the stored
+                // Through the shared path: an already-open project is focused, the stored
                 // path is normalised (a legacy `.strata` entry names the project, not its
-                // metadata dir).
-                if let Some(root) = platform::resolve_project_folder(FsPath::new(&path)) {
+                // metadata dir), and a recent whose folder is gone is dropped from the
+                // list instead of opened.
+                if let Some(root) = platform::resolve_recent(app.config, &path) {
                     let open_it =
                         platform::open_project(platform_handle.clone(), app.clone(), root);
                     spawn(open_it);
