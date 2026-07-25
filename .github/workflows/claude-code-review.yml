@@ -33,6 +33,24 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: "/code-review high --comment ${{ github.event.pull_request.number }}"
+          # TEMPORARY, for diagnosis. The run on PR #47 burned 11 minutes and $10
+          # and posted nothing at all - no review, no inline comments - while
+          # reporting is_error: false and num_turns: 0. The prompt drives a *skill*
+          # (/code-review) rather than the action's built-in review prompt, so the
+          # open question is whether the slash command resolves at all in this
+          # environment, and if it does, where its findings go.
+          #
+          # show_full_output streams every Claude message (including its reasoning
+          # and tool results) into the step log; display_report puts the final
+          # report in the job summary. Both are off by default because they expose
+          # model output publicly - see the note below before leaving them on.
+          #
+          # NOTE this repository is PUBLIC, so these logs are world-readable.
+          # GitHub masks registered secrets in step logs, and this job only ever
+          # reads the repo's own diff, so the practical exposure is low - but turn
+          # both back off once the reviewer is understood.
+          show_full_output: true
+          display_report: true
           claude_args: |
             --max-turns 40
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
