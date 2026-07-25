@@ -2,11 +2,14 @@
 //! persisted as JSON in the OS user-config dir via the `preferences` crate.
 //! Distinct from a `Project` — this is per-machine, never inside a `.psproj`.
 
+use crate::project;
 use crate::theme::DEFAULT_THEME;
 use crate::util;
 use preferences::{AppInfo, Preferences};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsStr;
+use std::path::Path;
 
 const APP_INFO: AppInfo = AppInfo {
     name: "Strata",
@@ -19,7 +22,9 @@ const KEY: &str = "config";
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RecentProject {
     pub name: String,
-    /// Absolute path to the project's `.strata` dir.
+    /// Absolute path to the **project folder** — the parent of its `.strata/` dir, i.e.
+    /// the same root [`crate::project`] takes and `ProjectState.root` holds. What the
+    /// launcher hands back to open the project.
     pub path: String,
     /// Unix epoch seconds of the last open (for display / ordering).
     pub last_opened: u64,
@@ -28,9 +33,6 @@ pub struct RecentProject {
     pub pinned: bool,
 }
 
-/// The user's settings. A plain nested field in [`AppConfig`] (a `"settings"` object in the
-/// config JSON — deliberately **not** `#[serde(flatten)]`, see [`AppConfig::settings`]), held at
-/// runtime in the per-window [`crate::settings`] store.
 /// Where "Open Project" opens a project when invoked from a window that already
 /// has one: ask each time (the This/New prompt — B10), reuse this window, or a new
 /// window. Serialized lowercase (`"ask"` / `"this"` / `"new"`) — matches older configs.
@@ -115,6 +117,10 @@ pub struct KeyBind {
     pub chord: Option<KeyChord>,
 }
 
+/// The user's settings. A plain nested field in [`AppConfig`] (a `"settings"` object in
+/// the config JSON — deliberately **not** `#[serde(flatten)]`, see [`AppConfig::settings`]),
+/// so it is reached through the one app-global config store rather than living in a store
+/// of its own.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Active theme id (see `crate::theme`). Persists across sessions/windows.
@@ -190,11 +196,15 @@ impl Default for Settings {
 }
 
 /// Machine-global configuration: the recent-projects list + the user [`Settings`].
+///
+/// The UI holds **one reactive instance of this whole struct** for the process (the Freya
+/// app's app-global config store) and persists it through [`save`]; nothing re-reads the
+/// file to answer a question. [`load`] is a startup input, not a live source.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub recent_projects: Vec<RecentProject>,
-    /// Paths (`.strata` dirs) of the projects with an open window right now, so
+    /// Project folders (see [`RecentProject::path`]) with an open window right now, so
     /// "Reopen projects on startup" can restore the whole set. Maintained live —
     /// added on open, removed on any window close.
     #[serde(default)]
@@ -257,31 +267,103 @@ impl AppConfig {
     pub fn most_recent(&self) -> Option<&RecentProject> {
         self.recent_projects.first()
     }
+
+    /// Rewrite project paths written by the pre-Freya app, which stored the project's
+    /// `.strata` dir where we now store the project folder ([`RecentProject::path`]).
+    /// Left alone, those entries name a folder that can't be opened as a project *and*
+    /// shadow the same project under a second identity. Entries that collapse onto one
+    /// already in the list are dropped, keeping the earlier (more recent) one.
+    fn migrate_paths(&mut self) {
+        for r in &mut self.recent_projects {
+            r.path = project_folder(&r.path);
+        }
+        let mut seen = HashSet::new();
+        self.recent_projects.retain(|r| seen.insert(r.path.clone()));
+
+        for p in &mut self.open_projects {
+            *p = project_folder(p);
+        }
+        let mut seen = HashSet::new();
+        self.open_projects.retain(|p| seen.insert(p.clone()));
+    }
 }
 
-/// Load the app config (empty default if missing or unreadable).
+/// The project folder for a stored path — the pre-Freya format's trailing `.strata`
+/// segment removed. Any other path is already a project folder and passes through.
+fn project_folder(path: &str) -> String {
+    let p = Path::new(path);
+    match (p.file_name(), p.parent()) {
+        (Some(name), Some(parent)) if name == OsStr::new(project::STRATA_DIR) => {
+            parent.to_string_lossy().into_owned()
+        }
+        _ => path.to_string(),
+    }
+}
+
+/// Load the app config (empty default if missing or unreadable), with legacy project
+/// paths migrated ([`AppConfig::migrate_paths`]).
 pub fn load() -> AppConfig {
-    AppConfig::load(&APP_INFO, KEY).unwrap_or_default()
+    let mut cfg = AppConfig::load(&APP_INFO, KEY).unwrap_or_default();
+    cfg.migrate_paths();
+    cfg
 }
 
-/// Persist the app config (best-effort; logged on failure).
+/// Persist the app config (best-effort; logged on failure). The caller holds the whole
+/// [`AppConfig`], so this is a plain write — never a load-mutate-save round trip, which
+/// would race the in-memory store it is supposed to mirror.
 pub fn save(cfg: &AppConfig) {
     if let Err(e) = cfg.save(&APP_INFO, KEY) {
         tracing::error!("save config: {e}");
     }
 }
 
-/// Record a project window opening in the persisted open-set (drives "Reopen
-/// projects on startup"). Load-mutate-save so it works from any window.
-pub fn mark_open(path: &str) {
-    let mut cfg = load();
-    cfg.add_open(path);
-    save(&cfg);
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Record a project window closing in the persisted open-set.
-pub fn mark_closed(path: &str) {
-    let mut cfg = load();
-    cfg.remove_open(path);
-    save(&cfg);
+    fn recent(name: &str, path: &str) -> RecentProject {
+        RecentProject {
+            name: name.into(),
+            path: path.into(),
+            last_opened: 0,
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn legacy_strata_dir_paths_migrate_to_project_folders() {
+        let mut cfg = AppConfig {
+            recent_projects: vec![
+                recent("sample", "/data/sample/.strata"),
+                recent("events", "/data/sample/events"),
+            ],
+            open_projects: vec!["/data/sample/.strata".into()],
+            settings: Settings::default(),
+        };
+        cfg.migrate_paths();
+
+        let paths: Vec<&str> = cfg.recent_projects.iter().map(|r| &*r.path).collect();
+        // The legacy entry loses its `.strata`; the already-migrated one is untouched.
+        assert_eq!(paths, ["/data/sample", "/data/sample/events"]);
+        assert_eq!(cfg.open_projects, ["/data/sample"]);
+    }
+
+    #[test]
+    fn migration_collapses_both_spellings_of_one_project() {
+        let mut cfg = AppConfig {
+            // The same project under both spellings — the newer (first) entry wins, so a
+            // re-open through the new path doesn't resurrect the stale row behind it.
+            recent_projects: vec![
+                recent("sample", "/data/sample"),
+                recent("sample", "/data/sample/.strata"),
+            ],
+            open_projects: vec!["/data/sample".into(), "/data/sample/.strata".into()],
+            settings: Settings::default(),
+        };
+        cfg.migrate_paths();
+
+        assert_eq!(cfg.recent_projects.len(), 1);
+        assert_eq!(cfg.recent_projects[0].path, "/data/sample");
+        assert_eq!(cfg.open_projects, ["/data/sample"]);
+    }
 }

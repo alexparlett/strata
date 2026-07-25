@@ -19,9 +19,9 @@ use freya::prelude::*;
 use freya::radio::Radio;
 use freya::winit::window::WindowId;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
-use strata_core::config::Settings;
 
 use crate::apps::project::query::RunId;
+use crate::state::ConfigStation;
 use strata_model::TabId;
 
 use crate::apps::project::state::{Chan, SessionState};
@@ -107,18 +107,13 @@ pub struct TabCloser {
 
 impl TabCloser {
     /// Close `id` — via the confirm when its query is in flight and the pref is on.
-    pub fn close(
-        &self,
-        mut radio: Radio<SessionState, Chan>,
-        settings: State<Settings>,
-        id: TabId,
-    ) {
+    pub fn close(&self, mut radio: Radio<SessionState, Chan>, config: ConfigStation, id: TabId) {
         // `read()` is peek-equivalent here: close() runs in event handlers, no reactive scope.
         let in_flight = radio
             .read()
             .request(id)
             .is_some_and(|s| *self.running.peek() == Some(s.run));
-        if in_flight && settings.peek().confirm_close_running {
+        if in_flight && config.peek().settings.confirm_close_running {
             let mut confirm = self.confirm;
             confirm.set(Some(CloseTarget::Tab(id)));
         } else {

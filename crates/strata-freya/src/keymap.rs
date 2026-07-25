@@ -2,7 +2,7 @@
 //! builder, and reactive shortcut hints.
 //!
 //! Dispatch is distributed (no registry): each feature attaches
-//! `.on_global_key_down(keymap::on_command(settings, Command::X, action))` to its own
+//! `.on_global_key_down(keymap::on_command(config, Command::X, action))` to its own
 //! rect. Same-name global listeners fire in document (pre-order) order and a handled
 //! command **consumes** the press via `prevent_default` — both semantics guaranteed by
 //! our Freya fork — so precedence is simply *where a listener sits in the tree*. Beware
@@ -16,6 +16,7 @@ use strata_core::config::{Command, KeyChord, Settings};
 use strata_core::keymap::{effective_chord, resolve};
 
 use crate::components::typography::Meta;
+use crate::state::{use_config, ConfigChan, ConfigStation};
 
 /// Fold a key event into a normalized [`KeyChord`]: `primary` = ⌘ *or* Ctrl (every ⌘
 /// shortcut also responds to Ctrl), characters lowercased (⇧⌘T arrives as `"T"` but is
@@ -58,8 +59,12 @@ pub fn chord_from_event(e: &KeyboardEventData) -> Option<KeyChord> {
 /// it names `cmd` and `action` handles it, consume the press so listeners later in
 /// document order never see it. `action` returns `false` to decline — "not applicable
 /// right now" (e.g. Esc while not renaming) — leaving the press for the next listener.
+///
+/// Takes the config **station**, not a [`ConfigRadio`](crate::state::ConfigRadio): a key
+/// handler must never subscribe its component to settings changes, and the station only
+/// peeks.
 pub fn on_command(
-    settings: State<Settings>,
+    config: ConfigStation,
     cmd: Command,
     mut action: impl FnMut() -> bool + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) {
@@ -67,7 +72,7 @@ pub fn on_command(
         let Some(chord) = chord_from_event(&e) else {
             return;
         };
-        if resolve(&settings.peek(), &chord) == Some(cmd) && action() {
+        if resolve(&config.peek().settings, &chord) == Some(cmd) && action() {
             e.prevent_default();
         }
     }
@@ -78,14 +83,14 @@ pub fn on_command(
 /// would replace the first. Folds and resolves once, then hands the command to
 /// `dispatch`; returning `true` consumes the press.
 pub fn on_commands(
-    settings: State<Settings>,
+    config: ConfigStation,
     mut dispatch: impl FnMut(Command) -> bool + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) {
     move |e: Event<KeyboardEventData>| {
         let Some(chord) = chord_from_event(&e) else {
             return;
         };
-        let Some(cmd) = resolve(&settings.peek(), &chord) else {
+        let Some(cmd) = resolve(&config.peek().settings, &chord) else {
             return;
         };
         if dispatch(cmd) {
@@ -143,11 +148,12 @@ fn edit_chord(chord: &KeyChord) -> Option<EditChord> {
 }
 
 /// The effective hint string for `cmd` (`"⇧⌘T"`, `""` when unbound), reactively: the
-/// `.read()` subscribes this component to the settings global, so a rebind repaints
-/// every hint in every window.
+/// `.read()` subscribes this component to the config's `Settings` channel, so a rebind
+/// repaints every hint in every window.
 pub fn use_hint(cmd: Command) -> String {
-    let settings = use_consume::<State<Settings>>();
-    strata_core::keymap::hint(&settings.read(), cmd)
+    let config = use_config(ConfigChan::Settings);
+    let config = config.read();
+    strata_core::keymap::hint(&config.settings, cmd)
 }
 
 /// A tooltip title with the command's effective chord appended — `"Save query (⌘S)"`,

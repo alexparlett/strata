@@ -5,9 +5,10 @@
 //! to the right · Close all — Reopen closed tab. `MenuButton` / `MenuContainer` are theme-driven (the
 //! same components the tab-controls dropdowns use), so only the separators take an explicit colour.
 
+use crate::state::ConfigStation;
 use freya::prelude::*;
 use freya::radio::Radio;
-use strata_core::config::{Command, Settings};
+use strata_core::config::Command;
 
 use strata_model::TabId;
 
@@ -59,7 +60,7 @@ pub fn tab_context_menu(
     sep: Color,
     mut renaming: State<bool>,
     closer: TabCloser,
-    settings: State<Settings>,
+    config: ConfigStation,
 ) -> Menu {
     // Built from an event handler (no reactive context), so this `read` is a peek: the reopen
     // stack can't change while this transient menu is up (reopening dismisses it), so the state
@@ -92,7 +93,7 @@ pub fn tab_context_menu(
                 .on_press(move |_| {
                     // Through the shared gate — the T2 confirm when this tab's query
                     // is in flight.
-                    closer.close(radio, settings, id);
+                    closer.close(radio, config, id);
                     ContextMenu::close();
                 })
                 .child(menu_row("Close", Command::CloseActiveTab)),

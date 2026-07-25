@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
+use strata_core::config::AppConfig;
 use strata_core::engine::{RecordBatch, Schema};
 use strata_core::theme::load;
 use strata_model::{Cell as CellData, ColumnInfo, Kind};
@@ -14,6 +15,7 @@ use super::super::find::FindState;
 use super::super::sort::SortState;
 use super::*;
 use crate::apps::project::state::{Chan, SessionState};
+use crate::state::ConfigStation;
 use crate::theme::strata_theme;
 
 /// A 2×2 page (scalar columns, empty batch — ⌘A is pure selection, no serialization).
@@ -85,7 +87,7 @@ fn cell_press_focuses_the_grid_and_cmd_a_selects_all() {
         app,
         (900., 700.).into(),
         |r| {
-            r.provide_root_context(|| State::create(Settings::default()));
+            r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             r.provide_root_context(|| State::create(Selection::None))
         },
         1.,
@@ -142,7 +144,7 @@ fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
         app,
         (900., 700.).into(),
         |r| {
-            r.provide_root_context(|| State::create(Settings::default()));
+            r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             r.provide_root_context(|| State::create(Selection::None))
         },
         1.,

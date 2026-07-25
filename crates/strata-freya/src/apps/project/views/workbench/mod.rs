@@ -25,7 +25,9 @@ use empty::EmptyState;
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
 use results::Results;
-use strata_core::config::{Command, Settings};
+use strata_core::config::Command;
+
+use crate::state::use_config_station;
 use tab_bar::bar::TabBar;
 
 pub mod editor;
@@ -84,11 +86,11 @@ impl Component for Workbench {
         // time — never a mount-time snapshot. This rect is an ancestor of the whole
         // workbench, so these fire before any Esc consumer below (fine: no Esc here, and
         // each of these chords has a single consumer).
-        let settings = use_consume::<State<Settings>>();
+        let config = use_config_station();
         let engine = use_consume::<EngineCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
         let mut cmd_radio = radio;
-        let shortcuts = on_commands(settings, move |cmd| {
+        let shortcuts = on_commands(config, move |cmd| {
             // `read()` is peek-equivalent here: event handlers have no reactive context.
             let active = cmd_radio.read().active;
             match cmd {
@@ -104,7 +106,7 @@ impl Component for Workbench {
                     let Some(id) = active else { return false };
                     // Through the shared gate: the T2 confirm when the tab's query is
                     // in flight (and the pref is on) — same dialog as the window close.
-                    closer.close(cmd_radio, settings, id);
+                    closer.close(cmd_radio, config, id);
                     true
                 }
                 Command::RunQuery => {

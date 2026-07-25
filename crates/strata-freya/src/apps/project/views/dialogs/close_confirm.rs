@@ -6,10 +6,10 @@
 //! *mechanics* (the winit `on_close` bridge, `CloseGuard`, `TabCloser`) live in
 //! `crate::apps::project::close`.
 
+use crate::state::{use_config, use_config_station, write_config, ConfigChan};
 use freya::components::{get_theme, use_theme};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
-use strata_core::config::{load, save, Settings};
 
 use crate::apps::project::close::CloseTarget;
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
@@ -34,7 +34,8 @@ impl Component for CloseConfirm {
         let target = *confirm.read();
         let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let project = use_radio_station::<ProjectState, ProjChan>();
-        let mut settings = use_consume::<State<Settings>>();
+        let config = use_config_station();
+        let settings = use_config(ConfigChan::Settings);
         let theme = use_theme();
         // The action wears the shared `cancel_button` dress (the running body's Cancel)
         // — the themes' authored stop-the-query tone, not a hardcoded red.
@@ -102,15 +103,14 @@ impl Component for CloseConfirm {
         let chip_bg = c.warning.with_a(36);
 
         // Checked = don't ask = the `confirm_close_running` setting off. Toggling writes
-        // the reactive global (the close guard mirrors it immediately) and persists —
-        // the comp's checkbox edits the setting directly, not a local draft.
-        let dont_ask = !settings.read().confirm_close_running;
+        // the app-global config (the close guard mirrors it immediately) and persists in
+        // the same funnel — the comp's checkbox edits the setting directly, not a local
+        // draft.
+        let dont_ask = !settings.read().settings.confirm_close_running;
         let toggle_dont_ask = move |_: Event<PressEventData>| {
-            let now = !settings.peek().confirm_close_running;
-            settings.write().confirm_close_running = now;
-            let mut cfg = load();
-            cfg.settings = settings.peek().clone();
-            save(&cfg);
+            write_config(config, &[ConfigChan::Settings], |cfg| {
+                cfg.settings.confirm_close_running = !cfg.settings.confirm_close_running;
+            });
         };
 
         let header = rect()

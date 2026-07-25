@@ -2,7 +2,9 @@ use freya::components::{use_theme, ScrollController};
 use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
 
-use strata_core::config::{Command, Settings};
+use strata_core::config::Command;
+
+use crate::state::{use_config_station, ConfigStation};
 use strata_model::TabId;
 
 use crate::apps::project::close::TabCloser;
@@ -124,7 +126,7 @@ impl Component for NavMenu {
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let palette = NavPalette::read();
         let closer = use_consume::<TabCloser>();
-        let settings = use_consume::<State<Settings>>();
+        let config = use_config_station();
 
         // Open tabs + status, filtered by the search box. Read once; the guard drops before we build.
         // The filter runs over *all* tabs, in strip order.
@@ -154,7 +156,7 @@ impl Component for NavMenu {
             rect().vertical().spacing(2.),
             |col, (id, name, active, dirty)| {
                 col.child(tab_row(
-                    id, name, active, dirty, palette, radio, open, closer, settings,
+                    id, name, active, dirty, palette, radio, open, closer, config,
                 ))
             },
         );
@@ -212,7 +214,7 @@ fn tab_row(
     mut radio: Radio<SessionState, Chan>,
     mut open: State<bool>,
     closer: TabCloser,
-    settings: State<Settings>,
+    config: ConfigStation,
 ) -> impl IntoElement {
     let fg = palette.name_fg(active);
     let close_fg = palette.faint;
@@ -253,7 +255,7 @@ fn tab_row(
                             e.stop_propagation();
                             // Through the shared gate — the T2 confirm when this tab's
                             // query is in flight.
-                            closer.close(radio, settings, id);
+                            closer.close(radio, config, id);
                         })
                         .child(Icon::new(IconName::Close).color(close_fg).size(12.)),
                 ),

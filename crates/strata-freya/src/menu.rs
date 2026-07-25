@@ -37,10 +37,12 @@ use freya::menu::{
     AboutMetadata, IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
 };
 use freya::prelude::{
-    Code, Key, Modifiers, ModifiersExt, NamedKey, NativeEventExt, RendererContext, State,
+    Code, Key, Modifiers, ModifiersExt, NamedKey, NativeEventExt, RendererContext,
 };
 use strata_core::config::{Command, KeyChord, Settings};
 use strata_core::keymap::effective_chord;
+
+use crate::state::ConfigStation;
 
 /// A custom menubar item — the typed vocabulary the builder and the event handler
 /// share, so dispatch is an exhaustive `match`, not string comparison (the Dioxus
@@ -243,14 +245,14 @@ pub fn app_menu(chords: MenuChords) -> Menu {
 /// Edit items synthesize their command's *live* effective chord into the focused
 /// window's keyboard pipeline, so the focused element and its bindings decide — the
 /// same path as typed keys.
-pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, settings: State<Settings>) {
+pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, config: ConfigStation) {
     match MenuCmd::parse(event.id()) {
         Some(MenuCmd::Quit) => ctx.request_close_window(None),
         Some(cmd) => {
             let Some(command) = cmd.edit_command() else {
                 return;
             };
-            let Some(chord) = effective_chord(&settings.peek(), command) else {
+            let Some(chord) = effective_chord(&config.peek().settings, command) else {
                 return;
             };
             let Some((key, modifiers)) = synthetic_key(&chord) else {

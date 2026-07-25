@@ -141,8 +141,15 @@ When writing Freya code, lean on these in roughly this order:
 
 ```
 src/main.rs                      Freya launch + window config; discovers ThemesCtx + creates the
-                                 app-global reactive Settings (`State::create_global`) — each
-                                 window's theme is pure derived state (`use_strata_theme`)
+                                 app-global reactive AppConfig store — each window's theme is
+                                 pure derived state (`use_strata_theme`)
+src/state/config.rs              THE app-global store: one `RadioStation<AppConfig, ConfigChan>`
+                                 (settings · recents · open-project set) created once in main and
+                                 shared into every window (`use_share_config`). Channels keep a
+                                 project open from waking theme readers; `write_config` is the only
+                                 write path (mutate + notify + persist — nothing re-reads the file).
+                                 `use_open_project` ties a window's project to recents + the
+                                 open-set for its lifetime
 src/theme.rs                     Freya theme application: `theme_registry!` / `strata_components!`
                                  macros, Pref→Preference coercion, ThemesCtx (the shared
                                  ThemeRegistry handle, discovered once in main, provided at every

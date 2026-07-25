@@ -25,10 +25,10 @@ use crate::apps::project::{
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
+use crate::state::{use_config_channel, ConfigChan, ConfigStation};
 use freya::prelude::*;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
 use strata_code_editor::prelude::EditorThemePreference;
-use strata_core::config::Settings;
 use strata_core::theme::{effective_id, ThemeRegistry, SLOTS};
 
 pub use strata_core::theme::{
@@ -99,24 +99,28 @@ pub fn window_background(t: &StrataTheme) -> Color {
     pc(&t.sheet.background)
 }
 
-/// Install this window's Freya theme and keep it **derived** from the app-global
-/// reactive [`Settings`] selection (`theme` + `sync_os`) and — only while syncing — the
-/// OS appearance (this window's `Platform.preferred_theme`, seeded from the window's
-/// real theme and live via winit `ThemeChanged`). Every window root mounts this; Phase
-/// 4's Settings UI just writes the settings global and every window repaints.
+/// Install this window's Freya theme and keep it **derived** from the app-global config's
+/// [`Settings`](strata_core::config::Settings) selection (`theme` + `sync_os`) and — only while syncing — the OS
+/// appearance (this window's `Platform.preferred_theme`, seeded from the window's real
+/// theme and live via winit `ThemeChanged`). Every window root mounts this; Phase 4's
+/// Settings UI just writes the config store and every window repaints.
+///
+/// Subscribes to [`ConfigChan::Settings`] only, so the recents/open-set churn of opening a
+/// project never re-derives a theme.
 ///
 /// There is no stored applied-theme id to keep coherent: windows stay consistent because
 /// each computes the same pure derivation (`effective_id`) of the same global inputs.
 /// The `Theme.name` guard (it carries the applied id) skips no-op rebuilds — including
 /// the mount-time echo of the id `use_init_theme` already resolved.
-pub fn use_strata_theme(themes: ThemesCtx, settings: State<Settings>) {
+pub fn use_strata_theme(themes: ThemesCtx, config: ConfigStation) {
     let platform = use_hook(Platform::get);
     let preferred = platform.preferred_theme;
+    let settings = use_config_channel(config, ConfigChan::Settings);
     let mut theme = use_init_theme({
         let themes = themes.clone();
         // `peek`s — the side effect below owns reactivity.
         move || {
-            let s = settings.peek();
+            let s = &config.peek().settings;
             let os_dark = s.sync_os && *preferred.peek() == PreferredTheme::Dark;
             let id = effective_id(&s.theme, s.sync_os, os_dark);
             strata_theme(themes.get_or_default(&id))
@@ -124,7 +128,7 @@ pub fn use_strata_theme(themes: ThemesCtx, settings: State<Settings>) {
     });
     use_side_effect(move || {
         let (id, sync_os) = {
-            let s = settings.read();
+            let s = &settings.read().settings;
             (s.theme.clone(), s.sync_os)
         };
         // Short-circuit: only subscribe to the OS appearance while actually syncing.
