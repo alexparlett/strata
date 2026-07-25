@@ -204,28 +204,53 @@ const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 /// (+ geometry) and writes it. The mount pass is skipped (the just-loaded session already
 /// matches disk).
 ///
+/// `restored` is the geometry the window was *created* with (`ProjectApp::window` read it off
+/// the same session file) — the seed for the "last normal geometry" the save persists, see
+/// below.
+///
+/// **Our fill, and fullscreen, are not remembered.** A window we filled (the header's
+/// double-press) or that is in native fullscreen has the *screen's* geometry, not a size the user
+/// picked; persisting it would reopen every later launch at screen size and quietly lose their
+/// real one. So while the window is in either state the save keeps rewriting the last geometry it
+/// had in neither — normal IDE behaviour.
+///
+/// A window the **user** sized to fill the screen is the opposite case and does persist, which is
+/// why the test is `filled_by_app` and not `Platform::is_maximized` alone: that mirrors macOS's
+/// `isZoomed`, a *frame comparison*, so a hand-tiled window reads as zoomed too (see
+/// `views::header::title_bar_press`). The `&& is_filled` keeps the pair self-healing — a stale
+/// mark can never freeze the geometry, because leaving fill drops the guard either way.
+///
 /// The subscription is inside the effect's reactive scope, not the caller's render, so a
 /// keystroke re-runs only this effect — the root render is untouched.
-pub fn use_autosave() {
+pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
     // One handle to subscribe the effect (Persist), one to peek the value at fire time.
     let subscribe = use_radio::<SessionState, Chan>(Chan::Persist);
     let session = use_radio_station::<SessionState, Chan>();
     let project = use_radio_station::<ProjectState, ProjChan>();
-    // The window's live geometry (logical). Both are `Copy` State signals — reading them in
-    // the effect also makes a resize / move trigger a save.
+    // The window's live geometry + window state (logical units). All `Copy` State signals —
+    // reading them in the effect also makes a resize / move / fill trigger a save.
     let platform = Platform::get();
     let root_size = platform.root_size;
     let window_position = platform.window_position;
+    let is_filled = platform.is_maximized;
+    let is_fullscreen = platform.is_fullscreen;
     let mut pending = use_state(|| None::<TaskHandle>);
     let mut armed = use_state(|| false);
+    // The last geometry the window had while neither filled nor fullscreen — what a restart
+    // restores to. Seeded with what the window opened at, so filling before ever resizing still
+    // persists the real size rather than dropping it.
+    let normal_geom = use_state(move || restored);
 
     use_side_effect(move || {
         // These reads bind the effect to session edits (`Chan::Persist`) and to window
-        // resize / move; the values themselves are captured at fire time in the task, so the
-        // debounce always writes the settled state.
+        // resize / move / fill; the values themselves are captured at fire time in the task, so
+        // the debounce always writes the settled state.
         let _ = subscribe.read().active;
         let _ = root_size.read();
         let _ = window_position.read();
+        let _ = is_filled.read();
+        let _ = is_fullscreen.read();
+        let _ = filled_by_app.read();
         // Skip the mount pass: nothing has changed since load, and the loaded session is
         // already on disk — only real edits should rewrite the file.
         if !*armed.peek() {
@@ -240,13 +265,20 @@ pub fn use_autosave() {
             // Any newer change would have cancelled this task before now.
             let root = project.peek().root.clone();
             let mut snapshot = session.peek().snapshot();
-            let (pos, size) = (window_position.peek(), root_size.peek());
-            snapshot.window = Some(WindowGeom {
-                x: pos.x,
-                y: pos.y,
-                width: size.width,
-                height: size.height,
-            });
+            // Geometry from *our* fill, or from fullscreen, is the screen's rather than the
+            // user's — remember only the normal one, and keep writing it while either holds.
+            let mut normal_geom = normal_geom;
+            let transient = (*filled_by_app.peek() && *is_filled.peek()) || *is_fullscreen.peek();
+            if !transient {
+                let (pos, size) = (window_position.peek(), root_size.peek());
+                normal_geom.set(Some(WindowGeom {
+                    x: pos.x,
+                    y: pos.y,
+                    width: size.width,
+                    height: size.height,
+                }));
+            }
+            snapshot.window = *normal_geom.peek();
             if let Err(e) = project_io::save_session(&root, &snapshot) {
                 tracing::error!("autosave session: {e}");
             }

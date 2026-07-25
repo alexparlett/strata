@@ -27,6 +27,11 @@ Not built. `session.rs` says persistence is "a later slice." Core provides the `
 `project.json` / `session.json` formats (top README; state-arch §5). `project.json` = shareable
 catalog **defs** (committed); `session.json` = local session state (gitignored).
 
+**The UI seam is already built and waiting** (P3-15): the header's project switcher
+(`views/header/project_menu.rs`) lists **Open…**, the open set and the recents off real state, and
+each row logs a `tracing::debug!` stub instead of opening. Wire those presses to *this* task's open
+path (with P4-01's This-Window / New-Window prompt) — one mechanism, not a header-local fold.
+
 ## Build (state-arch §5)
 1. On open (launcher P4-02 / Open Recent / folder pick), read **`.strata/project.json`** — catalog
    **defs** (external tables · views · saved queries) — and register them on the engine (the same

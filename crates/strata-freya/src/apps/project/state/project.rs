@@ -31,10 +31,8 @@ use uuid::Uuid;
 /// individually).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum ProjChan {
-    /// Project identity: name / root path.
-    /// Feature reservoir: subscribed by the header / window title when it shows the
-    /// open project (P4-13 UI).
-    #[allow(dead_code)]
+    /// Project identity: name / root path. Subscribed by the header's project switcher (a
+    /// rename / re-open re-labels the trigger); the window title joins it with P4-13.
     Meta,
     Tables,
     Views,

@@ -6,13 +6,23 @@
 use freya::components::use_theme;
 use freya::prelude::*;
 
-/// A 1px separating rule. Build with [`Divider::horizontal`] or [`Divider::vertical`].
+/// Which surface a rule belongs to, and so where its default colour comes from: the sheet's
+/// `border` for a plain rule between regions, the menu card's own hairline for one inside a menu.
+#[derive(PartialEq, Clone, Copy)]
+enum Role {
+    Plain,
+    Menu,
+}
+
+/// A 1px separating rule. Build with [`Divider::horizontal`], [`Divider::vertical`] or
+/// [`Divider::menu`].
 #[derive(PartialEq)]
 pub struct Divider {
     vertical: bool,
     length: Size,
     thickness: f32,
     color: Option<Color>,
+    role: Role,
     margin: Gaps,
 }
 
@@ -24,6 +34,7 @@ impl Divider {
             length: Size::fill(),
             thickness: 1.,
             color: None,
+            role: Role::Plain,
             margin: Gaps::new_all(0.),
         }
     }
@@ -35,7 +46,26 @@ impl Divider {
             length: Size::fill(),
             thickness: 1.,
             color: None,
+            role: Role::Plain,
             margin: Gaps::new_all(0.),
+        }
+    }
+
+    /// A **menu** separator — the rule that divides one group of menu rows from the next.
+    ///
+    /// A variant rather than a colour argument: the rule belongs to the menu card, so it takes
+    /// its colour from that card's own `menu_container` theme (the same hairline as the card's
+    /// border) instead of every menu picking one. Its length is `fill_minimum` because a menu
+    /// container hugs its children — a plain `fill` would blow it out to the window width —
+    /// plus a little vertical breathing room.
+    pub fn menu() -> Self {
+        Self {
+            vertical: false,
+            length: Size::fill_minimum(),
+            thickness: 1.,
+            color: None,
+            role: Role::Menu,
+            margin: Gaps::new_all(4.),
         }
     }
 
@@ -53,7 +83,8 @@ impl Divider {
         self
     }
 
-    /// Paint the rule in `color` instead of the default sheet `border`.
+    /// Paint the rule in `color` instead of its role's default — for a component painting a
+    /// rule from its **own** theme (the datagrid's cell separators, the tab strip's edge).
     pub fn color(mut self, color: Color) -> Self {
         self.color = Some(color);
         self
@@ -68,9 +99,20 @@ impl Divider {
 
 impl Component for Divider {
     fn render(&self) -> impl IntoElement {
-        // `use_theme` is a hook, so read it unconditionally and only *then* fall back to it.
-        let default_color = use_theme().read().colors.border;
-        let color = self.color.unwrap_or(default_color);
+        // Hooks run unconditionally and the fallback is chosen only *after* — a plain rule is
+        // the sheet's line colour, a menu's is the menu card's hairline (so it reads on that
+        // elevated surface in every theme, rather than each menu naming a colour).
+        let sheet_border = use_theme().read().colors.border;
+        let menu_border = get_theme!(
+            &None::<MenuContainerThemePartial>,
+            MenuContainerThemePreference,
+            "menu_container"
+        )
+        .border_fill;
+        let color = self.color.unwrap_or(match self.role {
+            Role::Plain => sheet_border,
+            Role::Menu => menu_border,
+        });
         let t = Size::px(self.thickness);
         let base = rect().margin(self.margin).background(color);
         // A fixed `px` thickness holds even in a `Content::Flex` parent, so no min is needed — and a

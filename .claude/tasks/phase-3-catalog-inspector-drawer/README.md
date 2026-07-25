@@ -6,8 +6,11 @@ bottom **drawer** (Problems / Events / History).
 ## State of play
 The layout shell is built (**P3-01** ✅): the project root now mounts the full rail · sidebar ·
 workbench · inspector · drawer frame with resizable, collapsible panels (open/collapse state + sizes
-persist across restart). The side panels / drawer are **shells** — chrome only — waiting on their
-content tasks. All engine/domain logic exists in `strata-core` (`[core ✓]`): catalog,
+persist across restart). The **header** is built too (**P3-15** ✅ — the app-shell surface that had
+no task of its own): it is the window's title bar (drag · double-press to fill · traffic-light
+gutter) and carries the brand, the project switcher, and the ⌘K / ⌘, cluster; the palette, settings
+and open-project actions are placeholders waiting on P6-01 / P4-03 / P4-13. The side panels / drawer
+are **shells** — chrome only — waiting on their content tasks. All engine/domain logic exists in `strata-core` (`[core ✓]`): catalog,
 `RefreshCatalog`, `Profile`, view-deps, validity, diagnostics, event log, history. This phase is
 **UI + wiring**; the rest fills the shells.
 
@@ -16,6 +19,7 @@ content tasks. All engine/domain logic exists in `strata-core` (`[core ✓]`): c
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
 | P3-01 | Project layout shell (rail·sidebar·workbench·inspector·drawer) | ✅ | — | — |
+| P3-15 | Header bar (title bar · brand · project switcher · cluster) | ✅ | U2 | — |
 | P3-02 | Catalog sidebar (sections, nested columns, filter) | ⬜ | U3 | P3-01 |
 | P3-03 | Catalog re-scan | ⬜ | D5 | P3-02 |
 | P3-04 | Catalog validity indicators | ⬜ | D11 | P3-02 |

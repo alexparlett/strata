@@ -2,6 +2,7 @@
 //! `design-handoff/` comps. Each owns its `define_theme!` theme (default registered in
 //! `crate::theme`), so its colours follow the sheet and are overridable like every built-in.
 
+pub mod avatar;
 pub mod divider;
 pub mod dot;
 pub mod icon;

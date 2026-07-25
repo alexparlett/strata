@@ -143,13 +143,9 @@ impl Component for Tab {
         } = get_theme!(&self.theme, TabThemePreference, "tab");
 
         // The unsaved dot is a semantic palette slot; the close × is a flat `Button`, so its icon
-        // inherits that button's colour. `text_inverse` is the context menu's separator colour, read
-        // here because the menu is built in an event handler (which can't read the theme).
-        let theme = use_theme();
-        let (dot_color, sep) = {
-            let c = &theme.read().colors;
-            (c.warning, c.text_inverse)
-        };
+        // inherits that button's colour. (The context menu's separators are `Divider::menu`'s
+        // own business — nothing to read here for them.)
+        let dot_color = use_theme().read().colors.warning;
 
         let (bg, fg, accent_fill) = if self.active {
             (active_background, active_color, accent)
@@ -230,7 +226,7 @@ impl Component for Tab {
                 e.stop_propagation();
                 ContextMenu::open_from_event(
                     &e,
-                    super::menu::tab_context_menu(id, radio, sep, renaming, closer, config),
+                    super::menu::tab_context_menu(id, radio, renaming, closer, config),
                 );
             })
             // While renaming: Escape cancels (consumed — an Esc that ends a rename must

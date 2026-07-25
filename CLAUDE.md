@@ -166,7 +166,12 @@ src/apps/project/                the project window (Valin-shaped)
                                  CodeEditorData, keyed on Chan::{Tabs, Tab(id)})
   model/                         window-local view models
   views/
-    header.rs                    top header bar
+    header/
+      mod.rs                     the header bar — and the window's macOS title bar: brand ·
+                                 switcher · ⌘K/⌘, cluster, drag + double-press-to-fill
+                                 (`window_drag`), traffic-light gutter
+      project_menu.rs            the project switcher: trigger + Open… / open set / recents
+                                 dropdown (data real; opening a project is P4-13's seam)
     workbench/
       mod.rs, empty.rs           workbench shell + no-query empty state
       editor/                    SQL editor: tab, toolbar
