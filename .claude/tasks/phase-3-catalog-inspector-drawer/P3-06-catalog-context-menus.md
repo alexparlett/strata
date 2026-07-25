@@ -1,68 +1,104 @@
 # P3-06 · Catalog context menus
 
-**Phase:** 3 · **Status:** ⬜ · **Depends on:** P3-02
+**Phase:** 3 · **Status:** ✅ · **Depends on:** P3-02
 
 ## Goal
 Right-click actions on catalog rows.
 
-## Current state
-Not built. The rows land with P3-02; this adds their menus and the drop-confirm flow.
+## What was built
 
-## Build
+Every catalog row carries a menu, on **two triggers** that share one item list
+(`views/sidebar/catalog/menu.rs`): right-click the row, or press the trailing **⋮** the canvas puts
+on it. `SidebarRow` grew `on_context_menu` for the first — a wrapper with `on_secondary_down`,
+because Freya's `SideBarItem` exposes only `on_press` — so the connections pane (W7) gets the same
+affordance for free.
 
-Freya `ContextMenu` / `Menu` on each row type (right-click; the Dioxus app also had a `⋮` trigger
-on hover — same item list, one source):
+- **Table** → View table · Profile table *(parked, P3-09)* · — · **Refresh table** · Configure
+  *(parked, P4-11)* · — · Drop table *(danger)*.
+- **View** → View view · Profile view *(parked)* · Edit query · — · Drop view *(danger)*.
+- **Saved query** → Open in new tab · Rename · — · Delete query *(danger)*. Pressing the row
+  opens it too, per the canvas's own row `title`.
 
-- **Table** → View table (`SELECT * FROM …` in a tab) · Profile (P3-09, disabled + "Profiling…"
-  while one runs) · Configure (P4-11) · — · Drop table *(danger)*.
-- **View** → View view · Profile · Edit query (open the view's SQL in its own tab, reusing an
-  existing tab of that name, `Origin::View` so ⌘S redefines it) · — · Drop view *(danger)*.
-- **Saved query** → Open in new tab · Rename · Delete *(danger)*. Addressed by `id`, so a rename
-  is free — no origin rewriting (unlike a view rename, which must go through `ProjectState`).
+A menu is a **snapshot**: the builders run from an event handler, so every read is a `peek`, like
+the tab strip's menu. The rows underneath stay live.
 
-**Drop confirms first — and the confirm is already built.** P3-05 landed the whole drop flow
-(`views/dialogs/drop_confirm.rs`): the dialog, its consequence line (*"N view(s) read this
-{table,view} and will be left invalid:"* — count, then the names as chips), and the drop itself
-(store + persist + engine + tab unbinding). Nothing breaks *now*: a view holds its sources by
-reference and keeps running until the project reopens and its SQL re-plans, so dependents are
-flagged invalid (P3-04), not broken.
+### Opening a row is `SessionState::open_or_focus`
 
-So all this task adds is the **trigger**. The dialog watches a `State<Option<DropTarget>>` provided
-at the window root, and a drop item is one line:
+New, and it is what stops a row opening twice. A tab already **bound** to the row (`Origin::View` /
+`Origin::SavedQuery`) is focused rather than duplicated — including when it has unsaved edits,
+which is exactly the tab "edit this view" should land on; two tabs on one origin would mean two ⌘S
+targets. A scratch row (View table's `SELECT *`, `LIMIT` from the row-limit setting) has no binding
+to match on, so it reuses an untouched tab of the same name and text, and stops reusing it once
+that buffer is edited.
 
-```rust
-let mut drop_target = use_consume::<State<Option<DropTarget>>>();
-// …in the menu item's handler:
-drop_target.set(Some(DropTarget::Table(name.clone())));
-```
+### Rename is inline, and free
 
-`DropTarget` has a variant per row type (`Table(name)` · `View(name)` · `Query { id, name }`,
-mirroring the catalog's identity rules), so the saved-query Delete goes through the same dialog.
-Do **not** write a second drop path.
+The menu item only flips the row's own `renaming` flag; the row reacts in its own scope, so the
+rename outlives the menu that started it (the tab strip's rename, exactly). Enter commits, Escape
+cancels, a press outside commits. `ProjectState::rename_saved_query` relabels **by id** and
+re-sorts — no origin rewriting, and no collision rule, because ⌘S already mints saved queries under
+whatever the tab is called and ids are what anything actually holds.
 
-### These are direct engine calls, not cache invalidations
+> Rough edge, shared with the tab strip's rename: Freya's `Input` leaves the caret at the *start*
+> of a seeded value, so typing prepends. The fix is a fork-side `select-on-focus` (or
+> caret-to-end) on `Input`, which would improve both; not done here because it is a submodule
+> change well outside this task.
 
-The old note here said drop / deregister / register are freya-query **mutations** whose
-`on_settled` invalidates `FetchCatalog`. That is wrong on both halves — `FetchCatalog` does not
-exist and must not (see P3-02: introspecting DataFusion would surface `__snap_*` result snapshots
-and hide failed rows). The actual shape:
+### Drop opens P3-05's confirm — there is no second drop path
 
-```
-engine.drop_view(name).await      →  project.write_channel(ProjChan::Views).remove_view(&name)
-engine.deregister(&name)          →  project.write_channel(ProjChan::Tables).remove_table(&name)
-                                  →  project.peek().save_defs()
-```
+Each Drop/Delete item sets the `DropTarget` slot the dialog watches, and nothing else. The dialog
+already owns the consequence line and the drop itself (store + persist + engine + tab unbinding).
+A test pins that the catalog is untouched until the dialog is confirmed.
 
-The `ProjectState` methods already exist (`remove_view`, `remove_table`, `remove_saved_query`,
-`upsert_*`), parked `#[allow(dead_code)]` for this task. The store *is* the catalog: mutate it and
-notify its channel — subscribers re-render, nothing refetches.
+### Refresh table (added on top of the original spec)
+
+The canvas's table menu has **Refresh table**, and it is a real re-registration of one row, not a
+label:
+
+- `state/hooks.rs::refresh_table` — the same pass as the sidebar's ↻ (`refresh_catalog`), narrowed.
+  `register_defs` now takes the table/view *work list* rather than reading the whole store, so
+  project open, ↻ and a row Refresh are one implementation at three widths. Held by the same
+  `CatalogScan` flag, so no two passes overlap; the item is disabled while one runs, and reads
+  "Refreshing…" while *this* row is unanswered.
+- `ProjectState::views_to_refresh` — the views that pass must re-create: those that **read** the
+  table (`deps`, so transitively through a view-of-a-view), plus every view currently **failing**.
+  Re-registering a table does not break a view over it — worse, the view goes on scanning the old
+  provider with the old schema, because its plan captured that provider by `Arc` (D10/D11, and the
+  decision P3-03 already made for the whole-catalog scan). A failing view has no dependency record,
+  so retrying it is the only way "I fixed the path, refresh the row" can heal it.
+- `spawn_scan` — **the pass is `spawn_forever`, not `spawn`.** Caught in the app, not by the
+  suite: `spawn` binds a task to `current_scope_id()`, which during an event is the handler's
+  element — the `MenuButton` that the very same press then closes. Scope teardown drops its tasks
+  before the future is ever polled, so the rows were reset to `Loading` and no answer ever came:
+  the table *and* the view over it spun forever. The ↻ needs it too (collapsing the sidebar
+  unmounts the button mid-scan). `drop_confirm` documented this exact trap; it now has a
+  regression test — `refreshing_a_table_settles_the_row_and_the_views_over_it` asserts the rows
+  **settle**, which a pass that never ran cannot fake.
+- `ProjectState::refresh_order` — **fixes a latent bug in P3-03's ↻ as well.** `CREATE OR REPLACE
+  VIEW` inlines the plan of any view it reads *at that moment*, so re-creating an outer view before
+  its inner one inlines the stale inner plan. The scan was ordering views alphabetically (the def
+  order), which is right only by luck. Kahn's over `view_deps`, computed **before** the rows are
+  reset — resetting is what discards the ordering information.
+
+### Also
+
+`ProjectState::{reload_table, reload_view}` (one-row resets), `IconName::Pencil` (the canvas's
+`edit` glyph — spent on Rename and Edit query, so Play consistently means "put this in a tab").
+
+> **Test-harness note worth keeping.** Freya polls tasks only once *no scope is dirty*
+> (`Runner::handle_events_immediately`), and `use_side_effect` is a task. Every row now mounts a ⋮
+> `Button`, which costs one extra settle pass — so the catalog tests' two `sync_and_update()` calls
+> silently stopped running effects, and the status slot's held verdict (P3-04) "disappeared" with
+> no error. They settle through a `settle()` helper now. Under-settling fails quietly; assume it
+> when effect-derived state is missing.
 
 ## Acceptance
-- [ ] Each row type shows the right menu; every action reaches the engine and the Project store, and the defs are persisted.
-- [ ] Drop asks first and states how many views it leaves invalid. *(The dialog is P3-05's; this is
+- [x] Each row type shows the right menu; every action reaches the engine and the Project store, and the defs are persisted.
+- [x] Drop asks first and states how many views it leaves invalid. *(The dialog is P3-05's; this is
   the menu item that opens it.)*
+- [x] Refresh table re-infers that row and re-creates the views it would otherwise leave stale.
 
 ## Freya / references
 - Freya `ContextMenu` / `Menu`; the existing `tab_bar/menu.rs` is the in-app precedent.
 - Reference implementation: `strata-dioxus/src/ui/sidebar.rs` (`catalog_menu_items`, `remove_dialog`, `phrase`).
-- Design: `Sidebar.dc.html` context menus.
+- Design: `Strata.dc.html` — the catalog row context menu (`buildCtxItems`) + the row's ⋮ button.

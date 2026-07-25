@@ -10,16 +10,21 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use freya::radio::RadioStation;
+use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
 use strata_core::engine::{TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ColRef, ColumnInfo, Kind, SavedQuery, TableDef, ViewDef};
+use strata_model::{ColRef, ColumnInfo, Kind, Origin, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
 
 use super::*;
-use crate::apps::project::state::{Chan, SessionState};
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::state::{Chan, Reg, SessionState};
+use crate::apps::project::views::DropTarget;
+use crate::state::ConfigStation;
 use crate::theme::strata_theme;
+use strata_core::config::AppConfig;
 
 /// A leaf column.
 fn col(name: &str, dtype: &str, kind: Kind) -> ColumnInfo {
@@ -154,19 +159,28 @@ fn project() -> ProjectState {
 /// The pane over the stores the runner provides. Both the project and the session store come from
 /// the runner as **root contexts**, so a test can write to the catalog (dropping a table, landing a
 /// registration) and read the layout back.
+///
+/// The [`ContextMenuViewer`] is the window root's in the real app; the row menus need it in an
+/// ancestor scope, and it is also what *renders* an open menu — so it is what makes the menu
+/// items assertable as text.
 fn app() -> impl IntoElement {
     use_init_theme(|| strata_theme(&load("midnight")));
     let filter = use_consume::<State<String>>();
-    rect().expanded().child(Catalog::new(filter))
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(Catalog::new(filter))
 }
 
-/// What the test holds onto: the filter slot to type into, the inspected-column slot, and the
-/// session + project stores to assert against (and, for validity, to mutate).
+/// What the test holds onto: the filter slot to type into, the inspected-column slot, the
+/// session + project stores to assert against (and, for validity, to mutate), and the
+/// drop-confirm slot a Drop item is supposed to set.
 type Handles = (
     State<String>,
     State<Option<ColRef>>,
     RadioStation<SessionState, Chan>,
     RadioStation<ProjectState, ProjChan>,
+    State<Option<DropTarget>>,
 );
 
 /// A tall window so every row lays out (the pane's `ScrollView` keeps off-screen children in the
@@ -188,10 +202,31 @@ fn runner() -> (TestingRunner, Handles) {
             });
             let store = r
                 .provide_root_context(|| RadioStation::<ProjectState, ProjChan>::create(project()));
-            (filter, selection, session, store)
+            // The row menus' remaining handles: the engine (never asked anything here — no test
+            // presses Refresh), the scan flag, the app config behind "View table"'s LIMIT, and
+            // the drop-confirm slot the Drop items set.
+            r.provide_root_context(EngineCtx::new);
+            r.provide_root_context(|| State::create(false));
+            r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
+            let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
+            (filter, selection, session, store, drop_target)
         },
         1.,
     )
+}
+
+/// Settle the tree: render, then let the effects those renders scheduled actually run.
+///
+/// **Several passes, not two.** Freya polls tasks only once *no scope is dirty*
+/// (`Runner::handle_events_immediately`), and `use_side_effect` is a task — so a pass that leaves
+/// anything dirty defers every effect in the tree to the next one. Every catalog row now mounts a
+/// ⋮ `Button`, which costs one such pass on first paint. Under-settling fails silently and
+/// confusingly: the render is correct, but effect-derived state (the status slot's held verdict)
+/// is simply never computed.
+fn settle(runner: &mut TestingRunner) {
+    for _ in 0..4 {
+        runner.sync_and_update();
+    }
 }
 
 /// Every text run currently in the tree.
@@ -206,8 +241,7 @@ fn shows(runner: &TestingRunner, text: &str) -> bool {
 /// Type `text` into the filter and settle the tree.
 fn type_filter(runner: &mut TestingRunner, filter: &mut State<String>, text: &str) {
     filter.set(text.to_string());
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(runner);
 }
 
 /// Click the centre of the first text run equal to `text`. Coordinates come from the laid-out
@@ -226,8 +260,58 @@ fn click_text(runner: &mut TestingRunner, text: &str) {
     );
     runner.move_cursor(point);
     runner.click_cursor(point);
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(runner);
+}
+
+/// The laid-out box of the first text run equal to `text`.
+fn text_area(runner: &TestingRunner, text: &str) -> Area {
+    runner
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|l| l.text == text)
+                .map(|_| node.layout().area)
+        })
+        .unwrap_or_else(|| panic!("no text run {text:?} in the tree"))
+}
+
+/// Right-click the row named `text` — how a user opens its context menu. The cursor is moved
+/// first because that is what the [`ContextMenuViewer`] tracks to place the card.
+fn right_click_row(runner: &mut TestingRunner, text: &str) {
+    let area = text_area(runner, text);
+    let point = (
+        (area.min_x() + area.width() / 2.) as f64,
+        (area.min_y() + area.height() / 2.) as f64,
+    );
+    runner.move_cursor(point);
+    runner.send_event(PlatformEvent::Mouse {
+        name: MouseEventName::MouseDown,
+        cursor: point.into(),
+        button: Some(MouseButton::Right),
+    });
+    settle(runner);
+}
+
+/// Press the ⋮ button of the row named `text` — the menu's *other* trigger. It sits at the row's
+/// trailing edge, so it is found by the tallest 22×22 box on that row's line.
+fn press_row_actions(runner: &mut TestingRunner, text: &str) {
+    let row = text_area(runner, text);
+    let mid_y = row.min_y() + row.height() / 2.;
+    let button = runner
+        .find_many(|node, _| {
+            let a = node.layout().area;
+            let square = (a.width() - 22.).abs() < 0.5 && (a.height() - 22.).abs() < 0.5;
+            (square && a.min_y() <= mid_y && a.max_y() >= mid_y).then_some(a)
+        })
+        .into_iter()
+        .max_by(|a, b| a.min_x().total_cmp(&b.min_x()))
+        .unwrap_or_else(|| panic!("no ⋮ button on the {text:?} row"));
+    let point = (
+        (button.min_x() + button.width() / 2.) as f64,
+        (button.min_y() + button.height() / 2.) as f64,
+    );
+    runner.move_cursor(point);
+    runner.click_cursor(point);
+    settle(runner);
 }
 
 /// Press the expand chevron of the nested column row named `name` — `back` pixels left of the
@@ -246,8 +330,7 @@ fn expand_nested(runner: &mut TestingRunner, name: &str, back: f32) {
     );
     runner.move_cursor(point);
     runner.click_cursor(point);
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(runner);
 }
 
 // ---- filtering ----------------------------------------------------------------------------
@@ -257,8 +340,7 @@ fn expand_nested(runner: &mut TestingRunner, name: &str, back: f32) {
 #[test]
 fn filter_narrows_all_three_sections_at_once() {
     let (mut runner, (mut filter, ..)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     // Unfiltered: every def in every section.
     for name in [
@@ -289,8 +371,7 @@ fn filter_narrows_all_three_sections_at_once() {
 #[test]
 fn filter_folds_case_in_both_directions() {
     let (mut runner, (mut filter, ..)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     // Upper-case query against lower-case names.
     type_filter(&mut runner, &mut filter, "ORD");
@@ -311,8 +392,7 @@ fn filter_folds_case_in_both_directions() {
 #[test]
 fn clearing_the_filter_restores_every_row() {
     let (mut runner, (mut filter, ..)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     type_filter(&mut runner, &mut filter, "zzz-nothing-matches");
     for name in ["orders", "users", "orders_daily", "regions"] {
@@ -337,8 +417,7 @@ fn clearing_the_filter_restores_every_row() {
 #[test]
 fn section_counts_follow_the_filter() {
     let (mut runner, (mut filter, ..)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     assert!(shows(&runner, "TABLES · 3"));
     assert!(shows(&runner, "VIEWS · 3"));
@@ -360,8 +439,7 @@ fn section_counts_follow_the_filter() {
 #[test]
 fn filter_matches_def_names_not_columns() {
     let (mut runner, (mut filter, ..)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     type_filter(&mut runner, &mut filter, "city");
     assert!(
@@ -376,8 +454,7 @@ fn filter_matches_def_names_not_columns() {
 #[test]
 fn saved_query_empty_note_is_suppressed_while_filtering() {
     let (mut runner, (mut filter, ..)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     // Two saved queries exist, so no note either way.
     assert!(!shows(&runner, "No saved queries yet"));
@@ -394,8 +471,7 @@ fn saved_query_empty_note_is_suppressed_while_filtering() {
 #[test]
 fn filtering_hides_an_expanded_entrys_columns() {
     let (mut runner, (mut filter, ..)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     click_text(&mut runner, "orders");
     assert!(shows(&runner, "id"), "expanded before filtering");
@@ -415,8 +491,7 @@ fn filtering_hides_an_expanded_entrys_columns() {
 #[test]
 fn entry_expands_to_its_columns_and_nests_one_level_at_a_time() {
     let (mut runner, ..) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     assert!(!shows(&runner, "id"), "columns start folded away");
 
@@ -440,8 +515,7 @@ fn entry_expands_to_its_columns_and_nests_one_level_at_a_time() {
 #[test]
 fn a_view_expands_to_its_columns_too() {
     let (mut runner, ..) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     click_text(&mut runner, "orders_daily");
     assert!(shows(&runner, "day"));
@@ -451,9 +525,8 @@ fn a_view_expands_to_its_columns_too() {
 /// inspector, which is how it reopens once collapsed.
 #[test]
 fn selecting_a_column_publishes_its_ref_and_opens_the_inspector() {
-    let (mut runner, (_, selection, session, _)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    let (mut runner, (_, selection, session, ..)) = runner();
+    settle(&mut runner);
 
     assert!(selection.peek().is_none());
     assert!(
@@ -479,8 +552,7 @@ fn selecting_a_column_publishes_its_ref_and_opens_the_inspector() {
 #[test]
 fn collapsing_a_section_hides_only_its_own_rows() {
     let (mut runner, ..) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     click_text(&mut runner, "TABLES · 3");
     assert!(!shows(&runner, "orders"), "the table rows are put away");
@@ -503,8 +575,7 @@ fn collapsing_a_section_hides_only_its_own_rows() {
 #[test]
 fn a_nested_field_selects_by_its_full_path() {
     let (mut runner, (_, selection, ..)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     click_text(&mut runner, "orders");
     // The struct's own chevron sits left of its name; pressing the *name* would select the column
@@ -563,8 +634,7 @@ fn wait_out_the_spinner_delay(runner: &mut TestingRunner) {
 #[test]
 fn failures_flag_at_once_but_a_wait_has_to_last_before_it_spins() {
     let (mut runner, ..) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     assert_eq!(
         status_labels(&runner),
@@ -597,9 +667,8 @@ fn failures_flag_at_once_but_a_wait_has_to_last_before_it_spins() {
 /// subscribes to TABLES as well as VIEWS.
 #[test]
 fn dropping_a_table_flags_the_views_that_read_it() {
-    let (mut runner, (.., mut store)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    let (mut runner, (.., mut store, _)) = runner();
+    settle(&mut runner);
 
     assert!(
         !status_labels(&runner).iter().any(|w| w.contains("orders")),
@@ -607,8 +676,7 @@ fn dropping_a_table_flags_the_views_that_read_it() {
     );
 
     store.write_channel(ProjChan::Tables).remove_table("orders");
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     assert!(
         status_labels(&runner)
@@ -623,9 +691,8 @@ fn dropping_a_table_flags_the_views_that_read_it() {
 /// swapping one status for another.
 #[test]
 fn a_triangle_clears_when_the_row_registers() {
-    let (mut runner, (.., mut store)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    let (mut runner, (.., mut store, _)) = runner();
+    settle(&mut runner);
 
     assert!(status_labels(&runner)
         .iter()
@@ -638,8 +705,7 @@ fn a_triangle_clears_when_the_row_registers() {
             rows: Some(4),
         },
     );
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     assert_eq!(
         status_labels(&runner),
@@ -653,9 +719,8 @@ fn a_triangle_clears_when_the_row_registers() {
 /// than a coincidence of when the test looked.
 #[test]
 fn a_row_answered_inside_the_delay_never_spins() {
-    let (mut runner, (.., mut store)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    let (mut runner, (.., mut store, _)) = runner();
+    settle(&mut runner);
 
     assert!(shows(&runner, "users"), "the def renders regardless");
 
@@ -666,8 +731,7 @@ fn a_row_answered_inside_the_delay_never_spins() {
             rows: Some(2),
         },
     );
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     wait_out_the_spinner_delay(&mut runner);
 
@@ -692,20 +756,19 @@ fn spinners(runner: &TestingRunner) -> usize {
 /// instant ↻ is pressed.
 #[test]
 fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
-    let (mut runner, (.., mut store)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    let (mut runner, (.., mut store, _)) = runner();
+    settle(&mut runner);
     let broken = "No such file or directory (os error 2)";
     assert!(status_labels(&runner).iter().any(|l| l == broken));
 
     // ↻ — every table row unanswered again, `events` included.
     store.write_channel(ProjChan::Tables).reload_tables();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     assert!(
         status_labels(&runner).iter().any(|l| l == broken),
-        "the verdict is held through the gap rather than un-said"
+        "the verdict is held through the gap rather than un-said: {:?}",
+        status_labels(&runner)
     );
     assert_eq!(spinners(&runner), 0, "and no row spins on the spot");
 
@@ -713,8 +776,7 @@ fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
     store
         .write_channel(ProjChan::Tables)
         .table_failed("events", broken.into());
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     assert!(status_labels(&runner).iter().any(|l| l == broken));
 }
@@ -724,13 +786,11 @@ fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
 /// holding a verdict we now know to be wrong would be worse than the blink.
 #[test]
 fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
-    let (mut runner, (.., mut store)) = runner();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    let (mut runner, (.., mut store, _)) = runner();
+    settle(&mut runner);
 
     store.write_channel(ProjChan::Tables).reload_tables();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     store.write_channel(ProjChan::Tables).table_registered(
         "events",
@@ -739,8 +799,7 @@ fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
             rows: Some(4),
         },
     );
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
 
     assert!(
         !status_labels(&runner)
@@ -755,7 +814,7 @@ fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
 /// throughout — its wait never stopped, so re-arming it would blink the spinner instead.
 #[test]
 fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
-    let (mut runner, (.., mut store)) = runner();
+    let (mut runner, (.., mut store, _)) = runner();
     runner.sync_and_update();
     wait_out_the_spinner_delay(&mut runner);
     assert_eq!(
@@ -765,8 +824,7 @@ fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
     );
 
     store.write_channel(ProjChan::Tables).reload_tables();
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
     assert_eq!(
         spinners(&runner),
         1,
@@ -785,5 +843,294 @@ fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
             .iter()
             .any(|l| l == "No such file or directory (os error 2)"),
         "and the spinner supersedes the held triangle rather than doubling up on it"
+    );
+}
+
+// ---- the row menus (P3-06) --------------------------------------------------------------------
+
+/// The menu items currently in the tree — what an open menu card is actually offering.
+///
+/// Taken as the text runs that are *not* catalog rows: the pane's own runs are all present
+/// before the menu opens, so a set difference is both simpler and stricter than trying to
+/// identify the card by geometry.
+fn menu_items(runner: &TestingRunner, before: &[String]) -> Vec<String> {
+    let mut rest = before.to_vec();
+    texts(runner)
+        .into_iter()
+        .filter(|t| match rest.iter().position(|b| b == t) {
+            Some(at) => {
+                rest.remove(at);
+                false
+            }
+            None => true,
+        })
+        .collect()
+}
+
+/// Open the menu for the row named `name` and return its items.
+fn open_menu(runner: &mut TestingRunner, name: &str) -> Vec<String> {
+    let before = texts(runner);
+    right_click_row(runner, name);
+    menu_items(runner, &before)
+}
+
+/// A runner whose first paint has settled — a menu test's starting point, and a separate
+/// function so a test can take several without shadowing the constructor.
+fn settled() -> (TestingRunner, Handles) {
+    let (mut runner, handles) = runner();
+    settle(&mut runner);
+    (runner, handles)
+}
+
+/// The three menus, by row kind — the item lists themselves, in order, because the *order* is
+/// the design (the destructive action last, behind a rule) as much as the wording is.
+#[test]
+fn each_row_kind_offers_its_own_menu() {
+    let (mut runner, ..) = settled();
+
+    assert_eq!(
+        open_menu(&mut runner, "orders"),
+        vec![
+            "View table",
+            "Profile table",
+            "Refresh table",
+            "Configure",
+            "Drop table"
+        ],
+        "the table menu"
+    );
+
+    let (mut runner, ..) = settled();
+    assert_eq!(
+        open_menu(&mut runner, "orders_daily"),
+        vec!["View view", "Profile view", "Edit query", "Drop view"],
+        "a view has no files to re-infer, so no Refresh — and it can be edited, which a table \
+         cannot"
+    );
+
+    let (mut runner, ..) = settled();
+    assert_eq!(
+        open_menu(&mut runner, "signup funnel"),
+        vec!["Open in new tab", "Rename", "Delete query"],
+        "a saved query is a stored string: nothing to profile, configure or refresh"
+    );
+}
+
+/// The ⋮ button opens the **same** menu right-click does — one item list, two triggers, which is
+/// the whole reason the builders live in one module.
+#[test]
+fn the_actions_button_opens_the_same_menu_as_a_right_click() {
+    let (mut runner, ..) = settled();
+    let by_right_click = open_menu(&mut runner, "orders");
+
+    let (mut runner, ..) = settled();
+    let before = texts(&runner);
+    press_row_actions(&mut runner, "orders");
+
+    assert_eq!(menu_items(&runner, &before), by_right_click);
+}
+
+/// **View table** puts `SELECT *` in a tab, ready to run but not run — a full scan of a big
+/// table must not start itself. The `LIMIT` is the row-limit setting.
+#[test]
+fn view_table_opens_a_select_star_tab_without_running_it() {
+    let (mut runner, (_, _, session, ..)) = settled();
+    right_click_row(&mut runner, "orders");
+
+    click_text(&mut runner, "View table");
+
+    let s = session.peek();
+    let tab = s.active_tab().expect("the new tab is focused");
+    assert_eq!(tab.name, "orders");
+    assert_eq!(tab.text(), "SELECT *\nFROM orders\nLIMIT 100;");
+    assert!(tab.request.is_none(), "opened, not run");
+}
+
+/// **Edit query** opens the view's own SQL bound to it, so ⌘S redefines *that view* rather than
+/// saving a new query — the DEV_TASKS "⌘S on a view saves a saved-query" bug, from the other end.
+#[test]
+fn edit_query_opens_the_views_sql_bound_to_the_view() {
+    let (mut runner, (_, _, session, ..)) = settled();
+    right_click_row(&mut runner, "orders_daily");
+
+    click_text(&mut runner, "Edit query");
+
+    let s = session.peek();
+    let tab = s.active_tab().expect("the view opened in a tab");
+    assert_eq!(tab.text(), "SELECT 1", "the view's own SQL, not a SELECT *");
+    assert!(
+        matches!(&tab.origin, Origin::View(v) if v == "orders_daily"),
+        "bound to the view: {:?}",
+        tab.origin
+    );
+}
+
+/// Pressing a saved-query row opens it — the canvas's own row `title` — bound by **id**, which
+/// is what makes the rename below free.
+#[test]
+fn pressing_a_saved_query_row_opens_it_bound_by_id() {
+    let (mut runner, (_, _, session, ..)) = settled();
+
+    click_text(&mut runner, "signup funnel");
+
+    let s = session.peek();
+    let tab = s.active_tab().expect("the query opened in a tab");
+    assert_eq!(tab.name, "signup funnel");
+    assert_eq!(tab.text(), "SELECT 4");
+    assert!(
+        matches!(&tab.origin, Origin::SavedQuery(q) if *q == Uuid::from_u128(2)),
+        "bound by id, not by label: {:?}",
+        tab.origin
+    );
+}
+
+/// Every **Drop** item opens P3-05's confirm rather than dropping: it sets the target slot the
+/// dialog watches, and the catalog is untouched until that dialog is confirmed. There is
+/// deliberately no second drop path — this is the assertion that pins it.
+#[test]
+fn drop_asks_the_confirm_and_leaves_the_catalog_alone() {
+    let (mut runner, (_, _, _, store, drop_target)) = settled();
+    right_click_row(&mut runner, "orders");
+
+    click_text(&mut runner, "Drop table");
+
+    assert!(
+        matches!(drop_target.peek().as_ref(), Some(DropTarget::Table(n)) if n == "orders"),
+        "the confirm was asked about `orders`: {:?}",
+        drop_target.peek()
+    );
+    assert!(
+        store.peek().tables.iter().any(|t| t.def.name == "orders"),
+        "and nothing has been dropped yet"
+    );
+}
+
+/// A view's Drop and a saved query's Delete go through the *same* slot, so the one dialog covers
+/// all three row kinds — a saved query by `id`, because that is its identity.
+#[test]
+fn dropping_a_view_and_deleting_a_query_use_the_same_confirm_slot() {
+    let (mut runner, (.., drop_target)) = settled();
+    right_click_row(&mut runner, "orders_daily");
+    click_text(&mut runner, "Drop view");
+    assert!(
+        matches!(drop_target.peek().as_ref(), Some(DropTarget::View(n)) if n == "orders_daily")
+    );
+
+    let (mut runner, (.., drop_target)) = settled();
+    right_click_row(&mut runner, "signup funnel");
+    click_text(&mut runner, "Delete query");
+    assert!(
+        matches!(
+            drop_target.peek().as_ref(),
+            Some(DropTarget::Query { id, name }) if *id == Uuid::from_u128(2) && name == "signup funnel"
+        ),
+        "addressed by id, with the label only for the dialog to show: {:?}",
+        drop_target.peek()
+    );
+}
+
+/// **Rename** is inline, in the row: the menu item only flips the row into rename mode — the
+/// input, and the commit, are the row's own, so they outlive the menu that started them.
+#[test]
+fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
+    let (mut runner, (_, _, _, store, _)) = settled();
+    right_click_row(&mut runner, "signup funnel");
+
+    click_text(&mut runner, "Rename");
+
+    assert!(
+        !shows(&runner, "signup funnel"),
+        "the label gave way to the rename input"
+    );
+    // Typed at the caret, which Freya's `Input` leaves at the start of a seeded value — the tab
+    // strip's rename opens the same way. Written as a prefix so the assertion states what the
+    // app actually does rather than what it would do with a select-on-focus input.
+    runner.write_text("weekly ");
+    runner.sync_and_update();
+    runner.press_key(Key::Named(NamedKey::Enter));
+    settle(&mut runner);
+
+    let p = store.peek();
+    let q = p
+        .saved_queries
+        .iter()
+        .find(|q| q.id == Uuid::from_u128(2))
+        .expect("the query is still there, under its new label");
+    assert_eq!(q.name, "weekly signup funnel");
+    assert_eq!(
+        q.sql, "SELECT 4",
+        "a rename touches the label and nothing else"
+    );
+    assert!(
+        shows(&runner, "weekly signup funnel"),
+        "and the row shows it"
+    );
+    assert_eq!(
+        p.saved_queries[0].name, "orders by region",
+        "the section is still in name order — `weekly …` sorts after it"
+    );
+}
+
+/// Escape abandons a rename outright — the row comes back wearing the name it had.
+#[test]
+fn escape_abandons_a_rename() {
+    let (mut runner, (_, _, _, store, _)) = settled();
+    right_click_row(&mut runner, "signup funnel");
+    click_text(&mut runner, "Rename");
+
+    runner.write_text("weekly ");
+    runner.sync_and_update();
+    runner.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut runner);
+
+    assert!(
+        shows(&runner, "signup funnel"),
+        "the row is back, unrenamed"
+    );
+    assert_eq!(
+        store.peek().saved_queries[1].name,
+        "signup funnel",
+        "and nothing was written"
+    );
+}
+
+/// **Refresh table actually runs.** The regression that shipped and had to be found by hand: the
+/// scan was `spawn`ed from the menu item's handler, so it belonged to a `MenuButton` scope that
+/// the very same press tore down — Freya drops a scope's tasks before polling them, so the rows
+/// were reset to `Loading` and nothing ever came back. The table *and* the view over it spun
+/// forever.
+///
+/// So the assertion is not "the engine answered X" but "the rows **settled**": whatever the
+/// answer, a pass that never ran can't produce one. `orders` here points at a file that doesn't
+/// exist, so the honest settled answer is `Failed` — which is exactly as good a proof.
+#[test]
+fn refreshing_a_table_settles_the_row_and_the_views_over_it() {
+    let (mut runner, (.., store, _)) = settled();
+    right_click_row(&mut runner, "orders");
+
+    click_text(&mut runner, "Refresh table");
+
+    // Both were reset by the synchronous half, so this is only meaningful once they come back.
+    assert!(
+        matches!(store.peek().tables[1].reg, Reg::Loading),
+        "the press reset the row it was pressed on"
+    );
+    // Give the spawned pass a moment to reach the engine and land its answers.
+    runner.poll(Duration::from_millis(10), Duration::from_millis(600));
+
+    let p = store.peek();
+    assert_eq!(p.tables[1].def.name, "orders");
+    assert!(
+        !matches!(p.tables[1].reg, Reg::Loading),
+        "the table settled — the scan task outlived the menu that ordered it"
+    );
+    let view = p
+        .views
+        .iter()
+        .find(|v| v.def.name == "orders_daily")
+        .expect("the view over it");
+    assert!(
+        !matches!(view.reg, Reg::Loading),
+        "and so did the view the refresh re-created, which is the half that made the bug obvious"
     );
 }

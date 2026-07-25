@@ -33,6 +33,7 @@ pub struct SidebarRow {
     selected: bool,
     active_background: Option<Color>,
     on_press: Option<EventHandler<Event<PressEventData>>>,
+    on_context_menu: Option<EventHandler<Event<PressEventData>>>,
     children: Vec<Element>,
 }
 
@@ -47,6 +48,7 @@ impl SidebarRow {
             selected: false,
             active_background: None,
             on_press: None,
+            on_context_menu: None,
             children: Vec::new(),
         }
     }
@@ -99,6 +101,18 @@ impl SidebarRow {
         self.on_press = Some(on_press.into());
         self
     }
+
+    /// Right-click the row (P3-06's catalog menus). Carried by a wrapper rather than by
+    /// [`SideBarItem`] itself, which exposes only `on_press` — and a wrapper is where it
+    /// belongs anyway: the row shell owns the affordance, so the catalog and (later)
+    /// connections can't each invent their own secondary-press handling.
+    pub fn on_context_menu(
+        mut self,
+        on_context_menu: impl Into<EventHandler<Event<PressEventData>>>,
+    ) -> Self {
+        self.on_context_menu = Some(on_context_menu.into());
+        self
+    }
 }
 
 impl ChildrenExt for SidebarRow {
@@ -143,6 +157,25 @@ impl Component for SidebarRow {
             })
             .child(content);
 
-        Activable::new(item).active(self.selected)
+        let row = Activable::new(item).active(self.selected);
+
+        // Unwrapped unless the row actually wants a context menu, so the common case adds no
+        // layout node. `Content::Fit` + no size of its own: the wrapper is the row's own box,
+        // and `SideBarItem` already fills the pane's width.
+        match &self.on_context_menu {
+            None => row.into_element(),
+            Some(handler) => {
+                let handler = handler.clone();
+                rect()
+                    .width(Size::fill())
+                    .content(Content::Fit)
+                    .on_secondary_down(move |e: Event<PressEventData>| {
+                        e.stop_propagation();
+                        handler.call(e);
+                    })
+                    .child(row)
+                    .into_element()
+            }
+        }
     }
 }

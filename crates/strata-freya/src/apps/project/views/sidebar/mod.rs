@@ -171,11 +171,14 @@ mod tests {
 
     use freya::radio::RadioStation;
     use freya_testing::TestingRunner;
+    use strata_core::config::AppConfig;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
     use strata_model::{ColRef, TableDef};
 
     use super::*;
+    use crate::apps::project::views::DropTarget;
+    use crate::state::ConfigStation;
     use crate::theme::strata_theme;
 
     /// The panel width these tests lay out at — wide enough that nothing is clipped for want of
@@ -217,6 +220,11 @@ mod tests {
                 r.provide_root_context(EngineCtx::new);
                 r.provide_root_context(|| State::create(false));
                 r.provide_root_context(|| State::create(None::<ColRef>));
+                // The catalog rows' menu handles (P3-06): the app config behind "View table"'s
+                // LIMIT, and the drop-confirm slot. Nothing here opens a menu — they only have
+                // to be reachable, since every row gathers them on render.
+                r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
+                r.provide_root_context(|| State::create(None::<DropTarget>));
                 r.provide_root_context(|| {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
                 });

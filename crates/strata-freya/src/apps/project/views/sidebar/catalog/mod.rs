@@ -25,6 +25,7 @@ mod columns;
 mod entry;
 #[cfg(test)]
 mod interaction;
+mod menu;
 mod section;
 
 use std::collections::HashSet;

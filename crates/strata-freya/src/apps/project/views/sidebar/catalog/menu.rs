@@ -1,0 +1,329 @@
+//! The catalog rows' **context menus** (P3-06) — one [`Menu`] per row kind, opened either by
+//! right-clicking the row or by pressing its ⋮ button. One item list per kind, built here, so the
+//! two triggers can't drift apart (the Dioxus sidebar had exactly this pair, sharing one
+//! `catalog_menu_items`).
+//!
+//! ## The actions are direct calls, not cache invalidations
+//!
+//! **The store is the catalog** (P3-02): there is no `FetchCatalog` query to invalidate. Every
+//! item here calls the engine and/or mutates [`ProjectState`] on the matching [`ProjChan`], and
+//! the rows subscribed to that channel re-render. Nothing refetches.
+//!
+//! ## Drop opens the confirm; it does not drop
+//!
+//! P3-05 landed the whole drop flow — the dialog, its "N views will be left invalid" consequence
+//! line, and the drop itself (store + persist + engine + tab unbinding). The item here sets the
+//! [`DropTarget`] slot that dialog watches, and that is *all* it does. There is deliberately no
+//! second drop path.
+//!
+//! ## A menu is a snapshot
+//!
+//! These builders run inside an event handler, which has no reactive context — every read is a
+//! `peek`. That is the same trade the tab strip's menu makes: a transient menu's contents are
+//! whatever was true when it opened, and acting on it dismisses it. The rows themselves stay
+//! live (a row re-answering swaps its own status glyph while the menu is up); only the labels in
+//! the open card are frozen.
+
+use freya::components::{use_theme, MenuItemThemePartial};
+use freya::prelude::*;
+use freya::radio::{use_radio_station, RadioStation};
+use strata_model::{Origin, SavedQuery};
+use uuid::Uuid;
+
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::state::{
+    refresh_table, use_catalog_scan, CatalogScan, Chan, ProjChan, ProjectState, Reg, SessionState,
+};
+use crate::apps::project::views::DropTarget;
+use crate::components::divider::Divider;
+use crate::components::icon::{Icon, IconName};
+use crate::components::typography::Prose;
+use crate::state::{use_config_station, ConfigStation};
+
+/// The menu card's width — the design canvas's `min-width: 210px`, which is what keeps
+/// "Refresh table" and "Open in new tab" on one line.
+const MENU_WIDTH: f32 = 210.;
+/// The glyph beside each label, and the gap to it (canvas: 15px icon, `--sp-4`).
+const ITEM_ICON: f32 = 15.;
+const ITEM_GAP: f32 = 12.;
+
+/// The handles a catalog row's menu acts through, gathered once per row.
+///
+/// Both stores are **stations**, not subscribing radios: a row must not re-render because a
+/// keystroke landed in some tab, or because another row's registration answered. The menus only
+/// ever peek and write.
+#[derive(Clone)]
+pub struct CatalogActions {
+    pub engine: EngineCtx,
+    pub session: RadioStation<SessionState, Chan>,
+    pub project: RadioStation<ProjectState, ProjChan>,
+    /// Whether a catalog pass is in flight — Refresh is a no-op while one is, so it says so
+    /// rather than offering a press that does nothing.
+    pub scan: CatalogScan,
+    /// The app-global config: "View table" takes its `LIMIT` from the row-limit setting.
+    pub config: ConfigStation,
+    /// The drop-confirm slot provided at the window root (P3-05). Setting it *is* the drop
+    /// action.
+    pub drop_target: State<Option<DropTarget>>,
+    /// The sheet's destructive tone, resolved here because the menu itself is built from an
+    /// event handler, where no hook — `use_theme` included — may run.
+    pub danger: Color,
+}
+
+/// Gather this row's action handles from the window's stores + context.
+pub fn use_catalog_actions() -> CatalogActions {
+    CatalogActions {
+        engine: use_consume::<EngineCtx>(),
+        session: use_radio_station::<SessionState, Chan>(),
+        project: use_radio_station::<ProjectState, ProjChan>(),
+        scan: use_catalog_scan(),
+        config: use_config_station(),
+        drop_target: use_consume::<State<Option<DropTarget>>>(),
+        danger: use_theme().read().colors.error,
+    }
+}
+
+impl CatalogActions {
+    /// A menu item: glyph, label, and an action run against these handles. Every item closes
+    /// the menu afterwards — a press *inside* the card doesn't dismiss it on its own (only an
+    /// outside press does).
+    fn item(
+        &self,
+        icon: IconName,
+        label: impl Into<String>,
+        action: impl Fn(&CatalogActions) + 'static,
+    ) -> MenuButton {
+        let actions = self.clone();
+        MenuButton::new()
+            .on_press(move |_| {
+                action(&actions);
+                ContextMenu::close();
+            })
+            .child(menu_row(icon, label))
+    }
+
+    /// An item whose target isn't built yet: rendered, disabled, so the menu shows the row's
+    /// full vocabulary and the shape can't drift when the owning task lands.
+    fn parked(&self, icon: IconName, label: impl Into<String>) -> MenuButton {
+        MenuButton::new()
+            .enabled(false)
+            .child(menu_row(icon, label))
+    }
+
+    /// The destructive item — the canvas's `--c-err` row. Colour rides the `menu_item` theme's
+    /// own `color` slot, which [`MenuItem`] applies to the whole row, so the glyph and the label
+    /// tint together (and the disabled fade still works on top of it).
+    fn danger(
+        &self,
+        label: impl Into<String>,
+        action: impl Fn(&CatalogActions) + 'static,
+    ) -> MenuButton {
+        self.item(IconName::Trash, label, action)
+            .theme(MenuItemThemePartial::default().color(self.danger))
+    }
+}
+
+/// One menu row: the glyph over its label, at the canvas's gap.
+fn menu_row(icon: IconName, label: impl Into<String>) -> impl IntoElement {
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .spacing(ITEM_GAP)
+        .child(Icon::new(icon).size(ITEM_ICON))
+        .child(Prose::new(label))
+}
+
+// ---- the menus -------------------------------------------------------------------------------
+
+/// A **table** row's menu: open it in a tab · profile it · re-scan it · configure it · drop it.
+pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
+    // Snapshotted at open (see the module doc). `loading` is this row's own state, which is what
+    // makes "Refreshing…" mean *this* table rather than "some pass is running": the row's status
+    // glyph says the same thing from the other side.
+    let scanning = *actions.scan.peek();
+    let loading = matches!(
+        actions
+            .project
+            .peek()
+            .tables
+            .iter()
+            .find(|t| t.def.name == name)
+            .map(|t| &t.reg),
+        Some(Reg::Loading)
+    );
+
+    Menu::new()
+        .min_width(Size::px(MENU_WIDTH))
+        .child({
+            let name = name.clone();
+            actions.item(IconName::Play, "View table", move |a| {
+                view_row(a, &name);
+            })
+        })
+        // P3-09 owns profiling (and its cost confirm, P3-10). Parked rather than omitted so the
+        // menu keeps the shape the canvas specifies.
+        .child(actions.parked(IconName::Chart, "Profile table"))
+        .child(Divider::menu())
+        .child({
+            let name = name.clone();
+            actions
+                .item(
+                    IconName::Reload,
+                    if loading {
+                        "Refreshing…"
+                    } else {
+                        "Refresh table"
+                    },
+                    move |a| {
+                        refresh_table(a.engine.clone(), a.project, a.scan, name.clone());
+                    },
+                )
+                .enabled(!scanning)
+        })
+        // P4-11 owns the table-config modal.
+        .child(actions.parked(IconName::Gear, "Configure"))
+        .child(Divider::menu())
+        .child(actions.danger("Drop table", move |a| {
+            let mut slot = a.drop_target;
+            slot.set(Some(DropTarget::Table(name.clone())));
+        }))
+}
+
+/// A **view** row's menu: open it in a tab · profile it · edit the SQL behind it · drop it.
+///
+/// No Refresh: a view has no files of its own to re-infer. Re-creating it is what a *table*
+/// refresh does to the views over it ([`ProjectState::views_to_refresh`]), because that is when
+/// its plan goes stale.
+pub fn view_menu(actions: &CatalogActions, name: String) -> Menu {
+    Menu::new()
+        .min_width(Size::px(MENU_WIDTH))
+        .child({
+            let name = name.clone();
+            actions.item(IconName::Play, "View view", move |a| {
+                view_row(a, &name);
+            })
+        })
+        // A view has no footer facts of its own, so a scan is the only way it learns anything —
+        // worth more here than on a table. Still P3-09's.
+        .child(actions.parked(IconName::Chart, "Profile view"))
+        .child({
+            let name = name.clone();
+            actions.item(IconName::Pencil, "Edit query", move |a| {
+                edit_view(a, &name);
+            })
+        })
+        .child(Divider::menu())
+        .child(actions.danger("Drop view", move |a| {
+            let mut slot = a.drop_target;
+            slot.set(Some(DropTarget::View(name.clone())));
+        }))
+}
+
+/// A **saved query** row's menu: open it · rename it · delete it.
+///
+/// `renaming` is the row's own inline-rename flag; the item just flips it on and the row reacts
+/// in its own scope (seeds the draft, focuses the input, commits), so it survives this menu
+/// closing — the tab strip's rename works the same way.
+pub fn query_menu(
+    actions: &CatalogActions,
+    id: Uuid,
+    name: String,
+    mut renaming: State<bool>,
+) -> Menu {
+    Menu::new()
+        .min_width(Size::px(MENU_WIDTH))
+        .child(actions.item(IconName::Play, "Open in new tab", move |a| {
+            open_saved_query(a, id);
+        }))
+        // The pencil is Strata's "edit the name or the definition", which is what makes it the
+        // right glyph here and on a view's Edit query — the canvas spends it on Open in new tab,
+        // which it can afford only because it has no Rename.
+        .child(
+            MenuButton::new()
+                .on_press(move |_| {
+                    renaming.set(true);
+                    ContextMenu::close();
+                })
+                .child(menu_row(IconName::Pencil, "Rename")),
+        )
+        .child(Divider::menu())
+        .child(actions.danger("Delete query", move |a| {
+            let mut slot = a.drop_target;
+            slot.set(Some(DropTarget::Query {
+                id,
+                name: name.clone(),
+            }));
+        }))
+}
+
+// ---- the actions -----------------------------------------------------------------------------
+
+/// **View table / View view** — put `SELECT * FROM <row>` in a tab, ready to run but not run:
+/// the row was clicked to look at the data, and pressing Run is the user's call (a full-width
+/// scan of a big table shouldn't start itself).
+///
+/// The `LIMIT` is the row-limit setting, as in the Dioxus app; `0` means no limit, so the clause
+/// is dropped rather than written as `LIMIT 0`.
+fn view_row(actions: &CatalogActions, name: &str) {
+    let limit = actions.config.peek().settings.row_limit;
+    let sql = if limit > 0 {
+        format!("SELECT *\nFROM {name}\nLIMIT {limit};")
+    } else {
+        format!("SELECT *\nFROM {name};")
+    };
+    let mut session = actions.session;
+    session
+        .write_channel(Chan::Tabs)
+        .open_or_focus(name, sql, Origin::Scratch);
+}
+
+/// **Edit query** — open the view's own SQL in a tab bound to it (`Origin::View`), so ⌘S
+/// redefines *that view* rather than saving a new query. A tab already bound to it is focused
+/// instead of opened twice (see [`SessionState::open_or_focus`]).
+fn edit_view(actions: &CatalogActions, name: &str) {
+    let Some(sql) = actions
+        .project
+        .peek()
+        .views
+        .iter()
+        .find(|v| v.def.name == name)
+        .map(|v| v.def.sql.clone())
+    else {
+        return;
+    };
+    let mut session = actions.session;
+    session
+        .write_channel(Chan::Tabs)
+        .open_or_focus(name, sql, Origin::View(name.to_string()));
+}
+
+/// **Open in new tab** — the saved query's SQL in a tab bound to it by `id`, which is a saved
+/// query's identity (so a later rename can't dangle the binding). Also what pressing the row
+/// itself does, per the canvas.
+pub fn open_saved_query(actions: &CatalogActions, id: Uuid) {
+    let Some(SavedQuery { name, sql, .. }) = actions
+        .project
+        .peek()
+        .saved_queries
+        .iter()
+        .find(|q| q.id == id)
+        .cloned()
+    else {
+        return;
+    };
+    let mut session = actions.session;
+    session
+        .write_channel(Chan::Tabs)
+        .open_or_focus(&name, sql, Origin::SavedQuery(id));
+}
+
+/// Commit a saved-query rename: relabel the row and persist the defs, since a def mutation
+/// persists at the mutation point (like save-as-view and the drop).
+pub fn rename_saved_query(actions: &CatalogActions, id: Uuid, name: &str) {
+    let mut project = actions.project;
+    let mut p = project.write_channel(ProjChan::Queries);
+    p.rename_saved_query(id, name);
+    if let Err(e) = p.save_defs() {
+        tracing::error!("save project defs: {e}");
+    }
+}

@@ -17,6 +17,9 @@ use strata_model::{CatalogKind, ColRef};
 use uuid::Uuid;
 
 use super::columns::{flatten_cols, ColRow};
+use super::menu::{
+    open_saved_query, query_menu, rename_saved_query, table_menu, use_catalog_actions, view_menu,
+};
 use super::CatalogTheme;
 use crate::apps::project::state::{
     use_catalog_selection, Chan, ProjChan, ProjectState, Reg, SessionState,
@@ -26,7 +29,10 @@ use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::type_palette::{kind_color, type_palette};
-use crate::components::typography::{Body, Meta, MonoValue};
+use crate::components::typography::{Body, InputTypography, Meta, MonoValue};
+use crate::keymap::on_command;
+use crate::state::use_config_station;
+use strata_core::config::Command;
 
 /// Row heights + the column block's indent, from the design canvas.
 const ENTRY_HEIGHT: f32 = 30.;
@@ -45,10 +51,37 @@ const LOADING: &str = "Loading…";
 /// spinners on the way in.
 const SPINNER_DELAY: Duration = Duration::from_millis(400);
 
+/// The trailing ⋮ actions button — the canvas's 22×22.
+const ACTIONS_SIZE: f32 = 22.;
+
 /// A status glyph wearing its message as a tooltip. Dropped below, like the rest of the app's
 /// overlays, so it can't cover the row above it in a dense list.
 fn tip(message: impl Into<std::borrow::Cow<'static, str>>) -> TooltipContainer {
     TooltipContainer::new(Tooltip::new(message)).position(AttachedPosition::Bottom)
+}
+
+/// The row's **⋮ trigger** — the canvas's own affordance, and the menu's discoverable half: the
+/// right-click opens the same one, but nothing on screen says so.
+///
+/// `stop_propagation` because it sits *inside* a pressable row — without it, opening the menu
+/// would also toggle the entry's columns (or open the saved query).
+///
+/// The menu is built lazily, per press: its labels are a snapshot of the moment it opens (see
+/// `menu.rs`), so building one per render would be both wasteful and wrong.
+fn actions_button(menu: impl Fn() -> Menu + 'static) -> impl IntoElement {
+    TooltipContainer::new(Tooltip::new("Actions"))
+        .position(AttachedPosition::Bottom)
+        .child(
+            Button::new()
+                .flat()
+                .width(Size::px(ACTIONS_SIZE))
+                .height(Size::px(ACTIONS_SIZE))
+                .on_press(move |e: Event<PressEventData>| {
+                    e.stop_propagation();
+                    ContextMenu::open_from_event(&e, menu());
+                })
+                .child(Icon::new(IconName::Dots).size(15.)),
+        )
 }
 
 /// What a catalog entry (a table or a view) resolved to for rendering: its columns, its partition
@@ -99,6 +132,7 @@ impl Component for EntryRow {
             _ => ProjChan::Tables,
         };
         let radio = use_radio::<ProjectState, ProjChan>(channel);
+        let actions = use_catalog_actions();
         // A view's validity is derived against the **live table rows**, and a table failing — or
         // being dropped — never touches the views channel. So a view row listens on TABLES too:
         // one store, two antennas, and this read *is* the subscription (the value itself is read
@@ -230,6 +264,18 @@ impl Component for EntryRow {
             (false, None) => None,
         };
 
+        // One menu, two triggers (right-click the row, or press its ⋮) — a fresh snapshot each
+        // time it is opened.
+        let build_menu = {
+            let kind = self.kind;
+            let name = self.name.clone();
+            move || match kind {
+                CatalogKind::View => view_menu(&actions, name.clone()),
+                _ => table_menu(&actions, name.clone()),
+            }
+        };
+        let menu_for_row = build_menu.clone();
+
         let row = SidebarRow::new()
             .height(ENTRY_HEIGHT)
             .on_press(move |_| {
@@ -256,7 +302,11 @@ impl Component for EntryRow {
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
-            .maybe_child(status.map(|s| s.into_element()));
+            .on_context_menu(move |e: Event<PressEventData>| {
+                ContextMenu::open_from_event(&e, menu_for_row());
+            })
+            .maybe_child(status.map(|s| s.into_element()))
+            .child(actions_button(build_menu));
 
         // The column block: an indented run hung off a hairline rail, exactly the canvas's
         // `border-left` treatment.
@@ -441,9 +491,13 @@ impl Component for ColumnRow {
 
 /// One saved query. Addressed by its stable `id` — the name is only a label — so a rename can't
 /// dangle whatever holds it.
+///
+/// Pressing the row opens it in a tab, which is the canvas's own `title="Open in a new tab"`;
+/// its menu (right-click or ⋮) adds Rename and Delete. Rename is **inline**, in the row itself,
+/// exactly like the tab strip's: the menu item only flips this row's `renaming` flag and the row
+/// reacts in its own scope, so the rename survives the menu closing.
 #[derive(PartialEq)]
 pub struct SavedQueryRow {
-    #[allow(dead_code)] // Consumed by open / rename / delete (P3-06); identity is already correct.
     id: Uuid,
     name: String,
     theme: CatalogTheme,
@@ -457,8 +511,37 @@ impl SavedQueryRow {
 
 impl Component for SavedQueryRow {
     fn render(&self) -> impl IntoElement {
+        let actions = use_catalog_actions();
+        let id = self.id;
+        // This row's own inline-rename state — local, never shared. Flipped by the menu item;
+        // the rename shell below owns everything that follows from it.
+        let renaming = use_state(|| false);
+
+        if *renaming.read() {
+            return QueryRename {
+                id,
+                name: self.name.clone(),
+                renaming,
+                theme: self.theme.clone(),
+            }
+            .into_element();
+        }
+
+        let build_menu = {
+            let actions = actions.clone();
+            let name = self.name.clone();
+            move || query_menu(&actions, id, name.clone(), renaming)
+        };
+        let menu_for_row = build_menu.clone();
+
         SidebarRow::new()
             .height(ENTRY_HEIGHT)
+            // Pressing the row opens it — the canvas's own `title="Open in a new tab"` — through
+            // the same action the menu's item runs, not a second copy of it.
+            .on_press(move |_| open_saved_query(&actions, id))
+            .on_context_menu(move |e: Event<PressEventData>| {
+                ContextMenu::open_from_event(&e, menu_for_row());
+            })
             .child(
                 Icon::new(IconName::Brackets)
                     .color(self.theme.query_color)
@@ -470,5 +553,91 @@ impl Component for SavedQueryRow {
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
+            .child(actions_button(build_menu))
+            .into_element()
+    }
+}
+
+/// The saved-query row **while it is being renamed**: the same box, with an input in place of
+/// the label. Its own component so it can own the commit / cancel listeners — what it replaces
+/// is a `SidebarRow`, whose whole job is to be pressable, and a row being renamed must not be.
+///
+/// Enter commits (the input's `on_submit`); Escape cancels — consumed, so an Esc that ends a
+/// rename doesn't also cancel a running query further down the dismiss chain; a press anywhere
+/// outside the row commits, like a blur. The tab strip's rename behaves identically, and for the
+/// same reasons.
+#[derive(PartialEq)]
+struct QueryRename {
+    id: Uuid,
+    name: String,
+    renaming: State<bool>,
+    theme: CatalogTheme,
+}
+
+impl Component for QueryRename {
+    fn render(&self) -> impl IntoElement {
+        let id = self.id;
+        let mut renaming = self.renaming;
+        let mut draft = use_state(String::new);
+        let mut area = use_state(|| None::<Area>);
+        let a11y = use_a11y();
+        let config = use_config_station();
+        let actions = use_catalog_actions();
+
+        // Seed the draft with the name being replaced. `use_hook`, not an effect: this component
+        // only exists while the row is being renamed, so mounting *is* the moment to seed — and
+        // re-seeding on any later render would fight the typing.
+        let seed = self.name.clone();
+        use_hook(move || draft.set(seed.clone()));
+
+        let outside_actions = actions.clone();
+
+        rect()
+            .width(Size::fill())
+            .height(Size::px(ENTRY_HEIGHT))
+            .horizontal()
+            .content(Content::Flex)
+            .cross_align(Alignment::Center)
+            .spacing(8.)
+            // The row's own geometry (see `SidebarRow`), so committing doesn't shift the list.
+            .padding(Gaps::new(0., 4., 0., 8.))
+            .margin(Gaps::new(0., 0., 2., 0.))
+            .on_sized(move |e: Event<SizedEventData>| area.set(Some(e.area)))
+            .on_global_key_down(on_command(config, Command::Cancel, move || {
+                renaming.set(false);
+                true
+            }))
+            .on_global_pointer_press(move |e: Event<PointerEventData>| {
+                let p = e.data().global_location();
+                if let Some(a) = *area.peek() {
+                    let (px, py) = (p.x as f32, p.y as f32);
+                    let outside = px < a.origin.x
+                        || px > a.origin.x + a.size.width
+                        || py < a.origin.y
+                        || py > a.origin.y + a.size.height;
+                    if outside {
+                        let name = draft.peek().clone();
+                        rename_saved_query(&outside_actions, id, &name);
+                        renaming.set(false);
+                    }
+                }
+            })
+            .child(
+                Icon::new(IconName::Brackets)
+                    .color(self.theme.query_color)
+                    .size(14.),
+            )
+            .child(InputTypography::body(
+                Input::new(draft)
+                    .a11y_id(a11y)
+                    .flat()
+                    .compact()
+                    .auto_focus(true)
+                    .width(Size::flex(1.))
+                    .on_submit(move |value: String| {
+                        rename_saved_query(&actions, id, &value);
+                        renaming.set(false);
+                    }),
+            ))
     }
 }

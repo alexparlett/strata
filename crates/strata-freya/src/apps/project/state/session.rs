@@ -270,6 +270,37 @@ impl SessionState {
         self.push_active(QueryTab::new(name, sql, origin))
     }
 
+    /// Open a catalog row in a tab — or focus the tab that **already is** it (P3-06).
+    ///
+    /// Two ways a tab can already be this, matching the two kinds of identity in the catalog:
+    ///
+    /// - it is **bound** to the same save target (`Origin::View` / `Origin::SavedQuery`). This
+    ///   is the one that matters: opening a view a second time must not leave two tabs both
+    ///   saving to it, and if the first has unsaved edits, that tab *is* what the user means by
+    ///   "edit this view". Its buffer is left exactly as it is.
+    /// - it is an unedited tab of the same **name and text** — how a repeated "View table" finds
+    ///   the `SELECT *` tab it opened a moment ago instead of stacking `orders 2`, `orders 3`.
+    ///   Edit it and the next press opens a fresh tab, which is the honest reading: the buffer
+    ///   is no longer the thing the row would have opened.
+    ///
+    /// Anything else is a new tab under a unique name, exactly as [`open_named`](Self::open_named).
+    pub fn open_or_focus(&mut self, name: &str, sql: String, origin: Origin) -> TabId {
+        let existing = self.order.iter().copied().find(|id| {
+            self.tabs.get(id).is_some_and(|t| match &origin {
+                Origin::View(view) => matches!(&t.origin, Origin::View(v) if v == view),
+                Origin::SavedQuery(query) => {
+                    matches!(&t.origin, Origin::SavedQuery(q) if q == query)
+                }
+                Origin::Scratch => t.name == name && t.text() == sql,
+            })
+        });
+        if let Some(id) = existing {
+            self.active = Some(id);
+            return id;
+        }
+        self.open_named(name, sql, origin)
+    }
+
     /// Duplicate `id` into a new scratch tab immediately to its right, and focus it.
     pub fn duplicate(&mut self, id: TabId) {
         let Some(src) = self.tabs.get(&id) else {
@@ -646,6 +677,66 @@ mod tests {
         assert!(
             names.contains(&"query 1") && names.contains(&"query 2"),
             "no duplicate name"
+        );
+    }
+
+    /// Opening a bound catalog row twice focuses the tab that is already saving to it rather
+    /// than minting a second one — **including** when that tab has diverged, because a tab with
+    /// unsaved edits to a view is precisely what "edit this view" should land on. Two tabs on
+    /// one `Origin::View` would mean two ⌘S targets for the same view.
+    #[test]
+    fn opening_a_bound_row_twice_focuses_the_tab_already_bound_to_it() {
+        let mut s = SessionState::default();
+        let first = s.open_or_focus(
+            "orders_daily",
+            "SELECT * FROM orders".into(),
+            Origin::View("orders_daily".into()),
+        );
+        s.open_blank();
+        s.tabs
+            .get_mut(&first)
+            .unwrap()
+            .editor
+            .set_text("SELECT 1 -- half-written");
+
+        let again = s.open_or_focus(
+            "orders_daily",
+            "SELECT * FROM orders".into(),
+            Origin::View("orders_daily".into()),
+        );
+
+        assert_eq!(again, first, "the bound tab, not a new one");
+        assert_eq!(s.active, Some(first), "and it is focused");
+        assert_eq!(s.tabs.len(), 2, "no third tab");
+        assert_eq!(
+            s.tabs[&first].text(),
+            "SELECT 1 -- half-written",
+            "the buffer is left exactly as the user left it"
+        );
+    }
+
+    /// A scratch row (View table's `SELECT *`) has no binding to match on, so it reuses an
+    /// untouched tab of the same name and text — and stops reusing it the moment that buffer is
+    /// edited, since it is then no longer what the row would have opened.
+    #[test]
+    fn view_table_reuses_its_own_untouched_tab_but_not_an_edited_one() {
+        let mut s = SessionState::default();
+        let sql = "SELECT *\nFROM orders\nLIMIT 100;".to_string();
+        let first = s.open_or_focus("orders", sql.clone(), Origin::Scratch);
+
+        assert_eq!(
+            s.open_or_focus("orders", sql.clone(), Origin::Scratch),
+            first,
+            "pressing again lands on the tab it just opened"
+        );
+
+        s.tabs.get_mut(&first).unwrap().editor.set_text("SELECT 1");
+        let second = s.open_or_focus("orders", sql, Origin::Scratch);
+
+        assert_ne!(second, first, "an edited buffer is not reused");
+        assert_eq!(
+            s.tabs[&second].name, "orders 2",
+            "and the new tab takes the next free name"
         );
     }
 
