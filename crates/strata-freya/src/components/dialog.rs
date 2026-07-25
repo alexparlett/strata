@@ -16,10 +16,18 @@
 //!   tall**: `--sp-4` (12) above and below a 34px button row. The strip sizes its own actions, so
 //!   the height is one number in one place rather than a `theme_layout` repeated at every call
 //!   site — and a dialog physically cannot ship a squashed button.
-//! - **Modal semantics** — Esc dismisses, Enter confirms, and *every* other key is consumed. That
-//!   barrier is why dialogs mount early at the window root: same-name global listeners fire in
-//!   document order, so a dialog above the features swallows keystrokes meant for it before ⌘W or
-//!   Esc-to-cancel-the-query can act on them.
+//! - **Modal semantics** — Esc dismisses, Enter confirms, and every other key is consumed *at the
+//!   global layer*. That barrier is why dialogs mount early at the window root: same-name global
+//!   listeners fire in document order, so a dialog above the features swallows keystrokes meant
+//!   for it before ⌘W or Esc-to-cancel-the-query can act on them.
+//!
+//!   **It is not yet focus containment.** `KeyDown` (priority 4) outranks `GlobalKeyDown` (5) and
+//!   its cancel set includes `GlobalKeyDown`, so a *focused* element still sees the key first and
+//!   can cancel the dialog's handler outright — the SQL editor's `on_key_down` does exactly that
+//!   on several branches. Nothing here moves focus into the card. So with the editor focused,
+//!   keystrokes reach the buffer under the scrim. Fixing it properly means focusing the dialog on
+//!   open and restoring focus on dismiss (Freya's own `Popup` sets `a11y_role`/auto-focus); until
+//!   then, treat the barrier as covering global listeners only.
 //!
 //! Dismiss and confirm are `EventHandler<()>` rather than the usual `Event<T>` props, because they
 //! are *outcomes*, not events: dismiss arrives from Esc **or** the backdrop, and confirm from Enter
@@ -34,7 +42,7 @@ use freya::prelude::*;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 
-/// The comps' default card width. The drop confirm widens to 430 for its dependents callout.
+/// The comps' card width — 420 for every confirm in the design.
 const DEFAULT_WIDTH: f32 = 420.;
 
 /// A dialog action's height. With the strip's `--sp-4` above and below, this is what makes the
@@ -102,7 +110,6 @@ impl Component for DialogHeader {
 
 #[derive(PartialEq)]
 pub struct Dialog {
-    width: f32,
     header: Option<Element>,
     body: Element,
     actions: Vec<Button>,
@@ -119,7 +126,6 @@ impl Default for Dialog {
 impl Dialog {
     pub fn new() -> Self {
         Self {
-            width: DEFAULT_WIDTH,
             header: None,
             body: rect().into_element(),
             actions: Vec::new(),
@@ -134,15 +140,12 @@ impl Dialog {
         self
     }
 
-    /// Card width in px (default [`DEFAULT_WIDTH`]).
-    pub fn width(mut self, width: f32) -> Self {
-        self.width = width;
-        self
-    }
-
     /// The card body — full width under the header, already inset by the card's padding. Pass a
     /// `rect()` with whatever direction and spacing the comp calls for.
-    pub fn child(mut self, body: impl IntoElement) -> Self {
+    ///
+    /// Named `body`, not `child`: it **replaces** rather than appends, so borrowing the builder
+    /// spelling would make `Dialog::new().child(a).child(b)` silently drop `a`.
+    pub fn body(mut self, body: impl IntoElement) -> Self {
         self.body = body.into_element();
         self
     }
@@ -181,15 +184,42 @@ impl Component for Dialog {
         let backdrop_dismiss = self.on_dismiss.clone();
         let confirm = self.on_confirm.clone();
 
+        // A message-only dialog has no strip — and so no hairline either, otherwise the card ends
+        // in a rule under an empty 58px band.
+        let strip = (!self.actions.is_empty()).then(|| {
+            rect()
+                .width(Size::fill())
+                .horizontal()
+                .main_align(Alignment::End)
+                .cross_align(Alignment::Center)
+                .spacing(8.)
+                .padding((12., 24.))
+                .background(c.surface_secondary)
+                .children(self.actions.iter().map(|action| {
+                    // The strip's height, layered over whatever layout theme the action arrived
+                    // with, so a variant's padding and radius still apply. A caller who set a
+                    // height deliberately keeps it — the stamp is a default, not an override,
+                    // or `.compact()` would stop meaning what it means everywhere else.
+                    let layout = action.get_theme_layout().cloned().unwrap_or_default();
+                    let layout = match layout.height {
+                        Some(_) => layout,
+                        None => layout.height(Size::px(ACTION_HEIGHT)),
+                    };
+                    action.clone().theme_layout(layout).into_element()
+                }))
+        });
+
         let card = rect()
-            .width(Size::px(self.width))
-            // Never wider than the window on a small screen, whatever the comp's fixed width.
+            .width(Size::px(DEFAULT_WIDTH))
+            // Never wider than the window on a small screen.
             .max_width(Size::window_percent(92.))
             .corner_radius(14.)
             .background(c.surface_tertiary)
             .border(Border::new().width(1.).fill(c.border))
             .shadow(Shadow::new().y(30.).blur(80.).color(c.shadow))
             .overflow(Overflow::Clip)
+            // Announced as a dialog rather than an anonymous group, like Freya's own `Popup`.
+            .a11y_role(AccessibilityRole::Dialog)
             .vertical()
             .child(
                 rect()
@@ -200,31 +230,12 @@ impl Component for Dialog {
                     .maybe_child(self.header.clone())
                     .child(self.body.clone()),
             )
-            .child(Divider::horizontal().color(c.border))
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .horizontal()
-                    .main_align(Alignment::End)
-                    .cross_align(Alignment::Center)
-                    .spacing(8.)
-                    .padding((12., 24.))
-                    .background(c.surface_secondary)
-                    // Each action gets the strip's height; whatever layout theme it arrived with
-                    // is otherwise kept, so a variant's padding and radius still apply.
-                    .children(self.actions.iter().map(|action| {
-                        action
-                            .clone()
-                            .theme_layout(
-                                action
-                                    .get_theme_layout()
-                                    .cloned()
-                                    .unwrap_or_default()
-                                    .height(Size::px(ACTION_HEIGHT)),
-                            )
-                            .into_element()
-                    })),
-            );
+            .maybe_child(
+                strip
+                    .as_ref()
+                    .map(|_| Divider::horizontal().color(c.border).into_element()),
+            )
+            .maybe_child(strip);
 
         rect()
             // The overlay layer + global position lift the whole dialog above the window content

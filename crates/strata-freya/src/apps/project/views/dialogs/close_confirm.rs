@@ -58,7 +58,12 @@ impl Component for CloseConfirm {
             move || {
                 let mut radio = radio;
                 let mut confirm = confirm;
-                match *confirm.peek() {
+                // Read the target into a value FIRST. `match *confirm.peek() { … }` keeps the
+                // scrutinee's temporary — and so the generational-box borrow — alive for the
+                // whole match, and the `set(None)` inside then panics ("already borrowed").
+                // Verified with a probe: the match form panics, this one doesn't.
+                let target = *confirm.peek();
+                match target {
                     Some(CloseTarget::Tab(id)) => {
                         // The root's tab-diff funnel cancels/retires the tab's engine state.
                         radio.write().close_one(id);
@@ -71,7 +76,11 @@ impl Component for CloseConfirm {
                     // them can be pressed again and open a *second* launcher.
                     Some(CloseTarget::Window) => {
                         confirm.set(None);
-                        spawn(platform::close_this_window(platform.clone(), app.clone()));
+                        // `spawn_forever`, not `spawn`: dismissing unmounts the dialog subtree
+                        // this handler belongs to, and scope teardown drops that scope's tasks
+                        // before they are ever polled — the window would simply never close.
+                        // See the same note in `drop_confirm::drop_row`.
+                        spawn_forever(platform::close_this_window(platform.clone(), app.clone()));
                     }
                     None => {}
                 }
@@ -83,7 +92,9 @@ impl Component for CloseConfirm {
         // it would latch, and every later close would behave as though the app were exiting.
         let keep_open = move || {
             let mut confirm = confirm;
-            if matches!(*confirm.peek(), Some(CloseTarget::Window)) {
+            // Same borrow rule as `close_anyway`: read it out before writing.
+            let quitting = matches!(*confirm.peek(), Some(CloseTarget::Window));
+            if quitting {
                 platform::end_quit();
             }
             confirm.set(None);
@@ -169,7 +180,7 @@ impl Component for CloseConfirm {
             // hand-off needs, so it isn't `Copy` and can't be moved into two handlers.
             .on_confirm(move |_| close_anyway_key())
             .header(header)
-            .child(
+            .body(
                 rect()
                     .width(Size::fill())
                     .vertical()

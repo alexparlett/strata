@@ -335,6 +335,24 @@ impl SessionState {
         }
     }
 
+    /// Whether any open tab saves to the view `name` — the guard that keeps a drop of a view no
+    /// tab is bound to from taking a `Chan::Tabs` write guard. That write notifies whether or not
+    /// it changed anything, and `Chan::Tabs` derives `Chan::Persist`, so an unguarded call
+    /// re-renders the tab strip and schedules a rewrite of `session.json` for a session that did
+    /// not change.
+    pub fn is_bound_to_view(&self, name: &str) -> bool {
+        self.tabs
+            .values()
+            .any(|t| matches!(&t.origin, Origin::View(v) if v == name))
+    }
+
+    /// The saved-query counterpart of [`is_bound_to_view`](Self::is_bound_to_view).
+    pub fn is_bound_to_query(&self, id: Uuid) -> bool {
+        self.tabs
+            .values()
+            .any(|t| matches!(&t.origin, Origin::SavedQuery(q) if *q == id))
+    }
+
     /// The saved query `id` is gone (P3-05's delete) — cut the binding, keep the buffer. Same
     /// reasoning as [`unbind_view`](Self::unbind_view); addressed by id because that is a saved
     /// query's identity.

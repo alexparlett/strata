@@ -250,6 +250,13 @@ impl ProjectState {
     /// CTE noise it can't tell apart from a view inline. Keep only the ones that are
     /// actually views (a view can't reference itself, and every view has a row from
     /// load, so the filter sees them all regardless of registration order).
+    ///
+    /// Matched with [`same_name`](Self::same_name), not `==`: aliases come back from the
+    /// **planner**, which folds unquoted identifiers to lower case, while def names carry
+    /// whatever the user typed. An exact compare drops every alias of a view named with any
+    /// upper case at all, leaving `view_deps` empty — and since P3-05 an empty list is a
+    /// *claim*, rendered as "nothing reads this view" right before a destructive drop.
+    /// Folding here is what makes `dependent_views`' own fold reachable.
     pub fn view_registered(&mut self, name: &str, meta: ViewMeta) {
         let view_deps: Vec<String> = meta
             .aliases
@@ -257,7 +264,7 @@ impl ProjectState {
             .filter(|a| {
                 self.views
                     .iter()
-                    .any(|v| v.def.name == *a && v.def.name != name)
+                    .any(|v| Self::same_name(&v.def.name, a) && !Self::same_name(&v.def.name, name))
             })
             .collect();
         if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
@@ -808,17 +815,58 @@ mod tests {
     }
 
     /// The row being dropped is never listed as its own dependent — a confirm warning that a
-    /// view will invalidate itself is noise. Held at both layers, which is why the meta landed
-    /// here names the view itself: `view_registered` drops a self-alias, and the lookup would
-    /// not list it even if one got through.
+    /// view will invalidate itself is noise.
+    ///
+    /// The guard is held at both layers, and this pins the **lookup's**, so the row is written
+    /// past `view_registered` (which already strips a self-alias): going through the landing path
+    /// would leave `view_deps` empty and the test would pass without the filter existing at all.
     #[test]
     fn a_view_is_never_listed_as_its_own_dependent() {
         let mut p = settled();
-        p.view_registered("orders_daily", view_meta_over(&[], &["orders_daily"]));
+        p.views[0].reg = Reg::Ready(ViewInfo {
+            columns: Vec::new(),
+            deps: Vec::new(),
+            view_deps: vec!["orders_daily".into()],
+        });
+        assert_eq!(
+            p.views[0].def.name, "orders_daily",
+            "the self-referencing row"
+        );
 
         assert!(p
             .dependent_views(CatalogKind::View, "orders_daily")
             .is_empty());
+    }
+
+    /// The view→view direction folds case too, and it has to fold at **landing**: the planner
+    /// hands back lower-cased aliases while def names keep the user's capitals, so an exact
+    /// filter in `view_registered` would leave `view_deps` empty and the drop confirm would
+    /// state that nothing reads a view that something does.
+    #[test]
+    fn view_dependencies_fold_case_when_the_alias_lands() {
+        let defs = ProjectDefs {
+            name: "test".into(),
+            tables: Vec::new(),
+            views: vec![
+                ViewDef {
+                    name: "Orders_Daily".into(),
+                    sql: "SELECT 1".into(),
+                },
+                ViewDef {
+                    name: "orders_weekly".into(),
+                    sql: "SELECT * FROM Orders_Daily".into(),
+                },
+            ],
+            saved_queries: Vec::new(),
+        };
+        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-viewdeps-fold-test"));
+        // What the planner lands: the alias folded to lower case.
+        p.view_registered("orders_weekly", view_meta_over(&[], &["orders_daily"]));
+
+        assert_eq!(
+            p.dependent_views(CatalogKind::View, "Orders_Daily"),
+            vec!["orders_weekly".to_string()]
+        );
     }
 
     /// Nothing can read a saved query — it is a stored string, not a SQL object — so a delete

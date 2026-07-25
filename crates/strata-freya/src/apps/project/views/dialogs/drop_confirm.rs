@@ -1,7 +1,8 @@
 //! The catalog **drop confirm** (P3-05 · D10), built to the Strata canvas's `remove` /
-//! `remove-deps` comp: a 430px elevated card — a trash chip beside "Drop table `events`?",
-//! the what-this-does line, and, when the drop leaves something behind it, an amber
-//! consequence callout naming the views — over Cancel + the destructive action.
+//! `remove-deps` comp: a trash chip beside the action over its subject ("Drop table" over
+//! `events`), the what-this-does line, and, when the drop leaves something behind it, an amber
+//! consequence callout naming the views — over Cancel + the destructive action. The card, the
+//! action strip and the modal keys are the shared [`Dialog`]'s.
 //!
 //! **This is the whole drop flow, minus its trigger.** Confirming performs the drop: the
 //! store's def goes (and is persisted), any tab bound to the row is unbound, and the engine
@@ -18,7 +19,7 @@
 
 use freya::components::{get_theme, use_theme, ScrollView};
 use freya::prelude::*;
-use freya::radio::{use_radio_station, RadioStation};
+use freya::radio::{use_radio, use_radio_station, RadioStation};
 use strata_model::CatalogKind;
 use uuid::Uuid;
 
@@ -132,6 +133,12 @@ impl Component for DropConfirm {
         let mut slot = self.target;
         let target = slot.read().clone();
         let engine = use_consume::<EngineCtx>();
+        // Two handles on the Project store, deliberately: `views` subscribes to the one channel
+        // the consequence line is derived from, while the station is the unsubscribed write side.
+        // `RadioStation::read()` would listen on *every* channel, so a catalog re-scan landing
+        // under the open dialog would re-render it (and re-run the O(views × deps) scan) once per
+        // table, to produce a pixel-identical card.
+        let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let session = use_radio_station::<SessionState, Chan>();
         let theme = use_theme();
@@ -161,12 +168,10 @@ impl Component for DropConfirm {
         };
 
         let c = theme.read().colors.clone();
-        // A subscribing read (`RadioStation::read` listens on every channel), and only while the
-        // dialog is open — the closed case returns above, before this line. The dialog blocks
-        // input but not the *engine*: a re-scan landing under it would otherwise leave the
-        // consequence line describing a catalog that no longer exists, and this is the one screen
-        // where a stale count would be acted on.
-        let dependents = project.read().dependent_views(target.kind(), target.name());
+        // Subscribed to `ProjChan::Views` (see above), so a view registering or being dropped
+        // under the open dialog refreshes the count — the dialog blocks input, not the engine,
+        // and this is the one screen where acting on a stale count is destructive.
+        let dependents = views.read().dependent_views(target.kind(), target.name());
         let consequence = consequence(dependents.len(), target.noun());
 
         // The action over its subject — the close confirm's shape exactly, which is what the comp
@@ -185,8 +190,8 @@ impl Component for DropConfirm {
         let callout = consequence.map(|line| {
             rect()
                 .width(Size::fill())
-                // 8 from the column's own spacing + 4 here = the comp's 12 above the callout.
-                .margin((4., 0., 0., 0.))
+                // No margin of its own: the body column already spaces at 12, which is the
+                // comp's `margin-top: var(--sp-4)` above the callout.
                 .corner_radius(10.)
                 .padding(12.)
                 .background(c.warning.with_a(23))
@@ -217,9 +222,14 @@ impl Component for DropConfirm {
                                         .horizontal()
                                         .content(Content::wrap_spacing(4.))
                                         .spacing(4.)
-                                        .children(dependents.iter().map(|name| {
-                                            Badge::value(name.clone(), c.warning).into()
-                                        })),
+                                        // `into_iter`: the names are owned and unused after
+                                        // this, so the chips take them rather than cloning
+                                        // every one a second time per render.
+                                        .children(
+                                            dependents
+                                                .into_iter()
+                                                .map(|name| Badge::value(name, c.warning).into()),
+                                        ),
                                 ),
                         ),
                 )
@@ -238,7 +248,7 @@ impl Component for DropConfirm {
             .on_dismiss(move |_| slot.set(None))
             .on_confirm(move |_| confirm(&key_engine))
             .header(DialogHeader::new(IconName::Trash, c.error, title))
-            .child(body)
+            .body(body)
             .action(
                 Button::new()
                     .flat()
@@ -300,10 +310,19 @@ fn drop_row(
                 p.remove_view(name);
                 persist(&p);
             }
-            session.write_channel(Chan::Tabs).unbind_view(name);
+            if session.peek().is_bound_to_view(name) {
+                session.write_channel(Chan::Tabs).unbind_view(name);
+            }
             let engine = engine.clone();
             let name = name.clone();
-            spawn(async move {
+            // **`spawn_forever`, not `spawn`.** `spawn` binds the task to `current_scope_id()`,
+            // which during an event is the scope of the element that owns the handler — a
+            // `Button` inside the dialog. Confirming closes the dialog in the same tick, that
+            // subtree unmounts, and scope teardown drops its tasks *before the future is ever
+            // polled*: the def would go, the file would be written, and DataFusion would never
+            // hear about it. Verified with a probe — the task ran 0 times. The engine call has
+            // to outlive the dialog that ordered it, so it belongs to the root.
+            spawn_forever(async move {
                 if let Err(e) = engine.drop_view(name.clone()).await {
                     // The def is already gone, which is the catalog's truth; a failed DROP VIEW
                     // leaves a stale registration the next re-scan clears.
@@ -318,7 +337,9 @@ fn drop_row(
                 p.remove_saved_query(*id);
                 persist(&p);
             }
-            session.write_channel(Chan::Tabs).unbind_saved_query(*id);
+            if session.peek().is_bound_to_query(*id) {
+                session.write_channel(Chan::Tabs).unbind_saved_query(*id);
+            }
         }
     }
 }
@@ -340,7 +361,7 @@ fn persist(project: &ProjectState) {
 /// deliverable here is what it *says* before a destructive action.
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use freya_testing::TestingRunner;
     use strata_core::engine::{TableMeta, ViewMeta};
@@ -371,7 +392,7 @@ mod tests {
 
     /// `orders` ← `orders_daily` ← `orders_weekly` (the nested reader), plus an unrelated
     /// `users` table and one saved query.
-    fn project(root: &str) -> ProjectState {
+    fn project(root: &Path) -> ProjectState {
         let defs = ProjectDefs {
             name: "test".into(),
             tables: vec![table("orders"), table("users")],
@@ -386,7 +407,7 @@ mod tests {
                 meta: "—".into(),
             }],
         };
-        let mut p = ProjectState::from_defs(defs, PathBuf::from(root));
+        let mut p = ProjectState::from_defs(defs, root.to_path_buf());
         for name in ["orders", "users"] {
             p.table_registered(
                 name,
@@ -428,9 +449,21 @@ mod tests {
         RadioStation<ProjectState, ProjChan>,
     );
 
-    /// A runner over a project rooted at `root` — per test, because confirming really does write
-    /// `.strata/project.json` and the suite runs in parallel.
-    fn runner(root: &'static str) -> (TestingRunner, Handles) {
+    /// A scratch project folder for one test.
+    ///
+    /// `env::temp_dir()` + **pid**, matching `strata_core::project`'s own test convention and for
+    /// the same reason it gives: the OS temp dir is machine-shared, so a hardcoded `/tmp/…` path
+    /// collides between parallel test binaries (this repo builds in several worktrees at once)
+    /// and can land on another user's directory. Confirming a drop really does write
+    /// `.strata/project.json`, and `persist` only logs a failure — so a collision would surface
+    /// as a test that passes while writing nothing.
+    fn temp_root(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("strata-drop-{tag}-{}", std::process::id()))
+    }
+
+    /// A runner over its own scratch project — per test, because confirming really does write.
+    fn runner(tag: &'static str) -> (TestingRunner, Handles) {
+        let root = temp_root(tag);
         TestingRunner::new(
             app,
             (900., 700.).into(),
@@ -441,7 +474,7 @@ mod tests {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
                 });
                 let project = r.provide_root_context(|| {
-                    RadioStation::<ProjectState, ProjChan>::create(project(root))
+                    RadioStation::<ProjectState, ProjChan>::create(project(&root))
                 });
                 (target, session, project)
             },
@@ -506,7 +539,7 @@ mod tests {
     /// the reader a warning built by scanning SQL text would miss.
     #[test]
     fn the_confirm_counts_and_names_every_view_the_drop_leaves_invalid() {
-        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-names-test");
+        let (mut runner, (mut slot, ..)) = runner("names");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
 
         assert_eq!(title(&runner), "Drop table orders");
@@ -526,7 +559,7 @@ mod tests {
     /// message.
     #[test]
     fn a_drop_with_no_dependents_shows_no_consequence_line() {
-        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-nodeps-test");
+        let (mut runner, (mut slot, ..)) = runner("nodeps");
         open(&mut runner, &mut slot, DropTarget::Table("users".into()));
 
         assert_eq!(title(&runner), "Drop table users");
@@ -546,7 +579,7 @@ mod tests {
     /// for every drop in the project.
     #[test]
     fn dropping_a_view_names_its_view_readers_and_uses_the_view_wording() {
-        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-view-test");
+        let (mut runner, (mut slot, ..)) = runner("view");
         open(
             &mut runner,
             &mut slot,
@@ -576,7 +609,7 @@ mod tests {
     /// never warns, and it says *delete* rather than *drop*.
     #[test]
     fn deleting_a_saved_query_never_warns() {
-        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-query-test");
+        let (mut runner, (mut slot, ..)) = runner("query");
         open(
             &mut runner,
             &mut slot,
@@ -595,7 +628,7 @@ mod tests {
     /// consequence line rests on.
     #[test]
     fn confirming_removes_the_def_and_leaves_its_dependents_in_place() {
-        let (mut runner, (mut slot, _, project)) = runner("/tmp/strata-drop-confirm-test");
+        let (mut runner, (mut slot, _, project)) = runner("confirm");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
 
         click_action(&mut runner, "Drop table");
@@ -618,7 +651,7 @@ mod tests {
     /// because the destructive path runs through the same closure the Enter key uses.
     #[test]
     fn cancelling_touches_nothing() {
-        let (mut runner, (mut slot, _, project)) = runner("/tmp/strata-drop-cancel-test");
+        let (mut runner, (mut slot, _, project)) = runner("cancel");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
 
         click_action(&mut runner, "Cancel");
@@ -631,7 +664,7 @@ mod tests {
     /// re-create the view the user just dropped — the buffer survives, the binding must not.
     #[test]
     fn dropping_a_view_unbinds_the_tab_bound_to_it() {
-        let (mut runner, (mut slot, mut session, _)) = runner("/tmp/strata-drop-unbind-test");
+        let (mut runner, (mut slot, mut session, _)) = runner("unbind");
         let tab = session.write_channel(Chan::Tabs).open_named(
             "orders_daily",
             "SELECT * FROM orders".into(),
@@ -660,7 +693,7 @@ mod tests {
     /// *and* on its buttons, since only the pair together prove where the height came from.
     #[test]
     fn the_action_strip_is_the_comps_fifty_eight_pixels() {
-        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-footer-test");
+        let (mut runner, (mut slot, ..)) = runner("footer");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
 
         // Both actions, by their laid-out boxes: the two buttons are the only 34px-tall boxes
@@ -695,7 +728,7 @@ mod tests {
     #[test]
     #[ignore = "writes target/drop-confirm-preview.png for eyeballing; run explicitly"]
     fn drop_confirm_preview() {
-        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-preview-test");
+        let (mut runner, (mut slot, ..)) = runner("preview");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
         runner.render_to_file(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -703,11 +736,61 @@ mod tests {
         ));
     }
 
+    /// Deleting a saved query removes it by **id** and unbinds the tab that was saving to it.
+    /// The whole `DropTarget::Query` confirm branch was otherwise unexercised — the dialog was
+    /// opened and read, never confirmed — while `remove_saved_query`'s `#[allow(dead_code)]` was
+    /// dropped on the strength of that very call.
+    #[test]
+    fn deleting_a_saved_query_removes_it_and_unbinds_its_tab() {
+        let (mut runner, (mut slot, mut session, project)) = runner("querydel");
+        let tab = session.write_channel(Chan::Tabs).open_named(
+            "orders by region",
+            "SELECT 1".into(),
+            Origin::SavedQuery(QUERY_ID),
+        );
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::Query {
+                id: QUERY_ID,
+                name: "orders by region".into(),
+            },
+        );
+
+        click_action(&mut runner, "Delete query");
+
+        assert!(
+            project.peek().saved_queries.is_empty(),
+            "the query is out of the project"
+        );
+        let s = session.peek();
+        let t = s.tabs.get(&tab).expect("the tab is still open");
+        assert!(matches!(t.origin, Origin::Scratch), "the binding is cut");
+        assert_eq!(t.text(), "SELECT 1", "the buffer is untouched");
+    }
+
+    /// Enter confirms. It runs through `Dialog::on_confirm` — a *different* closure from the
+    /// button's — so without this the two could be swapped and the suite would stay green.
+    #[test]
+    fn enter_confirms_the_drop() {
+        let (mut runner, (mut slot, _, project)) = runner("enter");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        runner.press_key(Key::Named(NamedKey::Enter));
+        runner.sync_and_update();
+
+        assert!(
+            !project.peek().tables.iter().any(|t| t.def.name == "orders"),
+            "Enter performed the drop"
+        );
+        assert!(slot.peek().is_none(), "and closed the dialog");
+    }
+
     /// Esc cancels — the dialog's own key barrier, the same one that stops a keystroke aimed at
     /// it reaching the workbench underneath.
     #[test]
     fn escape_cancels_the_drop() {
-        let (mut runner, (mut slot, _, project)) = runner("/tmp/strata-drop-escape-test");
+        let (mut runner, (mut slot, _, project)) = runner("escape");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
 
         runner.press_key(Key::Named(NamedKey::Escape));
