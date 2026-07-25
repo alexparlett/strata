@@ -1,0 +1,719 @@
+//! The catalog **drop confirm** (P3-05 · D10), built to the Strata canvas's `remove` /
+//! `remove-deps` comp: a 430px elevated card — a trash chip beside "Drop table `events`?",
+//! the what-this-does line, and, when the drop leaves something behind it, an amber
+//! consequence callout naming the views — over Cancel + the destructive action.
+//!
+//! **This is the whole drop flow, minus its trigger.** Confirming performs the drop: the
+//! store's def goes (and is persisted), any tab bound to the row is unbound, and the engine
+//! is told. What P3-06 adds is the entry point — a catalog row's context menu setting the
+//! [`DropTarget`] slot this dialog watches — not a second copy of the mechanics.
+//!
+//! ## What the consequence line claims
+//!
+//! *Left invalid*, never "will stop working". A dependent view captured its sources by `Arc`
+//! when it was created and never re-resolves their names, so it keeps answering after the
+//! drop and fails only on the next reload (verified against DataFusion 54 — DEV_TASKS
+//! D10/D11). So the warning says exactly what the catalog row will say afterwards: these
+//! views are flagged, and they will not survive a reopen.
+
+use freya::components::{get_theme, use_theme, ScrollView};
+use freya::prelude::*;
+use freya::radio::{use_radio_station, RadioStation};
+use strata_model::CatalogKind;
+use uuid::Uuid;
+
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
+use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
+use crate::components::badge::Badge;
+use crate::components::dialog::{Dialog, DialogHeader};
+use crate::components::icon::{Icon, IconName};
+use crate::components::typography::{Caption, Control, MonoValue, Prose, Title};
+
+/// What a drop confirm is about. The variants mirror the catalog's identity rules: tables and
+/// views are addressed by **name** (their engine/SQL identity, one shared namespace), a saved
+/// query by its stable **id** — its name is only the label, carried so the dialog can show it.
+#[derive(Clone, PartialEq, Debug)]
+// The dialog reads every variant; nothing *constructs* one until P3-06's catalog row menus set
+// the slot. Drop this attribute with that task.
+#[allow(dead_code)]
+pub enum DropTarget {
+    Table(String),
+    View(String),
+    Query { id: Uuid, name: String },
+}
+
+impl DropTarget {
+    /// The row's name, as the title shows it.
+    pub fn name(&self) -> &str {
+        match self {
+            DropTarget::Table(name) | DropTarget::View(name) => name,
+            DropTarget::Query { name, .. } => name,
+        }
+    }
+
+    /// Which catalog section it belongs to — what [`ProjectState::dependent_views`] dispatches
+    /// on to pick the right dependency list.
+    fn kind(&self) -> CatalogKind {
+        match self {
+            DropTarget::Table(_) => CatalogKind::Table,
+            DropTarget::View(_) => CatalogKind::View,
+            DropTarget::Query { .. } => CatalogKind::Query,
+        }
+    }
+
+    /// The action, used for both the title and the button (canvas `removeTitle` / `removeBtn`
+    /// are the same string). A saved query is *deleted*, not dropped — it was never registered
+    /// with the engine.
+    fn verb(&self) -> &'static str {
+        match self {
+            DropTarget::Table(_) => "Drop table",
+            DropTarget::View(_) => "Drop view",
+            DropTarget::Query { .. } => "Delete query",
+        }
+    }
+
+    /// What the drop actually does — the canvas's `removeBody`, each line chosen to answer the
+    /// question the user is really asking (are my *files* gone? are the tables it read gone?).
+    fn body(&self) -> &'static str {
+        match self {
+            DropTarget::Table(_) => {
+                "Unregisters the table from this project. The source files on disk are not \
+                 deleted."
+            }
+            DropTarget::View(_) => {
+                "Removes the view definition from the catalog. The tables it reads are not \
+                 affected."
+            }
+            DropTarget::Query { .. } => {
+                "Removes this saved query from the project. Any open tab keeps its SQL."
+            }
+        }
+    }
+
+    /// How the consequence line refers to it.
+    fn noun(&self) -> &'static str {
+        match self {
+            DropTarget::Table(_) => "table",
+            DropTarget::View(_) => "view",
+            DropTarget::Query { .. } => "query",
+        }
+    }
+}
+
+/// The consequence line (D10): how many views this drop leaves invalid, or `None` when it
+/// leaves none — the callout is absent entirely rather than stating a zero.
+///
+/// Count first, names after (they follow as chips): a busy table can back dozens of views, and
+/// the number is the part that scales.
+fn consequence(count: usize, noun: &str) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some(format!(
+            "1 view reads this {noun} and will be left invalid:"
+        )),
+        n => Some(format!(
+            "{n} views read this {noun} and will be left invalid:"
+        )),
+    }
+}
+
+/// Mounted at the window root beside [`CloseConfirm`](super::CloseConfirm), on the same terms:
+/// while open, its key handler precedes every feature listener in document order and consumes
+/// every press, so nothing underneath can act on a keystroke aimed at the dialog. Esc cancels,
+/// Enter confirms.
+#[derive(PartialEq)]
+pub struct DropConfirm {
+    pub target: State<Option<DropTarget>>,
+}
+
+impl Component for DropConfirm {
+    fn render(&self) -> impl IntoElement {
+        let mut slot = self.target;
+        let target = slot.read().clone();
+        let engine = use_consume::<EngineCtx>();
+        let project = use_radio_station::<ProjectState, ProjChan>();
+        let session = use_radio_station::<SessionState, Chan>();
+        let theme = use_theme();
+        // The destructive action wears the shared `cancel_button` dress — the themes' authored
+        // destructive tone (the running body's Cancel, the close confirm's Stop), not a
+        // hardcoded red.
+        let danger = get_theme!(
+            &None::<CancelButtonThemePartial>,
+            CancelButtonThemePreference,
+            "cancel_button"
+        );
+
+        // Shared by the button and the Enter key. It takes the engine rather than capturing it,
+        // so the closure holds only `Copy` handles and can live in both handlers; each of them
+        // carries its own `Arc` clone.
+        let confirm = move |engine: &EngineCtx| {
+            let mut slot = slot;
+            if let Some(target) = slot.peek().clone() {
+                drop_row(engine, project, session, &target);
+            }
+            slot.set(None);
+        };
+        let key_engine = engine.clone();
+
+        let Some(target) = target else {
+            return rect().into_element();
+        };
+
+        let c = theme.read().colors.clone();
+        // A subscribing read (`RadioStation::read` listens on every channel), and only while the
+        // dialog is open — the closed case returns above, before this line. The dialog blocks
+        // input but not the *engine*: a re-scan landing under it would otherwise leave the
+        // consequence line describing a catalog that no longer exists, and this is the one screen
+        // where a stale count would be acted on.
+        let dependents = project.read().dependent_views(target.kind(), target.name());
+        let consequence = consequence(dependents.len(), target.noun());
+
+        // The action over its subject — the close confirm's shape exactly, which is what the comp
+        // asks for. The name is mono at 12.5 on its own line, where it reads as the identifier it
+        // is; inline beside a 14.5 title it just looked shrunken. The accent is what marks it out.
+        let title = rect()
+            .width(Size::fill())
+            .vertical()
+            .child(Title::new(target.verb()).color(c.text_primary))
+            .child(
+                MonoValue::new(target.name().to_string())
+                    .color(c.primary)
+                    .text_overflow(TextOverflow::Ellipsis),
+            );
+
+        let callout = consequence.map(|line| {
+            rect()
+                .width(Size::fill())
+                // 8 from the column's own spacing + 4 here = the comp's 12 above the callout.
+                .margin((4., 0., 0., 0.))
+                .corner_radius(10.)
+                .padding(12.)
+                .background(c.warning.with_a(23))
+                .border(Border::new().width(1.).fill(c.warning.with_a(82)))
+                .horizontal()
+                .content(Content::Flex)
+                .spacing(8.)
+                .child(
+                    rect()
+                        .margin((1., 0., 0., 0.))
+                        .child(Icon::new(IconName::Warning).color(c.warning).size(15.)),
+                )
+                .child(
+                    rect()
+                        .width(Size::flex(1.))
+                        .vertical()
+                        .spacing(8.)
+                        .child(Caption::new(line).color(c.warning).wrap())
+                        // The names themselves, as chips. A tall list caps and scrolls rather
+                        // than growing the card off the screen (the comp's 96px well).
+                        .child(
+                            ScrollView::new()
+                                .height(Size::auto())
+                                .max_height(Size::px(96.))
+                                .child(
+                                    rect()
+                                        .width(Size::fill())
+                                        .horizontal()
+                                        .content(Content::wrap_spacing(4.))
+                                        .spacing(4.)
+                                        .children(dependents.iter().map(|name| {
+                                            Badge::value(name.clone(), c.warning).into()
+                                        })),
+                                ),
+                        ),
+                )
+        });
+
+        // Header · body · footer, like every other dialog: the title rides the chip, and the copy
+        // and callout run the full width beneath rather than indented beside it.
+        let body = rect()
+            .width(Size::fill())
+            .vertical()
+            .spacing(12.)
+            .child(Prose::new(target.body()).color(c.text_secondary).wrap())
+            .maybe_child(callout);
+
+        Dialog::new()
+            .on_dismiss(move |_| slot.set(None))
+            .on_confirm(move |_| confirm(&key_engine))
+            .header(DialogHeader::new(IconName::Trash, c.error, title))
+            .child(body)
+            .action(
+                Button::new()
+                    .flat()
+                    .on_press(move |_| slot.set(None))
+                    .child(Control::new("Cancel")),
+            )
+            .action(
+                Button::new()
+                    .filled()
+                    .theme_colors(
+                        ButtonColorsThemePartial::default()
+                            .background(danger.background)
+                            .hover_background(danger.hover_background)
+                            .border_fill(danger.border_fill)
+                            .hover_border_fill(danger.border_fill)
+                            .color(danger.color)
+                            .hover_color(danger.color),
+                    )
+                    .on_press(move |_| confirm(&engine))
+                    .child(
+                        rect()
+                            .horizontal()
+                            .cross_align(Alignment::Center)
+                            .spacing(8.)
+                            .child(Icon::new(IconName::Trash).size(13.))
+                            .child(Control::new(target.verb())),
+                    ),
+            )
+            .into_element()
+    }
+}
+
+/// Perform the confirmed drop.
+///
+/// **The store is the catalog**, so the def going is what the sidebar sees — there is nothing to
+/// invalidate and nothing refetches (P3-02). Order follows `save_view`'s: mutate the def and
+/// persist it first, then tell the engine. A table's dependent views turn invalid on the same
+/// write, because their validity is derived from the live table rows (P3-04) and the VIEWS
+/// section subscribes to [`ProjChan::Tables`] for exactly this.
+fn drop_row(
+    engine: &EngineCtx,
+    mut project: RadioStation<ProjectState, ProjChan>,
+    mut session: RadioStation<SessionState, Chan>,
+    target: &DropTarget,
+) {
+    match target {
+        DropTarget::Table(name) => {
+            {
+                let mut p = project.write_channel(ProjChan::Tables);
+                p.remove_table(name);
+                persist(&p);
+            }
+            // Synchronous and local: DataFusion just forgets the provider.
+            engine.deregister(name);
+        }
+        DropTarget::View(name) => {
+            {
+                let mut p = project.write_channel(ProjChan::Views);
+                p.remove_view(name);
+                persist(&p);
+            }
+            session.write_channel(Chan::Tabs).unbind_view(name);
+            let engine = engine.clone();
+            let name = name.clone();
+            spawn(async move {
+                if let Err(e) = engine.drop_view(name.clone()).await {
+                    // The def is already gone, which is the catalog's truth; a failed DROP VIEW
+                    // leaves a stale registration the next re-scan clears.
+                    tracing::error!("drop view '{name}': {e}");
+                }
+            });
+        }
+        DropTarget::Query { id, .. } => {
+            // Never registered with the engine — a saved query is a stored string.
+            {
+                let mut p = project.write_channel(ProjChan::Queries);
+                p.remove_saved_query(*id);
+                persist(&p);
+            }
+            session.write_channel(Chan::Tabs).unbind_saved_query(*id);
+        }
+    }
+}
+
+/// Write the project file — a drop is a def-mutation point, so it persists there and then rather
+/// than on a timer. Called inside the channel guard, like `save_view`'s.
+fn persist(project: &ProjectState) {
+    if let Err(e) = project.save_defs() {
+        tracing::error!("save project defs: {e}");
+    }
+}
+
+/// Drop-confirm tests — the dialog driven the way the user drives it, over a catalog whose
+/// dependency shape is the point: `orders` backs two views, one of them through a *nested* view,
+/// while `users` backs none. So the two halves of the consequence line (its count and its names)
+/// and its absence are all observable off one store.
+///
+/// The dialog is asserted through its rendered text rather than its internals, because the whole
+/// deliverable here is what it *says* before a destructive action.
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use freya_testing::TestingRunner;
+    use strata_core::engine::{TableMeta, ViewMeta};
+    use strata_core::project::ProjectDefs;
+    use strata_core::theme::load;
+    use strata_model::{Origin, SavedQuery, TableDef, ViewDef};
+
+    use super::*;
+    use crate::theme::strata_theme;
+
+    fn table(name: &str) -> TableDef {
+        TableDef {
+            name: name.into(),
+            format: "parquet".into(),
+            sources: vec![format!("{name}.parquet")],
+            partition_cols: Vec::new(),
+        }
+    }
+
+    fn view(name: &str, sql: &str) -> ViewDef {
+        ViewDef {
+            name: name.into(),
+            sql: sql.into(),
+        }
+    }
+
+    const QUERY_ID: Uuid = Uuid::from_u128(7);
+
+    /// `orders` ← `orders_daily` ← `orders_weekly` (the nested reader), plus an unrelated
+    /// `users` table and one saved query.
+    fn project(root: &str) -> ProjectState {
+        let defs = ProjectDefs {
+            name: "test".into(),
+            tables: vec![table("orders"), table("users")],
+            views: vec![
+                view("orders_daily", "SELECT * FROM orders"),
+                view("orders_weekly", "SELECT * FROM orders_daily"),
+            ],
+            saved_queries: vec![SavedQuery {
+                id: QUERY_ID,
+                name: "orders by region".into(),
+                sql: "SELECT 1".into(),
+                meta: "—".into(),
+            }],
+        };
+        let mut p = ProjectState::from_defs(defs, PathBuf::from(root));
+        for name in ["orders", "users"] {
+            p.table_registered(
+                name,
+                TableMeta {
+                    columns: Vec::new(),
+                    rows: Some(1),
+                },
+            );
+        }
+        p.view_registered(
+            "orders_daily",
+            ViewMeta {
+                columns: Vec::new(),
+                tables: vec!["orders".into()],
+                aliases: Vec::new(),
+            },
+        );
+        // The planner inlines the inner view: base tables in `tables`, the view in `aliases`.
+        p.view_registered(
+            "orders_weekly",
+            ViewMeta {
+                columns: Vec::new(),
+                tables: vec!["orders".into()],
+                aliases: vec!["orders_daily".into()],
+            },
+        );
+        p
+    }
+
+    fn app() -> impl IntoElement {
+        use_init_theme(|| strata_theme(&load("midnight")));
+        let target = use_consume::<State<Option<DropTarget>>>();
+        rect().expanded().child(DropConfirm { target })
+    }
+
+    type Handles = (
+        State<Option<DropTarget>>,
+        RadioStation<SessionState, Chan>,
+        RadioStation<ProjectState, ProjChan>,
+    );
+
+    /// A runner over a project rooted at `root` — per test, because confirming really does write
+    /// `.strata/project.json` and the suite runs in parallel.
+    fn runner(root: &'static str) -> (TestingRunner, Handles) {
+        TestingRunner::new(
+            app,
+            (900., 700.).into(),
+            move |r| {
+                r.provide_root_context(EngineCtx::new);
+                let target = r.provide_root_context(|| State::create(None::<DropTarget>));
+                let session = r.provide_root_context(|| {
+                    RadioStation::<SessionState, Chan>::create(SessionState::default())
+                });
+                let project = r.provide_root_context(|| {
+                    RadioStation::<ProjectState, ProjChan>::create(project(root))
+                });
+                (target, session, project)
+            },
+            1.,
+        )
+    }
+
+    /// Open the dialog on `target` and settle the tree.
+    fn open(runner: &mut TestingRunner, slot: &mut State<Option<DropTarget>>, target: DropTarget) {
+        runner.sync_and_update();
+        slot.set(Some(target));
+        runner.sync_and_update();
+        runner.sync_and_update();
+    }
+
+    /// Every `label()` run in the tree — the dialog's body copy, chips and button labels.
+    fn texts(runner: &TestingRunner) -> Vec<String> {
+        runner.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
+    }
+
+    fn shows(runner: &TestingRunner, text: &str) -> bool {
+        texts(runner).iter().any(|t| t == text)
+    }
+
+    /// The header's two lines — the action over its subject — joined with a space, so a test can
+    /// state the whole title in one assertion.
+    fn title(runner: &TestingRunner) -> String {
+        texts(runner)
+            .into_iter()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Press the action-strip button labelled `text`.
+    ///
+    /// The **lowest** matching run, not the first: the header's title carries the same words as
+    /// the button it confirms ("Drop table" over `orders`, then `Drop table` in the strip), so
+    /// taking the first match presses the title and the drop silently never happens.
+    fn click_action(runner: &mut TestingRunner, text: &str) {
+        let area = runner
+            .find_many(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|l| l.text == text)
+                    .map(|_| node.layout().area)
+            })
+            .into_iter()
+            .max_by(|a, b| a.min_y().total_cmp(&b.min_y()))
+            .unwrap_or_else(|| panic!("no text run {text:?} in the tree"));
+        let point = (
+            (area.min_x() + area.width() / 2.) as f64,
+            (area.min_y() + area.height() / 2.) as f64,
+        );
+        runner.move_cursor(point);
+        runner.click_cursor(point);
+        runner.sync_and_update();
+        runner.sync_and_update();
+    }
+
+    /// The headline: the confirm states how many views the drop leaves invalid **and** names
+    /// them — including the one that only reads the table through another view, which is exactly
+    /// the reader a warning built by scanning SQL text would miss.
+    #[test]
+    fn the_confirm_counts_and_names_every_view_the_drop_leaves_invalid() {
+        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-names-test");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        assert_eq!(title(&runner), "Drop table orders");
+        assert!(
+            shows(&runner, "2 views read this table and will be left invalid:"),
+            "the consequence line leads with the count: {:?}",
+            texts(&runner)
+        );
+        assert!(shows(&runner, "orders_daily"));
+        assert!(
+            shows(&runner, "orders_weekly"),
+            "the nested reader is just as invalid"
+        );
+    }
+
+    /// A drop that breaks nothing says nothing — no callout, no "0 views". The absence is the
+    /// message.
+    #[test]
+    fn a_drop_with_no_dependents_shows_no_consequence_line() {
+        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-nodeps-test");
+        open(&mut runner, &mut slot, DropTarget::Table("users".into()));
+
+        assert_eq!(title(&runner), "Drop table users");
+        assert!(
+            !texts(&runner).iter().any(|t| t.contains("left invalid")),
+            "nothing reads `users`: {:?}",
+            texts(&runner)
+        );
+        // The body copy still runs — the dialog isn't empty, it just makes no extra claim.
+        assert!(texts(&runner)
+            .iter()
+            .any(|t| t.contains("files on disk are not deleted")));
+    }
+
+    /// Dropping a **view** asks the other dependency list: the view that reads it, not the
+    /// readers of the table underneath it. Getting these two crossed would name `orders_weekly`
+    /// for every drop in the project.
+    #[test]
+    fn dropping_a_view_names_its_view_readers_and_uses_the_view_wording() {
+        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-view-test");
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::View("orders_daily".into()),
+        );
+
+        assert_eq!(title(&runner), "Drop view orders_daily");
+        assert!(
+            shows(&runner, "1 view reads this view and will be left invalid:"),
+            "singular, and about the view: {:?}",
+            texts(&runner)
+        );
+        assert!(shows(&runner, "orders_weekly"));
+        // Once, in the header — the row being dropped is not listed as its own dependent. A
+        // presence check can't say this any more, since the title names it by design.
+        assert_eq!(
+            texts(&runner)
+                .iter()
+                .filter(|t| *t == "orders_daily")
+                .count(),
+            1,
+            "`orders_daily` appears as the subject, not as a chip"
+        );
+    }
+
+    /// A saved query is a stored string, not a SQL object — nothing can read it, so the delete
+    /// never warns, and it says *delete* rather than *drop*.
+    #[test]
+    fn deleting_a_saved_query_never_warns() {
+        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-query-test");
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::Query {
+                id: QUERY_ID,
+                name: "orders by region".into(),
+            },
+        );
+
+        assert_eq!(title(&runner), "Delete query orders by region");
+        assert!(!texts(&runner).iter().any(|t| t.contains("left invalid")));
+    }
+
+    /// Confirming performs the drop: the def leaves the catalog and the dialog closes. The views
+    /// over it stay — they are left *invalid*, not removed, which is the distinction the whole
+    /// consequence line rests on.
+    #[test]
+    fn confirming_removes_the_def_and_leaves_its_dependents_in_place() {
+        let (mut runner, (mut slot, _, project)) = runner("/tmp/strata-drop-confirm-test");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        click_action(&mut runner, "Drop table");
+
+        let p = project.peek();
+        assert!(
+            !p.tables.iter().any(|t| t.def.name == "orders"),
+            "the table is out of the catalog"
+        );
+        assert_eq!(p.views.len(), 2, "its readers are flagged, not deleted");
+        assert_eq!(
+            p.view_problem(&p.views[0]).as_deref(),
+            Some("Reads orders, which is no longer in the catalog."),
+            "and the row now says what the dialog warned"
+        );
+        assert!(slot.peek().is_none(), "the dialog closed itself");
+    }
+
+    /// Cancelling is a true no-op — the catalog is untouched and the dialog closes. Worth pinning
+    /// because the destructive path runs through the same closure the Enter key uses.
+    #[test]
+    fn cancelling_touches_nothing() {
+        let (mut runner, (mut slot, _, project)) = runner("/tmp/strata-drop-cancel-test");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        click_action(&mut runner, "Cancel");
+
+        assert!(project.peek().tables.iter().any(|t| t.def.name == "orders"));
+        assert!(slot.peek().is_none());
+    }
+
+    /// Dropping a view unbinds the tab that was saving to it. Left bound, the next ⌘S would
+    /// re-create the view the user just dropped — the buffer survives, the binding must not.
+    #[test]
+    fn dropping_a_view_unbinds_the_tab_bound_to_it() {
+        let (mut runner, (mut slot, mut session, _)) = runner("/tmp/strata-drop-unbind-test");
+        let tab = session.write_channel(Chan::Tabs).open_named(
+            "orders_daily",
+            "SELECT * FROM orders".into(),
+            Origin::View("orders_daily".into()),
+        );
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::View("orders_daily".into()),
+        );
+
+        click_action(&mut runner, "Drop view");
+
+        let s = session.peek();
+        let t = s.tabs.get(&tab).expect("the tab is still open");
+        assert!(
+            matches!(t.origin, Origin::Scratch),
+            "the binding is cut, not the tab"
+        );
+        assert_eq!(t.text(), "SELECT * FROM orders", "the buffer is untouched");
+    }
+
+    /// The action strip is the comps' **58px**: a 34px button row with `--sp-4` above and below.
+    /// Freya's `button_layout` hugs its label (≈28px) unless told otherwise, which made both
+    /// confirms read as squashed — so the number is asserted rather than eyeballed, on the strip
+    /// *and* on its buttons, since only the pair together prove where the height came from.
+    #[test]
+    fn the_action_strip_is_the_comps_fifty_eight_pixels() {
+        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-footer-test");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        // Both actions, by their laid-out boxes: the two buttons are the only 34px-tall boxes
+        // carrying a button role.
+        let buttons: Vec<f32> = runner.find_many(|node, element| {
+            (element.accessibility().builder.role() == AccessibilityRole::Button)
+                .then(|| node.layout().area.height())
+        });
+        assert_eq!(
+            buttons,
+            vec![34., 34.],
+            "Cancel and the drop action are both 34px tall"
+        );
+
+        // The strip: the widest box that is exactly 58 tall.
+        let strip = runner
+            .find_many(|node, _| {
+                let a = node.layout().area;
+                ((a.height() - 58.).abs() < 0.5).then(|| a.width())
+            })
+            .into_iter()
+            .fold(0., f32::max);
+        assert!(
+            strip > 0.,
+            "no 58px-tall strip: 12 + 34 + 12 did not survive the layout"
+        );
+    }
+
+    /// Headless preview for eyeballing against the canvas `remove-deps` comp. Ignored by default
+    /// (it writes a file, asserts nothing):
+    /// `cargo test -p strata-freya drop_confirm_preview -- --ignored`.
+    #[test]
+    #[ignore = "writes target/drop-confirm-preview.png for eyeballing; run explicitly"]
+    fn drop_confirm_preview() {
+        let (mut runner, (mut slot, ..)) = runner("/tmp/strata-drop-preview-test");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        runner.render_to_file(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target/drop-confirm-preview.png"
+        ));
+    }
+
+    /// Esc cancels — the dialog's own key barrier, the same one that stops a keystroke aimed at
+    /// it reaching the workbench underneath.
+    #[test]
+    fn escape_cancels_the_drop() {
+        let (mut runner, (mut slot, _, project)) = runner("/tmp/strata-drop-escape-test");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        runner.press_key(Key::Named(NamedKey::Escape));
+        runner.sync_and_update();
+
+        assert!(project.peek().tables.iter().any(|t| t.def.name == "orders"));
+        assert!(slot.peek().is_none());
+    }
+}

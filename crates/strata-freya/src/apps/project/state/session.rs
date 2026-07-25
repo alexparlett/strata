@@ -18,6 +18,7 @@ use strata_model::{
     Diagnostic, DrawerTab, Layout, Origin, ResultsView, SessionSnapshot, SidebarPane, TabId,
     TabSnapshot,
 };
+use uuid::Uuid;
 
 use crate::apps::project::query::QuerySpec;
 
@@ -312,6 +313,36 @@ impl SessionState {
             }
             t.origin = origin;
             t.editor.mark_as_saved();
+        }
+    }
+
+    /// The save target of every tab bound to the view `name` is gone (P3-05's drop) — cut the
+    /// binding, keep the buffer.
+    ///
+    /// The tab is not closed and its SQL is not touched: the user still has the text, which is
+    /// what the drop confirm promises. What must not survive is the *binding* — a tab left on
+    /// `Origin::View("orders_daily")` would re-create the view the user just dropped on the next
+    /// ⌘S, silently undoing the drop. As a scratch tab it saves as a new saved query instead,
+    /// which is what an unbound buffer means everywhere else.
+    ///
+    /// Matched exactly, not folded: both sides are this store's own strings (a bind copies the
+    /// def name), and a view rename rewrites them through the Project store.
+    pub fn unbind_view(&mut self, name: &str) {
+        for t in self.tabs.values_mut() {
+            if matches!(&t.origin, Origin::View(v) if v == name) {
+                t.origin = Origin::Scratch;
+            }
+        }
+    }
+
+    /// The saved query `id` is gone (P3-05's delete) — cut the binding, keep the buffer. Same
+    /// reasoning as [`unbind_view`](Self::unbind_view); addressed by id because that is a saved
+    /// query's identity.
+    pub fn unbind_saved_query(&mut self, id: Uuid) {
+        for t in self.tabs.values_mut() {
+            if matches!(&t.origin, Origin::SavedQuery(q) if *q == id) {
+                t.origin = Origin::Scratch;
+            }
         }
     }
 

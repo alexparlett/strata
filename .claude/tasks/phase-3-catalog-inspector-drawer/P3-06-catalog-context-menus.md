@@ -20,10 +20,25 @@ on hover — same item list, one source):
 - **Saved query** → Open in new tab · Rename · Delete *(danger)*. Addressed by `id`, so a rename
   is free — no origin rewriting (unlike a view rename, which must go through `ProjectState`).
 
-**Drop confirms first**, via a dialog carrying the consequence line (P3-05): *"N view(s) read this
-{table,view} and will be left invalid."* Count, not names — a busy table can back dozens of views.
-Nothing breaks *now*: a view holds its sources by reference and keeps running until the project
-reopens and its SQL re-plans, so dependents are flagged invalid (P3-04), not broken.
+**Drop confirms first — and the confirm is already built.** P3-05 landed the whole drop flow
+(`views/dialogs/drop_confirm.rs`): the dialog, its consequence line (*"N view(s) read this
+{table,view} and will be left invalid:"* — count, then the names as chips), and the drop itself
+(store + persist + engine + tab unbinding). Nothing breaks *now*: a view holds its sources by
+reference and keeps running until the project reopens and its SQL re-plans, so dependents are
+flagged invalid (P3-04), not broken.
+
+So all this task adds is the **trigger**. The dialog watches a `State<Option<DropTarget>>` provided
+at the window root, and a drop item is one line:
+
+```rust
+let mut drop_target = use_consume::<State<Option<DropTarget>>>();
+// …in the menu item's handler:
+drop_target.set(Some(DropTarget::Table(name.clone())));
+```
+
+`DropTarget` has a variant per row type (`Table(name)` · `View(name)` · `Query { id, name }`,
+mirroring the catalog's identity rules), so the saved-query Delete goes through the same dialog.
+Do **not** write a second drop path.
 
 ### These are direct engine calls, not cache invalidations
 
@@ -44,7 +59,8 @@ notify its channel — subscribers re-render, nothing refetches.
 
 ## Acceptance
 - [ ] Each row type shows the right menu; every action reaches the engine and the Project store, and the defs are persisted.
-- [ ] Drop asks first and states how many views it leaves invalid.
+- [ ] Drop asks first and states how many views it leaves invalid. *(The dialog is P3-05's; this is
+  the menu item that opens it.)*
 
 ## Freya / references
 - Freya `ContextMenu` / `Menu`; the existing `tab_bar/menu.rs` is the in-app precedent.

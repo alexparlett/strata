@@ -15,7 +15,7 @@ use crate::apps::project::state::{
     resolve_launch_root, use_autosave, use_init_catalog_selection, use_init_history,
     use_init_project, use_init_session, Chan, SessionState,
 };
-use crate::apps::project::views::{CloseConfirm, HeaderBar, Shell};
+use crate::apps::project::views::{CloseConfirm, DropConfirm, DropTarget, HeaderBar, Shell};
 use crate::keymap::on_commands;
 use crate::state::{use_config, use_open_project, use_share_config, ConfigChan, ConfigStation};
 use crate::theme::{use_strata_theme, window_background, ThemesCtx};
@@ -189,6 +189,10 @@ impl App for ProjectApp {
         // The inspected-column slot (P3-02): the catalog sidebar writes it, the inspector
         // (P3-08) reads it. A context signal, not a store — see `state/catalog.rs`.
         use_init_catalog_selection();
+        // The drop-confirm slot (P3-05): the row a drop is being confirmed for. Provided here
+        // like the close target above, because the dialog is mounted at this root and its
+        // trigger is elsewhere — a catalog row's context menu sets it (P3-06).
+        let drop_target = use_provide_context(|| State::create(None::<DropTarget>));
 
         // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
         // structural change and retire the engine state of tabs that are gone. One
@@ -219,6 +223,12 @@ impl App for ProjectApp {
             // order — including the ⌘Q/stub rect at the bottom, so the dialog can't be
             // re-triggered or bypassed from the keyboard.
             .child(CloseConfirm { confirm })
+            // The catalog drop confirm (P3-05), on the same terms as the close confirm above
+            // and after it: if both were somehow open, the running-query question outranks the
+            // catalog one in document order.
+            .child(DropConfirm {
+                target: drop_target,
+            })
             .child(HeaderBar::new(filled_by_app))
             .child(Shell::new())
             // ⌘Q + the shortcuts whose targets aren't built yet (palette P6, settings
