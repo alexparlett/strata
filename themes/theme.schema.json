@@ -1518,6 +1518,9 @@
             },
             "part_background": {
               "$ref": "#/$defs/colorPref"
+            },
+            "warn_color": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },

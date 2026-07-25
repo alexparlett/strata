@@ -1053,6 +1053,9 @@
       },
       "part_background": {
         "specific": "rgba(43,127,208,.12)"
+      },
+      "warn_color": {
+        "reference": "warning"
       }
     },
     "datagrid": {
