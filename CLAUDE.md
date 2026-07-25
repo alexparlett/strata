@@ -31,21 +31,15 @@ After **any theme change**, regenerate + verify the schema:
 > source instead (see below) and hand off to a Mac build. Claude Code running locally on the Mac has
 > no such limit: build and test normally, and treat a clean build + `schema_in_sync` as the check.
 
-## Ways of working (Alex's engineering bar)
+## Ways of working
 
-- **Generic capability, not hardcoded subsets.** Build the real, general mechanism, not a tactical
-  stub that happens to pass the current case.
-- **Real end-states, not placeholders.** No TODO scaffolding left as the deliverable.
-- **Native Rust tooling, not stray scripts.** Schema/codegen/tests live in the crate (e.g. the
-  `schema_in_sync` test), not one-off Python.
-- **Verify from source before agreeing.** If Alex asserts an API or behaviour, check it in the fork
-  (`crates/freya/`) or the crate before confirming; correct it if it's wrong. Freya event data types
-  live in `crates/freya/crates/freya-core/src/events/data.rs`, components in
-  `crates/freya/crates/freya-components/`, usage in `crates/freya/examples/`.
-- **No over-engineering.** This is a private/internal app — see the visibility note below.
-- Follow the [`marc2332/valin`](https://github.com/marc2332/valin) conventions for the Freya app
-  (module layout, per-window data scoping, stateful tabs). Valin is the Freya author's own IDE and
-  our reference implementation.
+The engineering bar and every settled Strata/Freya convention are enshrined in @AGENTS.md — it is
+imported into every session alongside this file; hold all work to it, and update it in the same
+change whenever a review settles (or overturns) a convention. Headlines: generic capability over
+tactical stubs; real end-states, no placeholder scaffolding; verify APIs from the fork source
+before agreeing; framework-native idiom (never bridge Dioxus-era patterns); model impossible states
+out of existence and fail loud; follow [`marc2332/valin`](https://github.com/marc2332/valin) (the
+Freya author's own IDE) for module layout, per-window data scoping, and stateful tabs.
 
 ---
 
@@ -104,36 +98,12 @@ When writing Freya code, lean on these in roughly this order:
    context_menu, table, table_virtual, resizable_container, tooltip, popup, drag_drop, sidebar…),
    `animation_*.rs`, plus platform samples. The canonical "how do I wire X" reference.
 
-### Freya conventions that bite (verified in this codebase)
+### Conventions
 
-- **Reusable UI is a `Component`**: `struct` + `#[derive(PartialEq)]` +
-  `impl Component { fn render(&self) -> impl IntoElement }`. Plain functions are only for the app
-  root and stateless helpers. `mod.rs` builds children by **struct literal**, so their fields must
-  be visible.
-- **Builder pattern**: chain methods; never store an element in a variable to mutate later. Use
-  `.maybe(bool, |el| …)`, `.map(Option, |el, v| …)`, `.maybe_child(Option)`.
-- **Pointer events carry NO modifiers.** `MouseEventData` is location + button only. Track
-  shift/⌘/ctrl via `on_global_key_down` / `on_global_key_up` (`Key::Named(NamedKey::{Shift, Meta,
-  Control})`) into shared state — and beware they can **desync** (a keyup lost while the window is
-  unfocused leaves a modifier stuck). Reset defensively.
-- **`stop_propagation` vs `prevent_default`**: `prevent_default()` in `on_pointer_down` suppresses
-  the follow-up `on_press` / `on_global_pointer_press`. If a handler calls `prevent_default`, do
-  double-click / press detection *inside* that same handler (`EventsCombos::pressed(loc).is_double()`),
-  not via `on_press`.
-- **`VirtualScrollView` memoizes its builder closure**, so snapshots captured in the closure go
-  stale. Have each child **read shared state reactively** (`state.read()`) and compute its own view,
-  rather than passing a computed snapshot down.
-- **Reactivity**: `state()` / `.read()` subscribe (re-render on change); `.peek()` does not (use in
-  event handlers / actions); `.set()` / `.write()` need `let mut`.
-
-### This-codebase conventions
-
-- **Private/internal crate → don't fuss over visibility.** Use `pub` freely; don't hand-annotate
-  `pub(super)` per field on struct-literal-built components (the linter widens them back to `pub`
-  anyway).
-- **After any theme change**, the schema must be regenerated:
-  `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (Alex runs it; the committed
-  `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`).
+The Freya conventions that bite (component shape, builder pattern, event/handler traps, reactivity,
+logical units) and the this-codebase conventions (standard components, typography, naming,
+user-facing text register, state placement) are enshrined in [AGENTS.md](AGENTS.md) §3–§4 — that
+file is the single copy; don't restate them here.
 
 ---
 
@@ -221,11 +191,11 @@ src/apps/project/                the project window (Valin-shaped)
         toolbar.rs, status_bar.rs, running.rs, explain_plan.rs, empty.rs, error.rs
 ```
 
-**Note on the two frontends:** most of the persistent memory notes describe the **Dioxus** app's
-architecture (`crate::session`, `crate::project`, `GlobalStore`, `dispatch`/`action`, the muda menu,
-the keymap/hotkeys). The **Freya** app is a clean-slate, Valin-shaped rewrite with its own
-architecture (Radio `SessionState`, stateful `QueryTab`s, `EngineCtx` in context). When working in
-`strata-freya`, follow **`docs/FREYA_STATE_ARCHITECTURE.md`**, not the Dioxus-app patterns.
+**Note on the two frontends:** the **Freya** app is a clean-slate, Valin-shaped rewrite with its
+own architecture (Radio `SessionState`, stateful `QueryTab`s, `EngineCtx` in context) — never carry
+a Dioxus-app pattern (`GlobalStore`, `dispatch`/`action`, the muda menu, the old keymap/hotkeys
+registry) across. When working in `strata-freya`, follow **`docs/FREYA_STATE_ARCHITECTURE.md`** and
+[AGENTS.md](AGENTS.md), and treat `crates/strata-dioxus` as behavioural reference only.
 
 ---
 
