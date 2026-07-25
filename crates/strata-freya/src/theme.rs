@@ -412,11 +412,12 @@ strata_components! {
         name_color, value_color, null_color, nested_background, nested_color,
     },
     // The catalog sidebar (P3-02): section labels + chevrons, the entry / column row text ramp and
-    // hover / selected fills, the nested-column rail, the per-kind entry icons, the PART chip, and
-    // the same categorical `type_*_color` palette the grid header wears (column swatch + dtype).
+    // hover / selected fills, the nested-column rail, the per-kind entry icons, the PART chip, the
+    // validity triangle's tint (P3-04), and the same categorical `type_*_color` palette the grid
+    // header wears (column swatch + dtype).
     "catalog" => CatalogThemePreference {
         label_color, chevron_color, name_color, column_color, meta_color, rail_fill,
-        table_color, view_color, query_color, part_color, part_background,
+        table_color, view_color, query_color, part_color, part_background, warn_color,
     },
     // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
     // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and
