@@ -20,6 +20,7 @@ use strata_model::WindowGeom;
 
 use crate::apps::project::contexts::EngineCtx;
 
+use super::catalog::{use_init_catalog_scan, CatalogScan};
 use super::history::{History, HistoryCtx};
 use super::{Chan, ProjChan, ProjectState, SessionState};
 
@@ -58,8 +59,9 @@ fn new_session() -> SessionState {
 
 /// Initialise this window's Project store — open the project folder (argv\[1\], default
 /// the repo's `sample/`), scaffolding a fresh `.strata/` when the folder has none — and
-/// kick off engine registration of its defs (tables, then views). Call once in the
-/// window root, after the engine is in context.
+/// kick off engine registration of its defs (tables, then views). Also provides the
+/// window's [`CatalogScan`] flag, since this is where the first pass starts. Call once in
+/// the window root, after the engine is in context.
 ///
 /// The open itself is synchronous (one small JSON read, needed before anything can
 /// render meaningfully); registration is IO-heavy (schema inference reads file footers)
@@ -67,11 +69,59 @@ fn new_session() -> SessionState {
 /// [`ProjChan::Views`] so rows flip `Loading → Ready/Failed` as answers arrive.
 pub fn use_init_project(engine: &EngineCtx, root: PathBuf) -> RadioStation<ProjectState, ProjChan> {
     let station = use_init_radio_station::<ProjectState, ProjChan>(move || open_project(root));
+    let scan = use_init_catalog_scan();
     let engine = engine.clone();
     use_hook(move || {
-        spawn(register_defs(engine, station));
+        spawn(scan_catalog(engine, station, scan));
     });
     station
+}
+
+/// The sidebar's ↻ (P3-03): re-scan the whole catalog — re-infer every table's schema from
+/// its def, then re-create every view over what that found.
+///
+/// **Re-scan is re-registration**, from the defs, not a walk of what the engine happens to
+/// hold. `Engine::register` deregisters and rebuilds each table from a re-`infer_schema`d
+/// config (see `catalog::register_external`), which is the same re-infer a walk of the live
+/// providers would do — and, because the def is the input, it *also* retries a table whose
+/// first registration failed. That is the case the button most needs to serve: the user fixes
+/// a path or restores a file and presses ↻. A live-provider walk can't do it at all, since a
+/// failed row has no provider to rebuild from.
+///
+/// Rows drop to `Loading` first so the pane reads as re-scanning rather than as settled data;
+/// answers land through the normal registration path. A no-op while a scan is already running
+/// — the button is disabled for the duration, and this guards the rest.
+///
+/// A re-scan that *fails* leaves the table deregistered (`register_external` deregisters before
+/// it infers), which is load-time semantics and the honest outcome: the files really are
+/// unreadable now, the row says `Failed`, and any view over it fails its own re-create rather
+/// than quietly answering from the provider that no longer matches the disk.
+///
+/// Only the inferred *schema* is refreshed. File sets, row counts and partition values are
+/// already live: we run no `ListFilesCache`, so DataFusion re-`LIST`s per scan.
+pub fn refresh_catalog(
+    engine: EngineCtx,
+    mut station: RadioStation<ProjectState, ProjChan>,
+    scan: CatalogScan,
+) {
+    if *scan.peek() {
+        return;
+    }
+    station.write_channel(ProjChan::Tables).reload_tables();
+    station.write_channel(ProjChan::Views).reload_views();
+    spawn(scan_catalog(engine, station, scan));
+}
+
+/// One catalog scan, flag held for its duration — the project-open pass and every ↻ are the
+/// same pass, so neither can run while the other is in flight.
+async fn scan_catalog(
+    engine: EngineCtx,
+    station: RadioStation<ProjectState, ProjChan>,
+    mut scan: CatalogScan,
+) {
+    scan.set(true);
+    register_defs(engine, station).await;
+    scan.set(false);
 }
 
 /// Resolve the launch project's folder: argv\[1\] as the project folder, defaulting to
@@ -102,8 +152,10 @@ fn open_project(root: PathBuf) -> ProjectState {
     ProjectState::from_defs(defs, root)
 }
 
-/// Register the opened project's defs on the engine: every table (relative sources
-/// resolved against the project folder), then every view.
+/// Register the project's defs on the engine: every table (relative sources resolved
+/// against the project folder), then every view. One pass, shared by project open and the
+/// sidebar's ↻ re-scan ([`refresh_catalog`]) — a re-scan *is* a re-registration, so there is
+/// one implementation of "make the engine match the defs", not two that can drift.
 ///
 /// Views can read other views, and DataFusion requires a view's dependencies to exist
 /// when its `CREATE VIEW` plans — but the defs file carries no dependency order (it's

@@ -243,7 +243,7 @@ mod tests {
     use super::*;
     use std::env;
     use std::process;
-    use strata_model::{Origin, ResultsView, TabId, TabSnapshot, WindowGeom};
+    use strata_model::{Layout, Origin, ResultsView, TabId, TabSnapshot, WindowGeom};
     use uuid::Uuid;
 
     /// A fresh temp project folder, cleaned up on drop.
@@ -360,6 +360,7 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             }),
+            layout: Layout::default(),
         };
         save_session(&root.0, &snap).unwrap();
         // (`SessionSnapshot` is serde vocabulary and doesn't derive `PartialEq` — check fields.)
