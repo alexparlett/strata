@@ -21,7 +21,8 @@ use crate::apps::project::contexts::EngineCtx;
 use crate::state::ConfigStation;
 
 use super::catalog::{
-    claim_scan, use_init_catalog_rescan, use_init_catalog_scan, CatalogRescan, ScanGuard,
+    claim_scan, request_scan, use_init_catalog_rescan, use_init_catalog_scan, CatalogRescan,
+    ScanGuard, ScanScope,
 };
 use super::history::{History, HistoryCtx};
 use super::{Chan, ProjChan, ProjectState, SessionState};
@@ -152,7 +153,7 @@ pub fn use_init_project(engine: &EngineCtx, root: PathBuf) -> RadioStation<Proje
     let rescan = use_init_catalog_rescan();
     let engine = engine.clone();
     use_side_effect(move || {
-        let requested = rescan.read().0;
+        let request = rescan.read().clone();
         // Claimed synchronously here, before anything is spawned, so two requests in one
         // executor tick can't both get through (see `claim_scan`). The guard released by
         // `Drop` — not by the pass's last statement — is what keeps a cancelled pass from
@@ -160,17 +161,83 @@ pub fn use_init_project(engine: &EngineCtx, root: PathBuf) -> RadioStation<Proje
         let Some(guard) = claim_scan(scan) else {
             return;
         };
+        // The work list is read **before** any row is reset, because resetting is what discards
+        // the information it is derived from: a `Loading` view has no `view_deps` to order by,
+        // and none to say which table it reads.
+        let (tables, views) = plan_scan(station, &request.scope);
         // Rows drop to `Loading` so the pane reads as re-scanning rather than as settled
-        // data. Only for a real ↻: at mount every row is already `Loading`, and writing
+        // data. Only for a real request: at mount every row is already `Loading`, and writing
         // them again would wake the catalog's subscribers for nothing.
-        let mut station = station;
-        if requested > 0 {
+        if request.seq > 0 {
+            reset_rows(station, &request.scope, &views);
+        }
+        spawn(scan_catalog(engine.clone(), station, guard, tables, views));
+    });
+    station
+}
+
+/// A scan's work list: the tables to re-register, then the views to re-create **in dependency
+/// order**. Read before any row is reset (see the driver).
+///
+/// The two scopes differ only in reach. `All` is every def. `Table` is the one row plus
+/// [`ProjectState::views_to_refresh`] — the views that read it (transitively) and every view
+/// currently failing, because re-registering a table does not re-plan the views above it: their
+/// plans captured the old provider by `Arc` and would go on scanning the files the pass just
+/// replaced, with the old schema.
+fn plan_scan(
+    station: RadioStation<ProjectState, ProjChan>,
+    scope: &ScanScope,
+) -> (Vec<String>, Vec<String>) {
+    let p = station.peek();
+    match scope {
+        ScanScope::All => {
+            let tables = p.tables.iter().map(|t| t.def.name.clone()).collect();
+            let views = p.refresh_order(p.views.iter().map(|v| v.def.name.clone()).collect());
+            (tables, views)
+        }
+        // A name with no row left is planned as an empty pass rather than a whole-catalog one:
+        // the table went between the request and the driver serving it.
+        ScanScope::Table(name) => match p.tables.iter().any(|t| t.def.name == *name) {
+            true => (vec![name.clone()], p.views_to_refresh(name)),
+            false => (Vec::new(), Vec::new()),
+        },
+    }
+}
+
+/// Drop the rows this pass will re-answer back to `Loading` — and only those. A row Refresh
+/// leaves the rest of the catalog wearing the verdicts it already has, which is the whole
+/// difference between asking about one table and re-scanning the project.
+fn reset_rows(
+    mut station: RadioStation<ProjectState, ProjChan>,
+    scope: &ScanScope,
+    views: &[String],
+) {
+    match scope {
+        ScanScope::All => {
             station.write_channel(ProjChan::Tables).reload_tables();
             station.write_channel(ProjChan::Views).reload_views();
         }
-        spawn(scan_catalog(engine.clone(), station, guard));
-    });
-    station
+        ScanScope::Table(name) => {
+            station.write_channel(ProjChan::Tables).reload_table(name);
+            // Guarded: a write notifies whether or not it changed anything, and there is no
+            // reason to wake the VIEWS section for a table nothing reads.
+            if !views.is_empty() {
+                let mut p = station.write_channel(ProjChan::Views);
+                for view in views {
+                    p.reload_view(view);
+                }
+            }
+        }
+    }
+}
+
+/// A catalog row's **Refresh table** (P3-06): ask for a pass over *one* table and the views it
+/// would otherwise leave stale. Same request path as the ↻ below — the menu item can't spawn the
+/// pass itself for the same reason the button can't, and rather more sharply: the item's own
+/// scope is a `MenuButton` that the very same press closes, so a task spawned there is dropped
+/// before it is ever polled, and the rows it just reset would spin forever.
+pub fn refresh_table(rescan: CatalogRescan, name: String) {
+    request_scan(rescan, ScanScope::Table(name));
 }
 
 /// The sidebar's ↻ (P3-03): ask for a re-scan of the whole catalog — re-infer every table's
@@ -195,12 +262,13 @@ pub fn use_init_project(engine: &EngineCtx, root: PathBuf) -> RadioStation<Proje
 ///
 /// Only the inferred *schema* is refreshed. File sets, row counts and partition values are
 /// already live: we run no `ListFilesCache`, so DataFusion re-`LIST`s per scan.
-pub fn refresh_catalog(mut rescan: CatalogRescan) {
-    rescan.write().0 += 1;
+pub fn refresh_catalog(rescan: CatalogRescan) {
+    request_scan(rescan, ScanScope::All);
 }
 
-/// One catalog scan. The project-open pass and every ↻ are the same pass, so neither can run
-/// while the other is in flight.
+/// One catalog scan over `tables` + `views` — the project-open pass, every ↻ and every row
+/// Refresh are the same pass at different widths, so none of them can run while another is in
+/// flight.
 ///
 /// The [`ScanGuard`] is **owned by this future** and never touched: that is the release
 /// mechanism. Settling drops it, and so does cancelling — a `set(false)` written after the
@@ -209,8 +277,10 @@ async fn scan_catalog(
     engine: EngineCtx,
     station: RadioStation<ProjectState, ProjChan>,
     _scan: ScanGuard,
+    tables: Vec<String>,
+    views: Vec<String>,
 ) {
-    register_defs(engine, station).await;
+    register_defs(engine, station, tables, views).await;
 }
 
 /// Build the Project store for the resolved `root`: load its `project.json` defs, or
@@ -227,47 +297,58 @@ fn open_project(root: PathBuf) -> ProjectState {
     ProjectState::from_defs(defs, root)
 }
 
-/// Register the project's defs on the engine: every table (relative sources resolved
-/// against the project folder), then every view. One pass, shared by project open and the
-/// sidebar's ↻ re-scan ([`refresh_catalog`]) — a re-scan *is* a re-registration, so there is
-/// one implementation of "make the engine match the defs", not two that can drift.
+/// Register the named defs on the engine: each table (relative sources resolved against the
+/// project folder), then each view. One pass, shared by project open, the sidebar's ↻ re-scan
+/// ([`refresh_catalog`]) and a row's Refresh ([`refresh_table`]) — a re-scan *is* a
+/// re-registration, so there is one implementation of "make the engine match the defs", not
+/// several that can drift. The three differ only in the work list they hand in.
 ///
-/// Views can read other views, and DataFusion requires a view's dependencies to exist
-/// when its `CREATE VIEW` plans — but the defs file carries no dependency order (it's
-/// sorted alphabetically). Rather than parse SQL to topo-sort, retry to a fixed point:
-/// each round creates what it can, and a view whose dependency landed last round
-/// succeeds this round. No progress → the remainder are genuinely broken (bad SQL or a
-/// missing table) and their errors land on their rows.
-async fn register_defs(engine: EngineCtx, mut station: RadioStation<ProjectState, ProjChan>) {
+/// `views` is taken **in order**, which the caller has already sorted so a view is re-created
+/// after everything it reads ([`ProjectState::refresh_order`]). That ordering is only knowable
+/// once the views have answered at least once; at project open none of them have, which is what
+/// the fixed-point retry below is for. DataFusion requires a view's dependencies to exist when
+/// its `CREATE VIEW` plans, so rather than parse SQL to topo-sort, each round creates what it
+/// can and a view whose dependency landed last round succeeds this round. No progress → the
+/// remainder are genuinely broken (bad SQL or a missing table) and their errors land on their
+/// rows.
+///
+/// A name with no def is skipped — the row went while the pass was being planned.
+async fn register_defs(
+    engine: EngineCtx,
+    mut station: RadioStation<ProjectState, ProjChan>,
+    tables: Vec<String>,
+    views: Vec<String>,
+) {
     // Snapshot the work up front (peek — a task has no reactive context): results land
     // by name, so concurrent def edits can't be clobbered by a stale row write.
     let (tables, views) = {
         let p = station.peek();
         let root = p.root.clone();
-        let tables: Vec<(String, TableSpec)> = p
-            .tables
-            .iter()
-            .map(|t| {
-                (
-                    t.def.name.clone(),
+        let tables: Vec<(String, TableSpec)> = tables
+            .into_iter()
+            .filter_map(|name| {
+                let def = &p.tables.iter().find(|t| t.def.name == name)?.def;
+                Some((
+                    name,
                     TableSpec {
-                        name: t.def.name.clone(),
-                        paths: t
-                            .def
+                        name: def.name.clone(),
+                        paths: def
                             .sources
                             .iter()
                             .map(|s| project_io::resolve_source(&root, s))
                             .collect(),
-                        format: t.def.format.clone(),
-                        partitions: t.def.partition_cols.clone(),
+                        format: def.format.clone(),
+                        partitions: def.partition_cols.clone(),
                     },
-                )
+                ))
             })
             .collect();
-        let views: Vec<(String, String)> = p
-            .views
-            .iter()
-            .map(|v| (v.def.name.clone(), v.def.sql.clone()))
+        let views: Vec<(String, String)> = views
+            .into_iter()
+            .filter_map(|name| {
+                let sql = p.views.iter().find(|v| v.def.name == name)?.def.sql.clone();
+                Some((name, sql))
+            })
             .collect();
         (tables, views)
     };

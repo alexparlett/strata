@@ -57,8 +57,36 @@ pub fn use_init_catalog_scan() -> CatalogScan {
 /// A count, not a flag: a request that lands while a pass is in flight is dropped (the button is
 /// disabled then anyway), but the count still makes each press a *distinct* value, so two presses
 /// either side of a scan can't be folded into one no-op by change detection.
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
-pub struct ScanRequest(pub u64);
+#[derive(Clone, PartialEq, Eq, Default, Debug)]
+pub struct ScanRequest {
+    /// Bumped per request. `0` is the mount value, which is what tells the driver that its first
+    /// run *is* the project-open pass rather than a ↻.
+    pub seq: u64,
+    /// How much of the catalog this request covers.
+    pub scope: ScanScope,
+}
+
+/// What a scan covers. The pass itself is the same either way — re-register from the defs — so
+/// this only decides the **work list**, which is also the set of rows that drop to `Loading`.
+#[derive(Clone, PartialEq, Eq, Default, Debug)]
+pub enum ScanScope {
+    /// Every def in the catalog: project open, and the sidebar's ↻.
+    #[default]
+    All,
+    /// One table, plus the views a refresh of it would otherwise leave reading the provider it
+    /// replaced (P3-06's row Refresh). Every other row keeps the verdict it already has.
+    Table(String),
+}
+
+/// Ask the window root's driver for a pass over `scope`.
+///
+/// `peek` then `set`, rather than a mutating `write`: the request is a whole new value, and the
+/// read must not subscribe whoever is asking — a menu item or a toolbar button has no business
+/// re-rendering when the counter it bumps changes.
+pub fn request_scan(mut rescan: CatalogRescan, scope: ScanScope) {
+    let seq = rescan.peek().seq + 1;
+    rescan.set(ScanRequest { seq, scope });
+}
 
 /// This window's re-scan request counter. See [`ScanRequest`].
 pub type CatalogRescan = State<ScanRequest>;

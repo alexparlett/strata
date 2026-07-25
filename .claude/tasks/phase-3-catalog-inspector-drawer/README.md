@@ -13,8 +13,16 @@ and open-project actions are placeholders waiting on P6-01 / P4-03 / P4-13. The 
 now fills the left pane (**P3-02** ✅) — sections, nested columns, filter, and the column selection
 that drives the inspector — its ↻ re-scans the catalog (**P3-03** ✅), and broken rows carry a
 warning triangle with the reason (**P3-04** ✅). The **drop confirm** is built (**P3-05** ✅),
-naming the views a drop leaves invalid and performing the drop; it is waiting only on P3-06's menu
-to open it. The inspector and drawer are still **shells** waiting on their content tasks.
+naming the views a drop leaves invalid and performing the drop, and **P3-06** ✅ gave every row its
+menu (right-click *and* the canvas's ⋮): open in a tab, edit a view's SQL, rename a saved query,
+refresh one table, and the Drop items that open that confirm. The inspector and drawer are still
+**shells** waiting on their content tasks.
+
+> **A row's Refresh re-creates the views over it** (P3-06), and re-creates them in **dependency
+> order** — a view inlines the plan of any view it reads at `CREATE OR REPLACE` time, so an outer
+> view rebuilt before its inner one inlines the stale plan. `ProjectState::refresh_order` is shared
+> with the whole-catalog ↻, which had the same latent ordering bug (it worked only where the def
+> names happened to sort right).
 
 > **Validity is derived, never stored** (P3-04): `ProjectState::{table_problem, view_problem}`
 > answer off the live rows on every read — a table's from the answer already on it, a view's from
@@ -51,7 +59,7 @@ per-`Kind` hues, one shared group).
 | P3-03 | Catalog re-scan | ✅ | D5 | P3-02 |
 | P3-04 | Catalog validity indicators | ✅ | D11 | P3-02 |
 | P3-05 | View dependencies (UI consumer) + drop confirm | ✅ | D10 | P3-02/04 |
-| P3-06 | Catalog context menus | ⬜ | — | P3-02/05 |
+| P3-06 | Catalog context menus | ✅ | — | P3-02/05 |
 | P3-07 | PART badges · nested JSON · shape detection | ⬜ | D9 | P3-02 |
 | P3-08 | Column inspector (facts box) | ⬜ | U9 | P3-01 |
 | P3-09 | Column/table profiling (PROFILE zone) | ⬜ | D4 | P3-08 |

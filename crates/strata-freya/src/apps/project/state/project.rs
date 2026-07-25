@@ -428,6 +428,90 @@ impl ProjectState {
         }
     }
 
+    /// Reset **one** table row to `Loading` — the start of a row's own Refresh (P3-06). Same
+    /// reasoning as [`reload_tables`](Self::reload_tables), scoped to the row the user asked
+    /// about; every other row keeps the verdict it already has.
+    pub fn reload_table(&mut self, name: &str) {
+        if let Some(t) = self.tables.iter_mut().find(|t| t.def.name == name) {
+            t.reg = Reg::Loading;
+        }
+    }
+
+    /// Reset **one** view row to `Loading` — the views a single-table Refresh re-creates
+    /// ([`views_to_refresh`](Self::views_to_refresh)).
+    pub fn reload_view(&mut self, name: &str) {
+        if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
+            v.reg = Reg::Loading;
+        }
+    }
+
+    /// Every view a **Refresh** of the table `name` must re-create, in dependency order.
+    ///
+    /// Two sets, for two different reasons:
+    ///
+    /// - the views that **read** it ([`ViewInfo::deps`], so transitively through a
+    ///   view-of-a-view). Re-registering a table does not break a view over it — worse, the
+    ///   view goes on scanning the *old* provider with the *old* inferred schema, because its
+    ///   plan captured that provider by `Arc` at creation and never re-resolves the name
+    ///   (verified against DataFusion 54, D10/D11). Only re-issuing `CREATE OR REPLACE VIEW`
+    ///   re-plans it against what the refresh just found. This is the same decision P3-03 made
+    ///   for the whole-catalog ↻, narrowed to one table.
+    /// - every view that is currently **failing**. A failed view has no dependency record at
+    ///   all, so nothing can say whether this table was the thing it was missing — and the
+    ///   case Refresh most needs to serve is exactly that: the user fixes a path, refreshes the
+    ///   row, and the views that couldn't plan over it come back. Re-planning is cheap and
+    ///   idempotent, so trying is strictly better than leaving them broken.
+    pub fn views_to_refresh(&self, name: &str) -> Vec<String> {
+        let mut views = self.dependent_views(CatalogKind::Table, name);
+        for v in &self.views {
+            if matches!(v.reg, Reg::Failed(_)) && !views.iter().any(|n| n == &v.def.name) {
+                views.push(v.def.name.clone());
+            }
+        }
+        self.refresh_order(views)
+    }
+
+    /// Order `views` so that a view is re-created **after** every view it reads.
+    ///
+    /// `CREATE OR REPLACE VIEW` inlines the plan of any view it reads *at that moment*, so
+    /// re-creating an outer view before its inner one inlines the stale inner plan — and with
+    /// it the very provider the refresh is replacing. Alphabetical order (which is how the defs
+    /// are stored) gets this right only by luck.
+    ///
+    /// Kahn's algorithm over [`ViewInfo::view_deps`], restricted to the set being refreshed:
+    /// dependencies *outside* the set are already current, so they can't order anything. A view
+    /// with no landed answer carries no dependency information and simply sorts wherever it
+    /// falls — at project open that is every view, which is why the scan keeps its fixed-point
+    /// retry as well. A cycle is impossible (a view can't read itself, and DataFusion refuses
+    /// mutual recursion), but a residue is appended rather than dropped: a surprise can cost
+    /// ordering, never a re-create.
+    pub fn refresh_order(&self, views: Vec<String>) -> Vec<String> {
+        let mut remaining = views;
+        let mut ordered = Vec::with_capacity(remaining.len());
+        while !remaining.is_empty() {
+            let (ready, blocked): (Vec<String>, Vec<String>) =
+                remaining.iter().cloned().partition(|name| {
+                    let deps = self
+                        .views
+                        .iter()
+                        .find(|v| Self::same_name(&v.def.name, name))
+                        .and_then(|v| v.reg.ready())
+                        .map(|info| info.view_deps.as_slice())
+                        .unwrap_or_default();
+                    !deps
+                        .iter()
+                        .any(|d| remaining.iter().any(|r| Self::same_name(r, d)))
+                });
+            if ready.is_empty() {
+                ordered.extend(blocked);
+                break;
+            }
+            ordered.extend(ready);
+            remaining = blocked;
+        }
+        ordered
+    }
+
     // --- def mutations (the caller persists via `save_defs`) ------------------------
 
     /// Insert-or-replace a view def by name, at its alphabetical slot. The row resets
@@ -465,6 +549,27 @@ impl ProjectState {
     /// Drop the saved query with this `id`.
     pub fn remove_saved_query(&mut self, id: Uuid) {
         self.saved_queries.retain(|q| q.id != id);
+    }
+
+    /// Relabel the saved query `id`, moving it to the alphabetical slot of its new name
+    /// (P3-06's row rename). A blank name is refused — the row would have nothing to show.
+    ///
+    /// **A rename is free here, and only here.** A saved query is addressed by its stable
+    /// `id`, so nothing points at the old label: no tab origin to rewrite (unlike a view
+    /// rename, which moves the row's SQL identity), and no collision rule to enforce — ⌘S
+    /// already mints saved queries under whatever the tab is called, so two rows can wear the
+    /// same label today and neither is ambiguous to anything that addresses them.
+    pub fn rename_saved_query(&mut self, id: Uuid, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let Some(pos) = self.saved_queries.iter().position(|q| q.id == id) else {
+            return;
+        };
+        let mut query = self.saved_queries.remove(pos);
+        query.name = name.to_string();
+        self.upsert_saved_query(query);
     }
 
     /// Insert-or-replace a table def by name (registration / config save), at its
@@ -946,6 +1051,175 @@ mod tests {
             p.dependent_views(CatalogKind::Table, "orders"),
             vec!["orders_daily".to_string()]
         );
+    }
+
+    // --- single-row refresh (P3-06) ----------------------------------------------------
+
+    /// A row's Refresh touches **that row**, and the whole point is that nothing else moves:
+    /// its neighbour keeps the verdict it already had, so the pane doesn't read as a full
+    /// re-scan when the user asked about one table.
+    #[test]
+    fn refreshing_one_table_leaves_every_other_rows_verdict_alone() {
+        let mut p = settled();
+
+        p.reload_table("orders");
+
+        assert!(
+            matches!(p.tables[0].reg, Reg::Loading),
+            "`orders` is asked again"
+        );
+        assert_eq!(
+            p.tables[1].reg.error(),
+            Some("no such file"),
+            "`users` still says what it said"
+        );
+        assert!(
+            p.views[0].reg.ready().is_some(),
+            "and the views are untouched"
+        );
+    }
+
+    /// The headline: refreshing a table re-creates the views that **read** it. A view's plan
+    /// captured the old provider by `Arc`, so leaving it alone would leave it scanning the
+    /// files the refresh just replaced — silently, with the old schema.
+    #[test]
+    fn refreshing_a_table_re_creates_the_views_that_read_it() {
+        let mut p = settled();
+        p.upsert_view(ViewDef {
+            name: "user_signups".into(),
+            sql: "SELECT * FROM users".into(),
+        });
+        p.view_registered("user_signups", view_meta(&["users"]));
+
+        assert_eq!(
+            p.views_to_refresh("orders"),
+            vec!["orders_daily".to_string()],
+            "the reader of `orders`, not the reader of `users`"
+        );
+    }
+
+    /// Nested readers come too — `deps` is the *transitive* base-table set, so a view over a
+    /// view over the refreshed table re-plans as well. It is exactly as stale as the direct
+    /// reader, and one `CREATE OR REPLACE` on the inner view does not reach it.
+    #[test]
+    fn a_table_refresh_reaches_through_a_nested_view_in_dependency_order() {
+        let mut p = settled();
+        p.upsert_view(ViewDef {
+            name: "a_orders_weekly".into(),
+            sql: "SELECT * FROM orders_daily".into(),
+        });
+        p.view_registered(
+            "a_orders_weekly",
+            view_meta_over(&["orders"], &["orders_daily"]),
+        );
+
+        // Deliberately named so that *alphabetical* order is the wrong order: the outer view
+        // sorts first, and re-creating it first would inline the stale inner plan.
+        assert_eq!(
+            p.views_to_refresh("orders"),
+            vec!["orders_daily".to_string(), "a_orders_weekly".to_string()],
+            "the view that is read is re-created before the view that reads it"
+        );
+    }
+
+    /// A view that is **failing** is retried by any table refresh: it has no dependency record,
+    /// so nothing can say whether this table was the thing it was missing — and "I fixed the
+    /// path, refresh the row" is the case Refresh exists for.
+    #[test]
+    fn a_table_refresh_retries_every_failing_view() {
+        let mut p = settled();
+        p.upsert_view(ViewDef {
+            name: "user_signups".into(),
+            sql: "SELECT * FROM users".into(),
+        });
+        p.view_failed("user_signups", "table 'users' not found".into());
+
+        let refreshed = p.views_to_refresh("orders");
+        assert!(
+            refreshed.contains(&"user_signups".to_string()),
+            "a broken view is retried even though it never recorded a dep: {refreshed:?}"
+        );
+        assert!(
+            refreshed.contains(&"orders_daily".to_string()),
+            "alongside the actual readers"
+        );
+    }
+
+    /// The ordering rule on its own, over a three-deep chain: every view is re-created after
+    /// the view it reads, whatever order it was asked for in.
+    #[test]
+    fn refresh_order_puts_a_view_after_everything_it_reads() {
+        let mut p = settled();
+        for name in ["mid", "outer"] {
+            p.upsert_view(ViewDef {
+                name: name.into(),
+                sql: "SELECT 1".into(),
+            });
+        }
+        // `mid` reads `orders_daily`; `outer` reads both (the planner inlines transitively).
+        p.view_registered("mid", view_meta_over(&["orders"], &["orders_daily"]));
+        p.view_registered(
+            "outer",
+            view_meta_over(&["orders"], &["orders_daily", "mid"]),
+        );
+
+        let ordered = p.refresh_order(vec!["outer".into(), "mid".into(), "orders_daily".into()]);
+
+        assert_eq!(
+            ordered,
+            vec![
+                "orders_daily".to_string(),
+                "mid".to_string(),
+                "outer".to_string()
+            ]
+        );
+    }
+
+    /// At project open no view has answered yet, so there is no dependency information to order
+    /// by — the pass must still hand back every view (the scan's own fixed-point retry is what
+    /// resolves order then). Dropping the unanswered ones here would skip them entirely.
+    #[test]
+    fn refresh_order_keeps_views_that_have_not_answered_yet() {
+        let mut p = settled();
+        p.reload_views();
+
+        let names: Vec<String> = p.views.iter().map(|v| v.def.name.clone()).collect();
+        assert_eq!(p.refresh_order(names.clone()), names);
+    }
+
+    // --- saved-query rename (P3-06) ----------------------------------------------------
+
+    /// A rename is a **label** change: the id is untouched (so any tab bound to it stays bound)
+    /// and the row moves to its new alphabetical slot, because the section renders in store
+    /// order.
+    #[test]
+    fn renaming_a_saved_query_keeps_its_id_and_re_sorts_it() {
+        let mut p = settled();
+        p.upsert_saved_query(SavedQuery {
+            id: Uuid::from_u128(2),
+            name: "zebra".into(),
+            sql: "SELECT 9".into(),
+            meta: "—".into(),
+        });
+        assert_eq!(p.saved_queries[1].name, "zebra");
+
+        p.rename_saved_query(Uuid::from_u128(2), "  aardvark  ");
+
+        assert_eq!(p.saved_queries[0].name, "aardvark", "trimmed and re-sorted");
+        assert_eq!(p.saved_queries[0].id, Uuid::from_u128(2), "same query");
+        assert_eq!(p.saved_queries[0].sql, "SELECT 9", "same SQL");
+        assert_eq!(p.saved_queries.len(), 2, "a rename is not an insert");
+    }
+
+    /// A blank name is refused rather than stored — the row has nothing else to show.
+    #[test]
+    fn renaming_a_saved_query_to_nothing_is_refused() {
+        let mut p = settled();
+        let id = p.saved_queries[0].id;
+
+        p.rename_saved_query(id, "   ");
+
+        assert_eq!(p.saved_queries[0].name, "orders by region");
     }
 
     /// Dep names come back from the planner while def names come from the user, and DataFusion

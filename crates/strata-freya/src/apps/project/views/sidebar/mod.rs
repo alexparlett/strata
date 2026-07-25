@@ -173,13 +173,16 @@ mod tests {
 
     use freya::radio::RadioStation;
     use freya_testing::TestingRunner;
+    use strata_core::config::AppConfig;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
     use strata_model::{ColRef, TableDef};
 
     use super::*;
     use crate::apps::project::contexts::EngineCtx;
-    use crate::apps::project::state::{ProjChan, ProjectState, ScanRequest};
+    use crate::apps::project::state::{ProjChan, ProjectState, ScanRequest, ScanScope};
+    use crate::apps::project::views::DropTarget;
+    use crate::state::ConfigStation;
     use crate::theme::strata_theme;
 
     /// The panel width these tests lay out at — wide enough that nothing is clipped for want of
@@ -225,6 +228,11 @@ mod tests {
                 r.provide_root_context(|| State::create(false));
                 let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
                 r.provide_root_context(|| State::create(None::<ColRef>));
+                // The catalog rows' menu handles (P3-06): the app config behind "View table"'s
+                // LIMIT, and the drop-confirm slot. Nothing here opens a menu — they only have
+                // to be reachable, since every row gathers them on render.
+                r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
+                r.provide_root_context(|| State::create(None::<DropTarget>));
                 r.provide_root_context(|| {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
                 });
@@ -370,7 +378,11 @@ mod tests {
         let (mut runner, rescan) = runner();
         runner.sync_and_update();
         runner.sync_and_update();
-        assert_eq!(*rescan.peek(), ScanRequest(0), "nothing asked for yet");
+        assert_eq!(
+            *rescan.peek(),
+            ScanRequest::default(),
+            "nothing asked for yet"
+        );
 
         let refresh = header_controls(&runner)[0];
         let point = (
@@ -382,6 +394,13 @@ mod tests {
         runner.sync_and_update();
         runner.sync_and_update();
 
-        assert_eq!(*rescan.peek(), ScanRequest(1), "↻ asked for a re-scan");
+        assert_eq!(
+            *rescan.peek(),
+            ScanRequest {
+                seq: 1,
+                scope: ScanScope::All
+            },
+            "↻ asked for a re-scan"
+        );
     }
 }
