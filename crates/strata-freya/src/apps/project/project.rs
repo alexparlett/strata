@@ -17,26 +17,28 @@ use crate::apps::project::state::{
 };
 use crate::apps::project::views::{CloseConfirm, HeaderBar, Shell};
 use crate::keymap::on_commands;
+use crate::state::{use_config, use_open_project, use_share_config, ConfigChan, ConfigStation};
 use crate::theme::{use_strata_theme, window_background, ThemesCtx};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use freya::winit::dpi::LogicalPosition;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use futures::StreamExt;
-use strata_core::config::{Command, Settings};
+use strata_core::config::Command;
 use strata_core::project as project_io;
 use strata_core::theme::{effective_id, os_is_dark};
 use strata_model::TabId;
 
 pub struct ProjectApp {
     /// The shared theme registry (discovered once in `main`, the same `Arc` in every
-    /// window) and the app-global reactive [`Settings`] (any write repaints/reflows every
-    /// window that reads the changed field). The window's theme is **derived** from the
-    /// settings selection by [`use_strata_theme`] — no stored applied-theme id.
+    /// window) and the app-global reactive config — settings, recents, open-set (a write
+    /// on a channel repaints/reflows every window subscribed to it). The window's theme is
+    /// **derived** from the settings selection by [`use_strata_theme`] — no stored
+    /// applied-theme id.
     ///
     /// [`use_strata_theme`]: crate::theme::use_strata_theme
     pub themes: ThemesCtx,
-    pub settings: State<Settings>,
+    pub config: ConfigStation,
     /// The UI half of this window's close bridge (T2): the guard the winit `on_close`
     /// hook reads + the veto-signal receiver the root drains into the confirm dialog.
     pub close: CloseBridge,
@@ -47,18 +49,18 @@ pub struct ProjectApp {
 }
 
 impl ProjectApp {
-    pub fn window(themes: ThemesCtx, settings: State<Settings>) -> WindowConfig {
+    pub fn window(themes: ThemesCtx, config: ConfigStation) -> WindowConfig {
         // Match the theme's window body so a resize doesn't flash the default white.
         // Pre-launch there's no `Platform`, so the one-shot OS probe stands in for
         // Sync-with-OS.
         let background = {
-            let s = settings.peek();
+            let s = &config.peek().settings;
             let id = effective_id(&s.theme, s.sync_os, os_is_dark());
             window_background(themes.get_or_default(&id))
         };
         // This window's close bridge (T2): the hook vetoes an OS close while a query
         // runs (and the confirm pref is on) and pings the UI to show the dialog.
-        let (close, on_close) = close_bridge(settings.peek().confirm_close_running);
+        let (close, on_close) = close_bridge(config.peek().settings.confirm_close_running);
         // Resolve the project folder now (before the window exists) so its saved geometry
         // can seed the window — Freya has no runtime resize/move from the app, so restore
         // must happen at creation. A fresh / never-saved project has no geometry yet → the
@@ -74,7 +76,7 @@ impl ProjectApp {
         let (width, height) = geom.map_or((1200., 780.), |g| (g.width as f64, g.height as f64));
         WindowConfig::new_app(ProjectApp {
             themes,
-            settings,
+            config,
             close,
             root,
         })
@@ -112,12 +114,12 @@ impl App for ProjectApp {
         // This window's theme: installed + kept derived from the reactive settings
         // selection (+ OS appearance while syncing). Every window computes the same pure
         // derivation of the same globals, so they repaint consistently.
-        use_strata_theme(themes.clone(), self.settings);
-        // The settings handle into context so deep consumers (shortcut listeners, keymap
-        // hints) reach it without prop-threading. `State` is `Copy` — this shares the one
-        // global, it doesn't fork it.
-        let settings = self.settings;
-        use_provide_context(move || settings);
+        use_strata_theme(themes.clone(), self.config);
+        // The app-global config into context so deep consumers (shortcut listeners, keymap
+        // hints, the confirm dialog's "don't ask again") reach it without prop-threading.
+        // `RadioStation` is `Copy` — this shares the one global, it doesn't fork it.
+        let config = self.config;
+        use_share_config(config);
 
         // ── T2: the close bridge's UI half ─────────────────────────────────────────────
         // The close guard + the confirm-dialog target into context (the workbench's ⌘W
@@ -127,14 +129,16 @@ impl App for ProjectApp {
             move || guard
         });
         let mut confirm = use_provide_context(|| State::create(None::<CloseTarget>));
-        // Mirror the confirm-close-running pref into the hook's atomic (subscribes, so a
-        // settings change reaches the next OS close immediately).
+        // Mirror the confirm-close-running pref into the hook's atomic (subscribes to the
+        // config's Settings channel, so a change reaches the next OS close immediately).
         {
             let guard = guard.clone();
+            let settings = use_config(ConfigChan::Settings);
             use_side_effect(move || {
-                guard
-                    .confirm
-                    .store(settings.read().confirm_close_running, Ordering::Relaxed);
+                guard.confirm.store(
+                    settings.read().settings.confirm_close_running,
+                    Ordering::Relaxed,
+                );
             });
         }
         // Drain the hook's veto pings into the dialog. The receiver is taken exactly
@@ -156,7 +160,11 @@ impl App for ProjectApp {
         // committed `sample/`) and registers its defs on the engine as a background
         // task — rows flip Loading → Ready/Failed as answers land (P4-13 internals;
         // the launcher / open-dialog UI is a later slice).
-        let _project = use_init_project(&engine, self.root.clone());
+        let project = use_init_project(&engine, self.root.clone());
+        // Register the project in the app-global config for this window's lifetime: it
+        // heads the recents (so the launcher / project picker can offer it) and joins the
+        // open-set (so they can tell open from merely recent) until the window closes.
+        use_open_project(config, &project.peek().name, &self.root);
         // This window's Session store: restore the open project's `.strata/session.json`
         // (its tabs / order / active — P4-14), else one blank tab. Pulls the project root
         // from the store just provided above; provided via context.
@@ -207,13 +215,13 @@ impl App for ProjectApp {
             // modal barrier — outranks this catch-all. (The root rect itself would fire
             // FIRST.)
             .child(
-                rect().on_global_key_down(on_commands(self.settings, move |cmd| match cmd {
+                rect().on_global_key_down(on_commands(config, move |cmd| match cmd {
                     Command::CloseProject => {
                         // The same predicate as the on_close hook: red button, dock quit
                         // and ⌘Q share one dialog. Otherwise close now, bypassing the
                         // veto (this *is* the deliberate close).
                         if guard.running.load(Ordering::Relaxed)
-                            && settings.peek().confirm_close_running
+                            && config.peek().settings.confirm_close_running
                         {
                             confirm.set(Some(CloseTarget::Window));
                         } else {

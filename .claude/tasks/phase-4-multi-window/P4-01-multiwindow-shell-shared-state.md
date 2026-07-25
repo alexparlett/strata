@@ -7,12 +7,19 @@ The plumbing for more than one OS window: app-wide shared state, window spawn/fo
 close handling.
 
 ## Current state
-Only the project window exists. `main.rs` launches it. No cross-window state, no other window roots.
+Only the project window exists. `main.rs` launches it. No other window roots.
+
+**Shared state is done** (build item 1): `crate::state::config` holds the app-global `AppConfig`
+store — a global `RadioStation<AppConfig, ConfigChan>` (settings · recents · open-set) created in
+`main` and shared into each window root by `use_share_config`; `write_config` is the single
+mutate-and-persist path; `use_open_project` keeps a window's project in recents + the open-set for
+its lifetime. Theme is pure derived state off the `Settings` channel (`use_strata_theme`).
 
 ## Build (plan §4/§6)
-1. **Shared singletons** via `State::create_global` in `main` (before launch): **settings**, **theme**,
-   **recents**. Pass them into each window root; theme also drives `use_init_theme`. These are the
-   *only* globals — per-window model stays in each window's Radio station.
+1. ✅ **Shared singletons** — one app-global store (see Current state) rather than three separate
+   `create_global` signals: `AppConfig` is what the file holds, so one struct means one load, one
+   write, and no field clobbered by a partial save; `ConfigChan` supplies the granularity.
+   Per-window model stays in each window's Radio station.
 2. **Window management** (`platform/`): spawn / focus-if-open / close a window (project, launcher,
    settings, export). Single-canonical instances where required (settings).
 3. **Native close handling**: intercept `winit CloseRequested` (no objc) → the themed close-while-
@@ -26,8 +33,19 @@ Only the project window exists. `main.rs` launches it. No cross-window state, no
    those paths **`panic!`** as a loud interim placeholder (deliberately *not* a silent fallback — a
    project can't exist without a root). Wire them through this close path when it exists.
 
+6. **Quit vs. close, and reopen-on-startup.** `use_open_project` drops a project from the open-set
+   when its window closes — but quitting closes windows too, so the persisted set ends up empty and
+   "Reopen projects on startup" restores nothing. The Dioxus app got the split for free (its Quit was
+   a raw `terminate:` that never delivered a per-window close; a *deliberate* close did remove the
+   entry, so closing everything by hand correctly meant "open the launcher next time"). Ours routes
+   Quit through the same close path on purpose, to keep the close-while-running confirm — so quit-all
+   must mark itself and suppress the per-window removal. `create_global_config` already hands `main`
+   the restore list (`reopen`); this item is what consumes it, spawning a window per path (filtering
+   ones that no longer exist) when `reopen_on_startup` is set.
+
 ## Acceptance
 - [ ] A change to shared settings/theme is seen by every open window at once.
+- [ ] ⌘Q with N windows open restores those N on next launch; deliberately closing them all doesn't.
 - [ ] Windows spawn/focus/close; native close (red button / ⌘Q / dock) routes through the confirm.
 - [ ] An unrecoverable open/restore error closes that window (→ launcher if it was the last), replacing
       the interim `panic!` in `apps/project/state/hooks.rs`.

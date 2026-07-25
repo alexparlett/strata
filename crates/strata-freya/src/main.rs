@@ -13,15 +13,16 @@
 
 use apps::project::ProjectApp;
 use freya::prelude::*;
-use strata_core::config::load;
 use strata_core::engine::purge_snapshot_root;
 
+use crate::state::create_global_config;
 use crate::theme::ThemesCtx;
 
 mod apps;
 pub mod components;
 mod keymap;
 mod menu;
+mod state;
 mod theme;
 
 fn main() {
@@ -31,19 +32,27 @@ fn main() {
     // Discover the theme registry once (built-ins + the user themes dir) — every window
     // shares this one handle via context.
     let themes = ThemesCtx::discover();
-    // The app-global **reactive settings**: loaded from disk once here, then written only
-    // by UI (the Phase 4 Settings window — which also persists via `config::save`; disk is
-    // a startup input, never a live source). Any write repaints every window that reads
-    // the changed field. The theme is pure *derived* state: each window's
-    // `use_strata_theme` resolves the selection (+ OS appearance while Sync-with-OS is
-    // on, via Freya's per-window `Platform.preferred_theme`) through the shared registry
-    // — no stored applied-theme id to keep coherent.
-    let settings = State::create_global(load().settings);
+    // The app-global **reactive config**: the whole `AppConfig` — settings, recents, and
+    // the open-project set — loaded from disk once here and shared by every window. Disk
+    // is a startup input, never a live source: from now on this store is the truth and
+    // `write_config` is the only thing that writes the file. Writes are per-channel, so a
+    // project opening wakes the recents readers without touching the theme.
+    //
+    // The theme itself is pure *derived* state: each window's `use_strata_theme` resolves
+    // the settings selection (+ OS appearance while Sync-with-OS is on, via Freya's
+    // per-window `Platform.preferred_theme`) through the shared registry — no stored
+    // applied-theme id to keep coherent.
+    //
+    // `reopen` is the set of projects that had a window at the last exit — the
+    // "Reopen projects on startup" list. Restoring it needs multi-window spawn (P4-01);
+    // until then the launch window is `resolve_launch_root`'s and this is only reported.
+    let (config, reopen) = create_global_config();
+    tracing::debug!("reopen-on-startup candidates: {reopen:?}");
     // The menubar builds on the event loop thread (`Send` closure), so it captures the
-    // resolved chords — plain data — not the settings handle. The event *handler* runs
-    // on the renderer (main) thread and does capture `settings`, so Edit dispatch
+    // resolved chords — plain data — not the config handle. The event *handler* runs
+    // on the renderer (main) thread and does capture `config`, so Edit dispatch
     // resolves live bindings.
-    let menu_chords = menu::menu_chords(&settings.peek());
+    let menu_chords = menu::menu_chords(&config.peek().settings);
     launch(
         LaunchConfig::new()
             // The muda menubar replaces winit's default menu at resume. Crucially its
@@ -55,8 +64,8 @@ fn main() {
             // "bring your own app delegate" closes this, see P6-02.)
             .with_menu(
                 move || menu::app_menu(menu_chords),
-                move |event, ctx| menu::handle_menu_event(event, ctx, settings),
+                move |event, ctx| menu::handle_menu_event(event, ctx, config),
             )
-            .with_window(ProjectApp::window(themes, settings)),
+            .with_window(ProjectApp::window(themes, config)),
     );
 }

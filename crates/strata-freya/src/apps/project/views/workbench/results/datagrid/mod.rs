@@ -22,7 +22,8 @@ use std::rc::Rc;
 use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
 
-use strata_core::config::{Command, Settings};
+use crate::state::use_config_station;
+use strata_core::config::Command;
 use strata_core::engine::serialize::TextFormat;
 
 use super::cell_view::{CellValue, CellView};
@@ -191,7 +192,7 @@ impl Component for DataGrid {
         // Shared selection state + a Copy controller the cells call on pointer events. Freya pointer
         // events carry no modifiers, so shift / ⌘ are tracked via the root's global key up/down below.
         let sel = use_consume::<State<Selection>>();
-        let settings = use_consume::<State<Settings>>();
+        let config = use_config_station();
         let anchor = use_state(|| None::<usize>);
         let drag = use_state(|| false);
         let mut shift = use_state(|| false);
@@ -340,7 +341,7 @@ impl Component for DataGrid {
                 // selection as TSV (declining when empty, so the press stays unconsumed).
                 let data = data.clone();
                 let row_nums = self.row_nums.clone();
-                on_commands(settings, move |cmd| match cmd {
+                on_commands(config, move |cmd| match cmd {
                     Command::SelectAll => {
                         sel_ctl.all();
                         true
@@ -393,7 +394,7 @@ impl Component for DataGrid {
                 // leaving the press unconsumed. The modifier mirroring is separate
                 // bookkeeping for the pointer events (which carry no modifiers).
                 let find = self.find;
-                let mut commands = on_commands(settings, move |cmd| match cmd {
+                let mut commands = on_commands(config, move |cmd| match cmd {
                     // The modals sit above the popover, so they dismiss first (only one is
                     // ever open — each opens off its own double-click target).
                     Command::Cancel if cell_view.peek().is_some() => {

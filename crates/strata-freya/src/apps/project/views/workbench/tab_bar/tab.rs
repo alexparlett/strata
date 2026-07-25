@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use strata_core::config::{Command, Settings};
+use crate::state::use_config_station;
+use strata_core::config::Command;
 
 use strata_model::TabId;
 
@@ -93,7 +94,7 @@ impl Component for Tab {
         let mut renaming = use_state(|| false);
         let mut draft = use_state(String::new);
         let a11y = use_a11y();
-        let settings = use_consume::<State<Settings>>();
+        let config = use_config_station();
         let closer = use_consume::<TabCloser>();
         // Entering rename (from the menu or a double-click) just flips `renaming`. We react to that
         // here — in the tab's own scope, so it survives the menu closing: seed the draft with the
@@ -173,7 +174,7 @@ impl Component for Tab {
                 .height(Size::px(16.))
                 .on_press(move |e: Event<PressEventData>| {
                     e.stop_propagation();
-                    closer.close(radio, settings, id);
+                    closer.close(radio, config, id);
                 })
                 .child(Icon::new(IconName::Close).size(11.)),
         );
@@ -229,14 +230,14 @@ impl Component for Tab {
                 e.stop_propagation();
                 ContextMenu::open_from_event(
                     &e,
-                    super::menu::tab_context_menu(id, radio, sep, renaming, closer, settings),
+                    super::menu::tab_context_menu(id, radio, sep, renaming, closer, config),
                 );
             })
             // While renaming: Escape cancels (consumed — an Esc that ends a rename must
             // not also cancel a running query further down the dismiss chain); a press
             // anywhere outside the tab commits (like a blur).
             .maybe(*renaming.read(), |el| {
-                el.on_global_key_down(on_command(settings, Command::Cancel, move || {
+                el.on_global_key_down(on_command(config, Command::Cancel, move || {
                     renaming.set(false);
                     true
                 }))

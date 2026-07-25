@@ -78,7 +78,9 @@ Three tiers, use the weakest that works:
 - **Component-local** (`use_state`) — throwaway view state (hover, a results-view's local
   sort/scroll, a Run request).
 - **Radio (per-window)** — shared reactive state with surgical per-channel updates.
-- **Global** (`create_global`) — app-wide singletons.
+- **Global** (`create_global`) — app-wide singletons. Today: the `AppConfig` store (a global
+  *Radio station*, so the singleton still gets per-audience channels rather than one
+  everything-repaints signal).
 
 The Valin lesson: **a stateful thing that must be shared/persisted lives *in* a Radio store as
 a real struct that owns its state** — you don't keep it component-local and mirror it. So the
@@ -86,6 +88,7 @@ editor buffer lives in the store, inside the tab.
 
 | Store | Tier | Persisted | Holds |
 |-------|------|-----------|-------|
+| **`AppConfig`** (`state/config.rs`) | Radio (**global**, `RadioStation::create_global`) | yes (`config.prefs.json`) | the machine-global config: user `Settings`, the recent-projects list, and the set of projects with a window open. Channels = audiences (`ConfigChan::{Settings, Recents, Open}`), so opening a project doesn't wake theme readers. Created once in `main`, shared into every window root (`use_share_config`). **One** write path — `write_config` mutates, notifies, and persists; disk is a startup input, never re-read to answer a question. The persisted open-set is *taken* at startup (it is last run's ledger, not live truth) and rebuilt by each window's `use_open_project`. |
 | **`SessionState`** | Radio (per-window) | yes (snapshot) | the open tabs (each a `QueryTab` owning its `CodeEditorData`), order, active, closed stack |
 | **`Project`** | Radio (per-window) | yes (`project.json`) | catalog rows: pure defs (`TableDef`/`ViewDef`/`SavedQuery`) each wrapped with registration state (`Reg<T>`: Loading/Ready/Failed) — the *save targets*. Identity: views/tables by **name** (their SQL identity, one shared namespace, compared case-insensitively); saved queries by stable **`id: Uuid`** (the name is a label). Defs persist; `Reg` never does. Built P4-13-internals. |
 | **`LayoutCtx`** | context `State<Layout>` | yes | panel sizes, sidebar/inspector/drawer open |

@@ -4,6 +4,7 @@ use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
 use crate::keymap::{chord_from_event, edit_bindings};
+use crate::state::{use_config, use_config_station, ConfigChan};
 use freya::components::use_theme;
 use freya::prelude::{
     rect, use_a11y, use_consume, use_side_effect, use_state, ChildrenExt, Component, ComponentKey,
@@ -15,7 +16,7 @@ use strata_code_editor::prelude::{
     CodeEditor, CodeEditorData, CompletionItem, CompletionItemKind, CompletionRequest,
     EditorLanguage, Rope,
 };
-use strata_core::config::{Command, Settings};
+use strata_core::config::Command;
 use strata_core::engine::sql;
 use strata_core::keymap::resolve;
 use strata_model::TabId;
@@ -74,14 +75,17 @@ impl Component for EditorTab {
             }
         });
         let editor = editor.into_writable();
-        let settings = use_consume::<State<Settings>>();
+        let config = use_config_station();
         // Keep the buffer's history chords in lockstep with the settings: freya-edit
         // matches `EditBindings` in `process_key` (no hardcoded ⌘Z/⌘Y left), so a
         // rebind in Settings retargets undo/redo live, without remounting the editor.
+        // The `Settings` channel is what the effect subscribes to — the station below
+        // only peeks, inside handlers.
         {
             let mut editor = editor.clone();
+            let settings = use_config(ConfigChan::Settings);
             use_side_effect(move || {
-                let bindings = edit_bindings(&settings.read());
+                let bindings = edit_bindings(&settings.read().settings);
                 editor.write_if(|mut data| data.set_edit_bindings(bindings));
             });
         }
@@ -169,7 +173,7 @@ impl Component for EditorTab {
                             let primary =
                                 e.modifiers.intersects(Modifiers::META | Modifiers::CONTROL);
                             let editor_owned = chord_from_event(&e)
-                                .and_then(|chord| resolve(&settings.peek(), &chord))
+                                .and_then(|chord| resolve(&config.peek().settings, &chord))
                                 .is_some_and(Command::is_edit)
                                 || match &e.key {
                                     Key::Character(_) => false,
