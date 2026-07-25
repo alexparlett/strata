@@ -12,10 +12,10 @@ use std::sync::atomic::Ordering;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    use_autosave, use_init_catalog_selection, use_init_history, use_init_project,
-    use_init_session, Chan, SessionState,
+    use_autosave, use_init_catalog_selection, use_init_history, use_init_project, use_init_session,
+    Chan, SessionState,
 };
-use crate::apps::project::views::{CloseConfirm, HeaderBar, Shell};
+use crate::apps::project::views::{CloseConfirm, DropConfirm, DropTarget, HeaderBar, Shell};
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
 use crate::platform::{self, WindowKind};
@@ -235,6 +235,10 @@ impl App for ProjectApp {
         // The inspected-column slot (P3-02): the catalog sidebar writes it, the inspector
         // (P3-08) reads it. A context signal, not a store — see `state/catalog.rs`.
         use_init_catalog_selection();
+        // The drop-confirm slot (P3-05): the row a drop is being confirmed for. Provided here
+        // like the close target above, because the dialog is mounted at this root and its
+        // trigger is elsewhere — a catalog row's context menu sets it (P3-06).
+        let drop_target = use_provide_context(|| State::create(None::<DropTarget>));
 
         // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
         // structural change and retire the engine state of tabs that are gone. One
@@ -267,6 +271,12 @@ impl App for ProjectApp {
             .child(CloseConfirm {
                 confirm,
                 app: self.app.clone(),
+            })
+            // The catalog drop confirm (P3-05), on the same terms as the close confirm above
+            // and after it: if both were somehow open, the running-query question outranks the
+            // catalog one in document order.
+            .child(DropConfirm {
+                target: drop_target,
             })
             .child(HeaderBar::new(filled_by_app))
             .child(Shell::new())

@@ -28,12 +28,12 @@ use strata_core::config::AppConfig;
 use freya::components::use_theme;
 
 use crate::apps::project::state::{ProjChan, ProjectState};
-use crate::platform;
-use crate::state::AppCtx;
 use crate::components::avatar::Avatar;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Body, Control, Eyebrow, Path, Prose};
+use crate::platform;
+use crate::state::AppCtx;
 use crate::state::{use_config, ConfigChan};
 
 /// The dropdown's width — the comp's 328px card, so a long project path has room to read.

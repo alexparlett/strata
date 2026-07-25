@@ -4,6 +4,7 @@
 
 pub mod avatar;
 pub mod badge;
+pub mod dialog;
 pub mod divider;
 pub mod dot;
 pub mod icon;
