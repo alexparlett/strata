@@ -46,6 +46,10 @@ async-io = "2.5"
 # `block_on` in the freya-query unit tests.
 futures = "0.3"
 
+# Native folder / file pickers (the launcher's OPEN, later Export + Configure). The *async*
+# dialog: the blocking one spins its own run loop and would freeze every other window.
+rfd = "0.15"
+
 [dev-dependencies]
 # Headless Skia renderer for the `#[ignore]`d preview harnesses (e.g. `plan_preview`):
 # mounts a real surface under the real theme and snapshots it to a PNG for eyeballing.

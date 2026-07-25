@@ -27,6 +27,8 @@ use freya::radio::{
 };
 use strata_core::config::{self, AppConfig};
 
+use crate::platform::is_quitting;
+
 /// The audiences of the app-global config — a write on one wakes only its subscribers.
 ///
 /// Deliberately three, not one per field: these are the *surfaces* that care. Recents and
@@ -120,14 +122,13 @@ pub fn use_config_channel(station: ConfigStation, chan: ConfigChan) -> ConfigRad
 /// the whole point of a recent.
 ///
 /// `root` is the project folder ([`RecentProject::path`](strata_core::config::RecentProject::path)),
-/// already canonicalized by `resolve_launch_root`.
+/// already canonicalized by whoever opened the window.
 ///
-/// ⚠️ Quitting the app closes its windows, so this removal runs then too and the persisted
-/// open-set ends up empty — which makes "Reopen projects on startup" restore nothing. The
-/// old app got the split for free (its Quit was a raw `terminate:` that never delivered a
-/// per-window close), whereas ours deliberately routes Quit through the same close path to
-/// keep the close-while-running confirm. Telling the two apart is P4-01's job, where
-/// quit-all and multi-window restore are actually built.
+/// Quitting closes windows too, so this drop runs then as well — and must **not** remove
+/// anything, or the persisted open-set would end up empty and "Reopen projects on startup"
+/// would restore nothing. [`is_quitting`] is what tells the two apart, and that difference
+/// is the whole feature: quitting with three projects open reopens those three, while
+/// closing all three by hand means "start me at the launcher".
 pub fn use_open_project(station: ConfigStation, name: &str, root: &Path) {
     let path = root.to_string_lossy().into_owned();
     let name = name.to_string();
@@ -141,6 +142,9 @@ pub fn use_open_project(station: ConfigStation, name: &str, root: &Path) {
         }
     });
     use_drop(move || {
+        if is_quitting() {
+            return;
+        }
         write_config(station, &[ConfigChan::Open], |cfg| cfg.remove_open(&path));
     });
 }

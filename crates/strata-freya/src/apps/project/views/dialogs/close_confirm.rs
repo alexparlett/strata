@@ -6,7 +6,7 @@
 //! *mechanics* (the winit `on_close` bridge, `CloseGuard`, `TabCloser`) live in
 //! `crate::apps::project::close`.
 
-use crate::state::{use_config, use_config_station, write_config, ConfigChan};
+use crate::state::{use_config, use_config_station, write_config, AppCtx, ConfigChan};
 use freya::components::{get_theme, use_theme};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
@@ -17,6 +17,7 @@ use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePre
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Control, Prose, Title};
+use crate::platform;
 
 /// Mounted right after `ContextMenuViewer` at the window root: while open, its key
 /// handler precedes every feature listener in document order and consumes every press —
@@ -26,11 +27,16 @@ use crate::components::typography::{Control, Prose, Title};
 #[derive(PartialEq)]
 pub struct CloseConfirm {
     pub confirm: State<Option<CloseTarget>>,
+    /// What a confirmed *window* close needs: the shared close path puts the launcher up
+    /// when this window is the app's last, so "Stop & exit" lands where the red button
+    /// would rather than quitting the app.
+    pub app: AppCtx,
 }
 
 impl Component for CloseConfirm {
     fn render(&self) -> impl IntoElement {
-        let mut confirm = self.confirm;
+        let confirm = self.confirm;
+        let platform = use_hook(Platform::get);
         let target = *confirm.read();
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let project = use_radio_station::<ProjectState, ProjChan>();
@@ -45,24 +51,42 @@ impl Component for CloseConfirm {
             "cancel_button"
         );
 
-        // Stop & close / Stop & exit — shared by the button and the Enter key. The
-        // rebinds keep the closure `Fn` + `Copy` (both handles are `Copy`), so it can
-        // live in both handlers.
-        let close_anyway = move || {
-            let mut radio = radio;
-            let mut confirm = confirm;
-            match *confirm.peek() {
-                Some(CloseTarget::Tab(id)) => {
-                    // The root's tab-diff funnel cancels/retires the tab's engine state.
-                    radio.write().close_one(id);
-                    confirm.set(None);
+        // Stop & close / Stop & exit — shared by the button and the Enter key, so it's
+        // `Clone` (the theme handle isn't `Copy`) and each handler takes its own.
+        let close_anyway = {
+            let app = self.app.clone();
+            move || {
+                let mut radio = radio;
+                let mut confirm = confirm;
+                match *confirm.peek() {
+                    Some(CloseTarget::Tab(id)) => {
+                        // The root's tab-diff funnel cancels/retires the tab's engine state.
+                        radio.write().close_one(id);
+                        confirm.set(None);
+                    }
+                    // The shared close path: bypasses the on_close veto (this *is* the
+                    // confirmed close) and hands over to the launcher if we're the last.
+                    // Dismiss first — the close is several async hops (it may stand a
+                    // launcher up before this window goes), and a dialog left armed across
+                    // them can be pressed again and open a *second* launcher.
+                    Some(CloseTarget::Window) => {
+                        confirm.set(None);
+                        spawn(platform::close_this_window(platform.clone(), app.clone()));
+                    }
+                    None => {}
                 }
-                Some(CloseTarget::Window) => {
-                    // Bypasses the on_close veto — this *is* the confirmed close.
-                    Platform::get().close_current_window();
-                }
-                None => {}
             }
+        };
+        let close_anyway_key = close_anyway.clone();
+        // Every dismissal path (the keep button, Esc, the backdrop). Dismissing a *window*
+        // confirm is also the answer to the quit that raised it: without clearing the flag
+        // it would latch, and every later close would behave as though the app were exiting.
+        let keep_open = move || {
+            let mut confirm = confirm;
+            if matches!(*confirm.peek(), Some(CloseTarget::Window)) {
+                platform::end_quit();
+            }
+            confirm.set(None);
         };
 
         let Some(target) = target else {
@@ -138,8 +162,12 @@ impl Component for CloseConfirm {
         // The card, the strip and the modal keys (Esc keeps, Enter stops) are `Dialog`'s; this
         // supplies the comp's own header, body and its two actions.
         Dialog::new()
-            .on_dismiss(move |_| confirm.set(None))
-            .on_confirm(move |_| close_anyway())
+            // Esc and the backdrop are dismissals, so they go through `keep_open` — clearing
+            // the quit flag, not just the dialog.
+            .on_dismiss(move |_| keep_open())
+            // Enter takes the second clone: `close_anyway` captures the `AppCtx` the launcher
+            // hand-off needs, so it isn't `Copy` and can't be moved into two handlers.
+            .on_confirm(move |_| close_anyway_key())
             .header(header)
             .child(
                 rect()
@@ -152,7 +180,7 @@ impl Component for CloseConfirm {
             .action(
                 Button::new()
                     .flat()
-                    .on_press(move |_| confirm.set(None))
+                    .on_press(move |_| keep_open())
                     .child(Control::new(keep)),
             )
             .action(

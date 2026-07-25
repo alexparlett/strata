@@ -13,8 +13,7 @@ pub use catalog::{use_catalog_scan, use_catalog_selection, use_init_catalog_sele
 pub use channel::Chan;
 pub use history::use_history_recording;
 pub use hooks::{
-    refresh_catalog, resolve_launch_root, use_autosave, use_init_history, use_init_project,
-    use_init_session,
+    refresh_catalog, use_autosave, use_init_history, use_init_project, use_init_session,
 };
 pub use project::{ProjChan, ProjectState, Reg};
 pub use session::SessionState;
