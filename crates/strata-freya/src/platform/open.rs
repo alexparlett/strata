@@ -21,17 +21,25 @@
 //! outranks the preference rather than being one of its outcomes — the same rule
 //! [`windows::open_project`] has always applied before launching a window.
 //!
+//! **Opening in place asks before it destroys work.** The remount drops the outgoing
+//! project's engine, which aborts every query executing in it — the same loss ⇧⌘W, the red
+//! button and ⌘Q all stop and ask about. So [`OpenCtx::reroot`] goes through that very
+//! dialog ([`CloseTarget::Reroot`]) rather than being the one destructive path that doesn't.
+//!
 //! Deciding and acting are split ([`OpenTarget`]) because the two callers hold different
 //! handles: a window has a [`Platform`], while the menubar's event handler runs on the
 //! renderer with a `RendererContext` and no `Platform` to get. One set of rules, two
 //! executors.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use freya::prelude::*;
 use freya::winit::window::WindowId;
 use strata_core::config::OpenPref;
 
+use crate::apps::project::{CloseGuard, CloseTarget};
 use crate::platform::windows;
 use crate::state::{write_config, AppCtx, ConfigChan};
 
@@ -48,6 +56,15 @@ pub struct OpenCtx {
     pub root: State<PathBuf>,
     /// The folder a press picked, held while the prompt asks which window it belongs in.
     pub prompt: State<Option<PathBuf>>,
+    /// This window's engine in-flight flag — the close-while-running gate's other half. In a
+    /// `State` slot purely so this struct stays `Copy` (the same reason
+    /// [`TabCloser`](crate::apps::project::close::TabCloser) holds its engine that way). It
+    /// is the *window's* guard, handed over from engine to engine, so it stays correct across
+    /// a re-root.
+    pub guard: State<Arc<CloseGuard>>,
+    /// The window's confirm-dialog slot, so a re-root that would abort running queries raises
+    /// the same T2 question closing the window does.
+    pub confirm: State<Option<CloseTarget>>,
 }
 
 /// Where an open lands, once [`OpenCtx::decide`] has applied the rules. Returned rather than
@@ -89,7 +106,7 @@ impl OpenCtx {
             OpenTarget::NewWindow(root) => {
                 spawn_forever(windows::open_project(platform, app, root));
             }
-            OpenTarget::ThisWindow(root) => self.reroot(root),
+            OpenTarget::ThisWindow(root) => self.reroot(&app, root),
             OpenTarget::Ask(root) => self.ask(root),
         }
     }
@@ -148,11 +165,32 @@ impl OpenCtx {
         prompt.set(None);
     }
 
-    /// Open in **this** window: swap the root the window's project subtree is keyed on.
-    /// Everything else follows from the remount — the outgoing project's stores, engine and
-    /// autosave are dropped (its session flushed on the way out, its entry dropped from the
-    /// open-set) and the new project stands up exactly as it does at launch.
-    pub fn reroot(self, root: PathBuf) {
+    /// Open in **this** window — asking first when it would destroy work in flight.
+    ///
+    /// The remount drops the outgoing project's engine, and `Engine::drop` aborts everything
+    /// executing in it. That is the same loss the window's own close paths (⇧⌘W, the red
+    /// button, ⌘Q) stop and ask about, so this goes through the very same dialog rather than
+    /// being the one destructive action that doesn't — [`CloseTarget::Reroot`] carries the
+    /// folder, and answering it calls [`reroot_confirmed`](Self::reroot_confirmed).
+    pub fn reroot(self, app: &AppCtx, root: PathBuf) {
+        // The same predicate as the `on_close` hook and `TabCloser::close`: the engine's own
+        // in-flight answer (a background tab's run has no mounted view to derive from), and
+        // the user's pref about being asked.
+        let running = self.guard.peek().running.load(Ordering::Relaxed);
+        if running && app.config.peek().settings.confirm_close_running {
+            let mut confirm = self.confirm;
+            confirm.set(Some(CloseTarget::Reroot(root)));
+        } else {
+            self.reroot_confirmed(root);
+        }
+    }
+
+    /// Swap the root the window's project subtree is keyed on — the re-root itself, once
+    /// nothing is left to ask. Everything else follows from the remount: the outgoing
+    /// project's stores, engine and autosave are dropped (its session flushed on the way out,
+    /// its entry dropped from the open-set) and the new project stands up exactly as it does
+    /// at launch.
+    pub fn reroot_confirmed(self, root: PathBuf) {
         let mut current = self.root;
         current.set(root);
     }

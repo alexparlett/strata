@@ -88,6 +88,13 @@ Things that must not regress. Each was fought for once already.
   the preference and are not among its outcomes: the project a window already shows is a no-op,
   and a project another window already has is focused — two windows on one project would both
   autosave over its `session.json`.
+- **Every path that destroys a window's work asks on the same terms.** The T2 confirm is not the
+  close button's — it is the gate for *any* action that aborts running queries, and re-rooting
+  (`OpenPref::This`) is one, since the remount drops the engine. Adding such an action means
+  adding a `CloseTarget` variant and routing through the one dialog, never a second confirm and
+  never a silent abort. The predicate is always the engine's own answer (`guard.running` /
+  `Engine::is_running`) plus `confirm_close_running` — never derived from mounted UI, which goes
+  false the moment the user switches tabs.
 - **Managed DDL policy.** The editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` only. Views are
   Save's artifact: ⌘S wraps the buffer's plain query in `CREATE OR REPLACE VIEW`
   (`Engine::create_view`); typed DDL is blocked with validation pointing at the owning surface

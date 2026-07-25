@@ -281,9 +281,10 @@ pub fn use_file_menu(app: &AppCtx, open: Option<OpenCtx>) {
         if !*focused.read() {
             return;
         }
-        // Nothing subscribes to this slot — the menubar's handler `peek`s it on the renderer
-        // thread — so parking it here can't wake a render.
-        focused_open.set(open);
+        // `set_if_modified`, not `set`: this effect also rides `ConfigChan::Recents`, so it
+        // re-runs on every project open, close and pin — and re-parking an identical handle
+        // would notify the slot's audience for a value that never changed.
+        focused_open.set_if_modified(open);
         let recents = config.read();
         if let Some(handles) = menu.write().as_mut() {
             handles.sync(&recents.recent_projects, open.is_some());
@@ -507,6 +508,10 @@ fn open_recent(ctx: &mut RendererContext, app: AppCtx, path: &str) {
             None => OpenTarget::NewWindow(root),
         },
     };
+    // Only an outcome that actually puts something on screen stands the launcher down. `Ask`
+    // has opened nothing yet — the question is still on screen and Cancel is one of its
+    // answers — so closing the launcher there would spend it on an open that may never happen.
+    let decided = !matches!(target, OpenTarget::Ask(_));
     match target {
         OpenTarget::Nothing => {}
         OpenTarget::Focus(id) => {
@@ -519,9 +524,11 @@ fn open_recent(ctx: &mut RendererContext, app: AppCtx, path: &str) {
         }
         // Both of these are the focused window's own state, so they need no window handle —
         // and `focused` is `Some` by construction, since only its `decide` returns them.
+        // The re-root still goes through its gate: it may raise the confirm instead, if the
+        // project it would tear down has queries running.
         OpenTarget::ThisWindow(root) => {
             if let Some(open) = focused {
-                open.reroot(root);
+                open.reroot(&app, root);
             }
         }
         OpenTarget::Ask(root) => {
@@ -531,7 +538,7 @@ fn open_recent(ctx: &mut RendererContext, app: AppCtx, path: &str) {
         }
     }
     // The launcher exists only while there's nothing else to look at.
-    if let Some(id) = launcher {
+    if let Some(id) = launcher.filter(|_| decided) {
         ctx.request_close_window(Some(id));
     }
 }

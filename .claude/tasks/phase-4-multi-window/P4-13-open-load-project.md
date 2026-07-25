@@ -87,6 +87,23 @@ silently, which is the right fallback but not a New Project affordance.
 - [x] An open from a window that already has a project honours `OpenPref`: This Window re-roots in
       place, New Window opens one, Ask raises the prompt, and "Remember" persists the answer.
 
+### Re-rooting asks before it destroys work
+Opening in place unmounts the project subtree, and dropping its engine aborts **every in-flight
+query** — the same loss ⇧⌘W, the red button and ⌘Q all stop and ask about. So `OpenCtx::reroot`
+goes through that very dialog: `CloseTarget::Reroot(PathBuf)` carries the folder, the T2 confirm
+grows a third copy variant ("Confirm open" / "Stop & open"), and answering it calls
+`reroot_confirmed`. Cancelling leaves the window on its project with the queries still running.
+
+The gate is `OpenCtx`'s because all four surfaces reach the re-root through it; the guard and the
+confirm slot ride in `State` slots so `OpenCtx` stays `Copy`, the same trick `TabCloser` uses for
+its engine. `CloseTarget` is `Clone` rather than `Copy` now that one variant carries a path — a
+handful of `*confirm.read()` sites became `.clone()`.
+
+This also settles a dialog-ordering wrinkle: `OpenPrompt` is mounted above `CloseConfirm` in
+document order (deliberately — the canvas puts it at z 210 against the confirm's 96), so if both
+were up, Enter would take "This Window" instead of "Stop & exit". Answering the open question is
+now what *raises* the confirm, so the re-root path can't put both on screen at once.
+
 ### Coverage, and the two gaps in it
 `decide`'s rules (`platform::open::tests`), the keyed remount
 (`project::tests::changing_the_root_remounts_the_project_subtree`) and the rendered dialog

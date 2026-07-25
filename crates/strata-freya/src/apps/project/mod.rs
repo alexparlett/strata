@@ -11,6 +11,7 @@ mod query;
 mod state;
 mod views;
 
+pub use close::{CloseGuard, CloseTarget};
 pub use project::ProjectApp;
 pub use views::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,

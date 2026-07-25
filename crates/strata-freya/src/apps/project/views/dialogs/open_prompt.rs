@@ -7,9 +7,11 @@
 //! a window that already has a project; the routing and both outcomes are
 //! [`OpenCtx`](crate::platform::OpenCtx)'s, so this file is the surface and nothing else.
 //!
-//! Host + card, like the Dioxus original: the host stays mounted reading the slot, but the
+//! Host + card, like the Dioxus original: the host stays mounted reading the slot, while the
 //! card — and so the `remember` checkbox — is a fresh scope per prompt, which is what resets
-//! the box to unchecked on every open rather than carrying the last answer forward.
+//! the box to unchecked on every open rather than carrying the last answer forward. The card
+//! is **keyed on the folder** to make that true even when one question replaces another
+//! without the slot passing through `None`.
 
 use freya::components::use_theme;
 use freya::prelude::*;
@@ -149,6 +151,15 @@ impl Component for OpenPromptCard {
             )
             .into_element()
     }
+
+    /// Keyed on the folder, so a prompt **replaced in place** is a different card. The slot
+    /// does not always pass through `None` between questions — raising a prompt while one is
+    /// already up (a menubar recent behind the open dialog) overwrites it — and without the
+    /// key that would re-render the same scope, carrying a ticked `remember` onto a question
+    /// the user has not answered yet.
+    fn render_key(&self) -> DiffKey {
+        DiffKey::from(&self.path)
+    }
 }
 
 /// The dialog driven for real: mounted under a headless runner, pressed by its own copy, and
@@ -173,10 +184,14 @@ impl Component for OpenPromptCard {
 #[cfg(test)]
 mod interaction {
     use freya_testing::{TestingNode, TestingRunner};
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use strata_core::config::AppConfig;
     use strata_core::theme::load;
 
     use super::*;
+    use crate::apps::project::{CloseGuard, CloseTarget};
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
     use crate::state::ConfigStation;
@@ -206,6 +221,14 @@ mod interaction {
                 let open = r.provide_root_context(|| OpenCtx {
                     root: State::create(PathBuf::from(HERE)),
                     prompt: State::create(Some(PathBuf::from(THERE))),
+                    // Idle by default, like a window with nothing executing; the gate test
+                    // flips `running` before it presses.
+                    guard: State::create(Arc::new(CloseGuard {
+                        running: Arc::new(AtomicBool::new(false)),
+                        confirm: AtomicBool::new(true),
+                        last: AtomicBool::new(false),
+                    })),
+                    confirm: State::create(None),
                 });
                 // The app-globals the actions are handed. Fresh per test, so nothing here
                 // touches the real app's config store.
@@ -272,6 +295,35 @@ mod interaction {
 
         assert_eq!(*open.root.peek(), PathBuf::from(THERE));
         assert!(open.prompt.peek().is_none(), "the question is answered");
+    }
+
+    /// **A re-root asks before it destroys work.** Opening in place unmounts the project
+    /// subtree, and dropping its engine aborts every query executing in it — the same loss
+    /// ⇧⌘W, the red button and ⌘Q all stop and ask about. So with a query in flight This
+    /// Window must hand over to the close-while-running confirm rather than re-root behind
+    /// it; the window keeps its project until that second question is answered.
+    #[test]
+    fn this_window_asks_first_while_a_query_is_running() {
+        let (mut runner, open) = armed();
+        open.guard.peek().running.store(true, Ordering::Relaxed);
+        runner.sync_and_update();
+
+        runner.click_cursor(label_center(&runner, "This Window"));
+        runner.sync_and_update();
+
+        assert_eq!(
+            *open.root.peek(),
+            PathBuf::from(HERE),
+            "the window must not re-root behind a running query"
+        );
+        assert!(
+            matches!(&*open.confirm.peek(), Some(CloseTarget::Reroot(root)) if root == Path::new(THERE)),
+            "the confirm is armed for the folder that was asked about"
+        );
+        assert!(
+            open.prompt.peek().is_none(),
+            "the This/New question itself is answered"
+        );
     }
 
     /// Enter takes the primary action, exactly as pressing it does — `Dialog::on_confirm`.

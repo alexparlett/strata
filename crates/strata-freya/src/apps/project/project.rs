@@ -145,12 +145,29 @@ impl App for ProjectApp {
             move || app
         });
 
-        // This window's **open path**: the project it shows, and the This/New question it is
-        // asking. Window-scoped rather than part of the project subtree, precisely because
-        // writing `root` is what replaces that subtree. Into context for the header switcher.
+        // ── The close bridge's UI half ─────────────────────────────────────────────────
+        // The close guard + the confirm-dialog target into context (the workbench's ⌘W
+        // gate needs both, and so does the open path's re-root gate), then the mirrors and
+        // the veto drain.
+        let guard = use_provide_context({
+            let guard = self.close.guard.clone();
+            move || guard
+        });
+        let mut confirm = use_provide_context(|| State::create(None::<CloseTarget>));
+
+        // This window's **open path**: the project it shows, the This/New question it is
+        // asking, and the close-while-running gate a re-root has to pass — opening in place
+        // aborts whatever is executing, exactly as closing the window would. Window-scoped
+        // rather than part of the project subtree, precisely because writing `root` is what
+        // replaces that subtree. Into context for the header switcher and the confirm dialog.
         let open = OpenCtx {
             root: use_state(|| self.root.clone()),
             prompt: use_state(|| None),
+            guard: use_state({
+                let guard = guard.clone();
+                move || guard
+            }),
+            confirm,
         };
         use_provide_context(move || open);
 
@@ -167,14 +184,6 @@ impl App for ProjectApp {
         // open path Open Recent resolves through.
         use_file_menu(&self.app, Some(open));
 
-        // ── The close bridge's UI half ─────────────────────────────────────────────────
-        // The close guard + the confirm-dialog target into context (the workbench's ⌘W
-        // gate needs both), then the mirrors and the veto drain.
-        let guard = use_provide_context({
-            let guard = self.close.guard.clone();
-            move || guard
-        });
-        let mut confirm = use_provide_context(|| State::create(None::<CloseTarget>));
         // Mirror the confirm-close-running pref into the hook's atomic (subscribes to the
         // config's Settings channel, so a change reaches the next OS close immediately).
         {

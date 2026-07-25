@@ -28,6 +28,7 @@
 //! `last` are still mirrored from reactive state by the root's `use_side_effect`s.
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -68,12 +69,22 @@ pub enum Veto {
 }
 
 /// What the confirm dialog is about to close.
-#[derive(Clone, Copy, PartialEq, Eq)]
+///
+/// Not `Copy`: [`Reroot`](Self::Reroot) carries the folder to open once the question is
+/// answered. Every read of the slot clones instead — a handful of sites, against keeping a
+/// second pending-path slot in step with this one.
+#[derive(Clone, PartialEq, Eq)]
 pub enum CloseTarget {
     /// The whole window (OS close / ⌘Q).
     Window,
     /// One tab whose query is in flight (⌘W).
     Tab(TabId),
+    /// The window's **project**, in favour of the one at this folder — opening in place
+    /// ([`OpenCtx::reroot`](crate::platform::OpenCtx::reroot)) unmounts the project subtree,
+    /// and dropping its engine aborts everything in flight. Same loss of work as closing the
+    /// window, so it asks on the same terms rather than being the one destructive path that
+    /// doesn't.
+    Reroot(PathBuf),
 }
 
 /// The UI half of the bridge, carried in the `ProjectApp`: the shared guard plus the
