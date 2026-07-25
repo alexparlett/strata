@@ -21,7 +21,8 @@ use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
     DataGridThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
-    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    InspectorThemePreference, RecordViewThemePreference, StatusBarThemePreference,
+    TabBarThemePreference, TabThemePreference,
 };
 use crate::components::avatar::AvatarThemePreference;
 use crate::components::run_button::RunButtonThemePreference;
@@ -437,6 +438,17 @@ strata_components! {
     "catalog" => CatalogThemePreference {
         label_color, chevron_color, name_color, column_color, meta_color, rail_fill,
         table_color, view_color, query_color, part_color, part_background, warn_color,
+    },
+    // The column inspector (P3-08): the section eyebrows + the facts box's keys, the title's
+    // text ramp, the two box surfaces (facts rows / nested-field rows) with their border and
+    // row hairline, the completeness bar's three parts, and the source-format badge's tone per
+    // format — a closed set, since a theme can only name the formats it knows.
+    "inspector" => InspectorThemePreference {
+        background, label_color, name_color, value_color, field_color, meta_color, note_color,
+        border_fill, divider_fill, box_background, field_background,
+        emphasis_color, fill_color, null_color, tile_color,
+        format_parquet_color, format_csv_color, format_json_color, format_arrow_color,
+        format_view_color,
     },
     // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
     // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and

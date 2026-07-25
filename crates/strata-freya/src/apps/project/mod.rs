@@ -16,5 +16,6 @@ pub use project::ProjectApp;
 pub use views::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
     DataGridThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
-    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    InspectorThemePreference, RecordViewThemePreference, StatusBarThemePreference,
+    TabBarThemePreference, TabThemePreference,
 };

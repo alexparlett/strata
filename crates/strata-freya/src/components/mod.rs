@@ -1,6 +1,22 @@
 //! Strata's design-system components — reusable, theme-authorable widgets built to the
 //! `design-handoff/` comps. Each owns its `define_theme!` theme (default registered in
 //! `crate::theme`), so its colours follow the sheet and are overridable like every built-in.
+//!
+//! Sizes the design system fixes across components live here, not on any one of them: a constant
+//! scoped to a component is a constant every other consumer has to reach *into* that component
+//! for, which is how one surface's number quietly becomes the app's.
+
+/// A **committing action button's** height — a dialog's Cancel / confirm pair (stamped by the
+/// action strip) and the column inspector's scan card. Freya's `button_layout` hugs its label
+/// (≈28px), which reads as squashed; with a dialog strip's `--sp-4` above and below, this is
+/// also what makes that strip the comps' 58px.
+///
+/// Those two are the only consumers today. The workbench's empty-state CTA is the same kind of
+/// button and still hugs — worth folding in when that surface is next touched.
+///
+/// Deliberately **not** themeable: it is a design-system invariant, not a dress a theme author
+/// gets to retune — a taller button would break the strip's 58px and every layout built on it.
+pub const ACTION_HEIGHT: f32 = 34.;
 
 pub mod avatar;
 pub mod badge;

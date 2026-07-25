@@ -132,7 +132,12 @@ impl Component for OpenPromptCard {
                 Button::new()
                     .outline()
                     .on_press(move |_| {
-                        open.choose(new_platform.clone(), new_app.clone(), true, *remember.peek())
+                        open.choose(
+                            new_platform.clone(),
+                            new_app.clone(),
+                            true,
+                            *remember.peek(),
+                        )
                     })
                     .child(Control::new("New Window")),
             )

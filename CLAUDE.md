@@ -193,6 +193,12 @@ src/apps/project/                the project window (Valin-shaped)
                                  refresh row) over the active pane
       catalog/                   P3-02: mod (pane + sections), section, entry (entry/column/
                                  saved-query rows), columns (flatten + tests), interaction (tests)
+    inspector/                   P3-08 — the selected column, and **only what the source
+                                 reported**: mod (frame + theme + the not-a-column states),
+                                 model (resolve the ColRef path · the dynamic fact list ·
+                                 completeness, all unit-tested off a store), column (title ·
+                                 nested-fields box · STATISTICS), tests. The scan half of
+                                 STATISTICS is P3-09's; its card renders, minus its handler
     workbench/
       mod.rs, empty.rs           workbench shell + no-query empty state
       editor/                    SQL editor: tab, toolbar
@@ -277,6 +283,14 @@ of `FREYA_STATE_ARCHITECTURE.md` (and the P3-03 / P3-06 task files, now fixed) d
 DataFusion would surface the `__snap_*` result snapshots and hide defs whose registration failed,
 which are precisely the rows the catalog exists to show. Catalog mutations call the engine and
 then `ProjectState`'s own methods on the matching `ProjChan`; nothing refetches.
+
+**P3-08 (column inspector)** is ✅, and carries the phase's other standing rule: **only real
+facts.** Every number in the inspector was *read* from the source (footer statistics via
+`ColumnInfo.stats`, the row count via `TableMeta.rows`) — never derived from the rows on screen,
+which is what the Dioxus panel used to do. So the facts box is a dynamic list rather than a grid
+of blanks, inexact footer values render `~value`, and the completeness bar needs a real exact null
+count or it doesn't appear. P3-09's scan lands its facts in that same list, matched on `StatKey`,
+so a fact can never appear twice.
 
 ---
 

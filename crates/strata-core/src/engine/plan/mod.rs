@@ -19,7 +19,7 @@ mod sql;
 mod tree;
 
 pub use detail::{detail_parts, guide_rails, DetailPart};
-pub use fmt::{fmt_bytes, fmt_int, fmt_ms, fmt_ns};
+pub use fmt::{fmt_bytes, fmt_ms, fmt_ns};
 pub use metrics::{
     group_color, insights, metric_group, self_time_ms, Insight, InsightTone, Metric, MetricKind,
     METRIC_GROUPS,

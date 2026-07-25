@@ -142,7 +142,17 @@ Things that must not regress. Each was fought for once already.
   `data-hv` vocabulary maps 1:1 onto existing component themes; duplicating it drifts. Icon-button
   clusters are **28×28**. A missing component *state* (e.g. disabled) belongs on the component's
   own theme **in the fork** (`ButtonColors` grew `disabled_*` for exactly this) — never as a token
-  on the consuming surface's theme.
+  on the consuming surface's theme. And don't restate at a call site what a variant already
+  resolves: `Button::new().filled()` *is* accent-over-inverse-text, so a `theme_colors` override
+  naming those same two slots is a second copy of them. Override only for a genuinely different
+  tone (the destructive action reading `cancel_button`).
+- **A surface with its own component theme reads colours from that theme, not also from the
+  sheet.** Once a component has a `define_theme!`, every colour it paints — surfaces, borders,
+  hairlines, tints — is one of its own fields, authored as a `reference` to a sheet slot where it
+  should track one. The sheet is reached for directly only where the value is **semantic**
+  (`success` / `warning` / `error` / `info` — the status bar's state dot), because those must
+  follow the app-wide ramp wherever they appear. Mixing the two sources in one component is how
+  `colors.border` ends up beside a `border_fill` that already holds the same value.
 - **Fonts are never hardcoded.** Text goes through the typography role components
   (src/components/typography.rs); `Input`s are wrapped in `InputTypography::body(..)`/`::mono(..)`;
   `CodeEditor` pulls from the theme's code scale. Mixed-style inline text (one sentence changing
@@ -211,8 +221,13 @@ Cross-cutting capabilities (clipboard/copy, export, keyboard routing…) get **o
 implementation owned by their backlog task in `.claude/tasks/`. When your feature touches a
 capability another task owns:
 
-- Ship the UI affordance **inert** (a no-op control), and add a "wire into X" note to **both** task
-  files.
+- Ship the UI affordance **inert** — no handler behind it — and add a "wire into X" note to
+  **both** task files. Whether it also *looks* unavailable is a design call, not a rule: a menu
+  item is **parked** (`MenuButton::enabled(false)`, `catalog/menu.rs`) because a menu is a list of
+  things you can do right now, while a surface's **primary call to action keeps its full dress**
+  (the inspector's scan card) because greying it out misrepresents the canvas the surface is built
+  to. Either way the capability arrives with the task that owns it, and nothing at the call site
+  changes but the handler.
 - Do **not** build the shared mechanism early, do not fold a local one-off, and leave **no
   unreferenced pre-work** (pre-built helpers were removed for exactly this — "let the next task
   redefine that how it likes"). Record the intended shape in the owning task's file instead.
@@ -241,10 +256,16 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
   against fork source and hand off to a Mac build (see CLAUDE.md's environment note).
-- **No compound destructive git.** `git checkout`/`restore`/`reset`/`clean` — and any
-  delete/overwrite of work you didn't just create — run **standalone** with an explicit
-  description, never chained into a compound command; with substantial uncommitted work in the
-  tree, not without asking. Cleaning up a failed script means removing the exact files it created.
+- **No destructive git — now enforced, not merely agreed.** `git checkout`/`restore`/`reset`/
+  `clean` are **blocked outright** for agents by a `PreToolUse` hook
+  (`.claude/hooks/block-destructive-git.sh`, wired in `.claude/settings.json`). It reads the whole
+  command string, so chaining one behind `&&`, `;` or `$(…)` does not get past it — which is
+  exactly how the rule was broken while it was only written down. Ask the user to run it, or reach
+  for something that destroys nothing: `git switch` to change branch, `git stash` to park work,
+  `git diff` to inspect. Any other delete/overwrite of work you didn't just create still follows
+  the original rule: **standalone**, with an explicit description, and not at all when there is
+  substantial uncommitted work in the tree unless you have asked. Cleaning up a failed script means
+  removing the exact files it created.
 - **Task files are the working contract.** Each `.claude/tasks/` file is self-contained; keep it
   true — record corrections, wiring notes, and ownership seams there as part of the change (the
   `FetchCatalog` correction and the P4-01 fail-loud seam both live in task files because sessions

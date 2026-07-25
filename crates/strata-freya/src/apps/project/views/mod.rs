@@ -12,6 +12,7 @@ mod workbench;
 
 pub use dialogs::{CloseConfirm, DropConfirm, DropTarget, OpenPrompt};
 pub use header::{HeaderBar, HeaderBarThemePreference};
+pub use inspector::InspectorThemePreference;
 pub use shell::Shell;
 pub use sidebar::CatalogThemePreference;
 pub use workbench::{

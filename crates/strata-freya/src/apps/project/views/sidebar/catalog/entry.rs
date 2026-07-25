@@ -328,9 +328,8 @@ impl Component for EntryRow {
                         &mut rows,
                     );
                     drop(expanded);
-                    // The rail is a 1px sibling column rather than a left border: `BorderWidth`
-                    // takes a single `f32` (all four edges), so a one-sided rule has to be drawn.
-                    // Its height is the exact stack height — every column row is `COLUMN_HEIGHT`.
+                    // The rail is a 1px sibling column, drawn to the exact stack height — every
+                    // column row is `COLUMN_HEIGHT`, so the rule ends where the rows do.
                     // Not `Size::fill()`: the wrapper hugs its content, so `fill` would resolve
                     // against the scroll viewport and stretch the whole block to its height.
                     let rail_height = rows.len() as f32 * COLUMN_HEIGHT;

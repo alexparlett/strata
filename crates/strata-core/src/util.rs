@@ -37,6 +37,24 @@ pub fn sql_hash(sql: &str) -> u64 {
     h
 }
 
+/// Group a non-negative integer with thousands separators (`48213` → `48,213`).
+///
+/// Every surface that prints a count imports it from here — the EXPLAIN plan's metrics, the
+/// results footer and the column inspector's row counts — so two places can't disagree about
+/// how a number looks. Deliberately not re-exported from any of them: one path to one function.
+pub fn fmt_int(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
 /// Human-readable byte size (e.g. `1.4 MB`).
 pub fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -326,6 +344,15 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn ints_group_by_thousands() {
+        assert_eq!(fmt_int(0), "0");
+        assert_eq!(fmt_int(999), "999");
+        assert_eq!(fmt_int(1_000), "1,000");
+        assert_eq!(fmt_int(48_213), "48,213");
+        assert_eq!(fmt_int(2_413_118), "2,413,118");
     }
 
     #[test]
