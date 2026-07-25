@@ -49,6 +49,8 @@ pub struct ToggleButton {
     title: Option<String>,
     on_change: Option<EventHandler<Event<ChangeEventData>>>,
     theme: Option<ToggleButtonThemePartial>,
+    width: Option<Size>,
+    height: Option<Size>,
 }
 
 impl Default for ToggleButton {
@@ -71,6 +73,8 @@ impl ToggleButton {
             title: None,
             on_change: None,
             theme: None,
+            width: None,
+            height: None,
         }
     }
 
@@ -78,6 +82,20 @@ impl ToggleButton {
     /// programmatically — presses report theirs through [`on_change`](Self::on_change).
     pub fn toggle(mut self, on: impl Into<bool>) -> Self {
         self.toggle = on.into();
+        self
+    }
+
+    /// Fix the toggle's width (default: hug the content, at least square). Like the Freya
+    /// `Button`'s `.width`, so a larger control (e.g. the activity rail's 40×38 buttons) sizes
+    /// itself rather than relying on the 28px default.
+    pub fn width(mut self, width: impl Into<Size>) -> Self {
+        self.width = Some(width.into());
+        self
+    }
+
+    /// Fix the toggle's height (default: 28px).
+    pub fn height(mut self, height: impl Into<Size>) -> Self {
+        self.height = Some(height.into());
         self
     }
 
@@ -111,12 +129,12 @@ impl Component for ToggleButton {
             (theme.background, theme.color)
         };
         let on_change = self.on_change.clone();
-        // 28px tall, at least square, hugging wider content — the caller's children inherit
-        // the state's colour ambiently (icons via `currentColor`, labels via the parent).
+        // Default: 28px tall, at least square, hugging wider content — the caller's children
+        // inherit the state's colour ambiently (icons via `currentColor`, labels via the
+        // parent). An explicit `.width`/`.height` fixes the box (rail buttons), in which case
+        // the content just centres — no hug min-width or horizontal padding.
         let button = rect()
-            .height(Size::px(28.))
-            .min_width(Size::px(28.))
-            .padding((0., 6.))
+            .height(self.height.clone().unwrap_or(Size::px(28.)))
             .corner_radius(8.)
             .center()
             .background(background)
@@ -129,6 +147,10 @@ impl Component for ToggleButton {
                 if let Some(on_change) = &on_change {
                     on_change.call(e.map(|_| ChangeEventData::new(v)));
                 }
+            })
+            .map(self.width.clone(), |el, w| el.width(w))
+            .maybe(self.width.is_none(), |el| {
+                el.min_width(Size::px(28.)).padding((0., 6.))
             })
             .children(self.elements.clone());
         match &self.title {

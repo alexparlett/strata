@@ -4,16 +4,18 @@ The surfaces around the workbench: left **sidebar/catalog**, right **column insp
 bottom **drawer** (Problems / Events / History).
 
 ## State of play
-Greenfield in Freya — the project root mounts only **header + workbench** today; there is no sidebar,
-inspector, or drawer. All engine/domain logic exists in `strata-core` (`[core ✓]`): catalog,
+The layout shell is built (**P3-01** ✅): the project root now mounts the full rail · sidebar ·
+workbench · inspector · drawer frame with resizable, collapsible panels (open/collapse state + sizes
+persist across restart). The side panels / drawer are **shells** — chrome only — waiting on their
+content tasks. All engine/domain logic exists in `strata-core` (`[core ✓]`): catalog,
 `RefreshCatalog`, `Profile`, view-deps, validity, diagnostics, event log, history. This phase is
-**UI + wiring**. Do **P3-01** (the layout shell) first.
+**UI + wiring**; the rest fills the shells.
 
 ## Tasks
 
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
-| P3-01 | Project layout shell (rail·sidebar·workbench·inspector·drawer) | ⬜ | — | — |
+| P3-01 | Project layout shell (rail·sidebar·workbench·inspector·drawer) | ✅ | — | — |
 | P3-02 | Catalog sidebar (sections, nested columns, filter) | ⬜ | U3 | P3-01 |
 | P3-03 | Catalog re-scan | ⬜ | D5 | P3-02 |
 | P3-04 | Catalog validity indicators | ⬜ | D11 | P3-02 |
