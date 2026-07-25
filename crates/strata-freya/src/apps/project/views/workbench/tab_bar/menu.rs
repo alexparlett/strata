@@ -49,15 +49,13 @@ pub fn menu_row(label: &str, hint: Command) -> impl IntoElement {
         .child(KeyHint(hint))
 }
 
-/// Build the tab context menu for tab `id`. `sep` is the separator colour, passed in because this runs
-/// from an event handler — no hooks, so it can't read the theme itself. `renaming` is the tab's own
+/// Build the tab context menu for tab `id`. `renaming` is the tab's own
 /// rename flag: "Rename" just flips it on and the tab reacts (seeds the draft, focuses the input, and
 /// commits). Each action runs then closes the menu — a menu-item press lands *inside* the menu, so it
 /// won't dismiss on its own (only an outside press does).
 pub fn tab_context_menu(
     id: TabId,
     mut radio: Radio<SessionState, Chan>,
-    sep: Color,
     mut renaming: State<bool>,
     closer: TabCloser,
     config: ConfigStation,
@@ -87,7 +85,7 @@ pub fn tab_context_menu(
                 })
                 .child(Prose::new("Duplicate")),
         )
-        .child(menu_sep(sep))
+        .child(Divider::menu())
         .child(
             MenuButton::new()
                 .on_press(move |_| {
@@ -122,7 +120,7 @@ pub fn tab_context_menu(
                 })
                 .child(Prose::new("Close all")),
         )
-        .child(menu_sep(sep))
+        .child(Divider::menu())
         .child(
             MenuButton::new()
                 .enabled(can_reopen)
@@ -134,8 +132,3 @@ pub fn tab_context_menu(
         )
 }
 
-/// A menu divider — the shared [`Divider::menu`] recipe (kept as a local alias because this
-/// module's menus reach for it constantly).
-pub fn menu_sep(color: Color) -> Divider {
-    Divider::menu(color)
-}

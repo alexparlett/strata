@@ -47,14 +47,6 @@ define_theme!(
         background: Color,
         color: Color,
         border_fill: Color,
-        /// The switcher's folder glyph.
-        accent: Color,
-        /// The switcher dropdown: the rule between groups, the section labels, and a row's
-        /// name / path.
-        menu_divider_fill: Color,
-        menu_label_color: Color,
-        menu_name_color: Color,
-        menu_path_color: Color,
     }
 );
 
@@ -105,14 +97,13 @@ fn title_bar_press(
 
 impl Component for HeaderBar {
     fn render(&self) -> impl IntoElement {
-        // The bar's own surface is `header_bar`'s; the *content* tints come from the sheet, like
-        // the activity rail's — the palette already carries them, and none of them is a
-        // header-only dress.
+        // Only the bar's own surface is themed here. Its content — the switcher's accent glyph,
+        // the dropdown's text ramp — is root palette colours read through the normal hook, and
+        // its avatars / separators are the shared `Avatar` and `Divider::menu` components.
         let HeaderBarTheme {
             background,
             border_fill,
             color,
-            ..
         } = get_theme!(&self.theme, HeaderBarThemePreference, "header_bar");
 
         // The window's live fill state (the fork's mirror of winit's `is_maximized`). Leaving

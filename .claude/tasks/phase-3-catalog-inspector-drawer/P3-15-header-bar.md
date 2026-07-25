@@ -39,11 +39,19 @@ traffic-light gutter).
   (`ConfigChan::Recents` / `Open`).
 - **Action cluster** — 30×30 standard `button`s: Search and Settings, each wearing its live chord in
   the tooltip (`use_hint_title`).
-- Colours: **all** of it is the `header_bar` theme component — the bar's surface plus the
-  switcher's dress (`accent`, `menu_*`, `avatar_*`), the way every other surface (`tab`,
-  `status_bar`, `record_view`, …) carries its content colours. Both theme files + the generated
-  schema updated (`UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`).
-- `Divider::menu(color)` moved into the shared component (the tab menus' `menu_sep` now delegates).
+- Colours: `header_bar` themes the bar's **own surface** only (background · text · bottom rule).
+  Everything the switcher paints is a root palette colour read through `use_theme()` — no
+  header-only theme fields for colours the sheet already names — and its tiles and separators
+  belong to the shared components below.
+- **`Avatar`** (`components/avatar.rs`) — the initials tile, with its own `avatar` theme
+  (resting / active dress + corner radius). Both theme files + the generated schema updated
+  (`UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`).
+- **`Divider::menu()`** — a *variant*, not a colour argument: a rule inside a menu card takes its
+  colour from that card's own `menu_container` theme, so no menu names one. Replaces the old
+  `menu_sep(color)` helper and the `sep: Color` that was threaded through `tab_context_menu`
+  (it existed only because the menu is built outside a hook scope — the Divider reads the theme
+  itself). Side effect: the tab menus' rules were `text_inverse`, which was invisible on
+  Daylight's white card; they now read in both themes.
 - Icons added: `Folder`, `Gear`, `StrataLogo`.
 
 ## Deliberately not wired here

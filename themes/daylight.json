@@ -740,21 +740,6 @@
       },
       "border_fill": {
         "reference": "border"
-      },
-      "accent": {
-        "reference": "primary"
-      },
-      "menu_divider_fill": {
-        "reference": "border"
-      },
-      "menu_label_color": {
-        "specific": "#8b929d"
-      },
-      "menu_name_color": {
-        "reference": "text_primary"
-      },
-      "menu_path_color": {
-        "reference": "text_placeholder"
       }
     },
     "activity_rail": {

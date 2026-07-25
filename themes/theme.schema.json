@@ -963,21 +963,6 @@
             },
             "border_fill": {
               "$ref": "#/$defs/colorPref"
-            },
-            "accent": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "menu_divider_fill": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "menu_label_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "menu_name_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "menu_path_color": {
-              "$ref": "#/$defs/colorPref"
             }
           }
         },

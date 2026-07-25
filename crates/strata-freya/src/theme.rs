@@ -319,13 +319,9 @@ macro_rules! strata_components {
 }
 
 strata_components! {
-    // The header bar: its own surface (bg · text · bottom rule), plus the project switcher it
-    // carries — the accent-tinted folder glyph, and the dropdown's section labels, row name /
-    // path and group rule. (The rows' initials tiles are the shared `avatar` below.)
-    "header_bar" => HeaderBarThemePreference {
-        background, color, border_fill, accent,
-        menu_divider_fill, menu_label_color, menu_name_color, menu_path_color,
-    },
+    // The header bar's own surface: background, text, and the rule under it. Its switcher paints
+    // with root palette colours and the shared `avatar` / `menu` divider — no header-only dress.
+    "header_bar" => HeaderBarThemePreference { background, color, border_fill },
     // The initials tile a project row leads with (header switcher, launcher lists): the resting
     // dress plus the accent one a project with an open window wears.
     "avatar" => AvatarThemePreference {

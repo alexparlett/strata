@@ -19,7 +19,8 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_core::config::AppConfig;
 
-use super::{HeaderBarTheme, HeaderBarThemePreference};
+use freya::components::use_theme;
+
 use crate::apps::project::state::{ProjChan, ProjectState};
 use crate::components::avatar::Avatar;
 use crate::components::divider::Divider;
@@ -73,9 +74,11 @@ pub struct ProjectMenu;
 impl Component for ProjectMenu {
     fn render(&self) -> impl IntoElement {
         let mut open = use_state(|| false);
-        // The switcher's dress lives in the header's own theme component (`header_bar`), like
-        // every other surface's — no sheet reads here.
-        let theme = get_theme!(&None, HeaderBarThemePreference, "header_bar");
+        // Everything the dropdown paints is a root colour — the accent, and the text ramp — so
+        // it reads the sheet through the normal hook rather than inventing header-only theme
+        // fields for colours the palette already names. The rows' tiles are `Avatar`'s theme and
+        // the separators are `Divider::menu`'s.
+        let colors = use_theme().read().colors.clone();
 
         // This window's project — `ProjChan::Meta` is exactly "the identity changed".
         let project = use_radio::<ProjectState, ProjChan>(ProjChan::Meta);
@@ -127,19 +130,19 @@ impl Component for ProjectMenu {
                             .child(Prose::new("Open…")),
                     ),
             )
-            .child(Divider::menu(theme.menu_divider_fill))
-            .child(section_label("OPEN PROJECTS", theme.menu_label_color));
+            .child(Divider::menu())
+            .child(section_label("OPEN PROJECTS", colors.text_placeholder));
         let menu = open_rows.iter().fold(menu, |menu, row| {
             let current = row.path == active_path;
-            menu.child(project_row(row, true, current, &theme, open))
+            menu.child(project_row(row, true, current, &colors, open))
         });
         let menu = if recent_rows.is_empty() {
             menu
         } else {
             recent_rows.iter().fold(
-                menu.child(Divider::menu(theme.menu_divider_fill))
-                    .child(section_label("RECENT PROJECTS", theme.menu_label_color)),
-                |menu, row| menu.child(project_row(row, false, false, &theme, open)),
+                menu.child(Divider::menu())
+                    .child(section_label("RECENT PROJECTS", colors.text_placeholder)),
+                |menu, row| menu.child(project_row(row, false, false, &colors, open)),
             )
         };
 
@@ -156,10 +159,10 @@ impl Component for ProjectMenu {
                     .horizontal()
                     .cross_align(Alignment::Center)
                     .spacing(8.)
-                    .child(Icon::new(IconName::Folder).color(theme.accent).size(14.))
+                    .child(Icon::new(IconName::Folder).color(colors.primary).size(14.))
                     .child(
                         Control::new(active_name)
-                            .color(theme.menu_name_color)
+                            .color(colors.text_primary)
                             .max_width(Size::px(220.))
                             .text_overflow(TextOverflow::Ellipsis),
                     )
@@ -195,7 +198,7 @@ fn project_row(
     row: &ProjectRow,
     is_open: bool,
     current: bool,
-    theme: &HeaderBarTheme,
+    colors: &ColorsSheet,
     mut open: State<bool>,
 ) -> MenuItem {
     let path = row.path.clone();
@@ -224,13 +227,13 @@ fn project_row(
                         .spacing(2.)
                         .child(
                             Body::new(row.name.as_str())
-                                .color(theme.menu_name_color)
+                                .color(colors.text_primary)
                                 .width(Size::fill())
                                 .text_overflow(TextOverflow::Ellipsis),
                         )
                         .child(
                             Path::new(row.path.as_str())
-                                .color(theme.menu_path_color)
+                                .color(colors.text_placeholder)
                                 .width(Size::fill())
                                 .text_overflow(TextOverflow::Ellipsis),
                         ),
