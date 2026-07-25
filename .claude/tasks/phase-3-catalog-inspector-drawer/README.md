@@ -11,8 +11,8 @@ no task of its own): it is the window's title bar (drag · double-press to fill 
 gutter) and carries the brand, the project switcher, and the ⌘K / ⌘, cluster; the palette, settings
 and open-project actions are placeholders waiting on P6-01 / P4-03 / P4-13. The **catalog sidebar**
 now fills the left pane (**P3-02** ✅) — sections, nested columns, filter, and the column selection
-that drives the inspector. The inspector and drawer are still **shells** waiting on their content
-tasks.
+that drives the inspector — and its ↻ re-scans the catalog (**P3-03** ✅). The inspector and drawer
+are still **shells** waiting on their content tasks.
 
 > **The catalog is the `ProjectState` store**, not a query: the project file's defs plus what
 > registration learned (`Reg<T>`). There is no `FetchCatalog` capability and there must not be —
@@ -21,8 +21,10 @@ tasks.
 > the old, wrong premise and have been corrected.
 
 Most engine/domain logic exists in `strata-core` (`[core ✓]`): catalog registration, `Profile`,
-view-deps, validity, diagnostics, event log, history. **Not** `Engine::refresh_catalog` — P3-03
-writes it (the old `Command::RefreshCatalog` died with P2-01). This phase is **UI + wiring**.
+view-deps, validity, diagnostics, event log, history. `Engine::refresh_catalog` was never written
+and isn't needed: P3-03 settled that **a re-scan is a re-registration from the defs**
+(`Engine::register` already re-infers, and only the def-driven path can retry a table whose
+registration failed) — see its task file. This phase is **UI + wiring**.
 
 **Shared components that landed with P3-02** and are ready for the rest of the phase (and W7):
 `components/sidebar_row.rs` (row shell over Freya's `SideBarItem` — hover/selected + a11y),
@@ -36,7 +38,7 @@ per-`Kind` hues, one shared group).
 | P3-01 | Project layout shell (rail·sidebar·workbench·inspector·drawer) | ✅ | — | — |
 | P3-15 | Header bar (title bar · brand · project switcher · cluster) | ✅ | U2 | — |
 | P3-02 | Catalog sidebar (sections, nested columns, filter) | ✅ | U3 | P3-01 |
-| P3-03 | Catalog re-scan | ⬜ | D5 | P3-02 |
+| P3-03 | Catalog re-scan | ✅ | D5 | P3-02 |
 | P3-04 | Catalog validity indicators | ⬜ | D11 | P3-02 |
 | P3-05 | View dependencies (UI consumer) | ⬜ | D10 | P3-02/04 |
 | P3-06 | Catalog context menus | ⬜ | — | P3-02 |

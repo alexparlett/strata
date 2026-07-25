@@ -220,6 +220,13 @@ impl ProjectState {
     // --- registration landing (the engine's answers, folded onto the rows) ----------
 
     /// Land a table registration answer on its row.
+    ///
+    /// The one funnel every table answer arrives through — project open, a catalog re-scan
+    /// (P3-03), and a table-config save (P4-11) all land here. **When P3-09 adds the profile
+    /// cache, this is where it is dropped**: a landing answer means the files may have moved
+    /// under the row, which is exactly when a cached full-scan becomes a lie — and with it the
+    /// profile of every view whose [`ViewInfo::deps`] name this table, the half of "cached until
+    /// it changes" a view can't get from its own row (D10).
     pub fn table_registered(&mut self, name: &str, meta: TableMeta) {
         if let Some(r) = self.tables.iter_mut().find(|r| r.def.name == name) {
             r.reg = Reg::Ready(meta);
@@ -262,6 +269,35 @@ impl ProjectState {
     pub fn view_failed(&mut self, name: &str, error: String) {
         if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
             v.reg = Reg::Failed(error);
+        }
+    }
+
+    // --- re-scan (P3-03) -----------------------------------------------------------
+
+    /// Reset every table row to `Loading` — the start of a catalog re-scan. The defs are
+    /// untouched; only what the engine last said is dropped, so a row that was `Failed` shows
+    /// as unanswered while it is retried rather than displaying a stale error the re-scan may
+    /// be about to clear.
+    pub fn reload_tables(&mut self) {
+        for t in &mut self.tables {
+            t.reg = Reg::Loading;
+        }
+    }
+
+    /// Reset every view row to `Loading` — the view half of a re-scan.
+    ///
+    /// Views are re-created after the tables land, and the reason is subtle enough to be worth
+    /// stating: a view captures each base table **by `Arc`** in the plan it stores at `CREATE
+    /// VIEW` time, and the table's *name* is never re-resolved at query time (verified against
+    /// DataFusion 54 for D10/D11). So re-registering `orders` does not break a view over it —
+    /// worse, the view keeps scanning the *old* provider with the *old* inferred schema. Only
+    /// re-issuing `CREATE OR REPLACE VIEW` re-plans it against what the re-scan just found.
+    ///
+    /// That is a *refresh*, not a validity check: a view-of-a-view masks a missing table behind
+    /// the still-live inner `Arc`, which is why P3-04 derives validity from `deps` instead.
+    pub fn reload_views(&mut self) {
+        for v in &mut self.views {
+            v.reg = Reg::Loading;
         }
     }
 
@@ -314,5 +350,122 @@ impl ProjectState {
     #[allow(dead_code)]
     pub fn remove_table(&mut self, name: &str) {
         self.tables.retain(|t| t.def.name != name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn table_def(name: &str) -> TableDef {
+        TableDef {
+            name: name.into(),
+            format: "parquet".into(),
+            sources: vec![format!("{name}.parquet")],
+            partition_cols: vec![("year".into(), "Int32".into())],
+        }
+    }
+
+    /// A store with one settled table, one refused table, and one settled view — the three
+    /// registration states a re-scan has to reset.
+    fn settled() -> ProjectState {
+        let defs = ProjectDefs {
+            name: "test".into(),
+            tables: vec![table_def("orders"), table_def("users")],
+            views: vec![ViewDef {
+                name: "orders_daily".into(),
+                sql: "SELECT 1".into(),
+            }],
+            saved_queries: vec![SavedQuery {
+                id: Uuid::from_u128(1),
+                name: "orders by region".into(),
+                sql: "SELECT 2".into(),
+                meta: "—".into(),
+            }],
+        };
+        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-reload-test"));
+        p.table_registered(
+            "orders",
+            TableMeta {
+                columns: Vec::new(),
+                rows: Some(10),
+            },
+        );
+        p.table_failed("users", "no such file".into());
+        p.view_registered(
+            "orders_daily",
+            ViewMeta {
+                columns: Vec::new(),
+                tables: vec!["orders".into()],
+                aliases: Vec::new(),
+            },
+        );
+        p
+    }
+
+    /// A re-scan drops what the engine last said and nothing else: every row goes back to
+    /// `Loading` — including the one that **failed**, which is the case ↻ most needs to serve
+    /// (the user fixed the path and pressed refresh; keeping the stale error would read as if
+    /// nothing was retried).
+    #[test]
+    fn reloading_resets_every_registration_state_including_failures() {
+        let mut p = settled();
+        assert!(p.tables[0].reg.ready().is_some());
+        assert_eq!(p.tables[1].reg.error(), Some("no such file"));
+        assert!(p.views[0].reg.ready().is_some());
+
+        p.reload_tables();
+        p.reload_views();
+
+        assert!(p.tables.iter().all(|t| matches!(t.reg, Reg::Loading)));
+        assert!(p.views.iter().all(|v| matches!(v.reg, Reg::Loading)));
+    }
+
+    /// The defs are the *project*; a re-scan only re-asks the engine about them. Nothing
+    /// persisted may move — otherwise ↻ would be a mutation of the project file's contents.
+    #[test]
+    fn reloading_leaves_the_defs_untouched() {
+        let mut p = settled();
+        let before = p.defs();
+
+        p.reload_tables();
+        p.reload_views();
+
+        let after = p.defs();
+        assert_eq!(before.name, after.name);
+        assert_eq!(
+            before.tables.iter().map(|t| &t.name).collect::<Vec<_>>(),
+            after.tables.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        assert_eq!(before.tables[0].sources, after.tables[0].sources);
+        assert_eq!(
+            before.tables[0].partition_cols,
+            after.tables[0].partition_cols
+        );
+        assert_eq!(before.views[0].sql, after.views[0].sql);
+        // Saved queries aren't engine-registered at all, so a re-scan can't reach them.
+        assert_eq!(before.saved_queries.len(), after.saved_queries.len());
+        assert_eq!(before.saved_queries[0].id, after.saved_queries[0].id);
+    }
+
+    /// A landing answer replaces `Loading` in place — the second half of the round trip, so
+    /// the reset isn't a one-way door into a permanently unanswered catalog.
+    #[test]
+    fn a_reloaded_row_lands_its_new_answer() {
+        let mut p = settled();
+        p.reload_tables();
+
+        p.table_registered(
+            "users",
+            TableMeta {
+                columns: Vec::new(),
+                rows: Some(3),
+            },
+        );
+
+        assert_eq!(p.tables[1].def.name, "users");
+        assert_eq!(p.tables[1].reg.ready().and_then(|m| m.rows), Some(3));
+        // Its neighbour is still awaiting its own answer — rows land one at a time.
+        assert!(matches!(p.tables[0].reg, Reg::Loading));
     }
 }
