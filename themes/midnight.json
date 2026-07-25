@@ -1053,6 +1053,9 @@
       },
       "part_background": {
         "specific": "rgba(76,198,255,.12)"
+      },
+      "warn_color": {
+        "reference": "warning"
       }
     },
     "datagrid": {
@@ -1151,6 +1154,32 @@
       },
       "corner_radius": {
         "specific": 6
+      }
+    },
+    "launcher": {
+      "background": {
+        "reference": "surface_secondary"
+      },
+      "rail_background": {
+        "specific": "#262c35"
+      },
+      "border_fill": {
+        "reference": "border"
+      },
+      "title_color": {
+        "specific": "#b6bfcb"
+      },
+      "label_color": {
+        "specific": "#5d6775"
+      },
+      "nav_background": {
+        "specific": "rgba(76,198,255,.10)"
+      },
+      "row_hover_background": {
+        "specific": "#232831"
+      },
+      "remove_hover_background": {
+        "specific": "#14100f"
       }
     }
   },

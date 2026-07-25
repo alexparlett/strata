@@ -7,13 +7,19 @@
 //! set and the recents from the app-global [`AppConfig`](strata_core::config::AppConfig) — so a
 //! project opening in another window shows up here without any cross-window plumbing of ours.
 //!
-//! **Acting** on a row is deliberately not wired: opening a project is one mechanism (folder
-//! pick → `.strata/` load → this-window-or-new-window per [`OpenPref`], plus the re-open-in-place
-//! guard), owned by **P4-13** with **P4-01**'s window model. There is nothing to call yet, so the
-//! rows log and close; wire them at that one seam rather than folding a header-local open path in
-//! here.
+//! **Acting** on a row goes through [`platform::open_project`] — the same window path the
+//! launcher's rows, ⌘O and the menubar's Open Recent take, so a project that already has a
+//! window is *focused* rather than opened twice, and the row for **this** window's project is
+//! inert because you are already looking at it.
+//!
+//! What is still [`OpenPref`]'s (P4-13) is *which* window an open lands in: this / a new one /
+//! ask. Until that prompt exists every open here opens its own window, which is the honest half
+//! of the answer rather than a guess at the other.
 //!
 //! [`OpenPref`]: strata_core::config::OpenPref
+//! [`platform::open_project`]: crate::platform::open_project
+
+use std::path::Path as FsPath;
 
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -26,6 +32,8 @@ use crate::components::avatar::Avatar;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Body, Control, Eyebrow, Path, Prose};
+use crate::platform;
+use crate::state::AppCtx;
 use crate::state::{use_config, ConfigChan};
 
 /// The dropdown's width — the comp's 328px card, so a long project path has room to read.
@@ -74,6 +82,10 @@ pub struct ProjectMenu;
 impl Component for ProjectMenu {
     fn render(&self) -> impl IntoElement {
         let mut open = use_state(|| false);
+        // The app-globals from the window root: the shared open path needs them, and the
+        // window handle has to be taken here rather than inside a spawned task.
+        let app = consume_context::<AppCtx>();
+        let platform_handle = use_hook(Platform::get);
         // Everything the dropdown paints is a root colour — the accent, and the text ramp — so
         // it reads the sheet through the normal hook rather than inventing header-only theme
         // fields for colours the palette already names. The rows' tiles are `Avatar`'s theme and
@@ -90,7 +102,10 @@ impl Component for ProjectMenu {
         // Two subscriptions, one read: a window opening or closing anywhere moves the open set,
         // and opening a project also re-orders the recents. Both change what this menu lists.
         let config = use_config(ConfigChan::Recents);
-        let _open_set = use_config(ConfigChan::Open);
+        let open_set = use_config(ConfigChan::Open);
+        // Both handles are read: a radio subscribes in `read()`, so taking one without
+        // reading it leaves that channel unable to wake this menu.
+        let _ = open_set.read();
         let (open_rows, recent_rows) = {
             let cfg = config.read();
             let open_rows: Vec<ProjectRow> = cfg
@@ -117,9 +132,12 @@ impl Component for ProjectMenu {
             .on_close(move |_| open.set(false))
             .child(
                 MenuButton::new()
-                    .on_press(move |_| {
-                        tracing::debug!("project switcher: open-project not built yet (P4-13)");
-                        open.set(false);
+                    .on_press({
+                        let app = app.clone();
+                        move |_| {
+                            platform::pick_and_open_project(app.clone());
+                            open.set(false);
+                        }
                     })
                     .child(
                         rect()
@@ -134,7 +152,15 @@ impl Component for ProjectMenu {
             .child(section_label("OPEN PROJECTS", colors.text_placeholder));
         let menu = open_rows.iter().fold(menu, |menu, row| {
             let current = row.path == active_path;
-            menu.child(project_row(row, true, current, &colors, open))
+            menu.child(project_row(
+                row,
+                true,
+                current,
+                &colors,
+                open,
+                &app,
+                &platform_handle,
+            ))
         });
         let menu = if recent_rows.is_empty() {
             menu
@@ -142,7 +168,17 @@ impl Component for ProjectMenu {
             recent_rows.iter().fold(
                 menu.child(Divider::menu())
                     .child(section_label("RECENT PROJECTS", colors.text_placeholder)),
-                |menu, row| menu.child(project_row(row, false, false, &colors, open)),
+                |menu, row| {
+                    menu.child(project_row(
+                        row,
+                        false,
+                        false,
+                        &colors,
+                        open,
+                        &app,
+                        &platform_handle,
+                    ))
+                },
             )
         };
 
@@ -193,21 +229,33 @@ fn section_label(text: &str, color: Color) -> impl IntoElement {
 
 /// One project row: initials avatar · name over path. The row for the window's *own* project is
 /// `selected` (the comp's accent-tinted current row) and does nothing on press — it's already
-/// here; every other row is where P4-13's open path will hang.
+/// here; every other row opens (or focuses) through the shared window path.
+#[allow(clippy::too_many_arguments)]
 fn project_row(
     row: &ProjectRow,
     is_open: bool,
     current: bool,
     colors: &ColorsSheet,
     mut open: State<bool>,
+    app: &AppCtx,
+    platform_handle: &Platform,
 ) -> MenuItem {
     let path = row.path.clone();
+    let app = app.clone();
+    let platform_handle = platform_handle.clone();
     MenuItem::new()
         .selected(current)
         .padding(Gaps::new(8., 12., 8., 12.))
         .on_press(move |_| {
             if !current {
-                tracing::debug!("project switcher: opening `{path}` not built yet (P4-13)");
+                // Through the shared path: an already-open project is focused, and the stored
+                // path is normalised (a legacy `.strata` entry names the project, not its
+                // metadata dir).
+                if let Some(root) = platform::resolve_project_folder(FsPath::new(&path)) {
+                    let open_it =
+                        platform::open_project(platform_handle.clone(), app.clone(), root);
+                    spawn(open_it);
+                }
             }
             open.set(false);
         })

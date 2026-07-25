@@ -6,7 +6,7 @@
 //! *mechanics* (the winit `on_close` bridge, `CloseGuard`, `TabCloser`) live in
 //! `crate::apps::project::close`.
 
-use crate::state::{use_config, use_config_station, write_config, ConfigChan};
+use crate::state::{use_config, use_config_station, write_config, AppCtx, ConfigChan};
 use freya::components::{get_theme, use_theme};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
@@ -14,9 +14,10 @@ use freya::radio::{use_radio, use_radio_station};
 use crate::apps::project::close::CloseTarget;
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
-use crate::components::divider::Divider;
+use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Control, Prose, Title};
+use crate::platform;
 
 /// Mounted right after `ContextMenuViewer` at the window root: while open, its key
 /// handler precedes every feature listener in document order and consumes every press —
@@ -26,13 +27,18 @@ use crate::components::typography::{Control, Prose, Title};
 #[derive(PartialEq)]
 pub struct CloseConfirm {
     pub confirm: State<Option<CloseTarget>>,
+    /// What a confirmed *window* close needs: the shared close path puts the launcher up
+    /// when this window is the app's last, so "Stop & exit" lands where the red button
+    /// would rather than quitting the app.
+    pub app: AppCtx,
 }
 
 impl Component for CloseConfirm {
     fn render(&self) -> impl IntoElement {
-        let mut confirm = self.confirm;
+        let confirm = self.confirm;
+        let platform = use_hook(Platform::get);
         let target = *confirm.read();
-        let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
+        let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let config = use_config_station();
         let settings = use_config(ConfigChan::Settings);
@@ -45,24 +51,53 @@ impl Component for CloseConfirm {
             "cancel_button"
         );
 
-        // Stop & close / Stop & exit — shared by the button and the Enter key. The
-        // rebinds keep the closure `Fn` + `Copy` (both handles are `Copy`), so it can
-        // live in both handlers.
-        let close_anyway = move || {
-            let mut radio = radio;
-            let mut confirm = confirm;
-            match *confirm.peek() {
-                Some(CloseTarget::Tab(id)) => {
-                    // The root's tab-diff funnel cancels/retires the tab's engine state.
-                    radio.write().close_one(id);
-                    confirm.set(None);
+        // Stop & close / Stop & exit — shared by the button and the Enter key, so it's
+        // `Clone` (the theme handle isn't `Copy`) and each handler takes its own.
+        let close_anyway = {
+            let app = self.app.clone();
+            move || {
+                let mut radio = radio;
+                let mut confirm = confirm;
+                // Read the target into a value FIRST. `match *confirm.peek() { … }` keeps the
+                // scrutinee's temporary — and so the generational-box borrow — alive for the
+                // whole match, and the `set(None)` inside then panics ("already borrowed").
+                // Verified with a probe: the match form panics, this one doesn't.
+                let target = *confirm.peek();
+                match target {
+                    Some(CloseTarget::Tab(id)) => {
+                        // The root's tab-diff funnel cancels/retires the tab's engine state.
+                        radio.write().close_one(id);
+                        confirm.set(None);
+                    }
+                    // The shared close path: bypasses the on_close veto (this *is* the
+                    // confirmed close) and hands over to the launcher if we're the last.
+                    // Dismiss first — the close is several async hops (it may stand a
+                    // launcher up before this window goes), and a dialog left armed across
+                    // them can be pressed again and open a *second* launcher.
+                    Some(CloseTarget::Window) => {
+                        confirm.set(None);
+                        // `spawn_forever`, not `spawn`: dismissing unmounts the dialog subtree
+                        // this handler belongs to, and scope teardown drops that scope's tasks
+                        // before they are ever polled — the window would simply never close.
+                        // See the same note in `drop_confirm::drop_row`.
+                        spawn_forever(platform::close_this_window(platform.clone(), app.clone()));
+                    }
+                    None => {}
                 }
-                Some(CloseTarget::Window) => {
-                    // Bypasses the on_close veto — this *is* the confirmed close.
-                    Platform::get().close_current_window();
-                }
-                None => {}
             }
+        };
+        let close_anyway_key = close_anyway.clone();
+        // Every dismissal path (the keep button, Esc, the backdrop). Dismissing a *window*
+        // confirm is also the answer to the quit that raised it: without clearing the flag
+        // it would latch, and every later close would behave as though the app were exiting.
+        let keep_open = move || {
+            let mut confirm = confirm;
+            // Same borrow rule as `close_anyway`: read it out before writing.
+            let quitting = matches!(*confirm.peek(), Some(CloseTarget::Window));
+            if quitting {
+                platform::end_quit();
+            }
+            confirm.set(None);
         };
 
         let Some(target) = target else {
@@ -99,8 +134,6 @@ impl Component for CloseConfirm {
         };
 
         let c = theme.read().colors.clone();
-        // The comp's warning chip: the warning tone at 14% over the card.
-        let chip_bg = c.warning.with_a(36);
 
         // Checked = don't ask = the `confirm_close_running` setting off. Toggling writes
         // the app-global config (the close guard mirrors it immediately) and persists in
@@ -113,30 +146,19 @@ impl Component for CloseConfirm {
             });
         };
 
-        let header = rect()
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .spacing(12.)
-            .child(
-                rect()
-                    .width(Size::px(34.))
-                    .height(Size::px(34.))
-                    .corner_radius(8.)
-                    .background(chip_bg)
-                    .main_align(Alignment::Center)
-                    .cross_align(Alignment::Center)
-                    .child(Icon::new(IconName::Warning).color(c.warning).size(18.)),
-            )
-            .child(
-                rect()
-                    .vertical()
-                    .child(Title::new(title).color(c.text_primary))
-                    .child(
-                        Prose::new(name)
-                            .color(c.text_placeholder)
-                            .text_overflow(TextOverflow::Ellipsis),
-                    ),
-            );
+        // The title run beside the chip: what is being closed, over its name.
+        let header = DialogHeader::new(
+            IconName::Warning,
+            c.warning,
+            rect()
+                .vertical()
+                .child(Title::new(title).color(c.text_primary))
+                .child(
+                    Prose::new(name)
+                        .color(c.text_placeholder)
+                        .text_overflow(TextOverflow::Ellipsis),
+                ),
+        );
 
         let checkbox_row = rect()
             .horizontal()
@@ -148,21 +170,31 @@ impl Component for CloseConfirm {
             .child(Checkbox::new().selected(dont_ask).size(16.))
             .child(Prose::new("Don't ask again").color(c.text_placeholder));
 
-        let footer = rect()
-            .width(Size::fill())
-            .horizontal()
-            .main_align(Alignment::End)
-            .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((12., 24.))
-            .background(c.surface_secondary)
-            .child(
+        // The card, the strip and the modal keys (Esc keeps, Enter stops) are `Dialog`'s; this
+        // supplies the comp's own header, body and its two actions.
+        Dialog::new()
+            // Esc and the backdrop are dismissals, so they go through `keep_open` — clearing
+            // the quit flag, not just the dialog.
+            .on_dismiss(move |_| keep_open())
+            // Enter takes the second clone: `close_anyway` captures the `AppCtx` the launcher
+            // hand-off needs, so it isn't `Copy` and can't be moved into two handlers.
+            .on_confirm(move |_| close_anyway_key())
+            .header(header)
+            .body(
+                rect()
+                    .width(Size::fill())
+                    .vertical()
+                    .spacing(12.)
+                    .child(Prose::new(body).color(c.text_secondary).wrap())
+                    .child(checkbox_row),
+            )
+            .action(
                 Button::new()
                     .flat()
-                    .on_press(move |_| confirm.set(None))
+                    .on_press(move |_| keep_open())
                     .child(Control::new(keep)),
             )
-            .child(
+            .action(
                 Button::new()
                     .filled()
                     .theme_colors(
@@ -183,50 +215,7 @@ impl Component for CloseConfirm {
                             .child(Icon::new(action_icon).size(13.))
                             .child(Control::new(action)),
                     ),
-            );
-
-        let card = rect()
-            .width(Size::px(420.))
-            .corner_radius(14.)
-            .background(c.surface_tertiary)
-            .border(Border::new().width(1.).fill(c.border))
-            .shadow(Shadow::new().y(30.).blur(80.).color(c.shadow))
-            .overflow(Overflow::Clip)
-            .vertical()
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .vertical()
-                    .spacing(12.)
-                    .padding((24., 24., 16., 24.))
-                    .child(header)
-                    .child(Prose::new(body).color(c.text_secondary).wrap())
-                    .child(checkbox_row),
             )
-            .child(Divider::horizontal().color(c.border))
-            .child(footer);
-
-        rect()
-            // The overlay layer + global position lift the whole dialog above the
-            // window content (the same wrapper `Popup` puts around `PopupBackground`).
-            .layer(Layer::Overlay)
-            .position(Position::new_global())
-            // The modal barrier + the canvas's keys: Esc keeps, Enter stops, everything
-            // else is consumed before the feature listeners deeper in document order.
-            .on_global_key_down(move |e: Event<KeyboardEventData>| {
-                match &e.key {
-                    Key::Named(NamedKey::Escape) => confirm.set(None),
-                    Key::Named(NamedKey::Enter) => close_anyway(),
-                    _ => {}
-                }
-                e.prevent_default();
-            })
-            // A backdrop press keeps working (canvas `onCloseConfirmBackdrop`).
-            .child(PopupBackground::new(
-                card.into(),
-                move |_| confirm.set(None),
-                c.overlay,
-            ))
             .into_element()
     }
 }

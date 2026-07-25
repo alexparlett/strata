@@ -7,7 +7,10 @@
 //! silently did nothing), which is exactly what a second copy of a list buys you.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
+use async_io::Timer;
+use freya::components::CircularLoader;
 use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::{CatalogKind, ColRef};
@@ -33,6 +36,20 @@ const DEPTH_INDENT: f32 = 12.;
 /// The chevron gutter on a column row — reserved whether or not the column has one, so names
 /// line up.
 const CHEVRON_SLOT: f32 = 11.;
+/// The entry row's trailing **status glyph** — spinner or validity triangle, one slot, one size.
+const STATUS_SIZE: f32 = 12.;
+/// What the spinner says on hover (and to a screen reader).
+const LOADING: &str = "Loading…";
+/// How long a row must stay unanswered before it is worth spinning about. Most registrations land
+/// well inside this, so the usual project open is a catalog that simply appears — no flicker of
+/// spinners on the way in.
+const SPINNER_DELAY: Duration = Duration::from_millis(400);
+
+/// A status glyph wearing its message as a tooltip. Dropped below, like the rest of the app's
+/// overlays, so it can't cover the row above it in a dense list.
+fn tip(message: impl Into<std::borrow::Cow<'static, str>>) -> TooltipContainer {
+    TooltipContainer::new(Tooltip::new(message)).position(AttachedPosition::Bottom)
+}
 
 /// What a catalog entry (a table or a view) resolved to for rendering: its columns, its partition
 /// columns, and the registration state that produced them.
@@ -82,42 +99,92 @@ impl Component for EntryRow {
             _ => ProjChan::Tables,
         };
         let radio = use_radio::<ProjectState, ProjChan>(channel);
+        // A view's validity is derived against the **live table rows**, and a table failing — or
+        // being dropped — never touches the views channel. So a view row listens on TABLES too:
+        // one store, two antennas, and this read *is* the subscription (the value itself is read
+        // once, below, through `radio`).
+        let tables_radio = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
+        if self.kind == CatalogKind::View {
+            drop(tables_radio.read());
+        }
 
-        // Resolve this row's state out of the store, cloning what we render, so the read guard
-        // drops before any element is built.
-        let state = {
+        // Resolve this row's state and its validity out of the store, cloning what we render, so
+        // the read guard drops before any element is built.
+        let resolved = {
             let p = radio.read();
             match self.kind {
-                CatalogKind::View => {
-                    p.views
-                        .iter()
-                        .find(|v| v.def.name == self.name)
-                        .map(|v| match &v.reg {
-                            Reg::Loading => EntryState::Loading,
-                            Reg::Failed(_) => EntryState::Failed,
-                            Reg::Ready(info) => EntryState::Ready {
-                                columns: info.columns.clone(),
-                                // A view has no partition columns.
-                                partitions: Vec::new(),
-                            },
-                        })
-                }
-                _ => p
-                    .tables
-                    .iter()
-                    .find(|t| t.def.name == self.name)
-                    .map(|t| match &t.reg {
+                CatalogKind::View => p.views.iter().find(|v| v.def.name == self.name).map(|v| {
+                    let state = match &v.reg {
+                        Reg::Loading => EntryState::Loading,
+                        Reg::Failed(_) => EntryState::Failed,
+                        Reg::Ready(info) => EntryState::Ready {
+                            columns: info.columns.clone(),
+                            // A view has no partition columns.
+                            partitions: Vec::new(),
+                        },
+                    };
+                    (state, p.view_problem(v))
+                }),
+                _ => p.tables.iter().find(|t| t.def.name == self.name).map(|t| {
+                    let state = match &t.reg {
                         Reg::Loading => EntryState::Loading,
                         Reg::Failed(_) => EntryState::Failed,
                         Reg::Ready(meta) => EntryState::Ready {
                             columns: meta.columns.clone(),
                             partitions: t.def.partition_cols.clone(),
                         },
-                    }),
+                    };
+                    (state, ProjectState::table_problem(t))
+                }),
             }
         };
+        // **The status slot holds still.** A *settled* answer always applies at once: a row that
+        // comes back clean drops its triangle the moment the answer lands, and one that comes back
+        // broken says why. What is deliberately not immediate is the gap in between — while a row
+        // is unanswered the slot keeps whatever it last showed, for `SPINNER_DELAY`. Registering is
+        // metadata-only (`register_external`: infer the schema, list the files), so the usual pass
+        // is far inside that window and nothing in the pane moves at all; without the hold, ↻ on a
+        // broken row would blink its triangle off and back on, and the empty slot in between would
+        // read as "fine" — a claim the row cannot make while it has no answer. Past the hold the
+        // wait is news in its own right (a partitioned tree of thousands of files, or an object
+        // store) and the spinner takes the slot.
+        //
+        // Both bits of state are armed here, above the early return, so hook order can't depend on
+        // the row still being in the store.
+        let waiting = matches!(resolved, Some((EntryState::Loading, _)));
+        let problem = resolved.as_ref().and_then(|(_, p)| p.clone());
+
+        // Whether the wait has outlasted the hold. Re-armed from zero on every entry into (and exit
+        // from) the wait — but *not* on a re-scan of a row that was already waiting, whose wait
+        // never stopped and whose spinner therefore shouldn't blink.
+        let waited = use_state(|| false);
+        let pending = use_state(|| None::<TaskHandle>);
+        use_side_effect_with_deps(&waiting, move |waiting| {
+            let mut waited = waited;
+            let mut pending = pending;
+            if let Some(task) = pending.write().take() {
+                task.cancel();
+            }
+            waited.set_if_modified(false);
+            if *waiting {
+                pending.set(Some(spawn(async move {
+                    Timer::after(SPINNER_DELAY).await;
+                    waited.set_if_modified(true);
+                })));
+            }
+        });
+
+        // The verdict to keep showing through the gap: the last one that actually settled.
+        let held = use_state(|| None::<String>);
+        use_side_effect_with_deps(&(waiting, problem.clone()), move |(waiting, problem)| {
+            if !waiting {
+                let mut held = held;
+                held.set_if_modified(problem.clone());
+            }
+        });
+
         // The row was dropped from the store between the section's read and ours.
-        let Some(state) = state else {
+        let Some((state, _)) = resolved else {
             return rect();
         };
 
@@ -132,13 +199,35 @@ impl Component for EntryRow {
             CatalogKind::Table => (IconName::Database, self.theme.table_color),
         };
 
-        // The registration state shows only when it is *not* Ready: a settled row is clean, per
-        // the design, and an unanswered or refused one says so rather than looking empty. The
-        // failure's own message is the validity badge's (P3-04), not this label's.
-        let status = match &state {
-            EntryState::Loading => Some("loading…"),
-            EntryState::Failed => Some("failed"),
-            EntryState::Ready { .. } => None,
+        // One trailing **status slot** and at most one glyph in it, with the words only on hover. A
+        // settled row is clean, per the design. No status *text*: "failed" said strictly less than
+        // the reason the triangle carries, and it cost the name half the row. Each glyph declares
+        // its message as an **a11y label** too, so the explanation isn't mouse-only.
+        let status = match (
+            waiting && waited(),
+            if waiting {
+                held.read().clone()
+            } else {
+                problem
+            },
+        ) {
+            // The wait has outlasted the hold, so it is now the thing worth saying. Named, not
+            // bare: P3-09 puts a *profiling* spinner in reach of this same row, and two spinners
+            // meaning different things need to be tellable apart.
+            (true, _) => {
+                Some(tip(LOADING).child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(LOADING)))
+            }
+            // The settled verdict, or — mid-gap — the one still being held.
+            (false, Some(reason)) => Some(
+                tip(reason.clone()).child(
+                    rect().a11y_alt(reason).child(
+                        Icon::new(IconName::Warning)
+                            .color(self.theme.warn_color)
+                            .size(STATUS_SIZE),
+                    ),
+                ),
+            ),
+            (false, None) => None,
         };
 
         let row = SidebarRow::new()
@@ -167,7 +256,7 @@ impl Component for EntryRow {
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
-            .maybe_child(status.map(|s| Meta::new(s).color(self.theme.meta_color).into_element()));
+            .maybe_child(status.map(|s| s.into_element()));
 
         // The column block: an indented run hung off a hairline rail, exactly the canvas's
         // `border-left` treatment.

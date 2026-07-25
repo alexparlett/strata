@@ -993,6 +993,36 @@
             }
           }
         },
+        "launcher": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "rail_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "title_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "nav_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "row_hover_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "remove_hover_background": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "avatar": {
           "type": "object",
           "additionalProperties": false,
@@ -1517,6 +1547,9 @@
               "$ref": "#/$defs/colorPref"
             },
             "part_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "warn_color": {
               "$ref": "#/$defs/colorPref"
             }
           }

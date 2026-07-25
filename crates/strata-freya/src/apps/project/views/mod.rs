@@ -10,7 +10,7 @@ mod shell;
 mod sidebar;
 mod workbench;
 
-pub use dialogs::CloseConfirm;
+pub use dialogs::{CloseConfirm, DropConfirm, DropTarget};
 pub use header::{HeaderBar, HeaderBarThemePreference};
 pub use shell::Shell;
 pub use sidebar::CatalogThemePreference;

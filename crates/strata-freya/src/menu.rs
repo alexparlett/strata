@@ -1,12 +1,13 @@
-//! The application menubar (macOS): the App menu — About · Hide/Show · Quit — and a
-//! standard Edit menu — Undo · Redo · Cut · Copy · Paste · Select All — built with muda
-//! through the fork's `menu` feature.
+//! The application menubar (macOS): the App menu — About · Hide/Show · Quit — a File menu
+//! (Close Project), and a standard Edit menu — Undo · Redo · Cut · Copy · Paste · Select
+//! All — built with muda through the fork's `menu` feature.
 //!
-//! **Quit routes through the close veto**, never Cocoa's `terminate:`: it's a *custom*
-//! item (muda's `PredefinedMenuItem::quit()` would send `terminate:`, the very thing
-//! that bypassed the T2 confirm), whose event the handler turns into
-//! [`NativeEventExt::request_close_window`] — red-button semantics, so the
-//! close-while-running confirm keeps its say.
+//! **Quit and Close Project are different things, and both route through the close veto**,
+//! never Cocoa's `terminate:` (muda's `PredefinedMenuItem::quit()` sends exactly that, the
+//! thing that bypassed the T2 confirm). Quit asks *every* window to close and marks the app
+//! as quitting, so the open projects stay in the persisted open-set and the next launch
+//! reopens them; Close Project asks only the focused window, which drops it from that set
+//! and puts the launcher up if it was the last — the same thing its red button does.
 //!
 //! **The Edit menu is custom items too**, not muda's predefined set: the predefined
 //! items send Cocoa first-responder selectors (`undo:` / `copy:` / …) that a Skia view
@@ -32,25 +33,35 @@
 //! live, per focused window), so the hotkey manager, its focus-gated registration, and
 //! its chord→`Code` table have no job here.
 
+use std::path::Path;
+
 use freya::menu::accelerator::Accelerator;
 use freya::menu::{
     AboutMetadata, IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
 };
 use freya::prelude::{
-    Code, Key, Modifiers, ModifiersExt, NamedKey, NativeEventExt, RendererContext,
+    use_hook, use_side_effect, Code, Key, Modifiers, ModifiersExt, NamedKey, NativeEventExt,
+    Platform, RendererContext, State,
 };
-use strata_core::config::{Command, KeyChord, Settings};
+use strata_core::config::{Command, KeyChord, RecentProject, Settings};
 use strata_core::keymap::effective_chord;
 
-use crate::state::ConfigStation;
+use crate::apps::project::ProjectApp;
+use crate::platform;
+use crate::state::{use_config, AppCtx, ConfigChan};
 
 /// A custom menubar item — the typed vocabulary the builder and the event handler
 /// share, so dispatch is an exhaustive `match`, not string comparison (the Dioxus
 /// menu's `MenuCmd` pattern). Grows a variant per item as the menu fills out (P6-02).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuCmd {
-    /// Quit Strata — routed through the close veto, never Cocoa `terminate:`.
+    /// Quit Strata — every window, routed through the close veto rather than Cocoa
+    /// `terminate:`.
     Quit,
+    /// Pick a project folder and open it.
+    OpenProject,
+    /// Close the focused window (and open the launcher if it was the last).
+    CloseProject,
     Undo,
     Redo,
     Cut,
@@ -60,8 +71,10 @@ pub enum MenuCmd {
 }
 
 impl MenuCmd {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 9] = [
         Self::Quit,
+        Self::OpenProject,
+        Self::CloseProject,
         Self::Undo,
         Self::Redo,
         Self::Cut,
@@ -74,6 +87,8 @@ impl MenuCmd {
     fn id(self) -> &'static str {
         match self {
             Self::Quit => "strata.quit",
+            Self::OpenProject => "strata.file.open-project",
+            Self::CloseProject => "strata.file.close-project",
             Self::Undo => "strata.edit.undo",
             Self::Redo => "strata.edit.redo",
             Self::Cut => "strata.edit.cut",
@@ -89,11 +104,15 @@ impl MenuCmd {
         Self::ALL.into_iter().find(|cmd| id.0 == cmd.id())
     }
 
-    /// The keymap command an Edit item dispatches through the focused window's
-    /// keyboard pipeline. `None` for Quit, which routes through the close veto instead.
-    fn edit_command(self) -> Option<Command> {
+    /// The keymap command this item dispatches through the focused window's keyboard
+    /// pipeline — the Edit set, plus **Open…**, whose folder picker belongs to whichever
+    /// window is focused (the launcher stands down after opening; a project window doesn't).
+    /// `None` for the window-lifecycle items, which the handler routes through the close
+    /// path instead.
+    fn key_command(self) -> Option<Command> {
         match self {
-            Self::Quit => None,
+            Self::Quit | Self::CloseProject => None,
+            Self::OpenProject => Some(Command::OpenProject),
             Self::Undo => Some(Command::Undo),
             Self::Redo => Some(Command::Redo),
             Self::Cut => Some(Command::Cut),
@@ -149,12 +168,129 @@ fn synthetic_key(chord: &KeyChord) -> Option<(Key, Modifiers)> {
     Some((key, modifiers))
 }
 
+/// The id prefix a **recent-project** item carries, with its project folder appended —
+/// the one piece of menu vocabulary that can't be a fixed [`MenuCmd`] variant, because
+/// each item names a different path. Namespaced like the rest, and the path is the id's
+/// whole remainder, so a folder containing the separator can't split wrong.
+const RECENT_ID_PREFIX: &str = "strata.file.recent:";
+
+/// The mutable half of the menubar: the File menu's parts, kept after construction so it
+/// can follow the app.
+///
+/// Two things make it dynamic. **Open Recent** mirrors the config store's recents, which
+/// move on every open, pin and remove. **Close Project** applies only to a window that has
+/// one, so it (and the separator above it) is pulled from the menu while the launcher is
+/// the focused window rather than sitting there greyed — a menubar is app-global, but this
+/// half of it is about the focused window.
+pub struct MenuHandles {
+    file: Submenu,
+    recent: Submenu,
+    separator: PredefinedMenuItem,
+    close_project: MenuItem,
+    /// Whether the separator + Close Project pair is currently in the File menu.
+    closable: bool,
+    /// The recents the submenu currently renders, so an unchanged sync rebuilds nothing.
+    recents: Vec<RecentProject>,
+}
+
+impl MenuHandles {
+    /// Point the File menu at the focused window: its view of the recents, and whether it
+    /// has a project to close. Cheap and idempotent — each half no-ops when already right,
+    /// so the focused window can call it on every recents change.
+    pub fn sync(&mut self, recents: &[RecentProject], closable: bool) {
+        self.sync_recents(recents);
+        self.sync_closable(closable);
+    }
+
+    /// Rebuild **Open Recent** when the list has actually moved. muda has no way to edit an
+    /// item's label in place cheaply, so a change rebuilds the submenu wholesale; the
+    /// equality guard is what keeps that off the hot path.
+    fn sync_recents(&mut self, recents: &[RecentProject]) {
+        let same = self.recents.len() == recents.len()
+            && self
+                .recents
+                .iter()
+                .zip(recents)
+                .all(|(a, b)| a.path == b.path && a.name == b.name);
+        if same {
+            return;
+        }
+        while self.recent.remove_at(0).is_some() {}
+        for r in recents {
+            let item = MenuItem::with_id(
+                MenuId::new(format!("{RECENT_ID_PREFIX}{}", r.path)),
+                &r.name,
+                true,
+                None,
+            );
+            if let Err(err) = self.recent.append(&item) {
+                tracing::error!("menubar: appending a recent failed: {err}");
+            }
+        }
+        // An empty list would be a submenu you can open onto nothing; disabling it says
+        // "there are none" the way every other macOS Open Recent does.
+        self.recent.set_enabled(!recents.is_empty());
+        self.recents = recents.to_vec();
+    }
+
+    /// Add or remove the separator + **Close Project** pair.
+    fn sync_closable(&mut self, closable: bool) {
+        if closable == self.closable {
+            return;
+        }
+        let items: &[&dyn IsMenuItem] = &[&self.separator, &self.close_project];
+        let result = if closable {
+            self.file.append_items(items)
+        } else {
+            self.file
+                .remove(&self.separator)
+                .and_then(|()| self.file.remove(&self.close_project))
+        };
+        match result {
+            Ok(()) => self.closable = closable,
+            Err(err) => tracing::error!("menubar: updating Close Project failed: {err}"),
+        }
+    }
+}
+
+/// The app-global slot the menubar's handles land in. `None` until Freya calls the builder
+/// at `resumed`, which is after `main` creates this but before any window can use it.
+pub type MenuState = State<Option<MenuHandles>>;
+
+/// Create the slot. Call **once**, in `main`, before `launch` — not a hook.
+pub fn create_global_menu() -> MenuState {
+    State::create_global(None)
+}
+
+/// Keep the File menu pointed at this window for as long as it is focused: its recents, and
+/// whether it has a project to close. Call once in a window root, with `closable` set for a
+/// window that owns a project.
+///
+/// Focus is the gate because the menubar is app-global but its File half is about *one*
+/// window — so exactly one window drives it at a time, and a window that isn't focused
+/// never fights the one that is. (Freya's `Platform` is per-window, so despite its name
+/// `is_app_focused` is this window's focus.)
+pub fn use_file_menu(mut menu: MenuState, closable: bool) {
+    let focused = use_hook(Platform::get).is_app_focused;
+    let config = use_config(ConfigChan::Recents);
+    use_side_effect(move || {
+        if !*focused.read() {
+            return;
+        }
+        let recents = config.read();
+        if let Some(handles) = menu.write().as_mut() {
+            handles.sync(&recents.recent_projects, closable);
+        }
+    });
+}
+
 /// The launch-time accelerator chords, resolved from settings before the menu builder
-/// runs (the builder runs on the event loop thread as a `Send` closure, so it captures
-/// plain data — not the settings handle).
+/// runs, so the builder captures plain data rather than the settings handle.
 #[derive(Clone)]
 pub struct MenuChords {
     pub quit: Option<KeyChord>,
+    pub open_project: Option<KeyChord>,
+    pub close_project: Option<KeyChord>,
     pub undo: Option<KeyChord>,
     pub redo: Option<KeyChord>,
     pub cut: Option<KeyChord>,
@@ -167,7 +303,9 @@ pub struct MenuChords {
 pub fn menu_chords(settings: &Settings) -> MenuChords {
     let chord = |cmd| effective_chord(settings, cmd);
     MenuChords {
-        quit: chord(Command::CloseProject),
+        quit: chord(Command::Quit),
+        open_project: chord(Command::OpenProject),
+        close_project: chord(Command::CloseProject),
         undo: chord(Command::Undo),
         redo: chord(Command::Redo),
         cut: chord(Command::Cut),
@@ -177,8 +315,14 @@ pub fn menu_chords(settings: &Settings) -> MenuChords {
     }
 }
 
-/// Build the menubar: the App menu, then the standard Edit menu.
-pub fn app_menu(chords: MenuChords) -> Menu {
+/// Build the menubar: the App menu, the File menu, then the standard Edit menu.
+///
+/// Returns the [`MenuHandles`] the app keeps, because the File menu is **not** static: its
+/// recents follow the config store, and Close Project belongs only to a window that has a
+/// project. Freya calls this from `resumed`, on the thread that called `launch` — the same
+/// (main) thread the UI runs on and the only one muda allows menu work on — so the handles
+/// can be mutated straight from a window's effect, with no renderer hop.
+pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
     let quit = MenuItem::with_id(
         MenuCmd::Quit,
         "Quit Strata",
@@ -204,6 +348,32 @@ pub fn app_menu(chords: MenuChords) -> Menu {
     ];
     if let Err(err) = app.append_items(items) {
         tracing::error!("menubar: appending App menu items failed: {err}");
+    }
+
+    // File: getting *into* a project (Open… · Open Recent) and out of this one (Close
+    // Project, distinct from Quit above it). The recents submenu and the closing pair are
+    // filled in by `MenuHandles::sync` once a window is focused and can say what to show.
+    let file = Submenu::new("File", true);
+    // Open… rides the same keyboard pipeline as the Edit set, so it follows the same rule:
+    // an unbound command has no chord to dispatch and its item ships disabled, rather than
+    // looking live and doing nothing.
+    let open_project = MenuItem::with_id(
+        MenuCmd::OpenProject,
+        "Open…",
+        chords.open_project.is_some(),
+        chords.open_project.as_ref().and_then(accelerator),
+    );
+    let recent = Submenu::new("Open Recent", true);
+    let separator = PredefinedMenuItem::separator();
+    let close_project = MenuItem::with_id(
+        MenuCmd::CloseProject,
+        "Close Project",
+        true,
+        chords.close_project.as_ref().and_then(accelerator),
+    );
+    let items: &[&dyn IsMenuItem] = &[&open_project, &recent];
+    if let Err(err) = file.append_items(items) {
+        tracing::error!("menubar: appending File menu items failed: {err}");
     }
 
     // An unbound command has no chord to dispatch through the keyboard pipeline, so
@@ -232,24 +402,44 @@ pub fn app_menu(chords: MenuChords) -> Menu {
     }
 
     let menu = Menu::new();
-    for submenu in [&app, &edit] {
+    for submenu in [&app, &file, &edit] {
         if let Err(err) = menu.append(submenu) {
             tracing::error!("menubar: appending submenu failed: {err}");
         }
     }
-    menu
+    (
+        menu,
+        MenuHandles {
+            file,
+            recent,
+            separator,
+            close_project,
+            closable: false,
+            recents: Vec::new(),
+        },
+    )
 }
 
-/// The launch menu handler: exhaustive dispatch over [`MenuCmd`]. Quit routes through
-/// the close veto (red-button semantics — the T2 confirm decides while a query runs);
-/// Edit items synthesize their command's *live* effective chord into the focused
-/// window's keyboard pipeline, so the focused element and its bindings decide — the
-/// same path as typed keys.
-pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, config: ConfigStation) {
+/// The launch menu handler: exhaustive dispatch over [`MenuCmd`], plus the recents, whose
+/// ids carry a path rather than naming a fixed command.
+///
+/// Quit and Close Project route through the close veto (red-button semantics — the T2
+/// confirm decides while a query runs), the first over every window and the second over the
+/// focused one. A recent opens straight from here, since only this handler knows *which*
+/// one was picked. Everything else synthesizes its command's *live* effective chord into the
+/// focused window's keyboard pipeline, so the focused window (or element) and its bindings
+/// decide — the same path as typed keys.
+pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, app: AppCtx) {
+    let config = app.config;
+    if let Some(path) = event.id().0.strip_prefix(RECENT_ID_PREFIX) {
+        open_recent(&mut ctx, app, path);
+        return;
+    }
     match MenuCmd::parse(event.id()) {
-        Some(MenuCmd::Quit) => ctx.request_close_window(None),
+        Some(MenuCmd::Quit) => platform::quit_windows(&mut ctx),
+        Some(MenuCmd::CloseProject) => ctx.request_close_window(None),
         Some(cmd) => {
-            let Some(command) = cmd.edit_command() else {
+            let Some(command) = cmd.key_command() else {
                 return;
             };
             let Some(chord) = effective_chord(&config.peek().settings, command) else {
@@ -261,6 +451,32 @@ pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, config: Con
             ctx.send_key_press(None, key, Code::Unidentified, modifiers);
         }
         None => {}
+    }
+}
+
+/// Open a recent from the menubar. This runs on the renderer, which has no `Platform` to
+/// hand [`platform::open_project`], so it does the same two steps directly against the
+/// window map: focus the window that already has this project, else launch one. A launcher
+/// window standing in front of it then stands down, exactly as pressing the row would.
+fn open_recent(ctx: &mut RendererContext, app: AppCtx, path: &str) {
+    // Normalise *before* the registry lookup: windows are registered under the canonical
+    // root, while a recent's stored path may be a symlink or the pre-Freya `.strata` shape
+    // (`migrate_paths` strips the segment but never canonicalizes). Looking up the raw path
+    // would miss and open a second window on a project that already has one.
+    let Some(root) = platform::resolve_project_folder(Path::new(path)) else {
+        return;
+    };
+    let launcher = app.windows.peek().launcher();
+    if let Some(id) = app.windows.peek().project(&root.to_string_lossy()) {
+        if let Some(window) = ctx.windows.get_mut(&id) {
+            window.window().focus_window();
+        }
+    } else {
+        ctx.launch_window(ProjectApp::window(app, root));
+    }
+    // The launcher exists only while there's nothing else to look at.
+    if let Some(id) = launcher {
+        ctx.request_close_window(Some(id));
     }
 }
 
@@ -277,10 +493,23 @@ mod test {
     }
 
     #[test]
-    fn every_edit_item_has_a_command_and_quit_does_not() {
-        assert_eq!(MenuCmd::Quit.edit_command(), None);
-        for cmd in MenuCmd::ALL.into_iter().filter(|cmd| *cmd != MenuCmd::Quit) {
-            assert!(cmd.edit_command().unwrap().is_edit(), "{cmd:?}");
+    fn every_dispatching_item_has_a_command_and_the_window_ones_do_not() {
+        // The window-lifecycle items route through the close path, not the key pipeline.
+        assert_eq!(MenuCmd::Quit.key_command(), None);
+        assert_eq!(MenuCmd::CloseProject.key_command(), None);
+        // Open… rides the key pipeline like the Edit set, but isn't an *editing* command:
+        // its listener is the focused window's, not the focused editor's.
+        assert_eq!(
+            MenuCmd::OpenProject.key_command(),
+            Some(Command::OpenProject)
+        );
+        for cmd in MenuCmd::ALL.into_iter().filter(|cmd| {
+            !matches!(
+                cmd,
+                MenuCmd::Quit | MenuCmd::CloseProject | MenuCmd::OpenProject
+            )
+        }) {
+            assert!(cmd.key_command().unwrap().is_edit(), "{cmd:?}");
         }
     }
 
@@ -289,6 +518,7 @@ mod test {
         let chords = menu_chords(&Settings::default());
         for (name, chord) in [
             ("quit", &chords.quit),
+            ("close_project", &chords.close_project),
             ("undo", &chords.undo),
             ("redo", &chords.redo),
             ("cut", &chords.cut),

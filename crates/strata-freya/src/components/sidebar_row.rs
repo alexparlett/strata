@@ -31,6 +31,7 @@ pub struct SidebarRow {
     radius: f32,
     spacing: f32,
     selected: bool,
+    active_background: Option<Color>,
     on_press: Option<EventHandler<Event<PressEventData>>>,
     children: Vec<Element>,
 }
@@ -44,6 +45,7 @@ impl SidebarRow {
             radius: 6.,
             spacing: 8.,
             selected: false,
+            active_background: None,
             on_press: None,
             children: Vec::new(),
         }
@@ -84,6 +86,15 @@ impl SidebarRow {
         self
     }
 
+    /// Override the **selected** fill only — the one colour that legitimately differs by role.
+    /// The catalog's rows mark a *selection* and wear `sidebar_item`'s neutral `active`; the
+    /// launcher's rail marks *where you are* and wears the canvas's accent tint. Idle and hover
+    /// stay the shared theme's either way, which is the drift this preset exists to prevent.
+    pub fn active_background(mut self, active_background: Color) -> Self {
+        self.active_background = Some(active_background);
+        self
+    }
+
     pub fn on_press(mut self, on_press: impl Into<EventHandler<Event<PressEventData>>>) -> Self {
         self.on_press = Some(on_press.into());
         self
@@ -104,6 +115,10 @@ impl Component for SidebarRow {
             .padding(self.padding)
             .corner_radius(CornerRadius::new_all(self.radius))
             .margin(Gaps::new(0., 0., ROW_GAP, 0.));
+        let theme = match self.active_background {
+            Some(background) => theme.active_background(background),
+            None => theme,
+        };
 
         // `Content::Flex` so a `Size::flex` child (the truncating name) actually distributes —
         // without it the row hugs its content and pushes its trailing run out of the panel.

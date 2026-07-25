@@ -56,8 +56,15 @@ pub enum Command {
     NewTab,
     ReopenTab,
     CloseActiveTab,
-    /// Close the project window (⌘Q / red button / dock quit all route here).
+    /// Pick a project folder and open it (File ▸ Open…).
+    OpenProject,
+    /// Close **this** window (red button / File ▸ Close Project). The launcher takes its
+    /// place when it was the app's last window — never a quit.
     CloseProject,
+    /// Quit Strata: close **every** window (⌘Q / menu Quit / dock quit). The projects with
+    /// a window at that moment stay in [`AppConfig::open_projects`], so "Reopen projects on
+    /// startup" restores them — which is exactly what closing them by hand does not.
+    Quit,
     SaveQuery,
     RunQuery,
     /// Undo the last edit in the focused editor. Like every editing command (see

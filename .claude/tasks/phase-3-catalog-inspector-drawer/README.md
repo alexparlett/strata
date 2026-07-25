@@ -11,8 +11,18 @@ no task of its own): it is the window's title bar (drag · double-press to fill 
 gutter) and carries the brand, the project switcher, and the ⌘K / ⌘, cluster; the palette, settings
 and open-project actions are placeholders waiting on P6-01 / P4-03 / P4-13. The **catalog sidebar**
 now fills the left pane (**P3-02** ✅) — sections, nested columns, filter, and the column selection
-that drives the inspector — and its ↻ re-scans the catalog (**P3-03** ✅). The inspector and drawer
-are still **shells** waiting on their content tasks.
+that drives the inspector — its ↻ re-scans the catalog (**P3-03** ✅), and broken rows carry a
+warning triangle with the reason (**P3-04** ✅). The **drop confirm** is built (**P3-05** ✅),
+naming the views a drop leaves invalid and performing the drop; it is waiting only on P3-06's menu
+to open it. The inspector and drawer are still **shells** waiting on their content tasks.
+
+> **Validity is derived, never stored** (P3-04): `ProjectState::{table_problem, view_problem}`
+> answer off the live rows on every read — a table's from the answer already on it, a view's from
+> whether the base tables its `deps` name are still there and still working. So a re-scan, a drop,
+> or a fixed path needs no invalidation pass; the flag simply follows the catalog. **P3-05** ✅ runs
+> the same `deps` the other way (`dependent_views`: "which views would this drop leave invalid"),
+> and hangs the **drop confirm** off it — the dialog, its consequence line, and the drop itself.
+> P3-06 supplies its trigger and must not write a second drop path.
 
 > **The catalog is the `ProjectState` store**, not a query: the project file's defs plus what
 > registration learned (`Reg<T>`). There is no `FetchCatalog` capability and there must not be —
@@ -39,9 +49,9 @@ per-`Kind` hues, one shared group).
 | P3-15 | Header bar (title bar · brand · project switcher · cluster) | ✅ | U2 | — |
 | P3-02 | Catalog sidebar (sections, nested columns, filter) | ✅ | U3 | P3-01 |
 | P3-03 | Catalog re-scan | ✅ | D5 | P3-02 |
-| P3-04 | Catalog validity indicators | ⬜ | D11 | P3-02 |
-| P3-05 | View dependencies (UI consumer) | ⬜ | D10 | P3-02/04 |
-| P3-06 | Catalog context menus | ⬜ | — | P3-02 |
+| P3-04 | Catalog validity indicators | ✅ | D11 | P3-02 |
+| P3-05 | View dependencies (UI consumer) + drop confirm | ✅ | D10 | P3-02/04 |
+| P3-06 | Catalog context menus | ⬜ | — | P3-02/05 |
 | P3-07 | PART badges · nested JSON · shape detection | ⬜ | D9 | P3-02 |
 | P3-08 | Column inspector (facts box) | ⬜ | U9 | P3-01 |
 | P3-09 | Column/table profiling (PROFILE zone) | ⬜ | D4 | P3-08 |

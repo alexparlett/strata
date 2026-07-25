@@ -12,7 +12,10 @@
 //! free (ids don't move). User-entered names compare case-insensitively
 //! ([`ProjectState::same_name`]) — DataFusion folds unquoted identifiers — and that rule
 //! governs **every** def-identity decision: `name_in_use`, the upserts and the removes.
-//! Only **landing engine answers** matches exactly (round-trips of our own strings).
+//! Only **landing engine answers** matches exactly (round-trips of our own strings). A
+//! view's `deps` are the exception on the read side: they come back from the *planner*,
+//! off the user's SQL rather than our strings, so [`ProjectState::view_problem`] looks
+//! them up case-insensitively too.
 //!
 //! Mutations happen through methods (like `SessionState`) via a `write_channel` guard;
 //! persistence is [`ProjectState::save_defs`] — called at the def-mutation points
@@ -66,7 +69,6 @@ impl<T> Reg<T> {
     }
 
     /// The failure, if any — the sidebar's problem badge.
-    #[allow(dead_code)]
     pub fn error(&self) -> Option<&str> {
         match self {
             Reg::Failed(e) => Some(e),
@@ -112,13 +114,15 @@ impl TableRow {
 pub struct ViewInfo {
     /// The autocomplete symbol catalog (P2-04); the inspector reads it too (Phase 3).
     pub columns: Vec<ColumnInfo>,
-    /// The base tables it reads (transitive — the planner inlines nested views).
-    /// Feature reservoir: the table-drop warning + profile invalidation (Phase 3).
-    #[allow(dead_code)]
+    /// The base tables it reads (transitive — the planner inlines nested views). Read by
+    /// [`ProjectState::view_problem`] (P3-04) and, from the other direction, by
+    /// [`ProjectState::dependent_views`] (P3-05); profile invalidation takes the same list
+    /// (P3-09).
     pub deps: Vec<String>,
-    /// The views it reads (transitive), resolved from the engine's raw aliases.
-    #[allow(dead_code)]
-    // Feature reservoir: the table-drop warning + reload ordering (Phase 3).
+    /// The views it reads (transitive), resolved from the engine's raw aliases. The view
+    /// half of the drop warning: `deps` is base tables *by construction*, so it can answer
+    /// "which views read this table" but never "which views read this view" (DEV_TASKS D10
+    /// records that limit) — this list is what answers it.
     pub view_deps: Vec<String>,
 }
 
@@ -247,6 +251,13 @@ impl ProjectState {
     /// CTE noise it can't tell apart from a view inline. Keep only the ones that are
     /// actually views (a view can't reference itself, and every view has a row from
     /// load, so the filter sees them all regardless of registration order).
+    ///
+    /// Matched with [`same_name`](Self::same_name), not `==`: aliases come back from the
+    /// **planner**, which folds unquoted identifiers to lower case, while def names carry
+    /// whatever the user typed. An exact compare drops every alias of a view named with any
+    /// upper case at all, leaving `view_deps` empty — and since P3-05 an empty list is a
+    /// *claim*, rendered as "nothing reads this view" right before a destructive drop.
+    /// Folding here is what makes `dependent_views`' own fold reachable.
     pub fn view_registered(&mut self, name: &str, meta: ViewMeta) {
         let view_deps: Vec<String> = meta
             .aliases
@@ -254,7 +265,7 @@ impl ProjectState {
             .filter(|a| {
                 self.views
                     .iter()
-                    .any(|v| v.def.name == *a && v.def.name != name)
+                    .any(|v| Self::same_name(&v.def.name, a) && !Self::same_name(&v.def.name, name))
             })
             .collect();
         if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
@@ -273,12 +284,127 @@ impl ProjectState {
         }
     }
 
+    // --- validity (P3-04) ----------------------------------------------------------
+    //
+    // The catalog is *definitions*, not a mirror of DataFusion: a row can exist and not
+    // work. So validity is **derived on read**, never stored — a table's straight off the
+    // answer the engine already gave, a view's against the live table rows its `deps`
+    // name. There is no flag to invalidate, which is what makes it self-heal: put the
+    // file back, re-scan, and the triangle is gone on the next render.
+
+    /// A table's problem, if any — the engine refused its def (missing file, bad path).
+    ///
+    /// Takes a row rather than `&self` because a table's validity is entirely local: it
+    /// is the answer already landed on the row. An **unanswered** row is not a broken one,
+    /// so `Loading` reports nothing — otherwise a re-scan would flash a triangle over
+    /// every table while it retried them.
+    pub fn table_problem(row: &TableRow) -> Option<String> {
+        row.reg.error().map(str::to_owned)
+    }
+
+    /// A view's problem, if any:
+    ///
+    /// - the **hard** failure the engine reported — the SQL didn't plan (a syntax error,
+    ///   or a base table already missing when the view was created); or
+    /// - a **missing dependency** — a base table it reads is gone from the catalog, or is
+    ///   itself failing to register. [`ViewInfo::deps`] is the *transitive* base-table set
+    ///   (the planner inlines nested views at creation), so this reaches through a
+    ///   view-of-a-view, and it catches a table dropped **after** the view registered
+    ///   cleanly, which raises no event of its own.
+    ///
+    /// Note what the triangle does *not* claim. Verified against DataFusion 54: dropping a
+    /// base table does **not** break the view's live plan — that plan captured each source
+    /// by `Arc` at creation and never re-resolves the name, so `SELECT * FROM the_view`
+    /// still answers. What is true is that the view will not survive a reload, which is
+    /// why it is flagged as *left invalid*. It is also why validity is derived from `deps`
+    /// rather than by re-issuing `CREATE OR REPLACE VIEW`: a re-plan catches a directly
+    /// missing base table but a view-of-a-view masks it behind the same live `Arc`.
+    pub fn view_problem(&self, row: &ViewRow) -> Option<String> {
+        let info = match &row.reg {
+            Reg::Failed(e) => return Some(e.clone()),
+            // Unanswered: not broken — and there are no deps to check yet either.
+            Reg::Loading => return None,
+            Reg::Ready(info) => info,
+        };
+        info.deps.iter().find_map(|dep| {
+            // `deps` are engine-landed names, but DataFusion folds unquoted identifiers, so
+            // match them the way the catalog's own name rule does — `name_in_use` already
+            // stops two rows that fold together from coexisting, so this can't widen onto
+            // the wrong row, while an exact compare could miss the right one and cry wolf.
+            match self
+                .tables
+                .iter()
+                .find(|t| Self::same_name(&t.def.name, dep))
+            {
+                None => Some(format!("Reads {dep}, which is no longer in the catalog.")),
+                Some(t) if matches!(t.reg, Reg::Failed(_)) => {
+                    Some(format!("Reads {dep}, which failed to load."))
+                }
+                // Ready, or still loading — a dep mid-re-scan is not a problem.
+                Some(_) => None,
+            }
+        })
+    }
+
+    // --- dependents (P3-05) --------------------------------------------------------
+
+    /// The views a drop of `name` would leave **invalid**, alphabetically (rows are kept
+    /// sorted) — the other direction of the same deps [`view_problem`](Self::view_problem)
+    /// reads (D10). The drop confirm's consequence line and its name chips.
+    ///
+    /// Which list answers depends on what is being dropped, and the two are not
+    /// interchangeable. [`ViewInfo::deps`] is the *base tables* a view reads — transitive,
+    /// because the planner inlines nested views at creation — so it reaches a view-of-a-view
+    /// over the dropped table. [`ViewInfo::view_deps`] is the *views* it reads, which is the
+    /// only thing that can answer the view case at all. A saved query is not a SQL object:
+    /// nothing can read it, so it has no dependents.
+    ///
+    /// Names fold case for the same reason `view_problem`'s lookup does — deps come back
+    /// from the planner, the dropped name comes from a def.
+    ///
+    /// **Left invalid, not broken.** Verified against DataFusion 54: a dependent view's live
+    /// plan captured its sources by `Arc` at creation and never re-resolves their names, so
+    /// it keeps answering after the drop and only fails on the next reload, when its SQL
+    /// re-plans against something that is gone. The confirm says exactly what the row's
+    /// triangle will say (P3-04) — *left invalid* — not "will stop working".
+    ///
+    /// A view with no landed answer is **not** listed: there is no dependency information to
+    /// read off it, and a row that never registered is already flagged on its own account —
+    /// this drop is not what would invalidate it.
+    pub fn dependent_views(&self, kind: CatalogKind, name: &str) -> Vec<String> {
+        self.views
+            .iter()
+            // Tables and views share one namespace, but a view can't read itself — and a
+            // view being dropped is not left invalid by its own drop.
+            .filter(|v| !Self::same_name(&v.def.name, name))
+            .filter(|v| {
+                let Some(info) = v.reg.ready() else {
+                    return false;
+                };
+                match kind {
+                    CatalogKind::Table => &info.deps,
+                    CatalogKind::View => &info.view_deps,
+                    CatalogKind::Query => return false,
+                }
+                .iter()
+                .any(|dep| Self::same_name(dep, name))
+            })
+            .map(|v| v.def.name.clone())
+            .collect()
+    }
+
     // --- re-scan (P3-03) -----------------------------------------------------------
 
     /// Reset every table row to `Loading` — the start of a catalog re-scan. The defs are
-    /// untouched; only what the engine last said is dropped, so a row that was `Failed` shows
-    /// as unanswered while it is retried rather than displaying a stale error the re-scan may
-    /// be about to clear.
+    /// untouched; only what the engine last said is dropped, because that is the truth: mid-re-scan
+    /// the store has no verdict on this row, and keeping the old error here would make `Failed`
+    /// mean two different things.
+    ///
+    /// Display continuity is the *sidebar's* problem, not the store's, and it solves it without
+    /// lying: the row's status slot goes on showing the last verdict it had until a new one lands
+    /// (see `views/sidebar/catalog/entry.rs`), so ↻ on a broken row doesn't blink its triangle off
+    /// and back on. Un-flagging it here would have been the blink; keeping the error here would
+    /// have been a claim we can't make.
     pub fn reload_tables(&mut self) {
         for t in &mut self.tables {
             t.reg = Reg::Loading;
@@ -322,7 +448,6 @@ impl ProjectState {
 
     /// Drop the view named `name` — matched like [`upsert_view`](Self::upsert_view), so a
     /// drop names the same row a save would have replaced.
-    #[allow(dead_code)]
     pub fn remove_view(&mut self, name: &str) {
         self.views.retain(|v| !Self::same_name(&v.def.name, name));
     }
@@ -338,7 +463,6 @@ impl ProjectState {
     }
 
     /// Drop the saved query with this `id`.
-    #[allow(dead_code)]
     pub fn remove_saved_query(&mut self, id: Uuid) {
         self.saved_queries.retain(|q| q.id != id);
     }
@@ -357,7 +481,6 @@ impl ProjectState {
     }
 
     /// Drop the table named `name` — matched like [`upsert_table`](Self::upsert_table).
-    #[allow(dead_code)]
     pub fn remove_table(&mut self, name: &str) {
         self.tables.retain(|t| !Self::same_name(&t.def.name, name));
     }
@@ -508,5 +631,347 @@ mod tests {
         assert_eq!(p.tables[1].reg.ready().and_then(|m| m.rows), Some(3));
         // Its neighbour is still awaiting its own answer — rows land one at a time.
         assert!(matches!(p.tables[0].reg, Reg::Loading));
+    }
+
+    // --- validity (P3-04) --------------------------------------------------------------
+
+    fn view_meta(deps: &[&str]) -> ViewMeta {
+        ViewMeta {
+            columns: Vec::new(),
+            tables: deps.iter().map(|d| (*d).to_string()).collect(),
+            aliases: Vec::new(),
+        }
+    }
+
+    /// A table says what the engine said, and *only* when the engine has refused it. The
+    /// unanswered case is the one worth pinning: a re-scan resets every row to `Loading`, and
+    /// treating that as a problem would put a triangle on the whole catalog while it retried.
+    #[test]
+    fn a_table_is_invalid_only_once_registration_has_actually_failed() {
+        let p = settled();
+
+        assert_eq!(ProjectState::table_problem(&p.tables[0]), None, "Ready");
+        assert_eq!(
+            ProjectState::table_problem(&p.tables[1]).as_deref(),
+            Some("no such file"),
+            "Failed carries the engine's own reason"
+        );
+
+        let mut p = p;
+        p.reload_tables();
+        assert!(
+            p.tables
+                .iter()
+                .all(|t| ProjectState::table_problem(t).is_none()),
+            "an unanswered row is not a broken one"
+        );
+    }
+
+    /// A view's hard failure — the SQL never planned — is reported verbatim, and short-circuits
+    /// the dependency walk (there are no deps to walk: nothing landed).
+    #[test]
+    fn a_view_reports_the_failure_the_engine_gave_it() {
+        let mut p = settled();
+        p.view_failed("orders_daily", "Schema error: No field named x".into());
+
+        assert_eq!(
+            p.view_problem(&p.views[0]).as_deref(),
+            Some("Schema error: No field named x")
+        );
+    }
+
+    /// The derived half: a view that registered *cleanly* turns invalid when a base table it
+    /// reads leaves the catalog. Dropping a table raises no event of the view's own — this is
+    /// the only thing that notices.
+    #[test]
+    fn a_view_over_a_dropped_table_is_invalid() {
+        let mut p = settled();
+        assert_eq!(p.view_problem(&p.views[0]), None, "healthy to begin with");
+
+        p.remove_table("orders");
+
+        assert_eq!(
+            p.view_problem(&p.views[0]).as_deref(),
+            Some("Reads orders, which is no longer in the catalog.")
+        );
+    }
+
+    /// A base table that is *present but broken* is just as fatal to the view, and says so in
+    /// its own words — "failed to load" points at the table, not at the view's SQL.
+    #[test]
+    fn a_view_over_a_failed_table_is_invalid() {
+        let mut p = settled();
+        p.table_failed("orders", "No such file or directory (os error 2)".into());
+
+        assert_eq!(
+            p.view_problem(&p.views[0]).as_deref(),
+            Some("Reads orders, which failed to load.")
+        );
+    }
+
+    /// A dep that is merely *unanswered* is not a problem. Mid-re-scan every table is
+    /// `Loading` for a moment, and flagging then would strobe the whole VIEWS section.
+    #[test]
+    fn a_view_whose_base_table_is_still_loading_is_not_flagged() {
+        let mut p = settled();
+        p.reload_tables();
+
+        assert_eq!(p.view_problem(&p.views[0]), None);
+    }
+
+    /// Nothing is stored, so nothing has to be invalidated: the answer follows the catalog.
+    /// Re-register the table and the view is simply valid again on the next read.
+    #[test]
+    fn a_views_validity_heals_when_its_base_table_comes_back() {
+        let mut p = settled();
+        p.table_failed("orders", "gone".into());
+        assert!(p.view_problem(&p.views[0]).is_some());
+
+        p.table_registered(
+            "orders",
+            TableMeta {
+                columns: Vec::new(),
+                rows: Some(10),
+            },
+        );
+
+        assert_eq!(p.view_problem(&p.views[0]), None);
+    }
+
+    /// Deps are transitive base tables (the planner inlines a view-of-a-view at creation), so
+    /// a missing table deep under a nested view still reaches the outer view's row — and the
+    /// message names the *table*, which is the thing the user has to fix.
+    #[test]
+    fn a_nested_views_missing_base_table_still_reaches_the_outer_view() {
+        let mut p = settled();
+        p.upsert_view(ViewDef {
+            name: "orders_weekly".into(),
+            sql: "SELECT * FROM orders_daily".into(),
+        });
+        // What the planner lands for a view over a view: the *base* tables, inlined.
+        p.view_registered("orders_weekly", view_meta(&["orders"]));
+
+        p.remove_table("orders");
+
+        let outer = p
+            .views
+            .iter()
+            .find(|v| v.def.name == "orders_weekly")
+            .expect("the nested view is in the catalog");
+        assert_eq!(
+            p.view_problem(outer).as_deref(),
+            Some("Reads orders, which is no longer in the catalog.")
+        );
+    }
+
+    // --- dependents (P3-05) ------------------------------------------------------------
+
+    /// A view meta that reads views as well as tables — what the planner lands for a view over
+    /// a view (the base tables inlined, plus the view names among its raw aliases).
+    fn view_meta_over(tables: &[&str], views: &[&str]) -> ViewMeta {
+        ViewMeta {
+            columns: Vec::new(),
+            tables: tables.iter().map(|d| (*d).to_string()).collect(),
+            aliases: views.iter().map(|d| (*d).to_string()).collect(),
+        }
+    }
+
+    /// The headline: dropping a table names the views that read it, and only those. This is what
+    /// the confirm dialog states before the drop turns them all into triangles.
+    #[test]
+    fn dropping_a_table_names_the_views_that_read_it() {
+        let mut p = settled();
+        p.upsert_view(ViewDef {
+            name: "user_signups".into(),
+            sql: "SELECT * FROM users".into(),
+        });
+        p.view_registered("user_signups", view_meta(&["users"]));
+
+        assert_eq!(
+            p.dependent_views(CatalogKind::Table, "orders"),
+            vec!["orders_daily".to_string()]
+        );
+        assert_eq!(
+            p.dependent_views(CatalogKind::Table, "users"),
+            vec!["user_signups".to_string()]
+        );
+    }
+
+    /// A table nothing reads has no consequence line at all — the dialog must not manufacture
+    /// one, so "nothing depends on this" has to come back empty rather than as a zero.
+    #[test]
+    fn a_table_no_view_reads_has_no_dependents() {
+        let p = settled();
+
+        assert!(p.dependent_views(CatalogKind::Table, "users").is_empty());
+    }
+
+    /// Deps are transitive base tables, so a view *of a view* over the dropped table is named
+    /// too — it is just as invalid, and it is the case a hand-rolled "which views mention this
+    /// name" scan would miss.
+    #[test]
+    fn a_table_drop_reaches_through_a_nested_view() {
+        let mut p = settled();
+        p.upsert_view(ViewDef {
+            name: "orders_weekly".into(),
+            sql: "SELECT * FROM orders_daily".into(),
+        });
+        // The planner inlines the inner view: base tables in `tables`, the view in `aliases`.
+        p.view_registered(
+            "orders_weekly",
+            view_meta_over(&["orders"], &["orders_daily"]),
+        );
+
+        assert_eq!(
+            p.dependent_views(CatalogKind::Table, "orders"),
+            vec!["orders_daily".to_string(), "orders_weekly".to_string()],
+            "both the direct reader and the view over it"
+        );
+    }
+
+    /// Dropping a **view** is the other lookup — `view_deps`, not `deps`. Asserting both
+    /// directions off one store is the point: `orders_daily` reads `orders` and is read by
+    /// `orders_weekly`, and neither question may be answered with the other's list.
+    #[test]
+    fn dropping_a_view_names_the_views_that_read_it_not_its_base_tables_readers() {
+        let mut p = settled();
+        p.upsert_view(ViewDef {
+            name: "orders_weekly".into(),
+            sql: "SELECT * FROM orders_daily".into(),
+        });
+        p.view_registered(
+            "orders_weekly",
+            view_meta_over(&["orders"], &["orders_daily"]),
+        );
+
+        assert_eq!(
+            p.dependent_views(CatalogKind::View, "orders_daily"),
+            vec!["orders_weekly".to_string()]
+        );
+        assert!(
+            p.dependent_views(CatalogKind::View, "orders_weekly")
+                .is_empty(),
+            "nothing reads the outer view"
+        );
+    }
+
+    /// The row being dropped is never listed as its own dependent — a confirm warning that a
+    /// view will invalidate itself is noise.
+    ///
+    /// The guard is held at both layers, and this pins the **lookup's**, so the row is written
+    /// past `view_registered` (which already strips a self-alias): going through the landing path
+    /// would leave `view_deps` empty and the test would pass without the filter existing at all.
+    #[test]
+    fn a_view_is_never_listed_as_its_own_dependent() {
+        let mut p = settled();
+        p.views[0].reg = Reg::Ready(ViewInfo {
+            columns: Vec::new(),
+            deps: Vec::new(),
+            view_deps: vec!["orders_daily".into()],
+        });
+        assert_eq!(
+            p.views[0].def.name, "orders_daily",
+            "the self-referencing row"
+        );
+
+        assert!(p
+            .dependent_views(CatalogKind::View, "orders_daily")
+            .is_empty());
+    }
+
+    /// The view→view direction folds case too, and it has to fold at **landing**: the planner
+    /// hands back lower-cased aliases while def names keep the user's capitals, so an exact
+    /// filter in `view_registered` would leave `view_deps` empty and the drop confirm would
+    /// state that nothing reads a view that something does.
+    #[test]
+    fn view_dependencies_fold_case_when_the_alias_lands() {
+        let defs = ProjectDefs {
+            name: "test".into(),
+            tables: Vec::new(),
+            views: vec![
+                ViewDef {
+                    name: "Orders_Daily".into(),
+                    sql: "SELECT 1".into(),
+                },
+                ViewDef {
+                    name: "orders_weekly".into(),
+                    sql: "SELECT * FROM Orders_Daily".into(),
+                },
+            ],
+            saved_queries: Vec::new(),
+        };
+        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-viewdeps-fold-test"));
+        // What the planner lands: the alias folded to lower case.
+        p.view_registered("orders_weekly", view_meta_over(&[], &["orders_daily"]));
+
+        assert_eq!(
+            p.dependent_views(CatalogKind::View, "Orders_Daily"),
+            vec!["orders_weekly".to_string()]
+        );
+    }
+
+    /// Nothing can read a saved query — it is a stored string, not a SQL object — so a delete
+    /// has no dependents to warn about however the catalog is shaped.
+    #[test]
+    fn a_saved_query_has_no_dependents() {
+        let p = settled();
+
+        assert!(p
+            .dependent_views(CatalogKind::Query, "orders by region")
+            .is_empty());
+        assert!(p.dependent_views(CatalogKind::Query, "orders").is_empty());
+    }
+
+    /// A view with no landed answer carries no dependency information, so it can't be counted.
+    /// Mid-re-scan that is the whole catalog — a confirm that claimed every view would be left
+    /// invalid, or none, purely on scan timing would be worthless.
+    #[test]
+    fn an_unanswered_view_is_not_counted_as_a_dependent() {
+        let mut p = settled();
+        assert_eq!(p.dependent_views(CatalogKind::Table, "orders").len(), 1);
+
+        p.reload_views();
+
+        assert!(p.dependent_views(CatalogKind::Table, "orders").is_empty());
+    }
+
+    /// The same case fold as everywhere else: the dep names come from the planner, the dropped
+    /// name from the def the user is right-clicking.
+    #[test]
+    fn dependents_fold_case_like_the_rest_of_the_catalog() {
+        let mut p = settled();
+        p.view_registered("orders_daily", view_meta(&["ORDERS"]));
+
+        assert_eq!(
+            p.dependent_views(CatalogKind::Table, "orders"),
+            vec!["orders_daily".to_string()]
+        );
+    }
+
+    /// Dep names come back from the planner while def names come from the user, and DataFusion
+    /// folds unquoted identifiers — so the lookup folds case too. Matching exactly would put a
+    /// "no longer in the catalog" triangle on a view whose table is sitting right there.
+    #[test]
+    fn dependency_lookup_folds_case_like_the_rest_of_the_catalog() {
+        let defs = ProjectDefs {
+            name: "test".into(),
+            tables: vec![table_def("Orders")],
+            views: vec![ViewDef {
+                name: "orders_daily".into(),
+                sql: "SELECT 1".into(),
+            }],
+            saved_queries: Vec::new(),
+        };
+        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-validity-test"));
+        p.table_registered(
+            "Orders",
+            TableMeta {
+                columns: Vec::new(),
+                rows: None,
+            },
+        );
+        p.view_registered("orders_daily", view_meta(&["orders"]));
+
+        assert_eq!(p.view_problem(&p.views[0]), None);
     }
 }

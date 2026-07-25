@@ -7,6 +7,7 @@
 //! what actually reaches the tree.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
@@ -55,15 +56,23 @@ fn table(name: &str, partition_cols: Vec<(String, String)>) -> TableDef {
 
 /// A project whose names deliberately overlap across sections: `orders` (table), `orders_daily`
 /// (view) and `orders by region` (saved query) all contain "order", so one filter can be shown to
-/// reach all three; `users` and `regions` never match it.
+/// reach all three; `users`, `regions`, `events` and `archive_totals` never match it.
+///
+/// The last two carry the **invalid** states (P3-04): `events` is a table the engine refuses, and
+/// `archive_totals` is a view whose base table `archive` isn't in the catalog at all.
 fn defs() -> ProjectDefs {
     ProjectDefs {
         name: "test".into(),
         tables: vec![
+            table("events", vec![]),
             table("orders", vec![("year".into(), "Int32".into())]),
             table("users", vec![]),
         ],
         views: vec![
+            ViewDef {
+                name: "archive_totals".into(),
+                sql: "SELECT 1".into(),
+            },
             ViewDef {
                 name: "orders_daily".into(),
                 sql: "SELECT 1".into(),
@@ -90,61 +99,74 @@ fn defs() -> ProjectDefs {
     }
 }
 
-/// The pane mounted over a store whose registrations have already landed — `orders` carries a
-/// nested `address` struct and the `year` partition column, so expansion and the PART chip are
-/// exercisable. One row (`users`) is deliberately left `Loading` to cover the unanswered state.
+/// A store whose registrations have already landed — `orders` carries a nested `address` struct
+/// and the `year` partition column, so expansion and the PART chip are exercisable. `users` is
+/// deliberately left `Loading` to cover the unanswered state, `events` is **refused** by the
+/// engine, and `archive_totals` registered cleanly over a base table that isn't in the catalog.
+fn project() -> ProjectState {
+    let mut p = ProjectState::from_defs(defs(), PathBuf::from("/tmp/strata-catalog-test"));
+    p.table_failed("events", "No such file or directory (os error 2)".into());
+    p.table_registered(
+        "orders",
+        TableMeta {
+            columns: vec![
+                col("id", "Int64", Kind::Num),
+                nested(
+                    "address",
+                    vec![
+                        col("city", "Utf8", Kind::Str),
+                        col("zip", "Utf8", Kind::Str),
+                    ],
+                ),
+                col("year", "Int32", Kind::Num),
+            ],
+            rows: Some(10),
+        },
+    );
+    // `users` stays `Reg::Loading` — the first-paint state every row passes through.
+    p.view_registered(
+        "archive_totals",
+        ViewMeta {
+            columns: vec![col("total", "Int64", Kind::Num)],
+            tables: vec!["archive".into()],
+            aliases: Vec::new(),
+        },
+    );
+    p.view_registered(
+        "orders_daily",
+        ViewMeta {
+            columns: vec![col("day", "Date32", Kind::Ts)],
+            tables: vec!["orders".into()],
+            aliases: Vec::new(),
+        },
+    );
+    p.view_registered(
+        "regions",
+        ViewMeta {
+            columns: vec![col("region", "Utf8", Kind::Str)],
+            tables: Vec::new(),
+            aliases: Vec::new(),
+        },
+    );
+    p
+}
+
+/// The pane over the stores the runner provides. Both the project and the session store come from
+/// the runner as **root contexts**, so a test can write to the catalog (dropping a table, landing a
+/// registration) and read the layout back.
 fn app() -> impl IntoElement {
     use_init_theme(|| strata_theme(&load("midnight")));
-    freya::radio::use_init_radio_station::<ProjectState, ProjChan>(|| {
-        let mut p = ProjectState::from_defs(defs(), PathBuf::from("/tmp/strata-catalog-test"));
-        p.table_registered(
-            "orders",
-            TableMeta {
-                columns: vec![
-                    col("id", "Int64", Kind::Num),
-                    nested(
-                        "address",
-                        vec![
-                            col("city", "Utf8", Kind::Str),
-                            col("zip", "Utf8", Kind::Str),
-                        ],
-                    ),
-                    col("year", "Int32", Kind::Num),
-                ],
-                rows: Some(10),
-            },
-        );
-        // `users` stays `Reg::Loading` — the first-paint state every row passes through.
-        p.view_registered(
-            "orders_daily",
-            ViewMeta {
-                columns: vec![col("day", "Date32", Kind::Ts)],
-                tables: vec!["orders".into()],
-                aliases: Vec::new(),
-            },
-        );
-        p.view_registered(
-            "regions",
-            ViewMeta {
-                columns: vec![col("region", "Utf8", Kind::Str)],
-                tables: Vec::new(),
-                aliases: Vec::new(),
-            },
-        );
-        p
-    });
-    // The session store (which the catalog writes `open_inspector` on) comes from the runner as a
-    // root context, so the test can read the layout back.
     let filter = use_consume::<State<String>>();
     rect().expanded().child(Catalog::new(filter))
 }
 
-/// What the test holds onto: the filter slot to type into, the inspected-column slot and the
-/// session store to assert against.
+/// What the test holds onto: the filter slot to type into, the inspected-column slot, and the
+/// session + project stores to assert against (and, for validity, to mutate).
 type Handles = (
     State<String>,
     State<Option<ColRef>>,
     RadioStation<SessionState, Chan>,
+    RadioStation<ProjectState, ProjChan>,
 );
 
 /// A tall window so every row lays out (the pane's `ScrollView` keeps off-screen children in the
@@ -164,7 +186,9 @@ fn runner() -> (TestingRunner, Handles) {
                     s
                 })
             });
-            (filter, selection, session)
+            let store = r
+                .provide_root_context(|| RadioStation::<ProjectState, ProjChan>::create(project()));
+            (filter, selection, session, store)
         },
         1.,
     )
@@ -316,8 +340,8 @@ fn section_counts_follow_the_filter() {
     runner.sync_and_update();
     runner.sync_and_update();
 
-    assert!(shows(&runner, "TABLES · 2"));
-    assert!(shows(&runner, "VIEWS · 2"));
+    assert!(shows(&runner, "TABLES · 3"));
+    assert!(shows(&runner, "VIEWS · 3"));
     assert!(shows(&runner, "QUERIES · 2"));
 
     type_filter(&mut runner, &mut filter, "order");
@@ -427,7 +451,7 @@ fn a_view_expands_to_its_columns_too() {
 /// inspector, which is how it reopens once collapsed.
 #[test]
 fn selecting_a_column_publishes_its_ref_and_opens_the_inspector() {
-    let (mut runner, (_, selection, session)) = runner();
+    let (mut runner, (_, selection, session, _)) = runner();
     runner.sync_and_update();
     runner.sync_and_update();
 
@@ -458,11 +482,11 @@ fn collapsing_a_section_hides_only_its_own_rows() {
     runner.sync_and_update();
     runner.sync_and_update();
 
-    click_text(&mut runner, "TABLES · 2");
+    click_text(&mut runner, "TABLES · 3");
     assert!(!shows(&runner, "orders"), "the table rows are put away");
     assert!(!shows(&runner, "users"));
     assert!(
-        shows(&runner, "TABLES · 2"),
+        shows(&runner, "TABLES · 3"),
         "the header (and its count) stays"
     );
     assert!(
@@ -470,7 +494,7 @@ fn collapsing_a_section_hides_only_its_own_rows() {
         "the other sections are untouched"
     );
 
-    click_text(&mut runner, "TABLES · 2");
+    click_text(&mut runner, "TABLES · 3");
     assert!(shows(&runner, "orders"), "pressing again restores them");
 }
 
@@ -504,23 +528,262 @@ fn a_nested_field_selects_by_its_full_path() {
     );
 }
 
-// ---- registration state --------------------------------------------------------------------
+// ---- the status slot: unanswered · invalid (P3-04) --------------------------------------------
 
-/// A row whose registration hasn't landed still renders, and says so — the catalog is the
-/// project's defs, so a row exists before (and whether or not) the engine ever answers.
+/// Every status glyph's message, from its **a11y label** — the spinner's "Loading…" and the
+/// validity triangle's reason. Nothing else in the pane declares a label (Freya's own rows, icons
+/// and loaders don't), so this *is* the list of unsettled rows and what each is saying: read the
+/// way a screen reader would rather than the way a 500ms hover would, and settled rows contribute
+/// nothing, which is what makes a whole-list `assert_eq` meaningful.
+fn status_labels(runner: &TestingRunner) -> Vec<String> {
+    let mut labels: Vec<String> = runner.find_many(|_, element| {
+        element
+            .accessibility()
+            .builder
+            .label()
+            .map(|label| label.to_string())
+    });
+    labels.sort();
+    labels
+}
+
+/// Run the tree past the spinner's hold-back, so a row that is genuinely still waiting gets to
+/// spin. Real time, because the delay is a real timer — kept just over the threshold so the suite
+/// pays for it once per test that needs it.
+fn wait_out_the_spinner_delay(runner: &mut TestingRunner) {
+    runner.poll(Duration::from_millis(20), Duration::from_millis(550));
+    runner.sync_and_update();
+}
+
+/// The two halves of the slot, and the asymmetry between them. A **failure is a settled answer**,
+/// so both triangles are there on the first paint, each with its own reason. **Waiting is
+/// transient**, so `users` shows nothing yet — only once the wait outlasts the hold-back does it
+/// join. Every settled row stays silent throughout, and none of it is text in the row any more,
+/// which is the point of the slot.
 #[test]
-fn an_unanswered_row_renders_with_its_loading_state() {
-    let (runner, ..) = runner();
-    let mut runner = runner;
+fn failures_flag_at_once_but_a_wait_has_to_last_before_it_spins() {
+    let (mut runner, ..) = runner();
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    assert_eq!(
+        status_labels(&runner),
+        vec![
+            "No such file or directory (os error 2)".to_string(),
+            "Reads archive, which is no longer in the catalog.".to_string(),
+        ],
+        "the broken rows flag immediately; the waiting one holds its peace"
+    );
+    // The words live on the glyph, not in the row: the name gets the whole width back.
+    for gone in ["loading…", "failed"] {
+        assert!(!shows(&runner, gone), "{gone:?} is no longer a text run");
+    }
+
+    wait_out_the_spinner_delay(&mut runner);
+
+    assert_eq!(
+        status_labels(&runner),
+        vec![
+            "Loading…".to_string(),
+            "No such file or directory (os error 2)".to_string(),
+            "Reads archive, which is no longer in the catalog.".to_string(),
+        ],
+        "a wait this long is worth reporting"
+    );
+}
+
+/// The derived half is *live*: dropping a table flags every view that reads it, even though the
+/// view's own row never changed and the drop raises no view event of its own. This is why the row
+/// subscribes to TABLES as well as VIEWS.
+#[test]
+fn dropping_a_table_flags_the_views_that_read_it() {
+    let (mut runner, (.., mut store)) = runner();
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    assert!(
+        !status_labels(&runner).iter().any(|w| w.contains("orders")),
+        "`orders_daily` starts healthy"
+    );
+
+    store.write_channel(ProjChan::Tables).remove_table("orders");
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    assert!(
+        status_labels(&runner)
+            .iter()
+            .any(|w| w == "Reads orders, which is no longer in the catalog."),
+        "the view over the dropped table is flagged"
+    );
+}
+
+/// Nothing is stored, so nothing has to be invalidated: land the registration the row was waiting
+/// for and its triangle is simply gone on the next render — the row goes silent rather than
+/// swapping one status for another.
+#[test]
+fn a_triangle_clears_when_the_row_registers() {
+    let (mut runner, (.., mut store)) = runner();
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    assert!(status_labels(&runner)
+        .iter()
+        .any(|w| w == "No such file or directory (os error 2)"));
+
+    store.write_channel(ProjChan::Tables).table_registered(
+        "events",
+        TableMeta {
+            columns: vec![col("at", "Timestamp", Kind::Ts)],
+            rows: Some(4),
+        },
+    );
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    assert_eq!(
+        status_labels(&runner),
+        vec!["Reads archive, which is no longer in the catalog.".to_string()],
+        "the flag follows the catalog — there is nothing to clear"
+    );
+}
+
+/// The point of the hold-back: a row whose answer lands quickly — which is nearly all of them —
+/// never spins at all. Waiting out the delay afterwards is what makes this an assertion rather
+/// than a coincidence of when the test looked.
+#[test]
+fn a_row_answered_inside_the_delay_never_spins() {
+    let (mut runner, (.., mut store)) = runner();
     runner.sync_and_update();
     runner.sync_and_update();
 
     assert!(shows(&runner, "users"), "the def renders regardless");
-    assert!(shows(&runner, "loading…"));
-    // A settled row stays clean — no status run for `orders`.
+
+    store.write_channel(ProjChan::Tables).table_registered(
+        "users",
+        TableMeta {
+            columns: vec![col("id", "Int64", Kind::Num)],
+            rows: Some(2),
+        },
+    );
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    wait_out_the_spinner_delay(&mut runner);
+
+    assert!(
+        !status_labels(&runner).iter().any(|l| l == "Loading…"),
+        "the armed spinner was cancelled by the answer, not merely hidden"
+    );
+}
+
+/// How many rows are currently spinning.
+fn spinners(runner: &TestingRunner) -> usize {
+    status_labels(runner)
+        .iter()
+        .filter(|l| *l == "Loading…")
+        .count()
+}
+
+/// The whole point of the hold, and the case that sent us looking: **↻ on a broken row must not
+/// blink its triangle**. A re-scan resets every table row to `Loading`, at which point the store
+/// honestly has no verdict — but the slot keeps showing the last one, so a row that was broken
+/// before and is broken after never visibly changes. Nor does the pane fill with spinners the
+/// instant ↻ is pressed.
+#[test]
+fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
+    let (mut runner, (.., mut store)) = runner();
+    runner.sync_and_update();
+    runner.sync_and_update();
+    let broken = "No such file or directory (os error 2)";
+    assert!(status_labels(&runner).iter().any(|l| l == broken));
+
+    // ↻ — every table row unanswered again, `events` included.
+    store.write_channel(ProjChan::Tables).reload_tables();
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    assert!(
+        status_labels(&runner).iter().any(|l| l == broken),
+        "the verdict is held through the gap rather than un-said"
+    );
+    assert_eq!(spinners(&runner), 0, "and no row spins on the spot");
+
+    // The retry lands, still broken: the triangle was there before, during and after.
+    store
+        .write_channel(ProjChan::Tables)
+        .table_failed("events", broken.into());
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    assert!(status_labels(&runner).iter().any(|l| l == broken));
+}
+
+/// The exception that keeps the hold honest — a **settled** answer applies at once. A re-scan that
+/// fixes a row clears its triangle the moment the registration lands, with no wait to sit through:
+/// holding a verdict we now know to be wrong would be worse than the blink.
+#[test]
+fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
+    let (mut runner, (.., mut store)) = runner();
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    store.write_channel(ProjChan::Tables).reload_tables();
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    store.write_channel(ProjChan::Tables).table_registered(
+        "events",
+        TableMeta {
+            columns: vec![col("at", "Timestamp", Kind::Ts)],
+            rows: Some(4),
+        },
+    );
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    assert!(
+        !status_labels(&runner)
+            .iter()
+            .any(|l| l == "No such file or directory (os error 2)"),
+        "a good answer supersedes the held verdict immediately"
+    );
+}
+
+/// Past the hold, a wait is news in its own right: a row still unanswered after the delay gives its
+/// slot over to the spinner, held verdict or not. The row that was *already* waiting keeps spinning
+/// throughout — its wait never stopped, so re-arming it would blink the spinner instead.
+#[test]
+fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
+    let (mut runner, (.., mut store)) = runner();
+    runner.sync_and_update();
+    wait_out_the_spinner_delay(&mut runner);
     assert_eq!(
-        texts(&runner).iter().filter(|t| *t == "loading…").count(),
+        spinners(&runner),
         1,
-        "only the unanswered row carries a status"
+        "only `users` has been waiting long enough to spin"
+    );
+
+    store.write_channel(ProjChan::Tables).reload_tables();
+    runner.sync_and_update();
+    runner.sync_and_update();
+    assert_eq!(
+        spinners(&runner),
+        1,
+        "the rows the re-scan reset serve the hold; the one already waiting keeps its spinner"
+    );
+
+    wait_out_the_spinner_delay(&mut runner);
+
+    assert_eq!(
+        spinners(&runner),
+        3,
+        "once every table row's wait is real, every one of them spins"
+    );
+    assert!(
+        !status_labels(&runner)
+            .iter()
+            .any(|l| l == "No such file or directory (os error 2)"),
+        "and the spinner supersedes the held triangle rather than doubling up on it"
     );
 }

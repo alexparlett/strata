@@ -54,6 +54,7 @@ define_theme!(
         query_color: Color,
         part_color: Color,
         part_background: Color,
+        warn_color: Color,
     }
 );
 
