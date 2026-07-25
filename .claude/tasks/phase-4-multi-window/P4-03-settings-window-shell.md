@@ -6,7 +6,8 @@
 The settings window frame: single canonical instance, category nav, draft/save, and live theme.
 
 ## Current state
-Not built.
+Not built. The **header gear already exists** (P3-15) as a placeholder that logs, tooltip already
+reactive off the live chord — this task replaces its `tracing::debug!` stub with the window open.
 
 ## Build (to `Settings.dc.html`, DEV_TASKS W1)
 - Its own OS window (Freya `App` root), same chrome as a project window; **single instance,

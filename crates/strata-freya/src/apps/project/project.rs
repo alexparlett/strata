@@ -27,7 +27,7 @@ use futures::StreamExt;
 use strata_core::config::Command;
 use strata_core::project as project_io;
 use strata_core::theme::{effective_id, os_is_dark};
-use strata_model::TabId;
+use strata_model::{TabId, WindowGeom};
 
 pub struct ProjectApp {
     /// The shared theme registry (discovered once in `main`, the same `Arc` in every
@@ -46,6 +46,10 @@ pub struct ProjectApp {
     /// `use_init_project` (so the root is decided before the window opens, in time to
     /// restore its geometry).
     pub root: PathBuf,
+    /// The geometry the window was created with (`None` for a project that has never been
+    /// saved). Handed to `use_autosave` as the seed for the last *normal* geometry, so a
+    /// window filled before it is ever resized still persists a real size.
+    pub geometry: Option<WindowGeom>,
 }
 
 impl ProjectApp {
@@ -79,6 +83,7 @@ impl ProjectApp {
             config,
             close,
             root,
+            geometry: geom,
         })
         .with_title("Strata")
         .with_size(width, height)
@@ -169,9 +174,15 @@ impl App for ProjectApp {
         // (its tabs / order / active — P4-14), else one blank tab. Pulls the project root
         // from the store just provided above; provided via context.
         use_init_session();
+        // Set while the header's double-press is what filled this window — the flag the session
+        // reads to tell *our* transient fill from a window the user sized to the screen himself,
+        // which does persist. Owned here because both the header and autosave need it.
+        let filled_by_app = use_state(|| false);
         // Debounced autosave of that session back to `.strata/session.json` (P4-14). Its
         // subscription is inside the effect's own scope, so it never re-renders this root.
-        use_autosave();
+        // Seeded with the geometry the window opened at — it persists the last size the window
+        // had while neither app-filled nor fullscreen (see the hook).
+        use_autosave(self.geometry, filled_by_app);
         // The window's query-history satellite (P4-14): loads `.strata/history.jsonl` and
         // holds recent runs; the results pane appends to it as runs complete.
         use_init_history();
@@ -208,7 +219,7 @@ impl App for ProjectApp {
             // order — including the ⌘Q/stub rect at the bottom, so the dialog can't be
             // re-triggered or bypassed from the keyboard.
             .child(CloseConfirm { confirm })
-            .child(HeaderBar::new())
+            .child(HeaderBar::new(filled_by_app))
             .child(Shell::new())
             // ⌘Q + the shortcuts whose targets aren't built yet (palette P6, settings
             // window + cycle-windows P4, find-in-results P2-09): the chords are live now —

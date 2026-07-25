@@ -22,6 +22,7 @@ use crate::apps::project::{
     DataGridThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
     RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
+use crate::components::avatar::AvatarThemePreference;
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
@@ -327,7 +328,14 @@ strata_components! {
     "type_palette" => TypePaletteThemePreference {
         str_color, num_color, bool_color, ts_color, struct_color, list_color, map_color,
     },
+    // The header bar's own surface: background, text, and the rule under it. Its switcher paints
+    // with root palette colours and the shared `avatar` / `menu` divider — no header-only dress.
     "header_bar" => HeaderBarThemePreference { background, color, border_fill },
+    // The initials tile a project row leads with (header switcher, launcher lists): the resting
+    // dress plus the accent one a project with an open window wears.
+    "avatar" => AvatarThemePreference {
+        background, color, active_background, active_color, corner_radius: corner,
+    },
     // Freya's own `EditorThemePreference` (the `CodeEditor` reads it off the app `Theme`), but NOT
     // registered by the base theme — so it's a custom component here, not a `theme_registry!` entry.
     "code_editor" => EditorThemePreference {

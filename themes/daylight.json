@@ -1132,6 +1132,23 @@
       "color": {
         "reference": "text_secondary"
       }
+    },
+    "avatar": {
+      "background": {
+        "reference": "success"
+      },
+      "color": {
+        "reference": "text_inverse"
+      },
+      "active_background": {
+        "reference": "primary"
+      },
+      "active_color": {
+        "reference": "text_inverse"
+      },
+      "corner_radius": {
+        "specific": 6
+      }
     }
   },
   "tokens": {

@@ -6,9 +6,13 @@ bottom **drawer** (Problems / Events / History).
 ## State of play
 The layout shell is built (**P3-01** ✅): the project root mounts the full rail · sidebar ·
 workbench · inspector · drawer frame with resizable, collapsible panels (open/collapse state + sizes
-persist across restart). The **catalog sidebar** now fills the left pane (**P3-02** ✅) — sections,
-nested columns, filter, and the column selection that drives the inspector. The inspector and
-drawer are still **shells** waiting on their content tasks.
+persist across restart). The **header** is built too (**P3-15** ✅ — the app-shell surface that had
+no task of its own): it is the window's title bar (drag · double-press to fill · traffic-light
+gutter) and carries the brand, the project switcher, and the ⌘K / ⌘, cluster; the palette, settings
+and open-project actions are placeholders waiting on P6-01 / P4-03 / P4-13. The **catalog sidebar**
+now fills the left pane (**P3-02** ✅) — sections, nested columns, filter, and the column selection
+that drives the inspector. The inspector and drawer are still **shells** waiting on their content
+tasks.
 
 > **The catalog is the `ProjectState` store**, not a query: the project file's defs plus what
 > registration learned (`Reg<T>`). There is no `FetchCatalog` capability and there must not be —
@@ -30,6 +34,7 @@ per-`Kind` hues, one shared group).
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
 | P3-01 | Project layout shell (rail·sidebar·workbench·inspector·drawer) | ✅ | — | — |
+| P3-15 | Header bar (title bar · brand · project switcher · cluster) | ✅ | U2 | — |
 | P3-02 | Catalog sidebar (sections, nested columns, filter) | ✅ | U3 | P3-01 |
 | P3-03 | Catalog re-scan | ⬜ | D5 | P3-02 |
 | P3-04 | Catalog validity indicators | ⬜ | D11 | P3-02 |

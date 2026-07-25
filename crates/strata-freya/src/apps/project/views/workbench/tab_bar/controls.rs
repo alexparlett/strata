@@ -9,6 +9,7 @@ use strata_model::TabId;
 
 use crate::apps::project::close::TabCloser;
 use crate::apps::project::state::{Chan, SessionState};
+use crate::components::divider::Divider;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Caption, InputTypography, Prose};
@@ -287,9 +288,6 @@ impl Component for OverflowMenu {
             let s = radio.read();
             (!s.order.is_empty(), !s.closed.is_empty())
         };
-        // The context menu's separator colour, read here (Component scope) to divide the create
-        // action from the close/reopen group.
-        let sep = use_theme().read().colors.text_inverse;
 
         let menu = Menu::new()
             // Room for the hint row's chord (see `HINT_MENU_WIDTH`) — the Attached
@@ -305,7 +303,7 @@ impl Component for OverflowMenu {
                     })
                     .child(super::menu::menu_row("New query", Command::NewTab)),
             )
-            .child(super::menu::menu_sep(sep))
+            .child(Divider::menu())
             .child(
                 MenuButton::new()
                     .enabled(can_close_all)
