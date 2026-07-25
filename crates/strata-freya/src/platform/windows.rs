@@ -111,25 +111,38 @@ pub fn is_quitting() -> bool {
     QUITTING.load(Ordering::Relaxed)
 }
 
-/// Keep this window in the registry for as long as it lives. Call once in a window root.
+/// Keep this window in the registry for as long as it lives, under whatever `kind` reports.
+/// Call once in a window root.
 ///
 /// A window learns its own id from the renderer (there is no context that carries it), so
-/// the insert lands a beat after mount; the task is scope-bound, so a window that dies
+/// the first insert lands a beat after mount; the task is scope-bound, so a window that dies
 /// before its id arrives never registers one. The removal is a plain [`use_drop`].
-pub fn use_register_window(mut windows: WindowRegistry, kind: WindowKind) {
-    let id = use_state(|| None::<WindowId>);
+///
+/// `kind` is read **reactively**, not taken once: a project window can be re-rooted to
+/// another project in place ([`OpenCtx::reroot`](crate::platform::OpenCtx::reroot)), and an
+/// entry left naming the old project would answer both of the registry's questions wrongly —
+/// opening the old one would focus a window that no longer shows it, and opening the new one
+/// would spawn a second window onto a project this one already has.
+pub fn use_register_window(mut windows: WindowRegistry, kind: impl Fn() -> WindowKind + 'static) {
+    let mut id = use_state(|| None::<WindowId>);
     use_hook(move || {
         let platform = Platform::get();
-        let mut id = id;
         spawn(async move {
-            let window_id = platform.post_callback(|window_id, _| window_id).await;
-            if let Ok(window_id) = window_id {
+            if let Ok(window_id) = platform.post_callback(|window_id, _| window_id).await {
                 id.set(Some(window_id));
-                // Idempotent: a window we opened ourselves was already registered from the
-                // id `launch_window` handed back, which is a frame or two earlier than this.
-                windows.write().by_id.insert(window_id, kind);
             }
         });
+    });
+    use_side_effect(move || {
+        // Called before the early return so the effect subscribes to what `kind` reads even
+        // on the passes where the id hasn't landed yet.
+        let kind = kind();
+        let Some(window_id) = *id.read() else {
+            return;
+        };
+        // Idempotent: a window we opened ourselves was already registered from the id
+        // `launch_window` handed back, which is a frame or two earlier than this.
+        windows.write().by_id.insert(window_id, kind);
     });
     use_drop(move || {
         if let Some(window_id) = *id.peek() {
@@ -148,9 +161,12 @@ fn register(mut windows: WindowRegistry, id: WindowId, kind: WindowKind) {
     windows.write().by_id.insert(id, kind);
 }
 
-/// Open `root` in a project window — **the** path every "open this project" surface takes
-/// (the launcher's rows and OPEN, the header switcher, the recents). A project that already
-/// has a window is focused rather than opened twice.
+/// Open `root` in a **new** project window. A project that already has a window is focused
+/// rather than opened twice.
+///
+/// This is *how* a window comes up, not *where* an open lands: a window that already has a
+/// project routes through [`OpenCtx`](crate::platform::OpenCtx) first, which may re-root that
+/// window in place instead. The launcher calls straight here — it has nothing to displace.
 ///
 /// Returns once the window exists, so a caller that opens a project *instead of* itself
 /// (the launcher) can close only after there is something to close in favour of.
@@ -196,25 +212,6 @@ pub async fn close_this_window(platform: Platform, app: AppCtx) {
         open_launcher(platform.clone(), app).await;
     }
     platform.close_current_window();
-}
-
-/// Pick a project folder and open it — File ▸ Open… / ⌘O from a window that stays where it
-/// is. The launcher's own OPEN adds standing down afterwards on top of this.
-///
-/// Which window an open lands in is [`OpenPref`]'s question (this window / a new one / ask),
-/// and that prompt is P4-13's; until it exists every open goes to its own window, which is
-/// at least the honest half of the answer rather than a guess at the other.
-///
-/// [`OpenPref`]: strata_core::config::OpenPref
-pub fn pick_and_open_project(app: AppCtx) {
-    let platform = Platform::get();
-    let pick = pick_project_folder(&app);
-    spawn(async move {
-        let Some(root) = pick.await else {
-            return;
-        };
-        open_project(platform, app, root).await;
-    });
 }
 
 /// The native folder picker, resolved to a project folder. `None` when the user cancels, or

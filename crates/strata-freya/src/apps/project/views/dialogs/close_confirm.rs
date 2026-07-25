@@ -17,7 +17,7 @@ use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePre
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Control, Prose, Title};
-use crate::platform;
+use crate::platform::{self, OpenCtx};
 
 /// Mounted right after `ContextMenuViewer` at the window root: while open, its key
 /// handler precedes every feature listener in document order and consumes every press —
@@ -37,7 +37,11 @@ impl Component for CloseConfirm {
     fn render(&self) -> impl IntoElement {
         let confirm = self.confirm;
         let platform = use_hook(Platform::get);
-        let target = *confirm.read();
+        // Cloned, not copied: `CloseTarget::Reroot` carries the folder to open.
+        let target = confirm.read().clone();
+        // The window's open path, for the re-root variant's answer — the same handle every
+        // other open surface uses, so a confirmed re-root goes through one mechanism.
+        let open = use_consume::<OpenCtx>();
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let config = use_config_station();
@@ -62,7 +66,7 @@ impl Component for CloseConfirm {
                 // scrutinee's temporary — and so the generational-box borrow — alive for the
                 // whole match, and the `set(None)` inside then panics ("already borrowed").
                 // Verified with a probe: the match form panics, this one doesn't.
-                let target = *confirm.peek();
+                let target = confirm.peek().clone();
                 match target {
                     Some(CloseTarget::Tab(id)) => {
                         // The root's tab-diff funnel cancels/retires the tab's engine state.
@@ -82,6 +86,13 @@ impl Component for CloseConfirm {
                         // See the same note in `drop_confirm::drop_row`.
                         spawn_forever(platform::close_this_window(platform.clone(), app.clone()));
                     }
+                    // Dismiss first for the same reason, and more sharply: the re-root
+                    // unmounts this very subtree, so a slot left armed would arrive at the
+                    // new project still asking about the old one's queries.
+                    Some(CloseTarget::Reroot(root)) => {
+                        confirm.set(None);
+                        open.reroot_confirmed(root);
+                    }
                     None => {}
                 }
             }
@@ -92,8 +103,10 @@ impl Component for CloseConfirm {
         // it would latch, and every later close would behave as though the app were exiting.
         let keep_open = move || {
             let mut confirm = confirm;
-            // Same borrow rule as `close_anyway`: read it out before writing.
-            let quitting = matches!(*confirm.peek(), Some(CloseTarget::Window));
+            // Same borrow rule as `close_anyway`: read it out before writing. Only the
+            // *window* variant answers a quit — a declined re-root or tab close never began
+            // one, and clearing the flag for them would abandon a quit still in flight.
+            let quitting = matches!(&*confirm.peek(), Some(CloseTarget::Window));
             if quitting {
                 platform::end_quit();
             }
@@ -104,25 +117,33 @@ impl Component for CloseConfirm {
             return rect().into_element();
         };
 
-        // The canvas copy, per variant (`ccIsProject`).
-        let is_project = matches!(target, CloseTarget::Window);
-        let (title, body, keep, action, action_icon) = if is_project {
-            (
+        // The canvas copy, per variant (`ccIsProject`) — plus the re-root, which is the
+        // window variant's question about a project rather than the app.
+        let (title, body, keep, action, action_icon) = match target {
+            CloseTarget::Window => (
                 "Confirm exit",
                 "Queries are running. Are you sure you want to stop them and exit?",
                 "Cancel",
                 "Stop & exit",
                 IconName::LogOut,
-            )
-        } else {
-            (
+            ),
+            CloseTarget::Tab(_) => (
                 "Confirm close",
                 "A query is running. Are you sure you want to stop it and close this tab?",
                 "Keep tab open",
                 "Stop & close",
                 IconName::Stop,
-            )
+            ),
+            CloseTarget::Reroot(_) => (
+                "Confirm open",
+                "Queries are running. Are you sure you want to stop them and open another project?",
+                "Cancel",
+                "Stop & open",
+                IconName::Stop,
+            ),
         };
+        // The subject line: what is being closed — except for the re-root, where naming the
+        // project being *opened* is what identifies the action the user just took.
         let name = match target {
             CloseTarget::Tab(id) => radio
                 .read()
@@ -131,6 +152,10 @@ impl Component for CloseConfirm {
                 .map(|t| t.name.clone())
                 .unwrap_or_default(),
             CloseTarget::Window => project.read().name.clone(),
+            CloseTarget::Reroot(root) => root
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.display().to_string()),
         };
 
         let c = theme.read().colors.clone();

@@ -30,8 +30,8 @@ export, the config modal — plus P4-13's open/create UI. The Dioxus app shipped
 | P4-10 | Export window (rebuild to canvas) | ⬜ | D6/U13 | P4-01, P2-01 |
 | P4-11 | Config / register-table modal | ⬜ | U14/D7 | — |
 | P4-12 | Import (read) options (CSV/JSON) | ⬜ | D8 | P4-11 |
-| P4-13 | Open / create a project (`.strata/` load) | 🟡 internals done (defs load/scaffold + engine registration, sample-by-default); UI pending | lifecycle | P4-01 · *pull early* |
-| P4-14 | Session persistence + autosave | 🟡 tabs + history + window geometry done (load + autosave); layout awaits its store | lifecycle | P4-13 |
+| P4-13 | Open / create a project (`.strata/` load) | 🟡 internals + the open path done (`OpenPref` honoured everywhere; This Window = keyed remount); **New Project** UI remains | lifecycle | P4-01 · *pull early* |
+| P4-14 | Session persistence + autosave | 🟡 tabs + history + window geometry done (load + autosave, incl. a final save on close/re-root); layout awaits its store | lifecycle | P4-13 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

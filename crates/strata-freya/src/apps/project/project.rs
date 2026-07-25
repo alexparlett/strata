@@ -1,24 +1,34 @@
-//! The project window **root shell** (rail · sidebar · workbench · drawer).
+//! The project window **root shell** (rail · sidebar · workbench · drawer), in two layers.
 //!
-//! Initialises this window's per-window Session store + theme, spawns the engine into context
-//! (ready for the freya-query layer), and mounts the real `Workbench` (editor). The tab strip
-//! here is still the **throwaway** harness to create/switch tabs — the real DS strip is a later
-//! slice.
+//! [`ProjectApp`] is the **window**: its theme, the app-globals it shares into the tree, the
+//! close bridge, the menubar it points at itself, and the open path that decides where the
+//! next project lands. None of that changes when the window changes project.
+//!
+//! [`ProjectRoot`] is the **open project**: the engine, the Project / Session / History
+//! stores, autosave, the catalog, and every feature view. It is **keyed on the project
+//! folder**, so "open in this window" ([`OpenPref::This`](strata_core::config::OpenPref)) is
+//! a plain `State` write — the key change unmounts this subtree (flushing the session,
+//! dropping the engine, leaving the open-set) and mounts the next project exactly as launch
+//! does. There is no reopen-in-place path to keep in step with the mount path, because they
+//! are the same path.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use crate::apps::project::close::{close_bridge, CloseBridge, CloseTarget, Veto};
+use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
     use_autosave, use_init_catalog_selection, use_init_history, use_init_project, use_init_session,
     Chan, SessionState,
 };
-use crate::apps::project::views::{CloseConfirm, DropConfirm, DropTarget, HeaderBar, Shell};
+use crate::apps::project::views::{
+    CloseConfirm, DropConfirm, DropTarget, HeaderBar, OpenPrompt, Shell,
+};
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
-use crate::platform::{self, WindowKind};
+use crate::platform::{self, OpenCtx, WindowKind};
 use crate::state::{use_config, use_open_project, use_share_config, AppCtx, ConfigChan};
 use crate::theme::{use_strata_theme, window_background};
 use freya::prelude::*;
@@ -44,9 +54,10 @@ pub struct ProjectApp {
     /// The UI half of this window's close bridge: the guard the winit `on_close` hook reads
     /// + the veto receiver the root drains into the confirm dialog / the launcher hand-off.
     pub close: CloseBridge,
-    /// The open project's folder — decided by the caller (`main`'s startup routing, or
-    /// whoever opened this window) before the window exists, so its saved geometry can seed
-    /// the window.
+    /// The project folder the window **opens at** — decided by the caller (`main`'s startup
+    /// routing, or whoever opened this window) before the window exists, so its saved
+    /// geometry can seed the window. The project the window *shows* is [`OpenCtx::root`]
+    /// from here on, which starts as this and moves with an open-in-this-window.
     pub root: PathBuf,
     /// The geometry the window was created with (`None` for a project that has never been
     /// saved). Handed to `use_autosave` as the seed for the last *normal* geometry, so a
@@ -134,26 +145,45 @@ impl App for ProjectApp {
             move || app
         });
 
-        // Join the app's live window registry for this window's lifetime: it's what makes
-        // "this project is already open" a focus instead of a second window, and what tells
-        // this window whether it is the last one.
-        let windows = self.app.windows;
-        platform::use_register_window(
-            windows,
-            WindowKind::Project(self.root.to_string_lossy().into_owned()),
-        );
-        // While this window is focused the File menu is *its* File menu: the recents, and
-        // Close Project — which this window, unlike the launcher, has something to close.
-        use_file_menu(self.app.menu, true);
-
         // ── The close bridge's UI half ─────────────────────────────────────────────────
         // The close guard + the confirm-dialog target into context (the workbench's ⌘W
-        // gate needs both), then the mirrors and the veto drain.
+        // gate needs both, and so does the open path's re-root gate), then the mirrors and
+        // the veto drain.
         let guard = use_provide_context({
             let guard = self.close.guard.clone();
             move || guard
         });
         let mut confirm = use_provide_context(|| State::create(None::<CloseTarget>));
+
+        // This window's **open path**: the project it shows, the This/New question it is
+        // asking, and the close-while-running gate a re-root has to pass — opening in place
+        // aborts whatever is executing, exactly as closing the window would. Window-scoped
+        // rather than part of the project subtree, precisely because writing `root` is what
+        // replaces that subtree. Into context for the header switcher and the confirm dialog.
+        let open = OpenCtx {
+            root: use_state(|| self.root.clone()),
+            prompt: use_state(|| None),
+            guard: use_state({
+                let guard = guard.clone();
+                move || guard
+            }),
+            confirm,
+        };
+        use_provide_context(move || open);
+
+        // Join the app's live window registry for this window's lifetime: it's what makes
+        // "this project is already open" a focus instead of a second window, and what tells
+        // this window whether it is the last one. Reactive on the open project, so a
+        // re-rooted window is listed under what it actually shows.
+        let windows = self.app.windows;
+        platform::use_register_window(windows, move || {
+            WindowKind::Project(open.root.read().to_string_lossy().into_owned())
+        });
+        // While this window is focused the File menu is *its* File menu: the recents, Close
+        // Project — which this window, unlike the launcher, has something to close — and the
+        // open path Open Recent resolves through.
+        use_file_menu(&self.app, Some(open));
+
         // Mirror the confirm-close-running pref into the hook's atomic (subscribes to the
         // config's Settings channel, so a change reaches the next OS close immediately).
         {
@@ -187,6 +217,7 @@ impl App for ProjectApp {
         let platform = use_hook(Platform::get);
         let close_window = {
             let app = self.app.clone();
+            let platform = platform.clone();
             move || platform::close_this_window(platform.clone(), app.clone())
         };
         use_hook({
@@ -204,69 +235,17 @@ impl App for ProjectApp {
                 }
             }
         });
-        // Spawn this window's engine into context — the direct-call facade the query
-        // layer's capabilities await (state-arch §7) — and hand it the close guard's
-        // in-flight flag on the way. The engine is the only thing that knows what is
-        // executing across *all* tabs (the UI mounts only the active one's results), and
-        // the `on_close` hook can read nothing but an atomic; from here on the engine
-        // publishes into it on every dispatch / settle / cancel / cleanup.
-        let engine = use_provide_context({
-            let running = guard.running.clone();
-            move || {
-                let engine = EngineCtx::new();
-                engine.watch_inflight(running);
-                engine
-            }
-        });
-        // This window's Project store: opens the launch project (argv[1], default the
-        // committed `sample/`) and registers its defs on the engine as a background
-        // task — rows flip Loading → Ready/Failed as answers land (P4-13 internals;
-        // the launcher / open-dialog UI is a later slice).
-        let project = use_init_project(&engine, self.root.clone());
-        // Register the project in the app-global config for this window's lifetime: it
-        // heads the recents (so the launcher / project picker can offer it) and joins the
-        // open-set (so they can tell open from merely recent) until the window closes.
-        use_open_project(config, &project.peek().name, &self.root);
-        // This window's Session store: restore the open project's `.strata/session.json`
-        // (its tabs / order / active — P4-14), else one blank tab. Pulls the project root
-        // from the store just provided above; provided via context.
-        use_init_session();
         // Set while the header's double-press is what filled this window — the flag the session
         // reads to tell *our* transient fill from a window the user sized to the screen himself,
-        // which does persist. Owned here because both the header and autosave need it.
+        // which does persist. Owned here rather than in the project subtree because it is a fact
+        // about the *window*: re-rooting doesn't unfill it.
         let filled_by_app = use_state(|| false);
-        // Debounced autosave of that session back to `.strata/session.json` (P4-14). Its
-        // subscription is inside the effect's own scope, so it never re-renders this root.
-        // Seeded with the geometry the window opened at — it persists the last size the window
-        // had while neither app-filled nor fullscreen (see the hook).
-        use_autosave(self.geometry, filled_by_app);
-        // The window's query-history satellite (P4-14): loads `.strata/history.jsonl` and
-        // holds recent runs (capped by `Settings::max_history`, hence the config); the
-        // results pane appends to it as runs complete.
-        use_init_history(config);
-        // The inspected-column slot (P3-02): the catalog sidebar writes it, the inspector
-        // (P3-08) reads it. A context signal, not a store — see `state/catalog.rs`.
-        use_init_catalog_selection();
-        // The drop-confirm slot (P3-05): the row a drop is being confirmed for. Provided here
-        // like the close target above, because the dialog is mounted at this root and its
-        // trigger is elsewhere — a catalog row's context menu sets it (P3-06).
-        let drop_target = use_provide_context(|| State::create(None::<DropTarget>));
 
-        // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
-        // structural change and retire the engine state of tabs that are gone. One
-        // funnel for every close path (close / close-others / close-right / close-all);
-        // a reopened tab simply starts with no engine state, like a fresh one.
-        let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
-        let mut known = use_state(HashSet::<TabId>::new);
-        use_side_effect(move || {
-            let open: HashSet<TabId> = radio.read().tabs.keys().copied().collect();
-            for tab in known.peek().difference(&open) {
-                engine.cleanup(*tab);
-            }
-            if *known.peek() != open {
-                known.set(open);
-            }
-        });
+        let root = open.root.read().clone();
+        // The autosave seed is the launch project's alone — the window was *created* at that
+        // geometry. A re-root leaves the window exactly where it is, so the project that
+        // arrives simply records the geometry it finds itself at on its first save.
+        let geometry = (root == self.root).then_some(self.geometry).flatten();
 
         rect()
             .expanded()
@@ -276,22 +255,20 @@ impl App for ProjectApp {
             // floating menu). Mounted high so the menu inherits the app's styling; hugs to nothing
             // until a menu is open, so it doesn't disturb the header / workbench layout.
             .child(ContextMenuViewer::new())
-            // The close-while-running confirm (T2). Mounted second on purpose: while
-            // open, its barrier consumes keys before every listener below it in document
-            // order — including the ⌘Q/stub rect at the bottom, so the dialog can't be
-            // re-triggered or bypassed from the keyboard.
-            .child(CloseConfirm {
-                confirm,
+            // The open-target prompt (B10). Above the project subtree in document order, so
+            // while it is up its key barrier precedes every feature listener — Esc answers the
+            // question rather than cancelling the query behind it.
+            .child(OpenPrompt {
+                open,
                 app: self.app.clone(),
             })
-            // The catalog drop confirm (P3-05), on the same terms as the close confirm above
-            // and after it: if both were somehow open, the running-query question outranks the
-            // catalog one in document order.
-            .child(DropConfirm {
-                target: drop_target,
+            .child(ProjectRoot {
+                root,
+                geometry,
+                confirm,
+                filled_by_app,
+                app: self.app.clone(),
             })
-            .child(HeaderBar::new(filled_by_app))
-            .child(Shell::new())
             // Window lifecycle + the shortcuts whose targets aren't built yet (palette P6,
             // settings window + cycle-windows P4, find-in-results P2-09): the chords are
             // live now — consumed with a note, so a press can't fall through to something
@@ -301,12 +278,12 @@ impl App for ProjectApp {
             // would fire FIRST.)
             .child(rect().on_global_key_down(on_commands(config, {
                 let app = self.app.clone();
+                let platform = platform.clone();
                 move |cmd| match cmd {
-                    // ⌘O / File ▸ Open… — pick a folder and open it in its own window.
-                    // Which window it lands in is `OpenPref`'s question (this / new / ask),
-                    // and that prompt is P4-13's; new-window is the honest default until then.
+                    // ⌘O / File ▸ Open… — pick a folder, then the open path decides which
+                    // window it lands in (this one / a new one / ask).
                     Command::OpenProject => {
-                        crate::platform::pick_and_open_project(app.clone());
+                        open.pick(platform.clone(), app.clone());
                         true
                     }
                     Command::CloseProject => {
@@ -340,5 +317,219 @@ impl App for ProjectApp {
                     _ => false,
                 }
             })))
+    }
+}
+
+/// Everything that belongs to the **open project** rather than to the window: its engine,
+/// its stores, its autosave, its catalog and every feature view.
+///
+/// Keyed on [`root`](Self::root) — see the module doc. Nothing in here is written to
+/// re-open a project; it is only ever mounted at one.
+#[derive(PartialEq)]
+struct ProjectRoot {
+    /// The project folder this subtree is standing up. **Its diff key**, so a different
+    /// folder is a different subtree.
+    root: PathBuf,
+    /// The geometry the window was created at, when this is the project it was created for
+    /// — the autosave seed. `None` for a project opened into an existing window.
+    geometry: Option<WindowGeom>,
+    /// The window's close-confirm slot: this subtree owns the dialog (it needs the project
+    /// and session stores to name what it is closing), the window owns the slot.
+    confirm: State<Option<CloseTarget>>,
+    /// Whether the app filled the window (the header's double-press) — a window fact the
+    /// header writes and autosave reads.
+    filled_by_app: State<bool>,
+    app: AppCtx,
+}
+
+impl Component for ProjectRoot {
+    fn render(&self) -> impl IntoElement {
+        let config = self.app.config;
+        // Spawn this project's engine into context — the direct-call facade the query
+        // layer's capabilities await (state-arch §7) — and hand it the close guard's
+        // in-flight flag on the way. The engine is the only thing that knows what is
+        // executing across *all* tabs (the UI mounts only the active one's results), and
+        // the `on_close` hook can read nothing but an atomic; from here on the engine
+        // publishes into it on every dispatch / settle / cancel / cleanup. A re-root drops
+        // the old engine, whose `Drop` clears that same flag before the new one takes over.
+        let guard = use_consume::<Arc<CloseGuard>>();
+        let engine = use_provide_context({
+            let running = guard.running.clone();
+            move || {
+                let engine = EngineCtx::new();
+                engine.watch_inflight(running);
+                engine
+            }
+        });
+        // This project's store: loads `.strata/project.json` (scaffolding one when the folder
+        // has none) and registers its defs on the engine as a background task — rows flip
+        // Loading → Ready/Failed as answers land.
+        let project = use_init_project(&engine, self.root.clone());
+        // Register the project in the app-global config for as long as this subtree lives: it
+        // heads the recents (so the launcher / project picker can offer it) and joins the
+        // open-set (so they can tell open from merely recent) until the window closes — or
+        // until it opens something else, which drops this entry and adds that one.
+        use_open_project(config, &project.peek().name, &self.root);
+        // This project's Session store: restore its `.strata/session.json` (tabs / order /
+        // active / layout), else one blank tab. Pulls the root from the store above.
+        use_init_session();
+        // Debounced autosave of that session back to `.strata/session.json`. Its subscription
+        // is inside the effect's own scope, so it never re-renders this root; its `use_drop`
+        // is what makes a close — or a re-root — keep the last few hundred milliseconds.
+        use_autosave(self.geometry, self.filled_by_app);
+        // The project's query-history satellite: loads `.strata/history.jsonl` and holds
+        // recent runs (capped by `Settings::max_history`, hence the config); the results pane
+        // appends to it as runs complete.
+        use_init_history(config);
+        // The inspected-column slot (P3-02): the catalog sidebar writes it, the inspector
+        // (P3-08) reads it. A context signal, not a store — see `state/catalog.rs`.
+        use_init_catalog_selection();
+        // The drop-confirm slot (P3-05): the row a drop is being confirmed for. Provided here
+        // like the close target above, because the dialog is mounted at this root and its
+        // trigger is elsewhere — a catalog row's context menu sets it (P3-06).
+        let drop_target = use_provide_context(|| State::create(None::<DropTarget>));
+
+        // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
+        // structural change and retire the engine state of tabs that are gone. One
+        // funnel for every close path (close / close-others / close-right / close-all);
+        // a reopened tab simply starts with no engine state, like a fresh one.
+        let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
+        let mut known = use_state(HashSet::<TabId>::new);
+        use_side_effect(move || {
+            let open: HashSet<TabId> = radio.read().tabs.keys().copied().collect();
+            for tab in known.peek().difference(&open) {
+                engine.cleanup(*tab);
+            }
+            if *known.peek() != open {
+                known.set(open);
+            }
+        });
+
+        rect()
+            .expanded()
+            .vertical()
+            // The close-while-running confirm (T2). Mounted first on purpose: while
+            // open, its barrier consumes keys before every listener below it in document
+            // order — including the ⌘Q/stub rect at the window root, so the dialog can't be
+            // re-triggered or bypassed from the keyboard.
+            .child(CloseConfirm {
+                confirm: self.confirm,
+                app: self.app.clone(),
+            })
+            // The catalog drop confirm (P3-05), on the same terms as the close confirm above
+            // and after it: if both were somehow open, the running-query question outranks the
+            // catalog one in document order.
+            .child(DropConfirm {
+                target: drop_target,
+            })
+            .child(HeaderBar::new(self.filled_by_app))
+            .child(Shell::new())
+    }
+
+    /// **The re-root mechanism.** The subtree's identity is the project folder, so opening
+    /// another project in this window (`OpenPref::This`) diffs as a removal + an addition:
+    /// the old project's scope is dropped — flushing its session, cancelling its tasks,
+    /// dropping its engine and leaving the open-set — and the new one mounts through the very
+    /// same hooks that run at launch. Without the key, Freya would keep the scope and its
+    /// hooks, and every store would still hold the old project.
+    fn render_key(&self) -> DiffKey {
+        DiffKey::from(&self.root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use freya_testing::TestingRunner;
+
+    use super::*;
+
+    /// [`ProjectRoot`]'s keying and nothing else — the mechanism the whole re-root rests on,
+    /// with the stores and the engine replaced by a log of what mounted and what went.
+    #[derive(PartialEq)]
+    struct Keyed {
+        root: String,
+    }
+
+    impl Component for Keyed {
+        fn render(&self) -> impl IntoElement {
+            let log = use_consume::<State<Vec<String>>>();
+            // A scope-owned `State` read back in the drop — what the session flush does with
+            // the Project and Session stations. It works because `ScopeStorage` declares
+            // `values` (where the `use_drop` guard lives) before `owner` (where the state's
+            // value lives), so the guard runs while the value is still there. That is a field
+            // order in the fork, so it is worth a test rather than a comment.
+            let mine = use_state({
+                let root = self.root.clone();
+                move || root
+            });
+            use_hook(move || {
+                let mut log = log;
+                log.write().push(format!("mount {}", mine.peek()));
+            });
+            use_drop(move || {
+                let mut log = log;
+                log.write().push(format!("drop {}", mine.peek()));
+            });
+            rect()
+        }
+
+        fn render_key(&self) -> DiffKey {
+            DiffKey::from(&self.root)
+        }
+    }
+
+    fn app() -> impl IntoElement {
+        let root = use_consume::<State<String>>();
+        let root = root.read().clone();
+        rect().child(Keyed { root })
+    }
+
+    /// **The re-root is a remount, not a re-render.** Writing the window's project root has
+    /// to tear the old project's subtree down — its `use_drop`s are what flush the session
+    /// and drop it from the open-set — and stand the new one up through the same hooks that
+    /// run at launch. Freya only does that because the subtree is *keyed*; without the key it
+    /// would keep the scope, and every store would still hold the old project.
+    ///
+    /// A characterization test as much as a unit one: it pins the two framework behaviours the
+    /// design depends on — the keyed remount, and a `use_drop` still being able to read its
+    /// scope's own state (which is what lets the outgoing project flush its session) — so a
+    /// fork update that changed either fails here rather than silently leaving re-rooted
+    /// windows showing the old project's tabs.
+    #[test]
+    fn changing_the_root_remounts_the_project_subtree() {
+        let (mut runner, (root, log)) = TestingRunner::new(
+            app,
+            (200., 200.).into(),
+            |r| {
+                (
+                    r.provide_root_context(|| State::create("/data/sales".to_string())),
+                    r.provide_root_context(|| State::create(Vec::<String>::new())),
+                )
+            },
+            1.,
+        );
+        runner.sync_and_update();
+        assert_eq!(*log.peek(), ["mount /data/sales"]);
+
+        // The re-root: exactly what `OpenCtx::reroot` does.
+        let mut root = root;
+        root.set("/data/ml_features".to_string());
+        runner.sync_and_update();
+        assert_eq!(
+            *log.peek(),
+            [
+                "mount /data/sales",
+                // The outgoing project goes first — which is what lets its session flush
+                // land before the arriving one touches anything.
+                "drop /data/sales",
+                "mount /data/ml_features",
+            ]
+        );
+
+        // A render that does *not* change the root leaves the subtree alone: a re-root must
+        // cost a remount, but nothing else may.
+        root.set("/data/ml_features".to_string());
+        runner.sync_and_update();
+        assert_eq!(log.peek().len(), 3, "an unchanged root must not remount");
     }
 }

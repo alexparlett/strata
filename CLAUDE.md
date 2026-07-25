@@ -120,14 +120,23 @@ src/platform/windows.rs          the **window model**: the live registry (Window
                                  (focus-if-open), `close_this_window` (the launcher takes over
                                  when it was the last), and quit (closes every window + keeps the
                                  persisted open-set, so a restart reopens them)
+src/platform/open.rs             **where** an open lands, vs windows.rs's *how*: `OpenCtx` (the
+                                 window's project root + its pending This/New question) resolves
+                                 `OpenPref` for every project-window surface — ⌘O, Open…, Open
+                                 Recent, the switcher. `decide` is a pure, unit-tested rule (own
+                                 project = no-op; already-windowed = focus, outranking the pref);
+                                 acting is split off (`OpenTarget`) because the menubar handler
+                                 has a RendererContext and no Platform
 src/menu.rs                      the macOS menubar: App · **File** (Open… · Open Recent ·
                                  Close Project) · Edit. Not static — `app_menu` hands back
                                  `MenuHandles`, and the *focused* window keeps the File menu
-                                 pointed at itself (`use_file_menu`): its recents, and Close
-                                 Project only when it has a project to close
-src/state/mod.rs                 `AppCtx` — the four app-globals `main` creates once (themes ·
-                                 config · window registry · menubar handles), handed to every
-                                 window root as one value rather than four parameters
+                                 pointed at itself (`use_file_menu`): its recents, Close Project
+                                 only when it has a project to close, and the `OpenCtx` Open
+                                 Recent resolves through (the one item carrying data, not a chord)
+src/state/mod.rs                 `AppCtx` — the five app-globals `main` creates once (themes ·
+                                 config · window registry · menubar handles · the focused
+                                 window's open path), handed to every window root as one value
+                                 rather than five parameters
 src/state/config.rs              THE app-global store: one `RadioStation<AppConfig, ConfigChan>`
                                  (settings · recents · open-project set) created once in main and
                                  shared into every window (`use_share_config`). Channels keep a
@@ -156,7 +165,11 @@ src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
   views/                         title_bar · rail (SidebarRow) · projects · row · open (rfd pick)
 src/apps/project/                the project window (Valin-shaped)
-  project.rs                     root component; spawns the engine, provides EngineCtx
+  project.rs                     two layers: `ProjectApp` = the **window** (theme, app-globals,
+                                 close bridge, menubar, OpenCtx) and `ProjectRoot` = the **open
+                                 project** (engine, stores, autosave, catalog, views), whose
+                                 `render_key` is the project folder — so "open in this window"
+                                 is a `State` write and the remount *is* the reopen path
   contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context
   state/                         per-window state (Radio): channel, hooks, session
                                  session.rs = SessionState + stateful QueryTab (each tab owns its
@@ -166,12 +179,15 @@ src/apps/project/                the project window (Valin-shaped)
                                  catalog.rs = CatalogSelection, the inspected column (context)
   model/                         window-local view models
   views/
+    dialogs/                     the window's modal dialogs, mounted early so their key barrier
+                                 precedes every feature listener: close_confirm (T2) ·
+                                 drop_confirm (P3-05) · open_prompt (the This/New question)
     header/
       mod.rs                     the header bar — and the window's macOS title bar: brand ·
                                  switcher · ⌘K/⌘, cluster, drag + double-press-to-fill
                                  (`window_drag`), traffic-light gutter
       project_menu.rs            the project switcher: trigger + Open… / open set / recents
-                                 dropdown (data real; opening a project is P4-13's seam)
+                                 dropdown; every row opens through the window's `OpenCtx`
     sidebar/
       mod.rs                     sidebar shell — pane-specific header (the catalog's filter +
                                  refresh row) over the active pane

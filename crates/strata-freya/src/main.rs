@@ -22,7 +22,7 @@ use strata_core::config::AppConfig;
 use strata_core::engine::purge_snapshot_root;
 use strata_core::project as project_io;
 
-use crate::platform::create_global_windows;
+use crate::platform::{create_global_open, create_global_windows};
 use crate::state::{create_global_config, AppCtx};
 use crate::theme::ThemesCtx;
 
@@ -66,12 +66,18 @@ fn main() {
     // bindings and can open a recent straight from the renderer.
     let menu_chords = menu::menu_chords(&config.peek().settings);
     let menu_state = menu::create_global_menu();
+    // …and beside the menu handles, the slot the focused window parks its open path in, so
+    // File ▸ Open Recent honours that window's "Opening a project" preference (this window /
+    // a new one / ask) instead of always launching a window. Open… needs no slot: it reaches
+    // the focused window as a synthesized chord, like every other menu command.
+    let focused_open = create_global_open();
     // Everything a window — or the menubar handler — is handed, in one value.
     let app = AppCtx {
         themes,
         config,
         windows,
         menu: menu_state,
+        open: focused_open,
     };
     let menu_app = app.clone();
     let launch_config = LaunchConfig::new()

@@ -72,6 +72,29 @@ Things that must not regress. Each was fought for once already.
   **`Uuid`**. Renames route through the store (a view rename rewrites tab `Origin::View` keys).
 - **History is a satellite**, persisted append-only to `.strata/history.jsonl` — never a field on
   `ProjectState`/`SessionState`.
+- **A window's project subtree is keyed on the project folder; there is no reopen-in-place path.**
+  `ProjectApp` is the *window* (theme, app-globals, close bridge, menubar, the `OpenCtx` open
+  path); `ProjectRoot` is the *open project* (engine, stores, autosave, catalog, views) and its
+  `render_key` is that folder. So "open in this window" (`OpenPref::This`) is a plain `State`
+  write: Freya drops the old subtree — flushing its session, dropping its engine, leaving the
+  open-set — and mounts the new project through the very hooks that run at launch. Never add a
+  second path that re-points a live store at another project: two ways to open one project drift,
+  and the mutating one is how relative sources and partition columns get mangled. Anything that
+  must survive a re-root (window fill state, the close-confirm slot, the registry entry) belongs
+  on the **window** layer, and anything reading "which project" must read it reactively.
+- **Which window an open lands in is one decision in one place** (`platform::open`). `decide` is
+  pure over plain values and is the *whole* rule; acting on it is split off (`OpenTarget`) because
+  a window holds a `Platform` and the menubar handler holds a `RendererContext`. Two rules outrank
+  the preference and are not among its outcomes: the project a window already shows is a no-op,
+  and a project another window already has is focused — two windows on one project would both
+  autosave over its `session.json`.
+- **Every path that destroys a window's work asks on the same terms.** The T2 confirm is not the
+  close button's — it is the gate for *any* action that aborts running queries, and re-rooting
+  (`OpenPref::This`) is one, since the remount drops the engine. Adding such an action means
+  adding a `CloseTarget` variant and routing through the one dialog, never a second confirm and
+  never a silent abort. The predicate is always the engine's own answer (`guard.running` /
+  `Engine::is_running`) plus `confirm_close_running` — never derived from mounted UI, which goes
+  false the moment the user switches tabs.
 - **Managed DDL policy.** The editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` only. Views are
   Save's artifact: ⌘S wraps the buffer's plain query in `CREATE OR REPLACE VIEW`
   (`Engine::create_view`); typed DDL is blocked with validation pointing at the owning surface

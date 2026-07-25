@@ -7,17 +7,13 @@
 //! set and the recents from the app-global [`AppConfig`](strata_core::config::AppConfig) — so a
 //! project opening in another window shows up here without any cross-window plumbing of ours.
 //!
-//! **Acting** on a row goes through [`platform::open_project`] — the same window path the
-//! launcher's rows, ⌘O and the menubar's Open Recent take, so a project that already has a
-//! window is *focused* rather than opened twice, and the row for **this** window's project is
-//! inert because you are already looking at it.
-//!
-//! What is still [`OpenPref`]'s (P4-13) is *which* window an open lands in: this / a new one /
-//! ask. Until that prompt exists every open here opens its own window, which is the honest half
-//! of the answer rather than a guess at the other.
+//! **Acting** on a row goes through the window's [`OpenCtx`] — the same path ⌘O, File ▸
+//! Open… and the menubar's Open Recent take, so which window an open lands in is one
+//! decision in one place: [`OpenPref`] (this window / a new one / ask). A project that
+//! already has a window is *focused* rather than opened twice, and the row for **this**
+//! window's project is inert because you are already looking at it.
 //!
 //! [`OpenPref`]: strata_core::config::OpenPref
-//! [`platform::open_project`]: crate::platform::open_project
 
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -30,7 +26,7 @@ use crate::components::avatar::Avatar;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Body, Control, Eyebrow, Path, Prose};
-use crate::platform;
+use crate::platform::{self, OpenCtx};
 use crate::state::AppCtx;
 use crate::state::{use_config, ConfigChan};
 
@@ -83,6 +79,7 @@ impl Component for ProjectMenu {
         // The app-globals from the window root: the shared open path needs them, and the
         // window handle has to be taken here rather than inside a spawned task.
         let app = consume_context::<AppCtx>();
+        let opener = consume_context::<OpenCtx>();
         let platform_handle = use_hook(Platform::get);
         // Everything the dropdown paints is a root colour — the accent, and the text ramp — so
         // it reads the sheet through the normal hook rather than inventing header-only theme
@@ -132,8 +129,9 @@ impl Component for ProjectMenu {
                 MenuButton::new()
                     .on_press({
                         let app = app.clone();
+                        let platform_handle = platform_handle.clone();
                         move |_| {
-                            platform::pick_and_open_project(app.clone());
+                            opener.pick(platform_handle.clone(), app.clone());
                             open.set(false);
                         }
                     })
@@ -157,6 +155,7 @@ impl Component for ProjectMenu {
                 &colors,
                 open,
                 &app,
+                opener,
                 &platform_handle,
             ))
         });
@@ -174,6 +173,7 @@ impl Component for ProjectMenu {
                         &colors,
                         open,
                         &app,
+                        opener,
                         &platform_handle,
                     ))
                 },
@@ -227,7 +227,7 @@ fn section_label(text: &str, color: Color) -> impl IntoElement {
 
 /// One project row: initials avatar · name over path. The row for the window's *own* project is
 /// `selected` (the comp's accent-tinted current row) and does nothing on press — it's already
-/// here; every other row opens (or focuses) through the shared window path.
+/// here; every other row opens (or focuses) through the shared open path.
 #[allow(clippy::too_many_arguments)]
 fn project_row(
     row: &ProjectRow,
@@ -236,6 +236,7 @@ fn project_row(
     colors: &ColorsSheet,
     mut open: State<bool>,
     app: &AppCtx,
+    opener: OpenCtx,
     platform_handle: &Platform,
 ) -> MenuItem {
     let path = row.path.clone();
@@ -246,14 +247,12 @@ fn project_row(
         .padding(Gaps::new(8., 12., 8., 12.))
         .on_press(move |_| {
             if !current {
-                // Through the shared path: an already-open project is focused, the stored
-                // path is normalised (a legacy `.strata` entry names the project, not its
-                // metadata dir), and a recent whose folder is gone is dropped from the
-                // list instead of opened.
+                // Through the shared path: the open preference decides the window, an
+                // already-open project is focused, the stored path is normalised (a legacy
+                // `.strata` entry names the project, not its metadata dir), and a recent
+                // whose folder is gone is dropped from the list instead of opened.
                 if let Some(root) = platform::resolve_recent(app.config, &path) {
-                    let open_it =
-                        platform::open_project(platform_handle.clone(), app.clone(), root);
-                    spawn(open_it);
+                    opener.request(platform_handle.clone(), app.clone(), root);
                 }
             }
             open.set(false);
