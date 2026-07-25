@@ -21,8 +21,11 @@ remove_recent}` for the row actions. No launcher-local copy of the recents, so a
 window's `push_recent` can't overwrite each other (the Dioxus bug).
 
 Opening goes through **`platform::open_project`** — the shared window path — so a project that
-already has a window is *focused*, and the launcher then closes itself. A recent whose folder has
-moved is reported and the launcher stays up.
+already has a window is *focused*, and the launcher then closes itself. A recent whose folder no
+longer exists on disk is removed rather than offered: `config::load` prunes the recents at startup
+(`AppConfig::prune_missing`), and a press on a row whose folder went away mid-session drops the
+entry (`platform::resolve_recent` — shared with the header switcher and the menubar's Open
+Recent). A resolve that fails for any other reason is reported and the launcher stays up.
 
 Deferred at their own seams: the rail's **Settings** gear logs (P4-03 owns the single-instance
 settings window), and the in-window this-window/new-window prompt is P4-13's (`OpenPref`).

@@ -33,8 +33,6 @@
 //! live, per focused window), so the hotkey manager, its focus-gated registration, and
 //! its chord→`Code` table have no job here.
 
-use std::path::Path;
-
 use freya::menu::accelerator::Accelerator;
 use freya::menu::{
     AboutMetadata, IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
@@ -462,8 +460,10 @@ fn open_recent(ctx: &mut RendererContext, app: AppCtx, path: &str) {
     // Normalise *before* the registry lookup: windows are registered under the canonical
     // root, while a recent's stored path may be a symlink or the pre-Freya `.strata` shape
     // (`migrate_paths` strips the segment but never canonicalizes). Looking up the raw path
-    // would miss and open a second window on a project that already has one.
-    let Some(root) = platform::resolve_project_folder(Path::new(path)) else {
+    // would miss and open a second window on a project that already has one. A recent whose
+    // folder is gone is dropped by `resolve_recent`, and the focused window's
+    // `use_file_menu` rebuilds the submenu without it.
+    let Some(root) = platform::resolve_recent(app.config, path) else {
         return;
     };
     let launcher = app.windows.peek().launcher();

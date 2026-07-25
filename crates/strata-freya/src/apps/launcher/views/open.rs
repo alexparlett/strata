@@ -7,22 +7,22 @@
 //! launcher-specific is only the *after*: this window exists because there was nothing to
 //! look at, so it closes as soon as there is.
 
-use std::path::PathBuf;
-
 use freya::prelude::*;
 
 use crate::platform;
 use crate::state::AppCtx;
 
-/// Open `root` and close the launcher behind it.
+/// Open the recent at `path` (the stored
+/// [`RecentProject::path`](strata_core::config::RecentProject::path)) and close the
+/// launcher behind it.
 ///
-/// A recent whose folder has since been moved or deleted can't be opened: that is reported
-/// (by [`platform::resolve_project_folder`]) and the launcher **stays up** — there is
-/// nothing to hand over to.
-pub fn open_and_close(app: AppCtx, root: PathBuf) {
+/// A recent whose folder has since been moved or deleted can't be opened: the entry is
+/// dropped ([`platform::resolve_recent`]), so the pressed row disappears, and the launcher
+/// **stays up** — there is nothing to hand over to.
+pub fn open_and_close(app: AppCtx, path: String) {
     let platform = Platform::get();
     spawn(async move {
-        let Some(root) = platform::resolve_project_folder(&root) else {
+        let Some(root) = platform::resolve_recent(app.config, &path) else {
             return;
         };
         platform::open_project(platform.clone(), app, root).await;
