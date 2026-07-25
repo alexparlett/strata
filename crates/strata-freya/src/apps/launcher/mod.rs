@@ -45,8 +45,6 @@ define_theme!(
         title_color: Color,
         /// PINNED / RECENT eyebrows and the version under the wordmark.
         label_color: Color,
-        /// The rail's Settings row.
-        muted_color: Color,
         /// The active nav pill's accent tint (no left accent bar — V26). The rail rows'
         /// resting and hover fills are `sidebar_item`'s, which is the dress they wear.
         nav_background: Color,
@@ -98,6 +96,10 @@ impl App for LauncherApp {
         // the shared settings, and the app-global config into context for the views below.
         use_strata_theme(self.app.themes.clone(), self.app.config);
         use_share_config(self.app.config);
+        use_provide_context({
+            let app = self.app.clone();
+            move || app
+        });
         // Join the live window registry, so "open the launcher" finds this one instead of
         // opening a second, and a project window can tell whether it is the last one.
         platform::use_register_window(self.app.windows, WindowKind::Launcher);

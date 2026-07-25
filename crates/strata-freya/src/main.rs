@@ -35,6 +35,9 @@ mod state;
 mod theme;
 
 fn main() {
+    // First thing: nothing logged before this exists. Every `tracing::*` call in the app
+    // and in `strata-core` is a no-op until a subscriber is installed.
+    init_logging();
     // Clear snapshot leftovers from a previous crashed run (each live engine only ever
     // cleans its own subdirectory — safe only here, before any engine exists).
     purge_snapshot_root();
@@ -153,4 +156,15 @@ fn startup(config: &AppConfig, reopen: Vec<String>) -> Startup {
         }
     }
     Startup::Launcher
+}
+
+/// Install a tracing subscriber. Defaults to `warn` for deps + `info` for every `strata*`
+/// crate (`EnvFilter` matches targets by prefix, so one directive covers `strata_freya`,
+/// `strata_core`, `strata_model`, …); override with `RUST_LOG`. `try_init` is a no-op if a
+/// subscriber is already installed.
+fn init_logging() {
+    use tracing_subscriber::EnvFilter;
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,strata=info"));
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }

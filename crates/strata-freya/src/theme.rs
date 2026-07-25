@@ -19,14 +19,15 @@ use std::sync::Arc;
 
 use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
-    CancelButtonThemePreference, CellViewThemePreference, DataGridThemePreference,
-    ExplainPlanThemePreference, HeaderBarThemePreference, RecordViewThemePreference,
-    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
+    DataGridThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
+    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
 use crate::components::avatar::AvatarThemePreference;
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
+use crate::components::type_palette::TypePaletteThemePreference;
 use crate::state::{use_config_channel, ConfigChan, ConfigStation};
 use freya::prelude::*;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
@@ -329,18 +330,25 @@ macro_rules! strata_components {
 }
 
 strata_components! {
+    // The **shared** type palette — the seven categorical hues every type-showing surface reads
+    // (datagrid header · record view · catalog swatches; the EXPLAIN plan borrows the same ramp for
+    // operator kinds). A `%[no_ext]` token group, not a component: stated once here so a theme
+    // can't drift between the surfaces that must agree. Keyed by `Kind`, Strata's display taxonomy
+    // — not by Arrow. See `components::type_palette`.
+    "type_palette" => TypePaletteThemePreference {
+        str_color, num_color, bool_color, ts_color, struct_color, list_color, map_color,
+    },
     // The header bar's own surface: background, text, and the rule under it. Its switcher paints
     // with root palette colours and the shared `avatar` / `menu` divider — no header-only dress.
     "header_bar" => HeaderBarThemePreference { background, color, border_fill },
     // The launcher / welcome window: its card body + raised rail, the title-bar and rail rules,
-    // the three recessive text tones the sheet doesn't name (title strip · group eyebrows ·
-    // Settings row), the nav pill's accent tint, and the project-row hover fill plus Remove's
-    // danger one. Everything else it paints — the accent, the text ramp, the action hover fill
-    // — is a root palette colour; its rail rows are `sidebar_item`'s dress and its tiles
-    // `avatar`'s.
+    // the two recessive text tones the sheet doesn't name (title strip · group eyebrows), the
+    // nav pill's accent tint, and the project-row hover fill plus Remove's danger one.
+    // Everything else it paints — the accent, the text ramp, the action hover fill — is a root
+    // palette colour; its rail rows are `SidebarRow`'s dress and its tiles `avatar`'s.
     "launcher" => LauncherThemePreference {
-        background, rail_background, border_fill, title_color, label_color, muted_color,
-        nav_background, row_hover_background, remove_hover_background,
+        background, rail_background, border_fill, title_color, label_color, nav_background,
+        row_hover_background, remove_hover_background,
     },
     // The initials tile a project row leads with (header switcher, launcher lists): the resting
     // dress plus the accent one a project with an open window wears.
@@ -406,8 +414,6 @@ strata_components! {
     "explain_plan" => ExplainPlanThemePreference {
         background, card_background, border_fill, group_background, insight_background,
         color, value_color, key_color, muted_color, raw_color, hot_color, warm_color,
-        type_str_color, type_num_color, type_bool_color, type_ts_color, type_struct_color,
-        type_list_color, type_map_color,
     },
     // The nested-cell value modal (P2-12): the dimmed backdrop, the card surface + border, the
     // header (name / dtype badge / ghost close), and the sunken mono JSON body.
@@ -423,8 +429,14 @@ strata_components! {
     "record_view" => RecordViewThemePreference {
         backdrop, background, border_fill, divider_fill, row_divider_fill, label_color,
         name_color, value_color, null_color, nested_background, nested_color,
-        type_str_color, type_num_color, type_bool_color, type_ts_color, type_struct_color,
-        type_list_color, type_map_color,
+    },
+    // The catalog sidebar (P3-02): section labels + chevrons, the entry / column row text ramp and
+    // hover / selected fills, the nested-column rail, the per-kind entry icons, the PART chip, the
+    // validity triangle's tint (P3-04), and the same categorical `type_*_color` palette the grid
+    // header wears (column swatch + dtype).
+    "catalog" => CatalogThemePreference {
+        label_color, chevron_color, name_color, column_color, meta_color, rail_fill,
+        table_color, view_color, query_color, part_color, part_background, warn_color,
     },
     // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
     // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and
@@ -435,8 +447,7 @@ strata_components! {
         gutter_active_color, header_background, header_hover_background, header_color,
         header_label_color, header_active_background,
         header_active_color, divider_fill, column_divider_fill, header_divider_fill,
-        cell_num_color, cell_ts_color, type_str_color, type_num_color, type_bool_color,
-        type_ts_color, type_struct_color, type_list_color, type_map_color, color,
+        cell_num_color, cell_ts_color, color,
         comfortable_cell_padding: gaps, compact_cell_padding: gaps,
     },
 }

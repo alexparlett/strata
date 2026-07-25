@@ -9,6 +9,7 @@ use freya::prelude::*;
 use strata_core::engine::plan::{InsightTone, MetricKind, PlanKind};
 
 use super::ExplainPlanTheme;
+use crate::components::type_palette::TypePaletteTheme;
 
 /// The resolved plan dress every card reads: the `explain_plan` component theme plus the
 /// semantic sheet slots the palette borrows (accent · error · secondary text). The mapping
@@ -17,6 +18,8 @@ use super::ExplainPlanTheme;
 #[derive(Clone, PartialEq)]
 pub struct PlanPalette {
     pub theme: ExplainPlanTheme,
+    /// The shared type palette, borrowed as this view's categorical ramp (see its module doc).
+    pub types: TypePaletteTheme,
     pub accent: Color,
     pub error: Color,
     pub count_color: Color,
@@ -26,13 +29,13 @@ impl PlanPalette {
     /// A node's accent colour (core: `PlanKind::color`).
     pub fn kind(&self, kind: PlanKind) -> Color {
         match kind {
-            PlanKind::Source => self.theme.type_str_color,
-            PlanKind::Join => self.theme.type_bool_color,
-            PlanKind::Exchange => self.theme.type_num_color,
-            PlanKind::Agg => self.theme.type_ts_color,
-            PlanKind::Sort => self.theme.type_struct_color,
+            PlanKind::Source => self.types.str_color,
+            PlanKind::Join => self.types.bool_color,
+            PlanKind::Exchange => self.types.num_color,
+            PlanKind::Agg => self.types.ts_color,
+            PlanKind::Sort => self.types.struct_color,
             PlanKind::Proj => self.accent,
-            PlanKind::Limit => self.theme.type_map_color,
+            PlanKind::Limit => self.types.map_color,
             PlanKind::Util => self.theme.color,
         }
     }
@@ -41,9 +44,9 @@ impl PlanPalette {
     pub fn metric(&self, kind: MetricKind) -> Color {
         match kind {
             MetricKind::Time => self.theme.warm_color,
-            MetricKind::Bytes | MetricKind::Memory => self.theme.type_list_color,
+            MetricKind::Bytes | MetricKind::Memory => self.types.list_color,
             MetricKind::Count => self.count_color,
-            MetricKind::Ratio => self.theme.type_str_color,
+            MetricKind::Ratio => self.types.str_color,
         }
     }
 
@@ -52,10 +55,10 @@ impl PlanPalette {
         match group {
             "Output" => self.accent,
             "Time" => self.theme.warm_color,
-            "I/O" => self.theme.type_str_color,
-            "Pruning" | "Join" => self.theme.type_bool_color,
-            "Memory & spill" => self.theme.type_list_color,
-            "Exchange" => self.theme.type_num_color,
+            "I/O" => self.types.str_color,
+            "Pruning" | "Join" => self.types.bool_color,
+            "Memory & spill" => self.types.list_color,
+            "Exchange" => self.types.num_color,
             "Errors" => self.error,
             _ => self.theme.color,
         }
@@ -66,8 +69,8 @@ impl PlanPalette {
         match tone {
             InsightTone::Err => self.error,
             InsightTone::Warn => self.theme.warm_color,
-            InsightTone::Ok => self.theme.type_str_color,
-            InsightTone::Info => self.theme.type_list_color,
+            InsightTone::Ok => self.types.str_color,
+            InsightTone::Info => self.types.list_color,
         }
     }
 }

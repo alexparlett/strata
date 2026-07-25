@@ -12,7 +12,8 @@ use std::sync::atomic::Ordering;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    use_autosave, use_init_history, use_init_project, use_init_session, Chan, SessionState,
+    use_autosave, use_init_catalog_selection, use_init_history, use_init_project,
+    use_init_session, Chan, SessionState,
 };
 use crate::apps::project::views::{CloseConfirm, HeaderBar, Shell};
 use crate::keymap::on_commands;
@@ -126,6 +127,12 @@ impl App for ProjectApp {
         // `RadioStation` is `Copy` — this shares the one global, it doesn't fork it.
         let config = self.app.config;
         use_share_config(config);
+        // The app-globals bundle into context too: they are DI handles, so deep consumers
+        // (the header's project switcher) reach them without prop-threading through the shell.
+        use_provide_context({
+            let app = self.app.clone();
+            move || app
+        });
 
         // Join the app's live window registry for this window's lifetime: it's what makes
         // "this project is already open" a focus instead of a second window, and what tells
@@ -225,6 +232,9 @@ impl App for ProjectApp {
         // The window's query-history satellite (P4-14): loads `.strata/history.jsonl` and
         // holds recent runs; the results pane appends to it as runs complete.
         use_init_history();
+        // The inspected-column slot (P3-02): the catalog sidebar writes it, the inspector
+        // (P3-08) reads it. A context signal, not a store — see `state/catalog.rs`.
+        use_init_catalog_selection();
 
         // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
         // structural change and retire the engine state of tabs that are gone. One

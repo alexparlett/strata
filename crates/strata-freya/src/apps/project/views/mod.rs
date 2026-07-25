@@ -13,6 +13,7 @@ mod workbench;
 pub use dialogs::CloseConfirm;
 pub use header::{HeaderBar, HeaderBarThemePreference};
 pub use shell::Shell;
+pub use sidebar::CatalogThemePreference;
 pub use workbench::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
     DataGridThemePreference, ExplainPlanThemePreference, RecordViewThemePreference,

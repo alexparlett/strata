@@ -34,6 +34,29 @@
     "shadow": "rgba(15,23,42,.18)"
   },
   "components": {
+    "type_palette": {
+      "str_color": {
+        "specific": "#0a7d33"
+      },
+      "num_color": {
+        "specific": "#0550ae"
+      },
+      "bool_color": {
+        "specific": "#8250df"
+      },
+      "ts_color": {
+        "specific": "#bc4c00"
+      },
+      "struct_color": {
+        "specific": "#bf3989"
+      },
+      "list_color": {
+        "specific": "#0969da"
+      },
+      "map_color": {
+        "specific": "#9a6700"
+      }
+    },
     "button": {
       "color": {
         "specific": "#474c56"
@@ -188,27 +211,6 @@
       },
       "nested_color": {
         "reference": "text_secondary"
-      },
-      "type_str_color": {
-        "specific": "#7ee787"
-      },
-      "type_num_color": {
-        "specific": "#79c0ff"
-      },
-      "type_bool_color": {
-        "specific": "#d2a8ff"
-      },
-      "type_ts_color": {
-        "specific": "#ffa657"
-      },
-      "type_struct_color": {
-        "specific": "#f0a5c0"
-      },
-      "type_list_color": {
-        "specific": "#8ad4ff"
-      },
-      "type_map_color": {
-        "specific": "#ffcf6b"
       }
     },
     "outline_button": {
@@ -598,7 +600,7 @@
         "reference": "active"
       },
       "hover_background": {
-        "specific": "#eef0f4"
+        "specific": "#fafbfc"
       },
       "focus_border_fill": {
         "reference": "primary"
@@ -1016,27 +1018,44 @@
       },
       "warm_color": {
         "specific": "#9a6700"
+      }
+    },
+    "catalog": {
+      "label_color": {
+        "specific": "#8b929d"
       },
-      "type_str_color": {
-        "specific": "#0a7d33"
+      "chevron_color": {
+        "reference": "text_placeholder"
       },
-      "type_num_color": {
+      "name_color": {
+        "reference": "text_primary"
+      },
+      "column_color": {
+        "reference": "text_secondary"
+      },
+      "meta_color": {
+        "specific": "#a3a9b3"
+      },
+      "rail_fill": {
+        "reference": "border"
+      },
+      "table_color": {
         "specific": "#0550ae"
       },
-      "type_bool_color": {
+      "view_color": {
         "specific": "#8250df"
       },
-      "type_ts_color": {
-        "specific": "#bc4c00"
+      "query_color": {
+        "specific": "#6f42c1"
       },
-      "type_struct_color": {
-        "specific": "#bf3989"
+      "part_color": {
+        "reference": "primary"
       },
-      "type_list_color": {
-        "specific": "#0969da"
+      "part_background": {
+        "specific": "rgba(43,127,208,.12)"
       },
-      "type_map_color": {
-        "specific": "#9a6700"
+      "warn_color": {
+        "reference": "warning"
       }
     },
     "datagrid": {
@@ -1113,27 +1132,6 @@
       "cell_ts_color": {
         "specific": "#e2b98c"
       },
-      "type_str_color": {
-        "specific": "#7ee787"
-      },
-      "type_num_color": {
-        "specific": "#79c0ff"
-      },
-      "type_bool_color": {
-        "specific": "#d2a8ff"
-      },
-      "type_ts_color": {
-        "specific": "#ffa657"
-      },
-      "type_struct_color": {
-        "specific": "#f0a5c0"
-      },
-      "type_list_color": {
-        "specific": "#8ad4ff"
-      },
-      "type_map_color": {
-        "specific": "#ffcf6b"
-      },
       "color": {
         "reference": "text_secondary"
       }
@@ -1170,9 +1168,6 @@
       },
       "label_color": {
         "specific": "#8b929d"
-      },
-      "muted_color": {
-        "specific": "#5f6771"
       },
       "nav_background": {
         "specific": "rgba(43,127,208,.10)"

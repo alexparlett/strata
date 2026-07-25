@@ -29,6 +29,7 @@ use super::datagrid::GridData;
 use super::status_bar::fmt_int;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue, Path, Readout};
 
 define_theme!(
@@ -46,30 +47,8 @@ define_theme!(
         null_color: Color,
         nested_background: Color,
         nested_color: Color,
-        type_str_color: Color,
-        type_num_color: Color,
-        type_bool_color: Color,
-        type_ts_color: Color,
-        type_struct_color: Color,
-        type_list_color: Color,
-        type_map_color: Color,
     }
 );
-
-/// The dtype label colour for a field's left column — the same categorical palette the
-/// datagrid header wears, carried as this component's own `type_*_color` tokens (the
-/// `explain_plan` precedent: no cross-component theme reads).
-fn kind_color(kind: Kind, t: &RecordViewTheme) -> Color {
-    match kind {
-        Kind::Str => t.type_str_color,
-        Kind::Num => t.type_num_color,
-        Kind::Bool => t.type_bool_color,
-        Kind::Ts => t.type_ts_color,
-        Kind::Struct => t.type_struct_color,
-        Kind::List => t.type_list_color,
-        Kind::Map => t.type_map_color,
-    }
-}
 
 /// The centred backdrop modal: 540px card — header (label + copy JSON/CSV + prev/next + ghost
 /// close) over a scrollable field list, one row per column (150px name + dtype gutter, then a
@@ -117,6 +96,8 @@ impl RecordView {
 impl Component for RecordView {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, RecordViewThemePreference, "record_view");
+        // The shared type palette dresses the field gutter's dtype labels.
+        let palette = type_palette();
         let sheet = use_theme();
         let shadow = sheet.read().colors.shadow;
         let mut open = self.open;
@@ -243,7 +224,7 @@ impl Component for RecordView {
                 )
                 .child(
                     Meta::new(col.dtype.clone())
-                        .color(kind_color(col.kind, &theme))
+                        .color(kind_color(col.kind, &palette))
                         .wrap(),
                 );
             // The value: a nested cell renders its pretty JSON in a sunken scroll block

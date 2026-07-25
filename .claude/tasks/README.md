@@ -57,7 +57,7 @@ Read this index first, then open only the phase/workstream file you're working i
 | 0 · Core extraction | `strata-model` / `strata-core` split; both frontends on the shared core | ✅ done |
 | 1 · Skeleton + engine round-trip | window shell, per-window state scaffold, engine bridge | ✅ shell up, round-trip wired (P2-01/02: direct-call facade + freya-query) |
 | **2 · Workbench** | editor · results grid · tabs · run/explain · toolbar · status bar | 🟡 **datagrid + tabs + running body built; run/explain wired to real results states; plan body + chart-switcher/find/record/copy still to build** → `phase-2-workbench/` |
-| 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · bottom drawer | 🟡 **shell + header built** (P3-01 · P3-15); the panes are empty → `phase-3-catalog-inspector-drawer/` |
+| 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · bottom drawer | 🟡 **shell + header + catalog sidebar built** (P3-01 · P3-15 · P3-02 · P3-03 re-scan); inspector + drawer still empty → `phase-3-catalog-inspector-drawer/` |
 | 4 · Multi-window | launcher · settings · export · config modal · native close | ⬜ greenfield → `phase-4-multi-window/` |
 | 5 · Design polish | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | ⬜ ongoing → `phase-5-design-polish/` |
 | 6 · Platform + parity | keymap/hotkeys · command palette · native menu · then delete Dioxus | ⬜ → `phase-6-platform-parity/` |

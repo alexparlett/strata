@@ -47,6 +47,19 @@ pub struct ViewMeta {
 
 // ---- external table registration ----
 
+/// Register (or **re**-register) one external table from its spec, returning its
+/// inferred schema + free metadata.
+///
+/// This is also the catalog **re-scan** step (D5 / P3-03): it deregisters whatever is
+/// registered under `spec.name` and builds a *fresh* `ListingTable` from a
+/// re-`infer_schema`d config, because re-registering the same provider wouldn't re-infer
+/// anything. The spec is the source of truth on every pass — paths, format and partition
+/// columns come from the project's def, so a re-scan also picks up a def that changed and
+/// retries a table whose first registration failed.
+///
+/// Only the *inferred schema* is frozen at registration; file sets, row counts and
+/// partition values are already live, since we run no `ListFilesCache` and DataFusion
+/// re-`LIST`s per scan.
 pub async fn register_external(
     ctx: &SessionContext,
     spec: &TableSpec,
@@ -118,32 +131,6 @@ pub async fn register_external(
         .map_err(|e| e.to_string())?;
 
     table_meta(ctx, spec.name.as_str()).await
-}
-
-/// Rebuild a registered `ListingTable` from its own `paths` + `options`, re-inferring
-/// the schema, and re-register it under `name` — the schema-refresh step
-/// (`RefreshCatalog`). Re-registering the *same* provider wouldn't re-infer, so we
-/// construct a fresh table from a re-`infer_schema`d config. Returns its columns + free
-/// metadata — `opts` is the live table's own, so `collect_stat` carries over with it.
-/// Feature reservoir: consumed by `Engine::refresh_catalog` when the catalog task lands.
-#[allow(dead_code)]
-pub async fn rebuild_listing(
-    ctx: &SessionContext,
-    name: &str,
-    paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
-    opts: datafusion::datasource::listing::ListingOptions,
-) -> Result<TableMeta, String> {
-    use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
-    let config = ListingTableConfig::new_with_multi_paths(paths)
-        .with_listing_options(opts)
-        .infer_schema(&ctx.state())
-        .await
-        .map_err(|e| e.to_string())?;
-    let table = ListingTable::try_new(config).map_err(|e| e.to_string())?;
-    let _ = ctx.deregister_table(name);
-    ctx.register_table(name, Arc::new(table))
-        .map_err(|e| e.to_string())?;
-    table_meta(ctx, name).await
 }
 
 // ---- schema helpers ----

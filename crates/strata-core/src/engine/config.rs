@@ -432,12 +432,13 @@ pub fn is_restart_key(name: &str) -> bool {
 /// Whether `name` is a key the **app** owns and config may never set: the catalog and
 /// schema our tables live in (`crate::engine`'s `CATALOG` / `SCHEMA`).
 ///
-/// `RefreshCatalog` looks tables up by those names, so an override would hide the whole
-/// catalog from it — and since the live-apply path re-asserts every override *over*
-/// whatever the `SessionConfig` builder set, naming them at build time doesn't hold on
-/// its own; they have to be skipped here too. They're absent from [`ENGINE_KEYS`], so
-/// they can now only arrive as a hand-typed custom key or a stale saved override — both
-/// are skipped on apply and flagged by [`value_error`].
+/// Every table lookup resolves through the *default* catalog/schema, so an override
+/// re-points name resolution at a catalog that was never created — the "failed to resolve
+/// catalog: datafusion" every register hit after a config apply. Since the live-apply path
+/// re-asserts every override *over* whatever the `SessionConfig` builder set, naming them
+/// at build time doesn't hold on its own; they have to be skipped here too. They're absent
+/// from [`ENGINE_KEYS`], so they can now only arrive as a hand-typed custom key or a stale
+/// saved override — both are skipped on apply and flagged by [`value_error`].
 pub fn is_owned_key(name: &str) -> bool {
     matches!(
         name.trim(),

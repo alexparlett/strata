@@ -131,4 +131,3 @@ pub fn tab_context_menu(
                 .child(menu_row("Reopen closed tab", Command::ReopenTab)),
         )
 }
-

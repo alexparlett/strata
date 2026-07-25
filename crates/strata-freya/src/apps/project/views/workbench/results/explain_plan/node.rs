@@ -11,6 +11,7 @@ use strata_core::engine::plan::{
 };
 
 use super::palette::PlanPalette;
+use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue, Path};
 
@@ -157,15 +158,7 @@ impl Component for PlanNodeCard {
                     .background(kind),
             )
             .child(MonoValue::new(self.node.name.clone()).color(kind))
-            .maybe(hot, |el| {
-                el.child(
-                    rect()
-                        .padding((2., 4.))
-                        .corner_radius(4.)
-                        .background(t.hot_color.with_a(41))
-                        .child(Eyebrow::new("HOTSPOT").color(t.hot_color)),
-                )
-            });
+            .maybe(hot, |el| el.child(Badge::tag("HOTSPOT", t.hot_color)));
 
         // ── parsed detail: a key/value grid; bare fragments span both columns ─────────────
         let detail_grid = (!shown.is_empty()).then(|| {
@@ -263,11 +256,8 @@ impl Component for PlanNodeCard {
         // ── tier 2: non-zero insight callouts, tone-coloured pills ────────────────────────
         let tier2 = (show_metrics && !ins.is_empty()).then(|| {
             let pills = ins.iter().map(|i| {
-                rect()
-                    .padding((2., 8.))
-                    .corner_radius(4.)
+                Badge::value(i.text.clone(), self.palette.tone(i.tone))
                     .background(t.insight_background)
-                    .child(Meta::new(i.text.clone()).color(self.palette.tone(i.tone)))
                     .into_element()
             });
             rect()

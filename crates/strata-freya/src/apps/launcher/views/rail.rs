@@ -5,20 +5,23 @@
 //! (V26). There is exactly one destination today, so it is decoration with a job: it says
 //! *where you are*, which is what makes the Settings row read as the other place to go.
 //!
-//! Both rows are Freya's [`SideBarItem`], which already carries the hover fill, the padding
-//! and the rule that an **active** item doesn't light on hover — and whose `sidebar_item`
-//! theme both theme files already author. The rail *container* is hand-rolled because the
-//! fork ships no `SideBar`: its own example builds one from a `rect` too.
+//! Both rows are [`SidebarRow`] — the same preset the catalog's rows use, so the hover fill
+//! and the a11y (focusable, `Link` role, focus ring) can't drift between the two panes. Only
+//! the *selected* fill differs: this rail marks where you are with the canvas's accent tint
+//! rather than the catalog's neutral selection grey. The rail *container* is hand-rolled
+//! because the fork ships no `SideBar`: its own example builds one from a `rect` too.
 
 use freya::prelude::*;
 
 use crate::apps::launcher::{LauncherThemePartial, LauncherThemePreference};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::sidebar_row::SidebarRow;
 use crate::components::typography::{Control, Meta, Title};
 
-/// The rows' corner radius (the canvas's `--r-1`); `sidebar_item` ships 12.
-const ROW_RADIUS: f32 = 6.;
+/// The rail rows' padding (canvas `--sp-3 --sp-4`) — roomier than the catalog's, which sits
+/// in a narrower pane.
+const ROW_PADDING: Gaps = Gaps::new(8., 12., 8., 12.);
 
 /// The rail's width (canvas `width: 200px`), the hairline included.
 const RAIL_WIDTH: f32 = 200.;
@@ -57,30 +60,21 @@ impl Component for LauncherRail {
                     .child(Meta::new(env!("CARGO_PKG_VERSION")).color(theme.label_color)),
             );
 
-        // The current destination, wearing the accent tint. `Activable` is what
-        // `SideBarItem` reads its active state from, and active outranks hover in its own
-        // dress — so it stays put under the pointer, which is what a "you are here" marker
-        // should do.
-        let projects = Activable::new(
-            SideBarItem::new()
-                .theme(
-                    SideBarItemThemePartial::default()
-                        .active_background(theme.nav_background)
-                        .corner_radius(CornerRadius::new_all(ROW_RADIUS)),
-                )
-                .child(row_content(IconName::Folder, "Projects")),
-        )
-        .active(true);
+        // The current destination. `selected` outranks hover in the row's own dress, so the
+        // pill stays put under the pointer, which is what a "you are here" marker should do.
+        let projects = SidebarRow::new()
+            .auto_height()
+            .padding(ROW_PADDING)
+            .selected(true)
+            .active_background(theme.nav_background)
+            .child(row_content(IconName::Folder, "Projects"));
 
         // The gear (W1) — the standalone Settings window is P4-03, so the row is live and
         // logs until it lands. Wiring it here rather than at that seam would fold the
         // single-instance settings window into the launcher.
-        let settings = SideBarItem::new()
-            .theme(
-                SideBarItemThemePartial::default()
-                    .color(theme.muted_color)
-                    .corner_radius(CornerRadius::new_all(ROW_RADIUS)),
-            )
+        let settings = SidebarRow::new()
+            .auto_height()
+            .padding(ROW_PADDING)
             .on_press(move |_: Event<PressEventData>| {
                 tracing::debug!("launcher: settings window not built yet (P4-03)");
             })
@@ -114,7 +108,7 @@ impl Component for LauncherRail {
 }
 
 /// A rail row's content: glyph + label. The pill around it — padding, radius, hover and
-/// active fills — is `SideBarItem`'s.
+/// selected fills — is [`SidebarRow`]'s.
 fn row_content(icon: IconName, label: &str) -> impl IntoElement {
     rect()
         .horizontal()
