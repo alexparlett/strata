@@ -963,6 +963,42 @@
             },
             "border_fill": {
               "$ref": "#/$defs/colorPref"
+            },
+            "accent": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "menu_divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "menu_label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "menu_name_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "menu_path_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "avatar": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "active_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
             }
           }
         },

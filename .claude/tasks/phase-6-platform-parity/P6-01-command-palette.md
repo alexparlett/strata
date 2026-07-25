@@ -6,12 +6,15 @@
 The ⌘K command palette, with the "depth" niceties.
 
 ## Current state
-Not built. P2-20 binds ⌘K; this is the palette surface it opens.
+Not built. P2-20 binds ⌘K; this is the palette surface it opens. Its **header button already
+exists** (P3-15) as a placeholder that logs — `views/header/mod.rs`, tooltip already reactive off
+the live chord — so this task wires that press *and* the chord to the same open.
 
 ## Build
 - A palette overlay (filter + list) over the command registry (the P2-20 command table + actions).
-  The header search button that also opens it takes the canvas `Search (⌘K)` tooltip —
-  `keymap::use_hint_title("Search", Command::CommandPalette)`.
+  The header search button that also opens it is built and takes the canvas `Search (⌘K)` tooltip
+  (`keymap::use_hint_title("Search", Command::CommandPalette)`) — replace its `tracing::debug!`
+  stub with the open.
 - **Depth (T3):** grouping, keyboard navigation (↑↓ + enter), per-item **type icons** + **shortcut
   hints** (from `keymap::hint`), a columns group. The footer already advertises "↑↓ navigate".
 

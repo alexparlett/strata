@@ -134,12 +134,8 @@ pub fn tab_context_menu(
         )
 }
 
-/// A menu divider: the shared [`Divider`] configured for a hug-content menu — `fill_minimum` (a plain
-/// `fill` would blow the menu out to the window width, since the container hugs its children) with a
-/// little vertical breathing room.
+/// A menu divider — the shared [`Divider::menu`] recipe (kept as a local alias because this
+/// module's menus reach for it constantly).
 pub fn menu_sep(color: Color) -> Divider {
-    Divider::horizontal()
-        .length(Size::fill_minimum())
-        .color(color)
-        .margin(Gaps::new_all(4.))
+    Divider::menu(color)
 }

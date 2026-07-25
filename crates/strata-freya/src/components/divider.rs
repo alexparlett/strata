@@ -39,6 +39,16 @@ impl Divider {
         }
     }
 
+    /// A **menu** separator — the rule that divides one group of menu rows from the next.
+    /// `fill_minimum` because a menu container hugs its children, so a plain `fill` would blow
+    /// it out to the window width; plus a little vertical breathing room.
+    pub fn menu(color: Color) -> Self {
+        Self::horizontal()
+            .length(Size::fill_minimum())
+            .color(color)
+            .margin(Gaps::new_all(4.))
+    }
+
     /// Override the cross-axis extent (default: `fill`). Use `Size::px(18.)` for a short group rule,
     /// or `Size::fill_minimum()` inside a hug-content parent (e.g. a menu) where `fill` would blow the
     /// container out to its own parent's width.

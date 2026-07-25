@@ -740,6 +740,21 @@
       },
       "border_fill": {
         "reference": "border"
+      },
+      "accent": {
+        "reference": "primary"
+      },
+      "menu_divider_fill": {
+        "reference": "border"
+      },
+      "menu_label_color": {
+        "specific": "#8b929d"
+      },
+      "menu_name_color": {
+        "reference": "text_primary"
+      },
+      "menu_path_color": {
+        "reference": "text_placeholder"
       }
     },
     "activity_rail": {
@@ -1136,6 +1151,23 @@
       },
       "color": {
         "reference": "text_secondary"
+      }
+    },
+    "avatar": {
+      "background": {
+        "reference": "success"
+      },
+      "color": {
+        "reference": "text_inverse"
+      },
+      "active_background": {
+        "reference": "primary"
+      },
+      "active_color": {
+        "reference": "text_inverse"
+      },
+      "corner_radius": {
+        "specific": 6
       }
     }
   },
