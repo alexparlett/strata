@@ -157,13 +157,24 @@ src/theme.rs                     Freya theme application: `theme_registry!` / `s
                                  ThemeRegistry (built-ins + user themes dir) + schema gen live in
                                  `strata-core::theme`; the theme files themselves in root `themes/`
 src/components/                  shared component library
-  divider, dot, icon, run_button, typography
+  divider, dot, icon, run_button, segmented_toggle, toggle_button, typography
+  badge.rs                       tinted label pill (PART · HOTSPOT · ANALYZE · dtype · keycap).
+                                 NOT Freya's `Chip` — that's a selectable, focusable control
+  sidebar_row.rs                 the left pane's row shell: a preset over Freya's `SideBarItem`
+                                 (+ `Activable` for selection), so hover/selected dress and a11y
+                                 are shared by the catalog and, later, connections (W7)
+  type_palette.rs                the seven per-`Kind` hues (`"type_palette"` theme group) +
+                                 `kind_color`. Named for Kind, not Arrow; the EXPLAIN plan
+                                 borrows the same ramp for operator kinds
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     root component; spawns the engine, provides EngineCtx
   contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context
   state/                         per-window state (Radio): channel, hooks, session
                                  session.rs = SessionState + stateful QueryTab (each tab owns its
-                                 CodeEditorData, keyed on Chan::{Tabs, Tab(id)})
+                                 CodeEditorData, keyed on Chan::{Tabs, Tab(id)}); Layout too
+                                 project.rs = ProjectState — **the catalog**: persisted defs +
+                                 `Reg<T>` (Loading/Ready/Failed), per-section ProjChan channels
+                                 catalog.rs = CatalogSelection, the inspected column (context)
   model/                         window-local view models
   views/
     header/
@@ -172,6 +183,11 @@ src/apps/project/                the project window (Valin-shaped)
                                  (`window_drag`), traffic-light gutter
       project_menu.rs            the project switcher: trigger + Open… / open set / recents
                                  dropdown (data real; opening a project is P4-13's seam)
+    sidebar/
+      mod.rs                     sidebar shell — pane-specific header (the catalog's filter +
+                                 refresh row) over the active pane
+      catalog/                   P3-02: mod (pane + sections), section, entry (entry/column/
+                                 saved-query rows), columns (flatten + tests), interaction (tests)
     workbench/
       mod.rs, empty.rs           workbench shell + no-query empty state
       editor/                    SQL editor: tab, toolbar
@@ -248,6 +264,14 @@ owns its Run trigger (`QueryTab::request: Option<QuerySpec>`, on the dedicated
 keystrokes never wake the results pane); the `running` mirror is threaded as **struct-field
 props** — props for known shallow consumers, context only for DI handles (`EngineCtx`) and deep
 trees (`Selection`).
+
+Phase 3 has started: P3-01 (layout shell) and **P3-02 (catalog sidebar)** are ✅. Note the
+correction P3-02 carried: **the catalog is the `ProjectState` store, not a query.** Earlier drafts
+of `FREYA_STATE_ARCHITECTURE.md` (and the P3-03 / P3-06 task files, now fixed) described a
+`FetchCatalog` freya-query capability — it was never built and must not be. Introspecting
+DataFusion would surface the `__snap_*` result snapshots and hide defs whose registration failed,
+which are precisely the rows the catalog exists to show. Catalog mutations call the engine and
+then `ProjectState`'s own methods on the matching `ProjChan`; nothing refetches.
 
 ---
 

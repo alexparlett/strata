@@ -69,7 +69,9 @@ impl Component for Avatar {
             .corner_radius(theme.corner_radius)
             .background(background)
             .center()
-            .child(crate::components::typography::Caption::new(initials_of(&self.name)).color(color))
+            .child(
+                crate::components::typography::Caption::new(initials_of(&self.name)).color(color),
+            )
     }
 }
 

@@ -95,8 +95,9 @@ leaks, and only the latest dispatch may publish workspace state.
 **DDL / catalog changes do not retire snapshots.** A snapshot is a point-in-time result
 (Athena-style): dropping a table or reloading the catalog doesn't invalidate what a past Run
 returned. This retires the `epoch` field from the query key — with per-Run identity (§5) there is
-nothing for an epoch to invalidate: catalog freshness is `FetchCatalog`'s concern, result
-freshness is the user's Run button.
+nothing for an epoch to invalidate: catalog freshness is the `ProjectState` store's concern (it is
+a store, not a query — see `FREYA_STATE_ARCHITECTURE.md` §6), result freshness is the user's Run
+button.
 
 Disk, not memory: RAM holds one page regardless of result size (unchanged).
 

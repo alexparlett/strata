@@ -34,6 +34,29 @@
     "shadow": "rgba(0,0,0,.45)"
   },
   "components": {
+    "type_palette": {
+      "str_color": {
+        "specific": "#7ee787"
+      },
+      "num_color": {
+        "specific": "#79c0ff"
+      },
+      "bool_color": {
+        "specific": "#d2a8ff"
+      },
+      "ts_color": {
+        "specific": "#ffa657"
+      },
+      "struct_color": {
+        "specific": "#f0a5c0"
+      },
+      "list_color": {
+        "specific": "#8ad4ff"
+      },
+      "map_color": {
+        "specific": "#ffcf6b"
+      }
+    },
     "button": {
       "color": {
         "specific": "#b6bfcb"
@@ -188,27 +211,6 @@
       },
       "nested_color": {
         "reference": "text_secondary"
-      },
-      "type_str_color": {
-        "specific": "#7ee787"
-      },
-      "type_num_color": {
-        "specific": "#79c0ff"
-      },
-      "type_bool_color": {
-        "specific": "#d2a8ff"
-      },
-      "type_ts_color": {
-        "specific": "#ffa657"
-      },
-      "type_struct_color": {
-        "specific": "#f0a5c0"
-      },
-      "type_list_color": {
-        "specific": "#8ad4ff"
-      },
-      "type_map_color": {
-        "specific": "#ffcf6b"
       }
     },
     "outline_button": {
@@ -595,10 +597,10 @@
         "specific": "rgba(0,0,0,0)"
       },
       "active_background": {
-        "specific": "#333d4b"
+        "reference": "active"
       },
       "hover_background": {
-        "specific": "#262d37"
+        "specific": "#232831"
       },
       "focus_border_fill": {
         "reference": "primary"
@@ -1016,27 +1018,41 @@
       },
       "warm_color": {
         "specific": "#e2b98c"
+      }
+    },
+    "catalog": {
+      "label_color": {
+        "specific": "#5d6775"
       },
-      "type_str_color": {
-        "specific": "#7ee787"
+      "chevron_color": {
+        "reference": "text_placeholder"
       },
-      "type_num_color": {
+      "name_color": {
+        "reference": "text_primary"
+      },
+      "column_color": {
+        "reference": "text_secondary"
+      },
+      "meta_color": {
+        "specific": "#4d5765"
+      },
+      "rail_fill": {
+        "reference": "border"
+      },
+      "table_color": {
         "specific": "#79c0ff"
       },
-      "type_bool_color": {
+      "view_color": {
         "specific": "#d2a8ff"
       },
-      "type_ts_color": {
-        "specific": "#ffa657"
+      "query_color": {
+        "specific": "#c9a5ff"
       },
-      "type_struct_color": {
-        "specific": "#f0a5c0"
+      "part_color": {
+        "reference": "primary"
       },
-      "type_list_color": {
-        "specific": "#8ad4ff"
-      },
-      "type_map_color": {
-        "specific": "#ffcf6b"
+      "part_background": {
+        "specific": "rgba(76,198,255,.12)"
       }
     },
     "datagrid": {
@@ -1115,27 +1131,6 @@
       },
       "cell_ts_color": {
         "specific": "#e2b98c"
-      },
-      "type_str_color": {
-        "specific": "#7ee787"
-      },
-      "type_num_color": {
-        "specific": "#79c0ff"
-      },
-      "type_bool_color": {
-        "specific": "#d2a8ff"
-      },
-      "type_ts_color": {
-        "specific": "#ffa657"
-      },
-      "type_struct_color": {
-        "specific": "#f0a5c0"
-      },
-      "type_list_color": {
-        "specific": "#8ad4ff"
-      },
-      "type_map_color": {
-        "specific": "#ffcf6b"
       },
       "color": {
         "reference": "text_secondary"

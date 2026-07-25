@@ -38,18 +38,19 @@ impl Component for ActivityRail {
 
         // A rail toggle: 40×38, `on` derived from the layout, a press routing to `toggle`
         // (a fn pointer — `toggle_pane` / `toggle_drawer` for the chosen pane / tab).
-        let button = move |icon: IconName, title: &str, active: bool, toggle: fn(&mut SessionState)| {
-            ToggleButton::new()
-                .width(Size::px(40.))
-                .height(Size::px(38.))
-                .toggle(active)
-                .title(title)
-                .on_change(move |_: Event<ChangeEventData>| {
-                    let mut radio = radio;
-                    toggle(&mut radio.write_channel(Chan::Layout));
-                })
-                .child(Icon::new(icon).size(18.))
-        };
+        let button =
+            move |icon: IconName, title: &str, active: bool, toggle: fn(&mut SessionState)| {
+                ToggleButton::new()
+                    .width(Size::px(40.))
+                    .height(Size::px(38.))
+                    .toggle(active)
+                    .title(title)
+                    .on_change(move |_: Event<ChangeEventData>| {
+                        let mut radio = radio;
+                        toggle(&mut radio.write_channel(Chan::Layout));
+                    })
+                    .child(Icon::new(icon).size(18.))
+            };
 
         rect()
             .width(Size::px(48.))

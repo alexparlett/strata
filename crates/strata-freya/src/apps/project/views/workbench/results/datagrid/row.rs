@@ -23,6 +23,7 @@ use crate::apps::project::views::workbench::results::cell_view::{page_batch_row,
 use crate::apps::project::views::workbench::results::copy;
 use crate::apps::project::views::workbench::results::selection::{CellRole, SelCtl};
 use crate::components::divider::Divider;
+use crate::components::type_palette::type_palette;
 
 /// One body row of the results grid (page row `index`, display order).
 #[derive(PartialEq)]
@@ -56,6 +57,9 @@ impl Component for Row {
         let sel_ctl = self.sel;
         let record_view = self.record_view;
         let theme = &self.theme;
+        // The shared type palette — the cell tint for booleans comes from it, so a `true` reads
+        // in the same hue its column header does.
+        let palette = type_palette();
 
         // Right-click → the copy context menu over the selection (P2-11). A press on a
         // cell *outside* the current selection retargets it first (Excel semantics: the
@@ -162,7 +166,7 @@ impl Component for Row {
                 color: if cell.null {
                     theme.gutter_color
                 } else {
-                    col.kind.cell_color(theme)
+                    col.kind.cell_color(theme, &palette)
                 },
                 mono: true,
                 cross: Alignment::Start,

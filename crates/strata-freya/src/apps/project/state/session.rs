@@ -228,9 +228,15 @@ impl SessionState {
         self.layout.drawer = None;
     }
 
-    /// Collapse the inspector (its header ×). Reopening is a column selection (P3-08).
+    /// Collapse the inspector (its header ×).
     pub fn close_inspector(&mut self) {
         self.layout.inspector_open = false;
+    }
+
+    /// Reveal the inspector — selecting a catalog column (P3-02) is the way it reopens once
+    /// collapsed. Idempotent, so every selection can call it without checking first.
+    pub fn open_inspector(&mut self) {
+        self.layout.inspector_open = true;
     }
 
     /// Remember the sidebar's dragged width (a `ResizableContainer` resize). Write on

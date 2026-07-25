@@ -951,6 +951,33 @@
             }
           }
         },
+        "type_palette": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "str_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "num_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "bool_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "ts_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "struct_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "list_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "map_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "header_bar": {
           "type": "object",
           "additionalProperties": false,
@@ -1371,27 +1398,6 @@
             },
             "warm_color": {
               "$ref": "#/$defs/colorPref"
-            },
-            "type_str_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_num_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_bool_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_ts_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_struct_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_list_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_map_color": {
-              "$ref": "#/$defs/colorPref"
             }
           }
         },
@@ -1473,26 +1479,44 @@
             },
             "nested_color": {
               "$ref": "#/$defs/colorPref"
-            },
-            "type_str_color": {
+            }
+          }
+        },
+        "catalog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "label_color": {
               "$ref": "#/$defs/colorPref"
             },
-            "type_num_color": {
+            "chevron_color": {
               "$ref": "#/$defs/colorPref"
             },
-            "type_bool_color": {
+            "name_color": {
               "$ref": "#/$defs/colorPref"
             },
-            "type_ts_color": {
+            "column_color": {
               "$ref": "#/$defs/colorPref"
             },
-            "type_struct_color": {
+            "meta_color": {
               "$ref": "#/$defs/colorPref"
             },
-            "type_list_color": {
+            "rail_fill": {
               "$ref": "#/$defs/colorPref"
             },
-            "type_map_color": {
+            "table_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "view_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "query_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "part_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "part_background": {
               "$ref": "#/$defs/colorPref"
             }
           }
@@ -1559,27 +1583,6 @@
               "$ref": "#/$defs/colorPref"
             },
             "cell_ts_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_str_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_num_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_bool_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_ts_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_struct_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_list_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "type_map_color": {
               "$ref": "#/$defs/colorPref"
             },
             "color": {

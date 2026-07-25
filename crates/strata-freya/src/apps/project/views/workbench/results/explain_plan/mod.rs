@@ -13,11 +13,13 @@ use freya::prelude::*;
 
 use strata_core::engine::plan::{guide_rails, PlanTab, QueryPlan};
 
+use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
-use crate::components::typography::{Eyebrow, Readout};
+use crate::components::type_palette::type_palette;
+use crate::components::typography::Readout;
 
 mod node;
 mod palette;
@@ -43,13 +45,6 @@ define_theme!(
         raw_color: Color,
         hot_color: Color,
         warm_color: Color,
-        type_str_color: Color,
-        type_num_color: Color,
-        type_bool_color: Color,
-        type_ts_color: Color,
-        type_struct_color: Color,
-        type_list_color: Color,
-        type_map_color: Color,
     }
 );
 
@@ -95,6 +90,7 @@ impl Component for ExplainPlan {
         };
         let palette = PlanPalette {
             theme: theme.clone(),
+            types: type_palette(),
             accent,
             error,
             count_color,
@@ -128,16 +124,13 @@ impl Component for ExplainPlan {
                         .on_press(move |_| tab.set(PlanTab::Logical)),
                 )
         });
-        // Amber ANALYZE badge (physical tab only — the metrics live there): the design's
-        // status-pill recipe, a 15% tint of its own colour.
+        // Amber ANALYZE badge (physical tab only — the metrics live there): the shared badge, in
+        // the toolbar's taller pill dress. Its fill is the standard tint of its own colour.
         let badge = (self.plan.analyze && physical).then(|| {
-            rect()
-                .height(Size::px(22.))
+            Badge::tag("ANALYZE", palette.types.map_color)
+                .height(22.)
                 .padding((0., 12.))
-                .corner_radius(6.)
-                .background(theme.type_map_color.with_a(38))
-                .center()
-                .child(Eyebrow::new("ANALYZE").color(theme.type_map_color))
+                .radius(6.)
         });
         let raw_title = if raw_on {
             "Show the plan tree"
