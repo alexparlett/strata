@@ -295,8 +295,20 @@ in the freya-query cache — the store holds specs, never rows:
    (`Pending | Loading{res} | Settled{res}`); cancel is `engine.cancel(tab.into(), run.into())`
    → the awaiting run settles `Err("cancelled")`.
 6. **Invalidation**: none for results — a Run result is point-in-time; DDL / reload does *not*
-   retire it (spec §4). Catalog + functions are their own capabilities (`FetchCatalog`,
-   `FetchFunctions`) and invalidate on DDL via `on_settled`.
+   retire it (spec §4). The **catalog is not a query at all** — see the note below.
+
+> **The catalog is a store, not server data (corrected P3-02).** Earlier drafts of this document
+> described a `FetchCatalog` freya-query capability invalidated by the DDL mutations. That was
+> never built and must not be: the catalog is the project file's **defs** plus what registration
+> learned (`ProjectState`, §2), never an introspection query against DataFusion. Asking the engine
+> would be wrong four ways — result snapshots are registered as real `__snap_*` tables and would
+> appear; a def whose registration *failed* has no engine presence yet is exactly the row the
+> catalog must keep showing (P3-04's validity badge); `datafusion.catalog.information_schema`
+> defaults to `false` and is a user-facing Settings key; and saved queries aren't a DataFusion
+> concept. `ProjectState` is also the ⌘S save-target store, so a cached second copy would be two
+> sources of truth. DDL mutations therefore call the engine and then the store's own methods
+> (`upsert_view` / `remove_table` / …) on the matching `ProjChan`, and subscribers re-render —
+> nothing refetches. Functions **are** a snapshot the engine hands over (`Engine::functions`).
 
 **As built (P2-02, reworked post-P2-16).** P2-02 shipped the trigger as a single
 workbench-local `use_state(|| None::<QuerySpec>)` slot ("one execution per window") — which
@@ -390,7 +402,7 @@ originated, so the user sees them in place. Both happen; not either/or.
 | Origin | In the log | Also shown inline |
 |--------|-----------|-------------------|
 | Query execution | yes (logged where the query settles `Err`) | that tab's results / Problems, from `RunQuery::Err`; auto-clears on re-run |
-| Registration via configure form | yes | the form's submit error (`use_mutation(RegisterSource)::Err`); `on_settled` invalidates `FetchCatalog` |
+| Registration via configure form | yes | the form's submit error; the answer lands on the row via `ProjectState::table_registered` / `table_failed` (§6's catalog note — no cache to invalidate) |
 | Registration at load | yes | a per-source marker on the sidebar catalog item (+ one load-summary notice) |
 
 SQL validation is the exception — derived per-tab from the editor text and not logged. As built
@@ -435,21 +447,24 @@ holds **handles, not state**.
 ```
 apps/project/
   state/
-    session.rs      SessionState + QueryTab + TabId + Origin + methods
+    session.rs      SessionState + QueryTab + TabId + Origin + methods (Layout lives here)
+    project.rs      ProjectState + ProjChan + Reg<T> rows — THE catalog (§6's note)
+    catalog.rs      CatalogSelection — the inspected column (context signal, P3-02)
     channel.rs      Chan + RadioChannel impl
-    layout.rs       Layout + LayoutCtx (context signal, side-effect persist)
-    log.rs          LogEntry (level + origin) + LogCtx (context signal)
-    persist.rs      SessionSnapshot / TabSnapshot + load/save side effects
-    mod.rs          use_init_session/layout/log, typed accessors
+    history.rs      the query-history satellite
+    hooks.rs        use_init_session / use_init_project / use_init_history / use_autosave
+    mod.rs          typed accessors
   query/
     run_query.rs    RunQuery + QuerySpec + QueryPage
-    catalog.rs      FetchCatalog / FetchFunctions
+    validate.rs     use_validation (the debounced engine dry-plan, P2-18)
   contexts/
     engine_ctx.rs   EngineCtx — Arc<Engine> (Deref) + captured() + cleanup(tab); TabId→WsId
-  project/          Project store (views + saved-query defs; save targets) — adjacent task
 state/
+  config.rs         app-global AppConfig station (settings · recents · open-project set)
   switchboard.rs    app-global Switchboard (menu seam), created in main
 ```
+
+> There is no `query/catalog.rs`: the catalog is `state/project.rs`, not a capability (§6).
 
 ---
 
