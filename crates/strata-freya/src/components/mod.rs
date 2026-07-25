@@ -2,12 +2,15 @@
 //! `design-handoff/` comps. Each owns its `define_theme!` theme (default registered in
 //! `crate::theme`), so its colours follow the sheet and are overridable like every built-in.
 
+pub mod badge;
 pub mod divider;
 pub mod dot;
 pub mod icon;
 pub mod run_button;
 pub mod segmented_toggle;
+pub mod sidebar_row;
 pub mod toggle_button;
+pub mod type_palette;
 pub mod typography;
 // NB: the bespoke `icon_button` is retired — icon buttons are now Freya's `Button` variants
 // (`.flat()` / `.outline()`) wrapping an `Icon`. The old `icon_button.rs` is an orphan (unreferenced,

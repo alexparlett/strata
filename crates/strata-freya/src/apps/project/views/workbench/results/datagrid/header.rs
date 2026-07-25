@@ -7,7 +7,6 @@ use std::rc::Rc;
 use freya::prelude::*;
 
 use super::cell::Cell;
-use super::model::KindColors;
 use super::{
     DataGridTheme, GridData, DEFAULT_COL_W, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H,
     MAX_COL_W, MIN_COL_W, TRAIL_W,
@@ -16,6 +15,7 @@ use crate::apps::project::views::workbench::results::selection::{CellRole, SelCt
 use crate::apps::project::views::workbench::results::sort::SortState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue};
 
 // Content auto-fit (double-click a resize grip): a char-count estimate, à la the Dioxus
@@ -59,6 +59,9 @@ pub struct HeaderRow {
 impl Component for HeaderRow {
     fn render(&self) -> impl IntoElement {
         let theme = &self.theme;
+        // The shared type palette supplies the dtype-label hues (named `palette` — the sort
+        // arrow's own fill is the unrelated `arrow` field below).
+        let palette = type_palette();
         // Per-column content auto-fit widths (grip double-click), from this page's cells.
         let autofit = autofit_widths(&self.data);
         let mut header = rect()
@@ -99,7 +102,7 @@ impl Component for HeaderRow {
                 sort: self.sort,
                 name_color: theme.header_color,
                 active_color: theme.header_active_color,
-                type_color: col.kind.type_color(theme),
+                type_color: kind_color(col.kind, &palette),
                 arrow: theme.arrow_fill,
                 divider: theme.header_divider_fill,
                 grip: theme.selection_border_fill,

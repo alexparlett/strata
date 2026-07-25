@@ -190,7 +190,7 @@ impl Component for Tab {
             .cross_align(Alignment::Center)
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
-            .maybe(!show_x, |el| el.child(Dot { color: dot_color }))
+            .maybe(!show_x, |el| el.child(Dot::new(dot_color)))
             .maybe(show_x, |el| el.child(close_button));
 
         // The tab's visual + interactions; wrapped in the tab's own `DragZone` below.
@@ -364,7 +364,7 @@ impl Component for TabChrome {
             .height(Size::px(16.))
             .main_align(Alignment::Center)
             .cross_align(Alignment::Center)
-            .maybe(self.dirty, |el| el.child(Dot { color: dot_color }))
+            .maybe(self.dirty, |el| el.child(Dot::new(dot_color)))
             .maybe(!self.dirty, |el| {
                 el.child(label().text("×").font_size(13.).color(x_color))
             });

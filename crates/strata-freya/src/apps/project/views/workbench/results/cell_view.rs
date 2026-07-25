@@ -13,9 +13,10 @@
 use freya::components::{define_theme, get_theme, use_theme, ScrollView};
 use freya::prelude::*;
 
+use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{Meta, MonoValue, Readout};
+use crate::components::typography::{MonoValue, Readout};
 
 define_theme!(
     %[component]
@@ -94,11 +95,8 @@ impl Component for CellView {
             .padding((12., 16.))
             .child(MonoValue::new(self.value.name.clone()).color(theme.name_color))
             .child(
-                rect()
-                    .corner_radius(4.)
-                    .background(theme.badge_background)
-                    .padding((2., 8.))
-                    .child(Meta::new(self.value.dtype.clone()).color(theme.badge_color)),
+                Badge::value(self.value.dtype.clone(), theme.badge_color)
+                    .background(theme.badge_background),
             )
             .child(rect().width(Size::flex(1.)))
             .child(

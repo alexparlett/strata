@@ -10,8 +10,9 @@ use freya::radio::use_radio;
 use strata_core::config::Command;
 
 use crate::apps::project::state::{Chan, SessionState};
+use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{Control, Meta, Prose, Title};
+use crate::components::typography::{Control, Prose, Title};
 use crate::keymap::use_hint;
 
 /// The centre-pane placeholder when the session has no open tabs.
@@ -61,12 +62,12 @@ impl Component for EmptyState {
 
         // New query (primary) — and Reopen closed (secondary), only when something's on the stack.
         // The chord chip only mounts while the new-tab command is bound.
+        // Both alphas are passed explicitly: a keycap is dimmer than a status badge on *both*
+        // axes (a 20% fill under a 60% label), so it doesn't take the standard derived tint.
         let chip = (!new_hint.is_empty()).then(|| {
-            rect()
-                .padding((2., 5.))
-                .corner_radius(4.)
+            Badge::value(new_hint.clone(), chip_c.with_a(153))
                 .background(chip_c.with_a(51))
-                .child(Meta::new(new_hint.clone()).color(chip_c.with_a(153)))
+                .padding((2., 5.))
         });
         let new_btn = Button::new()
             .filled()

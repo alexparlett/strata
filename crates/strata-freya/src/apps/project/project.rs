@@ -12,8 +12,8 @@ use std::sync::atomic::Ordering;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseTarget};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    resolve_launch_root, use_autosave, use_init_history, use_init_project, use_init_session, Chan,
-    SessionState,
+    resolve_launch_root, use_autosave, use_init_catalog_selection, use_init_history,
+    use_init_project, use_init_session, Chan, SessionState,
 };
 use crate::apps::project::views::{CloseConfirm, HeaderBar, Shell};
 use crate::keymap::on_commands;
@@ -175,6 +175,9 @@ impl App for ProjectApp {
         // The window's query-history satellite (P4-14): loads `.strata/history.jsonl` and
         // holds recent runs; the results pane appends to it as runs complete.
         use_init_history();
+        // The inspected-column slot (P3-02): the catalog sidebar writes it, the inspector
+        // (P3-08) reads it. A context signal, not a store — see `state/catalog.rs`.
+        use_init_catalog_selection();
 
         // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
         // structural change and retire the engine state of tabs that are gone. One

@@ -10,35 +10,24 @@ use strata_core::engine::RecordBatch;
 use strata_model::{Cell, ColumnInfo, Kind, QueryOutput};
 
 use super::DataGridTheme;
+use crate::components::type_palette::TypePaletteTheme;
 
-/// Theme-colour mapping for a column's [`Kind`] (the model's schema vocabulary) — drives the
-/// header dtype-label colour and the cell text colour (matches the Dioxus `Kind` →
-/// `text_class()` / `cell_class()`).
+/// Theme-colour mapping for a column's [`Kind`] — the **cell text** colour (Dioxus
+/// `.cell.num` / `.cell.ts` / `.cell.bool`; everything else default).
+///
+/// The header's dtype-label colour is not here: that is the shared type palette
+/// ([`crate::components::type_palette::kind_color`]), which this borrows for booleans so a `true`
+/// reads in the same hue its column header does.
 pub trait KindColors {
-    /// The header dtype-label colour (Dioxus `.ct .t-*`).
-    fn type_color(self, t: &DataGridTheme) -> Color;
-    /// The cell text colour (Dioxus `.cell.num` / `.cell.ts` / `.cell.bool`; everything else default).
-    fn cell_color(self, t: &DataGridTheme) -> Color;
+    fn cell_color(self, t: &DataGridTheme, palette: &TypePaletteTheme) -> Color;
 }
 
 impl KindColors for Kind {
-    fn type_color(self, t: &DataGridTheme) -> Color {
-        match self {
-            Kind::Str => t.type_str_color,
-            Kind::Num => t.type_num_color,
-            Kind::Bool => t.type_bool_color,
-            Kind::Ts => t.type_ts_color,
-            Kind::Struct => t.type_struct_color,
-            Kind::List => t.type_list_color,
-            Kind::Map => t.type_map_color,
-        }
-    }
-
-    fn cell_color(self, t: &DataGridTheme) -> Color {
+    fn cell_color(self, t: &DataGridTheme, palette: &TypePaletteTheme) -> Color {
         match self {
             Kind::Num => t.cell_num_color,
             Kind::Ts => t.cell_ts_color,
-            Kind::Bool => t.type_bool_color,
+            Kind::Bool => palette.bool_color,
             _ => t.color,
         }
     }

@@ -234,9 +234,7 @@ fn tab_row(
                 .cross_align(Alignment::Center)
                 .spacing(8.)
                 .width(Size::fill())
-                .child(Dot {
-                    color: palette.dot(active, dirty),
-                })
+                .child(Dot::new(palette.dot(active, dirty)))
                 .child(
                     rect().width(Size::flex(1.)).child(
                         Prose::new(name)
