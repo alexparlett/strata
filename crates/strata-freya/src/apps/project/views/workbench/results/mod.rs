@@ -33,7 +33,7 @@ use chart::ChartView;
 use datagrid::{DataGrid, GridData, PageRead};
 use empty::EmptyState;
 use error::ErrorState;
-use find::FindState;
+use find::{FindState, PageKey};
 use running::Running;
 use sort::SortState;
 use status_bar::StatusBar;
@@ -160,13 +160,17 @@ impl Component for ResultsBody {
         );
 
         // Mirror the run's in-flight-ness into the workbench's `running` slot for the
-        // toolbar's Run→Cancel flip (P2-15). The toolbar cannot subscribe this query
-        // itself: freya-query re-runs *stale* entries when a subscriber mounts, and an
-        // in-flight entry reads as stale — a second enabled subscriber would double-execute
-        // the run. So this body, the sole subscriber, resolves the slot: the press's nonce
-        // while Pending/Loading, cleared on settle. Unmount (cancel / supersede / tab
-        // close) clears it too — nonce-guarded, so if a new press's body mounts before the
-        // old one drops, the stale drop can't clobber the newer run's flag.
+        // toolbar's Run→Cancel flip (P2-15). This body is the query's only subscriber and
+        // resolves the slot for everyone else: the press's nonce while Pending/Loading,
+        // cleared on settle. Unmount (cancel / supersede / tab close) clears it too —
+        // nonce-guarded, so if a new press's body mounts before the old one drops, the stale
+        // drop can't clobber the newer run's flag.
+        //
+        // The toolbar could subscribe the query itself without re-executing it (our fork
+        // counts in-flight executions, so a mounting subscriber attaches to one rather than
+        // dispatching a duplicate) — it doesn't, because `.enable(false)` is part of `Query`'s
+        // cache identity, so there is no "watch without running" subscription to make. See the
+        // `running` prop's own note in `workbench::Workbench`.
         let run = self.spec.run;
         let mut running = self.running;
         use_side_effect(move || {
@@ -213,6 +217,10 @@ impl Component for ResultsBody {
         // selection — the old indices would silently point at *different* cells (the same
         // invariant the pager jump protects) — so it clears the selection.
         let find = FindState::use_new();
+        // The page in hand + the find view over it, both O(page) and both memoized on what
+        // actually determines them (`find::PageMemo`) — this body re-renders for plenty of
+        // reasons that move neither.
+        let pages = find::use_page_memo();
         let sel = use_consume::<State<Selection>>();
         // Column sort (P2-13): per-press view intent, like the page — a new Run starts
         // unsorted. Cycling clears the selection and jumps to page 1 itself (see `sort.rs`).
@@ -250,18 +258,18 @@ impl Component for ResultsBody {
         let cur_size = *page_size.read();
         // A sorted read is never the Run's own page 1 — the snapshot re-orders under it.
         let native_page1 = cur_page == 1 && cur_size == run_size && sort_key.is_none();
+        // The cut being read — the read's cache key *and* the page memo's below, which is the
+        // point: the rows are a pure function of it.
+        let page_spec = PageSpec {
+            snapshot: snapshot.unwrap_or(SnapshotId(0)),
+            page: cur_page,
+            page_size: cur_size,
+            sort: sort_key,
+        };
         let fetch = use_query(
-            Query::new(
-                PageSpec {
-                    snapshot: snapshot.unwrap_or(SnapshotId(0)),
-                    page: cur_page,
-                    page_size: cur_size,
-                    sort: sort_key,
-                },
-                FetchSnapshotPage(engine.captured()),
-            )
-            .stale_time(Duration::MAX)
-            .enable(snapshot.is_some() && !native_page1),
+            Query::new(page_spec.clone(), FetchSnapshotPage(engine.captured()))
+                .stale_time(Duration::MAX)
+                .enable(snapshot.is_some() && !native_page1),
         );
 
         // Cancel = abort engine-side (S14: tag-guarded, a stale press can't kill a newer run)
@@ -304,38 +312,49 @@ impl Component for ResultsBody {
                 settlement_instant,
             } => {
                 // Resolve the page both consumers share: the grid renders it, the status bar
-                // aggregates the selection over it (see `PageRead`).
-                let run_grid = Rc::new(GridData::from_run(&rows.output, &rows.batch));
-                let view = if native_page1 {
-                    PageRead::Ready(run_grid.clone())
+                // aggregates the selection over it (see `PageRead`). It comes out of the memo
+                // already find-filtered — the filter narrows the *resolved* page (page-bounded
+                // — see `find`), so grid and aggregate see the same rows while the pager keeps
+                // walking the unfiltered snapshot — and neither the resolve nor the filter
+                // re-runs for a render that moved neither the cut nor the query.
+                let run_grid =
+                    pages.run_page(|| Rc::new(GridData::from_run(&rows.output, &rows.batch)));
+                let row_base = (cur_page - 1) * cur_size;
+                let needle = find.needle();
+                let (view, row_nums) = if native_page1 {
+                    let fv = pages.view(
+                        PageKey::Run,
+                        || run_grid.clone(),
+                        needle.as_deref(),
+                        row_base,
+                    );
+                    (PageRead::Ready(fv.data), fv.row_nums)
                 } else {
                     match &*fetch.read().state() {
                         QueryStateData::Settled {
                             res: Ok(fetched), ..
-                        } => PageRead::Ready(Rc::new(GridData::from_page(
-                            rows.output.columns.clone(),
-                            fetched.rows.clone(),
-                            fetched.batch.clone(),
-                        ))),
+                        } => {
+                            let fv = pages.view(
+                                PageKey::Snapshot(page_spec.clone()),
+                                || {
+                                    Rc::new(GridData::from_page(
+                                        rows.output.columns.clone(),
+                                        fetched.rows.clone(),
+                                        fetched.batch.clone(),
+                                    ))
+                                },
+                                needle.as_deref(),
+                                row_base,
+                            );
+                            (PageRead::Ready(fv.data), fv.row_nums)
+                        }
                         QueryStateData::Settled { res: Err(err), .. } => {
-                            PageRead::Failed(err.clone())
+                            (PageRead::Failed(err.clone()), None)
                         }
                         QueryStateData::Pending | QueryStateData::Loading { .. } => {
-                            PageRead::Loading
+                            (PageRead::Loading, None)
                         }
                     }
-                };
-                // The find filter narrows the *resolved* page (page-bounded — see `find`):
-                // the grid and the status bar's selection aggregate both see the filtered
-                // rows; the pager still walks the unfiltered snapshot.
-                let row_base = (cur_page - 1) * cur_size;
-                let needle = find.needle();
-                let (view, row_nums) = match &view {
-                    PageRead::Ready(data) => {
-                        let fv = find::filter_page(needle.as_deref(), data, row_base);
-                        (PageRead::Ready(fv.data), fv.row_nums)
-                    }
-                    other => (other.clone(), None),
                 };
                 let bar = StatusBar::new(ResultsState::Grid)
                     .pager(Pager {

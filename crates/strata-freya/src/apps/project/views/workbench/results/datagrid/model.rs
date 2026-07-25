@@ -109,8 +109,9 @@ impl PageRead {
 }
 
 /// Cell padding density — the vertical breathing room around cell text (the horizontal inset is
-/// fixed). Defaults to [`Comfortable`](Density::Comfortable); [`Compact`](Density::Compact) halves the
-/// vertical padding for denser tables. Wire to a user setting later (the Dioxus grid has a compact toggle).
+/// fixed). [`Compact`](Density::Compact) halves the vertical padding for denser tables. Selected by
+/// the user's `Settings::density_compact` (default [`Comfortable`](Density::Comfortable)), read
+/// where the grid renders.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Density {
     Comfortable,

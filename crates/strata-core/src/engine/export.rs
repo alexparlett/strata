@@ -53,6 +53,19 @@ pub async fn run_export(
         "arrow" => "ARROW",
         _ => "CSV",
     };
+    // `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option:
+    // DataFusion 54's COPY parser re-renders each one with `Ident::to_string()`, so a
+    // quoted name reaches the planner with its quotes still attached and matches no
+    // field. Bare is also case-preserving here (that parser doesn't normalise), so every
+    // name the tokenizer reads as one word round-trips — and one it doesn't simply can't
+    // be expressed, which is worth saying plainly instead of emitting a statement that
+    // fails with a parser message about a stray token.
+    if let Some(bad) = a.partition_cols.iter().find(|c| !is_bare_word(c)) {
+        return Err(format!(
+            "Can't partition by {bad:?}: COPY takes unquoted column names, so a partition \
+             column has to be a single plain word"
+        ));
+    }
     let part_clause = if a.partition_cols.is_empty() {
         String::new()
     } else {
@@ -66,9 +79,13 @@ pub async fn run_export(
                 "nan" => "NaN",
                 _ => "",
             };
+            // Every value here lands inside a `'…'` literal. `nv` and the bool are ours;
+            // the delimiter is the user's, so it gets the same `''` doubling as the path
+            // below (a `'` delimiter would otherwise close the literal early).
+            let delim = a.csv_delimiter.to_string().replace('\'', "''");
             format!(
-                " OPTIONS ('HAS_HEADER' '{}', 'DELIMITER' '{}', 'NULL_VALUE' '{}')",
-                a.csv_header, a.csv_delimiter, nv
+                " OPTIONS ('HAS_HEADER' '{}', 'DELIMITER' '{delim}', 'NULL_VALUE' '{}')",
+                a.csv_header, nv
             )
         }
         "parquet" => format!(
@@ -98,6 +115,17 @@ pub async fn run_export(
     let df = ctx.sql(&stmt).await.map_err(|e| e.to_string())?;
     let batches = df.collect().await.map_err(|e| e.to_string())?;
     Ok((a.path, copy_row_count(&batches)))
+}
+
+/// Whether `name` tokenises as a single **unquoted** identifier, asked of the very
+/// dialect DataFusion parses with rather than a hardcoded character set (`lex` does the
+/// same for the editor's word boundaries).
+fn is_bare_word(name: &str) -> bool {
+    use datafusion::sql::sqlparser::dialect::{Dialect, GenericDialect};
+    let d = GenericDialect {};
+    let mut rest = name.chars();
+    matches!(rest.next(), Some(c) if d.is_identifier_start(c))
+        && rest.all(|c| d.is_identifier_part(c))
 }
 
 /// Parquet compression codec string, with a level for the codecs that take one.

@@ -149,10 +149,6 @@ pub struct SessionState {
 impl SessionState {
     // --- reads ------------------------------------------------------------
 
-    pub fn active_tab(&self) -> Option<&QueryTab> {
-        self.active.and_then(|id| self.tabs.get(&id))
-    }
-
     /// The tab's current run request, if any.
     pub fn request(&self, id: TabId) -> Option<&QuerySpec> {
         self.tabs.get(&id).and_then(|t| t.request.as_ref())

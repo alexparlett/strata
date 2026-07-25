@@ -313,6 +313,29 @@ struct AggView {
 }
 
 impl AggView {
+    /// Fold one selected coordinate in. Out-of-range coordinates are *skipped*, not an error:
+    /// the selection is page-local and a page can shrink under it (a filter, a shorter last
+    /// page) between the write and this read.
+    ///
+    /// Numeric = a [`Kind::Num`] column's non-null cell whose text parses — the engine formats
+    /// numbers with thousands separators, so the commas come back out first. A null counts as
+    /// a selected *cell* but never as a numeric one.
+    fn add(&mut self, data: &GridData, r: usize, c: usize) {
+        let Some(cell) = data.rows.get(r).and_then(|row| row.get(c)) else {
+            return;
+        };
+        self.cells += 1;
+        let numeric_col = data.columns.get(c).is_some_and(|col| col.kind == Kind::Num);
+        if numeric_col && !cell.null {
+            if let Ok(v) = cell.text.replace(',', "").trim().parse::<f64>() {
+                self.numeric += 1;
+                self.sum += v;
+                self.min = self.min.min(v);
+                self.max = self.max.max(v);
+            }
+        }
+    }
+
     /// The accent strip's text: "N cells · Σ x · avg x · min x · max x" (count only when the
     /// selection holds no numeric cells).
     fn label(&self) -> String {
@@ -335,38 +358,13 @@ impl AggView {
 /// Aggregate the selection over the page's real cells — the Dioxus `selection_agg`. The view
 /// handed in is the *find-filtered* page (P2-09), which the page-local selection indexes
 /// into, so the aggregate stays honest under an active filter.
-/// Numeric = a `Kind::Num` column's non-null cell; the engine
-/// formats numbers with thousands separators, so parsing strips the commas back out.
+///
+/// The selection is walked and folded in one pass — Select-All over the pager's largest cut is
+/// 1000 × N coordinates, and this runs on **every** selection change (a drag-paint fires it per
+/// pointer move), so materializing them first would allocate the whole grid to read it.
 fn selection_agg(sel: &Selection, data: &GridData) -> Option<AggView> {
     let ncols = data.columns.len();
     let nrows = data.rows.len();
-
-    let mut coords: Vec<(usize, usize)> = Vec::new();
-    match sel {
-        Selection::None => return None,
-        Selection::Cell { .. } => {
-            let (minr, maxr, minc, maxc) = sel.cell_bounds()?;
-            for r in minr..=maxr {
-                for c in minc..=maxc {
-                    coords.push((r, c));
-                }
-            }
-        }
-        Selection::Rows(rows) => {
-            for &r in rows {
-                for c in 0..ncols {
-                    coords.push((r, c));
-                }
-            }
-        }
-        Selection::Cols(cols) => {
-            for r in 0..nrows {
-                for &c in cols {
-                    coords.push((r, c));
-                }
-            }
-        }
-    }
 
     let mut agg = AggView {
         cells: 0,
@@ -375,18 +373,30 @@ fn selection_agg(sel: &Selection, data: &GridData) -> Option<AggView> {
         min: f64::INFINITY,
         max: f64::NEG_INFINITY,
     };
-    for (r, c) in coords {
-        let Some(cell) = data.rows.get(r).and_then(|row| row.get(c)) else {
-            continue;
-        };
-        agg.cells += 1;
-        let numeric_col = data.columns.get(c).is_some_and(|col| col.kind == Kind::Num);
-        if numeric_col && !cell.null {
-            if let Ok(v) = cell.text.replace(',', "").trim().parse::<f64>() {
-                agg.numeric += 1;
-                agg.sum += v;
-                agg.min = agg.min.min(v);
-                agg.max = agg.max.max(v);
+    // Each shape is visited in the same order the coordinate list this replaced held it —
+    // floating-point addition isn't associative, so the order is part of the answer.
+    match sel {
+        Selection::None => return None,
+        Selection::Cell { .. } => {
+            let (minr, maxr, minc, maxc) = sel.cell_bounds()?;
+            for r in minr..=maxr {
+                for c in minc..=maxc {
+                    agg.add(data, r, c);
+                }
+            }
+        }
+        Selection::Rows(rows) => {
+            for &r in rows {
+                for c in 0..ncols {
+                    agg.add(data, r, c);
+                }
+            }
+        }
+        Selection::Cols(cols) => {
+            for r in 0..nrows {
+                for &c in cols {
+                    agg.add(data, r, c);
+                }
             }
         }
     }

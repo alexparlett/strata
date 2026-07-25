@@ -8,8 +8,8 @@ use freya::prelude::*;
 
 use super::cell::Cell;
 use super::{
-    DataGridTheme, GridData, DEFAULT_COL_W, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H,
-    MAX_COL_W, MIN_COL_W, TRAIL_W,
+    DataGridTheme, GridData, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H, MAX_COL_W,
+    MIN_COL_W, TRAIL_W,
 };
 use crate::apps::project::views::workbench::results::selection::{CellRole, SelCtl};
 use crate::apps::project::views::workbench::results::sort::SortState;
@@ -48,6 +48,9 @@ pub struct HeaderRow {
     /// The resolved page — column names/types, and the cells the auto-fit measures.
     pub data: Rc<GridData>,
     pub widths: State<Vec<f32>>,
+    /// The grid's starting column width (`DataGrid::render`) — what a lookup past the end of
+    /// `widths` answers with, so the fallback can't be a different width than the seed.
+    pub seed_w: f32,
     pub controller: ScrollController,
     pub viewport: State<Area>,
     pub hold_w: State<f32>,
@@ -88,13 +91,14 @@ impl Component for HeaderRow {
                 on_secondary: None,
             });
         for (ci, col) in self.data.columns.iter().enumerate() {
-            let w = self.widths.read().get(ci).copied().unwrap_or(DEFAULT_COL_W);
+            let w = self.widths.read().get(ci).copied().unwrap_or(self.seed_w);
             header = header.child(HeaderCell {
                 index: ci,
                 name: col.name.clone(),
                 dtype: col.dtype.clone(),
                 w,
                 widths: self.widths,
+                seed_w: self.seed_w,
                 controller: self.controller,
                 viewport: self.viewport,
                 hold_w: self.hold_w,
@@ -108,7 +112,7 @@ impl Component for HeaderRow {
                 grip: theme.selection_border_fill,
                 hover_bg: theme.header_hover_background,
                 active_bg: theme.header_active_background,
-                autofit_w: autofit.get(ci).copied().unwrap_or(DEFAULT_COL_W),
+                autofit_w: autofit.get(ci).copied().unwrap_or(self.seed_w),
             });
         }
         // Trailing dead space: keeps the last column's resize grip clear of the content's
@@ -133,6 +137,8 @@ pub struct HeaderCell {
     pub dtype: String,
     pub w: f32,
     pub widths: State<Vec<f32>>,
+    /// The grid's starting column width — see [`HeaderRow::seed_w`].
+    pub seed_w: f32,
     pub controller: ScrollController,
     pub viewport: State<Area>,
     pub hold_w: State<f32>,
@@ -244,6 +250,7 @@ impl Component for HeaderCell {
             .child(ColGrip {
                 index: self.index,
                 widths: self.widths,
+                seed_w: self.seed_w,
                 controller: self.controller,
                 viewport: self.viewport,
                 hold_w: self.hold_w,
@@ -262,6 +269,8 @@ impl Component for HeaderCell {
 struct ColGrip {
     index: usize,
     widths: State<Vec<f32>>,
+    /// The grid's starting column width — see [`HeaderRow::seed_w`].
+    seed_w: f32,
     /// The outer horizontal scroll — auto-scrolled while the drag nears a viewport edge so a column
     /// can grow past the visible right edge.
     controller: ScrollController,
@@ -284,6 +293,7 @@ impl Component for ColGrip {
         let viewport = self.viewport;
         let mut hold_w = self.hold_w;
         let autofit_w = self.autofit_w;
+        let seed_w = self.seed_w;
 
         let mut clicking = use_state(|| false);
         let mut hovering = use_state(|| false);
@@ -319,7 +329,7 @@ impl Component for ColGrip {
                 return;
             }
             origin_x.set(e.global_location().x as f32);
-            start_w.set(widths.read().get(index).copied().unwrap_or(DEFAULT_COL_W));
+            start_w.set(widths.read().get(index).copied().unwrap_or(seed_w));
             scroll_accum.set(0.0);
             // Freeze the content width at the current natural span for the duration of the drag.
             hold_w.set(GUTTER_W + widths.read().iter().sum::<f32>() + TRAIL_W);

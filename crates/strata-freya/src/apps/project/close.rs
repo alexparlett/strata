@@ -3,11 +3,10 @@
 //! same thing — the OS close held off long enough for the UI to act.
 //!
 //! The `on_close` hook runs on the winit thread outside any component scope and must be
-//! `Send`, so the window bridges it with atomics ([`CloseGuard`], mirrored from reactive
-//! state by `use_side_effect`s) plus an unbounded channel: the hook reads the guard
-//! synchronously, and when it declines the close it sends a [`Veto`] that wakes the UI
-//! executor. The UI then does what the hook couldn't and closes programmatically via
-//! `close_current_window()`, which bypasses the veto.
+//! `Send`, so the window bridges it with atomics ([`CloseGuard`]) plus an unbounded
+//! channel: the hook reads the guard synchronously, and when it declines the close it
+//! sends a [`Veto`] that wakes the UI executor. The UI then does what the hook couldn't
+//! and closes programmatically via `close_current_window()`, which bypasses the veto.
 //!
 //! Two reasons to decline, in precedence order:
 //!
@@ -18,6 +17,15 @@
 //! 2. [`Veto::Launcher`] — this is the app's last window and no quit is in flight: the
 //!    launcher has to be up *before* this window goes, or the app would exit instead
 //!    ([`platform::close_this_window`](crate::platform::close_this_window)).
+//!
+//! **The in-flight half of the guard is the engine's, not the UI's.** A run belongs to a
+//! workspace (a tab), not to a mounted view, and only the active tab's results are
+//! mounted — so a derivation from the UI went false the moment the user switched tabs on a
+//! running query, and both the window close and a background tab's ⌘W skipped the confirm
+//! with the engine still executing. The engine owns both answers now
+//! ([`Engine::watch_inflight`](strata_core::engine::Engine::watch_inflight) for the window,
+//! [`Engine::is_running`](strata_core::engine::Engine::is_running) per tab). `confirm` and
+//! `last` are still mirrored from reactive state by the root's `use_side_effect`s.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,19 +36,22 @@ use freya::radio::Radio;
 use freya::winit::window::WindowId;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 
-use crate::apps::project::query::RunId;
+use crate::apps::project::contexts::EngineCtx;
 use crate::platform;
 use crate::state::ConfigStation;
 use strata_model::TabId;
 
 use crate::apps::project::state::{Chan, SessionState};
 
-/// Shared with the winit `on_close` hook. The UI mirrors reactive state in
-/// (`running` ← the workbench's in-flight derivation, `confirm` ← the
-/// `confirm_close_running` setting, `last` ← the app-global window registry); the hook only
-/// reads.
+/// Shared with the winit `on_close` hook, which only reads it. `running` is written by the
+/// engine; `confirm` (← the `confirm_close_running` setting) and `last` (← the app-global
+/// window registry) are mirrored from reactive state by the window root's side effects.
 pub struct CloseGuard {
-    pub running: AtomicBool,
+    /// Whether this window's engine has *any* run or explain executing — written by the
+    /// engine itself, inside every lifecycle mutation. An `Arc` because the engine holds
+    /// the very same flag: the window hands it over once, at engine creation.
+    pub running: Arc<AtomicBool>,
+    /// Mirrors the `confirm_close_running` setting (the window root's side effect).
     pub confirm: AtomicBool,
     /// Whether this is the app's last window — if so its close has to put the launcher up
     /// first (see [`Veto::Launcher`]).
@@ -90,7 +101,7 @@ pub fn close_bridge(
 ) {
     let (tx, rx) = unbounded();
     let guard = Arc::new(CloseGuard {
-        running: AtomicBool::new(false),
+        running: Arc::new(AtomicBool::new(false)),
         confirm: AtomicBool::new(confirm_seed),
         last: AtomicBool::new(false),
     });
@@ -131,23 +142,25 @@ pub fn close_bridge(
 
 /// Close one tab through the close-while-running confirm — the gate **every**
 /// single-tab close path shares: ⌘W, the tab's × button, the tab context menu's Close,
-/// and the nav dropdown's ×. Provided into context by the workbench (which owns the run
-/// slots); bulk closes (close all / others / to-the-right) stay immediate — power
-/// actions whose engine cleanup already runs through the root's tab-diff funnel.
+/// and the nav dropdown's ×. Provided into context by the workbench; bulk closes (close
+/// all / others / to-the-right) stay immediate — power actions whose engine cleanup
+/// already runs through the root's tab-diff funnel.
 #[derive(Clone, Copy, PartialEq)]
 pub struct TabCloser {
-    pub running: State<Option<RunId>>,
+    /// This window's engine, in a `State` slot purely so the struct stays `Copy` —
+    /// it is passed by value into several tab-strip closures, and `EngineCtx` is an
+    /// `Arc` (`Clone`, not `Copy`).
+    pub engine: State<EngineCtx>,
     pub confirm: State<Option<CloseTarget>>,
 }
 
 impl TabCloser {
     /// Close `id` — via the confirm when its query is in flight and the pref is on.
     pub fn close(&self, mut radio: Radio<SessionState, Chan>, config: ConfigStation, id: TabId) {
-        // `read()` is peek-equivalent here: close() runs in event handlers, no reactive scope.
-        let in_flight = radio
-            .read()
-            .request(id)
-            .is_some_and(|s| *self.running.peek() == Some(s.run));
+        // Ask the engine, not the UI: a tab *is* a workspace, and a background tab's run
+        // has no mounted results pane to derive from. `peek()` because close() runs in
+        // event handlers, which have no reactive scope to subscribe.
+        let in_flight = self.engine.peek().is_running(id.into());
         if in_flight && config.peek().settings.confirm_close_running {
             let mut confirm = self.confirm;
             confirm.set(Some(CloseTarget::Tab(id)));
