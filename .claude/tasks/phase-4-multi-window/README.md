@@ -5,21 +5,21 @@ The other OS windows and the machinery that lets them share state: **launcher**,
 handling, and **project lifecycle** (open/load + session persistence).
 
 ## State of play
-Greenfield in Freya — only the project window exists (`apps/project/`). Per the port plan §6 these
-land here, and per §4 the cross-window singletons (settings, theme, recents) use
-**`State::create_global`** (created in `main`, passed into each window root), **not** a per-window
-Radio station. Each window is its own Freya `App` root under `apps/<window>/`. Native close uses
-**`winit CloseRequested`** (no objc). **Project open/load + session persistence (P4-13/14) are not
-built and are a prerequisite** — the window opens with no project today; the load half will likely be
-pulled earlier than the rest of this phase. The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the
-Freya rebuild.
+The **multi-window spine is up**: two window roots (`apps/project/`, `apps/launcher/`), two
+app-globals created in `main` and handed to each root — the config store (`state/config.rs`) and the
+live window registry (`platform/windows.rs`) — and one window path everything opens through
+(focus-if-open, launcher-if-last, quit-closes-all). Per plan §4 the cross-window singletons use
+**`State::create_global`**, **not** a per-window Radio station; native close uses **`winit
+CloseRequested`** (no objc). What's left in this phase is the *windows themselves*: settings,
+export, the config modal — plus P4-13's open/create UI. The Dioxus app shipped all of this
+(W1–W4, D6–D8) — this is the Freya rebuild.
 
 ## Tasks
 
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
-| P4-01 | Multi-window shell + shared state (`create_global`) + native close | ⬜ | W1/A8 | — |
-| P4-02 | Launcher window | ⬜ | U1 | P4-01 |
+| P4-01 | Multi-window shell + shared state (`create_global`) + native close | 🟡 shared state · window model · quit-vs-close done; per-window fault close + Dock quit remain | W1/A8 | — |
+| P4-02 | Launcher window | ✅ | U1 | P4-01 |
 | P4-03 | Settings window shell (draft/save, live theme, single-instance) | ⬜ | W1/U12 | P4-01 |
 | P4-04 | Settings ▸ Appearance | ⬜ | U12 | P4-03 |
 | P4-05 | Settings ▸ Data-display | ⬜ | U12 | P4-03 |

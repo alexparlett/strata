@@ -140,9 +140,24 @@ When writing Freya code, lean on these in roughly this order:
 ## strata-freya module map
 
 ```
-src/main.rs                      Freya launch + window config; discovers ThemesCtx + creates the
-                                 app-global reactive AppConfig store — each window's theme is
-                                 pure derived state (`use_strata_theme`)
+src/main.rs                      Freya launch + startup routing (reopen every project that had a
+                                 window at the last quit, else the launcher; argv[1] wins);
+                                 discovers ThemesCtx + creates the two app-globals — the reactive
+                                 AppConfig store and the live window registry. Each window's theme
+                                 is pure derived state (`use_strata_theme`)
+src/platform/windows.rs          the **window model**: the live registry (WindowId → launcher /
+                                 project folder), `open_project` / `open_launcher`
+                                 (focus-if-open), `close_this_window` (the launcher takes over
+                                 when it was the last), and quit (closes every window + keeps the
+                                 persisted open-set, so a restart reopens them)
+src/menu.rs                      the macOS menubar: App · **File** (Open… · Open Recent ·
+                                 Close Project) · Edit. Not static — `app_menu` hands back
+                                 `MenuHandles`, and the *focused* window keeps the File menu
+                                 pointed at itself (`use_file_menu`): its recents, and Close
+                                 Project only when it has a project to close
+src/state/mod.rs                 `AppCtx` — the four app-globals `main` creates once (themes ·
+                                 config · window registry · menubar handles), handed to every
+                                 window root as one value rather than four parameters
 src/state/config.rs              THE app-global store: one `RadioStation<AppConfig, ConfigChan>`
                                  (settings · recents · open-project set) created once in main and
                                  shared into every window (`use_share_config`). Channels keep a
@@ -158,6 +173,10 @@ src/theme.rs                     Freya theme application: `theme_registry!` / `s
                                  `strata-core::theme`; the theme files themselves in root `themes/`
 src/components/                  shared component library
   divider, dot, icon, run_button, typography
+src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher.dc.html`)
+  mod.rs                         root + window config + the `launcher` component theme
+  model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
+  views/                         title_bar · rail · projects · row · open (rfd folder pick)
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     root component; spawns the engine, provides EngineCtx
   contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context

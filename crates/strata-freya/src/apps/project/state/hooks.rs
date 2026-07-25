@@ -3,8 +3,6 @@
 //! themselves (`ProjectState`, `SessionState`, `History`) and their serde vocabulary
 //! (`strata_model`) live elsewhere; this is only the Freya wiring.
 
-use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -72,20 +70,6 @@ pub fn use_init_project(engine: &EngineCtx, root: PathBuf) -> RadioStation<Proje
         spawn(register_defs(engine, station));
     });
     station
-}
-
-/// Resolve the launch project's folder: argv\[1\] as the project folder, defaulting to
-/// `sample/` (the committed sample project) until the launcher / open-dialog lands
-/// (P4-02/P4-13 UI). Called once in [`ProjectApp::window`](crate::apps::project::ProjectApp)
-/// **before** the window opens, so its saved geometry can seed the window.
-///
-/// A project **can't exist without a root**, so a folder that won't canonicalize is an
-/// unrecoverable open error. The eventual handling is to close the window (and reopen the
-/// launcher if it was the last one) — see P4-01/P4-02/P4-13; until that multi-window
-/// plumbing exists, this fails fast so the fault is loud, not papered over.
-pub fn resolve_launch_root() -> PathBuf {
-    let arg = env::args().nth(1).unwrap_or_else(|| "sample".into());
-    fs::canonicalize(&arg).unwrap_or_else(|e| panic!("open project folder `{arg}`: {e}"))
 }
 
 /// Build the Project store for the resolved `root`: load its `project.json` defs, or

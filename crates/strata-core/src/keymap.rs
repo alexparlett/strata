@@ -65,11 +65,17 @@ pub const COMMANDS: &[CommandMeta] = &[
     command!(NewTab, "New query tab", "Open a new query tab", [primary] "t"),
     command!(ReopenTab, "Reopen closed tab", "Reopen the last closed tab", [primary shift] "t"),
     command!(CloseActiveTab, "Close tab", "Close the current query tab", [primary] "w"),
+    command!(OpenProject, "Open project", "Pick a project folder and open it", [primary] "o"),
+    // Quit precedes Close project deliberately: they are the two window-lifecycle commands a
+    // user might bind to the same chord, `resolve` is first-match, and the menubar resolves
+    // each command's accelerator independently. Listing Quit first means a shared chord
+    // resolves to the same command the App menu's accelerator fires.
+    command!(Quit, "Quit Strata", "Close every window and quit", [primary] "q"),
     command!(
         CloseProject,
         "Close project",
-        "Close the project window and return to the launcher",
-        [primary] "q"
+        "Close this window and return to the launcher",
+        [primary shift] "w"
     ),
     command!(RunQuery, "Run query", "Execute the current query", [primary] "Enter"),
     command!(SaveQuery, "Save query", "Save the active query to the project", [primary] "s"),
@@ -245,7 +251,9 @@ mod test {
             Command::NewTab,
             Command::ReopenTab,
             Command::CloseActiveTab,
+            Command::OpenProject,
             Command::CloseProject,
+            Command::Quit,
             Command::SaveQuery,
             Command::RunQuery,
             Command::Undo,
@@ -262,7 +270,7 @@ mod test {
             let (label, desc) = describe(cmd);
             assert!(!label.is_empty() && !desc.is_empty(), "{cmd:?}");
         }
-        assert_eq!(COMMANDS.len(), 17);
+        assert_eq!(COMMANDS.len(), 19);
     }
 
     #[test]
@@ -284,6 +292,17 @@ mod test {
         assert_eq!(
             resolve(&s, &chord(true, false, "`")),
             Some(Command::CycleWindow)
+        );
+        // Quit and close-this-window are separate commands: ⌘Q closes every window,
+        // ⇧⌘W only this one (and ⌘W is still the *tab* close).
+        assert_eq!(resolve(&s, &chord(true, false, "q")), Some(Command::Quit));
+        assert_eq!(
+            resolve(&s, &chord(true, true, "w")),
+            Some(Command::CloseProject)
+        );
+        assert_eq!(
+            resolve(&s, &chord(true, false, "w")),
+            Some(Command::CloseActiveTab)
         );
         // The text-editing commands are ordinary bindings now.
         assert_eq!(resolve(&s, &chord(true, false, "z")), Some(Command::Undo));

@@ -1154,6 +1154,35 @@
       "corner_radius": {
         "specific": 6
       }
+    },
+    "launcher": {
+      "background": {
+        "reference": "surface_secondary"
+      },
+      "rail_background": {
+        "specific": "#ffffff"
+      },
+      "border_fill": {
+        "reference": "border"
+      },
+      "title_color": {
+        "specific": "#474c56"
+      },
+      "label_color": {
+        "specific": "#8b929d"
+      },
+      "muted_color": {
+        "specific": "#5f6771"
+      },
+      "nav_background": {
+        "specific": "rgba(43,127,208,.10)"
+      },
+      "row_hover_background": {
+        "specific": "#fafbfc"
+      },
+      "remove_hover_background": {
+        "specific": "#fdeeee"
+      }
     }
   },
   "tokens": {

@@ -10,8 +10,6 @@ mod session;
 
 pub use channel::Chan;
 pub use history::use_history_recording;
-pub use hooks::{
-    resolve_launch_root, use_autosave, use_init_history, use_init_project, use_init_session,
-};
+pub use hooks::{use_autosave, use_init_history, use_init_project, use_init_session};
 pub use project::{ProjChan, ProjectState};
 pub use session::SessionState;

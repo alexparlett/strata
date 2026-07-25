@@ -90,7 +90,10 @@ impl Component for ProjectMenu {
         // Two subscriptions, one read: a window opening or closing anywhere moves the open set,
         // and opening a project also re-orders the recents. Both change what this menu lists.
         let config = use_config(ConfigChan::Recents);
-        let _open_set = use_config(ConfigChan::Open);
+        let open_set = use_config(ConfigChan::Open);
+        // Both handles are read: a radio subscribes in `read()`, so taking one without
+        // reading it leaves that channel unable to wake this menu.
+        let _ = open_set.read();
         let (open_rows, recent_rows) = {
             let cfg = config.read();
             let open_rows: Vec<ProjectRow> = cfg
