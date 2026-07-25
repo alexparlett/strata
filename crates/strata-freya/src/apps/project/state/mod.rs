@@ -10,8 +10,13 @@ mod project;
 mod session;
 
 pub use catalog::{
-    use_catalog_scan, use_catalog_selection, use_init_catalog_selection, CatalogScan,
+    use_catalog_rescan, use_catalog_scan, use_catalog_selection, use_init_catalog_selection,
+    CatalogRescan, CatalogScan,
 };
+/// Only the sidebar's layout tests name the re-scan request type: they stand the catalog's
+/// context signals up by hand, where the window goes through `use_init_catalog_rescan`.
+#[cfg(test)]
+pub use catalog::{ScanRequest, ScanScope};
 pub use channel::Chan;
 pub use history::use_history_recording;
 pub use hooks::{

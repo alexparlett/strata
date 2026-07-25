@@ -18,7 +18,7 @@ use strata_model::Kind;
 
 use super::cell::Cell;
 use super::model::KindColors;
-use super::{DataGridTheme, GridData, DEFAULT_COL_W, GUTTER_W, TRAIL_W};
+use super::{DataGridTheme, GridData, GUTTER_W, TRAIL_W};
 use crate::apps::project::views::workbench::results::cell_view::{page_batch_row, CellValue};
 use crate::apps::project::views::workbench::results::copy;
 use crate::apps::project::views::workbench::results::selection::{CellRole, SelCtl};
@@ -37,6 +37,8 @@ pub struct Row {
     pub row_base: usize,
     /// The grid's per-column widths — read reactively so a resize reflows the row.
     pub widths: State<Vec<f32>>,
+    /// The grid's starting column width — see [`HeaderRow::seed_w`](super::header::HeaderRow).
+    pub seed_w: f32,
     /// The shared selection controller (cells read it reactively for styling).
     pub sel: SelCtl,
     /// The nested-cell modal's open slot (P2-12) — a data-cell double-click fills it.
@@ -47,6 +49,8 @@ pub struct Row {
     pub row_h: f32,
     /// Horizontal cell padding from the density.
     pub cell_pad: Gaps,
+    /// `Settings::zebra` — off means every row takes the plain row background.
+    pub zebra: bool,
     pub theme: DataGridTheme,
 }
 
@@ -123,7 +127,7 @@ impl Component for Row {
             });
 
         for (ci, col) in self.data.columns.iter().enumerate() {
-            let w = self.widths.read().get(ci).copied().unwrap_or(DEFAULT_COL_W);
+            let w = self.widths.read().get(ci).copied().unwrap_or(self.seed_w);
             let cell = &self.data.rows[index][ci];
             // Nested non-null value → double-click opens the cell view (P2-12). The
             // handler snapshots the pretty JSON **at press time** (the canvas semantics —
@@ -193,7 +197,8 @@ impl Component for Row {
         rect()
             .width(Size::fill())
             .height(Size::px(self.row_h))
-            .background(if index % 2 == 1 {
+            // Alternating fill, unless the user turned striping off (`Settings::zebra`).
+            .background(if self.zebra && index % 2 == 1 {
                 theme.zebra_row_background
             } else {
                 theme.row_background

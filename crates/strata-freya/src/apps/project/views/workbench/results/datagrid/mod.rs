@@ -22,7 +22,7 @@ use std::rc::Rc;
 use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
 
-use crate::state::use_config_station;
+use crate::state::{use_config, use_config_station, ConfigChan};
 use strata_core::config::Command;
 use strata_core::engine::serialize::TextFormat;
 
@@ -54,6 +54,10 @@ const HEADER_H: f32 = 46.;
 const GUTTER_W: f32 = 52.; // the `#` row-number column (matches the Dioxus `.hnum` / `.rnum`)
 const TRAIL_W: f32 = 48.; // dead space after the last column so its resize grip stays reachable/draggable
 const CELL_LINE_H: f32 = 16.; // mono cell line box; a row is this tall plus the density's top+bottom padding
+/// The grid's own starting column width, and the number `Settings::default_col_width`'s default
+/// mirrors (that setting took this constant's place — core's `defaults_match_the_constants…`
+/// test pins the pair). Reached only when the setting can't be honoured at all; every column
+/// width the grid actually uses comes from the seed `DataGrid::render` computes from it.
 const DEFAULT_COL_W: f32 = 168.;
 const MIN_COL_W: f32 = 56.;
 const MAX_COL_W: f32 = 2000.;
@@ -100,7 +104,8 @@ define_theme!(
 /// it — swapping the component out would drop the user's resizes).
 #[derive(PartialEq)]
 pub struct DataGrid {
-    /// The page the Run itself returned — the source of the result schema (widths seed off it).
+    /// The page the Run itself returned — the source of the result schema (one seeded width
+    /// per column of it).
     run: Rc<GridData>,
     /// The resolved current page.
     view: PageRead,
@@ -118,7 +123,6 @@ pub struct DataGrid {
     row_nums: Option<Rc<Vec<usize>>>,
     /// The snapshot's total row count — the record view's `Row n of total` label (P2-10).
     total: usize,
-    density: Density,
     pub(crate) theme: Option<DataGridThemePartial>,
 }
 
@@ -140,7 +144,6 @@ impl DataGrid {
             sort,
             row_nums: None,
             total: 0,
-            density: Density::Comfortable,
             theme: None,
         }
     }
@@ -156,22 +159,52 @@ impl DataGrid {
         self.total = total;
         self
     }
-
-    /// Cell padding density (default [`Comfortable`](Density::Comfortable)). Wire to a user setting
-    /// when one exists.
-    pub(crate) fn density(mut self, density: Density) -> Self {
-        self.density = density;
-        self
-    }
 }
 
 impl Component for DataGrid {
     fn render(&self) -> impl IntoElement {
+        // The grid's three user settings, from the app-global config. This **subscribes**
+        // (`ConfigChan::Settings` + `.read()`) rather than peeking the station like the key
+        // handlers below: flipping zebra or density in Settings has to repaint every open grid
+        // there and then, not whenever something else happens to re-render it.
+        let settings = use_config(ConfigChan::Settings);
+        let (zebra, density, setting_w) = {
+            let cfg = settings.read();
+            (
+                cfg.settings.zebra,
+                if cfg.settings.density_compact {
+                    Density::Compact
+                } else {
+                    Density::Comfortable
+                },
+                cfg.settings.default_col_width as f32,
+            )
+        };
+        // **The** column width for this grid: what every column starts at, and what a width
+        // lookup past the end of `widths` answers with (`HeaderRow` / `Row` / `ColGrip` take it
+        // as `seed_w`). One number, so an out-of-range fallback can never be a different width
+        // than the one the user chose.
+        //
+        // Read *once*, at mount: raising the setting later must not blow away resizes the user
+        // has since made — it is the starting width, not a live one.
+        let seed_w = use_hook(move || {
+            // Clamped to the same bounds a resize drag honours — the setting is hand-editable
+            // JSON, and a 0 (or 5000) px seed would make the grid unusable with no control yet
+            // to fix it from. A non-finite value can't be clamped at all (`f32::clamp` passes
+            // NaN straight through), so it falls back to the grid's own `DEFAULT_COL_W` — which
+            // is the number the setting's default mirrors anyway.
+            if setting_w.is_finite() {
+                setting_w.clamp(MIN_COL_W, MAX_COL_W)
+            } else {
+                DEFAULT_COL_W
+            }
+        });
+
         // Per-column widths, seeded from the run's schema at mount and mutated by the grips. They
         // live at this level — not per page — so a page flip keeps the user's resizes (the column
         // set is fixed for the life of the snapshot).
         let n = self.run.columns.len();
-        let widths = use_state(move || vec![DEFAULT_COL_W; n]);
+        let widths = use_state(move || vec![seed_w; n]);
         // One horizontal scroll controller, shared with the resize grips (so they can auto-scroll the
         // view while dragging past an edge), plus the grid viewport in screen coords for edge detection.
         let controller = use_scroll_controller(ScrollConfig::default);
@@ -208,7 +241,7 @@ impl Component for DataGrid {
         let theme = get_theme!(&self.theme, DataGridThemePreference, "datagrid");
         // Cell padding comes from the theme via the density selector; the row height follows its
         // vertical extent so the virtual scroller's item size matches.
-        let cell_pad = self.density.padding(&theme);
+        let cell_pad = density.padding(&theme);
         let row_h = CELL_LINE_H + cell_pad.vertical();
 
         // The page to render, as the results pane resolved it. A page read in flight (or failed)
@@ -254,6 +287,7 @@ impl Component for DataGrid {
         let header = HeaderRow {
             data: data.clone(),
             widths,
+            seed_w,
             controller,
             viewport,
             hold_w,
@@ -267,25 +301,31 @@ impl Component for DataGrid {
         // reactively, so resizes and selection changes repaint without this builder re-running.
         // The page's rows — and the find filter's gutter numbers, which must swap in lockstep
         // with them — ride as `builder_data` (not a plain capture) so flipping pages or
-        // retyping the filter rebuilds the visible rows.
+        // retyping the filter rebuilds the visible rows. The two grid settings ride there for
+        // the same reason: a density flip usually moves `item_size` too (which the view *does*
+        // compare), but a zebra flip changes nothing else about the view at all — captured,
+        // either would leave the built rows dressed the old way until something else rebuilt
+        // them.
         let len = data.rows.len();
         // Absolute row numbers: the gutter continues across pages (page 2 starts at page_size + 1).
         let row_base = self.row_base;
         let theme_b = theme.clone();
-        let body_data = (data.clone(), self.row_nums.clone());
+        let body_data = (data.clone(), self.row_nums.clone(), zebra, cell_pad);
         let body = VirtualScrollView::new_with_data(body_data, move |index, page| {
-            let (data, row_nums) = page;
+            let (data, row_nums, zebra, cell_pad) = page;
             Row {
                 index,
                 data: data.clone(),
                 row_nums: row_nums.clone(),
                 row_base,
                 widths,
+                seed_w,
                 sel: sel_ctl,
                 cell_view,
                 record_view,
                 row_h,
-                cell_pad,
+                cell_pad: *cell_pad,
+                zebra: *zebra,
                 theme: theme_b.clone(),
             }
             .into_element()

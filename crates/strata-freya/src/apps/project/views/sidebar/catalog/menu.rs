@@ -30,9 +30,9 @@ use freya::radio::{use_radio_station, RadioStation};
 use strata_model::{Origin, SavedQuery};
 use uuid::Uuid;
 
-use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    refresh_table, use_catalog_scan, CatalogScan, Chan, ProjChan, ProjectState, Reg, SessionState,
+    refresh_table, use_catalog_rescan, use_catalog_scan, CatalogRescan, CatalogScan, Chan,
+    ProjChan, ProjectState, Reg, SessionState,
 };
 use crate::apps::project::views::DropTarget;
 use crate::components::divider::Divider;
@@ -54,12 +54,15 @@ const ITEM_GAP: f32 = 12.;
 /// ever peek and write.
 #[derive(Clone)]
 pub struct CatalogActions {
-    pub engine: EngineCtx,
     pub session: RadioStation<SessionState, Chan>,
     pub project: RadioStation<ProjectState, ProjChan>,
     /// Whether a catalog pass is in flight — Refresh is a no-op while one is, so it says so
     /// rather than offering a press that does nothing.
     pub scan: CatalogScan,
+    /// Where Refresh puts its request. The menu item deliberately cannot spawn the pass itself:
+    /// its own scope is a `MenuButton` that the same press closes, and Freya drops a scope's
+    /// tasks before polling them. The window root's driver owns the pass (`state/catalog.rs`).
+    pub rescan: CatalogRescan,
     /// The app-global config: "View table" takes its `LIMIT` from the row-limit setting.
     pub config: ConfigStation,
     /// The drop-confirm slot provided at the window root (P3-05). Setting it *is* the drop
@@ -73,10 +76,10 @@ pub struct CatalogActions {
 /// Gather this row's action handles from the window's stores + context.
 pub fn use_catalog_actions() -> CatalogActions {
     CatalogActions {
-        engine: use_consume::<EngineCtx>(),
         session: use_radio_station::<SessionState, Chan>(),
         project: use_radio_station::<ProjectState, ProjChan>(),
         scan: use_catalog_scan(),
+        rescan: use_catalog_rescan(),
         config: use_config_station(),
         drop_target: use_consume::<State<Option<DropTarget>>>(),
         danger: use_theme().read().colors.error,
@@ -174,9 +177,7 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
                     } else {
                         "Refresh table"
                     },
-                    move |a| {
-                        refresh_table(a.engine.clone(), a.project, a.scan, name.clone());
-                    },
+                    move |a| refresh_table(a.rescan, name.clone()),
                 )
                 .enabled(!scanning)
         })

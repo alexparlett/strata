@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::{Chan, Reg, SessionState};
+use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
 use crate::apps::project::views::DropTarget;
 use crate::state::ConfigStation;
 use crate::theme::strata_theme;
@@ -181,6 +181,7 @@ type Handles = (
     RadioStation<SessionState, Chan>,
     RadioStation<ProjectState, ProjChan>,
     State<Option<DropTarget>>,
+    State<ScanRequest>,
 );
 
 /// A tall window so every row lays out (the pane's `ScrollView` keeps off-screen children in the
@@ -207,9 +208,10 @@ fn runner() -> (TestingRunner, Handles) {
             // the drop-confirm slot the Drop items set.
             r.provide_root_context(EngineCtx::new);
             r.provide_root_context(|| State::create(false));
+            let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
-            (filter, selection, session, store, drop_target)
+            (filter, selection, session, store, drop_target, rescan)
         },
         1.,
     )
@@ -667,7 +669,7 @@ fn failures_flag_at_once_but_a_wait_has_to_last_before_it_spins() {
 /// subscribes to TABLES as well as VIEWS.
 #[test]
 fn dropping_a_table_flags_the_views_that_read_it() {
-    let (mut runner, (.., mut store, _)) = runner();
+    let (mut runner, (.., mut store, _, _)) = runner();
     settle(&mut runner);
 
     assert!(
@@ -691,7 +693,7 @@ fn dropping_a_table_flags_the_views_that_read_it() {
 /// swapping one status for another.
 #[test]
 fn a_triangle_clears_when_the_row_registers() {
-    let (mut runner, (.., mut store, _)) = runner();
+    let (mut runner, (.., mut store, _, _)) = runner();
     settle(&mut runner);
 
     assert!(status_labels(&runner)
@@ -719,7 +721,7 @@ fn a_triangle_clears_when_the_row_registers() {
 /// than a coincidence of when the test looked.
 #[test]
 fn a_row_answered_inside_the_delay_never_spins() {
-    let (mut runner, (.., mut store, _)) = runner();
+    let (mut runner, (.., mut store, _, _)) = runner();
     settle(&mut runner);
 
     assert!(shows(&runner, "users"), "the def renders regardless");
@@ -756,7 +758,7 @@ fn spinners(runner: &TestingRunner) -> usize {
 /// instant ↻ is pressed.
 #[test]
 fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
-    let (mut runner, (.., mut store, _)) = runner();
+    let (mut runner, (.., mut store, _, _)) = runner();
     settle(&mut runner);
     let broken = "No such file or directory (os error 2)";
     assert!(status_labels(&runner).iter().any(|l| l == broken));
@@ -786,7 +788,7 @@ fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
 /// holding a verdict we now know to be wrong would be worse than the blink.
 #[test]
 fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
-    let (mut runner, (.., mut store, _)) = runner();
+    let (mut runner, (.., mut store, _, _)) = runner();
     settle(&mut runner);
 
     store.write_channel(ProjChan::Tables).reload_tables();
@@ -814,7 +816,7 @@ fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
 /// throughout — its wait never stopped, so re-arming it would blink the spinner instead.
 #[test]
 fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
-    let (mut runner, (.., mut store, _)) = runner();
+    let (mut runner, (.., mut store, _, _)) = runner();
     runner.sync_and_update();
     wait_out_the_spinner_delay(&mut runner);
     assert_eq!(
@@ -940,7 +942,10 @@ fn view_table_opens_a_select_star_tab_without_running_it() {
     click_text(&mut runner, "View table");
 
     let s = session.peek();
-    let tab = s.active_tab().expect("the new tab is focused");
+    let tab = s
+        .active
+        .and_then(|id| s.tabs.get(&id))
+        .expect("the new tab is focused");
     assert_eq!(tab.name, "orders");
     assert_eq!(tab.text(), "SELECT *\nFROM orders\nLIMIT 100;");
     assert!(tab.request.is_none(), "opened, not run");
@@ -956,7 +961,10 @@ fn edit_query_opens_the_views_sql_bound_to_the_view() {
     click_text(&mut runner, "Edit query");
 
     let s = session.peek();
-    let tab = s.active_tab().expect("the view opened in a tab");
+    let tab = s
+        .active
+        .and_then(|id| s.tabs.get(&id))
+        .expect("the view opened in a tab");
     assert_eq!(tab.text(), "SELECT 1", "the view's own SQL, not a SELECT *");
     assert!(
         matches!(&tab.origin, Origin::View(v) if v == "orders_daily"),
@@ -974,7 +982,10 @@ fn pressing_a_saved_query_row_opens_it_bound_by_id() {
     click_text(&mut runner, "signup funnel");
 
     let s = session.peek();
-    let tab = s.active_tab().expect("the query opened in a tab");
+    let tab = s
+        .active
+        .and_then(|id| s.tabs.get(&id))
+        .expect("the query opened in a tab");
     assert_eq!(tab.name, "signup funnel");
     assert_eq!(tab.text(), "SELECT 4");
     assert!(
@@ -989,7 +1000,7 @@ fn pressing_a_saved_query_row_opens_it_bound_by_id() {
 /// deliberately no second drop path — this is the assertion that pins it.
 #[test]
 fn drop_asks_the_confirm_and_leaves_the_catalog_alone() {
-    let (mut runner, (_, _, _, store, drop_target)) = settled();
+    let (mut runner, (_, _, _, store, drop_target, _)) = settled();
     right_click_row(&mut runner, "orders");
 
     click_text(&mut runner, "Drop table");
@@ -1009,14 +1020,14 @@ fn drop_asks_the_confirm_and_leaves_the_catalog_alone() {
 /// all three row kinds — a saved query by `id`, because that is its identity.
 #[test]
 fn dropping_a_view_and_deleting_a_query_use_the_same_confirm_slot() {
-    let (mut runner, (.., drop_target)) = settled();
+    let (mut runner, (.., drop_target, _)) = settled();
     right_click_row(&mut runner, "orders_daily");
     click_text(&mut runner, "Drop view");
     assert!(
         matches!(drop_target.peek().as_ref(), Some(DropTarget::View(n)) if n == "orders_daily")
     );
 
-    let (mut runner, (.., drop_target)) = settled();
+    let (mut runner, (.., drop_target, _)) = settled();
     right_click_row(&mut runner, "signup funnel");
     click_text(&mut runner, "Delete query");
     assert!(
@@ -1033,7 +1044,7 @@ fn dropping_a_view_and_deleting_a_query_use_the_same_confirm_slot() {
 /// input, and the commit, are the row's own, so they outlive the menu that started them.
 #[test]
 fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
-    let (mut runner, (_, _, _, store, _)) = settled();
+    let (mut runner, (_, _, _, store, _, _)) = settled();
     right_click_row(&mut runner, "signup funnel");
 
     click_text(&mut runner, "Rename");
@@ -1056,7 +1067,10 @@ fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
         .iter()
         .find(|q| q.id == Uuid::from_u128(2))
         .expect("the query is still there, under its new label");
-    assert_eq!(q.name, "funnel v2", "the typing replaced the name, it did not prepend to it");
+    assert_eq!(
+        q.name, "funnel v2",
+        "the typing replaced the name, it did not prepend to it"
+    );
     assert_eq!(
         q.sql, "SELECT 4",
         "a rename touches the label and nothing else"
@@ -1071,7 +1085,7 @@ fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
 /// Escape abandons a rename outright — the row comes back wearing the name it had.
 #[test]
 fn escape_abandons_a_rename() {
-    let (mut runner, (_, _, _, store, _)) = settled();
+    let (mut runner, (_, _, _, store, _, _)) = settled();
     right_click_row(&mut runner, "signup funnel");
     click_text(&mut runner, "Rename");
 
@@ -1091,43 +1105,42 @@ fn escape_abandons_a_rename() {
     );
 }
 
-/// **Refresh table actually runs.** The regression that shipped and had to be found by hand: the
-/// scan was `spawn`ed from the menu item's handler, so it belonged to a `MenuButton` scope that
-/// the very same press tore down — Freya drops a scope's tasks before polling them, so the rows
-/// were reset to `Loading` and nothing ever came back. The table *and* the view over it spun
-/// forever.
+/// **Refresh table asks the window root for a pass over that table.**
 ///
-/// So the assertion is not "the engine answered X" but "the rows **settled**": whatever the
-/// answer, a pass that never ran can't produce one. `orders` here points at a file that doesn't
-/// exist, so the honest settled answer is `Failed` — which is exactly as good a proof.
+/// The regression this pins shipped and had to be found by hand: the pass was `spawn`ed from the
+/// menu item's own handler, so it belonged to a `MenuButton` scope the very same press tore down.
+/// Freya drops a scope's tasks before polling them, so the rows were reset to `Loading` and
+/// nothing ever came back — the table *and* the view over it spun forever.
+///
+/// The fix is structural: the item raises a [`ScanRequest`] and the driver at the window root
+/// runs it, exactly as the ↻ does (`state/catalog.rs`). So this asserts the request — its
+/// **scope** is the new part, and it is what tells the driver to re-answer one row instead of
+/// re-scanning the project. There is no driver in this pane-only harness, which is the same
+/// reason the sidebar's own ↻ test asserts a request rather than a scan.
 #[test]
-fn refreshing_a_table_settles_the_row_and_the_views_over_it() {
-    let (mut runner, (.., store, _)) = settled();
+fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
+    let (mut runner, (.., store, _, rescan)) = settled();
+    assert_eq!(
+        *rescan.peek(),
+        ScanRequest::default(),
+        "nothing asked for yet"
+    );
     right_click_row(&mut runner, "orders");
 
     click_text(&mut runner, "Refresh table");
 
-    // Both were reset by the synchronous half, so this is only meaningful once they come back.
-    assert!(
-        matches!(store.peek().tables[1].reg, Reg::Loading),
-        "the press reset the row it was pressed on"
+    assert_eq!(
+        *rescan.peek(),
+        ScanRequest {
+            seq: 1,
+            scope: ScanScope::Table("orders".into())
+        },
+        "the row it was pressed on, not the whole catalog"
     );
-    // Give the spawned pass a moment to reach the engine and land its answers.
-    runner.poll(Duration::from_millis(10), Duration::from_millis(600));
-
-    let p = store.peek();
-    assert_eq!(p.tables[1].def.name, "orders");
+    // And the item itself touches nothing: resetting rows is the driver's half of the pass, so a
+    // request that never gets served can't strand a row in `Loading`.
     assert!(
-        !matches!(p.tables[1].reg, Reg::Loading),
-        "the table settled — the scan task outlived the menu that ordered it"
-    );
-    let view = p
-        .views
-        .iter()
-        .find(|v| v.def.name == "orders_daily")
-        .expect("the view over it");
-    assert!(
-        !matches!(view.reg, Reg::Loading),
-        "and so did the view the refresh re-created, which is the half that made the bug obvious"
+        matches!(store.peek().tables[1].reg, Reg::Ready(_)),
+        "`orders` still wears the answer it had"
     );
 }

@@ -31,7 +31,8 @@ use strata_model::TabId;
 pub struct EditorToolbar {
     pub id: TabId,
     /// The in-flight press's nonce, mirrored from the results body's query lifecycle (see
-    /// `ResultsBody` — the toolbar must not subscribe the query itself).
+    /// `ResultsBody` — the toolbar doesn't subscribe the query itself, because `.enable(false)`
+    /// is a *different* cache entry and so there is no watch-without-running subscription).
     pub running: State<Option<RunId>>,
 }
 

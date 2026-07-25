@@ -9,14 +9,13 @@ mod catalog;
 
 use freya::components::{use_theme, CircularLoader, Input};
 use freya::prelude::*;
-use freya::radio::{use_radio, use_radio_station};
+use freya::radio::use_radio;
 use strata_model::SidebarPane;
 
 use self::catalog::Catalog;
 pub use self::catalog::CatalogThemePreference;
-use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    refresh_catalog, use_catalog_scan, Chan, ProjChan, ProjectState, SessionState,
+    refresh_catalog, use_catalog_rescan, use_catalog_scan, Chan, SessionState,
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -122,8 +121,8 @@ impl Component for Sidebar {
     }
 }
 
-/// The catalog header's **↻ re-scan** (P3-03): re-infer every table's schema from its def, then
-/// re-create the views over what that found — see
+/// The catalog header's **↻ re-scan** (P3-03): ask for a re-infer of every table's schema from
+/// its def and a re-create of the views over what that found — see
 /// [`refresh_catalog`](crate::apps::project::state::refresh_catalog).
 ///
 /// Its own component so the scan flag's subscription lives here rather than on the sidebar shell,
@@ -131,14 +130,17 @@ impl Component for Sidebar {
 ///
 /// Spins in place and disables for the duration — including the registration pass at project
 /// open, which is the *same* scan and would otherwise be raced by a press.
+///
+/// The press only bumps the window's re-scan counter; the pass itself is spawned by the driver at
+/// the window root. A task spawned from this handler would belong to *this* scope, and collapsing
+/// the sidebar mid-scan would cancel a pass the whole catalog is waiting on.
 #[derive(PartialEq)]
 struct RefreshButton;
 
 impl Component for RefreshButton {
     fn render(&self) -> impl IntoElement {
-        let engine = use_consume::<EngineCtx>();
-        let project = use_radio_station::<ProjectState, ProjChan>();
         let scan = use_catalog_scan();
+        let rescan = use_catalog_rescan();
         let scanning = *scan.read();
 
         Button::new()
@@ -146,7 +148,7 @@ impl Component for RefreshButton {
             .width(Size::px(24.))
             .height(Size::px(24.))
             .enabled(!scanning)
-            .on_press(move |_| refresh_catalog(engine.clone(), project, scan))
+            .on_press(move |_| refresh_catalog(rescan))
             .child(if scanning {
                 CircularLoader::new().size(13.).into_element()
             } else {
@@ -177,6 +179,8 @@ mod tests {
     use strata_model::{ColRef, TableDef};
 
     use super::*;
+    use crate::apps::project::contexts::EngineCtx;
+    use crate::apps::project::state::{ProjChan, ProjectState, ScanRequest, ScanScope};
     use crate::apps::project::views::DropTarget;
     use crate::state::ConfigStation;
     use crate::theme::strata_theme;
@@ -209,16 +213,20 @@ mod tests {
         Sidebar::new()
     }
 
-    /// The sidebar mounted over the contexts its shell + catalog pane consume. The engine is real
-    /// but never asked anything — nothing here presses ↻; these tests are about where the controls
-    /// land.
-    fn runner() -> TestingRunner {
-        let (runner, ()) = TestingRunner::new(
+    /// The sidebar mounted over the contexts its shell + catalog pane consume, plus the re-scan
+    /// counter handed back so a test can see what ↻ did. The engine is real but never asked
+    /// anything: there is no scan *driver* here — that lives at the window root — so pressing ↻
+    /// raises a request and nothing else, which is exactly the button's whole contract.
+    fn runner() -> (TestingRunner, State<ScanRequest>) {
+        TestingRunner::new(
             app,
             (PANEL_WIDTH, 700.).into(),
             |r| {
                 r.provide_root_context(EngineCtx::new);
+                // CatalogScan · CatalogRescan · CatalogSelection — the three context signals
+                // the pane's header and rows consume (`state/catalog.rs`).
                 r.provide_root_context(|| State::create(false));
+                let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
                 r.provide_root_context(|| State::create(None::<ColRef>));
                 // The catalog rows' menu handles (P3-06): the app config behind "View table"'s
                 // LIMIT, and the drop-confirm slot. Nothing here opens a menu — they only have
@@ -234,10 +242,20 @@ mod tests {
                         PathBuf::from("/tmp/strata-sidebar-test"),
                     ))
                 });
+                rescan
             },
             1.,
-        );
-        runner
+        )
+    }
+
+    /// The header's two fixed 24×24 controls, left to right: ↻ then the collapse ×.
+    fn header_controls(runner: &TestingRunner) -> Vec<Box2> {
+        let mut controls: Vec<_> = header_content(runner)
+            .into_iter()
+            .filter(|b| (b.width - CONTROL).abs() < 0.5 && (b.height - CONTROL).abs() < 0.5)
+            .collect();
+        controls.sort_by(|a, b| a.min_x.total_cmp(&b.min_x));
+        controls
     }
 
     /// One laid-out box, in the terms these tests reason about.
@@ -277,7 +295,7 @@ mod tests {
     /// control pushed out is invisible to the user however correct the element tree is.
     #[test]
     fn nothing_in_the_pane_is_laid_out_past_the_panel_edge() {
-        let mut runner = runner();
+        let (mut runner, _) = runner();
         runner.sync_and_update();
         runner.sync_and_update();
 
@@ -297,14 +315,11 @@ mod tests {
     /// can't: a squeezed-to-nothing control has no area to overflow with.
     #[test]
     fn both_header_controls_are_present_and_on_screen() {
-        let mut runner = runner();
+        let (mut runner, _) = runner();
         runner.sync_and_update();
         runner.sync_and_update();
 
-        let controls: Vec<_> = header_content(&runner)
-            .into_iter()
-            .filter(|b| (b.width - CONTROL).abs() < 0.5 && (b.height - CONTROL).abs() < 0.5)
-            .collect();
+        let controls = header_controls(&runner);
 
         assert_eq!(
             controls.len(),
@@ -331,7 +346,7 @@ mod tests {
     /// field spans the full content box and the button is pushed off the end.
     #[test]
     fn the_filter_leaves_room_for_the_refresh_button() {
-        let mut runner = runner();
+        let (mut runner, _) = runner();
         runner.sync_and_update();
         runner.sync_and_update();
 
@@ -350,6 +365,42 @@ mod tests {
             widest <= content - CONTROL,
             "the filter run ({widest}px) must leave the {CONTROL}px ↻ room inside the {content}px \
              content box"
+        );
+    }
+
+    /// Pressing ↻ raises a re-scan **request** — and that is all it does. The pass belongs to the
+    /// window root's driver (`use_init_project`), because a task spawned from this handler would
+    /// be cancelled the moment the sidebar collapses, stranding every catalog row in
+    /// `Reg::Loading`. So the button's whole contract is this counter, and the test drives it the
+    /// way the user does rather than calling `refresh_catalog` directly.
+    #[test]
+    fn pressing_refresh_raises_a_rescan_request() {
+        let (mut runner, rescan) = runner();
+        runner.sync_and_update();
+        runner.sync_and_update();
+        assert_eq!(
+            *rescan.peek(),
+            ScanRequest::default(),
+            "nothing asked for yet"
+        );
+
+        let refresh = header_controls(&runner)[0];
+        let point = (
+            ((refresh.min_x + refresh.max_x) / 2.) as f64,
+            (HEADER_HEIGHT / 2.) as f64,
+        );
+        runner.move_cursor(point);
+        runner.click_cursor(point);
+        runner.sync_and_update();
+        runner.sync_and_update();
+
+        assert_eq!(
+            *rescan.peek(),
+            ScanRequest {
+                seq: 1,
+                scope: ScanScope::All
+            },
+            "↻ asked for a re-scan"
         );
     }
 }

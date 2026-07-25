@@ -11,10 +11,7 @@
 //! Save-as-view / Save go through `editor::actions` — buffer rewrites plus the
 //! dispatch-on-origin save into the Project store (⌘S lands with the keymap).
 
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-
-use crate::apps::project::close::{CloseGuard, CloseTarget, TabCloser};
+use crate::apps::project::close::{CloseTarget, TabCloser};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, RunId};
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
@@ -53,32 +50,43 @@ impl Component for Workbench {
     fn render(&self) -> impl IntoElement {
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let active = radio.read().active;
+        let engine = use_consume::<EngineCtx>();
 
         // The in-flight press's nonce, mirrored out of the results body's query lifecycle
-        // (see `ResultsBody`) so the toolbar can wear Run→Cancel without subscribing the
-        // query itself — freya-query re-runs stale entries on subscribe, and an in-flight
-        // entry reads as stale, so a second enabled subscriber would double-execute the run.
+        // (see `ResultsBody`) so the toolbar can wear Run→Cancel. One resolver, one slot,
+        // read by props — the toolbar and ⌘↵ below both ask the same question and neither
+        // has to know what a query is.
+        //
+        // It used to be a *correctness* requirement: freya-query re-ran an entry a mounting
+        // subscriber found stale, and an in-flight entry read as stale, so a second enabled
+        // subscriber double-executed the run. Our fork fixed that at the source — an execution
+        // in flight is counted, and a mounting subscriber attaches to it (freya-query's
+        // `RunningGuard` / `query_inflight_dedup.rs`). So the toolbar *could* subscribe now; it
+        // still doesn't, because `.enable(false)` is part of `Query`'s cache identity (a
+        // disabled subscriber reads a different, never-running entry, so there is no way to
+        // "watch without running"), and because the toolbar would then re-render on every step
+        // of a lifecycle it only wants one bit of.
         // (The Run trigger itself lives on each tab — `QueryTab::request`, state-arch §6.)
+        //
+        // It answers for the **active tab only**, which is all the toolbar and ⌘↵ need
+        // since both only ever address that tab. The close-while-running guard (T2) does
+        // *not* use it — that question spans every tab, so it goes to the engine (see
+        // `close::CloseGuard` / `TabCloser`).
         let running = use_state(|| None::<RunId>);
 
-        // Mirror "a query is in flight" into the close guard's atomic, where the winit
-        // `on_close` hook (T2) reads it synchronously — the hook runs outside any
-        // component scope and can't touch reactive state. `running` alone answers it: the
-        // mounted results body resolves it while its run executes and clears it on settle,
-        // cancel, and unmount.
-        let close_guard = use_consume::<Arc<CloseGuard>>();
-        {
-            let close_guard = close_guard.clone();
-            use_side_effect(move || {
-                close_guard
-                    .running
-                    .store(running.read().is_some(), Ordering::Relaxed);
-            });
-        }
         let confirm = use_consume::<State<Option<CloseTarget>>>();
+        // The engine as a `Copy` slot for `TabCloser`, which is passed by value into the
+        // tab strip's closures.
+        let closer_engine = use_state({
+            let engine = engine.clone();
+            move || engine
+        });
         // The single-tab close gate, shared by every close path (⌘W here; the tab's ×,
         // the tab context menu, and the nav dropdown consume it from context).
-        let closer = use_provide_context(move || TabCloser { running, confirm });
+        let closer = use_provide_context(move || TabCloser {
+            engine: closer_engine,
+            confirm,
+        });
 
         // The workbench-owned shortcuts (one keyboard handler per node — see
         // `keymap::on_commands`). Tab commands write the session store; ⌘↵ and ⌘S share
@@ -87,7 +95,6 @@ impl Component for Workbench {
         // workbench, so these fire before any Esc consumer below (fine: no Esc here, and
         // each of these chords has a single consumer).
         let config = use_config_station();
-        let engine = use_consume::<EngineCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
         let mut cmd_radio = radio;
         let shortcuts = on_commands(config, move |cmd| {

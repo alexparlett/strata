@@ -77,14 +77,17 @@ label:
   provider with the old schema, because its plan captured that provider by `Arc` (D10/D11, and the
   decision P3-03 already made for the whole-catalog scan). A failing view has no dependency record,
   so retrying it is the only way "I fixed the path, refresh the row" can heal it.
-- `spawn_scan` — **the pass is `spawn_forever`, not `spawn`.** Caught in the app, not by the
+- **The item raises a request; the window root runs the pass.** Caught in the app, not by the
   suite: `spawn` binds a task to `current_scope_id()`, which during an event is the handler's
   element — the `MenuButton` that the very same press then closes. Scope teardown drops its tasks
   before the future is ever polled, so the rows were reset to `Loading` and no answer ever came:
-  the table *and* the view over it spun forever. The ↻ needs it too (collapsing the sidebar
-  unmounts the button mid-scan). `drop_confirm` documented this exact trap; it now has a
-  regression test — `refreshing_a_table_settles_the_row_and_the_views_over_it` asserts the rows
-  **settle**, which a pass that never ran cannot fake.
+  the table *and* the view over it spun forever. Fixed first with `spawn_forever`, then folded
+  into the **scan driver** `main` grew for the same bug on the ↻ (`ScanRequest` + `claim_scan` +
+  `ScanGuard`), which is the better shape: the pass belongs to the root scope that owns
+  `ProjectState`, and the flag is released by `Drop` so a *cancelled* pass can't latch it.
+  `ScanRequest` gained a **`ScanScope`** — `All` for open and ↻, `Table(name)` for a row Refresh —
+  so one driver serves every width. The test asserts the request and its scope, which is the part
+  this task adds; the driver's own behaviour is covered where it lives.
 - `ProjectState::refresh_order` — **fixes a latent bug in P3-03's ↻ as well.** `CREATE OR REPLACE
   VIEW` inlines the plan of any view it reads *at that moment*, so re-creating an outer view before
   its inner one inlines the stale inner plan. The scan was ordering views alphabetically (the def
