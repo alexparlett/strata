@@ -11,16 +11,19 @@ The repo's default-member is `strata-freya`, so from the repo root:
 cargo run
 ```
 
-opens the Strata project window — a **native Skia window on the Mac's display**.
-There is no headless mode: you can't drive or screenshot it from the terminal;
-verify a launch by the process staying alive and its tracing output, and let the
-user look at the window.
+opens Strata — a **native Skia window on the Mac's display**. There is no headless
+mode: you can't drive or screenshot it from the terminal; verify a launch by the
+process staying alive and its tracing output, and let the user look at the window.
 
 ## Details
 
-- **Project folder**: argv[1] is the project to open, defaulting to the committed
-  `sample/`: `cargo run -- path/to/project`. A folder without a `.strata/` gets
-  one scaffolded.
+- **Which window opens**: the projects that had a window at the last *quit* (⌘Q),
+  one window each; otherwise the **launcher** (the welcome window). Closing every
+  window by hand — rather than quitting — is what makes the next launch show the
+  launcher.
+- **Project folder**: argv[1] opens exactly that project and skips the above:
+  `cargo run -- sample` for the committed sample project. A folder without a
+  `.strata/` gets one scaffolded.
 - **Run it in the background** (it blocks until the window closes) and read the
   stdout/stderr tracing output for errors — registration failures and engine
   errors log there.

@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
     DataGridThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
@@ -50,6 +51,15 @@ impl ThemesCtx {
     /// Discover the registry (built-ins + the user themes dir) and wrap it for context.
     pub fn discover() -> Self {
         Self(Arc::new(ThemeRegistry::discover()))
+    }
+}
+
+/// There is exactly one registry per process (discovered in `main`), so identity is the
+/// only meaningful comparison — and it's what lets a component hold the handle as a prop
+/// without its diff ever seeing a change.
+impl PartialEq for ThemesCtx {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -331,6 +341,15 @@ strata_components! {
     // The header bar's own surface: background, text, and the rule under it. Its switcher paints
     // with root palette colours and the shared `avatar` / `menu` divider — no header-only dress.
     "header_bar" => HeaderBarThemePreference { background, color, border_fill },
+    // The launcher / welcome window: its card body + raised rail, the title-bar and rail rules,
+    // the two recessive text tones the sheet doesn't name (title strip · group eyebrows), the
+    // nav pill's accent tint, and the project-row hover fill plus Remove's danger one.
+    // Everything else it paints — the accent, the text ramp, the action hover fill — is a root
+    // palette colour; its rail rows are `SidebarRow`'s dress and its tiles `avatar`'s.
+    "launcher" => LauncherThemePreference {
+        background, rail_background, border_fill, title_color, label_color, nav_background,
+        row_hover_background, remove_hover_background,
+    },
     // The initials tile a project row leads with (header switcher, launcher lists): the resting
     // dress plus the accent one a project with an open window wears.
     "avatar" => AvatarThemePreference {
