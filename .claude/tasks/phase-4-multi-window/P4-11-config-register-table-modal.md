@@ -19,3 +19,7 @@ Not built. Core: `register_external` / `TableSpec`.
 
 ## Freya / references
 - Design: `Configure.dc.html`. Core `register_external` / `TableSpec`. DEV_TASKS U14/D7. LOCATION → W7.
+- **Failure messages come from P3-07**, which maps them inside `register_external` itself. A failed
+  Register renders what the engine hands back; do not grow a second set of messages here. The same
+  task settled that there is **no pre-flight** file-count or schema-consistency readout (handoff
+  `FEATURES.md` §6 over §7) — the Register *is* the check.

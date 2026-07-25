@@ -21,7 +21,9 @@ window), `column.rs` (the body), `tests.rs` (the rendered panel).
 3. **Nested columns** state their whole shape in a NESTED FIELDS box, depth-indented, every level
    expanded (display only — there is nothing to collapse, and profiling never descends).
 4. **Selection resolves by path**, so `address.city` is that field and not an unrelated top-level
-   `city`. A view's columns resolve the same way, off `ViewInfo::columns`.
+   `city`. A view's columns resolve the same way, off `ViewInfo::columns`. This closes the
+   nested-column gap P3-02 left — P3-07 was rescoped onto registration-failure messages and never
+   covered it.
 5. **The completeness bar** renders only with a real, *exact* null count and a real row count. The
    engine already drops a `null_count == num_rows` (ambiguous in DataFusion), and the bar refuses
    an inexact count or one past the row count. The percentage never rounds into a claim: a column
