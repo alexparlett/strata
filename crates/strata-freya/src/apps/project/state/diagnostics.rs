@@ -43,8 +43,8 @@ use crate::apps::project::contexts::EngineCtx;
 use super::catalog::{use_catalog, Catalog};
 use super::{Chan, SessionState, Stamp};
 
-/// How long the work list must sit still before each pass fires, so a typing burst validates
-/// once, on its settled text.
+/// How long a tab's text must sit still before it is validated — see [`settle`]. A typing burst
+/// therefore validates once, on the text the user stopped at, not once per window.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
 /// The extra quiet a pass waits out before it may **introduce** problems (~1s of quiet in
@@ -111,9 +111,6 @@ pub fn use_diagnostics() {
         spawn(async move {
             let _guard = Draining(draining);
             loop {
-                // Per iteration, so a typing burst settles before each pass rather than
-                // validating every keystroke.
-                Timer::after(DEBOUNCE).await;
                 // Re-derived every time: the work list is a projection, not a snapshot, so a
                 // tab edited mid-drain is simply stale again, and the active tab — which
                 // `stale_tabs` puts first — keeps its priority as the user types.
@@ -123,6 +120,7 @@ pub fn use_diagnostics() {
                 let Some(id) = session.read().stale_tabs(epoch).into_iter().next() else {
                     break;
                 };
+                settle(session, id).await;
                 // One at a time: at project open with twenty restored tabs everything is stale
                 // at once, and twenty concurrent dry plans would queue on the engine's two
                 // workers ahead of the user's first Run.
@@ -130,6 +128,42 @@ pub fn use_diagnostics() {
             }
         });
     });
+}
+
+/// Wait until `id`'s text has stopped moving — a full [`DEBOUNCE`] with no new revision — so a
+/// typing burst validates **once**, on the text the user actually settled on, rather than every
+/// `DEBOUNCE` for the length of the burst.
+///
+/// Only the **active** tab is waited on, and returns immediately for anything else. Nothing but
+/// a mounted editor writes a buffer, so a background tab's revision cannot move: making it wait
+/// would buy nothing and cost `DEBOUNCE` *per restored tab* at project open, which is exactly the
+/// serial-drain latency the loop is arranged to avoid.
+async fn settle(session: Radio<SessionState, Chan>, id: TabId) {
+    loop {
+        let before = {
+            let s = session.read();
+            // Not the active tab (or gone): its text can't be moving, so there is nothing to
+            // wait out.
+            if s.active != Some(id) {
+                return;
+            }
+            match s.tabs.get(&id) {
+                Some(tab) => tab.editor.revision(),
+                None => return,
+            }
+        };
+        Timer::after(DEBOUNCE).await;
+        // Unchanged across the whole window → the user has stopped. Anything else means they
+        // are still typing, so wait again from here.
+        let quiet = session
+            .read()
+            .tabs
+            .get(&id)
+            .is_none_or(|tab| tab.editor.revision() == before);
+        if quiet {
+            return;
+        }
+    }
 }
 
 /// Marks a drain as running for as long as it is alive. On `Drop` — settled *or* cancelled —

@@ -169,7 +169,8 @@ pub fn claim_scan(mut catalog: Catalog) -> Option<ScanGuard> {
     Some(ScanGuard { catalog, epoch })
 }
 
-/// Holds [`CatalogScan`] set for as long as it is alive, and clears it on `Drop` — whether the
+/// Holds the [`Catalog`] in [`CatalogState::Scanning`] for as long as it is alive, and releases
+/// it into the next epoch on `Drop` — whether the
 /// pass it belongs to *finished* or was *cancelled*.
 ///
 /// That distinction is the whole point. A `set(false)` after the pass's last `.await` never runs
