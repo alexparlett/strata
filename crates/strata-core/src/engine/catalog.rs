@@ -383,11 +383,9 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
 
 /// Profile `name` — one full scan, every column at once (see [`crate::profile`]).
 ///
-/// Runs on this worker like any other command, so the UI stays live and the row's
-/// `profiling` flag drives the spinner. Blocking is fine here; it's *meant* to be the
-/// expensive thing the user opted into.
-/// Feature reservoir: consumed by `Engine::profile` (D4) when the profiling task lands.
-#[allow(dead_code)]
+/// Spawned onto the engine's own runtime by [`Engine::profile`](super::Engine::profile), which
+/// owns the abort handle: blocking is fine in here, since this is *meant* to be the expensive
+/// thing the user opted into, and the UI stays live either way.
 pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProfile, String> {
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
     let columns: Vec<ColumnInfo> = df

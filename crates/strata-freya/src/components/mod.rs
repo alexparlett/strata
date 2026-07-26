@@ -18,6 +18,21 @@
 /// gets to retune — a taller button would break the strip's 58px and every layout built on it.
 pub const ACTION_HEIGHT: f32 = 34.;
 
+/// How long a wait must last before it is worth **telling the user about**.
+///
+/// Below this, announcing progress costs more than it buys: the spinner and the thing it replaced
+/// both flash past, and the eye reads the flicker rather than the state. Past it, the wait is news
+/// in its own right.
+///
+/// Shared, because two surfaces serve exactly the same hold and a number scoped to one of them is
+/// a number the other has to reach *into* it for: the catalog row's registration spinner (a
+/// metadata read, usually far inside this window — see `sidebar/catalog/entry.rs`) and the column
+/// inspector's re-scan row (a profile the user asked for again, over numbers already on screen).
+///
+/// It is **not** a hold on work the user just started with nothing to show yet — a first profile
+/// says so at once, or the press looks like it missed.
+pub const PROGRESS_HOLD: std::time::Duration = std::time::Duration::from_millis(400);
+
 pub mod avatar;
 pub mod badge;
 pub mod dialog;

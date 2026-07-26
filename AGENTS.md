@@ -64,6 +64,19 @@ Things that must not regress. Each was fought for once already.
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the
   engine, then the store's own method on the matching `ProjChan`; nothing refetches.
+- **An expensive, opt-in *result* is freya-query keyed by the request; the store holds the
+  request.** Profiling (P3-09) is the shape: the row keeps `Option<ScanId>` — a nonce minted per
+  ask — and the numbers live only in the cache entry that key names, with `stale_time(MAX)` (a
+  settled scan must never re-execute itself) and `clean_time(MAX)` ("cached until the entry
+  changes"). A re-scan is a *new* nonce, so it is a new execution; invalidating is dropping the
+  request. Never a `profile` field holding results on the store, never a dedup set, never a
+  spinner flag — the cache key is the dedup and `query.read().state()` is the spinner. And the
+  `Query` (stale/clean times included) is the identity, so it is **built in one place**: two call
+  sites spelling it differently are two entries, i.e. the same table scanned twice.
+- **One entry point per expensive action, with the confirm in front of it.** Every trigger for a
+  scan calls `ProfileActions::ask`, which raises P3-10's confirm on a first scan and goes straight
+  through on a re-scan; confirming calls the same `start` the ↻ calls. Adding a surface means
+  calling `ask`, never reaching for the store directly — the same rule the drop confirm holds.
 - **Def/runtime split.** `strata-model` holds pure serde defs only (exactly what
   `.strata/project.json` stores — no runtime caches, no UI flags). The Freya store wraps defs in
   rows with `Reg<T> = Loading | Ready(T) | Failed(String)`, making invalid combos unrepresentable;
@@ -266,11 +279,23 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
   against fork source and hand off to a Mac build (see CLAUDE.md's environment note).
+- **One Strata window across every session — enforced.** Several sessions can be live in several
+  worktrees, and each can build its own binary; a second instance clobbers the shared app config
+  (read once at startup, last writer wins for recents / settings / the open-project set). So
+  `.claude/hooks/block-second-strata.sh` refuses `cargo run` while any Strata is alive anywhere,
+  naming the worktree that owns it. A **refusal, not a kill**: the running window may be what the
+  user is looking at. This is a convention between agent sessions, *not* an app-level single-
+  instance lock — that is a real feature (one process, N windows, a second launch focuses) and
+  belongs to P4-01.
 - **No destructive git — now enforced, not merely agreed.** `git checkout`/`restore`/`reset`/
   `clean` are **blocked outright** for agents by a `PreToolUse` hook
   (`.claude/hooks/block-destructive-git.sh`, wired in `.claude/settings.json`). It reads the whole
   command string, so chaining one behind `&&`, `;` or `$(…)` does not get past it — which is
-  exactly how the rule was broken while it was only written down. Ask the user to run it, or reach
+  exactly how the rule was broken while it was only written down. Both hooks bound the verb with
+  "not an identifier character" on **each** side: the git one originally required whitespace-or-end
+  *after* the verb, so `git reset;`, `git clean|cat` and `$(git clean)` slipped through the very
+  chaining forms it claimed to catch (found while building the Strata hook, which had copied the
+  pattern). If you add a third hook, copy the fixed pattern and test the terminator forms. Ask the user to run it, or reach
   for something that destroys nothing: `git switch` to change branch, `git stash` to park work,
   `git diff` to inspect. Any other delete/overwrite of work you didn't just create still follows
   the original rule: **standalone**, with an explicit description, and not at all when there is
