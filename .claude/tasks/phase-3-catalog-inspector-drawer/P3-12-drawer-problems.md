@@ -6,7 +6,15 @@
 Live per-tab diagnostics in the Problems tab.
 
 ## Current state
-Not built, but the validation half is **already flowing** (P2-18 ✅): each debounced pass writes
+**P3-11 left three shared pieces to this task** (see its file): the header's **count label**
+(`drawerCountLabel` — errors here), the **Clear show/hide rule** (hidden on Problems, so this task
+owns the rule and P3-13/14 own the action), and the **list frame** — a scroll container and a
+centred empty state, which is all the three tabs genuinely share. Build them with Problems as the
+first consumer; P3-13/14 reuse. The drawer header already carries the title, the expand/restore
+toggle and the collapse ×, and the **rail's bottom group is the tab switcher** — do not add a pill
+row to the header.
+
+The validation half is **already flowing** (P2-18 ✅): each debounced pass writes
 `QueryTab::diagnostics` on its own **`Chan::Diagnostics(id)`** channel (read via
 `SessionState::diagnostics(id)`). Diagnostics carry severity + message + `loc` (`line L:C`) — the
 exact row shape below — plus a byte `span` for a future click-to-jump. The query-error half is the

@@ -15,6 +15,12 @@
 //! restores it (the shell seeds each panel's `initial_size` from the remembered size). The panels
 //! are **keyed** so the `Workbench` subtree (editor buffer, in-flight query) survives a sibling
 //! collapsing and shifting its position.
+//!
+//! The vertical container is driven through an explicit [`ResizableContext`] controller, because
+//! one size change doesn't come from a drag: the drawer's expand toggle. Seeding `initial_size`
+//! can't move a mounted panel — `ResizablePanel` reads it once, in a `use_hook` — so programmatic
+//! sizing goes through the controller, which is what the fork's own
+//! `component_resizable_panel_controller` example does.
 
 use freya::components::use_theme;
 use freya::prelude::*;
@@ -45,6 +51,15 @@ impl Component for Shell {
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let layout = radio.read().layout;
         let border = use_theme().read().colors.border;
+
+        // The vertical container's controller (see the module note). Supplying one means its
+        // `direction` / `handle_size` come from here rather than the builder — the builder's
+        // `.handle_size` is documented as ignored when a controller is given.
+        let drawer_sizing = use_state(|| ResizableContext {
+            direction: Direction::Vertical,
+            handle_size: 1.,
+            ..ResizableContext::default()
+        });
 
         // Sidebar / inspector panels: present only when open. Each wraps its shell in a sizing
         // probe (`on_sized`) that remembers the dragged width on `Chan::LayoutSize`.
@@ -118,14 +133,14 @@ impl Component for Shell {
                                 radio.write_channel(Chan::LayoutSize).set_drawer_h(h);
                             }
                         })
-                        .child(Drawer::new()),
+                        .child(Drawer::new(drawer_sizing)),
                 )
         });
 
         // Right area: [ panes-row (fills) | drawer? ] stacked vertically.
         let right_area = ResizableContainer::new()
             .direction(Direction::Vertical)
-            .handle_size(1.)
+            .controller(drawer_sizing)
             .panel(
                 ResizablePanel::new(PanelSize::percent(100.))
                     .key("panes")
@@ -141,5 +156,25 @@ impl Component for Shell {
             .child(ActivityRail::new())
             .child(Divider::vertical().color(border))
             .child(right_area)
+    }
+}
+
+/// Move the **mounted** drawer panel to `h`, in the vertical container `sizing` drives.
+///
+/// The drawer's expand toggle writes the new height to the layout, which re-seeds
+/// `initial_size` for the panel's *next* mount; this is the other half, moving the panel that
+/// is on screen now.
+///
+/// The drawer is that container's only pixel-sized panel — the panes row above it is
+/// `PanelSize::percent(100.)`, which is what makes it take the slack when the drawer grows.
+/// A collapsed drawer has no panel registered at all, and nothing to move.
+pub fn set_drawer_panel_height(mut sizing: State<ResizableContext>, h: f32) {
+    let mut sizing = sizing.write();
+    if let Some(panel) = sizing
+        .panels()
+        .iter_mut()
+        .find(|p| matches!(p.sizing, PanelSize::Pixels(_)))
+    {
+        panel.size = h;
     }
 }
