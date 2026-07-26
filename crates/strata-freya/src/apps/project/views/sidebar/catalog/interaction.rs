@@ -1073,7 +1073,8 @@ fn profile_asks_the_cost_confirm_rather_than_scanning() {
 fn a_refused_row_is_not_offered_a_scan() {
     let (mut runner, (_, _, _, store, _, _, profile_target)) = settled();
     assert_eq!(
-        store.peek().tables[0].def.name, "events",
+        store.peek().tables[0].def.name,
+        "events",
         "the refused row (`table_failed` in the fixture)"
     );
     right_click_row(&mut runner, "events");
@@ -1085,7 +1086,10 @@ fn a_refused_row_is_not_offered_a_scan() {
         "no confirm was raised: {:?}",
         profile_target.peek()
     );
-    assert_eq!(store.peek().profile_scan(CatalogKind::Table, "events"), None);
+    assert_eq!(
+        store.peek().profile_scan(CatalogKind::Table, "events"),
+        None
+    );
 }
 
 /// Once a row carries a request it **spins**, and the spinner is its own — the registration

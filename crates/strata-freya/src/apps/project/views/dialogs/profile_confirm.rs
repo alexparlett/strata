@@ -323,7 +323,8 @@ mod tests {
             }],
             saved_queries: Vec::new(),
         };
-        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-profile-confirm-test"));
+        let mut p =
+            ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-profile-confirm-test"));
         p.table_registered(
             "events",
             TableMeta {
@@ -361,8 +362,9 @@ mod tests {
             (900., 700.).into(),
             |r| {
                 let target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
-                let project = r
-                    .provide_root_context(|| RadioStation::<ProjectState, ProjChan>::create(project()));
+                let project = r.provide_root_context(|| {
+                    RadioStation::<ProjectState, ProjChan>::create(project())
+                });
                 let session = r.provide_root_context(|| {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
                 });
@@ -373,7 +375,12 @@ mod tests {
         )
     }
 
-    fn open(runner: &mut TestingRunner, slot: &mut State<Option<ProfileTarget>>, kind: CatalogKind, name: &str) {
+    fn open(
+        runner: &mut TestingRunner,
+        slot: &mut State<Option<ProfileTarget>>,
+        kind: CatalogKind,
+        name: &str,
+    ) {
         runner.sync_and_update();
         slot.set(Some(ProfileTarget {
             kind,
@@ -498,7 +505,10 @@ mod tests {
             Some(vec!["amount".to_string()]),
             "…standing on the entry's first column"
         );
-        assert!(session.peek().layout.inspector_open, "…in an open inspector");
+        assert!(
+            session.peek().layout.inspector_open,
+            "…in an open inspector"
+        );
     }
 
     /// Cancelling is a true no-op: no request, nothing scanned, nothing revealed.
@@ -509,7 +519,10 @@ mod tests {
 
         click_action(&mut runner, "Cancel");
 
-        assert_eq!(project.peek().profile_scan(CatalogKind::Table, "events"), None);
+        assert_eq!(
+            project.peek().profile_scan(CatalogKind::Table, "events"),
+            None
+        );
         assert!(selection.peek().is_none());
         assert!(slot.peek().is_none());
     }
@@ -537,7 +550,10 @@ mod tests {
 
         runner.press_key(Key::Named(NamedKey::Escape));
         runner.sync_and_update();
-        assert_eq!(project.peek().profile_scan(CatalogKind::Table, "events"), None);
+        assert_eq!(
+            project.peek().profile_scan(CatalogKind::Table, "events"),
+            None
+        );
         assert!(slot.peek().is_none());
 
         open(&mut runner, &mut slot, CatalogKind::Table, "events");

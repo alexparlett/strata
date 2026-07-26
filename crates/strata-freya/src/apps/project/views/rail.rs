@@ -123,7 +123,7 @@ impl Component for ProblemsBadge {
         let theme = use_theme();
         let (background, color, ring) = {
             let t = theme.read();
-        let c = t.colors();
+            let c = t.colors();
             // Semantic: the badge is the app-wide error tone wherever it appears (AGENTS.md §3).
             (c.error, c.text_inverse, c.surface_primary)
         };

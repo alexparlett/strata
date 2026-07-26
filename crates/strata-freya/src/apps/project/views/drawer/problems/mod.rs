@@ -55,7 +55,7 @@ struct Tones {
 fn tones() -> Tones {
     let theme = use_theme();
     let t = theme.read();
-        let c = t.colors();
+    let c = t.colors();
     Tones {
         error: c.error,
         warning: c.warning,
