@@ -24,7 +24,9 @@ use strata_model::CatalogKind;
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{
+    catalog_settled, use_catalog, Catalog, Chan, ProjChan, ProjectState, SessionState,
+};
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::badge::Badge;
 use crate::components::dialog::{Dialog, DialogHeader};
@@ -141,6 +143,9 @@ impl Component for DropConfirm {
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let session = use_radio_station::<SessionState, Chan>();
+        // A drop moves the engine's catalog: every tab reading the dropped row is now wrong,
+        // and none of them has been typed in. The bump is what re-derives them.
+        let catalog = use_catalog();
         let theme = use_theme();
         // The destructive action wears the shared `cancel_button` dress — the themes' authored
         // destructive tone (the running body's Cancel, the close confirm's Stop), not a
@@ -157,7 +162,7 @@ impl Component for DropConfirm {
         let confirm = move |engine: &EngineCtx| {
             let mut slot = slot;
             if let Some(target) = slot.peek().clone() {
-                drop_row(engine, project, session, &target);
+                drop_row(engine, project, session, catalog, &target);
             }
             slot.set(None);
         };
@@ -292,6 +297,7 @@ fn drop_row(
     engine: &EngineCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
     mut session: RadioStation<SessionState, Chan>,
+    catalog: Catalog,
     target: &DropTarget,
 ) {
     match target {
@@ -303,6 +309,8 @@ fn drop_row(
             }
             // Synchronous and local: DataFusion just forgets the provider.
             engine.deregister(name);
+            // Every tab that reads it is now wrong, and none of them has been typed in.
+            catalog_settled(catalog);
         }
         DropTarget::View(name) => {
             {
@@ -328,6 +336,7 @@ fn drop_row(
                     // leaves a stale registration the next re-scan clears.
                     tracing::error!("drop view '{name}': {e}");
                 }
+                catalog_settled(catalog);
             });
         }
         DropTarget::Query { id, .. } => {
@@ -362,6 +371,8 @@ fn persist(project: &ProjectState) {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+
+    use crate::apps::project::state::CatalogState;
 
     use freya_testing::TestingRunner;
     use strata_core::engine::{TableMeta, ViewMeta};
@@ -469,6 +480,7 @@ mod tests {
             (900., 700.).into(),
             move |r| {
                 r.provide_root_context(EngineCtx::new);
+                r.provide_root_context(|| State::create(CatalogState::Settled(0)));
                 let target = r.provide_root_context(|| State::create(None::<DropTarget>));
                 let session = r.provide_root_context(|| {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())

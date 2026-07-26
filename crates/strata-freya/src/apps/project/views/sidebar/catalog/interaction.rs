@@ -18,6 +18,8 @@ use strata_core::theme::load;
 use strata_model::{ColRef, ColumnInfo, Kind, Origin, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
 
+use crate::apps::project::state::CatalogState;
+
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
@@ -208,7 +210,7 @@ fn runner() -> (TestingRunner, Handles) {
             // presses Refresh), the scan flag, the app config behind "View table"'s LIMIT, and
             // the drop-confirm slot the Drop items set.
             r.provide_root_context(EngineCtx::new);
-            r.provide_root_context(|| State::create(false));
+            r.provide_root_context(|| State::create(CatalogState::Settled(0)));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));

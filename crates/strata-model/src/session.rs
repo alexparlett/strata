@@ -23,7 +23,7 @@ impl TabId {
 /// engine/SQL identity — a view rename goes through the Project store, which rewrites
 /// these), a saved query's is its stable **id** (its name is only a label, so renames
 /// can't dangle a tab).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Origin {
     Scratch,
     View(String),
@@ -42,7 +42,7 @@ pub enum ResultsView {
 
 /// The serde view of a session: the open tabs in strip order, which is active, the
 /// window's geometry, and the panel layout. This *is* the shape of `.strata/session.json`.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, PartialEq)]
 pub struct SessionSnapshot {
     #[serde(default)]
     pub tabs: Vec<TabSnapshot>,
@@ -135,7 +135,7 @@ impl Default for Layout {
 /// One persisted tab — enough to rebuild its live tab: identity (so `active` / order still
 /// resolve), title, save target, buffer text and results-view intent. Cursor / scroll /
 /// undo are deliberately left out (state-arch §12 — "lean minimal").
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub struct TabSnapshot {
     pub id: TabId,
     pub name: String,

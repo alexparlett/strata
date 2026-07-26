@@ -1620,6 +1620,36 @@
             }
           }
         },
+        "drawer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "group_icon_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "group_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "meta_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "message_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "empty_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "datagrid": {
           "type": "object",
           "additionalProperties": false,

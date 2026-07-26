@@ -1,5 +1,5 @@
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{use_validation, RunId};
+use crate::apps::project::query::RunId;
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
@@ -89,10 +89,11 @@ impl Component for EditorTab {
                 editor.write_if(|mut data| data.set_edit_bindings(bindings));
             });
         }
-        // Live validation (P2-18): the debounced engine dry-plan over this buffer —
-        // squiggles into the editor's decorations, diagnostics onto the tab.
+        // Validation is NOT driven from here. The window's one driver (`state::diagnostics`)
+        // keeps every open tab's diagnostics and squiggles in step with its text and the
+        // catalog — including tabs with no editor mounted, which is precisely what this
+        // component being the driver made impossible.
         let engine = use_consume::<EngineCtx>();
-        use_validation(id, editor.clone(), engine.clone());
         // Autocomplete (P2-04): the editor calls this provider synchronously per
         // qualifying keystroke / ⌃⌘Space. The `Catalog` snapshot is **memoized** —
         // rebuilt only when the project catalog actually changes (a registration

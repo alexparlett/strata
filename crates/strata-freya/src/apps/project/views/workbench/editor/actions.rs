@@ -17,7 +17,9 @@ use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, QuerySpec, RunId, DEFAULT_PAGE_SIZE};
-use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{
+    catalog_settled, Catalog, Chan, ProjChan, ProjectState, SessionState,
+};
 
 /// A Run / Explain / Analyze press (P2-15 + ⌘↵): snapshot the tab's editor text *now*,
 /// mint a fresh nonce, and set it as the tab's run request — on `Chan::Request(id)`, so
@@ -108,13 +110,14 @@ pub fn save(
     session: Radio<SessionState, Chan>,
     project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
+    catalog: Catalog,
     id: TabId,
 ) {
     let Some((sql, name, origin)) = read_tab(session, id) else {
         return;
     };
     match origin {
-        Origin::View(view) => save_view(session, project, engine, id, view, sql, false),
+        Origin::View(view) => save_view(session, project, engine, catalog, id, view, sql, false),
         Origin::SavedQuery(qid) => save_query(session, project, id, qid, name, sql),
         Origin::Scratch => save_query(session, project, id, Uuid::new_v4(), name, sql),
     }
@@ -127,6 +130,7 @@ pub fn save_as_view(
     session: Radio<SessionState, Chan>,
     project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
+    catalog: Catalog,
     id: TabId,
 ) {
     let Some((sql, _, _)) = read_tab(session, id) else {
@@ -139,7 +143,7 @@ pub fn save_as_view(
             .find(|n| p.name_in_use(n).is_none())
             .unwrap()
     };
-    save_view(session, project, engine, id, name, sql, true);
+    save_view(session, project, engine, catalog, id, name, sql, true);
 }
 
 /// The tab's savable state: `(sql, trimmed name, origin)`; `None` when the tab is
@@ -162,6 +166,7 @@ fn save_view(
     mut session: Radio<SessionState, Chan>,
     mut project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
+    catalog: Catalog,
     id: TabId,
     name: String,
     sql: String,
@@ -192,6 +197,12 @@ fn save_view(
                 project.write_channel(ProjChan::Views).view_failed(&name, e);
             }
         }
+        // The engine's catalog moved, so every tab's verdict was resolved against a catalog
+        // that no longer exists — a tab reading this view was reporting "not found" until
+        // now. Bumped **after** the answer lands, not at the def upsert: validation resolves
+        // against the engine, not the project file. Either arm counts; a view that failed to
+        // create is as much a change as one that succeeded.
+        catalog_settled(catalog);
     });
 }
 

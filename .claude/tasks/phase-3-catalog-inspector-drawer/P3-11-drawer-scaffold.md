@@ -59,9 +59,16 @@ putting back the height it had.
 - [x] Drawer opens/collapses/resizes; the rail switches tabs and the title follows.
 - [x] Expand raises the drawer and restore puts back the height it had; both survive a
       collapse→reopen and a restart.
-- [ ] Clear shows on Events/History, hidden on Problems → **P3-12** (rule + Problems), **P3-13**,
-      **P3-14** (the action).
-- [ ] Body + list frame → **P3-12**..**P3-14**.
+- [x] Clear shows on Events/History, hidden on Problems → the **rule** landed with **P3-12**
+      (`drawer/mod.rs`); the button is parked (`enabled(false)`) until **P3-13** builds the log
+      store and **P3-14** the History truncate, each of which enables it for its own tab.
+- [x] Count label → **P3-12**. It is a `DrawerCount` (`State<usize>`) the shell owns and the
+      *mounted body* resolves — the `running` mirror's pattern, because the header cannot
+      re-derive a body's list without a second number that can disagree with it. Problems writes
+      its **error** count and resets the slot on unmount; P3-13/14 write theirs the same way.
+- [x] List frame → **P3-12** built it as `drawer/frame.rs`: `DrawerBody` (the scroll container) and
+      `DrawerEmpty` (the centred glyph + one line of copy). Exactly the two pieces this file
+      predicted were shared; the row shapes stayed with their tabs.
 
 ## Freya / references
 - Freya `ResizableContainer` + its `ResizableContext` controller (height), `VirtualScrollView`

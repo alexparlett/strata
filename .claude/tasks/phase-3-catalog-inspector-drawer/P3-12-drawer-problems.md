@@ -1,39 +1,105 @@
-# P3-12 · Drawer — Problems tab
+# P3-12 · Drawer — Problems tab (and the diagnostics architecture behind it)
 
-**Phase:** 3 · **Status:** ⬜ `[core ✓]` · **DEV_TASKS:** U10 · **Depends on:** P3-11, P2-18, P2-01
+**Phase:** 3 · **Status:** ✅ `[core ✓]` · **DEV_TASKS:** U10 · **Depends on:** P3-11, P2-18, P2-01
 
 ## Goal
-Live per-tab diagnostics in the Problems tab.
+Live per-tab diagnostics in the Problems tab. The first build scoped the *view* to the active
+tab; review established that the limit was not the drawer's but the **producer's**, and the task
+grew into the diagnostics architecture. Design + diagrams: the approved plan for this change.
 
-## Current state
-**P3-11 left three shared pieces to this task** (see its file): the header's **count label**
-(`drawerCountLabel` — errors here), the **Clear show/hide rule** (hidden on Problems, so this task
-owns the rule and P3-13/14 own the action), and the **list frame** — a scroll container and a
-centred empty state, which is all the three tabs genuinely share. Build them with Problems as the
-first consumer; P3-13/14 reuse. The drawer header already carries the title, the expand/restore
-toggle and the collapse ×, and the **rail's bottom group is the tab switcher** — do not add a pill
-row to the header.
+## The problem it fixed
+`use_validation` was a hook inside `EditorTab`, which mounts only for the tab on screen. So a tab
+whose SQL arrived **without being typed** — restored at project open, reopened with ⇧⌘T, opened
+from a saved query or to edit a view — was never validated, and its empty `diagnostics` read as
+*clean* when it meant *nobody looked*. Two more holes had the same cause: the catalog was not a
+dependency at all (a table registering after a pass left a phantom "not found" until the next
+keystroke), and a pass cancelled by a tab switch left a verdict on text the tab no longer held.
 
-The validation half is **already flowing** (P2-18 ✅): each debounced pass writes
-`QueryTab::diagnostics` on its own **`Chan::Diagnostics(id)`** channel (read via
-`SessionState::diagnostics(id)`). Diagnostics carry severity + message + `loc` (`line L:C`) — the
-exact row shape below — plus a byte `span` for a future click-to-jump. The query-error half is the
-tab's settled `RunQuery` Err (P2-01), synthesized at render via `Diagnostic::from_query_error`.
+## Shipped
 
-## Build
-- Render `diagnostics(tab) ∪ query_error(tab)` for the **active tab** (state-arch §8) — **not**
-  a log: subscribe `use_radio(Chan::Diagnostics(active))` for the validation half; derive the
-  query-error half from the tab's freya-query state. They **self-clear** by construction — each
-  validation pass replaces the vec wholesale (fixed SQL → next pass writes `[]`), and the query
-  error lives in the run's cache entry (auto-clears on re-run). No dismissal state to build.
-- Row = **icon · message · line** (no code chip — dropped in the Dioxus app, DEV_TASKS U10).
-- **No Clear button** on Problems (the scaffold hides it — deliberate, do not "fix").
-- Empty state: "No problems — queries are clean".
+### The stamp — the idea the rest falls out of
+Each tab carries `validated: Option<Stamp>` (`state/session.rs`) — the buffer revision its
+diagnostics were computed from and the catalog epoch they were resolved against. Those are
+validation's only two inputs, so `SessionState::stale_tabs(epoch)` is the **whole** work list and
+there is no list of entry points to keep true: restored, reopened, opened-from-a-view,
+duplicated, edited, and cancelled-mid-pass are all "the stamp does not match". `None` means
+**unchecked**, which is distinct from `Some(_)` with an empty vec — *clean* — and that
+distinction is exactly what the old view could not make.
+
+### One driver
+`state/diagnostics.rs` — `use_diagnostics()`, one hook in the window root. Three fixed
+subscriptions: `Chan::Text` (a new synthetic fan-in every `Chan::Tab(_)` write derives, so **one**
+subscription watches any tab's buffer — without it the driver would need one per tab, a variable
+hook count), `Chan::Tabs`, and the catalog. One cancel-and-rearm task drains the stale list
+**serially, active tab first**, so a twenty-tab project open doesn't put twenty dry plans on the
+engine's two workers ahead of the user's first Run. `use_validation` and `query/validate.rs` are
+deleted; `EditorTab` is a pure view. There is exactly one writer of diagnostics in the app.
+
+The 700ms surface hold survives but is now **typing-only** (`hold`, unit-tested): a first look at
+a restored tab and a re-check after a catalog change are not half-written, and holding them would
+only delay the truth.
+
+### The catalog as a gate
+`CatalogState { Scanning, Settled(u64) }` replaces `CatalogScan: State<bool>` — one value for
+both "can I resolve against it" and "has it changed". `Engine::register` **deregisters before it
+re-infers**, so mid-scan `table_exist` is false for every table being rebuilt; gating means a
+false "not found" is never *produced* rather than produced and retracted, and the squiggles on
+screen hold rather than blank. Releasing into a new epoch re-derives every tab — which is how a
+problem fixed in Table Config clears without opening the tab. `catalog_settled` bumps for the
+discrete mutations (save-as-view, drop) *after* the engine answers, because validation resolves
+against the engine, not the defs.
+
+**An epoch, not a fingerprint over the rows:** registration writes `ProjChan::Tables` once per
+table, so a fingerprint would fire N times during one scan and queue N × M dry plans.
+
+> **The seed is `Settled(0)`, and that is load-bearing.** It must be *settled* because
+> `claim_scan` claims from settled — seeding `Scanning` deadlocks the window's one scan driver at
+> mount and strands every catalog row in `Reg::Loading` for the life of the window (shipped once,
+> caught in the app). Epoch **0** means "no pass has completed", so `epoch()` is `None` and
+> nothing validates before registration lands. The open-time race is closed by value, not by
+> which side effect happens to run first. Regression test:
+> `the_seed_is_claimable_but_nothing_validates_against_it`.
+
+### The view
+`views/drawer/problems/` is now a pure view over `problem_groups()`: a group per tab (sticky
+header of file glyph · tab name · `N problems`), rows of severity glyph · message · `line L:C`,
+**pressable** to switch to the owning tab (canvas `onProblemJump`). No `use_query`, no per-tab
+branching, no merge; `PlainProblems`, `RunProblems` and `problems/model.rs` are gone. The drawer
+header tally and the new **rail badge** (`ProblemsBadge`, its own leaf so a settling tab doesn't
+re-render the other four toggles) are both `error_count()` — one function, so they cannot
+disagree. Errors only: a keyword-typo warning lists without claiming the query is broken.
+
+The `Diagnostic` carries **no** `TabId` — the group supplies it, so there is no second copy to
+disagree with the tab the row is stored on, and `strata-model` stays free of app concerns.
+
+### Run failures are not here
+Deliberate, and a change from the first build. A failure belongs to a *run*, not to the text: it
+can describe SQL the buffer no longer holds, it can't self-clear by typing, and `cancel` /
+supersede settle `Err("cancelled")` / `Err("superseded")` that no user should read as a problem.
+Putting it in a cross-tab view costs either a copy on the store that outlives the run, or one
+freya-query subscription per tab in the drawer *and* in the rail badge. The results pane already
+renders it in full — banner, code frame, caret, hint. `DiagSource` and
+`Diagnostic::from_query_error` are deleted with it.
+
+### Two defects fixed on the way
+- **A run must survive a tab switch.** `run_query::query_for` is now the single spelling of a run
+  subscription, with `clean_time(MAX)`. The execution was always safe (`spawn_forever`, root
+  scope) but an *evicted* entry reads `Pending`, which is stale regardless of `stale_time`, so
+  returning to a tab would silently re-run its query and retire the snapshot its cached pages
+  describe. That it can't happen today is a fork accident (`update_tasks` counts the dying
+  scope's own effect contexts); this makes it a contract.
+- **Autosave gates on content.** `Chan::Tab(id)` derives `Persist`, so hovering a squiggle or
+  moving the caret rewrote a byte-identical `session.json` — and the driver's decoration writes
+  across every tab would have multiplied that. `use_autosave` now compares the snapshot it is
+  about to write against the last one it wrote.
 
 ## Acceptance
-- [ ] Problems reflects the active tab's diagnostics live and updates as the SQL changes / re-runs.
-- [ ] No Clear button; empty state shows the clean message.
+- [x] Every open tab's diagnostics are live, not just the active one's.
+- [x] They resolve as the user types, and when the user fixes a catalog issue.
+- [x] No false diagnostics at project open, and no badge spike that drains.
+- [x] No Clear button; the empty state shows the clean message.
+- [x] Rows switch to the owning tab; header tally and rail badge agree.
 
 ## Freya / references
-- state-arch §8 (Problems = validation ∪ query_error). Core `sql::validate` + query error. Design:
-  `DrawerProblems.dc.html`. DEV_TASKS U10 (row shape + the deliberate no-Clear divergence).
+- state-arch §8/§9 (rewritten by this change). Core `sql::validate`. Design:
+  `Strata.dc.html` `data-rg="drawer"` (1267–1348) + the rail badge (353–357). DEV_TASKS U10.

@@ -15,7 +15,7 @@ use strata_model::SidebarPane;
 use self::catalog::Catalog;
 pub use self::catalog::CatalogThemePreference;
 use crate::apps::project::state::{
-    refresh_catalog, use_catalog_rescan, use_catalog_scan, Chan, SessionState,
+    refresh_catalog, use_catalog, use_catalog_rescan, Chan, SessionState,
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -139,9 +139,9 @@ struct RefreshButton;
 
 impl Component for RefreshButton {
     fn render(&self) -> impl IntoElement {
-        let scan = use_catalog_scan();
+        let catalog = use_catalog();
         let rescan = use_catalog_rescan();
-        let scanning = *scan.read();
+        let scanning = catalog.read().is_scanning();
 
         Button::new()
             .flat()
@@ -169,6 +169,7 @@ impl Component for RefreshButton {
 /// was never "the button isn't in the tree" — it was there the whole time, just off-screen.
 #[cfg(test)]
 mod tests {
+    use crate::apps::project::state::CatalogState;
     use std::path::PathBuf;
 
     use freya::radio::RadioStation;
@@ -223,9 +224,9 @@ mod tests {
             (PANEL_WIDTH, 700.).into(),
             |r| {
                 r.provide_root_context(EngineCtx::new);
-                // CatalogScan · CatalogRescan · CatalogSelection — the three context signals
+                // Catalog · CatalogRescan · CatalogSelection — the three context signals
                 // the pane's header and rows consume (`state/catalog.rs`).
-                r.provide_root_context(|| State::create(false));
+                r.provide_root_context(|| State::create(CatalogState::Settled(0)));
                 let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
                 r.provide_root_context(|| State::create(None::<ColRef>));
                 // The catalog rows' menu handles (P3-06): the app config behind "View table"'s

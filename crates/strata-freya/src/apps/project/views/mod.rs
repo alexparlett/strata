@@ -15,6 +15,7 @@ pub use dialogs::{
     use_profile_actions, CloseConfirm, DropConfirm, DropTarget, OpenPrompt, ProfileActions,
     ProfileConfirm, ProfileTarget,
 };
+pub use drawer::DrawerThemePreference;
 pub use header::{HeaderBar, HeaderBarThemePreference};
 pub use inspector::InspectorThemePreference;
 pub use keeper::RequestKeepers;

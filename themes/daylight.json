@@ -1145,6 +1145,32 @@
         "reference": "warning"
       }
     },
+    "drawer": {
+      "background": {
+        "reference": "surface_secondary"
+      },
+      "border_fill": {
+        "reference": "border"
+      },
+      "label_color": {
+        "reference": "text_secondary"
+      },
+      "group_icon_color": {
+        "reference": "text_placeholder"
+      },
+      "group_color": {
+        "reference": "text_secondary"
+      },
+      "meta_color": {
+        "specific": "#a3a9b3"
+      },
+      "message_color": {
+        "reference": "text_secondary"
+      },
+      "empty_color": {
+        "specific": "#5f6771"
+      }
+    },
     "datagrid": {
       "background": {
         "reference": "surface_primary"

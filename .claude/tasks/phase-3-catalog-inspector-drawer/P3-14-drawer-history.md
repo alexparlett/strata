@@ -13,10 +13,22 @@ earlier description: history is a **satellite**, not Radio and not on `SessionSt
 deduped by `RunId`. Only successful data runs are recorded (a failed/cancelled run or an Explain
 never reaches it).
 
-**From P3-11:** the drawer header already has the title, expand/restore and collapse ×. **Clear**
-needs a `clear_history` in `strata-core::project` that truncates `history.jsonl` as well as
-emptying the satellite — it does not exist yet. The Clear button's Events/History-only rule lands
-with P3-12.
+**From P3-11 via P3-12:** the drawer header already has the title, the count, expand/restore and
+collapse ×. The **Clear** button and its Events/History-only rule are in `drawer/mod.rs`, shipped
+**parked** (`enabled(false)`) — it needs a `clear_history` in `strata-core::project` that truncates
+`history.jsonl` as well as emptying the satellite, which does not exist yet. Give the button an
+`on_press` and an `enabled(..)`; nothing else at the call site changes. The header's **count** is a
+`DrawerCount` (`State<usize>`) the shell owns and the mounted body writes (see P3-12) — write the
+history length into it and reset it on unmount, as `Problems` does. The shared **frame** is
+`drawer/frame.rs`: `DrawerBody` (scroll container) and `DrawerEmpty` (centred glyph + copy);
+colours come from the `drawer` component theme, which this task extends rather than duplicating.
+
+**Known defect to fix here:** the recorder lives *inside* `ResultsBody`
+(`state/history.rs::use_history_recording`), which only the active tab mounts. A run that settles
+while the user is on another tab is not recorded then — it is recorded when they come back, and
+if they never do, the successful run never enters History at all. P3-12 fixed the *timestamp*
+half (`ts_ms` now comes from `settlement_instant`, not from the clock at record time); moving the
+recorder out of the view needs a per-tab observer and belongs with this task, which owns History.
 
 ## Build
 - List past queries newest-first (meta · line-count badge · timestamp, per the canvas).

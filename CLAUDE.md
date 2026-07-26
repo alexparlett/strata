@@ -176,6 +176,17 @@ src/apps/project/                the project window (Valin-shaped)
                                  scan, keyed by `ProfileSpec { owner, scan }`, with `use_profile`
                                  the one place that Query is built)
   state/                         per-window state (Radio): channel, hooks, session
+                                 diagnostics.rs = **the window's one validation driver**: every
+                                 open tab's diagnostics kept in step with its text and the
+                                 catalog. Each tab carries `validated: Option<Stamp>` (buffer
+                                 revision + catalog epoch), so `stale_tabs` is the whole work
+                                 list and no entry point needs enumerating. One hook, three
+                                 fixed subscriptions (`Chan::Text` fan-in · `Chan::Tabs` · the
+                                 catalog), one serial task, active tab first
+                                 catalog.rs = `CatalogState { Scanning, Settled(epoch) }` — the
+                                 scan claim *and* the validation gate. Seeded `Settled(0)`:
+                                 settled so the project-open pass can claim it, epoch 0 so
+                                 nothing validates before that pass completes
                                  session.rs = SessionState + stateful QueryTab (each tab owns its
                                  CodeEditorData, keyed on Chan::{Tabs, Tab(id)}); Layout too
                                  project.rs = ProjectState — **the catalog**: persisted defs +
@@ -206,6 +217,21 @@ src/apps/project/                the project window (Valin-shaped)
                                  completeness · `with_scan`, which folds a scan's facts into that
                                  same list — all unit-tested off a store), column (title ·
                                  nested-fields box · the STATISTICS zone's four states), tests
+    drawer/
+      mod.rs                     the bottom drawer frame + its `drawer` component theme: header
+                                 (title · count · Clear · expand/restore · collapse) over the body
+                                 the **rail's bottom group** chose — there is no in-drawer tab
+                                 strip. The count is a `DrawerCount` (`State<usize>`) the shell
+                                 owns and the mounted body resolves (the `running` mirror's
+                                 pattern); Clear is Events/History-only and parked until P3-13/14
+      frame.rs                   the frame the three bodies share (P3-11 → P3-12): `DrawerBody`
+                                 (scroll container) + `DrawerEmpty` (centred glyph + one line)
+      problems/                  P3-12 — **every** open tab's diagnostics, grouped by tab, rows
+                                 pressable to switch to the owning tab. A pure view over
+                                 `problem_groups()`; the header tally and the rail badge are both
+                                 `error_count()`. Run failures are deliberately NOT here — a
+                                 failure belongs to a run, and the results pane renders it in
+                                 full
     keeper.rs                    request keepers, mounted by ProjectRoot: one invisible
                                  query subscriber per open tab's current press, so a
                                  backgrounded run keeps its cache entry (lifetime =
@@ -294,6 +320,13 @@ of `FREYA_STATE_ARCHITECTURE.md` (and the P3-03 / P3-06 task files, now fixed) d
 DataFusion would surface the `__snap_*` result snapshots and hide defs whose registration failed,
 which are precisely the rows the catalog exists to show. Catalog mutations call the engine and
 then `ProjectState`'s own methods on the matching `ProjChan`; nothing refetches.
+
+**P3-12 (Problems drawer)** is ✅ — and is the reference for reading a query's outcome from a
+second surface: it subscribes the **same** `Query` the results pane does (same capability, keys
+and `stale_time` — the whole of a cache entry's identity), so it attaches to that entry rather
+than mirroring the error onto a store. It lists the **active tab only**, because validation runs
+off the mounted `EditorTab` and an unvisited tab's empty `diagnostics` vec means "unchecked", not
+"clean".
 
 **P3-08 (column inspector)** is ✅, and carries the phase's other standing rule: **only real
 facts.** Every number in the inspector was *read* from the source (footer statistics via
