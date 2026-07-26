@@ -128,12 +128,22 @@ Things that must not regress. Each was fought for once already.
   one write, no field clobbered by a partial save. `use_config(chan)` to subscribe;
   `use_config_station()` when a handler must only `peek` (key chords, close guard).
 - **The theme is pure derived state — deliberately not stored.** Every window root mounts
-  `use_strata_theme(themes, config)`, which derives the effective theme id from the settings global
-  (+ `Platform.preferred_theme` while `sync_os`) and resolves through the shared `ThemesCtx`.
-  Don't add a stored applied-theme-id global back, and don't store other derivable settings
-  projections — subscribe to the channel and compute. Gotcha: copy `theme.peek().name` out before
-  `theme.set(...)` — an if-condition temporary holds the read borrow across the write (runtime
-  borrow panic on the same GenerationalBox).
+  `use_strata_theme(themes, config, preview)`, which derives the effective theme id from the
+  settings global (+ `Platform.preferred_theme` while `sync_os`) and resolves through the shared
+  `ThemesCtx`. Don't add a stored applied-theme-id global back, and don't store other derivable
+  settings projections — subscribe to the channel and compute. Gotcha: copy `theme.peek().name` out
+  before `theme.set(...)` — an if-condition temporary holds the read borrow across the write
+  (runtime borrow panic on the same GenerationalBox).
+- **An uncommitted value that must be live everywhere is a second *input* to the derivation, never
+  a stored result.** The Settings window's theme pick has to repaint every window while it is still
+  uncommitted, and `write_config` persists — so it rides one narrow app-global slot
+  (`state/theme_preview.rs`: `State<Option<ThemeSel>>`, theme id + `sync_os`) that
+  `use_strata_theme` resolves *ahead of* the settings. Two rules keep it honest. It stays
+  **narrow**: the rest of the draft is the Settings window's own `State`, because putting the whole
+  draft in the slot would wake every window's theme derivation on a keystroke in a text field
+  (mirror with `set_if_modified` for the same reason). And **dropping it is the revert** — Cancel,
+  Esc and the red button all just clear the slot, so there is no restore path to keep in step with
+  the commit path.
 - **A repeated colour is a palette slot, never a repeated `specific`.** A theme file's colour
   source is the 27-slot `sheet` **plus** its own `palette` of app-named slots, together forming the
   `Palette` a `Theme` resolves references against (fork-side: `Theme.palette: Box<dyn Palette>`,
@@ -149,6 +159,17 @@ Things that must not regress. Each was fought for once already.
   `Chan::LayoutSize` = sizes (nobody subscribes; a resize drag persists without re-rendering the
   shell). `ResizableContainer` owns live resizing — we persist only the last size. Keep panels
   **keyed** with fixed `.order()` so the `Workbench` subtree survives a sibling collapsing.
+- **A window that belongs *to* another window is a child window, and its lifetime is ours.** The
+  Settings window is one app-wide, pinned above whichever window opened it (the fork's
+  `set_window_parent`), re-pointed when another window asks — with one entry point
+  (`platform::settings::open_settings`) so "already open" can only mean focus + re-pin. Two things
+  don't come free with the AppKit relationship. It must **not** count as a workspace window
+  (`Windows::is_last()` skips it, or the last project closes onto an empty app), and **closing with
+  the owner has to be the app's rule, not AppKit's**: AppKit closes a child behind winit's back and
+  Freya only removes a window on a close it was asked for, so it would keep a live scope for a
+  window that is no longer on screen. Express it in the registry's terms — the owner leaving closes
+  the child through Freya's own path — which also covers the platforms where the child relationship
+  is a no-op.
 - **Window geometry** is read via `Platform::root_size` and the fork-added
   `Platform::window_position` (both logical); never reach for the raw winit handle. There is no
   runtime resize/move from the app — restore geometry only at window **creation**
@@ -271,7 +292,11 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
 - **Fix limitations in the fork, not around it.** When an app design starts reaching for a
   workaround (a registry, a scale-factor correction, a duplicated theme token), the right move is
   usually a semantic fix in the fork — deterministic listener ordering, logical `root_size`,
-  `SelectPlacement`, disabled colors on `ButtonColors` all landed this way.
+  `SelectPlacement`, disabled colors on `ButtonColors`, `set_window_parent` all landed this way.
+  The platform-specific half goes in its own `freya-winit` module beside `traffic_light.rs`
+  (`cfg`-gated, a documented no-op elsewhere), the primitive on `RendererContext` (the only place
+  that holds every window at once), and the discoverable API on `WinitPlatformExt` hopping to it —
+  so app code never touches objc2 or a raw winit handle.
 - Follow the fork's own `AGENTS.md` conventions when editing it; keep changes upstream-shaped
   (themed tokens, doc comments, examples).
 - **After changing the fork, push it** — the committed gitlink must exist on the fork remote or

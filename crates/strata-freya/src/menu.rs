@@ -56,6 +56,8 @@ pub enum MenuCmd {
     /// Quit Strata — every window, routed through the close veto rather than Cocoa
     /// `terminate:`.
     Quit,
+    /// Open the Settings window, pinned above the focused window.
+    OpenSettings,
     /// Pick a project folder and open it.
     OpenProject,
     /// Close the focused window (and open the launcher if it was the last).
@@ -69,8 +71,9 @@ pub enum MenuCmd {
 }
 
 impl MenuCmd {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Quit,
+        Self::OpenSettings,
         Self::OpenProject,
         Self::CloseProject,
         Self::Undo,
@@ -85,6 +88,7 @@ impl MenuCmd {
     fn id(self) -> &'static str {
         match self {
             Self::Quit => "strata.quit",
+            Self::OpenSettings => "strata.app.settings",
             Self::OpenProject => "strata.file.open-project",
             Self::CloseProject => "strata.file.close-project",
             Self::Undo => "strata.edit.undo",
@@ -104,12 +108,13 @@ impl MenuCmd {
 
     /// The keymap command this item dispatches through the focused window's keyboard
     /// pipeline — the Edit set, plus **Open…**, whose folder picker belongs to whichever
-    /// window is focused (the launcher stands down after opening; a project window doesn't).
-    /// `None` for the window-lifecycle items, which the handler routes through the close
-    /// path instead.
+    /// window is focused (the launcher stands down after opening; a project window doesn't),
+    /// and **Settings…**, which pins itself above whichever window asked. `None` for the
+    /// window-lifecycle items, which the handler routes through the close path instead.
     fn key_command(self) -> Option<Command> {
         match self {
             Self::Quit | Self::CloseProject => None,
+            Self::OpenSettings => Some(Command::OpenSettings),
             Self::OpenProject => Some(Command::OpenProject),
             Self::Undo => Some(Command::Undo),
             Self::Redo => Some(Command::Redo),
@@ -309,6 +314,7 @@ pub fn use_file_menu(app: &AppCtx, open: Option<OpenCtx>) {
 #[derive(Clone)]
 pub struct MenuChords {
     pub quit: Option<KeyChord>,
+    pub open_settings: Option<KeyChord>,
     pub open_project: Option<KeyChord>,
     pub close_project: Option<KeyChord>,
     pub undo: Option<KeyChord>,
@@ -324,6 +330,7 @@ pub fn menu_chords(settings: &Settings) -> MenuChords {
     let chord = |cmd| effective_chord(settings, cmd);
     MenuChords {
         quit: chord(Command::Quit),
+        open_settings: chord(Command::OpenSettings),
         open_project: chord(Command::OpenProject),
         close_project: chord(Command::CloseProject),
         undo: chord(Command::Undo),
@@ -349,6 +356,16 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
         true,
         chords.quit.as_ref().and_then(accelerator),
     );
+    // Settings…, in the App menu where macOS puts it. Like the Edit set it rides the
+    // keyboard pipeline (an unbound command has no chord to dispatch, so its item ships
+    // disabled), which is also how the window that asked is identified: the synthesized press
+    // lands in the *focused* window, whose listener opens Settings pinned above itself.
+    let settings = MenuItem::with_id(
+        MenuCmd::OpenSettings,
+        "Settings…",
+        chords.open_settings.is_some(),
+        chords.open_settings.as_ref().and_then(accelerator),
+    );
     let app = Submenu::new("Strata", true);
     let items: &[&dyn IsMenuItem] = &[
         &PredefinedMenuItem::about(
@@ -359,6 +376,8 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
                 ..Default::default()
             }),
         ),
+        &PredefinedMenuItem::separator(),
+        &settings,
         &PredefinedMenuItem::separator(),
         &PredefinedMenuItem::hide(Some("Hide Strata")),
         &PredefinedMenuItem::hide_others(None),
@@ -560,16 +579,23 @@ mod test {
         // The window-lifecycle items route through the close path, not the key pipeline.
         assert_eq!(MenuCmd::Quit.key_command(), None);
         assert_eq!(MenuCmd::CloseProject.key_command(), None);
-        // Open… rides the key pipeline like the Edit set, but isn't an *editing* command:
-        // its listener is the focused window's, not the focused editor's.
+        // Open… and Settings… ride the key pipeline like the Edit set, but aren't *editing*
+        // commands: their listener is the focused window's, not the focused editor's.
         assert_eq!(
             MenuCmd::OpenProject.key_command(),
             Some(Command::OpenProject)
         );
+        assert_eq!(
+            MenuCmd::OpenSettings.key_command(),
+            Some(Command::OpenSettings)
+        );
         for cmd in MenuCmd::ALL.into_iter().filter(|cmd| {
             !matches!(
                 cmd,
-                MenuCmd::Quit | MenuCmd::CloseProject | MenuCmd::OpenProject
+                MenuCmd::Quit
+                    | MenuCmd::CloseProject
+                    | MenuCmd::OpenProject
+                    | MenuCmd::OpenSettings
             )
         }) {
             assert!(cmd.key_command().unwrap().is_edit(), "{cmd:?}");
@@ -581,6 +607,7 @@ mod test {
         let chords = menu_chords(&Settings::default());
         for (name, chord) in [
             ("quit", &chords.quit),
+            ("open_settings", &chords.open_settings),
             ("close_project", &chords.close_project),
             ("undo", &chords.undo),
             ("redo", &chords.redo),

@@ -16,6 +16,16 @@ is pure UI**: the category page, click-to-capture (route through `validate_bind`
 duplicate-chord checks), conflict box, Custom badge, per-row reset, Reset all — then
 `config::save`.
 
+## Wiring into the P4-03 shell
+The Settings window shell is built: `Route::Keymap` renders `KeymapPane` in `apps/settings/mod.rs`, which
+today is a `Pane::not_built(..)` placeholder. Replace that component's body; nothing else changes.
+
+Every control edits `SettingsCtx::draft` (`use_consume::<SettingsCtx>()`) and stops there. The
+footer's **Apply** is the only thing that commits — `write_config(.., &[ConfigChan::Settings], ..)`,
+once, for the whole struct — so a page must never persist a field itself. The breadcrumb and the
+scroll frame are the shell's; the pane renders content only, and reads its colours from the
+`settings` component theme (`hint_color` is a setting's subtext).
+
 ## Build (DEV_TASKS W4)
 - Interactive rows from the real command table (the P2-20 set): **click-to-capture**, a **conflict box**
   (Reassign steals + unbinds the other / Cancel), a **Custom** badge, per-row **reset ↺**, **Add

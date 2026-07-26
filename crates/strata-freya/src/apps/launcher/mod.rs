@@ -18,14 +18,14 @@ mod views;
 use freya::prelude::*;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use strata_core::config::Command;
-use strata_core::theme::{effective_id, os_is_dark};
+use strata_core::theme::os_is_dark;
 
 use crate::apps::launcher::views::{pick_and_open, LauncherRail, ProjectsPane, TitleBar};
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
 use crate::platform::{self, WindowKind};
 use crate::state::{use_share_config, AppCtx};
-use crate::theme::{use_strata_theme, window_background};
+use crate::theme::{peek_selection, use_strata_theme, window_background};
 
 // `%[no_ext]`: the window's dress is read by four sibling views (title bar · rail · pane ·
 // row) rather than by one `Launcher` component, so there's no type for the generated
@@ -67,8 +67,7 @@ impl LauncherApp {
         // Match the theme's card body so a resize doesn't flash the default white. Pre-launch
         // there's no `Platform`, so the one-shot OS probe stands in for Sync-with-OS.
         let background = {
-            let s = &app.config.peek().settings;
-            let id = effective_id(&s.theme, s.sync_os, os_is_dark());
+            let id = peek_selection(app.config, app.preview).effective(os_is_dark());
             window_background(app.themes.get_or_default(&id))
         };
         WindowConfig::new_app(LauncherApp { app })
@@ -94,7 +93,7 @@ impl App for LauncherApp {
     fn render(&self) -> impl IntoElement {
         // The same two window-root steps every app takes: this window's theme derived from
         // the shared settings, and the app-global config into context for the views below.
-        use_strata_theme(self.app.themes.clone(), self.app.config);
+        use_strata_theme(self.app.themes.clone(), self.app.config, self.app.preview);
         use_share_config(self.app.config);
         use_provide_context({
             let app = self.app.clone();
@@ -115,6 +114,9 @@ impl App for LauncherApp {
             "launcher"
         );
         let config = self.app.config;
+        // Taken in the render scope so the key handler below can open a window from an event
+        // handler, where there is no scope left to read it from.
+        let platform = use_hook(Platform::get);
 
         rect()
             .expanded()
@@ -150,11 +152,17 @@ impl App for LauncherApp {
                         pick_and_open(app.clone());
                         true
                     }
+                    // ⌘, — the same window the rail's Settings row opens, pinned above this
+                    // one (or re-pinned here, if another window has it).
+                    Command::OpenSettings => {
+                        platform::open_settings(platform.clone(), app.clone());
+                        true
+                    }
                     Command::Quit => {
                         platform::quit();
                         true
                     }
-                    Command::CommandPalette | Command::OpenSettings | Command::CycleWindow => {
+                    Command::CommandPalette | Command::CycleWindow => {
                         tracing::debug!("launcher: shortcut {cmd:?} target not built yet (stub)");
                         true
                     }

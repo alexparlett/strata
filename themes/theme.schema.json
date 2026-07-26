@@ -1023,6 +1023,45 @@
             }
           }
         },
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "nav_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "group_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "chevron_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "item_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "item_active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "item_active_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hint_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "avatar": {
           "type": "object",
           "additionalProperties": false,

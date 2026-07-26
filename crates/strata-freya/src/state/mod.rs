@@ -11,14 +11,18 @@
 //!   ([`crate::platform::windows`]);
 //! - the menubar's mutable handles, so the focused window can keep the File menu pointed at
 //!   itself ([`crate::menu`]) — plus the open path it points Open Recent at
-//!   ([`crate::platform::open`]).
+//!   ([`crate::platform::open`]);
+//! - the Settings window's live theme preview ([`theme_preview`]) — the one half of its
+//!   uncommitted draft that every *other* window has to read.
 //!
 //! Plus the theme registry, which is immutable after discovery and so is a plain `Arc`
 //! rather than a store.
 
 mod config;
+mod theme_preview;
 
 pub use config::*;
+pub use theme_preview::*;
 
 use crate::menu::MenuState;
 use crate::platform::{FocusedOpen, WindowRegistry};
@@ -36,6 +40,10 @@ pub struct AppCtx {
     pub themes: ThemesCtx,
     pub config: ConfigStation,
     pub windows: WindowRegistry,
+    /// The Settings window's uncommitted theme pick, or `None` — see [`theme_preview`]. On
+    /// the bundle rather than in the Settings window because every window's theme derivation
+    /// reads it: that is what makes the preview live everywhere at once.
+    pub preview: ThemePreview,
     pub menu: MenuState,
     /// The focused window's open path, parked by `use_file_menu` — see [`FocusedOpen`]. It
     /// sits beside `menu` because it exists for the same reason: the File menu is app-global

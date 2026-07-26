@@ -199,7 +199,7 @@ mod interaction {
     use crate::apps::project::{CloseGuard, CloseTarget};
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
-    use crate::state::ConfigStation;
+    use crate::state::{create_global_theme_preview, ConfigStation};
     use crate::theme::{strata_theme, ThemesCtx};
 
     const HERE: &str = "/data/sales";
@@ -241,6 +241,7 @@ mod interaction {
                     themes: ThemesCtx::discover(),
                     config: ConfigStation::create_global(AppConfig::default()),
                     windows: create_global_windows(),
+                    preview: create_global_theme_preview(),
                     menu: create_global_menu(),
                     open: create_global_open(),
                 });

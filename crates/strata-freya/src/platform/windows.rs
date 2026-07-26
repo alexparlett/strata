@@ -41,6 +41,18 @@ use crate::state::{write_config, AppCtx, ConfigChan, ConfigStation};
 pub enum WindowKind {
     Launcher,
     Project(String),
+    /// The Settings window — one app-wide, pinned above whichever window last asked for it
+    /// ([`Windows::settings_owner`]). See [`crate::platform::settings`].
+    Settings,
+}
+
+impl WindowKind {
+    /// Whether this is a window the user *works* in — a project or the welcome screen.
+    /// Settings is not: it is a panel over one of these, so it can neither be the app's last
+    /// window nor keep the launcher from taking a closing project's place.
+    fn is_workspace(&self) -> bool {
+        !matches!(self, Self::Settings)
+    }
 }
 
 /// Every window this app has open, by id. Reactive: a window opening or closing anywhere
@@ -49,13 +61,21 @@ pub enum WindowKind {
 #[derive(Default, Clone, PartialEq)]
 pub struct Windows {
     by_id: HashMap<WindowId, WindowKind>,
+    /// The window the Settings window is currently pinned above, while it is open. Kept
+    /// beside the ids it names rather than in a global of its own: it is a fact about which
+    /// live windows relate to which, which is exactly what this registry is.
+    settings_owner: Option<WindowId>,
 }
 
 impl Windows {
     /// Whether the app is down to one window (or none — a window that hasn't yet resolved
     /// its id). What decides whether a close hands over to the launcher.
+    ///
+    /// Counts workspace windows only. The Settings window closes with its owner, so counting
+    /// it would let the last project close onto an empty app: "not the last window" would be
+    /// true right up to the moment both went.
     pub fn is_last(&self) -> bool {
-        self.by_id.len() <= 1
+        self.by_id.values().filter(|k| k.is_workspace()).count() <= 1
     }
 
     /// The window showing the project rooted at `path`, if one is open.
@@ -71,6 +91,29 @@ impl Windows {
         self.by_id
             .iter()
             .find_map(|(id, kind)| matches!(kind, WindowKind::Launcher).then_some(*id))
+    }
+
+    /// The Settings window, if it is open — what makes it single-instance: a second ask
+    /// focuses this one instead of opening another.
+    pub fn settings(&self) -> Option<WindowId> {
+        self.by_id
+            .iter()
+            .find_map(|(id, kind)| matches!(kind, WindowKind::Settings).then_some(*id))
+    }
+
+    /// The window Settings is pinned above, if it is open.
+    pub fn settings_owner(&self) -> Option<WindowId> {
+        self.settings_owner
+    }
+
+    /// Whether `id` still names a live window.
+    pub fn is_open(&self, id: WindowId) -> bool {
+        self.by_id.contains_key(&id)
+    }
+
+    /// Record which window Settings is pinned above (`None` when it closes).
+    pub fn pin_settings(&mut self, owner: Option<WindowId>) {
+        self.settings_owner = owner;
     }
 }
 
@@ -157,7 +200,7 @@ pub fn use_register_window(mut windows: WindowRegistry, kind: impl Fn() -> Windo
 /// [`use_register_window`] can only learn it a render + round trip later. Registering here
 /// closes that gap, which is what stops two closes in quick succession from each seeing
 /// "no launcher open" and opening one apiece.
-fn register(mut windows: WindowRegistry, id: WindowId, kind: WindowKind) {
+pub(super) fn register(mut windows: WindowRegistry, id: WindowId, kind: WindowKind) {
     windows.write().by_id.insert(id, kind);
 }
 

@@ -18,6 +18,8 @@ use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::typography::{Control, Meta, Title};
+use crate::platform::open_settings;
+use crate::state::AppCtx;
 
 /// The rail rows' padding (canvas `--sp-3 --sp-4`) — roomier than the catalog's, which sits
 /// in a narrower pane.
@@ -36,6 +38,11 @@ impl Component for LauncherRail {
             LauncherThemePreference,
             "launcher"
         );
+        // The Settings window is opened through the shared path, which needs both this
+        // window's platform handle (that is how it learns *which* window asked, so it can pin
+        // itself above this one) and the app-globals.
+        let platform = use_hook(Platform::get);
+        let app = use_consume::<AppCtx>();
 
         // The brand: the app mark in a rounded, clipped tile (the SVG is square and paints
         // its own colours), the wordmark in the scale's Title role, and the build under it.
@@ -69,14 +76,14 @@ impl Component for LauncherRail {
             .active_background(theme.nav_background)
             .child(row_content(IconName::Folder, "Projects"));
 
-        // The gear (W1) — the standalone Settings window is P4-03, so the row is live and
-        // logs until it lands. Wiring it here rather than at that seam would fold the
-        // single-instance settings window into the launcher.
+        // The gear (W1): the standalone Settings window, opened through
+        // `platform::open_settings` — so it is the same single instance ⌘, and the project
+        // header's gear reach, pinned above this window.
         let settings = SidebarRow::new()
             .auto_height()
             .padding(ROW_PADDING)
             .on_press(move |_: Event<PressEventData>| {
-                tracing::debug!("launcher: settings window not built yet (P4-03)");
+                open_settings(platform.clone(), app.clone());
             })
             .child(row_content(IconName::Gear, "Settings"));
 
