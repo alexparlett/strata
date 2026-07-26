@@ -60,17 +60,16 @@ The settings window frame: single canonical instance, category nav, draft/save, 
   `specific`s — `launcher.nav_background` and `catalog.part_background` now reference them
   (AGENTS §2, no visual change).
 
-## Known gap: Apply commits the whole struct
-`SettingsCtx::apply` writes the entire `Settings` from a draft seeded at mount, so a setting
-another window commits meanwhile is silently reverted. Concretely: with Settings open, the T2
+## Known gap: Apply commits the whole struct — **settled in P4-04** ✅
+`SettingsCtx::apply` wrote the entire `Settings` from a draft seeded at mount, so a setting
+another window committed meanwhile was silently reverted. Concretely: with Settings open, the T2
 close confirm's "Don't ask again" writes `confirm_close_running`
-(`views/dialogs/close_confirm.rs`), and Apply then restores the old value — a setting the user
+(`views/dialogs/close_confirm.rs`), and Apply then restored the old value — a setting the user
 changed, undone by a window that never showed it.
 
-**Unreachable today** (no pane edits the draft, so Apply is always disabled) and left that way
-deliberately: the fix is a design choice between re-seeding untouched fields from the store and
-committing a per-field diff, and it belongs with the first task that makes the draft editable —
-**P4-04**, with **P4-06** owning the control that collides today.
+It was unreachable while no pane edited the draft, and was left for the first task that made the
+draft editable. **P4-04 settled it** with the per-field diff (`Settings::merge_onto`) — see that
+task's file for the shape and why `dirty` moved onto the seed with it.
 
 ## Not built here (owned elsewhere)
 - **The five category panes.** Each route renders `Pane::not_built(..)` until its task lands:

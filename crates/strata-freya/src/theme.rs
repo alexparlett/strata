@@ -406,10 +406,15 @@ strata_components! {
     // chevron, a resting row and the current one's pill. `hint_color` is a pane's explanatory
     // subtext, which every category page uses under each setting. Its rows are `SideBarItem`s
     // (so the router's `ActivableRoute` drives selection — see the rail's own module) wearing
-    // the shared `sidebar_item` dress, and its footer buttons `button`'s.
+    // the shared `sidebar_item` dress, and its footer buttons `button`'s. The `card_*` /
+    // `selected_color` / `badge_*` set is the Appearance pane's theme grid (P4-04) — the cards'
+    // own dress; the *swatches* inside a card are the previewed theme's colours, not this
+    // window's, so they aren't tokens here.
     "settings" => SettingsThemePreference {
         background, nav_background, border_fill, icon_color, icon_background, group_color,
         chevron_color, item_color, item_active_background, item_active_color, hint_color,
+        card_background, card_border_fill, card_hover_border_fill, card_divider_fill,
+        selected_color, badge_builtin_color, badge_user_color,
     },
     // The initials tile a project row leads with (header switcher, launcher lists): the resting
     // dress plus the accent one a project with an open window wears.
@@ -686,7 +691,11 @@ fn set_corner(dst: &mut Preference<CornerRadius>, f: &BTreeMap<String, Pref>, ke
 
 /// Parse an authored colour: `#rrggbb`, `#rrggbbaa`, or `rgba(r,g,b,a)`. Anything else →
 /// magenta, so a bad value is obvious on screen.
-fn pc(s: &str) -> Color {
+///
+/// `pub(crate)` for the Settings theme grid, which paints each card's thumbnail from the
+/// previewed theme's own authored `sheet` — colours belonging to a theme that is *not* the one
+/// installed, so they can't come off a resolved `Theme`.
+pub(crate) fn pc(s: &str) -> Color {
     let s = s.trim();
     if let Some(inner) = s.strip_prefix("rgba(").and_then(|x| x.strip_suffix(')')) {
         let p: Vec<&str> = inner.split(',').map(str::trim).collect();

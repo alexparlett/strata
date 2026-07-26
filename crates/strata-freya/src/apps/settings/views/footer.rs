@@ -5,8 +5,8 @@
 //! just closes — nothing was committed, so there is nothing to undo but the live theme
 //! preview, which the root drops on the way out.
 //!
-//! Apply is disabled while the draft matches what is committed, so the button says whether
-//! there is anything to apply rather than being a no-op that closes the window.
+//! Apply is disabled while the draft matches the seed it was made from, so the button says
+//! whether there is anything to apply rather than being a no-op that closes the window.
 
 use freya::prelude::*;
 
@@ -30,7 +30,7 @@ impl Component for Footer {
         );
         let ctx = use_consume::<SettingsCtx>();
         let platform = use_hook(Platform::get);
-        let dirty = ctx.use_dirty();
+        let dirty = ctx.dirty();
 
         let cancel = {
             let platform = platform.clone();
