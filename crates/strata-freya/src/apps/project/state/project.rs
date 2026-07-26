@@ -324,6 +324,19 @@ impl ProjectState {
             });
             // Re-created means re-planned, against whatever the tables underneath it now hold —
             // so a scan of the old plan describes nothing that is still true.
+            //
+            // **Its own row, and deliberately no cascade to the views that read it** — unlike
+            // [`table_registered`](Self::table_registered), which has [`invalidate_readers`]. The
+            // asymmetry is not an oversight. `CREATE OR REPLACE VIEW` inlines the body of every
+            // view it reads *at that moment* (see [`refresh_order`](Self::refresh_order)), so a
+            // view B over this view holds an inlined copy of the **old** body and goes on
+            // answering with it — B's scanned numbers still describe exactly what B returns, and
+            // dropping them would put the scan card over a view whose data has not moved.
+            //
+            // The invariant that makes this self-maintaining: a profile dies when its view's plan
+            // is *re-created*, and this method is that event. So if a later task does start
+            // re-creating dependent views on a single-view edit, their profiles are already
+            // handled — by their own landing answer, on their own channel.
             v.profile = None;
         }
     }

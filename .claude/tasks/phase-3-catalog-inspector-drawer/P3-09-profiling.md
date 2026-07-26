@@ -87,6 +87,21 @@ the scan). Dedup is the cache key's: the inspector's zone and the row's spinner 
 `ProfileSpec` and attach to one execution. Engine-side, a re-scan supersedes rather than
 duplicating.
 
+### Why a view's re-creation does not cascade (raised in review, deliberately kept)
+
+`table_registered` drops the profile of every view that reads the table; `view_registered` drops
+only the edited view's own. That asymmetry looks like a missing `invalidate_readers` for
+`CatalogKind::View` — it isn't. `CREATE OR REPLACE VIEW` inlines the body of every view it reads
+*at that moment*, so a view B over the edited view A holds an inlined copy of A's **old** body and
+keeps answering with it. B's scanned numbers still describe precisely what B returns; dropping them
+would show the scan card over a view whose data has not moved. (The table case cascades because the
+driver re-creates those views moments later — `views_to_refresh` — which really does change their
+plans.)
+
+The invariant is "a profile dies when its view's plan is re-created", and `view_registered` *is*
+that event. So a later task that starts re-creating dependent views on a single-view edit gets this
+for free, on their own channel, with no cascade to add.
+
 ## Notes for later tasks
 
 - **P4-11 (table config)** lands a table answer through `table_registered`, so it invalidates for
