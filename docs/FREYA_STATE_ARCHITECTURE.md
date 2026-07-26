@@ -421,10 +421,25 @@ Both are small context signals, not Radio stations:
   A resize handle / toggle writes it directly (`layout.write().panel_sizes = …`); no action, no
   channel. Persisted by its own debounced side effect (§5). Coarse writes are fine — layout is
   tiny and its only readers are the panel container.
-- **`LogCtx = State<VecDeque<LogEntry>>`** — the window's complete event/error record, appended
-  by whichever layer observes the fact (a settled query's `Err`, a mutation's result, a load
-  summary). `LogEntry` carries a level + origin so views filter it (a toast host = recent
-  warn+). Ephemeral. **Not built** — P3-13 (the Events drawer) owns it.
+- **`LogCtx = State<Log>`** — the window's event record, behind the drawer's Events tab. Built
+  with **P3-13** (`state/log.rs`): a capped `VecDeque<LogEvent>`, newest-first, each entry a
+  **level** (`Ok` / `Info` / `Warning` / `Error` — the sheet's four semantic slots) + a message +
+  a local `HH:MM:SS`. Ephemeral, never persisted. Stood up by `use_init_log()` in `ProjectRoot`
+  *before* `use_init_project`, whose open is its first entry.
+
+  **Appended by whichever layer observed the fact**, and there is deliberately **no producer
+  hook** — the exact opposite of the diagnostics driver (§9) and for the opposite reason: a
+  diagnostic is a pure function of two live inputs, so a reconciliation can re-derive it; an event
+  can be re-derived from nothing. So the catalog scan records what the engine answered per def,
+  Save and the drop confirm record their own mutations, `cancel_run` records a cancel (the
+  `Err("cancelled")` settle lands unsubscribed — the trigger is cleared in the same pass), and a
+  tab's request keeper records a run's outcome. Adding a surface means capturing the `LogCtx` at
+  render time and calling `log_event`.
+
+  **No `origin` field.** An earlier draft of this section called for a level *and* an origin, so
+  views could filter. The level is real — it is the dot. The origin is not: every message already
+  names its subject, so a structured copy is a second copy that can disagree with the sentence
+  beside it. Add it with the filter (or toast host) that needs it.
 
   It does **not** feed Problems. That clause predates freya-query and would have made Problems a
   log; Problems is the SQL-validation surface (§9), and a log is the opposite of a live fact.
@@ -440,9 +455,10 @@ originated, so the user sees them in place. Both happen; not either/or.
 
 | Origin | In the log | Also shown inline |
 |--------|-----------|-------------------|
-| Query execution | yes (logged where the query settles `Err`) | that tab's **results pane**, from `RunQuery::Err` — banner, code frame, caret, hint; auto-clears on re-run. **Not Problems**: a failure belongs to a run, not to the text, and the only ways to put it in a cross-tab view are a copy on the store that outlives the run it describes, or one freya-query subscription per tab in the drawer *and* in the rail badge |
+| Query execution | yes — recorded by the tab's **request keeper** when the press settles (`use_run_logging`), which is mounted for the press's whole life, so a backgrounded tab's failure is recorded too | that tab's **results pane**, from `RunQuery::Err` — banner, code frame, caret, hint; auto-clears on re-run. **Not Problems**: a failure belongs to a run, not to the text, and the only ways to put it in a cross-tab view are a copy on the store that outlives the run it describes, or one freya-query subscription per tab in the drawer *and* in the rail badge |
+| A **cancel** | yes — recorded by `cancel_run`, at the cancel, because clearing the tab's trigger unmounts the keeper in the same pass and the `Err("cancelled")` settle lands unsubscribed. `Engine::cancel` returns the elapsed time iff it really aborted something, so a cancel that hit nothing records nothing | nothing: the body simply returns to its empty state. A cancel is a `Warning` in the log and is never a problem |
 | Registration via configure form | yes | the form's submit error; the answer lands on the row via `ProjectState::table_registered` / `table_failed` (§6's catalog note — no cache to invalidate) |
-| Registration at load | yes | a per-source marker on the sidebar catalog item (+ one load-summary notice) |
+| Registration at load, at a ↻ re-scan, or at a row Refresh | yes — one event per def per pass, on either arm (`state::hooks::register_defs`); no synthesized "N tables re-scanned" summary, which would re-derive facts already in the list | a per-source marker on the sidebar catalog item |
 
 SQL validation is the exception — derived per tab from the editor text and the catalog, and not
 logged. It is an **engine dry-plan**, not a client-side memo (P2-18/P2-23): lexical lints +

@@ -1,12 +1,14 @@
 //! The per-window stores (Radio): the **Session** (open tabs + arrangement) and the
-//! **Project** (the open project's catalog defs — the save targets).
-//! See `docs/FREYA_STATE_ARCHITECTURE.md` §2–§4.
+//! **Project** (the open project's catalog defs — the save targets), plus the two satellites that
+//! need no channels of their own — query [`history`] and the [`log`] behind the drawer's Events
+//! tab. See `docs/FREYA_STATE_ARCHITECTURE.md` §2–§4 (the stores) and §8 (the satellites).
 
 mod catalog;
 mod channel;
 mod diagnostics;
 mod history;
 mod hooks;
+mod log;
 mod project;
 mod session;
 
@@ -26,5 +28,11 @@ pub use hooks::{
     refresh_catalog, refresh_table, use_autosave, use_init_history, use_init_project,
     use_init_session,
 };
+/// Only tests name the log itself: they stand its context signal up by hand, where the window
+/// goes through `use_init_log`. Production code holds a [`LogCtx`] and appends through
+/// [`log_event`].
+#[cfg(test)]
+pub use log::Log;
+pub use log::{log_event, use_init_log, use_run_logging, LogCtx, LogLevel};
 pub use project::{ProjChan, ProjectState, Reg};
 pub use session::{ProblemGroup, SessionState, Stamp};

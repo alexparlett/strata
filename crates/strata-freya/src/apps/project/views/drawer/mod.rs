@@ -14,10 +14,12 @@
 //! - **The Clear rule**: shown on Events / History, **never** on Problems, whose rows self-clear
 //!   when the SQL is fixed or the query re-runs — a Clear there would either lie or imply the
 //!   problems aren't real (DEV_TASKS U10). The rule is this shell's; the *action* belongs to the
-//!   tabs that keep a log, so the button is parked until P3-13 / P3-14 give it something to clear.
+//!   tabs that keep a log. Events' is wired (P3-13); History's stays parked until P3-14 gives it a
+//!   truncate.
 //!
 //! The frame the three bodies share — a scroll container and a centred empty state — is [`frame`].
 
+mod events;
 mod frame;
 mod problems;
 
@@ -26,9 +28,10 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::DrawerTab;
 
+use self::events::Events;
 use self::problems::Problems;
 use super::shell::set_drawer_panel_height;
-use crate::apps::project::state::{Chan, SessionState};
+use crate::apps::project::state::{Chan, LogCtx, SessionState};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Caption, Control, Meta};
@@ -53,6 +56,9 @@ define_theme!(
         meta_color: Color,
         /// A row's message.
         message_color: Color,
+        /// The rule under an Events row — the recessive hairline *inside* a list, a step back
+        /// from [`border_fill`](Self::border_fill), which separates the header from the body.
+        divider_fill: Color,
         /// An empty state's copy. Its glyph wears a sheet colour, like every other semantic
         /// mark in the app.
         empty_color: Color,
@@ -99,6 +105,8 @@ impl Component for Drawer {
         // The body's tally. Each body resets it on unmount, so switching tabs can never leave the
         // previous one's number under the new one's title.
         let count: DrawerCount = use_state(|| 0usize);
+        // The window's event log — what **Clear** empties on the Events tab (below).
+        let log = use_consume::<LogCtx>();
 
         let (title, body): (&str, Element) = match tab {
             DrawerTab::Problems => (
@@ -109,8 +117,15 @@ impl Component for Drawer {
                 }
                 .into_element(),
             ),
-            // Events (P3-13) and History (P3-14) fill this same frame, and write the same count.
-            DrawerTab::Events => ("Events", rect().expanded().into_element()),
+            DrawerTab::Events => (
+                "Events",
+                Events {
+                    theme: theme.clone(),
+                    count,
+                }
+                .into_element(),
+            ),
+            // History (P3-14) fills this same frame, and writes the same count.
             DrawerTab::History => ("History", rect().expanded().into_element()),
         };
 
@@ -136,17 +151,27 @@ impl Component for Drawer {
                 .size(14.),
             );
 
-        // Clear: the two log tabs only, and parked until one of them has a log to clear. Events
-        // has no store at all yet (state-arch §8's `LogCtx` is unbuilt) and History has no
-        // truncate, so an enabled button would be a promise neither can keep.
+        let shown = *count.read();
+        // Clear: the two log tabs only (never Problems — see the module doc). Events empties the
+        // event log; History has no truncate yet, so its button stays parked (P3-14) rather than
+        // promising something it can't do.
+        //
+        // Enabled off the mounted body's **count** rather than a second read of the log: for
+        // Events the count *is* the log's length, so this way the number in the header and the
+        // button beside it can never disagree.
         let clear = (tab != DrawerTab::Problems).then(|| {
             Button::new()
                 .flat()
-                .enabled(false)
+                .enabled(tab == DrawerTab::Events && shown > 0)
                 .height(Size::px(24.))
+                .maybe(tab == DrawerTab::Events, |button| {
+                    button.on_press(move |_| {
+                        let mut log = log;
+                        log.write().clear();
+                    })
+                })
                 .child(Control::new("Clear"))
         });
-        let shown = *count.read();
 
         rect()
             .expanded()

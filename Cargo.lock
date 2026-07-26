@@ -6774,6 +6774,7 @@ dependencies = [
 name = "strata-core"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "datafusion",
  "futures",
  "preferences",

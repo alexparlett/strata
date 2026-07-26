@@ -5,6 +5,13 @@
 ## Goal
 The register/edit-table modal: multi-path sources, format, Hive partitions.
 
+> **This adds a new `project.json` mutation site** — the third def writer after Save and the drop
+> confirm. Route its persist through **P4-15**'s funnel (today: P3-13's
+> `actions::persisted`, which logs the failure and returns whether the write landed), and gate the
+> modal's own success on the answer. Do **not** copy the surrounding
+> `if let Err(e) = … { tracing::error!(…) }` idiom — that silence is exactly what P4-15 exists to
+> remove, and a registration the project file never heard about reverts on the next open.
+
 ## Current state
 Not built. Core: `register_external` / `TableSpec`.
 

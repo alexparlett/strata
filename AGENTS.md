@@ -79,6 +79,31 @@ Things that must not regress. Each was fought for once already.
   `Chan::Persist`) that lets one subscription watch every tab's buffer. **The catalog is a gate,
   not just an input**: `Engine::register` deregisters before it re-infers, so nothing validates
   mid-scan and no false "not found" is ever produced.
+- **A log is recorded by its observer; there is no producer to register with.** The event log
+  (`state::log`, the drawer's Events tab) is the mirror image of the rule above, and the contrast
+  is the reasoning: a diagnostic is a pure function of two live inputs, so one driver can
+  re-derive it and no entry point needs enumerating — an **event** can be re-derived from nothing,
+  because it describes something already finished that may no longer exist to be re-read. So
+  whichever layer watched the fact records it (the scan pass per def, Save and the drop confirm
+  per mutation, the request keeper per settle, `cancel_run` per cancel), by capturing the `LogCtx`
+  at render time and calling `log_event`. Never add a producer hook, never re-derive an event from
+  live state, and never let a *log* entry be the only copy of a live fact — a registration failure
+  belongs on its catalog row, a run failure in the run's own query entry. Two corollaries that
+  cost time to rediscover: a cancel is logged at the **cancel**, since clearing the tab's trigger
+  unmounts the press's keeper in the same pass and the `Err("cancelled")` settle lands
+  unsubscribed; and an entry carries a **level** (the sheet's four semantic slots) but no
+  `origin`, because the message already names its subject and a structured copy of that is a
+  second copy that can disagree with it.
+- **A stopped run is not a failed one, and `engine::stopped_on_purpose` is the only thing that
+  knows which is which.** The engine settles **three** such strings, not one — `cancelled` (an
+  abort), `superseded by a newer run` (a press that finished after a newer one replaced it) and
+  `superseded by a newer scan` (the profile equivalent) — each behind a named const beside the code
+  that produces it. Never string-match the engine's prose at a call site: the event log tested
+  `e == "cancelled"` and so logged a *supersede* as a red error reading "superseded by a newer run",
+  while the inspector's scan zone kept a second copy of the rule (`== "cancelled" ||
+  starts_with("superseded")`) that happened to be right. Two copies, one already drifted; both now
+  call the predicate. A surface showing a settled `Err` must map every one of them to something the
+  user reads as "you stopped this", never as a fault — and none of them may reach Problems.
 - **Problems is the SQL-validation surface; a run failure is the results pane's.** A failure
   belongs to a run, not to the text — it can describe SQL the buffer no longer holds, it can't
   self-clear by typing, and `cancel`/supersede settle `Err("cancelled")`/`Err("superseded")`

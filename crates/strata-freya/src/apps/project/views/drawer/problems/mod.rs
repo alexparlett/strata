@@ -24,6 +24,7 @@
 
 use freya::prelude::*;
 use freya::radio::use_radio;
+use strata_core::util::plural;
 use strata_model::{Diagnostic, Severity, TabId};
 
 use super::{DrawerBody, DrawerCount, DrawerEmpty, DrawerTheme};
@@ -145,10 +146,7 @@ impl KeyExt for Group {
 
 impl Component for Group {
     fn render(&self) -> impl IntoElement {
-        let tally = match self.group.rows.len() {
-            1 => "1 problem".to_string(),
-            n => format!("{n} problems"),
-        };
+        let tally = plural(self.group.rows.len(), "problem");
 
         rect()
             .width(Size::fill())

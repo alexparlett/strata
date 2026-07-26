@@ -14,11 +14,12 @@
 //! its guarantor must live exactly as long as the open project, not as long as whichever
 //! layout happens to show the workbench.
 //!
-//! The pin also owns **history recording** (P4-14): it observes the press settle even
-//! while its tab is backgrounded, so a successful run lands in history at its real
-//! completion time rather than whenever the tab is next revisited. (One narrow edge
-//! remains: a run whose settle lands in the same update pass that unmounts its pin — a
-//! supersede at the instant of completion — is not recorded.)
+//! The pin is therefore also the app's **settle observer**, and owns the two records a run
+//! leaves behind: **history** (P4-14, successful data runs only) and the **event log**
+//! (P3-13, every outcome). It observes the press settle even while its tab is backgrounded,
+//! so both land at the run's real completion time rather than whenever the tab is next
+//! revisited. (One narrow edge remains for both: a run whose settle lands in the same update
+//! pass that unmounts its pin — a supersede at the instant of completion — is not recorded.)
 
 use freya::prelude::*;
 use freya::query::use_query;
@@ -27,7 +28,7 @@ use strata_model::TabId;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::QuerySpec;
-use crate::apps::project::state::{use_history_recording, Chan, SessionState};
+use crate::apps::project::state::{use_history_recording, use_run_logging, Chan, SessionState};
 
 /// One keeper per open tab, rendered invisibly at the project root. Subscribes the tab
 /// *set* only (`Chan::Tabs`); each keeper tracks its own tab's request on its own channel,
@@ -109,6 +110,11 @@ impl Component for RequestPin {
         let engine = use_consume::<EngineCtx>();
         let query = use_query(self.spec.query(&engine));
         use_history_recording(query, self.spec.run, self.spec.sql.clone());
+        // …and the press's outcome into the event log (P3-13), on the same terms and for the same
+        // reason: this pin outlives its tab's visibility, so a backgrounded run is recorded when
+        // it actually settles. Unlike history, both arms are recorded — a run that failed or was
+        // cancelled is exactly what a log is read for.
+        use_run_logging(query);
         rect()
     }
 

@@ -1169,6 +1169,9 @@
       "message_color": {
         "reference": "text_secondary"
       },
+      "divider_fill": {
+        "reference": "border_disabled"
+      },
       "empty_color": {
         "reference": "text_muted"
       }

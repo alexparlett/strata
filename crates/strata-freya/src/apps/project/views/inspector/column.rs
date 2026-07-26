@@ -25,6 +25,7 @@ use freya::prelude::*;
 use freya::query::QueryStateData;
 use freya::radio::{use_radio_station, RadioStation};
 use strata_core::engine::profile::CatalogProfile;
+use strata_core::engine::stopped_on_purpose;
 use strata_core::util::iso8601;
 use strata_model::{CatalogKind, Origin};
 
@@ -612,12 +613,12 @@ const NESTED_NOTE: &str =
 ///
 /// `cancelled` is what a press of Cancel settles — and, for the moment before the store drops the
 /// request, what a scan aborted by a re-registration settles. `superseded` is a re-scan replacing
-/// this one. Neither is news the user needs told: they asked for it, or the app did on their
-/// behalf. Both strings are the engine's, and pinned by its own tests
-/// (`engine::tests::a_scan_is_work_in_flight_and_cancel_stops_it`).
-fn stopped_on_purpose(error: &str) -> bool {
-    error == "cancelled" || error.starts_with("superseded")
-}
+/// this one. Neither is news the user needs told: they asked for it, or the app did on their behalf.
+///
+/// The rule itself is the **engine's** (`engine::stopped_on_purpose`), because the strings are: this
+/// used to be a local `== "cancelled" || starts_with("superseded")`, and the event log grew a second
+/// copy that had already drifted (it caught the cancel but not the supersede). One definition, beside
+/// the constants that produce it.
 
 /// The zone's frame: the eyebrow (with whatever the scan half puts beside it), the facts box,
 /// the completeness bar, and a tail.
@@ -932,12 +933,17 @@ mod tests {
 
     /// Settled numbers win over anything held — that is what "something better replaced them"
     /// means.
+    ///
+    /// The settled profile is **cloned, not rebuilt**: `profile()` stamps `at: SystemTime::now()`
+    /// and `CatalogProfile`'s `PartialEq` includes it, so two `profile(9)` calls compared equal only
+    /// while both landed on the same instant — a ~1-in-12 flake, found when a full-suite run lost
+    /// the race.
     #[test]
     fn settled_numbers_replace_the_held_ones() {
         let previous = profile(5);
         let fresh = profile(9);
         assert_eq!(
-            shown(&Scan::Done(profile(9)), Some(&previous), true),
+            shown(&Scan::Done(fresh.clone()), Some(&previous), true),
             Shown::Facts(&fresh)
         );
     }

@@ -26,7 +26,9 @@ cost confirm on a first scan (**P3-10** ✅). The bottom drawer has its first bo
 fills it with **every** open tab's live diagnostics, grouped by tab and pressable to switch — and
 rebuilt the producer behind it (one driver, a per-tab stamp, the catalog as a gate) plus the three
 pieces P3-11 deferred to its first consumer. It also gave the drawer its own component theme and
-the rail its error badge. Events and History are still empty frames.
+the rail its error badge. **P3-13** ✅ fills the second body with the window's **event log** — and
+builds the store state-arch §8 only sketched, plus the drawer's first working **Clear**. History is
+still an empty frame.
 
 > **Only real facts** (P3-08 · DEV_TASKS U9). Every number in the inspector was *read*, never
 > derived from the rows on screen — the Dioxus panel once computed them off the current page of the
@@ -93,6 +95,15 @@ the rail its error badge. Events and History are still empty frames.
 > new rail badge so they cannot disagree), the Clear show/hide rule (parked on Events/History
 > until they have a log to clear), and the shared frame (`drawer/frame.rs`).
 >
+> **A log is the opposite of a reconciliation** (P3-13). Diagnostics are a pure function of the
+> buffer and the catalog, so one driver can re-derive them and no entry point needs enumerating.
+> An **event** can be re-derived from nothing — it describes something that has already finished
+> and may no longer exist to be re-read — so it is recorded by whichever layer *observed* it, and
+> there is deliberately no producer hook. That is also why a cancel is logged at the cancel rather
+> than at the settle: clearing the tab's trigger unmounts the press's keeper in the same pass, so
+> `Err("cancelled")` settles unsubscribed. See its file for the full table of what records what,
+> and for why an entry carries a level but **no `origin`**.
+>
 > **The catalog is the `ProjectState` store**, not a query: the project file's defs plus what
 > registration learned (`Reg<T>`). There is no `FetchCatalog` capability and there must not be —
 > introspecting DataFusion would surface `__snap_*` result snapshots and hide failed rows. See
@@ -127,7 +138,7 @@ per-`Kind` hues, one shared group).
 | P3-10 | Profile-cost confirm | ✅ | U15 | P3-09 |
 | P3-11 | Drawer scaffold (tabbed bottom panel) | ✅ | U10 | P3-01 |
 | P3-12 | Drawer — Problems tab + the diagnostics architecture | ✅ | U10 | P3-11/P2-18/P2-01 |
-| P3-13 | Drawer — Events tab | ⬜ | U10 | P3-12 |
+| P3-13 | Drawer — Events tab | ✅ | U10 | P3-12 |
 | P3-14 | Drawer — History tab | ⬜ | U10 | P3-12 |
 
 ## Legend

@@ -61,6 +61,12 @@ the launcher is the surface that needs it — `crate::platform::windows`:
    and skips a folder that won't resolve, and the launcher reports rather than opening a doomed
    window.
 
+   > **The write side is P4-15**, and the two should read as one policy. A file that won't *load*
+   > means the window can't exist, so it closes; a file that won't be *written* leaves a perfectly
+   > good window whose durable copy is behind — recoverable, and so a visible standing indication
+   > rather than a close. Settle the wording together: a user who cannot read and a user who cannot
+   > write should not be told in two unrelated registers.
+
 6. ✅ **Quit vs. close, and reopen-on-startup** — see Current state. `Command::Quit` (⌘Q) is now its
    own command, distinct from `Command::CloseProject` (⇧⌘W).
 

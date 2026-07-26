@@ -510,13 +510,14 @@ strata_components! {
         format_parquet_color, format_csv_color, format_json_color, format_arrow_color,
         format_view_color,
     },
-    // The bottom drawer (P3-01 shell + P3-12 Problems): its surface and the rule under the
-    // header, the header's title, and the Problems list's text ramp — a group header's glyph /
-    // name / tally, a row's message, and the clean state's copy. The severity ramp is NOT here:
-    // error / warning / info / success are semantic and come off the sheet wherever they appear.
+    // The bottom drawer (P3-01 shell + P3-12 Problems + P3-13 Events): its surface and the rule
+    // under the header, the header's title, the Problems list's text ramp — a group header's glyph
+    // / name / tally, a row's message, and the clean state's copy — and the in-list hairline
+    // between Events rows. The severity ramp is NOT here: error / warning / info / success are
+    // semantic and come off the sheet wherever they appear.
     "drawer" => DrawerThemePreference {
         background, border_fill, label_color, group_icon_color, group_color, meta_color,
-        message_color, empty_color,
+        message_color, divider_fill, empty_color,
     },
     // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
     // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and

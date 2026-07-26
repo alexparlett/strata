@@ -17,6 +17,14 @@ phase is the settings **categories** (P4-04…P4-09) and the remaining windows: 
 modal — plus P4-13's open/create UI. The Dioxus app shipped all of this (W1–W4, D6–D8) — this is
 the Freya rebuild.
 
+> **Pull P4-15 before the remaining writers.** `.strata` write failures are reported through
+> `tracing` and nowhere the user can see, and **P4-10 / P4-11 / P4-12 each add a new mutation
+> site** whose surrounding idiom is exactly that silence. P3-13 fixed the three def-mutation paths
+> it touched (Save, Save-as-view, drop) and gave them one helper; P4-15 generalises it, covers the
+> session / history / app-config writers, and settles what the UI says while a write is failing.
+> It is the *write*-side counterpart to **P4-01 item 5** (a file that won't load closes the
+> window) — and deliberately not a phase-5 item: P5 is design polish, not resiliency.
+
 ## Tasks
 
 | # | Task | Status | DEV_TASKS | Depends on |
@@ -35,6 +43,7 @@ the Freya rebuild.
 | P4-12 | Import (read) options (CSV/JSON) | ⬜ | D8 | P4-11 |
 | P4-13 | Open / create a project (`.strata/` load) | 🟡 internals + the open path done (`OpenPref` honoured everywhere; This Window = keyed remount); **New Project** UI remains | lifecycle | P4-01 · *pull early* |
 | P4-14 | Session persistence + autosave | 🟡 tabs + history + window geometry done (load + autosave, incl. a final save on close/re-root); layout awaits its store | lifecycle | P4-13 |
+| P4-15 | `.strata` write resiliency (one funnel, nothing silent) | ⬜ **pull before P4-10/11/12** | lifecycle | P4-13, P4-14, P3-13 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

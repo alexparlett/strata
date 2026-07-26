@@ -39,7 +39,8 @@ use status_bar::StatusBar;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{PageSpec, QueryOutcome, QuerySpec, RunId};
-use crate::apps::project::state::{Chan, SessionState};
+use crate::apps::project::state::{Chan, LogCtx, SessionState};
+use crate::apps::project::views::workbench::editor::actions;
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 pub use cell_view::CellViewThemePreference;
@@ -269,16 +270,17 @@ impl Component for ResultsBody {
         // Cancel = abort engine-side (S14: tag-guarded, a stale press can't kill a newer run)
         // + clear this tab's Run trigger, unmounting this body back to the empty state. The
         // query entry settles `Err("cancelled")` unobserved — a new press is a fresh nonce
-        // anyway.
+        // anyway — which is why `cancel_run` is also where the cancel is *logged* (P3-13).
+        //
+        // Through `actions::cancel_run`, the toolbar's Cancel path: one implementation, so the
+        // two controls can't drift (this body had its own copy of the same two steps, which is
+        // how one of them would have ended up not recording anything).
         let session = use_radio::<SessionState, Chan>(Chan::Request(ws));
+        let log = use_consume::<LogCtx>();
         let cancel = {
             let engine = engine.clone();
             let run = self.spec.run;
-            let mut session = session;
-            move |()| {
-                engine.cancel(ws.into(), run.into());
-                session.write_channel(Chan::Request(ws)).clear_request(ws);
-            }
+            move |()| actions::cancel_run(&engine, session, log, ws, run)
         };
 
         let reader = query.read();
