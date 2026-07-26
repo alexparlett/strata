@@ -79,7 +79,18 @@ What a silent failure costs, per mutation (worked through in the P3-13 session):
    default rather than by decision* — pick one and record the reasoning here. Note the constraint:
    `save_defs` writes `self.defs()`, a **pure projection of the store**, so the store must change
    before there is anything to write; "write first, then mutate" is not available.
-5. **Which window hears about an app-config failure?** The config store is app-global; the event
+5. **Adopt the export's failure path** (P4-10, already shipped). The Export window records both
+   arms straight into P3-13's log — `log_event(log, LogLevel::Ok, "Exported n rows to <path>")`
+   and an `Error` row on failure (`apps/export/views/footer.rs`), skipping
+   `stopped_on_purpose` settles. It does that because this funnel did not exist yet; P4-10's own
+   file said to route through here once it does.
+
+   **But check whether it belongs**, rather than folding it in reflexively: an export writes to a
+   destination the *user picked*, not into `.strata`, so items 3 and 4 don't apply to it — there
+   is no standing "the project is behind" condition and nothing to roll back. It may be that the
+   funnel is the right home for the reporting shape and the wrong home for this writer. Decide,
+   and record which.
+6. **Which window hears about an app-config failure?** The config store is app-global; the event
    log is per-window. Options: every open window's log, the focused window's, or neither (an inline
    error on the Settings surface that owns the edit — P4-04..P4-09). Settle it here; a settings
    write that fails while the Settings window is open should not be reported only in a project

@@ -233,6 +233,7 @@ impl Component for ResultsToolbar {
                                 launch.app,
                                 launch.engine,
                                 launch.target,
+                                launch.log,
                             );
                         }
                     }),

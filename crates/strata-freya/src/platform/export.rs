@@ -18,6 +18,7 @@ use freya::winit::window::WindowId;
 
 use crate::apps::export::{ExportApp, ExportTarget};
 use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::LogCtx;
 use crate::platform::windows::{register, WindowKind};
 use crate::state::AppCtx;
 
@@ -26,13 +27,20 @@ use crate::state::AppCtx;
 /// `platform` is taken from the caller's component scope (the results toolbar's render), which
 /// is both how the callback learns *which* window asked and why this can be called from an
 /// event handler with no scope of its own.
-pub fn open_export(platform: Platform, app: AppCtx, engine: EngineCtx, target: ExportTarget) {
+pub fn open_export(
+    platform: Platform,
+    app: AppCtx,
+    engine: EngineCtx,
+    target: ExportTarget,
+    log: LogCtx,
+) {
     // The receiver is dropped: the work happens inside the callback and nothing waits on it.
     drop(platform.post_callback(move |owner, ctx| {
         let id = ctx.launch_window(ExportApp::window(
             app.clone(),
             engine.clone(),
             target.clone(),
+            log,
             owner,
         ));
         // Registered here rather than left to the window's own `use_register_window`, which

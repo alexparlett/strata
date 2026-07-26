@@ -35,6 +35,7 @@ use strata_core::engine::SnapshotPin;
 
 use crate::apps::export::views::{ExportBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::LogCtx;
 use crate::keymap::on_commands;
 use crate::platform::{self, WindowKind};
 use crate::state::{use_share_config, AppCtx};
@@ -94,6 +95,10 @@ pub struct ExportLaunch {
     pub target: ExportTarget,
     pub engine: EngineCtx,
     pub app: AppCtx,
+    /// The **project window's** event log (P3-13). An export is a write the user asked for, so
+    /// both arms are recorded there — and it has to be the opener's log, because this window
+    /// closes itself on success and the user is looking at that one.
+    pub log: LogCtx,
 }
 
 /// Compares on the **target** alone. The other two are the window's own handles — one engine,
@@ -158,6 +163,8 @@ pub struct ExportApp {
     /// reaching back across the window boundary.
     pub engine: EngineCtx,
     pub target: ExportTarget,
+    /// Where this export's outcome is recorded — the opener's log, not this window's.
+    pub log: LogCtx,
     /// The window this one belongs to. Carried rather than looked up because the root's own
     /// `use_register_window` re-reports its kind, and an entry that forgot its owner would stop
     /// this window closing with the project window it is exporting from.
@@ -169,6 +176,7 @@ impl ExportApp {
         app: AppCtx,
         engine: EngineCtx,
         target: ExportTarget,
+        log: LogCtx,
         owner: WindowId,
     ) -> WindowConfig {
         // Match the theme's window body so a resize doesn't flash the default white — through
@@ -182,6 +190,7 @@ impl ExportApp {
             app,
             engine,
             target,
+            log,
             owner,
         })
         .with_title("Export results")
@@ -212,11 +221,14 @@ impl App for ExportApp {
             let app = self.app.clone();
             move || app
         });
-        // The engine, so the footer's Export can call the facade directly.
+        // The engine, so the footer's Export can call the facade directly, and the opener's
+        // log, so it can record the outcome there.
         use_provide_context({
             let engine = self.engine.clone();
             move || engine
         });
+        let log = self.log;
+        use_provide_context(move || log);
         // Join the live window registry, so a second press of Download focuses this window
         // rather than opening another, and so it closes with the project window that owns it.
         let owner = self.owner;

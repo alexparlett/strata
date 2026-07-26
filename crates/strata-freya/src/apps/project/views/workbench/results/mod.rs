@@ -300,6 +300,7 @@ impl Component for ResultsBody {
         // toolbar is a shallow, known consumer, which is props' case and not context's
         // (`AGENTS.md` §4).
         let export_app = use_consume::<AppCtx>();
+        let export_log = use_consume::<LogCtx>();
         let export_engine = engine.clone();
         let export_target = |rows: &QueryPage| -> Option<ExportLaunch> {
             rows.output.snapshot.map(|snapshot| ExportLaunch {
@@ -315,6 +316,7 @@ impl Component for ResultsBody {
                 },
                 engine: export_engine.clone(),
                 app: export_app.clone(),
+                log: export_log,
             })
         };
 

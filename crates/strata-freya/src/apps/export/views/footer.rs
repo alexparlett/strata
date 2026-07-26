@@ -19,9 +19,11 @@ use crate::apps::export::{
     model::thousands, ExportCtx, ExportThemePartial, ExportThemePreference, Status,
 };
 use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::{log_event, LogCtx, LogLevel};
 use crate::components::divider::Divider;
 use crate::components::typography::{Control, Path};
 use crate::components::ACTION_HEIGHT;
+use strata_core::engine::stopped_on_purpose;
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`).
 const FOOTER_PADDING: Gaps = Gaps::new(12., 16., 12., 16.);
@@ -35,6 +37,7 @@ impl Component for Footer {
         let error = use_theme().read().colors().error;
         let ctx = use_consume::<ExportCtx>();
         let engine = use_consume::<EngineCtx>();
+        let log = use_consume::<LogCtx>();
         let platform = use_hook(Platform::get);
 
         let status = ctx.status.read().clone();
@@ -84,7 +87,7 @@ impl Component for Footer {
             .height(Size::px(ACTION_HEIGHT))
             .enabled(!writing)
             .on_press(move |_: Event<PressEventData>| {
-                run_export(ctx, engine.clone(), platform.clone());
+                run_export(ctx, engine.clone(), log, platform.clone());
             })
             .child(Control::new(if writing {
                 "Exporting…"
@@ -114,7 +117,7 @@ impl Component for Footer {
 
 /// Ask for a destination, then write. Spawned, because both halves wait: the dialog on the
 /// user, the `COPY` on the engine.
-fn run_export(mut ctx: ExportCtx, engine: EngineCtx, platform: Platform) {
+fn run_export(mut ctx: ExportCtx, engine: EngineCtx, log: LogCtx, platform: Platform) {
     let (draft, target) = (ctx.draft.peek().clone(), ctx.target.peek().clone());
     let partitioned = draft.partition.is_active();
     let suggested = draft.suggested_name(&target);
@@ -153,12 +156,30 @@ fn run_export(mut ctx: ExportCtx, engine: EngineCtx, platform: Platform) {
 
         ctx.status.set(Status::Writing);
         match engine.export(target.snapshot, spec).await {
-            // Done: the file is on disk and there is nothing left to decide here. (The
-            // confirmation belongs in the Events drawer — P3-13 — which is where every other
-            // completed action will report; there is no toast surface yet, and inventing one
-            // for this window alone is the sort of local fold that later has to be undone.)
-            Ok(_) => platform.close_current_window(),
-            Err(why) => ctx.status.set(Status::Failed(why)),
+            // Done. The confirmation goes to the **project window's** event log (P3-13), not
+            // here: this window closes itself, so a line shown in it would vanish with it —
+            // and an export is a write the user asked for, which is exactly what that log is.
+            Ok((path, rows)) => {
+                log_event(
+                    log,
+                    LogLevel::Ok,
+                    format!("Exported {} rows to {path}", thousands(rows)),
+                );
+                platform.close_current_window();
+            }
+            // A failure is recorded *and* kept on screen: the log says it happened, the footer
+            // says what to do about it, and the window stays so the user can change something
+            // and retry without rebuilding the whole spec.
+            //
+            // A stopped call is not a fault (`stopped_on_purpose`) — nothing cancels an export
+            // today, but the engine can still settle `CANCELLED` if its runtime goes down with
+            // the window, and reporting that as an error would be a lie.
+            Err(why) => {
+                if !stopped_on_purpose(&why) {
+                    log_event(log, LogLevel::Error, format!("Export failed: {why}"));
+                }
+                ctx.status.set(Status::Failed(why));
+            }
         }
     });
 }

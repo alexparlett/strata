@@ -94,10 +94,15 @@ a window is opened *on a result*, so focusing an existing one would show the wro
 - 55 tests: 19 model, 16 preview, 20 end-to-end (`tests.rs` — draft → spec → `Engine::export`
   → a real file in a temp dir → read back), plus 18 engine round-trips in core.
 
-## Still to build / decide
-- The success confirmation. On a successful write the window closes and says nothing — there
-  is no toast surface yet. It belongs in the **Events drawer (P3-13)**; wire it there rather
-  than folding a local one-off into this window.
+**The outcome is reported**, per this file's own directive: on success the project window's
+event log (P3-13) gets `Exported <n> rows to <path>` and this window closes; on failure it gets
+an `Error` row *and* the footer keeps the message, so the user can change one option and retry
+without rebuilding the spec. A `stopped_on_purpose` settle is not reported as a fault. P4-15's
+write funnel had not landed, so this calls `log_event` directly — noted in P4-15's build list,
+with the open question of whether an export (which writes where the *user* chose, not into
+`.strata`) belongs in that funnel at all.
+
+## Still to decide
 - The high-cardinality warning the canvas shows is deliberately absent (see below).
 
 The destination is the native `rfd` save-file / choose-folder dialog (partitioning writes a
