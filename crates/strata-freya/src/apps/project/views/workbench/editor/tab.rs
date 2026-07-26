@@ -130,7 +130,7 @@ impl Component for EditorTab {
                 .map(to_completion_item)
                 .collect::<Vec<_>>()
         };
-        let border = use_theme().read().colors.border;
+        let border = use_theme().read().colors().border;
 
         rect()
             .expanded()

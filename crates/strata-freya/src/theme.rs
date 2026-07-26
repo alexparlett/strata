@@ -2,10 +2,10 @@
 //!
 //! The theme **data model** (authored shapes, built-in loader, [`Typography`] resolution,
 //! schema generator) lives in [`strata_core::theme`] and is re-exported here; this module is
-//! the Freya-specific half: a theme file's `sheet` is copied 1:1 into Freya's `ColorsSheet`
-//! (the palette every component references), and each `components` entry — a tagged [`Pref`],
-//! `{ "specific": … }` or `{ "reference": "<sheet slot>" }` — is coerced into Freya
-//! `Preference`s and applied as a *partial* merge over Freya's registered default.
+//! the Freya-specific half: a theme file's `sheet` and `palette` become the [`StrataPalette`]
+//! Freya resolves references against, and each `components` entry — a tagged [`Pref`],
+//! `{ "specific": … }` or `{ "reference": "<slot>" }` — is coerced into Freya `Preference`s and
+//! applied as a *partial* merge over Freya's registered default.
 //!
 //! One `theme_registry!` invocation is the single source of truth: it generates both the
 //! runtime override application and the [`REGISTRY`] data that [`generate_schema`] turns into
@@ -32,7 +32,7 @@ use crate::state::{use_config_channel, ConfigChan, ConfigStation};
 use freya::prelude::*;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
 use strata_code_editor::prelude::EditorThemePreference;
-use strata_core::theme::{effective_id, ThemeRegistry, SLOTS};
+use strata_core::theme::{effective_id, ThemeRegistry};
 
 pub use strata_core::theme::{
     resolve_typography, typography, Kind, Mode, Pref, SheetDef, SpecificValue, StrataTheme,
@@ -68,6 +68,36 @@ impl Deref for ThemesCtx {
 
     fn deref(&self) -> &ThemeRegistry {
         &self.0
+    }
+}
+
+/// The theme's colour source: the 27 core slots every Freya component references, plus the
+/// theme file's own `palette` — the app-named tones the sheet has no slot for (a muted meta
+/// text, a hairline, an accent), so each is stated once and referenced everywhere instead of
+/// repeated as a `specific` per field.
+///
+/// Freya consults [`Palette::color`] only for names the core sheet doesn't carry, so a palette
+/// key can never shadow a slot a built-in component depends on. Unknown names resolve to
+/// **magenta** rather than Freya's `primary` fallback — same convention as [`pc`], so a typo in
+/// an open namespace is visible on screen (and warned about at load, via
+/// `StrataTheme::unresolved_references`).
+struct StrataPalette {
+    sheet: ColorsSheet,
+    named: BTreeMap<String, Color>,
+}
+
+impl Palette for StrataPalette {
+    fn sheet(&self) -> &ColorsSheet {
+        &self.sheet
+    }
+
+    fn color(&self, name: &str) -> Option<Color> {
+        Some(
+            self.named
+                .get(name)
+                .copied()
+                .unwrap_or(Color::from_rgb(255, 0, 255)),
+        )
     }
 }
 
@@ -164,7 +194,10 @@ pub fn strata_theme(t: &StrataTheme) -> Theme {
     // Freya's `Theme.name` is `&'static str`; the id is a runtime string (built-in or custom),
     // so leak it once (negligible, lives for the program).
     th.name = Box::leak(t.id.clone().into_boxed_str());
-    th.colors = to_colors_sheet(&t.sheet);
+    th.palette = Box::new(StrataPalette {
+        sheet: to_colors_sheet(&t.sheet),
+        named: t.palette.iter().map(|(k, v)| (k.clone(), pc(v))).collect(),
+    });
     apply_component_overrides(&mut th, &t.components, &t.fonts);
     register_component_themes(&mut th, &t.components, &t.fonts);
     // Install the resolved type scale onto the theme itself (its `Box<dyn Any>` component store), so
@@ -553,7 +586,7 @@ pub fn generate_schema() -> serde_json::Value {
 fn set_color(dst: &mut Preference<Color>, f: &BTreeMap<String, Pref>, key: &str) {
     if let Some(p) = f.get(key) {
         *dst = match p {
-            Pref::Reference(slot) => Preference::Reference(sheet_slot(slot)),
+            Pref::Reference(slot) => Preference::reference(slot.clone()),
             Pref::Specific(SpecificValue::Color(s)) => Preference::Specific(pc(s)),
             _ => Preference::Specific(Color::from_rgb(255, 0, 255)),
         };
@@ -602,16 +635,6 @@ fn set_corner(dst: &mut Preference<CornerRadius>, f: &BTreeMap<String, Pref>, ke
     if let Some(Pref::Specific(SpecificValue::Scalar(n))) = f.get(key) {
         *dst = Preference::Specific(CornerRadius::new_all(*n));
     }
-}
-
-/// Map a `reference` slot name to the `&'static str` Freya's `Preference::Reference` needs
-/// (the 27 `ColorsSheet` slots; unknown → `primary`, so a typo shows).
-fn sheet_slot(s: &str) -> &'static str {
-    SLOTS
-        .iter()
-        .copied()
-        .find(|&slot| slot == s)
-        .unwrap_or("primary")
 }
 
 /// Parse an authored colour: `#rrggbb`, `#rrggbbaa`, or `rgba(r,g,b,a)`. Anything else →
@@ -667,6 +690,50 @@ mod tests {
                 committed, generated,
                 "theme.schema.json is stale — run `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`"
             );
+        }
+    }
+
+    /// Every [`SLOTS`] name must actually resolve through Freya's core-slot match. The two lists
+    /// are independent — ours gates `unresolved_references`, the fork's `core_slot` performs the
+    /// resolution — so without this a name could validate clean and still paint magenta.
+    ///
+    /// Works by resolving against a palette with **no** extended names: anything `core_slot`
+    /// doesn't know falls through to [`StrataPalette::color`], which answers magenta.
+    #[test]
+    fn slots_are_freya_core_slots() {
+        use super::{to_colors_sheet, StrataPalette};
+        use freya::prelude::{Color, ResolvablePreference};
+        use std::collections::BTreeMap;
+        use strata_core::theme::SLOTS;
+
+        let sheet = to_colors_sheet(&load("midnight").sheet);
+        let magenta = Color::from_rgb(255, 0, 255);
+        assert!(
+            !SLOTS.is_empty() && sheet.primary != magenta,
+            "the probe relies on the sheet carrying no magenta"
+        );
+        let palette = StrataPalette {
+            sheet,
+            named: BTreeMap::new(),
+        };
+        for slot in SLOTS {
+            let resolved: Color = Preference::reference(*slot).resolve(&palette);
+            assert_ne!(
+                resolved, magenta,
+                "SLOTS entry '{slot}' is not one of Freya's core slots"
+            );
+        }
+    }
+
+    /// Every `reference` in a built-in theme must name a sheet slot or one of that theme's own
+    /// `palette` keys. `reference` is an open namespace now, so the JSON schema can't enumerate
+    /// the valid targets — this is the check that replaces the closed enum it used to be, and it
+    /// is strictly stronger: it validates against the palette the theme actually declares.
+    #[test]
+    fn references_resolve() {
+        for id in ["midnight", "daylight"] {
+            let unresolved = load(id).unresolved_references();
+            assert!(unresolved.is_empty(), "{id}: {unresolved:?}");
         }
     }
 

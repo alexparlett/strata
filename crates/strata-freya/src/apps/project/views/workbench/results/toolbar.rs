@@ -51,10 +51,10 @@ impl Component for ResultsToolbar {
         let (bg, danger, accent, faint) = {
             let t = theme.read();
             (
-                t.colors.background,
-                t.colors.error,
-                t.colors.primary,
-                t.colors.text_placeholder,
+                t.colors().background,
+                t.colors().error,
+                t.colors().primary,
+                t.colors().text_placeholder,
             )
         };
         // The grid's shared selection (provided by the results pane) — cleared with the results so

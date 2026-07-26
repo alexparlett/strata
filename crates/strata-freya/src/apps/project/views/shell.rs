@@ -44,7 +44,7 @@ impl Component for Shell {
         // deriving only `Persist` — never wakes it, so the drag runs churn-free.
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let layout = radio.read().layout;
-        let border = use_theme().read().colors.border;
+        let border = use_theme().read().colors().border;
 
         // Sidebar / inspector panels: present only when open. Each wraps its shell in a sizing
         // probe (`on_sized`) that remembers the dragged width on `Chan::LayoutSize`.

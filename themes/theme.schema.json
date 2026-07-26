@@ -1631,12 +1631,18 @@
         }
       }
     },
-    "tokens": {
+    "palette": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/color"
+      }
+    },
+    "scale": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
         "additionalProperties": {
-          "$ref": "#/$defs/color"
+          "type": "number"
         }
       }
     },
@@ -1709,7 +1715,9 @@
       "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|rgba\\([^)]*\\))$"
     },
     "slot": {
-      "enum": [
+      "type": "string",
+      "description": "A core sheet slot, or a key of this theme's `palette`",
+      "examples": [
         "primary",
         "secondary",
         "tertiary",

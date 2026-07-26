@@ -85,7 +85,7 @@ impl Component for ProjectMenu {
         // it reads the sheet through the normal hook rather than inventing header-only theme
         // fields for colours the palette already names. The rows' tiles are `Avatar`'s theme and
         // the separators are `Divider::menu`'s.
-        let colors = use_theme().read().colors.clone();
+        let colors = use_theme().read().colors().clone();
 
         // This window's project — `ProjChan::Meta` is exactly "the identity changed".
         let project = use_radio::<ProjectState, ProjChan>(ProjChan::Meta);

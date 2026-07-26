@@ -82,7 +82,7 @@ pub fn use_catalog_actions() -> CatalogActions {
         rescan: use_catalog_rescan(),
         config: use_config_station(),
         drop_target: use_consume::<State<Option<DropTarget>>>(),
-        danger: use_theme().read().colors.error,
+        danger: use_theme().read().colors().error,
     }
 }
 

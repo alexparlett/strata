@@ -85,7 +85,8 @@ impl Component for ExplainPlan {
         let theme = get_theme!(&self.theme, ExplainPlanThemePreference, "explain_plan");
         let app_theme = use_theme();
         let (toolbar_bg, accent, error, count_color) = {
-            let c = &app_theme.read().colors;
+            let theme_ref = app_theme.read();
+            let c = theme_ref.colors();
             (c.background, c.primary, c.error, c.text_secondary)
         };
         let palette = PlanPalette {

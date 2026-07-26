@@ -29,9 +29,9 @@ impl Component for Inspector {
         let (bg, border, label_color) = {
             let t = theme.read();
             (
-                t.colors.surface_secondary,
-                t.colors.border,
-                t.colors.text_placeholder,
+                t.colors().surface_secondary,
+                t.colors().border,
+                t.colors().text_placeholder,
             )
         };
 

@@ -178,7 +178,7 @@ impl Dialog {
 impl Component for Dialog {
     fn render(&self) -> impl IntoElement {
         let theme = use_theme();
-        let c = theme.read().colors.clone();
+        let c = theme.read().colors().clone();
 
         let dismiss = self.on_dismiss.clone();
         let backdrop_dismiss = self.on_dismiss.clone();

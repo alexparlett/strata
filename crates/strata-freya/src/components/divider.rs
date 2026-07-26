@@ -102,7 +102,7 @@ impl Component for Divider {
         // Hooks run unconditionally and the fallback is chosen only *after* — a plain rule is
         // the sheet's line colour, a menu's is the menu card's hairline (so it reads on that
         // elevated surface in every theme, rather than each menu naming a colour).
-        let sheet_border = use_theme().read().colors.border;
+        let sheet_border = use_theme().read().colors().border;
         let menu_border = get_theme!(
             &None::<MenuContainerThemePartial>,
             MenuContainerThemePreference,

@@ -1,14 +1,19 @@
 # Strata (Freya) — theme spec
 
 A **native theme format for the Freya frontend**, authored directly against Freya's theming model — no lossy mapping.
-Three blocks:
+Four blocks:
 
-- **`sheet`** → copied 1:1 into Freya's `ColorsSheet` (the 27-slot palette). Every component's
+- **`sheet`** → the 27 core slots, copied 1:1 into Freya's `ColorsSheet`. Every component's
   `Reference("<slot>")` resolves against this at render, so it does most of the work.
+- **`palette`** → **app-named slots extending the sheet**, for the tones the 27 have no name for
+  (`text_muted`, `border_control`, `surface_hover`, `accent_violet`, …). References resolve against
+  the sheet **first**, then here — so a palette key can never shadow a core slot a built-in
+  component depends on. A colour used by more than one field belongs here, named once, rather than
+  repeated as a `specific` per field.
 - **`components`** → per-component overrides, keyed by **Freya's component key**
   (`"button"`, `"menu_container"`, `"switch"`, …). Each field is a **Preference**: a *Specific*
-  value or a *Reference* to a sheet slot. Overrides are **partial** — unspecified fields keep Freya's default. Our own
-  components (grid, editor, …) join this map once built with
+  value or a *Reference* to a sheet slot or palette key. Overrides are **partial** — unspecified
+  fields keep Freya's default. Our own components (grid, editor, …) join this map once built with
   `define_theme!`.
 - **`fonts`**.
 
@@ -16,7 +21,10 @@ Colours are `#rrggbb`, `#rrggbbaa`, or `rgba(r,g,b,a)`. Field names are `snake_c
 
 Midnight/Daylight ship built-in; custom themes load the same shape (roadmap: a plugin theme dir, like any IDE). Every
 theme file is validated by **`themes/theme.schema.json`** — reference it via `"$schema": "./theme.schema.json"` for
-editor autocomplete + validation.
+editor autocomplete + validation. Because `reference` is an open namespace (a theme names its own
+palette slots), the schema can't enumerate valid targets: a name that is neither a sheet slot nor a
+palette key paints **magenta** and is warned about at load
+(`StrataTheme::unresolved_references`, pinned for the built-ins by the `references_resolve` test).
 
 ---
 
@@ -101,12 +109,13 @@ Each field is a **tagged `Preference`** — an object with exactly one of `speci
 | `{ "specific": 14 }`                                      | `Preference::Specific(f32)` (`font_size`, `size`)                     |
 | `{ "specific": 8 }`                                       | `Preference::Specific(CornerRadius::new_all(8))` (`corner_radius`)    |
 | `{ "specific": 4 }` / `{ "specific": [6,12,6,12] }`       | `Preference::Specific(Gaps)` — all-sides / `[top,right,bottom,left]`  |
-| `{ "reference": "surface_tertiary" }`                     | `Preference::Reference("surface_tertiary")` — resolves from the sheet |
+| `{ "reference": "surface_tertiary" }`                     | `Preference::reference(..)` — a sheet slot, else a `palette` key       |
 
 The `specific` value's JSON type (string / number / array) is inferred, then coerced to the field's known type (see the
-table below). **References are colours-only** — Freya panics on a reference for a number/gaps/radius field. **Overrides
-are partial**: only the fields you list change; the rest keep Freya's default (which references the sheet, so still
-follows the palette).
+table below). **References are colours-only** — Freya panics on a reference for a number/gaps/radius field. (`Palette`
+carries a defaulted `scalar` hook for a future spacing/radius scale; nothing declares one yet, so don't author one.)
+**Overrides are partial**: only the fields you list change; the rest keep Freya's default (which references the sheet,
+so still follows the palette).
 
 ### Supported component keys + field types
 

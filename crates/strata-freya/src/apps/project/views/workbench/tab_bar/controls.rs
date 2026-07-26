@@ -81,7 +81,8 @@ struct NavPalette {
 impl NavPalette {
     fn read() -> Self {
         let theme = use_theme();
-        let c = &theme.read().colors;
+        let theme_ref = theme.read();
+        let c = theme_ref.colors();
         Self {
             dot_dirty: c.warning,
             dot_active: c.primary,

@@ -38,10 +38,10 @@ impl Component for Sidebar {
         let (bg, border, label_color, faint) = {
             let t = theme.read();
             (
-                t.colors.surface_secondary,
-                t.colors.border,
-                t.colors.text_placeholder,
-                t.colors.text_placeholder,
+                t.colors().surface_secondary,
+                t.colors().border,
+                t.colors().text_placeholder,
+                t.colors().text_placeholder,
             )
         };
 

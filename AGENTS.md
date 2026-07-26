@@ -113,6 +113,16 @@ Things that must not regress. Each was fought for once already.
   projections — subscribe to the channel and compute. Gotcha: copy `theme.peek().name` out before
   `theme.set(...)` — an if-condition temporary holds the read borrow across the write (runtime
   borrow panic on the same GenerationalBox).
+- **A repeated colour is a palette slot, never a repeated `specific`.** A theme file's colour
+  source is the 27-slot `sheet` **plus** its own `palette` of app-named slots, together forming the
+  `Palette` a `Theme` resolves references against (fork-side: `Theme.palette: Box<dyn Palette>`,
+  `sheet()` required so a custom palette can never break a built-in, `color()` open and consulted
+  only for non-core names). Authoring the same hex in two fields is the smell the palette exists to
+  remove — name it once and reference it. Two consequences to hold: `reference` is an **open**
+  namespace, so the schema can't enumerate targets — an unresolvable name paints magenta and warns
+  via `unresolved_references` (`references_resolve` pins the built-ins); and a colour is only one
+  token if it is one *per theme*, so collapse on the design source of truth (Midnight) and let the
+  others normalize onto it rather than freezing each theme's drift into separate specifics.
 - **Panel layout lives on `SessionState`** (not a peer store), so it rides `SessionSnapshot` +
   autosave and survives restart. Two channels, both `Persist`: `Chan::Layout` = structure,
   `Chan::LayoutSize` = sizes (nobody subscribes; a resize drag persists without re-rendering the

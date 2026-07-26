@@ -124,7 +124,7 @@ impl App for LauncherApp {
             // The window's ambient text colour. Every run that doesn't name one — the
             // wordmark, the nav pill's label and its glyph — inherits it; without it they
             // fall back to Freya's base-theme default rather than this sheet's ramp.
-            .color(use_theme().read().colors.text_primary)
+            .color(use_theme().read().colors().text_primary)
             .child(TitleBar)
             .child(
                 rect()

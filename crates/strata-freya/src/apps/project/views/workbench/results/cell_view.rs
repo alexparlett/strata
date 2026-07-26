@@ -81,7 +81,7 @@ impl Component for CellView {
         let mut close_hover = use_state(|| false);
         let theme = get_theme!(&self.theme, CellViewThemePreference, "cell_view");
         let sheet = use_theme();
-        let shadow = sheet.read().colors.shadow;
+        let shadow = sheet.read().colors().shadow;
         let mut open = self.open;
         let close = move |_: Event<PressEventData>| open.set(None);
 

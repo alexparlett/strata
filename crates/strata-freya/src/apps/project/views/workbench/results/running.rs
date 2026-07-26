@@ -59,7 +59,8 @@ impl Component for Running {
     fn render(&self) -> impl IntoElement {
         let theme = use_theme();
         let (title_color, sub_color, background) = {
-            let c = &theme.read().colors;
+            let theme_ref = theme.read();
+            let c = theme_ref.colors();
             (c.text_secondary, c.text_placeholder, c.surface_secondary)
         };
         // The Cancel control's own theme component — authored per theme in the file's

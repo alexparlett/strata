@@ -32,7 +32,7 @@ impl Component for ProjectsPane {
             LauncherThemePreference,
             "launcher"
         );
-        let colors = use_theme().read().colors.clone();
+        let colors = use_theme().read().colors().clone();
         let query = use_state(String::new);
 
         // Two subscriptions, one read: the recents move when a project is opened, pinned or
