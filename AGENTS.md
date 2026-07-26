@@ -279,11 +279,23 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
   against fork source and hand off to a Mac build (see CLAUDE.md's environment note).
+- **One Strata window across every session — enforced.** Several sessions can be live in several
+  worktrees, and each can build its own binary; a second instance clobbers the shared app config
+  (read once at startup, last writer wins for recents / settings / the open-project set). So
+  `.claude/hooks/block-second-strata.sh` refuses `cargo run` while any Strata is alive anywhere,
+  naming the worktree that owns it. A **refusal, not a kill**: the running window may be what the
+  user is looking at. This is a convention between agent sessions, *not* an app-level single-
+  instance lock — that is a real feature (one process, N windows, a second launch focuses) and
+  belongs to P4-01.
 - **No destructive git — now enforced, not merely agreed.** `git checkout`/`restore`/`reset`/
   `clean` are **blocked outright** for agents by a `PreToolUse` hook
   (`.claude/hooks/block-destructive-git.sh`, wired in `.claude/settings.json`). It reads the whole
   command string, so chaining one behind `&&`, `;` or `$(…)` does not get past it — which is
-  exactly how the rule was broken while it was only written down. Ask the user to run it, or reach
+  exactly how the rule was broken while it was only written down. Both hooks bound the verb with
+  "not an identifier character" on **each** side: the git one originally required whitespace-or-end
+  *after* the verb, so `git reset;`, `git clean|cat` and `$(git clean)` slipped through the very
+  chaining forms it claimed to catch (found while building the Strata hook, which had copied the
+  pattern). If you add a third hook, copy the fixed pattern and test the terminator forms. Ask the user to run it, or reach
   for something that destroys nothing: `git switch` to change branch, `git stash` to park work,
   `git diff` to inspect. Any other delete/overwrite of work you didn't just create still follows
   the original rule: **standalone**, with an explicit description, and not at all when there is
