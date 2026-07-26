@@ -54,6 +54,16 @@ jobs:
           # change (a path dep, not a lockfile entry) reuses the cache and only
           # rebuilds the fork crates.
           cache: true
+          # This action defaults `rustflags` to `-D warnings`, which would make CI
+          # assert something stricter than the check AGENTS.md §7 describes and
+          # every local `cargo test` runs. The first run of this workflow failed on
+          # exactly that: two long-standing warnings (a dead initial assignment in
+          # `drop_confirm.rs`, an unconstructed `CellRole::None`) became hard errors
+          # in a PR that changed no Rust at all. Denying warnings is a worthwhile
+          # policy but a separate decision - it needs those two resolved first, and
+          # one of them is a design call about a variant that is documented and
+          # deliberately unused. Empty keeps RUSTFLAGS unset.
+          rustflags: ''
 
       # `--workspace` rather than a bare `cargo test`: the root sets
       # `default-members = ["crates/strata-freya"]`, so a bare run would silently skip
