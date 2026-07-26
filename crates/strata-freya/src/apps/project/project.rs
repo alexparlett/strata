@@ -24,7 +24,8 @@ use crate::apps::project::state::{
     Chan, SessionState,
 };
 use crate::apps::project::views::{
-    CloseConfirm, DropConfirm, DropTarget, HeaderBar, OpenPrompt, Shell,
+    CloseConfirm, DropConfirm, DropTarget, HeaderBar, OpenPrompt, ProfileConfirm, ProfileTarget,
+    Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
@@ -388,6 +389,10 @@ impl Component for ProjectRoot {
         // like the close target above, because the dialog is mounted at this root and its
         // trigger is elsewhere — a catalog row's context menu sets it (P3-06).
         let drop_target = use_provide_context(|| State::create(None::<DropTarget>));
+        // The profile-cost slot (P3-10), on the same terms: the entry a *first* scan is being
+        // confirmed for. Its triggers are the catalog row menus and the inspector's scan card;
+        // a re-scan never fills it (`ProfileActions::ask`).
+        let profile_target = use_provide_context(|| State::create(None::<ProfileTarget>));
 
         // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
         // structural change and retire the engine state of tabs that are gone. One
@@ -421,6 +426,12 @@ impl Component for ProjectRoot {
             // catalog one in document order.
             .child(DropConfirm {
                 target: drop_target,
+            })
+            // The profile-cost confirm (P3-10). Last of the three, in the order their questions
+            // outrank each other: a running query, then a destructive catalog change, then a
+            // question about work the user is about to start.
+            .child(ProfileConfirm {
+                target: profile_target,
             })
             .child(HeaderBar::new(self.filled_by_app))
             .child(Shell::new())

@@ -7,9 +7,11 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+mod profile;
 mod run_query;
 mod validate;
 
+pub use profile::{use_profile, ProfileEntry, ProfileSpec, ScanId};
 pub use run_query::{
     FetchSnapshotPage, PageSpec, QueryMode, QueryOutcome, QuerySpec, RunId, RunQuery,
     DEFAULT_PAGE_SIZE,

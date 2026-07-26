@@ -21,7 +21,7 @@ use uuid::Uuid;
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
-use crate::apps::project::views::DropTarget;
+use crate::apps::project::views::{DropTarget, ProfileTarget};
 use crate::state::ConfigStation;
 use crate::theme::strata_theme;
 use strata_core::config::AppConfig;
@@ -174,7 +174,7 @@ fn app() -> impl IntoElement {
 
 /// What the test holds onto: the filter slot to type into, the inspected-column slot, the
 /// session + project stores to assert against (and, for validity, to mutate), and the
-/// drop-confirm slot a Drop item is supposed to set.
+/// drop-confirm / profile-confirm slots the destructive and scanning items are supposed to set.
 type Handles = (
     State<String>,
     State<Option<ColRef>>,
@@ -182,6 +182,7 @@ type Handles = (
     RadioStation<ProjectState, ProjChan>,
     State<Option<DropTarget>>,
     State<ScanRequest>,
+    State<Option<ProfileTarget>>,
 );
 
 /// A tall window so every row lays out (the pane's `ScrollView` keeps off-screen children in the
@@ -211,7 +212,16 @@ fn runner() -> (TestingRunner, Handles) {
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
-            (filter, selection, session, store, drop_target, rescan)
+            let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
+            (
+                filter,
+                selection,
+                session,
+                store,
+                drop_target,
+                rescan,
+                profile_target,
+            )
         },
         1.,
     )
@@ -669,7 +679,7 @@ fn failures_flag_at_once_but_a_wait_has_to_last_before_it_spins() {
 /// subscribes to TABLES as well as VIEWS.
 #[test]
 fn dropping_a_table_flags_the_views_that_read_it() {
-    let (mut runner, (.., mut store, _, _)) = runner();
+    let (mut runner, (.., mut store, _, _, _)) = runner();
     settle(&mut runner);
 
     assert!(
@@ -693,7 +703,7 @@ fn dropping_a_table_flags_the_views_that_read_it() {
 /// swapping one status for another.
 #[test]
 fn a_triangle_clears_when_the_row_registers() {
-    let (mut runner, (.., mut store, _, _)) = runner();
+    let (mut runner, (.., mut store, _, _, _)) = runner();
     settle(&mut runner);
 
     assert!(status_labels(&runner)
@@ -721,7 +731,7 @@ fn a_triangle_clears_when_the_row_registers() {
 /// than a coincidence of when the test looked.
 #[test]
 fn a_row_answered_inside_the_delay_never_spins() {
-    let (mut runner, (.., mut store, _, _)) = runner();
+    let (mut runner, (.., mut store, _, _, _)) = runner();
     settle(&mut runner);
 
     assert!(shows(&runner, "users"), "the def renders regardless");
@@ -758,7 +768,7 @@ fn spinners(runner: &TestingRunner) -> usize {
 /// instant ↻ is pressed.
 #[test]
 fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
-    let (mut runner, (.., mut store, _, _)) = runner();
+    let (mut runner, (.., mut store, _, _, _)) = runner();
     settle(&mut runner);
     let broken = "No such file or directory (os error 2)";
     assert!(status_labels(&runner).iter().any(|l| l == broken));
@@ -788,7 +798,7 @@ fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
 /// holding a verdict we now know to be wrong would be worse than the blink.
 #[test]
 fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
-    let (mut runner, (.., mut store, _, _)) = runner();
+    let (mut runner, (.., mut store, _, _, _)) = runner();
     settle(&mut runner);
 
     store.write_channel(ProjChan::Tables).reload_tables();
@@ -816,7 +826,7 @@ fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
 /// throughout — its wait never stopped, so re-arming it would blink the spinner instead.
 #[test]
 fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
-    let (mut runner, (.., mut store, _, _)) = runner();
+    let (mut runner, (.., mut store, _, _, _)) = runner();
     runner.sync_and_update();
     wait_out_the_spinner_delay(&mut runner);
     assert_eq!(
@@ -1000,7 +1010,7 @@ fn pressing_a_saved_query_row_opens_it_bound_by_id() {
 /// deliberately no second drop path — this is the assertion that pins it.
 #[test]
 fn drop_asks_the_confirm_and_leaves_the_catalog_alone() {
-    let (mut runner, (_, _, _, store, drop_target, _)) = settled();
+    let (mut runner, (_, _, _, store, drop_target, _, _)) = settled();
     right_click_row(&mut runner, "orders");
 
     click_text(&mut runner, "Drop table");
@@ -1016,18 +1026,154 @@ fn drop_asks_the_confirm_and_leaves_the_catalog_alone() {
     );
 }
 
+/// **Profile** asks the cost confirm (P3-10) rather than scanning, and the row is left carrying
+/// no request until that dialog says so. Same shape as Drop, and for the same reason: one entry
+/// point, shared with the inspector's scan card, so a full read of the user's data can never be
+/// started by a stray press.
+#[test]
+fn profile_asks_the_cost_confirm_rather_than_scanning() {
+    let (mut runner, (_, _, _, store, _, _, profile_target)) = settled();
+    right_click_row(&mut runner, "orders");
+
+    click_text(&mut runner, "Profile table");
+
+    assert_eq!(
+        profile_target.peek().as_ref().map(|t| t.name.clone()),
+        Some("orders".to_string()),
+        "the confirm was asked about `orders`: {:?}",
+        profile_target.peek()
+    );
+    assert_eq!(
+        store.peek().profile_scan(CatalogKind::Table, "orders"),
+        None,
+        "and nothing is scanning yet"
+    );
+
+    // A **view's** item asks about the view — the other section, and the kind that decides which
+    // channel the request lands on.
+    let (mut runner, (.., profile_target)) = settled();
+    right_click_row(&mut runner, "orders_daily");
+    click_text(&mut runner, "Profile view");
+    assert_eq!(
+        profile_target
+            .peek()
+            .as_ref()
+            .map(|t| (t.kind, t.name.clone())),
+        Some((CatalogKind::View, "orders_daily".to_string()))
+    );
+}
+
+/// A row the engine **refused** is not offered a scan. There is nothing behind it to read, so the
+/// scan could only fail — and it would fail out of sight, since the inspector shows a failed row's
+/// reason rather than any column a scan could report on. Asserted through the press, not the
+/// disabled dress: what matters is that nothing is asked for.
+#[test]
+fn a_refused_row_is_not_offered_a_scan() {
+    let (mut runner, (_, _, _, store, _, _, profile_target)) = settled();
+    assert_eq!(
+        store.peek().tables[0].def.name, "events",
+        "the refused row (`table_failed` in the fixture)"
+    );
+    right_click_row(&mut runner, "events");
+
+    click_text(&mut runner, "Profile table");
+
+    assert!(
+        profile_target.peek().is_none(),
+        "no confirm was raised: {:?}",
+        profile_target.peek()
+    );
+    assert_eq!(store.peek().profile_scan(CatalogKind::Table, "events"), None);
+}
+
+/// Once a row carries a request it **spins**, and the spinner is its own — the registration
+/// spinner beside it means something else entirely, and the two must be tellable apart.
+///
+/// A scan of a table that was never registered fails almost at once, which is exactly what makes
+/// this assertable: the glyph is up while the scan is in flight and gone the moment it settles,
+/// with no delay hold of its own.
+#[test]
+fn a_row_being_profiled_says_so_in_its_own_words() {
+    let (mut runner, (_, _, _, mut store, ..)) = settled();
+    let profiling = |runner: &TestingRunner| {
+        status_labels(runner)
+            .iter()
+            .filter(|l| *l == "Profiling…")
+            .count()
+    };
+    assert_eq!(profiling(&runner), 0);
+
+    store
+        .write_channel(ProjChan::Tables)
+        .request_profile(CatalogKind::Table, "orders");
+    // Two passes: one mounts the subscription, one renders what it says. The scan itself has not
+    // settled — its label is up because the query is in flight, not because time has passed.
+    runner.sync_and_update();
+    runner.sync_and_update();
+
+    assert_eq!(
+        profiling(&runner),
+        1,
+        "the row that was asked about, and only that row: {:?}",
+        status_labels(&runner)
+    );
+    // Deliberately no claim about `Loading…` here: `users` is left unanswered by the fixture, so
+    // whether *it* is spinning depends on whether 400ms of wall clock has passed — nothing to do
+    // with profiling. That the two spinners are distinguishable at all is the point, and it is
+    // `a_row_wearing_every_status_glyph_still_opens_its_own_menu` that pins it.
+}
+
+/// The row's trailing run is **three slots that come and go independently** — a profiling
+/// spinner, a registration status glyph, and the ⋮ button — and Freya assigns scopes by
+/// *position*. So the case with every slot filled has to keep working: `events` is a refused
+/// table (triangle) being profiled (spinner), and its ⋮ must still open its own menu rather than
+/// a scope some other element left behind.
+#[test]
+fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
+    let (mut runner, (_, _, _, mut store, ..)) = settled();
+    wait_out_the_spinner_delay(&mut runner);
+    store
+        .write_channel(ProjChan::Tables)
+        .request_profile(CatalogKind::Table, "events");
+    runner.sync_and_update();
+    runner.sync_and_update();
+    let labels = status_labels(&runner);
+    assert!(
+        labels.iter().any(|l| l == "Profiling…")
+            && labels
+                .iter()
+                .any(|l| l == "No such file or directory (os error 2)"),
+        "both glyphs are up: {labels:?}"
+    );
+
+    let before = texts(&runner);
+    press_row_actions(&mut runner, "events");
+
+    assert_eq!(
+        menu_items(&runner, &before),
+        vec![
+            "View table",
+            "Profile table",
+            "Refresh table",
+            "Configure",
+            "Drop table"
+        ],
+        "the ⋮ still belongs to `events`"
+    );
+}
+
 /// A view's Drop and a saved query's Delete go through the *same* slot, so the one dialog covers
 /// all three row kinds — a saved query by `id`, because that is its identity.
 #[test]
 fn dropping_a_view_and_deleting_a_query_use_the_same_confirm_slot() {
-    let (mut runner, (.., drop_target, _)) = settled();
+    let (mut runner, (.., drop_target, _, _)) = settled();
     right_click_row(&mut runner, "orders_daily");
     click_text(&mut runner, "Drop view");
     assert!(
         matches!(drop_target.peek().as_ref(), Some(DropTarget::View(n)) if n == "orders_daily")
     );
 
-    let (mut runner, (.., drop_target, _)) = settled();
+    let (mut runner, (.., drop_target, _, _)) = settled();
     right_click_row(&mut runner, "signup funnel");
     click_text(&mut runner, "Delete query");
     assert!(
@@ -1044,7 +1190,7 @@ fn dropping_a_view_and_deleting_a_query_use_the_same_confirm_slot() {
 /// input, and the commit, are the row's own, so they outlive the menu that started them.
 #[test]
 fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
-    let (mut runner, (_, _, _, store, _, _)) = settled();
+    let (mut runner, (_, _, _, store, _, _, _)) = settled();
     right_click_row(&mut runner, "signup funnel");
 
     click_text(&mut runner, "Rename");
@@ -1085,7 +1231,7 @@ fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
 /// Escape abandons a rename outright — the row comes back wearing the name it had.
 #[test]
 fn escape_abandons_a_rename() {
-    let (mut runner, (_, _, _, store, _, _)) = settled();
+    let (mut runner, (_, _, _, store, _, _, _)) = settled();
     right_click_row(&mut runner, "signup funnel");
     click_text(&mut runner, "Rename");
 
@@ -1119,7 +1265,7 @@ fn escape_abandons_a_rename() {
 /// reason the sidebar's own ↻ test asserts a request rather than a scan.
 #[test]
 fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
-    let (mut runner, (.., store, _, rescan)) = settled();
+    let (mut runner, (.., store, _, rescan, _)) = settled();
     assert_eq!(
         *rescan.peek(),
         ScanRequest::default(),

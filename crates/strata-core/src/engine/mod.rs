@@ -14,6 +14,10 @@
 //! workspace retires the previous snapshot at dispatch, cancel/cleanup retire
 //! partials, and dropping the engine clears its whole snapshot directory.
 //!
+//! Profiling ([`Engine::profile`]) is the third thing the engine tracks, beside runs and
+//! snapshots: one full scan per catalog entry, keyed by the entry rather than by a
+//! workspace, because a profile is a property of the *data* and not of any tab.
+//!
 //! The facade grows one method per feature that lands in the Freya app; the
 //! underlying logic lives in the sibling modules (`query`, `explain`, `catalog`,
 //! `export`, `profile`) as plain async functions over `&SessionContext`.
@@ -92,6 +96,19 @@ pub struct RunTag(pub u128);
 /// windows never collide.
 static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// An in-flight **profile scan** (D4): which dispatch it is, and the handle that cancels it.
+///
+/// Keyed by catalog entry rather than by workspace, because a profile belongs to the *data*:
+/// it is asked for from the catalog, cached per entry, and two tables profile concurrently.
+/// There is no snapshot — a scan materializes one aggregate row and returns it.
+struct ProfileRun {
+    /// Engine-unique, monotonic — the same "am I still the latest?" check [`InFlight`] uses,
+    /// for the same reason: a re-scan supersedes, and the superseded call must not tear down
+    /// the entry the newer one now owns.
+    dispatch: u64,
+    abort: AbortHandle,
+}
+
 /// A workspace's in-flight run or explain: which dispatch it is, the snapshot it is
 /// materializing (`None` for an explain), and the abort handle that cancels it.
 struct InFlight {
@@ -108,11 +125,15 @@ struct InFlight {
 }
 
 /// The engine's lifecycle bookkeeping, all under one lock (never held across an await):
-/// which run is in flight per workspace, and which snapshot each workspace currently owns.
+/// which run is in flight per workspace, which snapshot each workspace currently owns, and
+/// which catalog entries are being profiled.
 #[derive(Default)]
 struct Lifecycle {
     inflight: HashMap<WsId, InFlight>,
     current: HashMap<WsId, SnapshotId>,
+    /// In-flight profile scans by entry identity ([`fold_ident`] of the name — tables and
+    /// views share one namespace).
+    profiles: HashMap<String, ProfileRun>,
 }
 
 /// A window's engine. Create once per project window (cheap to share as `Arc<Engine>`);
@@ -213,12 +234,19 @@ impl Engine {
         self.publish_inflight(&lc);
     }
 
-    /// Publish `inflight`'s emptiness to the installed flag. Called from **every** mutation
-    /// of `Lifecycle::inflight`, with the lock held, so a reader can never see a flag that
-    /// disagrees with the map.
+    /// Publish "this engine has work in flight" to the installed flag. Called from **every**
+    /// mutation of `Lifecycle::inflight` / `Lifecycle::profiles`, with the lock held, so a
+    /// reader can never see a flag that disagrees with the maps.
+    ///
+    /// A **profile counts** (D4): a scan is the most expensive thing the app does, and closing
+    /// the window would throw it away — exactly what the confirm exists to ask about. The
+    /// per-tab probe below deliberately does not, because a profile is not a tab's work.
     fn publish_inflight(&self, lc: &Lifecycle) {
         if let Some(flag) = self.inflight_flag.get() {
-            flag.store(!lc.inflight.is_empty(), Ordering::Relaxed);
+            flag.store(
+                !lc.inflight.is_empty() || !lc.profiles.is_empty(),
+                Ordering::Relaxed,
+            );
         }
     }
 
@@ -435,11 +463,91 @@ impl Engine {
         }
     }
 
+    // --- profile ----------------------------------------------------------
+
+    /// Profile the catalog entry `name` — **one full scan, one aggregate, every column at
+    /// once** (D4, see [`profile`]). Works for a table or a view: a view has no footer at all,
+    /// so a scan is the only way it learns anything beyond a column's type.
+    ///
+    /// Deliberately expensive and deliberately opt-in: distinct counts can't be merged across
+    /// files, so there is no cheaper form. The UI confirms before a first scan (P3-10) and
+    /// caches the result until the entry changes.
+    ///
+    /// Superseded-by-dispatch like [`query`](Engine::query): a re-scan aborts the scan it
+    /// replaces, and the older call settles `Err("superseded by a newer scan")` rather than
+    /// tearing down the entry the newer one now owns. Dedup is the *caller's* (freya-query
+    /// keys the cache by the request), which is why two arrivals here mean two real requests.
+    pub async fn profile(&self, name: String) -> Result<profile::CatalogProfile, String> {
+        let key = fold_ident(&name);
+        let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
+        let task = {
+            let mut lc = self.lifecycle.lock().unwrap();
+            if let Some(prev) = lc.profiles.remove(&key) {
+                prev.abort.abort();
+            }
+            let ctx = self.ctx.clone();
+            let scanned = name.clone();
+            let task = self
+                .rt()
+                .spawn(async move { catalog::run_profile(&ctx, &scanned).await });
+            lc.profiles.insert(
+                key.clone(),
+                ProfileRun {
+                    dispatch,
+                    abort: task.abort_handle(),
+                },
+            );
+            self.publish_inflight(&lc);
+            task
+        };
+
+        let joined = task.await;
+
+        let mut lc = self.lifecycle.lock().unwrap();
+        let latest = lc.profiles.get(&key).map(|p| p.dispatch) == Some(dispatch);
+        if latest {
+            lc.profiles.remove(&key);
+        }
+        self.publish_inflight(&lc);
+        match joined {
+            Ok(res) if latest => res,
+            // Its numbers describe a scan the caller has already replaced.
+            Ok(_) => Err("superseded by a newer scan".into()),
+            Err(join) if join.is_cancelled() => Err("cancelled".into()),
+            Err(join) => Err(format!("profile task failed: {join}")),
+        }
+    }
+
+    /// Abort the profile scan of `name`, if one is running — `true` when something was
+    /// actually cancelled. The awaiting [`profile`](Engine::profile) settles `Err("cancelled")`.
+    ///
+    /// Unguarded by any nonce, unlike [`cancel`](Engine::cancel): a scan is keyed by the entry,
+    /// and every caller — the inspector's Cancel, and every catalog mutation that is about to
+    /// make the result a lie — means "stop scanning *this entry*".
+    pub fn cancel_profile(&self, name: &str) -> bool {
+        let mut lc = self.lifecycle.lock().unwrap();
+        let cancelled = match lc.profiles.remove(&fold_ident(name)) {
+            Some(run) => {
+                run.abort.abort();
+                true
+            }
+            None => false,
+        };
+        self.publish_inflight(&lc);
+        cancelled
+    }
+
     // --- catalog ----------------------------------------------------------
 
     /// (Re)register one external table from its spec, returning its inferred schema +
     /// free row count.
+    ///
+    /// Aborts the table's profile scan first: re-registration re-infers the schema from
+    /// whatever is on disk *now*, so a scan in flight is computing numbers about files the
+    /// register is replacing. Done here rather than left to the caller because it is engine
+    /// truth — every path that re-registers gets it, including ones not yet written.
     pub async fn register(&self, spec: TableSpec) -> Result<TableMeta, String> {
+        self.cancel_profile(&spec.name);
         let ctx = self.ctx.clone();
         self.rt()
             .spawn(async move { catalog::register_external(&ctx, &spec).await })
@@ -449,6 +557,7 @@ impl Engine {
 
     /// Drop a registered table.
     pub fn deregister(&self, table: &str) {
+        self.cancel_profile(table);
         let _ = self.ctx.deregister_table(table);
     }
 
@@ -461,6 +570,8 @@ impl Engine {
     /// The view's identity is then [`fold_ident(name)`](fold_ident), which is what the
     /// lookup below asks for.
     pub async fn create_view(&self, name: String, sql: String) -> Result<ViewMeta, String> {
+        // Redefining the view changes what a scan of it would even mean — see `register`.
+        self.cancel_profile(&name);
         let ctx = self.ctx.clone();
         self.rt()
             .spawn(async move {
@@ -504,6 +615,7 @@ impl Engine {
     /// Drop the SQL view `name` (idempotent — `IF EXISTS`). Quoted the same way
     /// [`create_view`](Engine::create_view) quoted it, so the drop names the same view.
     pub async fn drop_view(&self, name: String) -> Result<(), String> {
+        self.cancel_profile(&name);
         let ctx = self.ctx.clone();
         self.rt()
             .spawn(async move {
@@ -570,6 +682,9 @@ impl Drop for Engine {
         let mut lc = self.lifecycle.lock().unwrap();
         for (_, f) in lc.inflight.drain() {
             f.abort.abort();
+        }
+        for (_, p) in lc.profiles.drain() {
+            p.abort.abort();
         }
         lc.current.clear();
         // The window is going: whoever still holds the flag must not be told we're busy.
@@ -727,12 +842,17 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
 
 #[cfg(test)]
 mod tests {
+    use strata_model::StatKey;
+
     use super::*;
 
     /// Big enough that the first dispatch is still streaming when the second lands, and
     /// cheap to abort (the spool awaits per batch, so the abort takes effect at once).
     const SLOW: &str = "SELECT count(*) FROM generate_series(1, 50000000)";
     const FAST: &str = "SELECT 1 AS n";
+    /// A view body whose **profile** is still counting when a test acts on it: 50M distinct
+    /// values, aborted within a few dozen milliseconds, so the scan never accumulates far.
+    const SLOW_ROWS: &str = "SELECT * FROM generate_series(1, 50000000)";
 
     #[test]
     fn a_nameable_ident_is_emitted_bare_and_case_folded() {
@@ -941,17 +1061,10 @@ mod tests {
         }
     }
 
-    /// The "view as query" SQL has to *resolve*, not merely read well — the button drops
-    /// it into a scratch tab for the user to run. A table the user named `Regions`
-    /// registers as `regions` (`register_table` takes its `&str` through
-    /// `TableReference::parse_str`), so the generated `FROM` must say `regions`; the
-    /// always-quote helper this replaced printed `FROM "Regions"`, which plans against
-    /// nothing.
-    #[tokio::test]
-    async fn the_profile_sql_for_a_mixed_case_table_actually_runs() {
-        let eng = Engine::new(Default::default());
+    /// Register the `regions.csv` fixture (5 rows, `country` + `region`) under `name`.
+    async fn register_regions(eng: &Engine, name: &str) {
         eng.register(TableSpec {
-            name: "Regions".into(),
+            name: name.into(),
             paths: vec![format!(
                 "{}/tests/fixtures/loadfix/regions.csv",
                 env!("CARGO_MANIFEST_DIR")
@@ -961,10 +1074,20 @@ mod tests {
         })
         .await
         .expect("register");
+    }
 
-        let profile = catalog::run_profile(&eng.ctx, "Regions")
-            .await
-            .expect("profile");
+    /// The "view as query" SQL has to *resolve*, not merely read well — the button drops
+    /// it into a scratch tab for the user to run. A table the user named `Regions`
+    /// registers as `regions` (`register_table` takes its `&str` through
+    /// `TableReference::parse_str`), so the generated `FROM` must say `regions`; the
+    /// always-quote helper this replaced printed `FROM "Regions"`, which plans against
+    /// nothing.
+    #[tokio::test]
+    async fn the_profile_sql_for_a_mixed_case_table_actually_runs() {
+        let eng = Engine::new(Default::default());
+        register_regions(&eng, "Regions").await;
+
+        let profile = eng.profile("Regions".into()).await.expect("profile");
         assert!(
             profile.sql.contains("FROM regions"),
             "the folded name, bare: {}",
@@ -973,6 +1096,144 @@ mod tests {
         eng.query(WsId(1), RunTag(1), profile.sql.clone(), 10)
             .await
             .unwrap_or_else(|e| panic!("re-running the printed query: {e}\n{}", profile.sql));
+    }
+
+    /// A scan through the facade: the rows it read, and the per-type facts for the columns it
+    /// found. `regions.csv` is two `Utf8` columns, so each gets distinct / min / max and a
+    /// null count — and *not* mean / median, which are a type error on a string and would
+    /// fail the whole aggregate rather than one column (`profile::aggregates`).
+    #[tokio::test]
+    async fn a_scan_lands_the_per_type_facts_of_every_column() {
+        let eng = Engine::new(Default::default());
+        register_regions(&eng, "regions").await;
+
+        let profile = eng.profile("regions".into()).await.expect("profile");
+
+        assert_eq!(profile.rows, 5);
+        let keys = |col: &str| {
+            let mut keys: Vec<StatKey> = profile.cols[col].iter().map(|s| s.key).collect();
+            keys.sort_by_key(|k| format!("{k:?}"));
+            keys
+        };
+        for col in ["country", "region"] {
+            assert_eq!(
+                keys(col),
+                vec![StatKey::Distinct, StatKey::Max, StatKey::Min, StatKey::Nulls],
+                "{col}: a string column's facts, and no mean/median"
+            );
+        }
+        let stat = |col: &str, key: StatKey| {
+            profile.cols[col]
+                .iter()
+                .find(|s| s.key == key)
+                .map(|s| s.text.clone())
+                .unwrap_or_else(|| panic!("{col} has no {key:?}"))
+        };
+        assert_eq!(stat("region", StatKey::Distinct), "2", "EMEA and APAC");
+        assert_eq!(stat("region", StatKey::Min), "APAC");
+        assert_eq!(stat("region", StatKey::Nulls), "0");
+        assert!(
+            profile.cols["country"].iter().all(|s| s.exact),
+            "computed, not read from a truncatable footer"
+        );
+    }
+
+    /// Cancel, and what the flag says while a scan runs. Both halves are the point: a scan is
+    /// the most expensive thing the app does, so the window-close confirm counts it as work in
+    /// flight (D4) — and the Cancel in the inspector's running state has to actually stop it.
+    ///
+    /// The subject is a **view** over `generate_series`, which is also the case a scan matters
+    /// most for (a view has no footer at all): 50M rows of `count(distinct …)` is comfortably
+    /// slow enough to observe, and aborts at the next await.
+    #[tokio::test]
+    async fn a_scan_is_work_in_flight_and_cancel_stops_it() {
+        let eng = Engine::new(Default::default());
+        let flag = Arc::new(AtomicBool::new(false));
+        eng.watch_inflight(flag.clone());
+        eng.create_view("slow".into(), SLOW_ROWS.into())
+            .await
+            .expect("create view");
+        assert!(!flag.load(Ordering::Relaxed), "idle to begin with");
+
+        let observe = async {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            let flagged = flag.load(Ordering::Relaxed);
+            let cancelled = eng.cancel_profile("slow");
+            (flagged, cancelled)
+        };
+        let (settled, (flagged, cancelled)) = tokio::join!(eng.profile("slow".into()), observe);
+
+        assert!(flagged, "a running scan is work in flight");
+        assert!(cancelled, "…and the cancel found it");
+        assert_eq!(settled.as_ref().err().map(String::as_str), Some("cancelled"));
+        assert!(!flag.load(Ordering::Relaxed), "cleared once it settled");
+        assert!(
+            !eng.cancel_profile("slow"),
+            "nothing left in flight to cancel"
+        );
+        // A tab's own probe is untouched: a profile is not a tab's work, so the *tab*-close
+        // confirm must not count it (D4).
+        assert!(!eng.is_running(WsId(1)));
+    }
+
+    /// Two things at once, because they are the same bookkeeping. A **re-scan supersedes**: the
+    /// older call reports no numbers, and the newer one owns the entry — which the late cancel
+    /// proves, since a settle path that keyed on the *name* would have removed the newer scan's
+    /// entry on its way out and left nothing to cancel (and the flag latched). And profiles are
+    /// **keyed per entry**, so a scan of another table runs alongside rather than being
+    /// superseded by it.
+    #[tokio::test]
+    async fn a_re_scan_supersedes_its_own_entry_and_nobody_elses() {
+        let eng = Engine::new(Default::default());
+        eng.create_view("slow".into(), SLOW_ROWS.into())
+            .await
+            .expect("create view");
+        register_regions(&eng, "regions").await;
+
+        let first = eng.profile("slow".into());
+        let re_scan = async {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            eng.profile("slow".into()).await
+        };
+        // Dispatched with `first`, so both scans are in flight together.
+        let other = eng.profile("regions".into());
+        let stop = async {
+            tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+            eng.cancel_profile("slow")
+        };
+        let (first, re_scan, other, stopped) = tokio::join!(first, re_scan, other, stop);
+
+        assert!(first.is_err(), "the superseded scan reports no numbers");
+        assert!(stopped, "the re-scan owns the entry, so there was one to cancel");
+        assert!(re_scan.is_err(), "…and that cancel landed on it");
+        assert_eq!(
+            other.map(|p| p.rows),
+            Ok(5),
+            "another entry's scan ran alongside, untouched"
+        );
+    }
+
+    /// Re-registering a table aborts its scan: the numbers would describe files the register
+    /// is replacing, so nothing should go on paying for them. Engine-side rather than left to
+    /// the caller, so every path that re-registers gets it.
+    #[tokio::test]
+    async fn re_registering_a_table_aborts_its_scan() {
+        let eng = Engine::new(Default::default());
+        eng.create_view("slow".into(), SLOW_ROWS.into())
+            .await
+            .expect("create view");
+
+        let scan = eng.profile("slow".into());
+        let replace = async {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            // The view's own re-definition is the view-shaped half of the same rule.
+            eng.create_view("slow".into(), "SELECT 1 AS n".into())
+                .await
+                .expect("re-create");
+        };
+        let (scan, ()) = tokio::join!(scan, replace);
+
+        assert_eq!(scan.as_ref().err().map(String::as_str), Some("cancelled"));
     }
 
     /// The close-while-running guard's two probes (T2). Both are answered from the

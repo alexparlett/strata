@@ -171,17 +171,24 @@ src/apps/project/                the project window (Valin-shaped)
                                  `render_key` is the project folder — so "open in this window"
                                  is a `State` write and the remount *is* the reopen path
   contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context
+  query/                         the freya-query capabilities over the engine facade — run_query
+                                 (RunQuery · FetchSnapshotPage), validate, profile (P3-09: the
+                                 scan, keyed by `ProfileSpec { owner, scan }`, with `use_profile`
+                                 the one place that Query is built)
   state/                         per-window state (Radio): channel, hooks, session
                                  session.rs = SessionState + stateful QueryTab (each tab owns its
                                  CodeEditorData, keyed on Chan::{Tabs, Tab(id)}); Layout too
                                  project.rs = ProjectState — **the catalog**: persisted defs +
-                                 `Reg<T>` (Loading/Ready/Failed), per-section ProjChan channels
+                                 `Reg<T>` (Loading/Ready/Failed), per-section ProjChan channels,
+                                 and each row's profile *request* (never its numbers)
                                  catalog.rs = CatalogSelection, the inspected column (context)
   model/                         window-local view models
   views/
     dialogs/                     the window's modal dialogs, mounted early so their key barrier
                                  precedes every feature listener: close_confirm (T2) ·
-                                 drop_confirm (P3-05) · open_prompt (the This/New question)
+                                 drop_confirm (P3-05) · open_prompt (the This/New question) ·
+                                 profile_confirm (P3-10 — and `ProfileActions`, the one entry
+                                 point every "profile this" trigger calls)
     header/
       mod.rs                     the header bar — and the window's macOS title bar: brand ·
                                  switcher · ⌘K/⌘, cluster, drag + double-press-to-fill
@@ -193,12 +200,12 @@ src/apps/project/                the project window (Valin-shaped)
                                  refresh row) over the active pane
       catalog/                   P3-02: mod (pane + sections), section, entry (entry/column/
                                  saved-query rows), columns (flatten + tests), interaction (tests)
-    inspector/                   P3-08 — the selected column, and **only what the source
-                                 reported**: mod (frame + theme + the not-a-column states),
-                                 model (resolve the ColRef path · the dynamic fact list ·
-                                 completeness, all unit-tested off a store), column (title ·
-                                 nested-fields box · STATISTICS), tests. The scan half of
-                                 STATISTICS is P3-09's; its card renders, minus its handler
+    inspector/                   P3-08/P3-09 — the selected column, and **only what was actually
+                                 read or counted**: mod (frame + theme + the not-a-column
+                                 states), model (resolve the ColRef path · the dynamic fact list ·
+                                 completeness · `with_scan`, which folds a scan's facts into that
+                                 same list — all unit-tested off a store), column (title ·
+                                 nested-fields box · the STATISTICS zone's four states), tests
     workbench/
       mod.rs, empty.rs           workbench shell + no-query empty state
       editor/                    SQL editor: tab, toolbar
@@ -289,8 +296,17 @@ facts.** Every number in the inspector was *read* from the source (footer statis
 `ColumnInfo.stats`, the row count via `TableMeta.rows`) — never derived from the rows on screen,
 which is what the Dioxus panel used to do. So the facts box is a dynamic list rather than a grid
 of blanks, inexact footer values render `~value`, and the completeness bar needs a real exact null
-count or it doesn't appear. P3-09's scan lands its facts in that same list, matched on `StatKey`,
-so a fact can never appear twice.
+count or it doesn't appear.
+
+**P3-09 (profiling) + P3-10 (cost confirm)** are ✅, and land the scan tier in that same list
+(matched on `StatKey`, so a fact can never appear twice; free wins a tie *unless* it is an inexact
+bound). The scan is a **freya-query action keyed by its request**: the store row keeps
+`Option<ScanId>` and the numbers live only in the cache entry that key names (AGENTS.md §2) — so
+invalidating a profile is dropping the request, which `table_registered` does for the table *and*
+for the views that read it. `Engine::profile` / `cancel_profile` own the engine side; a running
+scan counts as work in flight for the window-close confirm and not for the per-tab probe. The
+canvas's **distribution bars are deliberately not built** — the scan has no distribution data and
+an honest histogram needs a second full pass (P3-09's file has the reasoning).
 
 ---
 

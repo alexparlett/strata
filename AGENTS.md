@@ -64,6 +64,19 @@ Things that must not regress. Each was fought for once already.
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the
   engine, then the store's own method on the matching `ProjChan`; nothing refetches.
+- **An expensive, opt-in *result* is freya-query keyed by the request; the store holds the
+  request.** Profiling (P3-09) is the shape: the row keeps `Option<ScanId>` — a nonce minted per
+  ask — and the numbers live only in the cache entry that key names, with `stale_time(MAX)` (a
+  settled scan must never re-execute itself) and `clean_time(MAX)` ("cached until the entry
+  changes"). A re-scan is a *new* nonce, so it is a new execution; invalidating is dropping the
+  request. Never a `profile` field holding results on the store, never a dedup set, never a
+  spinner flag — the cache key is the dedup and `query.read().state()` is the spinner. And the
+  `Query` (stale/clean times included) is the identity, so it is **built in one place**: two call
+  sites spelling it differently are two entries, i.e. the same table scanned twice.
+- **One entry point per expensive action, with the confirm in front of it.** Every trigger for a
+  scan calls `ProfileActions::ask`, which raises P3-10's confirm on a first scan and goes straight
+  through on a re-scan; confirming calls the same `start` the ↻ calls. Adding a surface means
+  calling `ask`, never reaching for the store directly — the same rule the drop confirm holds.
 - **Def/runtime split.** `strata-model` holds pure serde defs only (exactly what
   `.strata/project.json` stores — no runtime caches, no UI flags). The Freya store wraps defs in
   rows with `Reg<T> = Loading | Ready(T) | Failed(String)`, making invalid combos unrepresentable;

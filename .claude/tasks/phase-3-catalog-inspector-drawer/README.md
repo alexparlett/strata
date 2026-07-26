@@ -18,8 +18,9 @@ menu (right-click *and* the canvas's ⋮): open in a tab, edit a view's SQL, ren
 refresh one table, and the Drop items that open that confirm. The **column inspector** now fills
 the right pane (**P3-08** ✅) — the selected column's title + source-format badge, a nested
 column's shape, and the STATISTICS zone: a dynamic facts box over what the source actually
-reported, plus the completeness bar. Its scan half is parked for P3-09 (the card renders in
-full; only its press handler is missing). The drawer is still a **shell** waiting on its content
+reported, plus the completeness bar. **Profiling** fills that zone's scan half (**P3-09** ✅) — an
+on-demand full scan per catalog entry, offered by the zone's card and by both row menus, behind a
+cost confirm on a first scan (**P3-10** ✅). The drawer is still a **shell** waiting on its content
 tasks.
 
 > **Only real facts** (P3-08 · DEV_TASKS U9). Every number in the inspector was *read*, never
@@ -29,6 +30,13 @@ tasks.
 > values render `~value`, and the completeness bar needs a real *exact* null count and a real row
 > count or it does not appear. The percentage never rounds into a claim it can't make: with nulls
 > present it reads `>99.9%`, never `100%`. The null count is the bar and **only** the bar.
+>
+> P3-09's **scan** lands in that same list, matched on `StatKey`, so a fact still cannot appear
+> twice — and the rule extends: the scan's *row count* comes with its null count (the bar divides
+> one by the other, so mixing a counted numerator with a reported denominator is one ratio from two
+> reads), and a nested field takes neither, because the profile is keyed by top-level column name.
+> The canvas's **distribution bars are deliberately not built**: the profile has no distribution
+> data, and an honest histogram needs a second full pass. See P3-09.
 
 > **P3-07 was rescoped** (and is now ✅) to *registration failure messages*. Its original three items were PART
 > chips and the nested column tree — both delivered by P3-02, PART exercised end to end by the
@@ -82,8 +90,8 @@ per-`Kind` hues, one shared group).
 | P3-06 | Catalog context menus | ✅ | — | P3-02/05 |
 | P3-07 | Registration failure messages | ✅ | D9 | P3-04 |
 | P3-08 | Column inspector (facts box) | ✅ | U9 | P3-01 |
-| P3-09 | Column/table profiling (PROFILE zone) | ⬜ | D4 | P3-08 |
-| P3-10 | Profile-cost confirm | ⬜ | U15 | P3-09 |
+| P3-09 | Column/table profiling (PROFILE zone) | ✅ | D4 | P3-08 |
+| P3-10 | Profile-cost confirm | ✅ | U15 | P3-09 |
 | P3-11 | Drawer scaffold (tabbed bottom panel) | ⬜ | U10 | P3-01 |
 | P3-12 | Drawer — Problems tab | ⬜ | U10 | P3-11 |
 | P3-13 | Drawer — Events tab | ⬜ | U10 | P3-11 |

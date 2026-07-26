@@ -16,6 +16,13 @@
 //! [`DropTarget`] slot that dialog watches, and that is *all* it does. There is deliberately no
 //! second drop path.
 //!
+//! ## Profile asks the same question the inspector's card does
+//!
+//! `Profile table` / `Profile view` route through [`ProfileActions::ask`] — the *one* entry point
+//! the inspector's scan card also uses — so a first scan raises the cost confirm (P3-10) and a
+//! re-scan doesn't. The item leaves a request on the row and nothing else: the scan itself is the
+//! freya-query entry that request keys, and the row's own spinner is what says it is running.
+//!
 //! ## A menu is a snapshot
 //!
 //! These builders run inside an event handler, which has no reactive context — every read is a
@@ -27,14 +34,14 @@
 use freya::components::{use_theme, MenuItemThemePartial};
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_model::{Origin, SavedQuery};
+use strata_model::{CatalogKind, Origin, SavedQuery};
 use uuid::Uuid;
 
 use crate::apps::project::state::{
     refresh_table, use_catalog_rescan, use_catalog_scan, CatalogRescan, CatalogScan, Chan,
     ProjChan, ProjectState, Reg, SessionState,
 };
-use crate::apps::project::views::DropTarget;
+use crate::apps::project::views::{use_profile_actions, DropTarget, ProfileActions, ProfileTarget};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Prose;
@@ -68,6 +75,10 @@ pub struct CatalogActions {
     /// The drop-confirm slot provided at the window root (P3-05). Setting it *is* the drop
     /// action.
     pub drop_target: State<Option<DropTarget>>,
+    /// The profile action (P3-09): asking for a scan of this row, through the cost confirm on a
+    /// first one (P3-10). The same call the inspector's scan card makes — this is the catalog
+    /// side of one entry point, not a second copy of it.
+    pub profile: ProfileActions,
     /// The sheet's destructive tone, resolved here because the menu itself is built from an
     /// event handler, where no hook — `use_theme` included — may run.
     pub danger: Color,
@@ -82,6 +93,7 @@ pub fn use_catalog_actions() -> CatalogActions {
         rescan: use_catalog_rescan(),
         config: use_config_station(),
         drop_target: use_consume::<State<Option<DropTarget>>>(),
+        profile: use_profile_actions(),
         danger: use_theme().read().colors.error,
     }
 }
@@ -111,6 +123,28 @@ impl CatalogActions {
         MenuButton::new()
             .enabled(false)
             .child(menu_row(icon, label))
+    }
+
+    /// Has the engine actually answered for this row? The precondition for offering a **scan**:
+    /// a def the engine refused has no provider behind it, so a scan of it can only fail — and it
+    /// would fail out of sight, because the inspector shows a failed row's *reason* rather than
+    /// any column a scan could report on. An unanswered row is not offered one either; the answer
+    /// is moments away, and by then the offer means something.
+    fn registered(&self, kind: CatalogKind, name: &str) -> bool {
+        let p = self.project.peek();
+        match kind {
+            CatalogKind::View => p
+                .views
+                .iter()
+                .find(|v| v.def.name == name)
+                .is_some_and(|v| v.reg.ready().is_some()),
+            CatalogKind::Query => false,
+            CatalogKind::Table => p
+                .tables
+                .iter()
+                .find(|t| t.def.name == name)
+                .is_some_and(|t| t.reg.ready().is_some()),
+        }
     }
 
     /// The destructive item — the canvas's `--c-err` row. Colour rides the `menu_item` theme's
@@ -154,6 +188,7 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
             .map(|t| &t.reg),
         Some(Reg::Loading)
     );
+    let registered = actions.registered(CatalogKind::Table, &name);
 
     Menu::new()
         .min_width(Size::px(MENU_WIDTH))
@@ -163,9 +198,19 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
                 view_row(a, &name);
             })
         })
-        // P3-09 owns profiling (and its cost confirm, P3-10). Parked rather than omitted so the
-        // menu keeps the shape the canvas specifies.
-        .child(actions.parked(IconName::Chart, "Profile table"))
+        .child({
+            let name = name.clone();
+            actions
+                .item(
+                    IconName::Chart,
+                    ProfileTarget::verb(CatalogKind::Table),
+                    move |a| a.profile.ask(CatalogKind::Table, &name),
+                )
+                // There is nothing to scan until the engine has answered for this row: a table it
+                // refused has no provider, so a scan of it can only fail — and it would fail out
+                // of sight, since the inspector has no column of a failed row to show it on.
+                .enabled(registered)
+        })
         .child(Divider::menu())
         .child({
             let name = name.clone();
@@ -196,6 +241,8 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
 /// refresh does to the views over it ([`ProjectState::views_to_refresh`]), because that is when
 /// its plan goes stale.
 pub fn view_menu(actions: &CatalogActions, name: String) -> Menu {
+    let registered = actions.registered(CatalogKind::View, &name);
+
     Menu::new()
         .min_width(Size::px(MENU_WIDTH))
         .child({
@@ -205,8 +252,18 @@ pub fn view_menu(actions: &CatalogActions, name: String) -> Menu {
             })
         })
         // A view has no footer facts of its own, so a scan is the only way it learns anything —
-        // worth more here than on a table. Still P3-09's.
-        .child(actions.parked(IconName::Chart, "Profile view"))
+        // worth more here than on a table. Offered only once the view has actually planned: a view
+        // whose SQL didn't plan has nothing to scan (see `registered`).
+        .child({
+            let name = name.clone();
+            actions
+                .item(
+                    IconName::Chart,
+                    ProfileTarget::verb(CatalogKind::View),
+                    move |a| a.profile.ask(CatalogKind::View, &name),
+                )
+                .enabled(registered)
+        })
         .child({
             let name = name.clone();
             actions.item(IconName::Pencil, "Edit query", move |a| {
