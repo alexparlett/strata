@@ -16,7 +16,7 @@
 //!    ([`TabCloser`]).
 //! 2. [`Veto::Launcher`] — this is the app's last window and no quit is in flight: the
 //!    launcher has to be up *before* this window goes, or the app would exit instead
-//!    ([`platform::close_this_window`](crate::platform::close_this_window)).
+//!    ([`platform::close_this_window`]).
 //!
 //! **The in-flight half of the guard is the engine's, not the UI's.** A run belongs to a
 //! workspace (a tab), not to a mounted view, and only the active tab's results are

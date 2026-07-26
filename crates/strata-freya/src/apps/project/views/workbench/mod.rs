@@ -1,6 +1,6 @@
 //! The workbench: the active tab's editor pane — the query toolbar over the `CodeEditor`.
 //!
-//! The editor is the Valin pattern: a `Writable` slice into the active [`QueryTab`]'s
+//! The editor is the Valin pattern: a `Writable` slice into the active `QueryTab`'s
 //! `CodeEditorData`, which lives in the store keyed by `TabId`, so switching tabs re-binds and
 //! each tab's cursor / undo / scroll travel with it.
 //!

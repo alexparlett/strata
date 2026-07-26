@@ -1,11 +1,16 @@
 //! Opening a project **from the launcher**: the two actions that stand this window down
 //! once the project window is up.
 //!
-//! The open itself is [`platform::open_project`] and the picker is
-//! [`platform::pick_and_open_project`]'s — the shared window paths, so a project that
-//! already has a window is focused here exactly as in the header's switcher. What is
+//! The open itself is [`platform::open_project`] and the folder pick is
+//! [`platform::pick_project_folder`]'s — the shared window paths, so a project that already
+//! has a window is focused here exactly as in the header's switcher. What is
 //! launcher-specific is only the *after*: this window exists because there was nothing to
 //! look at, so it closes as soon as there is.
+//!
+//! **Deliberately not through [`OpenCtx`](crate::platform::OpenCtx).** `OpenPref` asks which
+//! window an open lands in, and the launcher has no answer to give: it holds no project to
+//! open *into* and no engine to interrupt, and it is only ever up when no project window is.
+//! So every open here goes straight to a new window, and this one stands down behind it.
 
 use freya::prelude::*;
 

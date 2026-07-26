@@ -10,7 +10,7 @@
 //! metadata** — footer-derived, so it varies by source format and is often absent entirely — and,
 //! with P3-09, what a full **scan** computed. A fact never appears in both, and an absent fact is
 //! an absent row rather than a blank one. The derivation lives in [`model`], where it can be
-//! tested without a window; this module is the frame and [`column`] the body.
+//! tested without a window; this module is the frame and [`column`](mod@column) the body.
 //!
 //! ## What is deliberately not here
 //!

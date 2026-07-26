@@ -133,7 +133,7 @@ pub struct SessionState {
     pub order: Vec<TabId>, // strip order (drag-reorder)
     pub active: Option<TabId>,
     pub closed: Vec<(usize, QueryTab)>, // reopen stack — parked tab + its strip index at close
-    /// A throwaway editor buffer the [`EditorTab`](crate::apps::project::views::workbench) slice
+    /// A throwaway editor buffer the `EditorTab` slice
     /// falls back to when its tab was closed mid-event. Closing the active tab (nav-dropdown ×)
     /// fires the editor's commit-on-click-outside *after* the close removed the tab, so its
     /// slice write lands here (and is discarded) instead of panicking on a missing tab.
