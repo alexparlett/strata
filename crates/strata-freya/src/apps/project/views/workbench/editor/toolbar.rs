@@ -1,6 +1,6 @@
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, RunId};
-use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{use_catalog, Chan, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -49,6 +49,7 @@ impl Component for EditorToolbar {
         // The Project store — save-target access only, so no channel subscription (the
         // toolbar shows nothing catalog-derived).
         let project = use_radio_station::<ProjectState, ProjChan>();
+        let catalog = use_catalog();
         // The tab's Run trigger, on its own channel — a press re-renders this toolbar
         // without waking the editor, and keystrokes (on `Chan::Tab`) never land here twice.
         let request_radio = use_radio::<SessionState, Chan>(Chan::Request(id));
@@ -147,13 +148,14 @@ impl Component for EditorToolbar {
             .child(tip(
                 "Save as view".into(),
                 tool(IconName::Eye).on_press(move |_| {
-                    actions::save_as_view(radio, project, view_engine.clone(), id)
+                    actions::save_as_view(radio, project, view_engine.clone(), catalog, id)
                 }),
             ))
             .child(tip(
                 save_title,
-                tool(IconName::Save)
-                    .on_press(move |_| actions::save(radio, project, save_engine.clone(), id)),
+                tool(IconName::Save).on_press(move |_| {
+                    actions::save(radio, project, save_engine.clone(), catalog, id)
+                }),
             ));
 
         rect()

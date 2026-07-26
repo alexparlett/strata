@@ -22,6 +22,19 @@ use uuid::Uuid;
 
 use crate::apps::project::query::QuerySpec;
 
+/// What a tab's diagnostics **describe**: the buffer revision they were computed from, and the
+/// catalog epoch they were resolved against. Those are validation's only two inputs, so a stamp
+/// that no longer matches the tab is the whole definition of "needs another pass".
+///
+/// This is what lets the driver stop enumerating entry points. A tab restored at project open,
+/// reopened with ⇧⌘T, opened from a saved query or a view, duplicated, or left behind by a pass
+/// a tab switch cancelled are not five cases — they are one: the stamp does not match.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Stamp {
+    pub revision: u64,
+    pub epoch: u64,
+}
+
 /// One query tab. Owns its editing buffer exactly like Valin's `EditorTab`, and its own
 /// Run trigger — the latest run request, whose results the tab's pane shows.
 pub struct QueryTab {
@@ -39,13 +52,20 @@ pub struct QueryTab {
     /// The results view mode (Table/Chart toggle). Its own channel too
     /// ([`Chan::View`](super::Chan)) — a flip wakes only the tab's results pane.
     pub view: ResultsView,
-    /// The tab's current validation diagnostics (P2-18): the debounced engine
-    /// dry-plan pass over the editor text. Its own channel
-    /// ([`Chan::Diagnostics`](super::Chan)); the editor's squiggles are the same
-    /// facts, carried as decorations *inside* the buffer (set by the same pass).
-    /// Purely advisory — Run is never gated on them (P2-23: diagnostics advise,
-    /// the engine decides; a doomed run fails at plan time with the same error).
+    /// The tab's current validation diagnostics: the debounced engine dry-plan pass over the
+    /// editor text. Written on [`Chan::Diagnostics`](super::Chan) by the window's one driver
+    /// (`state::diagnostics`); the editor's squiggles are the same facts, carried as
+    /// decorations *inside* the buffer by the same pass. Purely advisory — Run is never gated
+    /// on them (P2-23: diagnostics advise, the engine decides; a doomed run fails at plan time
+    /// with the same error).
     pub diagnostics: Vec<Diagnostic>,
+    /// What [`diagnostics`](Self::diagnostics) describes, or `None` when nothing has looked at
+    /// this tab yet.
+    ///
+    /// The distinction is load-bearing, not bookkeeping: `Some(_)` with an empty vec is the
+    /// only honest way to say **clean**, and `None` means **unchecked**. Reading an empty vec
+    /// as clean is exactly why the Problems drawer could once speak for the active tab only.
+    pub validated: Option<Stamp>,
 }
 
 /// The SQL grammar (derekstride/tree-sitter-sql via `tree-sitter-sequel`) + its highlights query,
@@ -76,6 +96,7 @@ impl QueryTab {
             request: None,
             view: ResultsView::default(),
             diagnostics: Vec::new(),
+            validated: None,
         }
     }
 
@@ -107,6 +128,7 @@ impl QueryTab {
             request: None,
             view,
             diagnostics: Vec::new(),
+            validated: None,
         }
     }
 
@@ -122,8 +144,31 @@ impl QueryTab {
     }
 }
 
+/// One tab's block in the Problems view: which tab the rows belong to, what it is called now,
+/// and the rows themselves. The **group** is where a row's owning tab comes from — a
+/// [`Diagnostic`] deliberately doesn't carry one, so there is no second copy to disagree with
+/// the tab it is stored on.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ProblemGroup {
+    pub tab: TabId,
+    pub name: String,
+    pub rows: Vec<Diagnostic>,
+}
+
 /// Cap on the reopen stack; parking more drops the oldest (freeing its buffer).
 const CLOSED_CAP: usize = 20;
+
+/// Strip a tab of everything that describes a world it is no longer part of, on the way to the
+/// reopen stack. Its `request` goes for the reason `close_one` has always given (a reopened tab
+/// starts with no results, matching the engine-side cleanup); its diagnostics and stamp go with
+/// it, because `reopen_last` restores the parked tab **whole** and would otherwise bring back a
+/// verdict on text from before the close, against a catalog from before whatever happened in
+/// between. Cleared, it comes back **unvalidated**, and the driver simply picks it up.
+fn park(tab: &mut QueryTab) {
+    tab.request = None;
+    tab.diagnostics.clear();
+    tab.validated = None;
+}
 
 /// The window's open tabs + arrangement. Holds live [`QueryTab`]s (not serde — persistence goes
 /// through a snapshot, a later slice). Provided as a Radio store in the window root.
@@ -175,21 +220,74 @@ impl SessionState {
         self.tabs.get(&id).map(|t| t.view).unwrap_or_default()
     }
 
-    /// The tab's current validation diagnostics (P2-18). Read on
-    /// [`Chan::Diagnostics(id)`](super::Chan).
-    pub fn diagnostics(&self, id: TabId) -> &[Diagnostic] {
-        self.tabs
-            .get(&id)
-            .map(|t| t.diagnostics.as_slice())
-            .unwrap_or(&[])
-    }
-
-    /// Replace `id`'s validation diagnostics (a validation pass settling). Write on
-    /// [`Chan::Diagnostics(id)`](super::Chan).
-    pub fn set_diagnostics(&mut self, id: TabId, diagnostics: Vec<Diagnostic>) {
+    /// A settled validation pass: replace `id`'s diagnostics **and** stamp them, so the two can
+    /// never disagree about which text and which catalog they describe. Write on
+    /// [`Chan::Diagnostics`](super::Chan). A no-op for a tab closed while the pass ran.
+    pub fn set_diagnostics(&mut self, id: TabId, stamp: Stamp, diagnostics: Vec<Diagnostic>) {
         if let Some(t) = self.tabs.get_mut(&id) {
             t.diagnostics = diagnostics;
+            t.validated = Some(stamp);
         }
+    }
+
+    /// Every open tab whose diagnostics no longer describe what it holds — the validation
+    /// driver's whole work list, in the order it should run them: the **active tab first** (it
+    /// is the one being looked at), then strip order.
+    ///
+    /// This is the reason the driver needs no list of entry points. A restored tab has no stamp;
+    /// a reopened one carries a stamp from before its close; a duplicated one copied text but no
+    /// stamp; an edited one moved its revision; and every tab goes stale at once when the
+    /// catalog epoch moves. All of them are just "the stamp does not match".
+    pub fn stale_tabs(&self, epoch: u64) -> Vec<TabId> {
+        let stale = |id: &TabId| {
+            self.tabs.get(id).is_some_and(|t| {
+                t.validated
+                    != Some(Stamp {
+                        revision: t.editor.revision(),
+                        epoch,
+                    })
+            })
+        };
+        self.active
+            .filter(stale)
+            .into_iter()
+            .chain(
+                self.order
+                    .iter()
+                    .copied()
+                    .filter(|id| Some(*id) != self.active && stale(id)),
+            )
+            .collect()
+    }
+
+    /// The Problems view's groups: every **validated** tab that has something to report, in
+    /// strip order.
+    ///
+    /// Unvalidated tabs are skipped rather than shown clean — an empty vec means "clean" only
+    /// once something has looked, which is what the stamp exists to distinguish.
+    pub fn problem_groups(&self) -> Vec<ProblemGroup> {
+        self.order
+            .iter()
+            .filter_map(|id| self.tabs.get(id))
+            .filter(|t| t.validated.is_some() && !t.diagnostics.is_empty())
+            .map(|t| ProblemGroup {
+                tab: t.id,
+                name: t.name.clone(),
+                rows: t.diagnostics.clone(),
+            })
+            .collect()
+    }
+
+    /// How many **errors** are open across every validated tab — the drawer header's tally and
+    /// the rail badge, from one function so the two can't disagree. Warnings and infos still
+    /// list in the drawer; they just don't claim the query is broken.
+    pub fn error_count(&self) -> usize {
+        self.tabs
+            .values()
+            .filter(|t| t.validated.is_some())
+            .flat_map(|t| t.diagnostics.iter())
+            .filter(|d| d.is_error())
+            .count()
     }
 
     /// Flip `id`'s results view (the toolbar's Table/Chart toggle). Write on
@@ -441,9 +539,9 @@ impl SessionState {
         let was_active = self.active == Some(id);
 
         if let Some(mut tab) = self.tabs.remove(&id) {
-            // Parked without its request: reopen starts with no results, like a fresh tab —
-            // matching the engine-side cleanup (SNAPSHOT_SPEC §4, the root's tab-diff funnel).
-            tab.request = None;
+            // Parked without its request or its verdict — reopen starts with no results and
+            // unvalidated, like a fresh tab (see `park`; SNAPSHOT_SPEC §4 for the engine half).
+            park(&mut tab);
             let at = pos.unwrap_or(self.order.len());
             self.closed.push((at, tab));
             let overflow = self.closed.len().saturating_sub(CLOSED_CAP);
@@ -468,7 +566,7 @@ impl SessionState {
     pub fn close_all(&mut self) {
         for (at, id) in mem::take(&mut self.order).into_iter().enumerate() {
             if let Some(mut tab) = self.tabs.remove(&id) {
-                tab.request = None;
+                park(&mut tab);
                 self.closed.push((at, tab));
             }
         }
@@ -494,7 +592,7 @@ impl SessionState {
             .collect();
         for (at, tid) in victims {
             if let Some(mut tab) = self.tabs.remove(&tid) {
-                tab.request = None;
+                park(&mut tab);
                 self.closed.push((at, tab));
             }
         }
@@ -527,7 +625,7 @@ impl SessionState {
             .is_some_and(|a| victims.iter().any(|(_, t)| *t == a));
         for (at, tid) in &victims {
             if let Some(mut tab) = self.tabs.remove(tid) {
-                tab.request = None;
+                park(&mut tab);
                 self.closed.push((*at, tab));
             }
         }
@@ -838,7 +936,11 @@ mod tests {
         assert_eq!(s.layout.drawer_h, expanded_drawer_h());
         assert_eq!(s.layout.drawer_restore_h, Some(310.0), "and is expanded");
 
-        assert_eq!(s.toggle_drawer_height(), 310.0, "the dragged height is back");
+        assert_eq!(
+            s.toggle_drawer_height(),
+            310.0,
+            "the dragged height is back"
+        );
         assert_eq!(s.layout.drawer_h, 310.0);
         assert_eq!(s.layout.drawer_restore_h, None, "no longer expanded");
     }
@@ -914,5 +1016,182 @@ mod tests {
     #[test]
     fn empty_snapshot_is_none() {
         assert!(SessionState::from_snapshot(SessionSnapshot::default()).is_none());
+    }
+
+    // --- diagnostics: the stamp, and the projections over it --------------
+
+    use strata_model::Severity;
+
+    fn problem(message: &str) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Error,
+            message: message.into(),
+            loc: Some("line 1:1".into()),
+            span: Some(0..6),
+        }
+    }
+
+    fn warning(message: &str) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Warning,
+            ..problem(message)
+        }
+    }
+
+    /// Stamp a tab as validated against the world it currently holds.
+    fn mark(s: &mut SessionState, id: TabId, epoch: u64, rows: Vec<Diagnostic>) {
+        let revision = s.tabs[&id].editor.revision();
+        s.set_diagnostics(id, Stamp { revision, epoch }, rows);
+    }
+
+    /// The driver's whole work list. Every way a tab can come to need a pass reduces to one
+    /// question — does its stamp match? — which is what replaced enumerating entry points.
+    #[test]
+    fn stale_tabs_is_every_tab_whose_stamp_no_longer_matches() {
+        let mut s = SessionState::default();
+        let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        let b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
+
+        // Nothing has looked at either yet.
+        assert_eq!(s.stale_tabs(1).len(), 2, "unvalidated tabs are stale");
+
+        mark(&mut s, a, 1, vec![]);
+        mark(&mut s, b, 1, vec![]);
+        assert!(
+            s.stale_tabs(1).is_empty(),
+            "both describe the world as it is"
+        );
+
+        // The user types in one of them.
+        s.tabs.get_mut(&a).unwrap().editor.set_text("SELECT 3");
+        assert_eq!(s.stale_tabs(1), vec![a], "a moved its text, b did not");
+
+        // The catalog is fixed: every tab's verdict was resolved against the old one.
+        mark(&mut s, a, 1, vec![]);
+        let stale = s.stale_tabs(2);
+        assert_eq!(stale.len(), 2, "a catalog epoch bump stales everything");
+    }
+
+    /// The active tab runs first — it is the one being looked at — and the rest follow strip
+    /// order, so a 20-tab project open doesn't make you wait for tab 19 to squiggle tab 1.
+    #[test]
+    fn stale_tabs_puts_the_active_tab_first() {
+        let mut s = SessionState::default();
+        let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        let b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
+        let c = s.open_named("c", "SELECT 3".into(), Origin::Scratch);
+        s.switch(b);
+
+        assert_eq!(s.stale_tabs(1), vec![b, a, c]);
+    }
+
+    /// A settled pass stamps and replaces together, so a tab can never carry rows that describe
+    /// one world and a stamp that claims another.
+    #[test]
+    fn set_diagnostics_stamps_and_replaces_together() {
+        let mut s = SessionState::default();
+        let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+
+        mark(
+            &mut s,
+            a,
+            3,
+            vec![problem("Table or view 'nope' not found")],
+        );
+        let t = &s.tabs[&a];
+        assert_eq!(t.diagnostics.len(), 1);
+        assert_eq!(t.validated.unwrap().epoch, 3);
+
+        // A later clean pass retracts wholesale — nothing accumulates.
+        mark(&mut s, a, 3, vec![]);
+        assert!(s.tabs[&a].diagnostics.is_empty());
+        assert!(s.tabs[&a].validated.is_some(), "clean, not unchecked");
+
+        // A tab closed mid-pass simply doesn't take the answer.
+        let gone = TabId::new();
+        s.set_diagnostics(
+            gone,
+            Stamp {
+                revision: 0,
+                epoch: 3,
+            },
+            vec![problem("x")],
+        );
+        assert!(!s.tabs.contains_key(&gone));
+    }
+
+    /// The drawer's groups: strip order, clean tabs skipped, and — the distinction the stamp
+    /// exists for — **unvalidated** tabs skipped too. An unchecked tab is not a clean one.
+    #[test]
+    fn problem_groups_skip_clean_and_unchecked_tabs_alike() {
+        let mut s = SessionState::default();
+        let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        let b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
+        let c = s.open_named("c", "SELECT 3".into(), Origin::Scratch);
+
+        mark(&mut s, a, 1, vec![problem("bad a")]);
+        mark(&mut s, b, 1, vec![]); // clean
+                                    // c is left unvalidated
+
+        let groups = s.problem_groups();
+        assert_eq!(groups.len(), 1, "only the tab with something to report");
+        assert_eq!(groups[0].tab, a);
+        assert_eq!(groups[0].rows.len(), 1);
+
+        // Give c a verdict and it joins, in strip order behind a.
+        mark(&mut s, c, 1, vec![problem("bad c")]);
+        assert_eq!(
+            s.problem_groups().iter().map(|g| g.tab).collect::<Vec<_>>(),
+            vec![a, c]
+        );
+    }
+
+    /// A group is labelled with what the tab is called *now*, so renaming a tab relabels its
+    /// problems without re-validating anything.
+    #[test]
+    fn a_group_carries_the_tabs_current_name() {
+        let mut s = SessionState::default();
+        let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        mark(&mut s, a, 1, vec![problem("bad")]);
+
+        s.rename(a, "orders_daily".into());
+        assert_eq!(s.problem_groups()[0].name, "orders_daily");
+    }
+
+    /// The header tally and the rail badge count **errors**, not rows: a keyword-typo warning
+    /// listing in the drawer must not claim the query is broken.
+    #[test]
+    fn error_count_counts_errors_across_validated_tabs_only() {
+        let mut s = SessionState::default();
+        let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        let b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
+        let c = s.open_named("c", "SELECT 3".into(), Origin::Scratch);
+
+        mark(&mut s, a, 1, vec![problem("e1"), warning("w1")]);
+        mark(&mut s, b, 1, vec![problem("e2")]);
+        s.tabs.get_mut(&c).unwrap().diagnostics = vec![problem("never validated")];
+
+        assert_eq!(s.error_count(), 2, "two errors; the warning doesn't count");
+    }
+
+    /// Closing parks the tab **unvalidated**, so ⇧⌘T can't bring back a verdict on text from
+    /// before the close (against a catalog from before whatever happened in between). The
+    /// driver picks the reopened tab up like any other unstamped one.
+    #[test]
+    fn closing_drops_the_verdict_so_reopen_starts_unchecked() {
+        let mut s = SessionState::default();
+        let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        mark(&mut s, a, 1, vec![problem("bad")]);
+
+        s.close_one(a);
+        s.reopen_last();
+
+        let t = &s.tabs[&a];
+        assert!(t.diagnostics.is_empty(), "the stale verdict did not travel");
+        assert!(
+            t.validated.is_none(),
+            "and it reads as unchecked, not clean"
+        );
+        assert_eq!(s.stale_tabs(1), vec![a], "so the driver re-validates it");
     }
 }

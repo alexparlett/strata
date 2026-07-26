@@ -20,8 +20,8 @@ use std::sync::Arc;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    use_autosave, use_init_catalog_selection, use_init_history, use_init_project, use_init_session,
-    Chan, SessionState,
+    use_autosave, use_diagnostics, use_init_catalog_selection, use_init_history, use_init_project,
+    use_init_session, Chan, SessionState,
 };
 use crate::apps::project::views::{
     CloseConfirm, DropConfirm, DropTarget, HeaderBar, OpenPrompt, ProfileConfirm, ProfileTarget,
@@ -382,6 +382,11 @@ impl Component for ProjectRoot {
         // recent runs (capped by `Settings::max_history`, hence the config); the results pane
         // appends to it as runs complete.
         use_init_history(config);
+        // The window's one validation driver: every open tab's diagnostics kept in step with
+        // its text and the catalog (`state/diagnostics.rs`). Mounted here, after the engine,
+        // the project (which provides the catalog state it gates on) and the session, because
+        // it reconciles all three. Nothing else in the app writes diagnostics.
+        use_diagnostics();
         // The inspected-column slot (P3-02): the catalog sidebar writes it, the inspector
         // (P3-08) reads it. A context signal, not a store — see `state/catalog.rs`.
         use_init_catalog_selection();

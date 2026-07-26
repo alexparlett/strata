@@ -26,7 +26,7 @@ mod schema;
 mod session;
 
 pub use catalog::{CatalogKind, ColRef, RemoveKind, RemoveTarget, SavedQuery, TableDef, ViewDef};
-pub use diagnostics::{DiagSource, Diagnostic, Severity};
+pub use diagnostics::{Diagnostic, Severity};
 pub use form::{ConfigForm, ExportForm};
 pub use history::HistoryEntry;
 pub use log::{LogEvent, LogKind, LogTab};

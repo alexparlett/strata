@@ -15,14 +15,14 @@ use freya::prelude::{
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
 use strata_core::engine::TableSpec;
 use strata_core::project::{self as project_io, SessionLoadError};
-use strata_model::WindowGeom;
+use strata_model::{SessionSnapshot, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::state::ConfigStation;
 
 use super::catalog::{
-    claim_scan, request_scan, use_init_catalog_rescan, use_init_catalog_scan, CatalogRescan,
-    ScanGuard, ScanScope,
+    claim_scan, request_scan, use_init_catalog, use_init_catalog_rescan, CatalogRescan, ScanGuard,
+    ScanScope,
 };
 use super::history::{History, HistoryCtx};
 use super::{Chan, ProjChan, ProjectState, SessionState};
@@ -130,7 +130,7 @@ fn new_session() -> SessionState {
 /// Initialise this window's Project store — open the project folder (argv\[1\], default
 /// the repo's `sample/`), scaffolding a fresh `.strata/` when the folder has none — and
 /// drive engine registration of its defs (tables, then views). Also provides the window's
-/// [`CatalogScan`](super::catalog::CatalogScan) flag and [`CatalogRescan`] counter, since
+/// [`Catalog`](super::catalog::Catalog) state and [`CatalogRescan`] counter, since
 /// this is where the scans run. Call once in the window root, after the engine is in
 /// context.
 ///
@@ -151,7 +151,7 @@ fn new_session() -> SessionState {
 /// effect on the flag's own release and loop).
 pub fn use_init_project(engine: &EngineCtx, root: PathBuf) -> RadioStation<ProjectState, ProjChan> {
     let station = use_init_radio_station::<ProjectState, ProjChan>(move || open_project(root));
-    let scan = use_init_catalog_scan();
+    let catalog = use_init_catalog();
     let rescan = use_init_catalog_rescan();
     let engine = engine.clone();
     use_side_effect(move || {
@@ -160,7 +160,7 @@ pub fn use_init_project(engine: &EngineCtx, root: PathBuf) -> RadioStation<Proje
         // executor tick can't both get through (see `claim_scan`). The guard released by
         // `Drop` — not by the pass's last statement — is what keeps a cancelled pass from
         // latching the flag (see `ScanGuard`).
-        let Some(guard) = claim_scan(scan) else {
+        let Some(guard) = claim_scan(catalog) else {
             return;
         };
         // The work list is read **before** any row is reset, because resetting is what discards
@@ -461,6 +461,13 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
     // down tests. `armed` can't answer it: it goes true on the mount pass itself, which is
     // exactly the pass that means "nothing has changed yet".
     let mut dirty = use_state(|| false);
+    // The last snapshot actually written, so a wake that moved nothing *reaching disk* writes
+    // nothing. `Chan::Tab(id)` is the tab's whole editor state — text, caret, selection, scroll,
+    // squiggle decorations, hover — and it derives `Persist` because it *can* carry a text
+    // change; this is what decides whether it *did*. Without it, hovering a squiggle or moving
+    // the caret rewrites `session.json` byte-for-byte, and the validation driver's decoration
+    // writes across every open tab multiply that by the tab count.
+    let mut written = use_state(|| None::<SessionSnapshot>);
     // The last geometry the window had while neither filled nor fullscreen — what a restart
     // restores to. Seeded with what the window opened at, so filling before ever resizing still
     // persists the real size rather than dropping it.
@@ -509,9 +516,14 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
                 }));
             }
             snapshot.window = *normal_geom.peek();
+            if written.peek().as_ref() == Some(&snapshot) {
+                return;
+            }
             if let Err(e) = project_io::save_session(&root, &snapshot) {
                 tracing::error!("autosave session: {e}");
+                return;
             }
+            written.set(Some(snapshot));
         });
         pending.set(Some(task));
     });
@@ -535,6 +547,9 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
         let root = project.peek().root.clone();
         let mut snapshot = session.peek().snapshot();
         snapshot.window = *normal_geom.peek();
+        if written.peek().as_ref() == Some(&snapshot) {
+            return;
+        }
         if let Err(e) = project_io::save_session(&root, &snapshot) {
             tracing::error!("save session on close: {e}");
         }

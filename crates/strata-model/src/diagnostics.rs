@@ -1,69 +1,48 @@
-//! Diagnostics **vocabulary** — the shapes the Problems view reasons in. The per-tab
-//! store that holds validation diagnostics is app-side (`crate::diagnostics` in the
-//! frontend, over a `GlobalStore`); only these framework-agnostic types live here, so the
-//! `sql` validator (which produces them) can depend *down* onto vocabulary.
+//! Diagnostics **vocabulary** — what the SQL validator asserts about a tab's text, and what
+//! the Problems view reasons in. Framework-agnostic, so the `sql` validator (which produces
+//! them) can depend *down* onto vocabulary; the per-tab store that holds them is app-side
+//! (`QueryTab::diagnostics` in `strata-freya`).
+//!
+//! A diagnostic is a **live fact about text**, not a log entry: every validation pass replaces
+//! a tab's slice wholesale, so fixing the SQL retracts the problem on the next pass. Query
+//! *execution* failures are deliberately not modelled here — they belong to a run, and the
+//! results pane renders one in full (banner, code frame, caret, hint) from
+//! [`QueryError`](crate::QueryError).
 
 use std::ops::Range;
 
-use crate::QueryError;
-
-/// Diagnostic severity (LSP-ish). Only `Error` counts toward the Problems badge.
-/// `Warning`/`Info` are unused until the static validator lands (execution errors are
-/// always `Error`) — allow so the stub phase stays warning-clean.
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Diagnostic severity (LSP-ish). Only [`Error`](Severity::Error) counts toward the Problems
+/// badge and the drawer's header tally; warnings and infos still list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Severity {
     Error,
     Warning,
     Info,
 }
 
-/// Which provider asserted a diagnostic. `Validation` lives in the app's store;
-/// `Execution` is synthesized on the fly from `runs::query_error`. `Validation` isn't
-/// constructed until the validator lands — allow through the stub phase.
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DiagSource {
-    Validation,
-    Execution,
-}
-
-/// One problem on a tab: a severity, a message, and (optionally) a `line L:C` location
-/// for jump/squiggle.
+/// One problem with a tab's SQL: a severity, a message, and where it is.
 ///
-/// No class/rule code: the design's Problems row is icon · message · line, and a code
-/// chip was a third thing competing with the message for a single line.
-#[derive(Clone, PartialEq)]
+/// No class/rule code: the design's Problems row is icon · message · line, and a code chip was
+/// a third thing competing with the message for a single line.
+///
+/// No owning tab either. A diagnostic is *stored on* the tab it belongs to, so carrying a
+/// `TabId` as well would be the same fact under two names — and this crate is leaf vocabulary
+/// that knows nothing about tabs. The Problems view gets the owner from the group it renders
+/// the row in.
+#[derive(Clone, PartialEq, Debug)]
 pub struct Diagnostic {
     pub severity: Severity,
-    pub source: DiagSource,
     pub message: String,
-    /// `line L:C` (matches `QueryError::loc`) — the Problems-row display label.
+    /// `line L:C` — the Problems-row display label.
     pub loc: Option<String>,
-    /// Byte range into the tab's SQL (S25) — drives the editor squiggle + the
-    /// click-to-select jump. `None` for execution errors (only a `line:col` string).
+    /// Byte range into the tab's SQL — drives the editor squiggle, and the click-to-jump when
+    /// it lands. Interpreted against the text the pass ran on, which the tab's validation
+    /// stamp records.
     pub span: Option<Range<usize>>,
 }
 
 impl Diagnostic {
     pub fn is_error(&self) -> bool {
         matches!(self.severity, Severity::Error)
-    }
-
-    /// Fold a failed query's structured error into an execution diagnostic.
-    pub fn from_query_error(qe: &QueryError) -> Self {
-        let head = qe.message.lines().next().unwrap_or("").trim();
-        let message = if head.is_empty() {
-            qe.etype.clone()
-        } else {
-            head.to_string()
-        };
-        Self {
-            severity: Severity::Error,
-            source: DiagSource::Execution,
-            message,
-            loc: qe.loc.clone(),
-            span: None,
-        }
     }
 }

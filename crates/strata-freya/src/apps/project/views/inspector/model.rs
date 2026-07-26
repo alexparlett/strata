@@ -140,9 +140,7 @@ pub fn inspect(project: &ProjectState, col: &ColRef) -> Inspected {
             Some(row) => match &row.reg {
                 Reg::Loading => Inspected::Loading,
                 Reg::Failed(e) => Inspected::Failed(e.clone()),
-                Reg::Ready(info) => {
-                    facts(col, &info.columns, SourceFormat::View, None, true, scan)
-                }
+                Reg::Ready(info) => facts(col, &info.columns, SourceFormat::View, None, true, scan),
             },
         },
         // A saved query is a stored string, not a schema — nothing can select a column of one,

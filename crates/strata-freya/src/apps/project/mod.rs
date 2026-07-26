@@ -15,7 +15,7 @@ pub use close::{CloseGuard, CloseTarget};
 pub use project::ProjectApp;
 pub use views::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
-    DataGridThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
-    InspectorThemePreference, RecordViewThemePreference, StatusBarThemePreference,
-    TabBarThemePreference, TabThemePreference,
+    DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,
+    HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
+    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };

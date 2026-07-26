@@ -42,7 +42,7 @@ use crate::engine::sql::lex::{
 };
 use crate::engine::sql::resolve::resolve;
 use crate::engine::sql::FunctionCatalog;
-use strata_model::{DiagSource, Diagnostic, Severity};
+use strata_model::{Diagnostic, Severity};
 
 /// Clause keywords we typo-check bare identifiers against (edit distance ≤ 1).
 const CLAUSE_KEYWORDS: &[&str] = &[
@@ -641,7 +641,6 @@ pub(crate) fn diag(
 ) -> Diagnostic {
     Diagnostic {
         severity,
-        source: DiagSource::Validation,
         message,
         loc: Some(line_col(sql, span.start)),
         span: Some(span),

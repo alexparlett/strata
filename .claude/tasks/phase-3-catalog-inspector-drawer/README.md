@@ -22,8 +22,11 @@ the right pane (**P3-08** ✅) — the selected column's title + source-format b
 column's shape, and the STATISTICS zone: a dynamic facts box over what the source actually
 reported, plus the completeness bar. **Profiling** fills that zone's scan half (**P3-09** ✅) — an
 on-demand full scan per catalog entry, offered by the zone's card and by both row menus, behind a
-cost confirm on a first scan (**P3-10** ✅). The drawer is still a **shell** waiting on its content
-tasks.
+cost confirm on a first scan (**P3-10** ✅). The bottom drawer has its first body: **P3-12** ✅
+fills it with **every** open tab's live diagnostics, grouped by tab and pressable to switch — and
+rebuilt the producer behind it (one driver, a per-tab stamp, the catalog as a gate) plus the three
+pieces P3-11 deferred to its first consumer. It also gave the drawer its own component theme and
+the rail its error badge. Events and History are still empty frames.
 
 > **Only real facts** (P3-08 · DEV_TASKS U9). Every number in the inspector was *read*, never
 > derived from the rows on screen — the Dioxus panel once computed them off the current page of the
@@ -75,6 +78,21 @@ tasks.
 > and hangs the **drop confirm** off it — the dialog, its consequence line, and the drop itself.
 > P3-06 supplies its trigger and must not write a second drop path.
 
+> **Diagnostics are a reconciliation, and Problems shows every tab** (P3-12). The first build
+> scoped the view to the active tab; the real limit was the *producer* — `use_validation` lived in
+> `EditorTab`, which mounts only for the tab on screen. Now each tab carries a **stamp** (buffer
+> revision + catalog epoch) of what its diagnostics describe, `SessionState::stale_tabs` is the
+> whole work list, and **one** driver (`state/diagnostics.rs`, a hook in the window root) drains
+> it. No entry point needs enumerating: restored, reopened, opened-from-a-view, duplicated,
+> edited, cancelled-mid-pass are all "the stamp does not match". The catalog is a **gate** as well
+> as an input (`CatalogState { Scanning, Settled(epoch) }`), so nothing validates mid-scan and
+> fixing a source path clears the rows without opening the tab. Run failures are deliberately
+> **not** in Problems — they belong to a run, and the results pane renders them in full.
+>
+> P3-11's three handovers landed with it: the header count (now `error_count()`, shared with the
+> new rail badge so they cannot disagree), the Clear show/hide rule (parked on Events/History
+> until they have a log to clear), and the shared frame (`drawer/frame.rs`).
+>
 > **The catalog is the `ProjectState` store**, not a query: the project file's defs plus what
 > registration learned (`Reg<T>`). There is no `FetchCatalog` capability and there must not be —
 > introspecting DataFusion would surface `__snap_*` result snapshots and hide failed rows. See
@@ -108,9 +126,9 @@ per-`Kind` hues, one shared group).
 | P3-09 | Column/table profiling (PROFILE zone) | ✅ | D4 | P3-08 |
 | P3-10 | Profile-cost confirm | ✅ | U15 | P3-09 |
 | P3-11 | Drawer scaffold (tabbed bottom panel) | ✅ | U10 | P3-01 |
-| P3-12 | Drawer — Problems tab | ⬜ | U10 | P3-11 |
-| P3-13 | Drawer — Events tab | ⬜ | U10 | P3-11 |
-| P3-14 | Drawer — History tab | ⬜ | U10 | P3-11 |
+| P3-12 | Drawer — Problems tab + the diagnostics architecture | ✅ | U10 | P3-11/P2-18/P2-01 |
+| P3-13 | Drawer — Events tab | ⬜ | U10 | P3-12 |
+| P3-14 | Drawer — History tab | ⬜ | U10 | P3-12 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

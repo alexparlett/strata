@@ -38,8 +38,8 @@ use strata_model::{CatalogKind, Origin, SavedQuery};
 use uuid::Uuid;
 
 use crate::apps::project::state::{
-    refresh_table, use_catalog_rescan, use_catalog_scan, CatalogRescan, CatalogScan, Chan,
-    ProjChan, ProjectState, Reg, SessionState,
+    refresh_table, use_catalog, use_catalog_rescan, Catalog, CatalogRescan, Chan, ProjChan,
+    ProjectState, Reg, SessionState,
 };
 use crate::apps::project::views::{use_profile_actions, DropTarget, ProfileActions, ProfileTarget};
 use crate::components::divider::Divider;
@@ -65,7 +65,7 @@ pub struct CatalogActions {
     pub project: RadioStation<ProjectState, ProjChan>,
     /// Whether a catalog pass is in flight — Refresh is a no-op while one is, so it says so
     /// rather than offering a press that does nothing.
-    pub scan: CatalogScan,
+    pub catalog: Catalog,
     /// Where Refresh puts its request. The menu item deliberately cannot spawn the pass itself:
     /// its own scope is a `MenuButton` that the same press closes, and Freya drops a scope's
     /// tasks before polling them. The window root's driver owns the pass (`state/catalog.rs`).
@@ -89,7 +89,7 @@ pub fn use_catalog_actions() -> CatalogActions {
     CatalogActions {
         session: use_radio_station::<SessionState, Chan>(),
         project: use_radio_station::<ProjectState, ProjChan>(),
-        scan: use_catalog_scan(),
+        catalog: use_catalog(),
         rescan: use_catalog_rescan(),
         config: use_config_station(),
         drop_target: use_consume::<State<Option<DropTarget>>>(),
@@ -177,7 +177,7 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
     // Snapshotted at open (see the module doc). `loading` is this row's own state, which is what
     // makes "Refreshing…" mean *this* table rather than "some pass is running": the row's status
     // glyph says the same thing from the other side.
-    let scanning = *actions.scan.peek();
+    let scanning = actions.catalog.peek().is_scanning();
     let loading = matches!(
         actions
             .project

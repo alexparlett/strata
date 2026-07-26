@@ -68,6 +68,23 @@ Things that must not regress. Each was fought for once already.
   manage entry lifetime imperatively; mount or unmount a subscriber. Fork-side, freya-query
   never cleans an entry whose execution is in flight and never cancels one on unmount — a
   remounting subscriber attaches to it (`RunningGuard`).
+- **Diagnostics are a reconciliation, not an event.** Every open tab's diagnostics are a pure
+  function of two inputs — its buffer revision and the catalog epoch — and each tab records a
+  `Stamp` of the pair its current rows describe. `SessionState::stale_tabs` is the whole work
+  list, and the window's **one** driver (`state::diagnostics::use_diagnostics`, a hook in the
+  window root) drains it. Never add a second producer, and never enumerate entry points: a tab
+  restored at open, reopened, opened from a view or saved query, duplicated, edited, or left
+  behind by a pass a tab switch cancelled are all the same thing — the stamp does not match. It
+  is one hook rather than a component per tab because `Chan::Text` is a fan-in (like
+  `Chan::Persist`) that lets one subscription watch every tab's buffer. **The catalog is a gate,
+  not just an input**: `Engine::register` deregisters before it re-infers, so nothing validates
+  mid-scan and no false "not found" is ever produced.
+- **Problems is the SQL-validation surface; a run failure is the results pane's.** A failure
+  belongs to a run, not to the text — it can describe SQL the buffer no longer holds, it can't
+  self-clear by typing, and `cancel`/supersede settle `Err("cancelled")`/`Err("superseded")`
+  that no user should ever read as a problem. Putting it in a cross-tab view costs either a copy
+  on the store that outlives the run, or one freya-query subscription per tab in the drawer
+  *and* in the rail badge. The results pane already renders it in full.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the
@@ -238,6 +255,14 @@ The decision procedure (full design: `docs/FREYA_STATE_ARCHITECTURE.md`):
   (`State<T>` is `Copy` + `PartialEq`), e.g. the workbench's `running` mirror.
 - **Context** (`use_provide_context`/`use_consume`) is reserved for DI handles (`EngineCtx`, theme)
   and deep/open-ended consumer trees (`Selection` across the datagrid layers).
+- **A second surface that needs a settled query's outcome subscribes the query again** — same
+  capability, same keys, same `stale_time`, which *is* a freya-query cache entry's identity — never
+  a mirror of the result on a store or a prop threaded across the tree. A settled entry with
+  `stale_time(MAX)` is never stale so it can't re-execute, and an execution in flight is attached
+  to (our fork counts them). The Problems drawer reads a run's error exactly this way, off the same
+  entry the results pane renders. Caveat: `enabled` is part of that identity, so `.enable(false)`
+  reads a *different*, never-running entry — there is no "watch without running", and a surface
+  that only sometimes has a key mounts its subscriber in a child that only exists when it does.
 - **Never a shared map/registry value** (`State<HashMap<TabId, …>>`, a context registry) that
   threads every tab's data through one value into every consumer — that's the rejected
   "runs-by-id store" in every disguise.

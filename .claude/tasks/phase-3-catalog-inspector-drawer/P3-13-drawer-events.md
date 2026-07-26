@@ -17,8 +17,15 @@ referenced by no live crate, `LogTab` duplicates `DrawerTab`, and `LogEvent.open
 flag in a serde-only crate (without a `Serialize` derive, so it isn't even that). Define the real
 shape here and delete it; don't build on it.
 
-**From P3-11:** this task owns the first working **Clear** — the drawer header's Clear button and
-its Events/History-only rule land with P3-12 (which owns the rule) and this task (the action).
+**From P3-11 via P3-12:** this task owns the first working **Clear**. The button and its
+Events/History-only rule are already in `drawer/mod.rs`, shipped **parked** (`enabled(false)`)
+because there is nothing to clear yet — give it an `on_press` and `enabled(!log.is_empty())`;
+nothing else at the call site changes. The header's **count** is a `DrawerCount`
+(`State<usize>`) the shell owns and the mounted body writes (see P3-12) — write the log's length
+into it, and reset it on unmount as `Problems` does. The shared **frame** is `drawer/frame.rs`:
+`DrawerBody` (scroll container) and `DrawerEmpty` (centred glyph + copy). Colours come from the
+`drawer` component theme; extend it rather than adding a second one, and read `LogKind`'s dot
+colours off the sheet's semantic ramp (`success`/`warning`/`error`/`info`), per AGENTS.md §3.
 
 ## Build
 - The store: a window-scoped log appended by whichever layer observes the fact (a settled query's

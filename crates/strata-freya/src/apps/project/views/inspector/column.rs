@@ -496,12 +496,7 @@ impl Component for ScannedStatistics {
 
         match shown(&state, previous.as_ref(), *announced.read()) {
             // Nothing on screen yet, so the press says so at once — no hold.
-            Shown::FirstScan => zone(
-                &self.facts,
-                t,
-                None,
-                Some(running_row(t, SCANNING, cancel)),
-            ),
+            Shown::FirstScan => zone(&self.facts, t, None, Some(running_row(t, SCANNING, cancel))),
             // A re-scan slow enough to be worth saying: the numbers stay, the row explains why
             // they are still the old ones, and Cancel is right there.
             Shown::ReScan(profile) => settled(profile, Some(running_row(t, RESCANNING, cancel))),
@@ -710,7 +705,9 @@ fn scan_card(facts: &ColumnFacts, t: &InspectorTheme, actions: ProfileActions) -
     let kind = facts.owner_kind();
     let owner = facts.owner.clone();
     let copy = match facts.derived {
-        true => "Running the view's query in full would compute distinct counts, means and medians.",
+        true => {
+            "Running the view's query in full would compute distinct counts, means and medians."
+        }
         false => "Reading every file would compute distinct counts, means and medians.",
     };
 

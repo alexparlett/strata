@@ -18,6 +18,8 @@ use strata_core::theme::load;
 use strata_model::{ColRef, ColumnInfo, Kind, Origin, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
 
+use crate::apps::project::state::CatalogState;
+
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
@@ -208,7 +210,7 @@ fn runner() -> (TestingRunner, Handles) {
             // presses Refresh), the scan flag, the app config behind "View table"'s LIMIT, and
             // the drop-confirm slot the Drop items set.
             r.provide_root_context(EngineCtx::new);
-            r.provide_root_context(|| State::create(false));
+            r.provide_root_context(|| State::create(CatalogState::Settled(0)));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
@@ -1071,7 +1073,8 @@ fn profile_asks_the_cost_confirm_rather_than_scanning() {
 fn a_refused_row_is_not_offered_a_scan() {
     let (mut runner, (_, _, _, store, _, _, profile_target)) = settled();
     assert_eq!(
-        store.peek().tables[0].def.name, "events",
+        store.peek().tables[0].def.name,
+        "events",
         "the refused row (`table_failed` in the fixture)"
     );
     right_click_row(&mut runner, "events");
@@ -1083,7 +1086,10 @@ fn a_refused_row_is_not_offered_a_scan() {
         "no confirm was raised: {:?}",
         profile_target.peek()
     );
-    assert_eq!(store.peek().profile_scan(CatalogKind::Table, "events"), None);
+    assert_eq!(
+        store.peek().profile_scan(CatalogKind::Table, "events"),
+        None
+    );
 }
 
 /// Once a row carries a request it **spins**, and the spinner is its own — the registration

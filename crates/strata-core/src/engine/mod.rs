@@ -1118,7 +1118,12 @@ mod tests {
         for col in ["country", "region"] {
             assert_eq!(
                 keys(col),
-                vec![StatKey::Distinct, StatKey::Max, StatKey::Min, StatKey::Nulls],
+                vec![
+                    StatKey::Distinct,
+                    StatKey::Max,
+                    StatKey::Min,
+                    StatKey::Nulls
+                ],
                 "{col}: a string column's facts, and no mean/median"
             );
         }
@@ -1165,7 +1170,10 @@ mod tests {
 
         assert!(flagged, "a running scan is work in flight");
         assert!(cancelled, "…and the cancel found it");
-        assert_eq!(settled.as_ref().err().map(String::as_str), Some("cancelled"));
+        assert_eq!(
+            settled.as_ref().err().map(String::as_str),
+            Some("cancelled")
+        );
         assert!(!flag.load(Ordering::Relaxed), "cleared once it settled");
         assert!(
             !eng.cancel_profile("slow"),
@@ -1204,7 +1212,10 @@ mod tests {
         let (first, re_scan, other, stopped) = tokio::join!(first, re_scan, other, stop);
 
         assert!(first.is_err(), "the superseded scan reports no numbers");
-        assert!(stopped, "the re-scan owns the entry, so there was one to cancel");
+        assert!(
+            stopped,
+            "the re-scan owns the entry, so there was one to cancel"
+        );
         assert!(re_scan.is_err(), "…and that cancel landed on it");
         assert_eq!(
             other.map(|p| p.rows),

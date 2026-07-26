@@ -14,7 +14,7 @@
 use crate::apps::project::close::{CloseTarget, TabCloser};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, RunId};
-use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{use_catalog, Chan, ProjChan, ProjectState, SessionState};
 use crate::keymap::on_commands;
 use editor::actions;
 use editor::tab::EditorTab;
@@ -96,6 +96,9 @@ impl Component for Workbench {
         // each of these chords has a single consumer).
         let config = use_config_station();
         let project = use_radio_station::<ProjectState, ProjChan>();
+        // ⌘S can create a view, which moves the engine's catalog — the driver re-derives every
+        // tab's verdict against it (`state::diagnostics`).
+        let catalog = use_catalog();
         let mut cmd_radio = radio;
         let shortcuts = on_commands(config, move |cmd| {
             // `read()` is peek-equivalent here: event handlers have no reactive context.
@@ -131,7 +134,7 @@ impl Component for Workbench {
                 }
                 Command::SaveQuery => {
                     let Some(id) = active else { return false };
-                    actions::save(cmd_radio, project, engine.clone(), id);
+                    actions::save(cmd_radio, project, engine.clone(), catalog, id);
                     true
                 }
                 _ => false,

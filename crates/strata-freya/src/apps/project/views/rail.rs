@@ -18,6 +18,7 @@ use strata_model::{DrawerTab, SidebarPane};
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
+use crate::components::typography::Meta;
 
 #[derive(PartialEq)]
 pub struct ActivityRail;
@@ -75,13 +76,19 @@ impl Component for ActivityRail {
             ))
             // Flexible spacer pushes the diagnostics group to the bottom.
             .child(rect().width(Size::px(1.)).height(Size::flex(1.)))
-            // Bottom group — the drawer's diagnostics tabs.
-            .child(button(
-                IconName::Problems,
-                "Problems",
-                layout.drawer == Some(DrawerTab::Problems),
-                |s| s.toggle_drawer(DrawerTab::Problems),
-            ))
+            // Bottom group — the drawer's diagnostics tabs. Problems wears the error count.
+            .child(
+                rect()
+                    .width(Size::px(40.))
+                    .height(Size::px(38.))
+                    .child(button(
+                        IconName::Problems,
+                        "Problems",
+                        layout.drawer == Some(DrawerTab::Problems),
+                        |s| s.toggle_drawer(DrawerTab::Problems),
+                    ))
+                    .child(ProblemsBadge),
+            )
             .child(button(
                 IconName::Lines,
                 "Events",
@@ -94,5 +101,60 @@ impl Component for ActivityRail {
                 layout.drawer == Some(DrawerTab::History),
                 |s| s.toggle_drawer(DrawerTab::History),
             ))
+    }
+}
+
+/// The Problems button's error count (canvas `Strata.dc.html:355`): how many errors are open
+/// across **every** open tab, hidden at zero and capped at `99+`.
+///
+/// Its own leaf, not a read on [`ActivityRail`]: the rail renders five toggles, and a validation
+/// pass settling on any tab has no business re-rendering the other four.
+///
+/// It counts the same `error_count()` the drawer header does, from the same function, so the
+/// badge and the header can never disagree. Errors only — a keyword-typo warning lists in the
+/// drawer without claiming the query is broken.
+#[derive(PartialEq)]
+struct ProblemsBadge;
+
+impl Component for ProblemsBadge {
+    fn render(&self) -> impl IntoElement {
+        let session = use_radio::<SessionState, Chan>(Chan::Diagnostics);
+        let errors = session.read().error_count();
+        let theme = use_theme();
+        let (background, color, ring) = {
+            let t = theme.read();
+            let c = t.colors();
+            // Semantic: the badge is the app-wide error tone wherever it appears (AGENTS.md §3).
+            (c.error, c.text_inverse, c.surface_primary)
+        };
+
+        // Nothing to say: no pill, not an empty one (canvas `sc-if hasProblems`).
+        if errors == 0 {
+            return rect();
+        }
+        rect()
+            // Pinned over the button's top-right corner, the way the grid header's resize grip
+            // pins to its cell — an explicit offset, not fill-plus-alignment.
+            .position(Position::new_absolute().top(1.).right(1.))
+            .min_width(Size::px(15.))
+            .height(Size::px(15.))
+            .corner_radius(7.5)
+            .background(background)
+            // The canvas's 2px ring, so the pill reads clear of the glyph beneath it.
+            .border(
+                Border::new()
+                    .width(2.)
+                    .fill(ring)
+                    .alignment(BorderAlignment::Outer),
+            )
+            .center()
+            .padding((0., 3.))
+            .child(
+                Meta::new(match errors {
+                    n if n > 99 => "99+".to_string(),
+                    n => n.to_string(),
+                })
+                .color(color),
+            )
     }
 }

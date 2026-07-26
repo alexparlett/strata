@@ -424,7 +424,10 @@ Both are small context signals, not Radio stations:
 - **`LogCtx = State<VecDeque<LogEntry>>`** — the window's complete event/error record, appended
   by whichever layer observes the fact (a settled query's `Err`, a mutation's result, a load
   summary). `LogEntry` carries a level + origin so views filter it (a toast host = recent
-  warn+, Problems = a tab's logged query error). Ephemeral.
+  warn+). Ephemeral. **Not built** — P3-13 (the Events drawer) owns it.
+
+  It does **not** feed Problems. That clause predates freya-query and would have made Problems a
+  log; Problems is the SQL-validation surface (§9), and a log is the opposite of a live fact.
 
 ---
 
@@ -437,17 +440,34 @@ originated, so the user sees them in place. Both happen; not either/or.
 
 | Origin | In the log | Also shown inline |
 |--------|-----------|-------------------|
-| Query execution | yes (logged where the query settles `Err`) | that tab's results / Problems, from `RunQuery::Err`; auto-clears on re-run |
+| Query execution | yes (logged where the query settles `Err`) | that tab's **results pane**, from `RunQuery::Err` — banner, code frame, caret, hint; auto-clears on re-run. **Not Problems**: a failure belongs to a run, not to the text, and the only ways to put it in a cross-tab view are a copy on the store that outlives the run it describes, or one freya-query subscription per tab in the drawer *and* in the rail badge |
 | Registration via configure form | yes | the form's submit error; the answer lands on the row via `ProjectState::table_registered` / `table_failed` (§6's catalog note — no cache to invalidate) |
 | Registration at load | yes | a per-source marker on the sidebar catalog item (+ one load-summary notice) |
 
-SQL validation is the exception — derived per-tab from the editor text and not logged. As built
-(P2-18) it is an **engine dry-plan**, not a client-side memo: a debounced cancel-and-rearm pass
-(`query::use_validation`, gated on the buffer's text revision) calls `Engine::validate` — lexical
-lints + managed-DDL policy + parse/resolve/analyze against the live session, never executing —
-and applies the byte-spanned result twice: squiggle decorations inside the tab's own
-`CodeEditorData`, and `QueryTab::diagnostics` on `Chan::Diagnostics(id)`. A tab's Problems view
-is `diagnostics(tab) ∪ query_error(tab)`.
+SQL validation is the exception — derived per tab from the editor text and the catalog, and not
+logged. It is an **engine dry-plan**, not a client-side memo (P2-18/P2-23): lexical lints +
+managed-DDL policy + parse/resolve/analyze against the live session, never executing.
+
+**One driver, for every tab** (`state::diagnostics::use_diagnostics`, mounted once in the window
+root). Each tab carries `validated: Option<Stamp>` — the buffer revision its diagnostics were
+computed from and the catalog epoch they were resolved against — so `SessionState::stale_tabs`
+is the whole work list and there is no set of entry points to keep true: a tab restored at
+project open, reopened, opened from a saved query or a view, duplicated, edited, or left behind
+by a pass a tab switch cancelled are all "the stamp does not match". A settled pass writes
+squiggle decorations into the tab's own `CodeEditorData` and its rows + stamp on
+`Chan::Diagnostics`.
+
+Three fixed subscriptions make that one hook rather than a component per tab: `Chan::Text` (the
+synthetic fan-in every `Chan::Tab(_)` write derives, so one subscription watches any tab's
+buffer), `Chan::Tabs`, and the catalog. The catalog is a **gate**, not just an input:
+`Engine::register` deregisters before it re-infers, so while a scan is in flight nothing
+validates and no false "not found" is ever produced. Releasing into a new epoch is what
+re-derives every tab against the catalog the pass just built — how a problem fixed in Table
+Config clears without the user opening the tab.
+
+Problems is therefore `diagnostics(tab)` across every tab, grouped by tab; the drawer's header
+tally and the rail badge are both `SessionState::error_count()`, from one function, so they
+cannot disagree.
 
 ---
 
