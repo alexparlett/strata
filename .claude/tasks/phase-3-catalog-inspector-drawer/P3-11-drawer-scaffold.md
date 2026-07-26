@@ -23,7 +23,9 @@ piece with no dependency on tab content. The three original items resolved as:
    never built), and History would need a `clear_history` + `history.jsonl` truncate that
    `strata-core::project` doesn't have. Same for the design's **count label** (`drawerCountLabel`)
    — nothing to count yet. **P3-12** adds the count and the Problems-hides-Clear rule; **P3-13**
-   the log store and the first working Clear; **P3-14** the History one.
+   the log store and the first working Clear; **P3-14** the History one. (All but the last have
+   since landed: P3-12 shipped `DrawerCount` + the frame, P3-13 built `state::log` and wired
+   Events' Clear off that count. History's stays parked.)
 3. **List frame — deferred to P3-12.** No consumer today, which is the unreferenced pre-work
    AGENTS.md §5 rejects. It is also less shared than this file assumed: Problems is a sticky group
    header + icon·message·line rows at `--sp-7`; Events is flat bottom-bordered dot·message·ts rows;

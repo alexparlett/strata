@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use async_io::Timer;
 use freya::prelude::{
-    spawn, use_drop, use_provide_context, use_side_effect, use_state, Platform, State, TaskHandle,
-    WritableUtils,
+    spawn, use_drop, use_hook, use_provide_context, use_side_effect, use_state, Platform, State,
+    TaskHandle, WritableUtils,
 };
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
 use strata_core::engine::TableSpec;
 use strata_core::project::{self as project_io, SessionLoadError};
+use strata_core::util::{fmt_int, plural};
 use strata_model::{SessionSnapshot, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
@@ -25,6 +26,7 @@ use super::catalog::{
     ScanScope,
 };
 use super::history::{History, HistoryCtx};
+use super::log::{log_event, LogCtx, LogLevel};
 use super::{Chan, ProjChan, ProjectState, SessionState};
 
 /// Initialise this window's Session store and provide it via context. Pulls the open
@@ -149,11 +151,25 @@ fn new_session() -> SessionState {
 /// The effect's mount run *is* the project-open pass; every later run is a ↻ (it subscribes
 /// to the request counter and nothing else — reading the scan flag here would re-fire the
 /// effect on the flag's own release and loop).
-pub fn use_init_project(engine: &EngineCtx, root: PathBuf) -> RadioStation<ProjectState, ProjChan> {
+///
+/// `log` is the window's event log (P3-13): the open itself and every def the pass answers for
+/// are recorded there. Handed in rather than consumed from context so the root reads as what it
+/// is — the log is stood up first, precisely because this is its first writer.
+pub fn use_init_project(
+    engine: &EngineCtx,
+    log: LogCtx,
+    root: PathBuf,
+) -> RadioStation<ProjectState, ProjChan> {
     let station = use_init_radio_station::<ProjectState, ProjChan>(move || open_project(root));
     let catalog = use_init_catalog();
     let rescan = use_init_catalog_rescan();
     let engine = engine.clone();
+    // The window's first event, once per open — including the open a re-root performs, which
+    // mounts this hook again with a fresh log.
+    use_hook(move || {
+        let name = station.peek().name.clone();
+        log_event(log, LogLevel::Info, format!("Opened project '{name}'"));
+    });
     use_side_effect(move || {
         let request = rescan.read().clone();
         // Claimed synchronously here, before anything is spawned, so two requests in one
@@ -173,7 +189,14 @@ pub fn use_init_project(engine: &EngineCtx, root: PathBuf) -> RadioStation<Proje
         if request.seq > 0 {
             reset_rows(station, &request.scope, &views);
         }
-        spawn(scan_catalog(engine.clone(), station, guard, tables, views));
+        spawn(scan_catalog(
+            engine.clone(),
+            station,
+            log,
+            guard,
+            tables,
+            views,
+        ));
     });
     station
 }
@@ -278,11 +301,12 @@ pub fn refresh_catalog(rescan: CatalogRescan) {
 async fn scan_catalog(
     engine: EngineCtx,
     station: RadioStation<ProjectState, ProjChan>,
+    log: LogCtx,
     _scan: ScanGuard,
     tables: Vec<String>,
     views: Vec<String>,
 ) {
-    register_defs(engine, station, tables, views).await;
+    register_defs(engine, station, log, tables, views).await;
 }
 
 /// Build the Project store for the resolved `root`: load its `project.json` defs, or
@@ -314,10 +338,17 @@ fn open_project(root: PathBuf) -> ProjectState {
 /// remainder are genuinely broken (bad SQL or a missing table) and their errors land on their
 /// rows.
 ///
+/// Every answer the engine gives is also **recorded in the event log** (P3-13) — one event per def,
+/// on either arm, for every width of pass. Not a synthesized "re-scanned N tables" summary: the
+/// per-def answers are the facts the pass observed, and a count derived from them would be a second
+/// derivation of the same thing. A pass whose work list is empty (a table dropped between the
+/// request and the driver) records nothing, because nothing happened.
+///
 /// A name with no def is skipped — the row went while the pass was being planned.
 async fn register_defs(
     engine: EngineCtx,
     mut station: RadioStation<ProjectState, ProjChan>,
+    log: LogCtx,
     tables: Vec<String>,
     views: Vec<String>,
 ) {
@@ -357,11 +388,31 @@ async fn register_defs(
 
     for (name, spec) in tables {
         match engine.register(spec).await {
-            Ok(meta) => station
-                .write_channel(ProjChan::Tables)
-                .table_registered(&name, meta),
+            Ok(meta) => {
+                log_event(
+                    log,
+                    LogLevel::Ok,
+                    format!(
+                        "Registered table '{name}' · {}{}",
+                        plural(meta.columns.len(), "column"),
+                        // Only if the source reported one (P3-08's rule) — a CSV table has no
+                        // row count until something counts it.
+                        meta.rows
+                            .map(|rows| format!(" · {} rows", fmt_int(rows)))
+                            .unwrap_or_default()
+                    ),
+                );
+                station
+                    .write_channel(ProjChan::Tables)
+                    .table_registered(&name, meta)
+            }
             Err(e) => {
                 tracing::error!("register table '{name}' failed: {e}");
+                log_event(
+                    log,
+                    LogLevel::Error,
+                    format!("Table '{name}' failed to register: {e}"),
+                );
                 station
                     .write_channel(ProjChan::Tables)
                     .table_failed(&name, e);
@@ -375,9 +426,21 @@ async fn register_defs(
         let mut failed = Vec::new();
         for (name, sql) in pending {
             match engine.create_view(name.clone(), sql.clone()).await {
-                Ok(meta) => station
-                    .write_channel(ProjChan::Views)
-                    .view_registered(&name, meta),
+                Ok(meta) => {
+                    log_event(
+                        log,
+                        LogLevel::Ok,
+                        format!(
+                            "Registered view '{name}' · {}",
+                            plural(meta.columns.len(), "column")
+                        ),
+                    );
+                    station
+                        .write_channel(ProjChan::Views)
+                        .view_registered(&name, meta)
+                }
+                // Not logged yet: a view whose dependency lands later succeeds on a following
+                // round, and an event per attempt would record failures that never happened.
                 Err(e) => failed.push((name, sql, e)),
             }
         }
@@ -385,6 +448,11 @@ async fn register_defs(
             // A full round without progress — the rest are genuinely broken.
             for (name, _, e) in failed {
                 tracing::error!("create view '{name}' failed: {e}");
+                log_event(
+                    log,
+                    LogLevel::Error,
+                    format!("View '{name}' failed to register: {e}"),
+                );
                 station.write_channel(ProjChan::Views).view_failed(&name, e);
             }
             break;

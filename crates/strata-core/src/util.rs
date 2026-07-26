@@ -2,6 +2,7 @@
 //! timestamps, and the one crash-safe file write every file `.strata/` owns goes through
 //! ([`write_atomic`]). (Domain vocabulary like `Kind` lives in `crate::model`.)
 
+use chrono::Timelike;
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -10,27 +11,28 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Wall-clock `HH:MM:SS` (UTC) for log timestamps — avoids a chrono dependency.
+/// Wall-clock `HH:MM:SS` in the machine's **local** zone — the timestamp on an event-log row
+/// (P3-13).
+///
+/// Local, unlike [`iso8601`] below, and deliberately: this stamp is read against the clock in the
+/// user's menu bar ("did that scan run just now, or before I fixed the path?"), so an unmarked UTC
+/// time would be a lie the reader cannot detect. The zone is not a guess — `chrono`'s `clock`
+/// feature (already in the graph via datafusion → arrow) reads the real system zone. An absolute
+/// instant, which has no such frame of reference, still prints UTC and says so.
 pub fn now_hms() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-        % 86_400;
-    format!(
-        "{:02}:{:02}:{:02}",
-        secs / 3600,
-        (secs % 3600) / 60,
-        secs % 60
-    )
+    let now = chrono::Local::now();
+    // Formatted by hand rather than through `strftime`: the same three fields, and it keeps this
+    // module's one timestamp shape in one recognisable place.
+    format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second())
 }
 
 /// An instant as an ISO-8601 timestamp in **UTC** (`2026-07-26T09:22:48Z`) — the exact-time
 /// tooltip behind a relative age the UI shows ("scanned 5 min ago").
 ///
-/// **UTC, and marked `Z`.** There is no timezone database in `std`, so a local rendering would need
-/// an offset we can only guess at — and a guessed offset is worse than a stated zone, because the
-/// reader cannot tell it is wrong. Same call [`now_hms`] makes, for the same reason.
+/// **UTC, and marked `Z`.** An absolute instant is read on its own, with no clock beside it to
+/// compare against, so the zone has to be *stated* — and a stamp that says which zone it is in is
+/// never ambiguous, wherever the reader is. That is the opposite case to [`now_hms`], a wall clock
+/// read against the user's own, which is why the two differ.
 ///
 /// Like [`fmt_int`], one path to one function: every surface that prints an instant imports it from
 /// here, so two places can't disagree about what a timestamp looks like.
@@ -105,6 +107,18 @@ pub fn fmt_int(n: u64) -> String {
         out.push(*b as char);
     }
     out
+}
+
+/// A counted noun — `12 columns`, `1 problem` — with the count grouped by [`fmt_int`].
+///
+/// **Regular nouns only** (`+s`), which is every noun the UI counts: columns, rows, problems,
+/// tables, views, files, events. A count that needs an irregular plural needs its own sentence
+/// anyway.
+pub fn plural(n: usize, noun: &str) -> String {
+    match n {
+        1 => format!("1 {noun}"),
+        n => format!("{} {noun}s", fmt_int(n as u64)),
+    }
 }
 
 /// Human-readable byte size (e.g. `1.4 MB`).
@@ -439,6 +453,15 @@ mod tests {
         assert_eq!(fmt_int(1_000), "1,000");
         assert_eq!(fmt_int(48_213), "48,213");
         assert_eq!(fmt_int(2_413_118), "2,413,118");
+    }
+
+    /// A counted noun agrees with its count, and rides the same grouping as every other figure.
+    #[test]
+    fn counted_nouns_agree_and_group() {
+        assert_eq!(plural(0, "problem"), "0 problems");
+        assert_eq!(plural(1, "problem"), "1 problem");
+        assert_eq!(plural(2, "column"), "2 columns");
+        assert_eq!(plural(48_213, "row"), "48,213 rows");
     }
 
     #[test]

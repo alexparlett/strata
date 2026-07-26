@@ -1,0 +1,264 @@
+//! The window's **event log** satellite — the record behind the drawer's Events tab (P3-13 ·
+//! state-arch §8).
+//!
+//! A context signal rather than a store, on the same terms as [`History`](super::history::History):
+//! nothing needs surgical per-channel updates, because one append wakes exactly one reader (the
+//! Events body, when it is mounted).
+//!
+//! ## Appended by whoever observed the fact
+//!
+//! There is no producer hook here and there must not be one — an event is not derivable from
+//! anything, so the only layer that can honestly record it is the one that watched it happen: the
+//! catalog scan records what the engine answered for each def (`state::hooks`), Save and the drop
+//! confirm record their own mutations, and a Run's outcome is recorded by the tab's request keeper
+//! ([`use_run_logging`]), which is already mounted for the press's whole life. That is the opposite
+//! of the diagnostics driver (AGENTS.md §2) and for the opposite reason: diagnostics are a pure
+//! function of the buffer and the catalog, so a reconciliation can re-derive them; a log is a
+//! history of things that no longer exist to be re-read.
+//!
+//! ## Ephemeral, and never a second copy
+//!
+//! Nothing here is persisted (unlike history's `history.jsonl`) and nothing here is the *only*
+//! copy of anything: a registration failure lives on its catalog row, a run failure lives in the
+//! run's own freya-query entry and is rendered in full by the results pane. The log is the
+//! **record that they happened**, in one place and in order, which is the one thing no surface
+//! showing live state can give.
+//!
+//! ## No `origin` field
+//!
+//! state-arch §8 sketched a level *and an origin* per entry. The level is real — it is the dot's
+//! colour and an error's message tone. The origin is not: every message already names what it is
+//! about ("Registered table 'users'", "Dropped view 'daily'"), so a structured copy of the same
+//! thing would be a second copy that can disagree with the sentence beside it — the reason a
+//! `Diagnostic` carries no `TabId` (P3-12) — and nothing filters the list today. A filter, or a
+//! toast host that wants "recent warn+", can add the field when it is the thing being built.
+
+use std::collections::VecDeque;
+
+use freya::prelude::{
+    use_consume, use_provide_context, use_side_effect, use_state, State, WritableUtils,
+};
+use freya::query::{QueryStateData, UseQuery};
+
+use crate::apps::project::query::{QueryOutcome, RunQuery};
+use strata_core::util::fmt_int;
+use strata_core::util::now_hms;
+
+/// How many events are kept, newest-first. The log is a scrollback, not an audit trail — old
+/// enough to answer "what did the scan say", short enough that it can't grow without bound in a
+/// window left open for a week.
+const CAP: usize = 200;
+
+/// What an event says about itself: the dot's tone, off the sheet's semantic ramp (`success` /
+/// `info` / `warning` / `error` — AGENTS.md §3). Four, because that ramp has four: the canvas's
+/// separate `run` kind painted the same colour as `info` and differed in nothing else.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LogLevel {
+    /// Something the user asked for finished, and worked.
+    Ok,
+    /// Something happened that is neither an outcome nor a fault.
+    Info,
+    /// Finished, but not the way it was asked for (a cancelled run).
+    Warning,
+    /// Failed.
+    Error,
+}
+
+/// One row of the log.
+pub struct LogEvent {
+    /// Append order — the row's list key, so an event arriving above another doesn't shuffle the
+    /// rest through each other's scopes. Per log, which is all a key needs to be.
+    pub seq: u64,
+    pub level: LogLevel,
+    pub message: String,
+    /// The local wall clock the event was appended at, `HH:MM:SS`
+    /// ([`now_hms`](strata_core::util::now_hms)) — formatted once, at append, because that is when
+    /// the clock says what it said.
+    pub at: String,
+}
+
+/// The window's event log: newest first, capped at [`CAP`].
+#[derive(Default)]
+pub struct Log {
+    events: VecDeque<LogEvent>,
+    next_seq: u64,
+}
+
+impl Log {
+    /// Append `message` at `level`, stamped now, and drop the oldest event past [`CAP`].
+    pub fn push(&mut self, level: LogLevel, message: impl Into<String>) {
+        self.next_seq += 1;
+        self.events.push_front(LogEvent {
+            seq: self.next_seq,
+            level,
+            message: message.into(),
+            at: now_hms(),
+        });
+        while self.events.len() > CAP {
+            self.events.pop_back();
+        }
+    }
+
+    /// The events, newest first.
+    pub fn events(&self) -> impl Iterator<Item = &LogEvent> {
+        self.events.iter()
+    }
+
+    /// How many events are held — the drawer header's count on this tab, which is also what
+    /// decides the tab's empty state and whether **Clear** is live. One question, one answer; no
+    /// `is_empty` beside it, because a second way to ask it would just be a second thing to keep
+    /// in step.
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Empty the log — the drawer's **Clear** (the first working one; P3-11 shipped the button
+    /// parked because nothing had a log to clear yet).
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+}
+
+/// The event log in context.
+pub type LogCtx = State<Log>;
+
+/// Stand this project's log up and provide it. Call once in the window root — **before**
+/// `use_init_project`, whose scan is the first thing that records into it.
+pub fn use_init_log() -> LogCtx {
+    use_provide_context(|| State::create(Log::default()))
+}
+
+/// Append one event. A free function over the handle rather than a hook, because every observer
+/// is a spawned task or an event handler by the time it knows what happened; the handle is
+/// captured at render time and passed in, like the engine and the stores.
+pub fn log_event(mut log: LogCtx, level: LogLevel, message: impl Into<String>) {
+    log.write().push(level, message);
+}
+
+/// Record a Run press's outcome, once, when it settles.
+///
+/// Called from the tab's request keeper (`views::keeper`) beside `use_history_recording`, and for
+/// the same reason: the pin is mounted for the press's whole life, so a backgrounded tab's run is
+/// still observed — and stamped — at its real completion time. (The one edge history also has: a
+/// settle landing in the same update pass that unmounts its pin goes unrecorded.) The local flag
+/// is the whole dedup: the pin is keyed by the press's nonce, so there is never a second observer
+/// of the same settle to guard against.
+///
+/// Both halves of a settle are recorded, unlike history's success-only rule — a log of runs that
+/// omitted the failures would be the one thing nobody looks at a log for.
+pub fn use_run_logging(query: UseQuery<RunQuery>) {
+    let log = use_consume::<LogCtx>();
+    let mut logged = use_state(|| false);
+    use_side_effect(move || {
+        if *logged.peek() {
+            return;
+        }
+        // Resolved while the query's borrow is held, released before the append (the same shape
+        // `use_history_recording` uses).
+        let settled = match &*query.read().state() {
+            QueryStateData::Settled { res, .. } => Some(run_event(res)),
+            _ => None,
+        };
+        if let Some((level, message)) = settled {
+            logged.set(true);
+            log_event(log, level, message);
+        }
+    });
+}
+
+/// What a settled Run reads as in the log.
+///
+/// A **cancel** is a warning, not an error: `Err("cancelled")` is what the engine settles both for
+/// an explicit cancel and for a press superseded by a newer one, and neither is a fault — which is
+/// also why that string never reaches Problems (AGENTS.md §2). Everything else `Err` is the
+/// engine's own message, the same text the results pane frames.
+fn run_event(res: &Result<QueryOutcome, String>) -> (LogLevel, String) {
+    match res {
+        Ok(QueryOutcome::Rows(page)) => (
+            LogLevel::Ok,
+            format!(
+                "Query executed · {} rows · {} ms",
+                fmt_int(page.output.total as u64),
+                page.output.elapsed_ms
+            ),
+        ),
+        // The plan says whether it was an `EXPLAIN ANALYZE`, so nothing has to be threaded from
+        // the press to tell the two apart — and they are worth telling apart: analyze runs the
+        // query, plain explain does not.
+        Ok(QueryOutcome::Plan(plan)) => (
+            LogLevel::Ok,
+            match plan.analyze {
+                true => "Explained query with analyze".into(),
+                false => "Explained query".into(),
+            },
+        ),
+        Err(e) if e == "cancelled" => (LogLevel::Warning, "Query cancelled".into()),
+        Err(e) => (LogLevel::Error, e.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Newest first, and bounded: the log is a scrollback, so the oldest event is what goes.
+    #[test]
+    fn events_are_newest_first_and_capped() {
+        let mut log = Log::default();
+        for i in 0..CAP + 2 {
+            log.push(LogLevel::Info, format!("event {i}"));
+        }
+        assert_eq!(log.len(), CAP);
+        let messages: Vec<&str> = log.events().map(|e| e.message.as_str()).collect();
+        assert_eq!(messages[0], format!("event {}", CAP + 1));
+        assert_eq!(
+            messages[CAP - 1],
+            "event 2",
+            "the two oldest events aged out"
+        );
+    }
+
+    /// Sequence numbers keep rising past the cap — they are list keys, so a recycled one would
+    /// hand a new event the outgoing row's scope.
+    #[test]
+    fn sequence_numbers_are_unique_across_the_cap() {
+        let mut log = Log::default();
+        for _ in 0..CAP + 5 {
+            log.push(LogLevel::Ok, "x");
+        }
+        let seqs: Vec<u64> = log.events().map(|e| e.seq).collect();
+        assert_eq!(seqs[0], (CAP + 5) as u64);
+        assert!(seqs.windows(2).all(|w| w[0] > w[1]), "strictly descending");
+    }
+
+    #[test]
+    fn clear_empties_the_log() {
+        let mut log = Log::default();
+        log.push(LogLevel::Error, "boom");
+        assert_eq!(log.len(), 1);
+        log.clear();
+        assert_eq!(log.len(), 0);
+        // …and the next event still gets a fresh key: sequence numbers count appends, not rows,
+        // so an event added after a Clear can't collide with a cleared row's scope.
+        log.push(LogLevel::Ok, "again");
+        assert_eq!(log.events().next().unwrap().seq, 2);
+    }
+
+    /// A cancel (and a supersede, which settles the same string) is a warning, not a failure —
+    /// the distinction the results pane also makes.
+    #[test]
+    fn a_cancelled_run_logs_as_a_warning() {
+        let (level, message) = run_event(&Err("cancelled".to_string()));
+        assert_eq!(level, LogLevel::Warning);
+        assert_eq!(message, "Query cancelled");
+    }
+
+    /// Any other failure is the engine's own message, verbatim — the same text the results pane
+    /// frames, so the two can't describe one run differently.
+    #[test]
+    fn a_failed_run_logs_the_engines_message() {
+        let (level, message) = run_event(&Err("Schema error: No field named 'amont'".to_string()));
+        assert_eq!(level, LogLevel::Error);
+        assert_eq!(message, "Schema error: No field named 'amont'");
+    }
+}

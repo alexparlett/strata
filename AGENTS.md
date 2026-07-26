@@ -79,6 +79,21 @@ Things that must not regress. Each was fought for once already.
   `Chan::Persist`) that lets one subscription watch every tab's buffer. **The catalog is a gate,
   not just an input**: `Engine::register` deregisters before it re-infers, so nothing validates
   mid-scan and no false "not found" is ever produced.
+- **A log is recorded by its observer; there is no producer to register with.** The event log
+  (`state::log`, the drawer's Events tab) is the mirror image of the rule above, and the contrast
+  is the reasoning: a diagnostic is a pure function of two live inputs, so one driver can
+  re-derive it and no entry point needs enumerating — an **event** can be re-derived from nothing,
+  because it describes something already finished that may no longer exist to be re-read. So
+  whichever layer watched the fact records it (the scan pass per def, Save and the drop confirm
+  per mutation, the request keeper per settle, `cancel_run` per cancel), by capturing the `LogCtx`
+  at render time and calling `log_event`. Never add a producer hook, never re-derive an event from
+  live state, and never let a *log* entry be the only copy of a live fact — a registration failure
+  belongs on its catalog row, a run failure in the run's own query entry. Two corollaries that
+  cost time to rediscover: a cancel is logged at the **cancel**, since clearing the tab's trigger
+  unmounts the press's keeper in the same pass and the `Err("cancelled")` settle lands
+  unsubscribed; and an entry carries a **level** (the sheet's four semantic slots) but no
+  `origin`, because the message already names its subject and a structured copy of that is a
+  second copy that can disagree with it.
 - **Problems is the SQL-validation surface; a run failure is the results pane's.** A failure
   belongs to a run, not to the text — it can describe SQL the buffer no longer holds, it can't
   self-clear by typing, and `cancel`/supersede settle `Err("cancelled")`/`Err("superseded")`

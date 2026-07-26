@@ -5,6 +5,13 @@
 ## Goal
 The export UI, rebuilt to the v19 canvas — keep the export backend (`COPY … TO`).
 
+> **Report the outcome, and route a failure through P4-15.** An export is a write the user asked
+> for, so it belongs in the event log (P3-13) on both arms — the canvas's own
+> `Exported <n> rows → <path>` is the success line. Take the failure path through **P4-15**'s write
+> funnel rather than inventing a second one here; if P4-15 has not landed yet, call P3-13's
+> `persisted`-style helper and note it in P4-15's build list instead of adding a bare
+> `tracing::error!`.
+
 ## Current state
 Not built. In Freya, export **reads the run's snapshot** (P2-01) — no seed handoff (plan §6).
 

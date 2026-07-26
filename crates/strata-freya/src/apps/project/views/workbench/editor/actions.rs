@@ -12,13 +12,15 @@
 
 use freya::prelude::spawn;
 use freya::radio::{Radio, RadioStation};
+use strata_core::util::fmt_int;
 use strata_model::{Origin, SavedQuery, TabId, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, QuerySpec, RunId, DEFAULT_PAGE_SIZE};
 use crate::apps::project::state::{
-    catalog_settled, Catalog, Chan, ProjChan, ProjectState, SessionState,
+    catalog_settled, log_event, Catalog, Chan, LogCtx, LogLevel, ProjChan, ProjectState,
+    SessionState,
 };
 
 /// A Run / Explain / Analyze press (P2-15 + ⌘↵): snapshot the tab's editor text *now*,
@@ -56,17 +58,31 @@ pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: Quer
     );
 }
 
-/// Cancel the in-flight request (the toolbar's Run→Cancel flip, the Running body's
-/// control, and Esc all land here): tag-guarded engine-side abort (S14 — a stale press
-/// can't kill a newer run) + drop *this tab's* trigger, unmounting its results body
-/// back to Empty. Other tabs' requests are untouchable from here by construction.
+/// Cancel the in-flight request — the toolbar's Run→Cancel flip, the Running body's control, and
+/// the Esc that body binds to the same handler (`results::running`'s `on_esc`) all land here:
+/// tag-guarded engine-side abort (S14 — a stale press can't kill a newer run) + drop *this tab's*
+/// trigger, unmounting its results body back to Empty. Other tabs' requests are untouchable from
+/// here by construction.
+///
+/// **And the cancel is where a cancel gets logged** (P3-13), not the settle: dropping the
+/// trigger unmounts the press's keeper in the same pass, so the entry's `Err("cancelled")`
+/// lands with nobody subscribed (the keeper's own doc says as much). `Engine::cancel` answers
+/// with the elapsed time *iff* it really aborted something, which is both the guard against
+/// logging a cancel that hit nothing and the one real fact the event can carry.
 pub fn cancel_run(
     engine: &EngineCtx,
     mut session: Radio<SessionState, Chan>,
+    log: LogCtx,
     id: TabId,
     run: RunId,
 ) {
-    engine.cancel(id.into(), run.into());
+    if let Some(elapsed) = engine.cancel(id.into(), run.into()) {
+        log_event(
+            log,
+            LogLevel::Warning,
+            format!("Query cancelled after {} ms", fmt_int(elapsed as u64)),
+        );
+    }
     session.write_channel(Chan::Request(id)).clear_request(id);
 }
 
@@ -106,20 +122,26 @@ pub fn clear(mut session: Radio<SessionState, Chan>, id: TabId) {
 
 /// The Save button: write the buffer to the tab's save target, dispatching on its
 /// origin (see the module doc). A blank buffer never saves.
+///
+/// `log` is the window's event log: a save is a project mutation, so its outcome is recorded
+/// there (P3-13).
 pub fn save(
     session: Radio<SessionState, Chan>,
     project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
     catalog: Catalog,
+    log: LogCtx,
     id: TabId,
 ) {
     let Some((sql, name, origin)) = read_tab(session, id) else {
         return;
     };
     match origin {
-        Origin::View(view) => save_view(session, project, engine, catalog, id, view, sql, false),
-        Origin::SavedQuery(qid) => save_query(session, project, id, qid, name, sql),
-        Origin::Scratch => save_query(session, project, id, Uuid::new_v4(), name, sql),
+        Origin::View(view) => {
+            save_view(session, project, engine, catalog, log, id, view, sql, false)
+        }
+        Origin::SavedQuery(qid) => save_query(session, project, log, id, qid, name, sql),
+        Origin::Scratch => save_query(session, project, log, id, Uuid::new_v4(), name, sql),
     }
 }
 
@@ -131,6 +153,7 @@ pub fn save_as_view(
     project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
     catalog: Catalog,
+    log: LogCtx,
     id: TabId,
 ) {
     let Some((sql, _, _)) = read_tab(session, id) else {
@@ -143,7 +166,29 @@ pub fn save_as_view(
             .find(|n| p.name_in_use(n).is_none())
             .unwrap()
     };
-    save_view(session, project, engine, catalog, id, name, sql, true);
+    save_view(session, project, engine, catalog, log, id, name, sql, true);
+}
+
+/// Write the project file at a mutation point, and **record it if that fails**. `true` when the
+/// defs really reached disk.
+///
+/// Shared by both save paths and by the drop confirm (P3-13): `save_defs` failing used to be a
+/// `tracing::error!` and nothing more, which is invisible in the app — and the event log beside it
+/// would then claim the mutation stuck. One wording for all of them, and deliberately not naming
+/// the subject: the event that precedes or follows it already does.
+pub fn persisted(project: &ProjectState, log: LogCtx) -> bool {
+    match project.save_defs() {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::error!("save project defs: {e}");
+            log_event(
+                log,
+                LogLevel::Error,
+                format!("Could not write the project file: {e}"),
+            );
+            false
+        }
+    }
 }
 
 /// The tab's savable state: `(sql, trimmed name, origin)`; `None` when the tab is
@@ -167,21 +212,23 @@ fn save_view(
     mut project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
     catalog: Catalog,
+    log: LogCtx,
     id: TabId,
     name: String,
     sql: String,
     rename: bool,
 ) {
-    {
+    // Whether the def actually reached `project.json`. A failure here used to be a `tracing`
+    // line and nothing else, which the event log would then contradict: the engine goes on to
+    // create the view, so "Saved view" would be logged for a view the next open loses.
+    let persisted = {
         let mut p = project.write_channel(ProjChan::Views);
         p.upsert_view(ViewDef {
             name: name.clone(),
             sql: sql.clone(),
         });
-        if let Err(e) = p.save_defs() {
-            tracing::error!("save project defs: {e}");
-        }
-    }
+        persisted(&p, log)
+    };
     session.write_channel(Chan::Tabs).bind_saved(
         id,
         rename.then(|| name.clone()),
@@ -189,11 +236,23 @@ fn save_view(
     );
     spawn(async move {
         match engine.create_view(name.clone(), sql).await {
-            Ok(meta) => project
-                .write_channel(ProjChan::Views)
-                .view_registered(&name, meta),
+            Ok(meta) => {
+                // Only when it is really saved — the write failure above has already said so,
+                // and claiming both would be two rows arguing about one action.
+                if persisted {
+                    log_event(log, LogLevel::Ok, format!("Saved view '{name}'"));
+                }
+                project
+                    .write_channel(ProjChan::Views)
+                    .view_registered(&name, meta)
+            }
             Err(e) => {
                 tracing::error!("create view '{name}' failed: {e}");
+                log_event(
+                    log,
+                    LogLevel::Error,
+                    format!("View '{name}' failed to register: {e}"),
+                );
                 project.write_channel(ProjChan::Views).view_failed(&name, e);
             }
         }
@@ -211,6 +270,7 @@ fn save_view(
 fn save_query(
     mut session: Radio<SessionState, Chan>,
     mut project: RadioStation<ProjectState, ProjChan>,
+    log: LogCtx,
     id: TabId,
     qid: Uuid,
     name: String,
@@ -219,7 +279,10 @@ fn save_query(
     if name.is_empty() {
         return;
     }
-    {
+    // **After** the write, and only if it landed. A saved query is nothing but a stored string,
+    // so a failed `project.json` write means nothing was saved at all — logging the success first
+    // would have the log promising a query that the next open cannot find.
+    let saved = {
         let mut p = project.write_channel(ProjChan::Queries);
         let meta = p
             .saved_queries
@@ -229,13 +292,14 @@ fn save_query(
             .unwrap_or_else(|| "—".into());
         p.upsert_saved_query(SavedQuery {
             id: qid,
-            name,
+            name: name.clone(),
             sql,
             meta,
         });
-        if let Err(e) = p.save_defs() {
-            tracing::error!("save project defs: {e}");
-        }
+        persisted(&p, log)
+    };
+    if saved {
+        log_event(log, LogLevel::Ok, format!("Saved query '{name}'"));
     }
     session
         .write_channel(Chan::Tabs)

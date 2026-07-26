@@ -1,6 +1,8 @@
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, RunId};
-use crate::apps::project::state::{use_catalog, Chan, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{
+    use_catalog, Chan, LogCtx, ProjChan, ProjectState, SessionState,
+};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -50,6 +52,8 @@ impl Component for EditorToolbar {
         // toolbar shows nothing catalog-derived).
         let project = use_radio_station::<ProjectState, ProjChan>();
         let catalog = use_catalog();
+        // The window's event log — a save records its outcome there (P3-13).
+        let log = use_consume::<LogCtx>();
         // The tab's Run trigger, on its own channel — a press re-renders this toolbar
         // without waking the editor, and keystrokes (on `Chan::Tab`) never land here twice.
         let request_radio = use_radio::<SessionState, Chan>(Chan::Request(id));
@@ -95,7 +99,7 @@ impl Component for EditorToolbar {
         // body's control and Esc). Otherwise it's Run. Disabled never fires (RunButton
         // swallows it).
         let run_press = move |_| match in_flight {
-            Some(run) => actions::cancel_run(&engine, radio, id, run),
+            Some(run) => actions::cancel_run(&engine, radio, log, id, run),
             None => press(QueryMode::Run),
         };
 
@@ -148,13 +152,13 @@ impl Component for EditorToolbar {
             .child(tip(
                 "Save as view".into(),
                 tool(IconName::Eye).on_press(move |_| {
-                    actions::save_as_view(radio, project, view_engine.clone(), catalog, id)
+                    actions::save_as_view(radio, project, view_engine.clone(), catalog, log, id)
                 }),
             ))
             .child(tip(
                 save_title,
                 tool(IconName::Save).on_press(move |_| {
-                    actions::save(radio, project, save_engine.clone(), catalog, id)
+                    actions::save(radio, project, save_engine.clone(), catalog, log, id)
                 }),
             ));
 

@@ -13,22 +13,25 @@ earlier description: history is a **satellite**, not Radio and not on `SessionSt
 deduped by `RunId`. Only successful data runs are recorded (a failed/cancelled run or an Explain
 never reaches it).
 
-**From P3-11 via P3-12:** the drawer header already has the title, the count, expand/restore and
-collapse ×. The **Clear** button and its Events/History-only rule are in `drawer/mod.rs`, shipped
-**parked** (`enabled(false)`) — it needs a `clear_history` in `strata-core::project` that truncates
+**From P3-11 via P3-12, and now with P3-13 built:** the drawer header already has the title, the
+count, expand/restore and collapse ×. The **Clear** button and its Events/History-only rule are in
+`drawer/mod.rs`; **Events' half is wired** (P3-13) and History's is still **parked**
+(`enabled(false)`) — it needs a `clear_history` in `strata-core::project` that truncates
 `history.jsonl` as well as emptying the satellite, which does not exist yet. Give the button an
-`on_press` and an `enabled(..)`; nothing else at the call site changes. The header's **count** is a
-`DrawerCount` (`State<usize>`) the shell owns and the mounted body writes (see P3-12) — write the
-history length into it and reset it on unmount, as `Problems` does. The shared **frame** is
-`drawer/frame.rs`: `DrawerBody` (scroll container) and `DrawerEmpty` (centred glyph + copy);
-colours come from the `drawer` component theme, which this task extends rather than duplicating.
+`on_press` and widen the `enabled(..)` condition; nothing else at the call site changes, and
+Events is the worked example — including the fact that `enabled` reads the mounted body's
+`DrawerCount` rather than the store a second time. The header's **count** is that same
+`DrawerCount` (`State<usize>`), which the shell owns and the mounted body writes (see P3-12) —
+write the history length into it and reset it on unmount, as `Problems` and `Events` do. The
+shared **frame** is `drawer/frame.rs`: `DrawerBody` (scroll container) and `DrawerEmpty` (centred
+glyph + copy); colours come from the `drawer` component theme, which this task extends rather than
+duplicating (P3-13 added `divider_fill`, the in-list hairline).
 
-**Known defect to fix here:** the recorder lives *inside* `ResultsBody`
-(`state/history.rs::use_history_recording`), which only the active tab mounts. A run that settles
-while the user is on another tab is not recorded then — it is recorded when they come back, and
-if they never do, the successful run never enters History at all. P3-12 fixed the *timestamp*
-half (`ts_ms` now comes from `settlement_instant`, not from the clock at record time); moving the
-recorder out of the view needs a per-tab observer and belongs with this task, which owns History.
+**The recorder is already out of the view** (correcting an earlier note here): it lives in the
+tab's request keeper (`views::keeper`), mounted for the press's whole life at `ProjectRoot`, so a
+run that settles while the user is on another tab is recorded at its real completion time. P3-13
+hung the event log's own settle observer beside it. One edge remains for both: a settle landing in
+the same update pass that unmounts its pin goes unrecorded.
 
 ## Build
 - List past queries newest-first (meta · line-count badge · timestamp, per the canvas).

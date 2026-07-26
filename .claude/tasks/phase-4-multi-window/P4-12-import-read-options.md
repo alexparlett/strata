@@ -5,6 +5,9 @@
 ## Goal
 Format-specific import-read options in the config modal, wired into registration.
 
+> Read options are persisted **defs**, so this inherits P4-11's note: the persist goes through
+> **P4-15**'s write funnel, and nothing claims success the project file did not accept.
+
 ## Current state
 Not built. Designed in v19 (`Strata.dc.html` §~2205–2313; the import VM in `strata-windows.js`).
 

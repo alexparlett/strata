@@ -5,7 +5,7 @@
 //! (which made the engine look like their owner — it isn't; a `Stat` is read from a
 //! Parquet footer *by the engine* and computed from a scan *by [`crate::profile`]*, a
 //! `ColumnInfo` is produced by the engine, stored by [`crate::project`] and rendered by
-//! the UI), the form/log/menu types lived in a grab-bag `state.rs`, `QueryError` was a
+//! the UI), the form/menu types lived in a grab-bag `state.rs`, `QueryError` was a
 //! top-level file, and `Kind` was in `util`. Consolidating them into one leaf module —
 //! depending on nothing app-specific — lets `engine`, `profile`, `project`, `runs` and
 //! the UI all depend *down* onto one vocabulary, and breaks the `engine ↔ profile`
@@ -18,7 +18,6 @@ mod catalog;
 mod diagnostics;
 mod form;
 mod history;
-mod log;
 mod profile;
 mod query_error;
 mod results;
@@ -29,7 +28,6 @@ pub use catalog::{CatalogKind, ColRef, RemoveKind, RemoveTarget, SavedQuery, Tab
 pub use diagnostics::{Diagnostic, Severity};
 pub use form::{ConfigForm, ExportForm};
 pub use history::HistoryEntry;
-pub use log::{LogEvent, LogKind, LogTab};
 pub use profile::CatalogProfile;
 pub use query_error::QueryError;
 pub use results::{Cell, QueryOutput, SnapshotId};

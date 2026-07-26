@@ -18,6 +18,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 # `config`: app config (recent projects + prefs) in the OS user-config dir.
 preferences = "2"
+# `util::now_hms`: the local wall clock behind an event-log timestamp. Already in the graph
+# (datafusion → arrow → chrono, with `clock` on), so this only names what we depend on.
+chrono = "0.4"
 tracing = "0.1.44"
 
 [dev-dependencies]

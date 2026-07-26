@@ -1645,6 +1645,9 @@
             "message_color": {
               "$ref": "#/$defs/colorPref"
             },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "empty_color": {
               "$ref": "#/$defs/colorPref"
             }

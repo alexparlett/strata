@@ -20,8 +20,8 @@ use std::sync::Arc;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    use_autosave, use_diagnostics, use_init_catalog_selection, use_init_history, use_init_project,
-    use_init_session, Chan, SessionState,
+    use_autosave, use_diagnostics, use_init_catalog_selection, use_init_history, use_init_log,
+    use_init_project, use_init_session, Chan, SessionState,
 };
 use crate::apps::project::views::{
     CloseConfirm, DropConfirm, DropTarget, HeaderBar, OpenPrompt, ProfileConfirm, ProfileTarget,
@@ -362,10 +362,14 @@ impl Component for ProjectRoot {
                 engine
             }
         });
+        // This project's event log (P3-13) — the drawer's Events tab. First, because the open
+        // below is its first entry: every later observer (Save, the drop confirm, a tab's request
+        // keeper) reaches it from context.
+        let log = use_init_log();
         // This project's store: loads `.strata/project.json` (scaffolding one when the folder
         // has none) and registers its defs on the engine as a background task — rows flip
-        // Loading → Ready/Failed as answers land.
-        let project = use_init_project(&engine, self.root.clone());
+        // Loading → Ready/Failed as answers land, and each answer is recorded in the log.
+        let project = use_init_project(&engine, log, self.root.clone());
         // Register the project in the app-global config for as long as this subtree lives: it
         // heads the recents (so the launcher / project picker can offer it) and joins the
         // open-set (so they can tell open from merely recent) until the window closes — or

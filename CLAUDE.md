@@ -52,8 +52,9 @@ Members:
 - **`strata-freya`** — the Freya (Skia/native) frontend. **The port target** and the default build.
 - **`strata-core`** — engine logic: the DataFusion boundary (query/plan/profile/serialize), config,
   theme, SQL language service. The only place DataFusion is touched.
-- **`strata-model`** — leaf data vocabulary, serde-only (schema, results, catalog, form, log,
-  query_error). No logic.
+- **`strata-model`** — leaf data vocabulary, serde-only (schema, results, catalog, form, history,
+  session, query_error). No logic. (The event log is *not* here: it is ephemeral app state —
+  `strata-freya::apps::project::state::log`.)
 - **`strata-code-editor`** — vendored Skia code editor (Rope buffer + tree-sitter highlighting) used
   by the Freya SQL editor.
 - **`strata-forms` / `strata-forms-macro`** — headless forms layer + `#[derive(Form)]`.
@@ -193,6 +194,10 @@ src/apps/project/                the project window (Valin-shaped)
                                  `Reg<T>` (Loading/Ready/Failed), per-section ProjChan channels,
                                  and each row's profile *request* (never its numbers)
                                  catalog.rs = CatalogSelection, the inspected column (context)
+                                 log.rs = P3-13's **event log** satellite (`LogCtx`, ephemeral,
+                                 capped): the record behind the drawer's Events tab. No producer
+                                 hook — whichever layer observed the fact appends it (the scan
+                                 pass, Save, the drop confirm, the keeper's settle, `cancel_run`)
   model/                         window-local view models
   views/
     dialogs/                     the window's modal dialogs, mounted early so their key barrier
@@ -232,6 +237,9 @@ src/apps/project/                the project window (Valin-shaped)
                                  `error_count()`. Run failures are deliberately NOT here — a
                                  failure belongs to a run, and the results pane renders it in
                                  full
+      events.rs                  P3-13 — the window's event log, newest first: flat dot · message
+                                 · time rows over the shared frame. A view over `state::log`, and
+                                 the tab that owns the drawer's first working **Clear**
     keeper.rs                    request keepers, mounted by ProjectRoot: one invisible
                                  query subscriber per open tab's current press, so a
                                  backgrounded run keeps its cache entry (lifetime =
@@ -332,6 +340,16 @@ catalog is a **gate** as well as an input (`Engine::register` deregisters before
 nothing validates mid-scan and no false "not found" is ever produced). Problems is the
 **SQL-validation** surface across every tab; a run failure belongs to a run, not to the text, and
 stays the results pane's.
+
+**P3-13 (Events drawer)** is ✅, and is the standing rule above read backwards: **a log is
+recorded by its observer.** An event can't be re-derived from anything — it describes something
+already finished — so `state::log` has **no producer hook**; the scan pass records each def the
+engine answered for, Save and the drop confirm record their mutations, the request keeper records
+each run's settle, and `cancel_run` records a cancel (the `Err("cancelled")` settle lands
+unsubscribed, because clearing the trigger unmounts the keeper in the same pass). It also builds
+the store state-arch §8 only sketched — deleting the dead `strata-model::log` vocabulary — and
+wires the drawer's first working **Clear**. An entry carries a level, not an origin; see its task
+file.
 
 **P3-08 (column inspector)** is ✅, and carries the phase's other standing rule: **only real
 facts.** Every number in the inspector was *read* from the source (footer statistics via

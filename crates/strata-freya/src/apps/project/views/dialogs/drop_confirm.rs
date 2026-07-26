@@ -25,8 +25,10 @@ use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    catalog_settled, use_catalog, Catalog, Chan, ProjChan, ProjectState, SessionState,
+    catalog_settled, log_event, use_catalog, Catalog, Chan, LogCtx, LogLevel, ProjChan,
+    ProjectState, SessionState,
 };
+use crate::apps::project::views::workbench::editor::actions::persisted;
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::badge::Badge;
 use crate::components::dialog::{Dialog, DialogHeader};
@@ -104,6 +106,16 @@ impl DropTarget {
     }
 }
 
+/// The same action in the past tense, for the event log — the log records what happened, so it
+/// cannot reuse [`DropTarget::verb`], which is worded as the thing you are about to do.
+fn past(target: &DropTarget) -> &'static str {
+    match target {
+        DropTarget::Table(_) => "Dropped table",
+        DropTarget::View(_) => "Dropped view",
+        DropTarget::Query { .. } => "Deleted query",
+    }
+}
+
 /// The consequence line (D10): how many views this drop leaves invalid, or `None` when it
 /// leaves none — the callout is absent entirely rather than stating a zero.
 ///
@@ -146,6 +158,10 @@ impl Component for DropConfirm {
         // A drop moves the engine's catalog: every tab reading the dropped row is now wrong,
         // and none of them has been typed in. The bump is what re-derives them.
         let catalog = use_catalog();
+        // A drop is a catalog mutation, so it is recorded in the event log (P3-13) — including
+        // the one failure mode the catalog itself cannot show: a `DROP VIEW` the engine refused
+        // after the def was already gone.
+        let log = use_consume::<LogCtx>();
         let theme = use_theme();
         // The destructive action wears the shared `cancel_button` dress — the themes' authored
         // destructive tone (the running body's Cancel, the close confirm's Stop), not a
@@ -162,7 +178,7 @@ impl Component for DropConfirm {
         let confirm = move |engine: &EngineCtx| {
             let mut slot = slot;
             if let Some(target) = slot.peek().clone() {
-                drop_row(engine, project, session, catalog, &target);
+                drop_row(engine, project, session, catalog, log, &target);
             }
             slot.set(None);
         };
@@ -298,14 +314,21 @@ fn drop_row(
     mut project: RadioStation<ProjectState, ProjChan>,
     mut session: RadioStation<SessionState, Chan>,
     catalog: Catalog,
+    log: LogCtx,
     target: &DropTarget,
 ) {
+    // A removal is recorded at `Info`, not `Ok`: it is a change to the catalog, not a piece of
+    // work that succeeded, and the green tick belongs to the latter. Recorded **after** the def
+    // is written, and only if that write landed — `persisted` says so, and says so itself when it
+    // did not. A drop the project file never heard about comes back on the next open, so logging
+    // it first would leave the log contradicting the catalog.
+    let mut dropped = false;
     match target {
         DropTarget::Table(name) => {
             {
                 let mut p = project.write_channel(ProjChan::Tables);
                 p.remove_table(name);
-                persist(&p);
+                dropped = persisted(&p, log);
             }
             // Synchronous and local: DataFusion just forgets the provider.
             engine.deregister(name);
@@ -316,7 +339,7 @@ fn drop_row(
             {
                 let mut p = project.write_channel(ProjChan::Views);
                 p.remove_view(name);
-                persist(&p);
+                dropped = persisted(&p, log);
             }
             if session.peek().is_bound_to_view(name) {
                 session.write_channel(Chan::Tabs).unbind_view(name);
@@ -333,8 +356,15 @@ fn drop_row(
             spawn_forever(async move {
                 if let Err(e) = engine.drop_view(name.clone()).await {
                     // The def is already gone, which is the catalog's truth; a failed DROP VIEW
-                    // leaves a stale registration the next re-scan clears.
+                    // leaves a stale registration the next re-scan clears. The log is the only
+                    // surface that can say so — the row it would have described is gone.
                     tracing::error!("drop view '{name}': {e}");
+                    // Only the part the row above doesn't already say — it named the drop.
+                    log_event(
+                        log,
+                        LogLevel::Warning,
+                        format!("The engine kept view '{name}' until the next re-scan: {e}"),
+                    );
                 }
                 catalog_settled(catalog);
             });
@@ -344,20 +374,19 @@ fn drop_row(
             {
                 let mut p = project.write_channel(ProjChan::Queries);
                 p.remove_saved_query(*id);
-                persist(&p);
+                dropped = persisted(&p, log);
             }
             if session.peek().is_bound_to_query(*id) {
                 session.write_channel(Chan::Tabs).unbind_saved_query(*id);
             }
         }
     }
-}
-
-/// Write the project file — a drop is a def-mutation point, so it persists there and then rather
-/// than on a timer. Called inside the channel guard, like `save_view`'s.
-fn persist(project: &ProjectState) {
-    if let Err(e) = project.save_defs() {
-        tracing::error!("save project defs: {e}");
+    if dropped {
+        log_event(
+            log,
+            LogLevel::Info,
+            format!("{} '{}'", past(target), target.name()),
+        );
     }
 }
 
@@ -372,11 +401,11 @@ fn persist(project: &ProjectState) {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::apps::project::state::CatalogState;
+    use crate::apps::project::state::{CatalogState, Log};
 
     use freya_testing::TestingRunner;
     use strata_core::engine::{TableMeta, ViewMeta};
-    use strata_core::project::ProjectDefs;
+    use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
     use strata_model::{Origin, SavedQuery, TableDef, ViewDef};
 
@@ -458,6 +487,7 @@ mod tests {
         State<Option<DropTarget>>,
         RadioStation<SessionState, Chan>,
         RadioStation<ProjectState, ProjChan>,
+        LogCtx,
     );
 
     /// A scratch project folder for one test.
@@ -488,7 +518,9 @@ mod tests {
                 let project = r.provide_root_context(|| {
                     RadioStation::<ProjectState, ProjChan>::create(project(&root))
                 });
-                (target, session, project)
+                // The window's event log: a drop is a mutation, so it records one (P3-13).
+                let log = r.provide_root_context(|| State::create(Log::default()));
+                (target, session, project, log)
             },
             1.,
         )
@@ -640,7 +672,7 @@ mod tests {
     /// consequence line rests on.
     #[test]
     fn confirming_removes_the_def_and_leaves_its_dependents_in_place() {
-        let (mut runner, (mut slot, _, project)) = runner("confirm");
+        let (mut runner, (mut slot, _, project, ..)) = runner("confirm");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
 
         click_action(&mut runner, "Drop table");
@@ -659,14 +691,81 @@ mod tests {
         assert!(slot.peek().is_none(), "the dialog closed itself");
     }
 
-    /// Cancelling is a true no-op — the catalog is untouched and the dialog closes. Worth pinning
-    /// because the destructive path runs through the same closure the Enter key uses.
+    /// A confirmed drop is **recorded** (P3-13). Worth pinning here rather than on the log store:
+    /// the log is only useful if the mutation paths actually write to it, and the row it describes
+    /// is gone from the catalog by the time anyone reads the message. Past tense, and the saved
+    /// query is *deleted* — the log borrows the dialog's own distinction.
+    #[test]
+    fn confirming_records_the_drop_in_the_event_log() {
+        let (mut runner, (mut slot, _, _, log)) = runner("logged");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        click_action(&mut runner, "Drop table");
+
+        let recorded: Vec<(LogLevel, String)> = log
+            .peek()
+            .events()
+            .map(|e| (e.level, e.message.clone()))
+            .collect();
+        assert_eq!(
+            recorded,
+            [(LogLevel::Info, "Dropped table 'orders'".to_string())]
+        );
+    }
+
+    /// A drop the **project file never heard about** is not logged as a drop — it is logged as the
+    /// write failure it was. The def is gone from this session's store either way (that is the
+    /// catalog's truth and there is no rollback), but the row comes back on the next open, so a
+    /// `Dropped table 'orders'` beside it would be the log contradicting the catalog. Before the
+    /// fix, `save_defs` failing was a `tracing::error!` and nothing else, and the drop event was
+    /// logged unconditionally *ahead* of the write.
+    ///
+    /// A read-only `.strata/` is the portable way to make the write fail (as `util`'s own
+    /// `write_atomic` tests do); Unix-only, because that is where the mode bits mean this.
+    #[cfg(unix)]
+    #[test]
+    fn a_drop_whose_project_write_fails_is_logged_as_the_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root("nowrite");
+        let strata = project_io::strata_dir(&root);
+        std::fs::create_dir_all(&strata).unwrap();
+        let (mut runner, (mut slot, _, _, log)) = runner("nowrite");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
+        click_action(&mut runner, "Drop table");
+        std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let recorded: Vec<(LogLevel, String)> = log
+            .peek()
+            .events()
+            .map(|e| (e.level, e.message.clone()))
+            .collect();
+        assert_eq!(recorded.len(), 1, "one event, not two: {recorded:?}");
+        let (level, message) = &recorded[0];
+        assert_eq!(*level, LogLevel::Error);
+        assert!(
+            message.starts_with("Could not write the project file: "),
+            "unexpected message: {message}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Cancelling is a true no-op — the catalog is untouched, nothing is logged, and the dialog
+    /// closes. Worth pinning because the destructive path runs through the same closure the Enter
+    /// key uses.
     #[test]
     fn cancelling_touches_nothing() {
-        let (mut runner, (mut slot, _, project)) = runner("cancel");
+        let (mut runner, (mut slot, _, project, log)) = runner("cancel");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
 
         click_action(&mut runner, "Cancel");
+        assert_eq!(
+            log.peek().len(),
+            0,
+            "a drop that never happened is not an event"
+        );
 
         assert!(project.peek().tables.iter().any(|t| t.def.name == "orders"));
         assert!(slot.peek().is_none());
@@ -676,7 +775,7 @@ mod tests {
     /// re-create the view the user just dropped — the buffer survives, the binding must not.
     #[test]
     fn dropping_a_view_unbinds_the_tab_bound_to_it() {
-        let (mut runner, (mut slot, mut session, _)) = runner("unbind");
+        let (mut runner, (mut slot, mut session, ..)) = runner("unbind");
         let tab = session.write_channel(Chan::Tabs).open_named(
             "orders_daily",
             "SELECT * FROM orders".into(),
@@ -754,7 +853,7 @@ mod tests {
     /// dropped on the strength of that very call.
     #[test]
     fn deleting_a_saved_query_removes_it_and_unbinds_its_tab() {
-        let (mut runner, (mut slot, mut session, project)) = runner("querydel");
+        let (mut runner, (mut slot, mut session, project, ..)) = runner("querydel");
         let tab = session.write_channel(Chan::Tabs).open_named(
             "orders by region",
             "SELECT 1".into(),
@@ -785,7 +884,7 @@ mod tests {
     /// button's — so without this the two could be swapped and the suite would stay green.
     #[test]
     fn enter_confirms_the_drop() {
-        let (mut runner, (mut slot, _, project)) = runner("enter");
+        let (mut runner, (mut slot, _, project, ..)) = runner("enter");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
 
         runner.press_key(Key::Named(NamedKey::Enter));
@@ -802,7 +901,7 @@ mod tests {
     /// it reaching the workbench underneath.
     #[test]
     fn escape_cancels_the_drop() {
-        let (mut runner, (mut slot, _, project)) = runner("escape");
+        let (mut runner, (mut slot, _, project, ..)) = runner("escape");
         open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
 
         runner.press_key(Key::Named(NamedKey::Escape));
