@@ -380,7 +380,7 @@
     },
     "switch": {
       "background": {
-        "reference": "active"
+        "specific": "#c4c8d0"
       },
       "thumb_background": {
         "reference": "text_inverse"
@@ -502,7 +502,7 @@
         "reference": "text_secondary"
       },
       "border_fill": {
-        "reference": "border_overlay"
+        "specific": "#d5d8de"
       },
       "font_family": {
         "specific": "ui"
@@ -903,7 +903,7 @@
         "reference": "accent_blue"
       },
       "comment": {
-        "reference": "surface_inverse"
+        "reference": "text_placeholder"
       },
       "constant": {
         "reference": "accent_blue"
