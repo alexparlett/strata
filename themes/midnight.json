@@ -1020,6 +1020,68 @@
         "specific": "#e2b98c"
       }
     },
+    "inspector": {
+      "background": {
+        "reference": "surface_secondary"
+      },
+      "label_color": {
+        "specific": "#5d6775"
+      },
+      "name_color": {
+        "reference": "text_primary"
+      },
+      "value_color": {
+        "reference": "text_primary"
+      },
+      "field_color": {
+        "reference": "text_secondary"
+      },
+      "meta_color": {
+        "specific": "#6f7988"
+      },
+      "note_color": {
+        "specific": "#909aa9"
+      },
+      "border_fill": {
+        "reference": "border"
+      },
+      "divider_fill": {
+        "specific": "#23272f"
+      },
+      "box_background": {
+        "reference": "surface_tertiary"
+      },
+      "field_background": {
+        "reference": "surface_primary"
+      },
+      "emphasis_color": {
+        "specific": "#cfe1ff"
+      },
+      "fill_color": {
+        "reference": "primary"
+      },
+      "null_color": {
+        "specific": "#4d5765"
+      },
+      "tile_color": {
+        "reference": "primary"
+      },
+      "format_parquet_color": {
+        "specific": "#79c0ff"
+      },
+      "format_csv_color": {
+        "specific": "#7ee787"
+      },
+      "format_json_color": {
+        "specific": "#ffcf6b"
+      },
+      "format_arrow_color": {
+        "specific": "#f0a5c0"
+      },
+      "format_view_color": {
+        "specific": "#c9a5ff"
+      }
+    },
     "catalog": {
       "label_color": {
         "specific": "#5d6775"

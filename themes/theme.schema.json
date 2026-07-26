@@ -1554,6 +1554,72 @@
             }
           }
         },
+        "inspector": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "name_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "value_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "field_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "meta_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "note_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "box_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "field_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "emphasis_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "fill_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "null_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "tile_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "format_parquet_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "format_csv_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "format_json_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "format_arrow_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "format_view_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "datagrid": {
           "type": "object",
           "additionalProperties": false,

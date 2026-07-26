@@ -13,9 +13,10 @@
 //!   beside the chip. That is the structural half of the fix: previously one dialog put its copy
 //!   in a column next to the icon and the other ran it across the card.
 //! - **Action strip** — a `surface_secondary` band under a hairline, buttons end-aligned, **58px
-//!   tall**: `--sp-4` (12) above and below a 34px button row. The strip sizes its own actions, so
-//!   the height is one number in one place rather than a `theme_layout` repeated at every call
-//!   site — and a dialog physically cannot ship a squashed button.
+//!   tall**: `--sp-4` (12) above and below a [`ACTION_HEIGHT`] button row. The strip stamps that
+//!   height onto its own actions, so a dialog physically cannot ship a squashed button — and the
+//!   number itself belongs to the design system (`components::ACTION_HEIGHT`), not to this
+//!   component, because every committing button in the app wears it.
 //! - **Modal semantics** — Esc dismisses, Enter confirms, and every other key is consumed *at the
 //!   global layer*. That barrier is why dialogs mount early at the window root: same-name global
 //!   listeners fire in document order, so a dialog above the features swallows keystrokes meant
@@ -41,14 +42,10 @@ use freya::prelude::*;
 
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::ACTION_HEIGHT;
 
 /// The comps' card width — 420 for every confirm in the design.
 const DEFAULT_WIDTH: f32 = 420.;
-
-/// A dialog action's height. With the strip's `--sp-4` above and below, this is what makes the
-/// bar the comps' 58px. Freya's `button_layout` default hugs its label instead (≈28px), which
-/// reads as squashed against the card.
-const ACTION_HEIGHT: f32 = 34.;
 
 /// The header chip's box and its glyph. One size for every dialog — see the module doc.
 const CHIP: f32 = 38.;
@@ -196,10 +193,11 @@ impl Component for Dialog {
                 .padding((12., 24.))
                 .background(c.surface_secondary)
                 .children(self.actions.iter().map(|action| {
-                    // The strip's height, layered over whatever layout theme the action arrived
-                    // with, so a variant's padding and radius still apply. A caller who set a
-                    // height deliberately keeps it — the stamp is a default, not an override,
-                    // or `.compact()` would stop meaning what it means everywhere else.
+                    // The design system's action height, layered over whatever layout theme the
+                    // action arrived with, so a variant's padding and radius still apply. A
+                    // caller who set a height deliberately keeps it — the stamp is a default,
+                    // not an override, or `.compact()` would stop meaning what it means
+                    // everywhere else.
                     let layout = action.get_theme_layout().cloned().unwrap_or_default();
                     let layout = match layout.height {
                         Some(_) => layout,

@@ -12,6 +12,7 @@ use freya::components::use_theme;
 use freya::prelude::*;
 use strata_core::config::Command;
 use strata_core::engine::plan::PlanTab;
+use strata_core::util::fmt_int;
 use strata_model::Kind;
 
 use super::datagrid::{GridData, PageRead};
@@ -154,7 +155,7 @@ impl Component for StatusBar {
             ResultsState::Running => ("Running…".into(), Some("scanning sources".into())),
             ResultsState::Grid => match &self.info {
                 Some(info) => (
-                    format!("{} rows", fmt_int(info.total)),
+                    format!("{} rows", count(info.total)),
                     Some(format!("· {} ms", info.elapsed_ms)),
                 ),
                 None => ("Results".into(), None),
@@ -163,7 +164,7 @@ impl Component for StatusBar {
             // the chart draws the materialized snapshot, not live files (comp `_statusVals`).
             ResultsState::Chart => match &self.info {
                 Some(info) => (
-                    format!("{} rows", fmt_int(info.total)),
+                    format!("{} rows", count(info.total)),
                     Some("charting snapshot".into()),
                 ),
                 None => ("Results".into(), None),
@@ -342,7 +343,7 @@ impl AggView {
         let mut parts = vec![if self.cells == 1 {
             "1 cell".to_string()
         } else {
-            format!("{} cells", fmt_int(self.cells))
+            format!("{} cells", count(self.cells))
         }];
         if self.numeric > 0 {
             let avg = self.sum / self.numeric as f64;
@@ -511,7 +512,7 @@ impl Component for PagerCluster {
                         }
                     }),
             ))
-            .child(Path::new(format!("of {}", fmt_int(pages))).color(self.theme.sub_color));
+            .child(Path::new(format!("of {}", count(pages))).color(self.theme.sub_color));
 
         rect()
             .direction(Direction::Horizontal)
@@ -550,19 +551,11 @@ impl Component for PagerCluster {
 
 // ── formatting ────────────────────────────────────────────────────────────────────────────────
 
-/// Thousands-separated integer ("12847" → "12,847"). Shared with the record view's
-/// `Row n of total` label (P2-10).
-pub fn fmt_int(n: usize) -> String {
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
+/// Thousands-separated count ("12847" → "12,847") — [`strata_core::util::fmt_int`] over a
+/// `usize`, so the footer's counts read exactly like the plan view's metrics and the column
+/// inspector's row counts.
+fn count(n: usize) -> String {
+    fmt_int(n as u64)
 }
 
 /// Compact number for the aggregate strip — up to 4 dp, trailing zeros trimmed.
@@ -600,11 +593,9 @@ mod tests {
 
     #[test]
     fn ints_group_by_thousands() {
-        assert_eq!(fmt_int(0), "0");
-        assert_eq!(fmt_int(999), "999");
-        assert_eq!(fmt_int(1000), "1,000");
-        assert_eq!(fmt_int(12_847), "12,847");
-        assert_eq!(fmt_int(1_234_567), "1,234,567");
+        assert_eq!(count(0), "0");
+        assert_eq!(count(12_847), "12,847");
+        assert_eq!(count(1_234_567), "1,234,567");
     }
 
     #[test]

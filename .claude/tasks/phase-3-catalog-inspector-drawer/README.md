@@ -15,8 +15,20 @@ that drives the inspector — its ↻ re-scans the catalog (**P3-03** ✅), and 
 warning triangle with the reason (**P3-04** ✅). The **drop confirm** is built (**P3-05** ✅),
 naming the views a drop leaves invalid and performing the drop, and **P3-06** ✅ gave every row its
 menu (right-click *and* the canvas's ⋮): open in a tab, edit a view's SQL, rename a saved query,
-refresh one table, and the Drop items that open that confirm. The inspector and drawer are still
-**shells** waiting on their content tasks.
+refresh one table, and the Drop items that open that confirm. The **column inspector** now fills
+the right pane (**P3-08** ✅) — the selected column's title + source-format badge, a nested
+column's shape, and the STATISTICS zone: a dynamic facts box over what the source actually
+reported, plus the completeness bar. Its scan half is parked for P3-09 (the card renders in
+full; only its press handler is missing). The drawer is still a **shell** waiting on its content
+tasks.
+
+> **Only real facts** (P3-08 · DEV_TASKS U9). Every number in the inspector was *read*, never
+> derived from the rows on screen — the Dioxus panel once computed them off the current page of the
+> current tab's query and presented them as column facts. So the facts box is a **dynamic list** (a
+> Parquet column shows four rows, a CSV column shows one, neither shows a blank), inexact footer
+> values render `~value`, and the completeness bar needs a real *exact* null count and a real row
+> count or it does not appear. The percentage never rounds into a claim it can't make: with nulls
+> present it reads `>99.9%`, never `100%`. The null count is the bar and **only** the bar.
 
 > **P3-07 was rescoped** (and is now ✅) to *registration failure messages*. Its original three items were PART
 > chips and the nested column tree — both delivered by P3-02, PART exercised end to end by the
@@ -69,7 +81,7 @@ per-`Kind` hues, one shared group).
 | P3-05 | View dependencies (UI consumer) + drop confirm | ✅ | D10 | P3-02/04 |
 | P3-06 | Catalog context menus | ✅ | — | P3-02/05 |
 | P3-07 | Registration failure messages | ✅ | D9 | P3-04 |
-| P3-08 | Column inspector (facts box) | ⬜ | U9 | P3-01 |
+| P3-08 | Column inspector (facts box) | ✅ | U9 | P3-01 |
 | P3-09 | Column/table profiling (PROFILE zone) | ⬜ | D4 | P3-08 |
 | P3-10 | Profile-cost confirm | ⬜ | U15 | P3-09 |
 | P3-11 | Drawer scaffold (tabbed bottom panel) | ⬜ | U10 | P3-01 |
