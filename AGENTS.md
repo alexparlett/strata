@@ -398,6 +398,13 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
   against fork source and hand off to a Mac build (see CLAUDE.md's environment note).
+- **CI runs that same check on every PR** (`.github/workflows/ci.yml`): `cargo test --workspace
+  --locked` on **macOS** (the platform we ship — a green Linux build proves nothing about the muda
+  menubar or the traffic-light gutter), with `submodules: true`, because the build resolves Freya by
+  local path and without the fork checkout nothing compiles. `--workspace` and not a bare
+  `cargo test`, which `default-members` would narrow to `strata-freya` alone. It asserts the
+  submodule sits at the recorded gitlink **before** compiling, so §6's unpushed-fork-commit trap
+  fails in seconds with that named as the cause instead of as a missing method 40 minutes in.
 - **One Strata window across every session — enforced.** Several sessions can be live in several
   worktrees, and each can build its own binary; a second instance clobbers the shared app config
   (read once at startup, last writer wins for recents / settings / the open-project set). So
