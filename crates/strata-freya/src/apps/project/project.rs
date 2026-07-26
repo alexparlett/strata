@@ -24,7 +24,7 @@ use crate::apps::project::state::{
     Chan, SessionState,
 };
 use crate::apps::project::views::{
-    CloseConfirm, DropConfirm, DropTarget, HeaderBar, OpenPrompt, Shell,
+    CloseConfirm, DropConfirm, DropTarget, HeaderBar, OpenPrompt, RequestKeepers, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
@@ -422,6 +422,12 @@ impl Component for ProjectRoot {
             .child(DropConfirm {
                 target: drop_target,
             })
+            // Invisible, zero-size: every open tab's current press keeps a query
+            // subscriber mounted for this project's whole life, so backgrounded runs
+            // neither lose their cache entry nor miss their history settle. Root-level
+            // on purpose — the invariant is session-scoped, like the tab funnel above,
+            // not a property of whichever layout shows the workbench (see `views::keeper`).
+            .child(RequestKeepers)
             .child(HeaderBar::new(self.filled_by_app))
             .child(Shell::new())
     }

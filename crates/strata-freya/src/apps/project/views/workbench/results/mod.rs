@@ -6,10 +6,9 @@
 //! themed by `status_bar`).
 
 use std::rc::Rc;
-use std::time::Duration;
 
 use freya::prelude::*;
-use freya::query::{use_query, Query, QueryStateData};
+use freya::query::{use_query, QueryStateData};
 use freya::radio::use_radio;
 use strata_core::engine::plan::PlanTab;
 use strata_model::{ResultsView, SnapshotId, TabId};
@@ -39,10 +38,8 @@ use sort::SortState;
 use status_bar::StatusBar;
 
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{
-    FetchSnapshotPage, PageSpec, QueryOutcome, QuerySpec, RunId, RunQuery,
-};
-use crate::apps::project::state::{use_history_recording, Chan, SessionState};
+use crate::apps::project::query::{PageSpec, QueryOutcome, QuerySpec, RunId};
+use crate::apps::project::state::{Chan, SessionState};
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 pub use cell_view::CellViewThemePreference;
@@ -134,9 +131,12 @@ impl Component for Results {
 }
 
 /// The pane once its tab owns the current press: subscribes `use_query` on the press's
-/// [`QuerySpec`] and derives the body from the query state. `stale_time(MAX)` because a Run
-/// is an *action* — a settled entry must never re-execute by itself (SNAPSHOT_SPEC §6); only
-/// a new press (fresh nonce → new key) runs again.
+/// [`QuerySpec`] (through [`QuerySpec::query`] — the settings are cache identity) and
+/// derives the body from the query state. `stale_time(MAX)` because a Run is an *action* —
+/// a settled entry must never re-execute by itself (SNAPSHOT_SPEC §6); only a new press
+/// (fresh nonce → new key) runs again. The tab's keeper (`views::keeper`) subscribes
+/// the same entry for as long as the press stays current, so unmounting this body on a tab
+/// switch never starts the entry aging out.
 #[derive(PartialEq)]
 struct ResultsBody {
     spec: QuerySpec,
@@ -155,16 +155,14 @@ impl KeyExt for ResultsBody {
 impl Component for ResultsBody {
     fn render(&self) -> impl IntoElement {
         let engine = use_consume::<EngineCtx>();
-        let query = use_query(
-            Query::new(self.spec.clone(), RunQuery(engine.captured())).stale_time(Duration::MAX),
-        );
+        let query = use_query(self.spec.query(&engine));
 
         // Mirror the run's in-flight-ness into the workbench's `running` slot for the
-        // toolbar's Run→Cancel flip (P2-15). This body is the query's only subscriber and
-        // resolves the slot for everyone else: the press's nonce while Pending/Loading,
-        // cleared on settle. Unmount (cancel / supersede / tab close) clears it too —
-        // nonce-guarded, so if a new press's body mounts before the old one drops, the stale
-        // drop can't clobber the newer run's flag.
+        // toolbar's Run→Cancel flip (P2-15). The tab's keeper pins this query too, but only
+        // this body resolves the slot: the press's nonce while Pending/Loading, cleared on
+        // settle. Unmount (cancel / supersede / tab close) clears it too — nonce-guarded,
+        // so if a new press's body mounts before the old one drops, the stale drop can't
+        // clobber the newer run's flag.
         //
         // The toolbar could subscribe the query itself without re-executing it (our fork
         // counts in-flight executions, so a mounting subscriber attaches to one rather than
@@ -191,8 +189,8 @@ impl Component for ResultsBody {
             }
         });
 
-        // Query history (P4-14): record this run once when it settles `Ok(Rows)`.
-        use_history_recording(query, run, self.spec.sql.clone());
+        // (Query history is the keeper's: its pin observes the settle even while this tab
+        // is backgrounded and this body is unmounted — see `views::keeper`.)
         // The 1-based snapshot page the grid shows and the rows-per-page it's cut into. They
         // live here — beside the status bar that pages them and the grid that reads them — and
         // reset for every press (this component is keyed by the press's nonce). `page_size`
@@ -266,11 +264,7 @@ impl Component for ResultsBody {
             page_size: cur_size,
             sort: sort_key,
         };
-        let fetch = use_query(
-            Query::new(page_spec.clone(), FetchSnapshotPage(engine.captured()))
-                .stale_time(Duration::MAX)
-                .enable(snapshot.is_some() && !native_page1),
-        );
+        let fetch = use_query(page_spec.query(&engine, snapshot.is_some() && !native_page1));
 
         // Cancel = abort engine-side (S14: tag-guarded, a stale press can't kill a newer run)
         // + clear this tab's Run trigger, unmounting this body back to the empty state. The

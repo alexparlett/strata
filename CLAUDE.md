@@ -199,6 +199,10 @@ src/apps/project/                the project window (Valin-shaped)
                                  completeness, all unit-tested off a store), column (title ·
                                  nested-fields box · STATISTICS), tests. The scan half of
                                  STATISTICS is P3-09's; its card renders, minus its handler
+    keeper.rs                    request keepers, mounted by ProjectRoot: one invisible
+                                 query subscriber per open tab's current press, so a
+                                 backgrounded run keeps its cache entry (lifetime =
+                                 subscriber presence) and records history at settle time
     workbench/
       mod.rs, empty.rs           workbench shell + no-query empty state
       editor/                    SQL editor: tab, toolbar

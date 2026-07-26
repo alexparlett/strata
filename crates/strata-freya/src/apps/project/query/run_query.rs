@@ -10,9 +10,17 @@
 //!
 //! Subscribe with `stale_time(Duration::MAX)` on both: freya-query re-runs *stale*
 //! entries on resubscribe, and an uncontrolled re-execution would silently
-//! re-materialize a snapshot out from under the cached pages.
+//! re-materialize a snapshot out from under the cached pages. A Run's subscription is
+//! always built through [`QuerySpec::query`] — a `Query`'s settings are part of its
+//! **cache identity**, so a second call site constructing them by hand risks a silently
+//! different entry, which is a duplicate execution. The default `clean_time` stands: a
+//! superseded press's entry ages out five minutes after its last subscriber unmounts,
+//! while the *current* request's entry is held live by its tab's keeper
+//! (`views::keeper`) even when the tab is backgrounded.
 
-use freya::query::{Captured, QueryCapability};
+use std::time::Duration;
+
+use freya::query::{Captured, Query, QueryCapability};
 use strata_core::engine::plan::{as_explain, QueryPlan};
 use strata_core::engine::{RecordBatch, RunTag};
 use strata_model::{Cell, QueryOutput, SnapshotId};
@@ -61,6 +69,18 @@ pub struct QuerySpec {
     pub sql: String,
     pub mode: QueryMode,
     pub page_size: usize,
+}
+
+impl QuerySpec {
+    /// The one way to subscribe this press: every `use_query` on a Run builds its `Query`
+    /// here, because the settings below are part of the cache identity — a hand-built
+    /// subscription with different settings would be a *different* entry, and mounting it
+    /// would dispatch the same press a second time. `stale_time(MAX)` so a settled press
+    /// never re-executes by itself (SNAPSHOT_SPEC §6); `clean_time` stays at the default
+    /// so a superseded press's entry is garbage-collected once nothing subscribes it.
+    pub fn query(&self, engine: &EngineCtx) -> Query<RunQuery> {
+        Query::new(self.clone(), RunQuery(engine.captured())).stale_time(Duration::MAX)
+    }
 }
 
 /// A settled Run: the snapshot handle + page 1 (`output`) and the page-1 batch (the
@@ -120,6 +140,18 @@ pub struct PageSpec {
     /// `(column name, ascending)` — an `ORDER BY` over the whole snapshot before the
     /// page window; `None` = snapshot order.
     pub sort: Option<(String, bool)>,
+}
+
+impl PageSpec {
+    /// The one way to subscribe this page read — the same contract as [`QuerySpec::query`]:
+    /// the settings are cache identity, so a second call site building them by hand would
+    /// fork the entry into a duplicate fetch. `enabled` is the one legitimate per-site
+    /// variable (a read stays disabled until its Run settles rows).
+    pub fn query(&self, engine: &EngineCtx, enabled: bool) -> Query<FetchSnapshotPage> {
+        Query::new(self.clone(), FetchSnapshotPage(engine.captured()))
+            .stale_time(Duration::MAX)
+            .enable(enabled)
+    }
 }
 
 /// A settled page read: display rows + the page batch.

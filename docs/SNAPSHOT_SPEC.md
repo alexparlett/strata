@@ -208,6 +208,18 @@ pressing Run may execute. `RunId` gives every press its own cache entry, so:
   would silently re-materialize under a *new* snapshot while cached pages still described the
   old one.
 
+Cache-entry **lifetime is subscriber presence**, so a press must keep a subscriber for as long
+as it is some tab's `request` — the results element alone can't provide that (it mounts only for
+the *active* tab, and freya-query cleans an unsubscribed entry after `clean_time`, which for a
+backgrounded run would mean a silent re-execution on revisit). The workbench's **request
+keepers** (`views::keeper`, one invisible pin per open tab's current press) are that
+subscriber: while a press stays current its entry is held live; once superseded / cancelled /
+its tab closed, the pin unmounts and the entry ages out. Two supporting rules: every Run
+subscription is built through `QuerySpec::query` (a `Query`'s settings are part of its cache
+identity — a hand-built variant is a *different* entry, i.e. a duplicate execution), and
+freya-query itself (fork) never cleans an entry whose execution is still in flight, so even an
+eviction can't orphan a running press into a duplicate dispatch.
+
 Page reads are keyed `(snapshot, page, page_size, sort)` — all reads of an immutable set, so
 cache hits are sound forever: a revisited page renders with **zero** engine traffic. Reads of a
 retired snapshot fail cleanly (table's gone) — reachable only through a stale subscriber, since
@@ -216,7 +228,7 @@ a new Run hands the UI a new handle and the old `PageSpec`s die with their subsc
 Run flow end-to-end:
 
 1. Run press: `request.set(Some(QuerySpec { tab, run: RunId::new(), sql: editor_text, mode: Run, page_size }))`.
-2. Results element: `use_query(Query::new(spec, RunQuery(engine.captured())).stale_time(MAX))` →
+2. Results element (and the tab's keeper pin): `use_query(spec.query(&engine))` →
    `Pending/Loading` renders Running.
 3. `RunQuery::run` → `engine.query(tab.into(), run.into(), sql, page_size).await` — the direct
    facade call (§5); the query settles; grid renders page 1 from `QueryOutput` + holds the handle.
