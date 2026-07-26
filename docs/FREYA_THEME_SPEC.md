@@ -17,6 +17,13 @@ Four blocks:
   `define_theme!`.
 - **`fonts`**.
 
+Plus a top-level `typography` type scale, and `scale` — the design system's `spacing`/`radius`
+ramps, which both built-ins already carry. **`scale` is inert:** the schema accepts it so the
+committed themes validate, but `StrataTheme` has no field for it, so serde drops it and no surface
+reads it. Authoring one today is a silent no-op; it is kept as design input for whichever task
+first needs a spacing scale. (Not to be confused with `Palette::scalar` below, the fork-side hook
+that would *resolve* such a scale.)
+
 Colours are `#rrggbb`, `#rrggbbaa`, or `rgba(r,g,b,a)`. Field names are `snake_case`.
 
 Midnight/Daylight ship built-in; custom themes load the same shape (roadmap: a plugin theme dir, like any IDE). Every
