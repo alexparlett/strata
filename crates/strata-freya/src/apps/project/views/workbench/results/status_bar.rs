@@ -131,7 +131,8 @@ impl Component for StatusBar {
         // of the `status_bar` token.
         let app_theme = use_theme();
         let (dot_color, accent) = {
-            let c = &app_theme.read().colors;
+            let theme_ref = app_theme.read();
+            let c = theme_ref.colors();
             let dot = match self.state {
                 ResultsState::Empty => c.text_placeholder,
                 ResultsState::Running => c.warning,

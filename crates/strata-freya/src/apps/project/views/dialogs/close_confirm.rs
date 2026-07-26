@@ -158,7 +158,7 @@ impl Component for CloseConfirm {
                 .unwrap_or_else(|| root.display().to_string()),
         };
 
-        let c = theme.read().colors.clone();
+        let c = theme.read().colors().clone();
 
         // Checked = don't ask = the `confirm_close_running` setting off. Toggling writes
         // the app-global config (the close guard mirrors it immediately) and persists in

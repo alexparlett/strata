@@ -235,7 +235,7 @@ impl Component for ProfileConfirm {
             return rect().into_element();
         };
 
-        let c = theme.read().colors.clone();
+        let c = theme.read().colors().clone();
         // The action over its subject — the close and drop confirms' shape exactly: the name is
         // mono on its own line, where it reads as the identifier it is.
         let title = rect()

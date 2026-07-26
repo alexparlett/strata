@@ -42,7 +42,7 @@ impl Component for EditorToolbar {
         let theme = use_theme();
         let (bg, border) = {
             let t = theme.read();
-            (t.colors.background, t.colors.border)
+            (t.colors().background, t.colors().border)
         };
         let radio = use_radio::<SessionState, Chan>(Chan::Tab(id));
         let engine = use_consume::<EngineCtx>();

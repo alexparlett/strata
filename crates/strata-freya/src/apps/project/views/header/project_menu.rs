@@ -4,7 +4,7 @@
 //! target, which showed only *this* window's project where the canvas shows the whole open set).
 //!
 //! The **data is real**: this window's project comes from its [`ProjectState`] store, the open
-//! set and the recents from the app-global [`AppConfig`](strata_core::config::AppConfig) — so a
+//! set and the recents from the app-global [`AppConfig`] — so a
 //! project opening in another window shows up here without any cross-window plumbing of ours.
 //!
 //! **Acting** on a row goes through the window's [`OpenCtx`] — the same path ⌘O, File ▸
@@ -85,7 +85,7 @@ impl Component for ProjectMenu {
         // it reads the sheet through the normal hook rather than inventing header-only theme
         // fields for colours the palette already names. The rows' tiles are `Avatar`'s theme and
         // the separators are `Divider::menu`'s.
-        let colors = use_theme().read().colors.clone();
+        let colors = use_theme().read().colors().clone();
 
         // This window's project — `ProjChan::Meta` is exactly "the identity changed".
         let project = use_radio::<ProjectState, ProjChan>(ProjChan::Meta);

@@ -167,7 +167,7 @@ impl Component for DropConfirm {
             return rect().into_element();
         };
 
-        let c = theme.read().colors.clone();
+        let c = theme.read().colors().clone();
         // Subscribed to `ProjChan::Views` (see above), so a view registering or being dropped
         // under the open dialog refreshes the count — the dialog blocks input, not the engine,
         // and this is the one screen where acting on a stale count is destructive.

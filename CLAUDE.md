@@ -237,7 +237,7 @@ Migration:
 - **`FREYA_STATE_ARCHITECTURE.md`** — the **definitive** per-window state design for the Freya app;
   every API verified against Freya 0.4 source. **Supersedes `FREYA_PORT_PLAN.md` §4.**
 - **`freya-state-dataflow.mermaid`** — data-flow diagram for the above.
-- **`FREYA_THEME_SPEC.md`** — the native JSON theme format (sheet + components + tokens + fonts).
+- **`FREYA_THEME_SPEC.md`** — the native JSON theme format (sheet + palette + components + fonts).
 
 Product / design:
 

@@ -94,7 +94,7 @@ pub fn use_catalog_actions() -> CatalogActions {
         config: use_config_station(),
         drop_target: use_consume::<State<Option<DropTarget>>>(),
         profile: use_profile_actions(),
-        danger: use_theme().read().colors.error,
+        danger: use_theme().read().colors().error,
     }
 }
 

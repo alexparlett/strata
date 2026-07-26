@@ -57,10 +57,9 @@ pub struct OpenCtx {
     /// The folder a press picked, held while the prompt asks which window it belongs in.
     pub prompt: State<Option<PathBuf>>,
     /// This window's engine in-flight flag — the close-while-running gate's other half. In a
-    /// `State` slot purely so this struct stays `Copy` (the same reason
-    /// [`TabCloser`](crate::apps::project::close::TabCloser) holds its engine that way). It
-    /// is the *window's* guard, handed over from engine to engine, so it stays correct across
-    /// a re-root.
+    /// `State` slot purely so this struct stays `Copy`, the same reason `TabCloser` holds its
+    /// engine that way. It is the *window's* guard, handed over from engine to engine, so it
+    /// stays correct across a re-root.
     pub guard: State<Arc<CloseGuard>>,
     /// The window's confirm-dialog slot, so a re-root that would abort running queries raises
     /// the same T2 question closing the window does.

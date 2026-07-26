@@ -129,7 +129,7 @@ impl Component for HeaderRow {
 
 /// One header column: name + sort chevron on top, dtype label below, a trailing column rule, and an
 /// absolutely-positioned [`ColGrip`] on the right edge for drag-to-resize. Owns its hover locally, like
-/// the body [`Cell`](super::cell::Cell)s.
+/// the body [`Cell`]s.
 #[derive(PartialEq)]
 pub struct HeaderCell {
     pub index: usize,

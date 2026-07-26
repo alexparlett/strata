@@ -38,10 +38,10 @@ impl Component for Sidebar {
         let (bg, border, label_color, faint) = {
             let t = theme.read();
             (
-                t.colors.surface_secondary,
-                t.colors.border,
-                t.colors.text_placeholder,
-                t.colors.text_placeholder,
+                t.colors().surface_secondary,
+                t.colors().border,
+                t.colors().text_placeholder,
+                t.colors().text_placeholder,
             )
         };
 
@@ -123,7 +123,7 @@ impl Component for Sidebar {
 
 /// The catalog header's **↻ re-scan** (P3-03): ask for a re-infer of every table's schema from
 /// its def and a re-create of the views over what that found — see
-/// [`refresh_catalog`](crate::apps::project::state::refresh_catalog).
+/// [`refresh_catalog`].
 ///
 /// Its own component so the scan flag's subscription lives here rather than on the sidebar shell,
 /// which would re-render the whole pane header twice per scan for a button swap.

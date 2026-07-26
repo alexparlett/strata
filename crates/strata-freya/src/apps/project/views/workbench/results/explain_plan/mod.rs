@@ -6,7 +6,7 @@
 //! Split like the datagrid: this file owns the `explain_plan` theme component and the
 //! [`ExplainPlan`] shell (toolbar + tree/raw body); [`node`] renders one railed operator
 //! card with its three-tier metrics block; [`palette`] maps kind / metric / group / tone
-//! onto the theme's colour fields; [`preview`] is the headless render harness.
+//! onto the theme's colour fields; `preview` is the headless render harness.
 
 use freya::components::use_theme;
 use freya::prelude::*;
@@ -85,7 +85,8 @@ impl Component for ExplainPlan {
         let theme = get_theme!(&self.theme, ExplainPlanThemePreference, "explain_plan");
         let app_theme = use_theme();
         let (toolbar_bg, accent, error, count_color) = {
-            let c = &app_theme.read().colors;
+            let theme_ref = app_theme.read();
+            let c = theme_ref.colors();
             (c.background, c.primary, c.error, c.text_secondary)
         };
         let palette = PlanPalette {

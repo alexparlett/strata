@@ -4,8 +4,8 @@
 //! Window, with This Window as the primary (and so Enter's).
 //!
 //! It is raised only when the "Opening a project" preference is *Ask* and the open came from
-//! a window that already has a project; the routing and both outcomes are
-//! [`OpenCtx`](crate::platform::OpenCtx)'s, so this file is the surface and nothing else.
+//! a window that already has a project; the routing and both outcomes are [`OpenCtx`]'s, so
+//! this file is the surface and nothing else.
 //!
 //! Host + card, like the Dioxus original: the host stays mounted reading the slot, while the
 //! card — and so the `remember` checkbox — is a fresh scope per prompt, which is what resets
@@ -61,7 +61,7 @@ impl Component for OpenPromptCard {
         let platform = use_hook(Platform::get);
         let remember = use_state(|| false);
         let theme = use_theme();
-        let c = theme.read().colors.clone();
+        let c = theme.read().colors().clone();
         let open = self.open;
 
         // One binding per handler: `AppCtx` and `Platform` are `Clone`, not `Copy`, so each

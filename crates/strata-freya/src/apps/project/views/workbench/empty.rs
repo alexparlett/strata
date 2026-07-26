@@ -33,7 +33,8 @@ impl Component for EmptyState {
         let new_hint = use_hint(Command::NewTab);
 
         let (background, tile_bg, tile_border, icon_c, title_c, sub_c, chip_c) = {
-            let c = &use_theme().read().colors;
+            let theme_ref = use_theme().read();
+            let c = theme_ref.colors();
             (
                 c.surface_secondary,
                 c.surface_tertiary,

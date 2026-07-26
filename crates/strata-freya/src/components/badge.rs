@@ -2,7 +2,7 @@
 //! the plan view's `HOTSPOT` / `ANALYZE` flags and its insight pills, the nested-cell modal's dtype
 //! chip.
 //!
-//! Deliberately **not** Freya's [`Chip`](freya::components::Chip): that is a selectable control —
+//! Deliberately **not** Freya's [`Chip`]: that is a selectable control —
 //! `on_press`, `selected`, `enabled`, keyboard focus, an a11y id, a cursor icon, and colour triples
 //! for hover / selected / focus. A badge is a label. Rendering one as a `Chip` would give it press
 //! and focus semantics it must not have, and leave most of that theme inert.

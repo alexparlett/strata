@@ -371,7 +371,7 @@ impl Component for ScannedStatistics {
         // The one colour this component takes from the **sheet** rather than from its own theme:
         // a failure is semantic, and must follow the app-wide error ramp wherever it appears
         // (AGENTS.md §3).
-        let danger = use_theme().read().colors.error;
+        let danger = use_theme().read().colors().error;
 
         // Cloned out, so the query's read guard is gone before any element is built. A `Loading`
         // entry never carries a previous value here — every request is a fresh key — so it is

@@ -12,8 +12,10 @@ gutter) and carries the brand, the project switcher, and the ⌘K / ⌘, cluster
 and open-project actions are placeholders waiting on P6-01 / P4-03 / P4-13. The **catalog sidebar**
 now fills the left pane (**P3-02** ✅) — sections, nested columns, filter, and the column selection
 that drives the inspector — its ↻ re-scans the catalog (**P3-03** ✅), and broken rows carry a
-warning triangle with the reason (**P3-04** ✅). The **drop confirm** is built (**P3-05** ✅),
-naming the views a drop leaves invalid and performing the drop, and **P3-06** ✅ gave every row its
+warning triangle with the reason (**P3-04** ✅). The **drawer** header gained its expand / restore
+toggle (**P3-11** ✅ — see the note below on how little of that task was left). The **drop
+confirm** is built (**P3-05** ✅), naming the views a drop leaves invalid and performing the drop,
+and **P3-06** ✅ gave every row its
 menu (right-click *and* the canvas's ⋮): open in a tab, edit a view's SQL, rename a saved query,
 refresh one table, and the Drop items that open that confirm. The **column inspector** now fills
 the right pane (**P3-08** ✅) — the selected column's title + source-format badge, a nested
@@ -37,6 +39,19 @@ tasks.
 > reads), and a nested field takes neither, because the profile is keyed by top-level column name.
 > The canvas's **distribution bars are deliberately not built**: the profile has no distribution
 > data, and an honest histogram needs a second full pass. See P3-09.
+
+> **P3-11 was largely already built** (and is now ✅). P3-01 had delivered the drawer container,
+> its resizable/collapsible height, the persisted active-tab state — and the **tab switcher**,
+> which in the design is the **rail's bottom group**, not a pill row in the drawer header (the
+> canvas computes `drawerHistTabStyle` / `drawerProbTabStyle` / `drawerEvtTabStyle` and
+> `onDrawerTab` and never renders them). Don't add a second switcher: it would be a second writer
+> for `Layout::drawer`. The rest of P3-11's brief — the header's count label, Clear, and the
+> "common list frame" — has no consumer until the tab tasks, so it moved to them: **P3-12** owns
+> the count, the Problems-hides-Clear rule, and the frame (a scroll container + a centred empty
+> state, which is all the three tabs genuinely share); **P3-13** and **P3-14** own Clear's action.
+> What shipped is the header's **expand / restore** toggle — see its file, including the fork note
+> that `ResizablePanel` reads `initial_size` only at mount, so programmatic sizing goes through a
+> `ResizableContext` controller.
 
 > **P3-07 was rescoped** (and is now ✅) to *registration failure messages*. Its original three items were PART
 > chips and the nested column tree — both delivered by P3-02, PART exercised end to end by the
@@ -92,7 +107,7 @@ per-`Kind` hues, one shared group).
 | P3-08 | Column inspector (facts box) | ✅ | U9 | P3-01 |
 | P3-09 | Column/table profiling (PROFILE zone) | ✅ | D4 | P3-08 |
 | P3-10 | Profile-cost confirm | ✅ | U15 | P3-09 |
-| P3-11 | Drawer scaffold (tabbed bottom panel) | ⬜ | U10 | P3-01 |
+| P3-11 | Drawer scaffold (tabbed bottom panel) | ✅ | U10 | P3-01 |
 | P3-12 | Drawer — Problems tab | ⬜ | U10 | P3-11 |
 | P3-13 | Drawer — Events tab | ⬜ | U10 | P3-11 |
 | P3-14 | Drawer — History tab | ⬜ | U10 | P3-11 |

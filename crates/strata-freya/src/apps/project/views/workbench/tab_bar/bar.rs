@@ -98,7 +98,7 @@ impl Component for TabBar {
                     .map(|(_, n, ..)| n.clone())
             })
             .unwrap_or_default();
-        let slot_bg = use_theme().read().colors.surface_inverse;
+        let slot_bg = use_theme().read().colors().surface_inverse;
 
         // While a drag is live, one global pointer handler drives both the placeholder slot and
         // edge-scroll. It hit-tests the *remaining* tabs (dragged excluded, matching how the strip

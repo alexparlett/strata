@@ -60,7 +60,9 @@ pub fn use_init_session() -> RadioStation<SessionState, Chan> {
 ///   perfectly good session into one empty tab a few hundred milliseconds later. That is
 ///   the silent-destruction case the project's standing rule exists to prevent, so this arm
 ///   takes the other half of that rule: **fail loud on unrecoverable**, like a project root
-///   that won't canonicalize ([`resolve_launch_root`]) or defs that won't load
+///   that won't canonicalize
+///   ([`resolve_project_folder`](crate::platform::resolve_project_folder)) or defs that
+///   won't load
 ///   ([`open_project`]). Interim shape, same as those two: the eventual handling is to close
 ///   the window and surface the fault (P4-01/P4-02/P4-13); until that plumbing exists the
 ///   panic keeps the fault loud instead of papering over it with a blank session that

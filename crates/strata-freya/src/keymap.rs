@@ -178,7 +178,7 @@ pub struct KeyHint(pub Command);
 impl Component for KeyHint {
     fn render(&self) -> impl IntoElement {
         let hint = use_hint(self.0);
-        let color = use_theme().read().colors.text_secondary;
+        let color = use_theme().read().colors().text_secondary;
         rect().maybe(!hint.is_empty(), |el| {
             el.child(Meta::new(hint).color(color))
         })

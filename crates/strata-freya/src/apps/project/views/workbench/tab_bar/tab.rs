@@ -135,7 +135,7 @@ impl Component for Tab {
         // The unsaved dot is a semantic palette slot; the close × is a flat `Button`, so its icon
         // inherits that button's colour. (The context menu's separators are `Divider::menu`'s
         // own business — nothing to read here for them.)
-        let dot_color = use_theme().read().colors.warning;
+        let dot_color = use_theme().read().colors().warning;
 
         let (bg, fg, accent_fill) = if self.active {
             (active_background, active_color, accent)
@@ -371,7 +371,8 @@ impl Component for TabChrome {
         } = get_theme!(&self.theme, TabThemePreference, "tab");
 
         let (dot_color, x_color) = {
-            let c = &use_theme().read().colors;
+            let theme_ref = use_theme().read();
+            let c = theme_ref.colors();
             (c.warning, c.disabled)
         };
 
