@@ -60,6 +60,14 @@ Things that must not regress. Each was fought for once already.
 - **Results are freya-query off the tab's SQL.** Each `QueryTab` owns its Run trigger
   (`QueryTab::request: Option<QuerySpec>` on `Chan::Request(id)`). The store holds **specs, never
   results** — rows live only in the freya-query cache keyed by `QuerySpec`. No runs-by-id store.
+  Two lifetime rules keep that cache honest: a Run subscription is built **only** through
+  `QuerySpec::query` (a `Query`'s settings are cache identity — a hand-built variant is a
+  different entry, i.e. a duplicate execution), and cache-entry lifetime is **subscriber
+  presence**, held for background tabs by the window's request keepers (`views::keeper`, mounted at ProjectRoot —
+  one invisible pin per open tab's current press, which also owns history recording). Never
+  manage entry lifetime imperatively; mount or unmount a subscriber. Fork-side, freya-query
+  never cleans an entry whose execution is in flight and never cancels one on unmount — a
+  remounting subscriber attaches to it (`RunningGuard`).
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the

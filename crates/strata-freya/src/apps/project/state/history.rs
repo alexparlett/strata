@@ -7,9 +7,14 @@
 //!
 //! **Only successful data runs are recorded**, captured when the run *settles* `Ok(Rows)` —
 //! a failed / cancelled run (settles `Err`) and an Explain (settles `Plan`) never reach
-//! here, so history stays a log of queries that actually returned data. Recording is
-//! deduped by the run's [`RunId`]: the results pane re-mounts on a tab switch and re-serves
-//! the *cached* result, which would otherwise re-log the same run.
+//! here, so history stays a log of queries that actually returned data. The recorder is the
+//! tab's request keeper (`views::keeper`), not the results pane: the keeper stays
+//! mounted while the tab is backgrounded, so the settle is observed — and timestamped — at
+//! real completion time, and a run whose tab is never revisited still records. (A settle
+//! landing in the same update pass that unmounts its pin — a supersede at the instant of
+//! completion — goes unrecorded; the pin's side effect never gets to run.) Recording is
+//! deduped by the run's [`RunId`], so a second observer of the same settled run (or a
+//! re-mounted one re-serving the *cached* result) can never re-log it.
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -77,12 +82,13 @@ impl History {
 /// The history satellite in context.
 pub type HistoryCtx = State<History>;
 
-/// Drive history recording for a results pane's run: record it once when it settles
-/// `Ok(Rows)` — a successful *data* run. A failed / cancelled `Err` or an Explain `Plan`
-/// never records, so bad queries stay out of history; the local `recorded` flag stops a
-/// re-record on later re-renders of the same mount, and cross-mount dedup (a tab switch
-/// re-serves the cached result) lives in the store, keyed by `run`. Call once per
-/// `ResultsBody` (keyed by the press's nonce).
+/// Drive history recording for a press: record it once when it settles `Ok(Rows)` — a
+/// successful *data* run. A failed / cancelled `Err` or an Explain `Plan` never records,
+/// so bad queries stay out of history; the local `recorded` flag stops a re-record on
+/// later re-renders of the same mount, and cross-mount dedup lives in the store, keyed by
+/// `run`. Call once per `RequestPin` (`views::keeper` — keyed by the press's nonce, and
+/// mounted for the press's whole life, so a background tab's settle still records; the one
+/// unrecorded edge is a settle landing in the same update pass that unmounts the pin).
 pub fn use_history_recording(query: UseQuery<RunQuery>, run: RunId, sql: String) {
     let history = use_consume::<HistoryCtx>();
     let project = use_radio_station::<ProjectState, ProjChan>();

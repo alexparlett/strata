@@ -5,6 +5,7 @@ mod dialogs;
 mod drawer;
 mod header;
 mod inspector;
+mod keeper;
 mod rail;
 mod shell;
 mod sidebar;
@@ -16,6 +17,7 @@ pub use dialogs::{
 };
 pub use header::{HeaderBar, HeaderBarThemePreference};
 pub use inspector::InspectorThemePreference;
+pub use keeper::RequestKeepers;
 pub use shell::Shell;
 pub use sidebar::CatalogThemePreference;
 pub use workbench::{

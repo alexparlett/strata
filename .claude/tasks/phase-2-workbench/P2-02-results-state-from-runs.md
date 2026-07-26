@@ -39,3 +39,26 @@ request signal.
 
 ## Freya / references
 - `docs/FREYA_STATE_ARCHITECTURE.md` §6. `results/mod.rs`. Query state = freya-query `QueryStateData`.
+
+## Correction (2026-07-26 · background-tab cache lifetime)
+
+The acceptance parenthetical above predates per-tab request slots: each tab owns
+`QueryTab::request` now, and tabs run concurrently (engine in-flight is per `WsId`) — there is
+no one-execution-per-window slot.
+
+A tab-switching review found a backgrounded press's outcome survived only by accident:
+freya-query's `clean_time` eviction (5 min after the last subscriber unmounts) never fired
+because its subscriber check counted reactive contexts, which haven't unsubscribed yet when
+drop callbacks run — and had it fired, a revisit past it would have silently re-executed the
+press (aborting it mid-flight if still running). Settled fix, both halves required
+(AGENTS §2, SNAPSHOT_SPEC §6):
+
+- **Fork**: freya-query counts `use_query` subscribers explicitly; cleanup schedules only when
+  the last one unmounts and never removes an entry whose execution is in flight
+  (`crates/freya-query/tests/query_clean_time.rs`).
+- **App**: `views/keeper.rs` mounts one invisible subscriber per open tab's current press,
+  so entry lifetime tracks request *currency*, not tab visibility; superseded / cancelled /
+  closed presses age out on the default clean time. Every Run subscription is built through
+  `QuerySpec::query` — a `Query`'s settings are cache identity, so a hand-built variant is a
+  duplicate execution. History recording moved into the keeper's pin, which observes a
+  background settle at real completion time.

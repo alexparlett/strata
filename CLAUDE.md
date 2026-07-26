@@ -206,6 +206,10 @@ src/apps/project/                the project window (Valin-shaped)
                                  completeness · `with_scan`, which folds a scan's facts into that
                                  same list — all unit-tested off a store), column (title ·
                                  nested-fields box · the STATISTICS zone's four states), tests
+    keeper.rs                    request keepers, mounted by ProjectRoot: one invisible
+                                 query subscriber per open tab's current press, so a
+                                 backgrounded run keeps its cache entry (lifetime =
+                                 subscriber presence) and records history at settle time
     workbench/
       mod.rs, empty.rs           workbench shell + no-query empty state
       editor/                    SQL editor: tab, toolbar
