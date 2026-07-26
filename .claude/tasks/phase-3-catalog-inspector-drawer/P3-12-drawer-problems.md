@@ -60,6 +60,19 @@ table, so a fingerprint would fire N times during one scan and queue N × M dry 
 > which side effect happens to run first. Regression test:
 > `the_seed_is_claimable_but_nothing_validates_against_it`.
 
+### Known, accepted: the drain is head-of-line during a typing burst
+`use_diagnostics` drains one stale tab at a time with the active tab first, and `settle` only
+returns once that tab has been quiet for a full `DEBOUNCE`. So a long continuous burst in the
+active tab delays validation of any *other* tab that went stale meanwhile — a catalog epoch bump
+from a save-as-view or a ↻ — until the user pauses.
+
+Left as is, deliberately. It is self-healing and produces nothing wrong, only delayed freshness
+for tabs that are not on screen. Fixing it means either inverting the active-first priority (which
+costs the common case, where the active tab is the only stale one, to help a rare one) or teaching
+the drain to yield mid-settle and resume — real complexity in the part of this task that has
+already produced two regressions under review. If it ever bites, the shape to reach for is
+"drain background tabs while the active tab is still settling", not a shorter debounce.
+
 ### The view
 `views/drawer/problems/` is now a pure view over `problem_groups()`: a group per tab (sticky
 header of file glyph · tab name · `N problems`), rows of severity glyph · message · `line L:C`,
