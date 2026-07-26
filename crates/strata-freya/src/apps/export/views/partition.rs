@@ -235,11 +235,17 @@ impl Component for Available {
                         .spacing(8.)
                         .padding((0., 12.))
                         .on_press(move |_| {
+                            // Adding clears the filter, so the next pick starts from the whole
+                            // list rather than a query matching nothing. The **box** is cleared
+                            // too, not just the draft: the box is the buffer the `Input`
+                            // renders, so clearing only the draft left a query on screen that
+                            // was no longer being applied — and put it back on the next
+                            // keystroke.
+                            let mut filter_text = filter_text;
+                            filter_text.set(String::new());
                             ctx.edit(|d| {
                                 if !d.partition.columns.contains(&pressed) {
                                     d.partition.columns.push(pressed.clone());
-                                    // Adding clears the filter, so the next pick starts from
-                                    // the whole list rather than a query matching nothing.
                                     d.partition.filter.clear();
                                 }
                             })

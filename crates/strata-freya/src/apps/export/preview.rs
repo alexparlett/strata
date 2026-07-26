@@ -185,9 +185,12 @@ fn partition_tree(draft: &ExportDraft, target: &ExportTarget) -> String {
         .and_then(|name| index(name).map(|i| (name, i)))
     {
         Some((first, col)) => {
-            let mut values: Vec<String> = rows(target)
+            // The **whole** page in hand, not the five rows the flat previews show: a tree is
+            // about distinct values, so more rows mean a truer shape. (The line below says how
+            // many were seen, so this stays honest about being one page.)
+            let mut values: Vec<String> = target
+                .sample
                 .iter()
-                .chain(target.sample.iter())
                 .filter_map(|row| row.get(col))
                 .map(|cell| cell.text.clone())
                 .collect();

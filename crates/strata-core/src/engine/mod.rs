@@ -606,8 +606,8 @@ impl Engine {
         }
     }
 
-    /// Take one hold without a guard — for [`export`](Engine::export), which brackets its own
-    /// call and has a plain `&self`. Always paired with [`release_pin`](Engine::release_pin).
+    /// Take one hold without the `Arc` a [`SnapshotPin`] needs — for [`ExportGuard`], which
+    /// borrows the engine for the length of one call. Always released by that guard's `Drop`.
     fn acquire_pin(&self, snapshot: SnapshotId) {
         let mut lc = self.lifecycle.lock().unwrap();
         *lc.pins.entry(snapshot).or_insert(0) += 1;
@@ -673,24 +673,23 @@ impl Engine {
         snapshot: SnapshotId,
         spec: export::ExportSpec,
     ) -> Result<(String, usize), String> {
-        self.acquire_pin(snapshot);
+        // **A guard, not a bracketed pair.** This method awaits, and the caller is a UI task
+        // that is dropped when its scope goes — so closing the export window mid-write drops
+        // this future at the await below. Decrementing after the await would then never run:
+        // the in-flight flag would stay true for the engine's whole life (every later window
+        // close would claim work was running) and the pin would never release, leaving a
+        // snapshot that survives every re-run for the rest of the session.
+        let _writing = ExportGuard::new(self, snapshot);
         let task = {
-            let mut lc = self.lifecycle.lock().unwrap();
-            lc.exports += 1;
-            self.publish_inflight(&lc);
             let ctx = self.ctx.clone();
             self.rt()
                 .spawn(async move { export::run_export(&ctx, snapshot, spec).await })
         };
 
+        // Dropping this future does *not* stop the write: the spawned task detaches and the
+        // file still completes, which is the kinder outcome for a user who closed the window
+        // after committing to an export. What it does stop is anyone hearing how it ended.
         let joined = task.await;
-
-        {
-            let mut lc = self.lifecycle.lock().unwrap();
-            lc.exports = lc.exports.saturating_sub(1);
-            self.publish_inflight(&lc);
-        }
-        self.release_pin(snapshot);
 
         match joined {
             Ok(res) => res,
@@ -829,6 +828,44 @@ impl Engine {
         if let Some(snap) = f.snapshot {
             retire_snapshot(&self.ctx, self.engine_id, snap);
         }
+    }
+}
+
+/// One in-flight export's bookkeeping — the count the close confirm reads, and a hold on the
+/// snapshot being written — released together by `Drop`.
+///
+/// A guard rather than a matching pair of statements because [`Engine::export`] awaits, and a
+/// dropped future must not be able to leak either. Borrows the engine, so it cannot outlive the
+/// call; [`SnapshotPin`] is the owned variant, for a holder that outlives one method.
+struct ExportGuard<'a> {
+    engine: &'a Engine,
+    snapshot: SnapshotId,
+}
+
+impl<'a> ExportGuard<'a> {
+    /// Claim both halves. Constructing the guard *is* the acquire, so there is no way to hold
+    /// one without having taken what it releases.
+    fn new(engine: &'a Engine, snapshot: SnapshotId) -> Self {
+        engine.acquire_pin(snapshot);
+        {
+            let mut lc = engine.lifecycle.lock().unwrap();
+            lc.exports += 1;
+            engine.publish_inflight(&lc);
+        }
+        Self { engine, snapshot }
+    }
+}
+
+impl Drop for ExportGuard<'_> {
+    fn drop(&mut self) {
+        {
+            let mut lc = self.engine.lifecycle.lock().unwrap();
+            lc.exports = lc.exports.saturating_sub(1);
+            self.engine.publish_inflight(&lc);
+        }
+        // Outside the lock above: `release_pin` takes it itself, and this mutex is not
+        // reentrant.
+        self.engine.release_pin(self.snapshot);
     }
 }
 

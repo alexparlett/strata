@@ -553,6 +553,54 @@ async fn releasing_a_pin_alone_retires_nothing() {
         .expect("still the workspace's current snapshot");
 }
 
+/// **A dropped export future must not leak its bookkeeping.** `Engine::export` awaits, and its
+/// caller is a UI task that is dropped when the export window closes — so if the count and the
+/// pin were released *after* the await, closing the window mid-write would leave the engine
+/// permanently claiming work in flight and holding a snapshot nothing can retire.
+#[tokio::test]
+async fn dropping_an_export_mid_write_releases_its_pin_and_its_count() {
+    let dir = scratch("export-cancelled");
+    let out = dir.join("out.csv");
+    let eng = std::sync::Arc::new(engine());
+
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    eng.watch_inflight(flag.clone());
+
+    let (first, _) = eng
+        .query(WsId(1), RunTag(1), SQL.into(), 2)
+        .await
+        .expect("run");
+    let snap = first.snapshot.expect("snapshot");
+
+    // Start an export and throw the future away without polling it to completion — exactly
+    // what dropping the window's task does.
+    {
+        use std::future::Future;
+
+        let fut = eng.export(snap, spec(&out, Format::Csv(csv())));
+        futures::pin_mut!(fut);
+        // One poll so the guard is taken and the work is dispatched, then drop it unfinished.
+        let waker = futures::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        let _ = fut.as_mut().poll(&mut cx);
+    }
+
+    assert!(
+        !flag.load(std::sync::atomic::Ordering::Relaxed),
+        "a dropped export must not leave the engine claiming work in flight"
+    );
+
+    // And the pin went with it, so the snapshot retires on the next re-run like any other.
+    eng.query(WsId(1), RunTag(2), SQL.into(), 2)
+        .await
+        .expect("re-run");
+    eng.fetch_page(snap, 1, 2, None)
+        .await
+        .expect_err("no pin left holding it open");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[tokio::test]
 async fn exporting_without_a_snapshot_says_so_plainly() {
     let dir = scratch("no-snapshot");

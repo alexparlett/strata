@@ -217,14 +217,21 @@ impl Component for FieldControl {
 
         let make = self.field.make;
         let max_len = self.field.max_len;
-        let current = self.field.value.clone();
         use_side_effect(move || {
-            // The canvas's `maxlength`: keeping an overflow the box doesn't show would export
-            // something the user can't see.
-            let typed: String = text.read().chars().take(max_len).collect();
-            if typed != current {
-                apply(ctx, make.edit(typed));
+            // The canvas's `maxlength`, enforced on the **box** and not just on the way out:
+            // truncating only the draft would show "ab" in a one-character field and quote with
+            // "a", which is a control disagreeing with the file it produces.
+            let raw = text.read().clone();
+            let capped: String = raw.chars().take(max_len).collect();
+            if capped != raw {
+                let mut text = text;
+                text.set(capped.clone());
             }
+            // Applied unconditionally: `ExportCtx::edit` is idempotent, so a no-op edit costs
+            // nothing — and comparing here against a captured value is precisely the bug this
+            // replaces (`use_side_effect` builds its closure once, so the capture froze at the
+            // first render and typing a field back to its original value wrote nothing).
+            apply(ctx, make.edit(capped));
         });
 
         rect()
@@ -260,18 +267,16 @@ impl Component for NumControl {
         let (make, min, max) = (self.make, self.min, self.max);
         use_side_effect(move || {
             let typed = text.read().trim().to_string();
-            match typed.parse::<u32>() {
-                // Clamp rather than accept: the engine clamps too, and a control that
-                // disagrees with the file it produces is worse than one that corrects itself.
-                Ok(parsed) => {
-                    let clamped = parsed.clamp(min, max);
-                    if clamped != value {
-                        apply(ctx, make.edit(clamped));
-                    }
-                }
-                // Let the box be emptied or half-typed; the draft keeps the last good value
-                // until something parseable arrives.
-                Err(_) => {}
+            // Clamp rather than accept: the engine clamps too, and a control that disagrees
+            // with the file it produces is worse than one that corrects itself. Applied
+            // unconditionally — `ExportCtx::edit` is idempotent, and the comparison this
+            // replaces was against a value frozen at the first render, so setting the level
+            // back to its starting number wrote nothing.
+            //
+            // An empty or half-typed box is left alone: the draft keeps the last good value
+            // until something parseable arrives.
+            if let Ok(parsed) = typed.parse::<u32>() {
+                apply(ctx, make.edit(parsed.clamp(min, max)));
             }
         });
 

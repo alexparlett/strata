@@ -140,13 +140,24 @@ impl ExportCtx {
     /// Mutate the draft — **the one write path**, used by the data-driven option groups and by
     /// the partition pane's bespoke controls alike.
     ///
-    /// It exists to make one rule unforgettable rather than to wrap a `write()`: a failure
-    /// message describes the spec that produced it, so any change to the draft makes it a lie.
-    /// Clearing it here means no control has to remember to.
+    /// It exists to make two rules unforgettable rather than to wrap a `write()`.
+    ///
+    /// A failure message describes the spec that produced it, so any change to the draft makes
+    /// it a lie; clearing it here means no control has to remember to.
+    ///
+    /// And it is **idempotent**: an edit that changes nothing neither writes nor clears the
+    /// message. That is what lets a control just apply what the user typed instead of guarding
+    /// the write itself — a guard the text controls got *wrong*, because `use_side_effect`
+    /// builds its closure once, so any value they captured to compare against was frozen at
+    /// their first render and reverting a field to its original value silently did nothing.
     pub fn edit(mut self, f: impl FnOnce(&mut ExportDraft)) {
         {
-            let mut draft = self.draft.write();
-            f(&mut draft);
+            let mut next = self.draft.peek().clone();
+            f(&mut next);
+            if next == *self.draft.peek() {
+                return;
+            }
+            self.draft.set(next);
         }
         if *self.status.peek() != Status::Idle {
             self.status.set(Status::Idle);
