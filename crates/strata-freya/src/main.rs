@@ -23,7 +23,7 @@ use strata_core::engine::purge_snapshot_root;
 use strata_core::project as project_io;
 
 use crate::platform::{create_global_open, create_global_windows};
-use crate::state::{create_global_config, AppCtx};
+use crate::state::{create_global_config, create_global_theme_preview, AppCtx};
 use crate::theme::ThemesCtx;
 
 mod apps;
@@ -58,6 +58,10 @@ fn main() {
     // …and the app-global **live** window registry: which windows exist right now, so a
     // project that already has one is focused rather than opened twice.
     let windows = create_global_windows();
+    // The Settings window's live theme preview — the one half of its uncommitted draft every
+    // *other* window reads, which is what makes picking a theme repaint them all at once
+    // while the choice is still uncommitted. Empty except while that window is open.
+    let preview = create_global_theme_preview();
     // The menubar. Its builder runs at `resumed`, on this very thread, and hands back the
     // File menu's handles — which land in a third app-global so the focused window can keep
     // Open Recent and Close Project pointed at itself (`menu::use_file_menu`). The builder
@@ -76,6 +80,7 @@ fn main() {
         themes,
         config,
         windows,
+        preview,
         menu: menu_state,
         open: focused_open,
     };

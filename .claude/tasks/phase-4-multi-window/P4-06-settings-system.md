@@ -18,6 +18,16 @@ The segmented control that sets it directly is this task's: the canvas has it as
 New window). Write it through `write_config(.., &[ConfigChan::Settings], ..)` like every other
 setting — nothing else needs touching, the readers are already there.
 
+## Wiring into the P4-03 shell
+The Settings window shell is built: `Route::System` renders `SystemPane` in `apps/settings/mod.rs`, which
+today is a `Pane::not_built(..)` placeholder. Replace that component's body; nothing else changes.
+
+Every control edits `SettingsCtx::draft` (`use_consume::<SettingsCtx>()`) and stops there. The
+footer's **Apply** is the only thing that commits — `write_config(.., &[ConfigChan::Settings], ..)`,
+once, for the whole struct — so a page must never persist a field itself. The breadcrumb and the
+scroll frame are the shell's; the pane renders content only, and reads its colours from the
+`settings` component theme (`hint_color` is a setting's subtext).
+
 ## Build
 - System prefs as a uniform divider-separated list (no ALL-CAPS labels — U12 alignment).
 - **History limit** = `Settings.max_history` (default 100) as a numeric input, like the data-display

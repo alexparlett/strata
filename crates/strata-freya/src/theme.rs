@@ -24,16 +24,17 @@ use crate::apps::project::{
     HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
     StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
+use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
 use crate::components::type_palette::TypePaletteThemePreference;
-use crate::state::{use_config_channel, ConfigChan, ConfigStation};
+use crate::state::{use_config_channel, ConfigChan, ConfigStation, ThemePreview, ThemeSel};
 use freya::prelude::*;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
 use strata_code_editor::prelude::EditorThemePreference;
-use strata_core::theme::{effective_id, ThemeRegistry};
+use strata_core::theme::ThemeRegistry;
 
 pub use strata_core::theme::{
     resolve_typography, typography, Kind, Mode, Pref, SheetDef, SpecificValue, StrataTheme,
@@ -142,11 +143,26 @@ pub fn window_background(t: &StrataTheme) -> Color {
     pc(&t.sheet.background)
 }
 
+/// The theme selection in force **right now**, without subscribing to either input — for the
+/// pre-launch window background, where there is no reactive scope and no `Platform` yet.
+///
+/// The preview outranks the settings for the same reason it does in [`use_strata_theme`]: a
+/// window opened while the Settings window is previewing a theme has to come up wearing that
+/// theme, not the committed one it is about to replace.
+pub fn peek_selection(config: ConfigStation, preview: ThemePreview) -> ThemeSel {
+    preview
+        .peek()
+        .clone()
+        .unwrap_or_else(|| ThemeSel::from(&config.peek().settings))
+}
+
 /// Install this window's Freya theme and keep it **derived** from the app-global config's
-/// [`Settings`](strata_core::config::Settings) selection (`theme` + `sync_os`) and — only while syncing — the OS
+/// [`Settings`](strata_core::config::Settings) selection (`theme` + `sync_os`), the Settings
+/// window's live [`ThemePreview`] where it has one, and — only while syncing — the OS
 /// appearance (this window's `Platform.preferred_theme`, seeded from the window's real
-/// theme and live via winit `ThemeChanged`). Every window root mounts this; Phase 4's
-/// Settings UI just writes the config store and every window repaints.
+/// theme and live via winit `ThemeChanged`). Every window root mounts this; the Settings UI
+/// writes the preview (live, uncommitted) or the config store (on Save) and every window
+/// repaints.
 ///
 /// Subscribes to [`ConfigChan::Settings`] only, so the recents/open-set churn of opening a
 /// project never re-derives a theme.
@@ -154,8 +170,9 @@ pub fn window_background(t: &StrataTheme) -> Color {
 /// There is no stored applied-theme id to keep coherent: windows stay consistent because
 /// each computes the same pure derivation (`effective_id`) of the same global inputs.
 /// The `Theme.name` guard (it carries the applied id) skips no-op rebuilds — including
-/// the mount-time echo of the id `use_init_theme` already resolved.
-pub fn use_strata_theme(themes: ThemesCtx, config: ConfigStation) {
+/// the mount-time echo of the id `use_init_theme` already resolved, and the Save that
+/// commits a preview the window is already wearing.
+pub fn use_strata_theme(themes: ThemesCtx, config: ConfigStation, preview: ThemePreview) {
     let platform = use_hook(Platform::get);
     let preferred = platform.preferred_theme;
     let settings = use_config_channel(config, ConfigChan::Settings);
@@ -163,20 +180,20 @@ pub fn use_strata_theme(themes: ThemesCtx, config: ConfigStation) {
         let themes = themes.clone();
         // `peek`s — the side effect below owns reactivity.
         move || {
-            let s = &config.peek().settings;
-            let os_dark = s.sync_os && *preferred.peek() == PreferredTheme::Dark;
-            let id = effective_id(&s.theme, s.sync_os, os_dark);
-            strata_theme(themes.get_or_default(&id))
+            let sel = peek_selection(config, preview);
+            let os_dark = sel.sync_os && *preferred.peek() == PreferredTheme::Dark;
+            strata_theme(themes.get_or_default(&sel.effective(os_dark)))
         }
     });
     use_side_effect(move || {
-        let (id, sync_os) = {
-            let s = &settings.read().settings;
-            (s.theme.clone(), s.sync_os)
-        };
+        // Both inputs are read on every pass, not short-circuited on the preview: a Save
+        // writes the settings and clears the preview, and a subscription taken only while
+        // the preview was absent would miss whichever of the two landed second.
+        let committed = ThemeSel::from(&settings.read().settings);
+        let sel = preview.read().clone().unwrap_or(committed);
         // Short-circuit: only subscribe to the OS appearance while actually syncing.
-        let os_dark = sync_os && *preferred.read() == PreferredTheme::Dark;
-        let id = effective_id(&id, sync_os, os_dark);
+        let os_dark = sel.sync_os && *preferred.read() == PreferredTheme::Dark;
+        let id = sel.effective(os_dark);
         let applied = theme.peek().name;
         if applied != id {
             theme.set(strata_theme(themes.get_or_default(&id)));
@@ -383,6 +400,16 @@ strata_components! {
     "launcher" => LauncherThemePreference {
         background, rail_background, border_fill, title_color, label_color, nav_background,
         row_hover_background, remove_hover_background,
+    },
+    // The Settings window: its body + raised category rail, the three rules (title bar, rail
+    // edge, footer), the window's gear mark, and the nav tree's dress — group heading, its
+    // chevron, a resting row and the current one's pill. `hint_color` is a pane's explanatory
+    // subtext, which every category page uses under each setting. Its rows are `SideBarItem`s
+    // (so the router's `ActivableRoute` drives selection — see the rail's own module) wearing
+    // the shared `sidebar_item` dress, and its footer buttons `button`'s.
+    "settings" => SettingsThemePreference {
+        background, nav_background, border_fill, icon_color, icon_background, group_color,
+        chevron_color, item_color, item_active_background, item_active_color, hint_color,
     },
     // The initials tile a project row leads with (header switcher, launcher lists): the resting
     // dress plus the accent one a project with an open window wears.
@@ -784,5 +811,76 @@ mod tests {
                 "{id}: fonts-map resolution"
             );
         }
+    }
+
+    /// **The live-theme preview.** A window's theme is derived from the committed settings
+    /// *unless* the Settings window has an uncommitted pick, and taking the slot back is what
+    /// makes Cancel a revert. Every window runs this same derivation off the same globals, so
+    /// pinning it in one window pins "previews live across windows".
+    ///
+    /// Worth a mounted test rather than a unit one on `ThemeSel`: the ordering is inside
+    /// `use_strata_theme`'s effect, and the value under test is what Freya actually installed
+    /// (`Theme.name` carries the applied id).
+    #[test]
+    fn a_preview_outranks_the_committed_theme_until_it_is_dropped() {
+        use freya::elements::label::Label;
+        use freya::prelude::*;
+        use freya_testing::TestingRunner;
+        use strata_core::config::AppConfig;
+
+        use super::{use_strata_theme, ThemesCtx};
+        use crate::state::{create_global_theme_preview, ConfigStation, ThemePreview, ThemeSel};
+
+        type Handles = (ThemesCtx, ConfigStation, ThemePreview);
+
+        fn app() -> impl IntoElement {
+            let (themes, config, preview) = use_consume::<Handles>();
+            use_strata_theme(themes, config, preview);
+            // The applied id, surfaced as text so the assertions read what Freya installed
+            // (`Theme.name` carries it) rather than re-deriving it.
+            label().text(use_theme().read().name)
+        }
+
+        /// The id the window is currently themed with. Two passes: the derivation is a side
+        /// effect, so the first settles it and the second repaints the probe from it.
+        fn applied(runner: &mut TestingRunner) -> String {
+            runner.sync_and_update();
+            runner.sync_and_update();
+            runner
+                .find(|_, element| Label::try_downcast(element))
+                .expect("the probe label is on screen")
+                .text
+                .to_string()
+        }
+
+        let mut cfg = AppConfig::default();
+        cfg.settings.theme = "midnight".to_string();
+        let (mut runner, mut preview) = TestingRunner::new(
+            app,
+            (100., 100.).into(),
+            move |r| {
+                let handles: Handles = (
+                    ThemesCtx::discover(),
+                    ConfigStation::create_global(cfg.clone()),
+                    create_global_theme_preview(),
+                );
+                let preview = handles.2;
+                r.provide_root_context(move || handles);
+                preview
+            },
+            1.,
+        );
+        assert_eq!(applied(&mut runner), "midnight");
+
+        // The Settings window picks another theme: uncommitted, but live here.
+        preview.set(Some(ThemeSel {
+            theme: "daylight".to_string(),
+            sync_os: false,
+        }));
+        assert_eq!(applied(&mut runner), "daylight");
+
+        // Cancel drops the slot, and the window falls back to what is committed.
+        preview.set(None);
+        assert_eq!(applied(&mut runner), "midnight");
     }
 }

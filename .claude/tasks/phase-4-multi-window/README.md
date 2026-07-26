@@ -5,14 +5,17 @@ The other OS windows and the machinery that lets them share state: **launcher**,
 handling, and **project lifecycle** (open/load + session persistence).
 
 ## State of play
-The **multi-window spine is up**: two window roots (`apps/project/`, `apps/launcher/`), two
-app-globals created in `main` and handed to each root — the config store (`state/config.rs`) and the
-live window registry (`platform/windows.rs`) — and one window path everything opens through
+The **multi-window spine is up**: three window roots (`apps/project/`, `apps/launcher/`,
+`apps/settings/`), app-globals created in `main` and handed to each root — the config store
+(`state/config.rs`), the live window registry (`platform/windows.rs`) and the Settings window's
+theme preview (`state/theme_preview.rs`) — and one window path everything opens through
 (focus-if-open, launcher-if-last, quit-closes-all). Per plan §4 the cross-window singletons use
 **`State::create_global`**, **not** a per-window Radio station; native close uses **`winit
-CloseRequested`** (no objc). What's left in this phase is the *windows themselves*: settings,
-export, the config modal — plus P4-13's open/create UI. The Dioxus app shipped all of this
-(W1–W4, D6–D8) — this is the Freya rebuild.
+CloseRequested`** (no objc), and the one place objc *is* reached for is the fork's
+`set_window_parent` (P4-03 pins Settings above the window that opened it). What's left in this
+phase is the settings **categories** (P4-04…P4-09) and the remaining windows: export, the config
+modal — plus P4-13's open/create UI. The Dioxus app shipped all of this (W1–W4, D6–D8) — this is
+the Freya rebuild.
 
 ## Tasks
 
@@ -20,7 +23,7 @@ export, the config modal — plus P4-13's open/create UI. The Dioxus app shipped
 |---|---|---|---|---|
 | P4-01 | Multi-window shell + shared state (`create_global`) + native close | 🟡 shared state · window model · quit-vs-close done; per-window fault close + Dock quit remain | W1/A8 | — |
 | P4-02 | Launcher window | ✅ | U1 | P4-01 |
-| P4-03 | Settings window shell (draft/save, live theme, single-instance) | ⬜ | W1/U12 | P4-01 |
+| P4-03 | Settings window shell (draft/save, live theme, single-instance) | ✅ | W1/U12 | P4-01 |
 | P4-04 | Settings ▸ Appearance | ⬜ | U12 | P4-03 |
 | P4-05 | Settings ▸ Data-display | ⬜ | U12 | P4-03 |
 | P4-06 | Settings ▸ System (+ history limit) | ⬜ | W3/U12 | P4-03 |

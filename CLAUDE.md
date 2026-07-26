@@ -116,10 +116,16 @@ src/main.rs                      Freya launch + startup routing (reopen every pr
                                  AppConfig store and the live window registry. Each window's theme
                                  is pure derived state (`use_strata_theme`)
 src/platform/windows.rs          the **window model**: the live registry (WindowId → launcher /
-                                 project folder), `open_project` / `open_launcher`
+                                 project folder / settings), `open_project` / `open_launcher`
                                  (focus-if-open), `close_this_window` (the launcher takes over
-                                 when it was the last), and quit (closes every window + keeps the
-                                 persisted open-set, so a restart reopens them)
+                                 when it was the last — settings doesn't count as a window you
+                                 work in), and quit (closes every window + keeps the persisted
+                                 open-set, so a restart reopens them)
+src/platform/settings.rs         the Settings window's single instance + its **pin**: one app-wide,
+                                 opened above whichever window asked (a native child window via
+                                 the fork's `set_window_parent`), re-pointed when another window
+                                 asks. Closing with the owner is ours, not AppKit's — the owner
+                                 leaving the registry closes it through Freya's own path
 src/platform/open.rs             **where** an open lands, vs windows.rs's *how*: `OpenCtx` (the
                                  window's project root + its pending This/New question) resolves
                                  `OpenPref` for every project-window surface — ⌘O, Open…, Open
@@ -133,10 +139,14 @@ src/menu.rs                      the macOS menubar: App · **File** (Open… · 
                                  pointed at itself (`use_file_menu`): its recents, Close Project
                                  only when it has a project to close, and the `OpenCtx` Open
                                  Recent resolves through (the one item carrying data, not a chord)
-src/state/mod.rs                 `AppCtx` — the five app-globals `main` creates once (themes ·
-                                 config · window registry · menubar handles · the focused
-                                 window's open path), handed to every window root as one value
-                                 rather than five parameters
+src/state/mod.rs                 `AppCtx` — the six app-globals `main` creates once (themes ·
+                                 config · window registry · theme preview · menubar handles · the
+                                 focused window's open path), handed to every window root as one
+                                 value rather than six parameters
+src/state/theme_preview.rs       the Settings window's **live theme preview** — the one half of
+                                 its uncommitted draft every other window reads, so a pick
+                                 repaints them all before it is saved. A second, higher-priority
+                                 input to the same pure derivation; dropping it is the revert
 src/state/config.rs              THE app-global store: one `RadioStation<AppConfig, ConfigChan>`
                                  (settings · recents · open-project set) created once in main and
                                  shared into every window (`use_share_config`). Channels keep a
@@ -164,6 +174,15 @@ src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher
   mod.rs                         root + window config + the `launcher` component theme
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
   views/                         title_bar · rail (SidebarRow) · projects · row · open (rfd pick)
+src/apps/settings/               the settings window (P4-03, `Settings.dc.html`) — one app-wide,
+                                 pinned above its opener
+  mod.rs                         root + window config + the `settings` component theme, the
+                                 **freya-router** `Route` per category, `SettingsCtx` (the draft ·
+                                 Apply · the live-theme mirror), and the category panes (each a
+                                 placeholder until P4-04…P4-08)
+  model.rs                       the nav tree: CATEGORIES + their groups + breadcrumbs
+                                 (unit-tested — one category per route, groups contiguous)
+  views/                         chrome (the router layout) · title_bar · nav · pane · footer
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     two layers: `ProjectApp` = the **window** (theme, app-globals,
                                  close bridge, menubar, OpenCtx) and `ProjectRoot` = the **open

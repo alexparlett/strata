@@ -31,7 +31,7 @@ use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
 use crate::platform::{self, OpenCtx, WindowKind};
 use crate::state::{use_config, use_open_project, use_share_config, AppCtx, ConfigChan};
-use crate::theme::{use_strata_theme, window_background};
+use crate::theme::{peek_selection, use_strata_theme, window_background};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use freya::winit::dpi::LogicalPosition;
@@ -39,7 +39,7 @@ use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use futures::StreamExt;
 use strata_core::config::Command;
 use strata_core::project as project_io;
-use strata_core::theme::{effective_id, os_is_dark};
+use strata_core::theme::os_is_dark;
 use strata_model::{TabId, WindowGeom};
 
 pub struct ProjectApp {
@@ -74,8 +74,7 @@ impl ProjectApp {
         // Pre-launch there's no `Platform`, so the one-shot OS probe stands in for
         // Sync-with-OS.
         let background = {
-            let s = &app.config.peek().settings;
-            let id = effective_id(&s.theme, s.sync_os, os_is_dark());
+            let id = peek_selection(app.config, app.preview).effective(os_is_dark());
             window_background(app.themes.get_or_default(&id))
         };
         // This window's close bridge: the hook holds an OS close while a query runs (and
@@ -133,7 +132,7 @@ impl App for ProjectApp {
         // This window's theme: installed + kept derived from the reactive settings
         // selection (+ OS appearance while syncing). Every window computes the same pure
         // derivation of the same globals, so they repaint consistently.
-        use_strata_theme(themes.clone(), self.app.config);
+        use_strata_theme(themes.clone(), self.app.config, self.app.preview);
         // The app-global config into context so deep consumers (shortcut listeners, keymap
         // hints, the confirm dialog's "don't ask again") reach it without prop-threading.
         // `RadioStation` is `Copy` — this shares the one global, it doesn't fork it.
@@ -308,10 +307,13 @@ impl App for ProjectApp {
                         platform::quit();
                         true
                     }
-                    Command::CommandPalette
-                    | Command::OpenSettings
-                    | Command::CycleWindow
-                    | Command::Find => {
+                    // ⌘, — the same window the header's gear opens, pinned above this one
+                    // (or re-pinned here, if another window has it).
+                    Command::OpenSettings => {
+                        platform::open_settings(platform.clone(), app.clone());
+                        true
+                    }
+                    Command::CommandPalette | Command::CycleWindow | Command::Find => {
                         tracing::debug!("shortcut {cmd:?}: target not built yet (stub)");
                         true
                     }

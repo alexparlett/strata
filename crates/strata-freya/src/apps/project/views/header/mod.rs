@@ -34,6 +34,8 @@ use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Title;
 use crate::keymap::use_hint_title;
+use crate::platform::open_settings;
+use crate::state::AppCtx;
 
 /// The gutter that keeps the bar's content clear of the OS traffic lights. The window insets
 /// them to (13, 16) (`with_traffic_light_inset`), so the three buttons end around x = 67; 82 is
@@ -118,12 +120,16 @@ impl Component for HeaderBar {
             }
         });
 
-        // Both actions are placeholders: the command palette is P6-01 and the settings window is
-        // P4-03, so the buttons exist (with their live chord in the tooltip) and log until those
-        // land. Their chords are already consumed by `project.rs`'s catch-all — this is the same
-        // stub, reachable by mouse.
+        // The command palette is P6-01, so that button exists (with its live chord in the
+        // tooltip) and logs until it lands — the same stub `project.rs`'s catch-all holds for
+        // the chord, reachable by mouse. The gear opens the real Settings window.
         let search_title = use_hint_title("Search", Command::CommandPalette);
         let settings_title = use_hint_title("Settings", Command::OpenSettings);
+        // The Settings window is opened through the shared path, which needs this window's
+        // platform handle (that is how it learns *which* window asked, so it can pin itself
+        // above this one) and the app-globals.
+        let platform = use_hook(Platform::get);
+        let app = use_consume::<AppCtx>();
 
         // The brand: the app mark in a rounded, clipped tile (the SVG is square and paints its
         // own colours), then the wordmark in the scale's Title role — ui 600 14.5, the comp's.
@@ -170,7 +176,7 @@ impl Component for HeaderBar {
             .child(tip(
                 settings_title,
                 action(IconName::Gear, 16.).on_press(move |_| {
-                    tracing::debug!("header: settings window not built yet (P4-03)");
+                    open_settings(platform.clone(), app.clone());
                 }),
             ));
 

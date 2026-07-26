@@ -128,7 +128,10 @@ pub struct KeyBind {
 /// the config JSON — deliberately **not** `#[serde(flatten)]`, see [`AppConfig::settings`]),
 /// so it is reached through the one app-global config store rather than living in a store
 /// of its own.
-#[derive(Clone, Serialize, Deserialize)]
+/// `PartialEq` because the Settings window edits a **draft** copy: comparing it against the
+/// committed settings is what "is there anything to apply?" means, and the whole struct is
+/// the unit of that question (see `strata-freya`'s `SettingsCtx`).
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     /// Active theme id (see `crate::theme`). Persists across sessions/windows.
     #[serde(default = "default_theme")]

@@ -35,11 +35,13 @@
   },
   "palette": {
     "accent_amber": "#ffcf6b",
+    "accent_badge": "rgba(76,198,255,.12)",
     "accent_blue": "#79c0ff",
     "accent_cyan": "#8ad4ff",
     "accent_green": "#7ee787",
     "accent_orchid": "#c9a5ff",
     "accent_rose": "#ff7b9c",
+    "accent_selection": "rgba(76,198,255,.10)",
     "accent_sky": "#a5d6ff",
     "accent_soft": "rgba(76,198,255,.22)",
     "accent_tan": "#e2b98c",
@@ -1139,7 +1141,7 @@
         "reference": "primary"
       },
       "part_background": {
-        "specific": "rgba(76,198,255,.12)"
+        "reference": "accent_badge"
       },
       "warn_color": {
         "reference": "warning"
@@ -1286,13 +1288,48 @@
         "reference": "text_label"
       },
       "nav_background": {
-        "specific": "rgba(76,198,255,.10)"
+        "reference": "accent_selection"
       },
       "row_hover_background": {
         "reference": "surface_subtle"
       },
       "remove_hover_background": {
         "specific": "#14100f"
+      }
+    },
+    "settings": {
+      "background": {
+        "reference": "surface_secondary"
+      },
+      "nav_background": {
+        "reference": "surface_overlay"
+      },
+      "border_fill": {
+        "reference": "border"
+      },
+      "icon_color": {
+        "reference": "primary"
+      },
+      "icon_background": {
+        "reference": "accent_badge"
+      },
+      "group_color": {
+        "reference": "text_secondary"
+      },
+      "chevron_color": {
+        "reference": "text_placeholder"
+      },
+      "item_color": {
+        "reference": "text_muted"
+      },
+      "item_active_background": {
+        "reference": "accent_selection"
+      },
+      "item_active_color": {
+        "reference": "text_primary"
+      },
+      "hint_color": {
+        "reference": "text_placeholder"
       }
     }
   },
