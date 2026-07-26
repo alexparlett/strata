@@ -57,6 +57,9 @@ jobs:
             ends as soon as you stop, and anything still running is discarded unread
             while you pay for it.
 
+            One command per Bash call. Chaining with `;` or `&&` makes the whole call
+            need approval, which nothing can give here, so the call just fails.
+
             Post the result yourself before you finish - nothing posts it for you:
               - a line-specific finding goes inline via the
                 mcp__github_inline_comment__create_inline_comment tool;
@@ -67,6 +70,13 @@ jobs:
             indistinguishable from the reviewer being broken, which is how this went
             unnoticed.
 
+            **Budget your turns and post while you still have some.** You have a hard
+            turn limit and the run dies at it with nothing published - that has already
+            happened once. On a large diff, read what you need to judge the risky hunks
+            rather than every file, and once you are around three quarters of the way
+            through your turns, stop looking and post what you have. A partial review
+            that lands beats a thorough one that doesn't.
+
           # TEMPORARY (with the prompt change above), so the next run is checkable:
           # show_full_output streams every message and tool result into the step log,
           # display_report puts the final report in the job summary. Both are
@@ -76,8 +86,13 @@ jobs:
           # actually lands on a PR.
           show_full_output: true
           display_report: true
+          # 40 was sized when the main loop only dispatched subagents and did no work
+          # itself. Now the whole review happens here, and PR #47 spent all 40 on
+          # reading (12 Read, 8 Grep, 20 Bash) and died at the cap before posting a
+          # word. The real guard is `timeout-minutes: 45` above; that run took under
+          # 4 minutes and $2.27, so this has room to be generous.
           claude_args: |
-            --max-turns 40
+            --max-turns 150
             --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
         env:
           GH_TOKEN: ${{ github.token }}
