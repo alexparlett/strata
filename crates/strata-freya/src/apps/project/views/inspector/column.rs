@@ -2,11 +2,15 @@
 //! carries, the shape of a nested type, and the STATISTICS zone — the facts box, the
 //! completeness bar, and the scan.
 //!
-//! Built to the `Strata.dc.html` inspector canvas. The zone has **four states**, all through one
-//! frame ([`zone`]) so the box can't shift under the user as a scan settles: the offer of a scan
-//! ([`scan_card`]), the scan running ([`running_row`]), what it found (its facts folded into the
-//! one list, under the canvas's age / view-as-query / ↻ controls), and a failure with the retry
-//! beside it.
+//! Built to the `Strata.dc.html` inspector canvas. Every state goes through one frame ([`zone`]),
+//! so the box can't shift under the user as a scan settles: the offer of a scan ([`scan_card`]),
+//! the scan running ([`running_row`]), what it found (its facts folded into the one list, under
+//! the canvas's age / view-as-query / ↻ controls), and a failure with the retry beside it.
+//!
+//! Which of those is showing is [`shown`] — a pure state machine over one rule: **the zone never
+//! shows less than it did a moment ago.** A re-scan keeps the numbers it is replacing and stays
+//! silent unless it outlasts the hold, so re-profiling a small table changes the numbers rather
+//! than flashing a spinner where they were. See [`ScannedStatistics`].
 //!
 //! **Deliberately not built: the canvas's distribution bars.** The profile carries no
 //! distribution data — the scan computes distinct / min / max / mean / median (`core::profile`),
@@ -15,11 +19,13 @@
 //! data; a bar drawn from anything else here would be the fabrication this panel exists to
 //! avoid. Recorded in the P3-09 task file and DEV_TASKS D4.
 
+use async_io::Timer;
 use freya::components::{use_theme, CircularLoader};
 use freya::prelude::*;
 use freya::query::QueryStateData;
 use freya::radio::{use_radio_station, RadioStation};
 use strata_core::engine::profile::CatalogProfile;
+use strata_core::util::iso8601;
 use strata_model::{CatalogKind, Origin};
 
 use super::model::{
@@ -36,7 +42,7 @@ use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::type_palette::{kind_color, type_palette, TypePaletteTheme};
 use crate::components::typography::{Body, Control, Eyebrow, Meta, MonoValue, Path, Prose};
-use crate::components::ACTION_HEIGHT;
+use crate::components::{ACTION_HEIGHT, PROGRESS_HOLD};
 
 /// Corner radius of the facts box and the profile card (canvas `--r-3`); the smaller boxes use
 /// `--r-2`, and the badges `--r-xs`.
@@ -327,15 +333,17 @@ impl Component for Statistics {
                 None,
                 Some(scan_card(&self.facts, &self.theme, actions)),
             ),
-            // Keyed on the request, so a ↻ re-scan remounts on the new key rather than showing
-            // the previous scan's numbers while the next one runs.
+            // Keyed on the **entry**, not on the request: a ↻ re-scan has to keep the numbers it
+            // is replacing on screen, and it can only do that from a scope that survives the new
+            // request (see `ScannedStatistics::held`). Switching entries *is* a remount, so one
+            // table's numbers can never be held over another's.
             Some(scan) => ScannedStatistics {
                 facts: self.facts.clone(),
                 theme: self.theme.clone(),
                 scan,
                 key: DiffKey::None,
             }
-            .key(scan)
+            .key(&self.facts.owner)
             .into_element(),
         }
     }
@@ -348,6 +356,25 @@ impl Component for Statistics {
 /// request, the dedup is that key's identity — two subscribers (this and the catalog row's
 /// spinner) attach to one execution — and the running state is `query.read().state()`. Nothing
 /// here is stored, so nothing here can go stale behind the store's back.
+///
+/// ## The zone never shows less than it did a moment ago
+///
+/// A re-scan is a *new* request, hence a new cache key, hence a `Pending` entry — so on its own it
+/// would blank the facts box and put a spinner where the numbers were, then swap back a moment
+/// later. On a small table that whole round trip is a flicker: the eye reads it as a glitch rather
+/// than as a state.
+///
+/// Two halves, and they interlock — the second is only possible because of the first:
+///
+/// 1. **The last settled numbers stay live** ([`held`](Self::held)). They were true as of their own
+///    timestamp, and the header says when that was, so there is nothing dishonest about leaving
+///    them up while the next pass runs.
+/// 2. **The re-scan only announces itself once it has outlasted [`PROGRESS_HOLD`]** — the same hold
+///    the catalog row's registration spinner serves. Inside it, a re-scan is invisible: numbers,
+///    then different numbers.
+///
+/// A **first** scan is deliberately exempt from the hold: there is nothing to hold onto, and a
+/// press that shows nothing for 400ms reads as a press that missed.
 #[derive(PartialEq)]
 struct ScannedStatistics {
     facts: ColumnFacts,
@@ -384,87 +411,146 @@ impl Component for ScannedStatistics {
         };
         drop(reader);
 
+        // The last numbers this entry settled — what a re-scan keeps on screen (see the type doc).
+        // Remembered in an effect rather than during render, and only when it actually moves, so a
+        // settle costs one render and not two.
+        let mut held = use_state(|| None::<CatalogProfile>);
+        use_side_effect(move || {
+            if let QueryStateData::Settled { res: Ok(p), .. } = &*query.read().state() {
+                held.set_if_modified(Some(p.clone()));
+            }
+        });
+
+        // Whether the scan in flight has outlasted the hold, and so is worth saying out loud.
+        // Re-armed from zero on every entry into (and exit from) a scan — the same shape, and the
+        // same reasoning, as the catalog row's status slot.
+        let running = matches!(state, Scan::Running);
+        let announced = use_state(|| false);
+        let pending = use_state(|| None::<TaskHandle>);
+        use_side_effect_with_deps(&running, move |running| {
+            let mut announced = announced;
+            let mut pending = pending;
+            if let Some(task) = pending.write().take() {
+                task.cancel();
+            }
+            announced.set_if_modified(false);
+            if *running {
+                pending.set(Some(spawn(async move {
+                    Timer::after(PROGRESS_HOLD).await;
+                    announced.set_if_modified(true);
+                })));
+            }
+        });
+
         let kind = self.facts.owner_kind();
         let owner = self.facts.owner.clone();
         let t = &self.theme;
+        let previous = held.read();
+        let cancel = {
+            let engine = engine.clone();
+            let owner = owner.clone();
+            move |_| {
+                // Both halves, because they answer different questions: the engine stops paying
+                // for the scan, and dropping the request is what puts the zone back to offering
+                // one — there is no result of *this* scan, so nothing else would be honest.
+                engine.cancel_profile(&owner);
+                actions.clear(kind, &owner);
+            }
+        };
 
-        match state {
-            Scan::Running => {
-                let cancel = {
-                    let engine = engine.clone();
-                    let owner = owner.clone();
-                    move |_| {
-                        // Both halves, because they answer different questions: the engine stops
-                        // paying for the scan, and dropping the request is what puts the zone
-                        // back to offering one — there is no result, so nothing else would be
-                        // honest to show.
-                        engine.cancel_profile(&owner);
-                        actions.clear(kind, &owner);
-                    }
-                };
-                zone(&self.facts, t, None, Some(running_row(t, cancel)))
-            }
-            Scan::Done(profile) => {
-                // The scan's facts fold into the one list, matched on `StatKey` — so a fact can
-                // never appear twice, and the completeness bar below picks up a *counted* null
-                // count wherever the footer had none.
-                let facts = with_scan(self.facts.clone(), &profile);
-                let tail = rect()
-                    .width(Size::fill())
-                    .vertical()
-                    .spacing(8.)
-                    // What a nested field's absent facts mean, since the box above it would
-                    // otherwise read as a scan that found nothing.
-                    .maybe_child(facts.child.then(|| {
-                        Path::new(NESTED_NOTE)
-                            .color(t.note_color)
-                            .wrap()
-                            .into_element()
-                    }))
-                    .child(Path::new(scan_footnote(&profile)).color(t.meta_color));
-                zone(
-                    &facts,
+        // The facts + controls half is identical for settled and held numbers, which is the whole
+        // point: a re-scan in progress is not a different-looking panel.
+        let settled = |profile: &CatalogProfile, tail: Option<Element>| {
+            // The scan's facts fold into the one list, matched on `StatKey` — so a fact can never
+            // appear twice, and the completeness bar picks up a *counted* null count wherever the
+            // footer had none.
+            let facts = with_scan(self.facts.clone(), profile);
+            let footnotes = rect()
+                .width(Size::fill())
+                .vertical()
+                .spacing(8.)
+                // What a nested field's absent facts mean, since the box above it would
+                // otherwise read as a scan that found nothing.
+                .maybe_child(facts.child.then(|| {
+                    Path::new(NESTED_NOTE)
+                        .color(t.note_color)
+                        .wrap()
+                        .into_element()
+                }))
+                .child(Path::new(scan_footnote(profile)).color(t.meta_color))
+                .maybe_child(tail);
+            zone(
+                &facts,
+                t,
+                Some(scan_controls(
                     t,
-                    Some(scan_controls(t, &profile, owner, kind, session, actions)),
-                    Some(tail.into_element()),
-                )
+                    profile,
+                    owner.clone(),
+                    kind,
+                    session,
+                    actions,
+                )),
+                Some(footnotes.into_element()),
+            )
+        };
+
+        match shown(&state, previous.as_ref(), *announced.read()) {
+            // Nothing on screen yet, so the press says so at once — no hold.
+            Shown::FirstScan => zone(
+                &self.facts,
+                t,
+                None,
+                Some(running_row(t, SCANNING, cancel)),
+            ),
+            // A re-scan slow enough to be worth saying: the numbers stay, the row explains why
+            // they are still the old ones, and Cancel is right there.
+            Shown::ReScan(profile) => settled(profile, Some(running_row(t, RESCANNING, cancel))),
+            Shown::Facts(profile) => settled(profile, None),
+            Shown::Failed(error, previous) => {
+                let reason = rect()
+                    .width(Size::fill())
+                    .horizontal()
+                    .content(Content::Flex)
+                    .spacing(8.)
+                    .child(
+                        rect()
+                            .margin((1., 0., 0., 0.))
+                            .child(Icon::new(IconName::Alert).color(danger).size(14.)),
+                    )
+                    .child(
+                        Prose::new(error.to_string())
+                            .color(t.note_color)
+                            .width(Size::flex(1.))
+                            .wrap(),
+                    );
+                match previous {
+                    // A failed *re*-scan keeps what it was replacing, for the same reason a
+                    // running one does — and the ↻ in the header is the retry.
+                    Some(profile) => settled(profile, Some(reason.into_element())),
+                    // A failed first scan says why and offers the retry, which is one press: the
+                    // request is still on the row, so it goes straight through the confirm.
+                    None => zone(
+                        &self.facts,
+                        t,
+                        None,
+                        Some(
+                            rect()
+                                .width(Size::fill())
+                                .vertical()
+                                .spacing(12.)
+                                .child(reason)
+                                .child(scan_card(&self.facts, t, actions))
+                                .into_element(),
+                        ),
+                    ),
+                }
             }
-            // A scan that was stopped on purpose is not a failure to report — the zone simply goes
-            // back to offering one, exactly as if it had never been asked for.
-            Scan::Failed(error) if stopped_on_purpose(&error) => zone(
+            Shown::Offer => zone(
                 &self.facts,
                 t,
                 None,
                 Some(scan_card(&self.facts, t, actions)),
             ),
-            // A real failure says why and offers the retry, which is one press: the request is
-            // still on the row, so this goes straight through the confirm (P3-10).
-            Scan::Failed(error) => {
-                let tail = rect()
-                    .width(Size::fill())
-                    .vertical()
-                    .spacing(12.)
-                    .child(
-                        rect()
-                            .width(Size::fill())
-                            .horizontal()
-                            .content(Content::Flex)
-                            .spacing(8.)
-                            .child(
-                                rect()
-                                    .margin((1., 0., 0., 0.))
-                                    .child(Icon::new(IconName::Alert).color(danger).size(14.)),
-                            )
-                            .child(
-                                Prose::new(error)
-                                    .color(t.note_color)
-                                    .width(Size::flex(1.))
-                                    .wrap(),
-                            ),
-                    )
-                    .child(scan_card(&self.facts, t, actions));
-                zone(&self.facts, t, None, Some(tail.into_element()))
-            }
         }
     }
 
@@ -479,6 +565,47 @@ enum Scan {
     Running,
     Done(CatalogProfile),
     Failed(String),
+}
+
+/// What the zone actually puts on screen.
+#[derive(PartialEq, Debug)]
+enum Shown<'a> {
+    /// A scan is running and there is nothing yet to show — say so immediately.
+    FirstScan,
+    /// A scan is running over numbers already on screen, and has outlasted the hold: keep them,
+    /// and say a re-scan is why they are still the old ones.
+    ReScan(&'a CatalogProfile),
+    /// Numbers. Either just settled, or the previous ones standing in for a re-scan too quick to
+    /// be worth announcing.
+    Facts(&'a CatalogProfile),
+    /// The scan failed, over whatever was on screen before it ran.
+    Failed(&'a str, Option<&'a CatalogProfile>),
+    /// Nothing to show and nothing running — offer the scan.
+    Offer,
+}
+
+/// **The zone never shows less than it did a moment ago.** Pure, and tested as such: this is the
+/// rule the user sees, and it is easier to get wrong than to read.
+///
+/// `held` is the last numbers this entry settled; `announced` is whether the scan in flight has
+/// outlasted [`PROGRESS_HOLD`]. Inside that hold a re-scan is *invisible* — the numbers simply
+/// change when the new ones land — which is only possible because `held` keeps them there.
+fn shown<'a>(scan: &'a Scan, held: Option<&'a CatalogProfile>, announced: bool) -> Shown<'a> {
+    match scan {
+        Scan::Done(profile) => Shown::Facts(profile),
+        Scan::Running => match held {
+            None => Shown::FirstScan,
+            Some(previous) if announced => Shown::ReScan(previous),
+            Some(previous) => Shown::Facts(previous),
+        },
+        // Stopped on purpose is not a failure to report: the zone falls back to whatever it had,
+        // or to offering the scan again.
+        Scan::Failed(e) if stopped_on_purpose(e) => match held {
+            Some(previous) => Shown::Facts(previous),
+            None => Shown::Offer,
+        },
+        Scan::Failed(e) => Shown::Failed(e, held),
+    }
 }
 
 /// What an absent set of facts means on a nested field: the scan ran, and deliberately says
@@ -646,6 +773,7 @@ fn scan_card(facts: &ColumnFacts, t: &InspectorTheme, actions: ProfileActions) -
 /// than a button that says which.
 fn running_row(
     t: &InspectorTheme,
+    label: &'static str,
     on_cancel: impl Into<EventHandler<Event<PressEventData>>>,
 ) -> Element {
     rect()
@@ -658,9 +786,9 @@ fn running_row(
         .padding((16., PANEL_PAD))
         .background(t.box_background)
         .border(Border::new().width(1.).fill(t.border_fill))
-        .child(CircularLoader::new().size(15.).a11y_alt(SCANNING))
+        .child(CircularLoader::new().size(15.).a11y_alt(label))
         .child(
-            Body::new(SCANNING)
+            Body::new(label)
                 .color(t.note_color)
                 .width(Size::flex(1.))
                 .text_overflow(TextOverflow::Ellipsis),
@@ -674,9 +802,14 @@ fn running_row(
         .into_element()
 }
 
-/// What the running row says — and what a screen reader hears from the spinner, so the two can't
+/// What the running row says — and what a screen reader hears from its spinner, so the two can't
 /// disagree.
+///
+/// The two are worth telling apart: `Scanning…` sits over an empty zone, while `Re-scanning…` sits
+/// *under numbers that are still on screen* and is the sentence that explains why they haven't
+/// changed yet.
 const SCANNING: &str = "Scanning…";
+const RESCANNING: &str = "Re-scanning…";
 
 /// The settled scan's header controls: how old it is, the query that produced it, and ↻.
 ///
@@ -696,7 +829,14 @@ fn scan_controls(
         .horizontal()
         .cross_align(Alignment::Center)
         .spacing(4.)
-        .child(Meta::new(scan_age(profile.at)).color(t.meta_color))
+        // The age is coarse on purpose (`scan_age`), so the exact instant is its tooltip — the
+        // same trade the completeness bar makes with its own numbers. ISO-8601, UTC, from the one
+        // place that prints instants (`util::iso8601`).
+        .child(
+            TooltipContainer::new(Tooltip::new(iso8601(profile.at)))
+                .position(AttachedPosition::Bottom)
+                .child(Meta::new(scan_age(profile.at)).color(t.meta_color)),
+        )
         // **View as query** — the profile is never a black box. Absent when the unparser
         // couldn't render an expression (`profile_sql` returns nothing then): no button beats a
         // button that opens a query which doesn't run.
@@ -740,4 +880,100 @@ fn control_button(
                 .child(Icon::new(icon).size(13.)),
         )
         .into_element()
+}
+
+/// The zone's one behavioural rule, as a state machine: **it never shows less than it did a moment
+/// ago.** Worth testing pure, because every case here was reported as a flicker before it was a
+/// rule, and none of them is visible in a screenshot of the settled panel.
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::time::SystemTime;
+
+    use super::*;
+
+    fn profile(rows: u64) -> CatalogProfile {
+        CatalogProfile {
+            at: SystemTime::now(),
+            rows,
+            sql: "SELECT 1".into(),
+            cols: BTreeMap::new(),
+        }
+    }
+
+    /// A **first** scan says so at once: there is nothing to hold onto, and a press that shows
+    /// nothing for the length of the hold reads as a press that missed.
+    #[test]
+    fn a_first_scan_announces_itself_immediately() {
+        assert_eq!(shown(&Scan::Running, None, false), Shown::FirstScan);
+        assert_eq!(shown(&Scan::Running, None, true), Shown::FirstScan);
+    }
+
+    /// **The flicker fix.** A re-scan of a small table settles well inside the hold, and for that
+    /// whole time the zone is indistinguishable from settled — the numbers simply change when the
+    /// new ones land. This is the case that used to blank the facts box and flash a spinner.
+    #[test]
+    fn a_quick_re_scan_is_invisible() {
+        let previous = profile(5);
+        assert_eq!(
+            shown(&Scan::Running, Some(&previous), false),
+            Shown::Facts(&previous),
+            "inside the hold: the numbers already on screen, and no spinner at all"
+        );
+    }
+
+    /// Past the hold the wait is news, so it is said — *under* the numbers, which stay put. The
+    /// row is also what carries Cancel, which a long scan needs within reach.
+    #[test]
+    fn a_slow_re_scan_says_why_the_numbers_are_still_the_old_ones() {
+        let previous = profile(5);
+        assert_eq!(
+            shown(&Scan::Running, Some(&previous), true),
+            Shown::ReScan(&previous)
+        );
+    }
+
+    /// Settled numbers win over anything held — that is what "something better replaced them"
+    /// means.
+    #[test]
+    fn settled_numbers_replace_the_held_ones() {
+        let previous = profile(5);
+        let fresh = profile(9);
+        assert_eq!(
+            shown(&Scan::Done(profile(9)), Some(&previous), true),
+            Shown::Facts(&fresh)
+        );
+    }
+
+    /// A scan **stopped on purpose** is not a failure to report: it falls back to whatever was on
+    /// screen, or to offering the scan again where there was nothing. Both strings are the
+    /// engine's, and this is the arm a re-registration's abort lands in for the moment before the
+    /// store drops the request.
+    #[test]
+    fn a_scan_stopped_on_purpose_reports_nothing() {
+        let previous = profile(5);
+        for stopped in ["cancelled", "superseded by a newer scan"] {
+            let scan = Scan::Failed(stopped.to_string());
+            assert_eq!(shown(&scan, Some(&previous), true), Shown::Facts(&previous));
+            assert_eq!(shown(&scan, None, true), Shown::Offer);
+        }
+    }
+
+    /// A real failure says why — and a failed *re*-scan still keeps what it was replacing, for the
+    /// same reason a running one does. Dropping numbers on a transient failure is the flicker
+    /// again, one beat later.
+    #[test]
+    fn a_failure_says_why_and_keeps_whatever_it_was_replacing() {
+        let previous = profile(5);
+        let scan = Scan::Failed("Schema error: No field named x".to_string());
+        assert_eq!(
+            shown(&scan, Some(&previous), true),
+            Shown::Failed("Schema error: No field named x", Some(&previous))
+        );
+        assert_eq!(
+            shown(&scan, None, true),
+            Shown::Failed("Schema error: No field named x", None),
+            "a failed first scan has nothing to fall back to, so it offers the retry"
+        );
+    }
 }

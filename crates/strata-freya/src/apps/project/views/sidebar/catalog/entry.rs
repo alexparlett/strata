@@ -33,6 +33,7 @@ use crate::components::icon::{Icon, IconName};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Body, InputTypography, Meta, MonoValue};
+use crate::components::PROGRESS_HOLD;
 use crate::keymap::on_command;
 use crate::state::use_config_station;
 use strata_core::config::Command;
@@ -52,7 +53,11 @@ const LOADING: &str = "Loading…";
 /// How long a row must stay unanswered before it is worth spinning about. Most registrations land
 /// well inside this, so the usual project open is a catalog that simply appears — no flicker of
 /// spinners on the way in.
-const SPINNER_DELAY: Duration = Duration::from_millis(400);
+///
+/// The design system's shared hold (`components::PROGRESS_HOLD`), because the inspector's re-scan
+/// row serves the same one — see there for the half of the rule this row already had: a hold needs
+/// something to hold *onto*, and what this slot holds is the last verdict it showed.
+const SPINNER_DELAY: Duration = PROGRESS_HOLD;
 
 /// The trailing ⋮ actions button — the canvas's 22×22.
 const ACTIONS_SIZE: f32 = 22.;

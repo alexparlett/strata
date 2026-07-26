@@ -25,6 +25,58 @@ pub fn now_hms() -> String {
     )
 }
 
+/// An instant as an ISO-8601 timestamp in **UTC** (`2026-07-26T09:22:48Z`) — the exact-time
+/// tooltip behind a relative age the UI shows ("scanned 5 min ago").
+///
+/// **UTC, and marked `Z`.** There is no timezone database in `std`, so a local rendering would need
+/// an offset we can only guess at — and a guessed offset is worse than a stated zone, because the
+/// reader cannot tell it is wrong. Same call [`now_hms`] makes, for the same reason.
+///
+/// Like [`fmt_int`], one path to one function: every surface that prints an instant imports it from
+/// here, so two places can't disagree about what a timestamp looks like.
+///
+/// A pre-epoch instant (a clock set decades back) reads as the epoch rather than as a negative
+/// year: total, and the alternative is a panic in a tooltip.
+pub fn iso8601(t: SystemTime) -> String {
+    let secs = t
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    let (days, sod) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        sod / 3600,
+        (sod % 3600) / 60,
+        sod % 60
+    )
+}
+
+/// The civil date `days` after 1970-01-01, as `(year, month, day)`.
+///
+/// Howard Hinnant's `civil_from_days` (the algorithm behind every `chrono`-free date conversion):
+/// shift the era to start in March so the leap day lands at the *end* of the year, which is what
+/// removes February from the arithmetic entirely. Correct for the proleptic Gregorian calendar,
+/// which is what ISO-8601 asks for — including the 400-year rule that makes 2000 a leap year and
+/// 2100 not one.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    // Days from 0000-03-01 rather than 1970-01-01.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    // Day of era: [0, 146096].
+    let doe = z - era * 146_097;
+    // Year of era: [0, 399].
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    // Day of the *March-based* year: [0, 365].
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    // January and February belong to the next calendar year.
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
 /// A stable FNV-1a hash of the **trimmed** SQL — the tab dirty-tracking baseline.
 /// Cheaper than storing/comparing whole strings, and deterministic across runs so
 /// a persisted baseline still matches after reload.
@@ -344,6 +396,36 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// The instants a tooltip has to get right, against values taken from a real calendar
+    /// implementation rather than from the algorithm being tested. The two leap cases are the
+    /// point: 2000 *is* a leap year (the 400-rule) and 2100 is *not* (the 100-rule), and an
+    /// implementation that fumbles either is only wrong for a day at a time — which is exactly
+    /// the kind of wrong nobody notices in a tooltip.
+    #[test]
+    fn instants_print_as_iso_8601_utc() {
+        let at = |secs: u64| iso8601(UNIX_EPOCH + Duration::from_secs(secs));
+        assert_eq!(at(0), "1970-01-01T00:00:00Z");
+        assert_eq!(at(1_000_000_000), "2001-09-09T01:46:40Z");
+        assert_eq!(at(1_735_689_600), "2025-01-01T00:00:00Z");
+        assert_eq!(at(1_774_521_768), "2026-03-26T10:42:48Z");
+        assert_eq!(at(951_782_400), "2000-02-29T00:00:00Z", "2000 is a leap year");
+        assert_eq!(
+            at(4_107_542_400),
+            "2100-03-01T00:00:00Z",
+            "2100 is not — the day after 2100-02-28"
+        );
+    }
+
+    /// A clock set before the epoch reads as the epoch rather than panicking or printing a
+    /// negative year. A tooltip is not a place to fail.
+    #[test]
+    fn a_pre_epoch_instant_reads_as_the_epoch() {
+        assert_eq!(
+            iso8601(UNIX_EPOCH - Duration::from_secs(60)),
+            "1970-01-01T00:00:00Z"
+        );
     }
 
     #[test]
