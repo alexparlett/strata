@@ -1,6 +1,6 @@
 //! A collapsible catalog section — `▾ TABLES · 4` over its rows.
 //!
-//! Hand-rolled rather than Freya's [`Accordion`](freya::components::Accordion): that component
+//! Hand-rolled rather than Freya's [`Accordion`]: that component
 //! keeps its open flag internal *and* starts closed (`use_state(|| false)`), while every catalog
 //! section opens by default and shows a live count in its own header. The collapse flag is
 //! section-local — a way of looking, not project data, so it neither persists nor reaches a store.

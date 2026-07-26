@@ -1,6 +1,6 @@
 //! The **app-global config store**: one reactive [`AppConfig`] for the whole process —
-//! the user [`Settings`], the recent-projects list, and the set of projects with a window
-//! open right now.
+//! the user [`Settings`](strata_core::config::Settings), the recent-projects list, and the
+//! set of projects with a window open right now.
 //!
 //! **Why global, not per-window.** Every field here is written by one window and read by
 //! the others. Opening a project in window A must appear in the launcher's recents and in

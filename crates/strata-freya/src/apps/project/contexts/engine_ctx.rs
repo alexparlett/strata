@@ -3,8 +3,8 @@
 //! context. The engine is a **direct-call async facade** (it owns its own Tokio runtime
 //! internally), so freya-query capabilities simply await its methods — no protocol, no
 //! event stream, no UI-side runtime. This wrapper adds only what's UI-shaped: the
-//! [`TabId`] → [`WsId`] identity (a tab *is* an engine workspace) and the tab-close
-//! cleanup hook the window root drives.
+//! [`TabId`] → [`WsId`](strata_core::engine::WsId) identity (a tab *is* an engine
+//! workspace) and the tab-close cleanup hook the window root drives.
 
 use std::ops::Deref;
 use std::sync::Arc;
