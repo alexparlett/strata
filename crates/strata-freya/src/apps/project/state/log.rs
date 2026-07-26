@@ -41,6 +41,7 @@ use freya::prelude::{
 use freya::query::{QueryStateData, UseQuery};
 
 use crate::apps::project::query::{QueryOutcome, RunQuery};
+use strata_core::engine::{stopped_on_purpose, CANCELLED};
 use strata_core::util::fmt_int;
 use strata_core::util::now_hms;
 
@@ -168,10 +169,14 @@ pub fn use_run_logging(query: UseQuery<RunQuery>) {
 
 /// What a settled Run reads as in the log.
 ///
-/// A **cancel** is a warning, not an error: `Err("cancelled")` is what the engine settles both for
-/// an explicit cancel and for a press superseded by a newer one, and neither is a fault — which is
-/// also why that string never reaches Problems (AGENTS.md §2). Everything else `Err` is the
-/// engine's own message, the same text the results pane frames.
+/// A run that was **stopped** is a warning, not an error, and `engine::stopped_on_purpose` is the
+/// one place that knows which settles those are — deliberately not a string compare here. The
+/// engine has *three* such strings, not one: `cancelled` (an abort), `superseded by a newer run` (a
+/// press that finished after a newer one replaced it) and `superseded by a newer scan` (the profile
+/// equivalent). This used to test `e == "cancelled"`, which mapped a supersede to a red `Error` row
+/// reading "superseded by a newer run" — a fault the user never had, and precisely the string
+/// AGENTS.md §2 says must never read as a problem. Everything else `Err` is the engine's own
+/// message, the same text the results pane frames.
 fn run_event(res: &Result<QueryOutcome, String>) -> (LogLevel, String) {
     match res {
         Ok(QueryOutcome::Rows(page)) => (
@@ -192,7 +197,14 @@ fn run_event(res: &Result<QueryOutcome, String>) -> (LogLevel, String) {
                 false => "Explained query".into(),
             },
         ),
-        Err(e) if e == "cancelled" => (LogLevel::Warning, "Query cancelled".into()),
+        Err(e) if stopped_on_purpose(e) => (
+            LogLevel::Warning,
+            match e.as_str() {
+                CANCELLED => "Query cancelled".into(),
+                // Sentence-cased rather than restated, so the engine keeps owning the wording.
+                stopped => format!("Query {stopped}"),
+            },
+        ),
         Err(e) => (LogLevel::Error, e.clone()),
     }
 }
@@ -200,6 +212,7 @@ fn run_event(res: &Result<QueryOutcome, String>) -> (LogLevel, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strata_core::engine::{SUPERSEDED_RUN, SUPERSEDED_SCAN};
 
     /// Newest first, and bounded: the log is a scrollback, so the oldest event is what goes.
     #[test]
@@ -244,13 +257,27 @@ mod tests {
         assert_eq!(log.events().next().unwrap().seq, 2);
     }
 
-    /// A cancel (and a supersede, which settles the same string) is a warning, not a failure —
-    /// the distinction the results pane also makes.
+    /// A cancel is a warning, not a failure — the distinction the results pane also makes.
     #[test]
     fn a_cancelled_run_logs_as_a_warning() {
-        let (level, message) = run_event(&Err("cancelled".to_string()));
+        let (level, message) = run_event(&Err(CANCELLED.to_string()));
         assert_eq!(level, LogLevel::Warning);
         assert_eq!(message, "Query cancelled");
+    }
+
+    /// **And so is a supersede.** A press that finished after a newer one replaced it settles a
+    /// *different* string from a cancel (`superseded by a newer run`), which an `e == "cancelled"`
+    /// test missed — logging it as a red `Error` reading "superseded by a newer run", a fault the
+    /// user never had. Every string the engine calls `stopped_on_purpose` maps to a warning; the
+    /// arm is reached through that predicate, so a fourth one can't quietly fall through to
+    /// `Error` again.
+    #[test]
+    fn a_superseded_run_logs_as_a_warning_too() {
+        for stopped in [SUPERSEDED_RUN, SUPERSEDED_SCAN] {
+            let (level, message) = run_event(&Err(stopped.to_string()));
+            assert_eq!(level, LogLevel::Warning, "{stopped}");
+            assert_eq!(message, format!("Query {stopped}"));
+        }
     }
 
     /// Any other failure is the engine's own message, verbatim — the same text the results pane

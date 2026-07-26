@@ -94,6 +94,16 @@ Things that must not regress. Each was fought for once already.
   unsubscribed; and an entry carries a **level** (the sheet's four semantic slots) but no
   `origin`, because the message already names its subject and a structured copy of that is a
   second copy that can disagree with it.
+- **A stopped run is not a failed one, and `engine::stopped_on_purpose` is the only thing that
+  knows which is which.** The engine settles **three** such strings, not one — `cancelled` (an
+  abort), `superseded by a newer run` (a press that finished after a newer one replaced it) and
+  `superseded by a newer scan` (the profile equivalent) — each behind a named const beside the code
+  that produces it. Never string-match the engine's prose at a call site: the event log tested
+  `e == "cancelled"` and so logged a *supersede* as a red error reading "superseded by a newer run",
+  while the inspector's scan zone kept a second copy of the rule (`== "cancelled" ||
+  starts_with("superseded")`) that happened to be right. Two copies, one already drifted; both now
+  call the predicate. A surface showing a settled `Err` must map every one of them to something the
+  user reads as "you stopped this", never as a fault — and none of them may reach Problems.
 - **Problems is the SQL-validation surface; a run failure is the results pane's.** A failure
   belongs to a run, not to the text — it can describe SQL the buffer no longer holds, it can't
   self-clear by typing, and `cancel`/supersede settle `Err("cancelled")`/`Err("superseded")`

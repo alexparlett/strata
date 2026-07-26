@@ -62,7 +62,17 @@ anything):
   subscribed (the keeper's own doc says so). `Engine::cancel` returns the elapsed time *iff* it
   really aborted something — both the guard against logging a cancel that hit nothing, and the
   one real fact the event carries. `run_event`'s `Warning` arm stays as the mapping for a settle
-  that *is* observed, so "cancelled" can never be logged as an error.
+  that *is* observed, so a stopped run can never be logged as an error.
+  - **Correction from the PR review:** that arm originally tested `e == "cancelled"`, on the belief
+    that a cancel and a supersede settle the same string. They don't — `Engine::query` settles
+    `Err("superseded by a newer run")` when a press finishes after a newer one replaced it
+    (`engine/mod.rs`, the `latest == false` arm), a *different* path from the abort. So a supersede
+    would have logged as a red `Error` reading the engine's raw prose. The strings are now named
+    consts in `strata-core::engine` with one predicate, `stopped_on_purpose`, which both this and
+    the inspector's scan zone call — that zone had kept its own copy of the rule
+    (`== "cancelled" || starts_with("superseded")`), so the concept existed twice and one copy had
+    already drifted. Unreachable today (the pin unmounts before the superseded press settles), but
+    the mapping is the guard, and a guard with a hole is not one.
   - This unified the two cancel paths: the results pane's Running body had its own copy of
     `cancel_run`'s two steps and now calls it, so one of them can't quietly stop recording.
 - **Per-def scan events, no synthesized summary.** One event per answer the engine gave, for

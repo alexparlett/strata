@@ -48,6 +48,30 @@ pub use datafusion::arrow::record_batch::RecordBatch;
 /// [`RecordBatch`] sometimes needs to name its schema.
 pub use datafusion::arrow::datatypes::Schema;
 
+/// A call the caller (or the app on their behalf) **stopped**: [`Engine::cancel`] aborted it, or
+/// [`Engine::cancel_profile`] did.
+pub const CANCELLED: &str = "cancelled";
+/// A run that finished but was no longer the latest dispatch for its workspace — a newer press
+/// replaced it, so its result is discarded and its snapshot retired ([`Engine::query`]).
+pub const SUPERSEDED_RUN: &str = "superseded by a newer run";
+/// The scan equivalent: a re-scan replaced this one ([`Engine::profile`]).
+pub const SUPERSEDED_SCAN: &str = "superseded by a newer scan";
+
+/// Did this `Err` mean the call was **stopped**, rather than that it *failed*?
+///
+/// The three strings above are one concept with three causes, and the distinction matters at every
+/// surface that shows a settled error: a stopped call is news the user already has (they cancelled,
+/// or they pressed Run again), so it must never be presented as a fault.
+///
+/// **A named predicate rather than a literal at each call site**, because the consumers used to
+/// match the engine's own prose: `state::log::run_event` compared against `"cancelled"` (and so
+/// mapped a *supersede* to a red `Error` row reading "superseded by a newer run"), while the
+/// inspector's scan zone did `== "cancelled" || starts_with("superseded")`. Two copies of one rule,
+/// each able to drift from the strings this module actually produces — and one of them already had.
+pub fn stopped_on_purpose(error: &str) -> bool {
+    matches!(error, CANCELLED | SUPERSEDED_RUN | SUPERSEDED_SCAN)
+}
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -353,7 +377,7 @@ impl Engine {
                 } else {
                     // Finished after being superseded — its snapshot must not leak.
                     retire_snapshot(&self.ctx, self.engine_id, snapshot);
-                    Err("superseded by a newer run".into())
+                    Err(SUPERSEDED_RUN.into())
                 }
             }
             // `run_and_snapshot` cleaned its own partial on failure.
@@ -366,7 +390,7 @@ impl Engine {
                 // task is finished by the time we see `is_cancelled`, so retiring again
                 // (idempotent, best-effort) sweeps whatever it managed to create.
                 retire_snapshot(&self.ctx, self.engine_id, snapshot);
-                Err("cancelled".into())
+                Err(CANCELLED.into())
             }
             Err(join) => {
                 retire_snapshot(&self.ctx, self.engine_id, snapshot);
@@ -436,7 +460,7 @@ impl Engine {
         self.publish_inflight(&lc);
         match joined {
             Ok(res) => res,
-            Err(join) if join.is_cancelled() => Err("cancelled".into()),
+            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
             Err(join) => Err(format!("explain task failed: {join}")),
         }
     }
@@ -512,8 +536,8 @@ impl Engine {
         match joined {
             Ok(res) if latest => res,
             // Its numbers describe a scan the caller has already replaced.
-            Ok(_) => Err("superseded by a newer scan".into()),
-            Err(join) if join.is_cancelled() => Err("cancelled".into()),
+            Ok(_) => Err(SUPERSEDED_SCAN.into()),
+            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
             Err(join) => Err(format!("profile task failed: {join}")),
         }
     }
