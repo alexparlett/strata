@@ -61,7 +61,7 @@ impl Component for OpenPromptCard {
         let platform = use_hook(Platform::get);
         let remember = use_state(|| false);
         let theme = use_theme();
-        let c = theme.read().colors.clone();
+        let c = theme.read().colors().clone();
         let open = self.open;
 
         // One binding per handler: `AppCtx` and `Platform` are `Clone`, not `Copy`, so each

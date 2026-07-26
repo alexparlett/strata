@@ -50,7 +50,7 @@ impl Component for Shell {
         // deriving only `Persist` — never wakes it, so the drag runs churn-free.
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let layout = radio.read().layout;
-        let border = use_theme().read().colors.border;
+        let border = use_theme().read().colors().border;
 
         // The vertical container's controller (see the module note). Supplying one means its
         // `direction` / `handle_size` come from here rather than the builder — the builder's

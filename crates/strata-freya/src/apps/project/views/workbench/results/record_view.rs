@@ -99,7 +99,7 @@ impl Component for RecordView {
         // The shared type palette dresses the field gutter's dtype labels.
         let palette = type_palette();
         let sheet = use_theme();
-        let shadow = sheet.read().colors.shadow;
+        let shadow = sheet.read().colors().shadow;
         let mut open = self.open;
         let row = self.row;
         let len = self.data.rows.len();

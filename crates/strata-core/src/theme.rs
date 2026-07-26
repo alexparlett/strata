@@ -2,11 +2,11 @@
 //! framework-agnostic.
 //!
 //! Midnight/Daylight are built-ins (embedded); custom themes load the same shape from a
-//! plugin dir (roadmap). A theme file has: a `sheet` copied 1:1 into the frontend's colour
-//! palette (Freya's `ColorsSheet`), a `components` map of per-component overrides keyed by
-//! component key, `tokens` for our own not-yet-built components, `fonts`, and a top-level
-//! `typography` type scale. Each component field is a tagged [`Pref`] — `{ "specific": … }`
-//! or `{ "reference": "<sheet slot>" }`.
+//! plugin dir (roadmap). A theme file has: a `sheet` copied 1:1 into the frontend's core colour
+//! slots (Freya's `ColorsSheet`), a `palette` of app-named slots extending it, a `components`
+//! map of per-component overrides keyed by component key, `fonts`, and a top-level `typography`
+//! type scale. Each component field is a tagged [`Pref`] — `{ "specific": … }` or
+//! `{ "reference": "<slot>" }`, where a slot is a sheet slot **or** a `palette` key.
 //!
 //! This module owns the authored shapes, the [`ThemeRegistry`] (discovery over the embedded
 //! built-ins + the user themes dir, with [`Source`] badges and id lookup), the resolved
@@ -77,8 +77,13 @@ pub struct StrataTheme {
     pub sheet: SheetDef,
     #[serde(default)]
     pub components: BTreeMap<String, BTreeMap<String, Pref>>,
+    /// App-named colour slots, extending the 27 [`SLOTS`] the frontend palette carries. A
+    /// `reference` in `components` resolves against the sheet first, then this map — so a tone
+    /// the sheet has no name for (a muted meta text, a hairline, an accent) is stated **once**
+    /// here and referenced everywhere, instead of being repeated as a `specific` per field.
+    /// Names are free-form; the frontend paints an unresolvable one magenta.
     #[serde(default)]
-    pub tokens: BTreeMap<String, BTreeMap<String, String>>,
+    pub palette: BTreeMap<String, String>,
     #[serde(default)]
     pub fonts: BTreeMap<String, String>,
     /// The type scale — named roles (display · title · body · meta · …), each fixing a font
@@ -195,6 +200,29 @@ pub struct SheetDef {
     pub shadow: String,
 }
 
+impl StrataTheme {
+    /// Every `reference` in `components` naming neither a core [`SLOTS`] entry nor a
+    /// [`palette`](Self::palette) key, formatted `"<component>.<field> -> <name>"`.
+    ///
+    /// `reference` is an open namespace (a theme names its own palette slots), so the JSON
+    /// schema can no longer enumerate the valid targets the way a closed enum did. This is what
+    /// replaces that check: the theme still renders — an unresolved reference paints magenta —
+    /// but a typo becomes a warning at load instead of a colour nobody looks at twice.
+    pub fn unresolved_references(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (component, fields) in &self.components {
+            for (field, pref) in fields {
+                if let Pref::Reference(name) = pref {
+                    if !SLOTS.contains(&name.as_str()) && !self.palette.contains_key(name) {
+                        out.push(format!("{component}.{field} -> {name}"));
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Load an embedded **built-in** theme by id ("midnight" / "daylight"), defaulting to
 /// Midnight. This is the always-available floor (used by [`typography`]'s defensive
 /// fallback and the theme tests); real theme resolution goes through the [`ThemeRegistry`],
@@ -268,7 +296,12 @@ impl ThemeRegistry {
             paths.sort();
             for path in paths {
                 match parse_theme_file(&path) {
-                    Ok(theme) => upsert(&mut entries, theme, Source::User),
+                    Ok(theme) => {
+                        for r in theme.unresolved_references() {
+                            tracing::warn!("theme {}: unresolved reference {r}", path.display());
+                        }
+                        upsert(&mut entries, theme, Source::User)
+                    }
                     Err(e) => tracing::warn!("skipping theme {}: {e}", path.display()),
                 }
             }
@@ -454,7 +487,7 @@ pub fn resolve_typography(t: &StrataTheme) -> Typography {
     }
 }
 
-/// Build the JSON schema for the theme format: the fixed model (sheet slots, fonts, tokens,
+/// Build the JSON schema for the theme format: the fixed model (sheet slots, palette, fonts,
 /// typography roles) plus the frontend's themeable components — `component_registries` is a
 /// set of `(component key, fields + kinds)` tables (e.g. Freya's builtin-override registry
 /// and its custom-component registry). The frontend's `schema_in_sync` test keeps
@@ -524,13 +557,14 @@ pub fn generate_schema(component_registries: &[&[(&str, &[(&str, Kind)])]]) -> s
             "mode": { "enum": ["dark", "light"] },
             "sheet": { "$ref": "#/$defs/sheet" },
             "components": { "type": "object", "additionalProperties": false, "properties": Value::Object(components) },
-            "tokens": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/color" } } },
+            "palette": { "type": "object", "additionalProperties": { "$ref": "#/$defs/color" } },
+            "scale": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": { "type": "number" } } },
             "fonts": { "type": "object", "properties": { "ui": { "type": "string" }, "mono": { "type": "string" } }, "additionalProperties": { "type": "string" } },
             "typography": { "type": "object", "additionalProperties": false, "properties": Value::Object(typo_props) }
         },
         "$defs": {
             "color": { "type": "string", "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|rgba\\([^)]*\\))$" },
-            "slot": { "enum": slots.clone() },
+            "slot": { "type": "string", "description": "A core sheet slot, or a key of this theme's `palette`", "examples": slots.clone() },
             "colorPref": { "oneOf": [
                 { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "$ref": "#/$defs/color" } } },
                 { "type": "object", "required": ["reference"], "additionalProperties": false, "properties": { "reference": { "$ref": "#/$defs/slot" } } }

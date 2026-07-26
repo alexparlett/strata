@@ -117,7 +117,7 @@ impl Component for ToggleButton {
         let theme = get_theme!(&self.theme, ToggleButtonThemePreference, "toggle_button");
         // The comp's plain-icon-button hover (semantic — read from the palette): a 7%
         // text-colour overlay under a brightened glyph. The `on` dress wins over hover.
-        let hover = use_theme().read().colors.text_primary;
+        let hover = use_theme().read().colors().text_primary;
         let mut hovered = use_state(|| false);
         let mut on = use_reactive(&self.toggle);
 

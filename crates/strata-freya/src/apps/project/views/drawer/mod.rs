@@ -47,9 +47,9 @@ impl Component for Drawer {
         let (bg, border, title_color) = {
             let t = theme.read();
             (
-                t.colors.surface_secondary,
-                t.colors.border,
-                t.colors.text_secondary,
+                t.colors().surface_secondary,
+                t.colors().border,
+                t.colors().text_secondary,
             )
         };
 

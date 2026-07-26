@@ -24,7 +24,8 @@ impl Component for ErrorState {
     fn render(&self) -> impl IntoElement {
         let theme = use_theme();
         let (tile_bg, tile_border, icon_color, title_color, msg_color, background) = {
-            let c = &theme.read().colors;
+            let theme_ref = theme.read();
+            let c = theme_ref.colors();
             (
                 c.surface_tertiary,
                 c.border,

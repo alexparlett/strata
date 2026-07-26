@@ -34,7 +34,7 @@ impl Component for ActivityRail {
         // dress, but a resize drag (on `Chan::LayoutSize`) does not.
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let layout = radio.read().layout;
-        let background = use_theme().read().colors.surface_primary;
+        let background = use_theme().read().colors().surface_primary;
 
         // A rail toggle: 40×38, `on` derived from the layout, a press routing to `toggle`
         // (a fn pointer — `toggle_pane` / `toggle_drawer` for the chosen pane / tab).

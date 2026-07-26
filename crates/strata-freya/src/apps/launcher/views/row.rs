@@ -40,7 +40,7 @@ impl Component for ProjectRowView {
             LauncherThemePreference,
             "launcher"
         );
-        let colors = use_theme().read().colors.clone();
+        let colors = use_theme().read().colors().clone();
         let mut hovered = use_state(|| false);
 
         let ProjectRow {

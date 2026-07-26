@@ -33,39 +33,64 @@
     "overlay": "rgba(0,0,0,.5)",
     "shadow": "rgba(0,0,0,.45)"
   },
+  "palette": {
+    "accent_amber": "#ffcf6b",
+    "accent_blue": "#79c0ff",
+    "accent_cyan": "#8ad4ff",
+    "accent_green": "#7ee787",
+    "accent_orchid": "#c9a5ff",
+    "accent_rose": "#ff7b9c",
+    "accent_sky": "#a5d6ff",
+    "accent_soft": "rgba(76,198,255,.22)",
+    "accent_tan": "#e2b98c",
+    "accent_violet": "#d2a8ff",
+    "border_control": "#363e4a",
+    "border_overlay": "#414a57",
+    "danger_soft": "rgba(229,72,77,.16)",
+    "danger_soft_hover": "rgba(229,72,77,.24)",
+    "surface_hover": "#262d37",
+    "surface_hover_strong": "#2f3742",
+    "surface_overlay": "#262c35",
+    "surface_row_hover": "#2a323e",
+    "surface_subtle": "#232831",
+    "text_control": "#b6bfcb",
+    "text_label": "#5d6775",
+    "text_muted": "#909aa9",
+    "transparent": "rgba(0,0,0,0)"
+  },
   "components": {
     "type_palette": {
       "str_color": {
-        "specific": "#7ee787"
+        "reference": "accent_green"
       },
       "num_color": {
-        "specific": "#79c0ff"
+        "reference": "accent_blue"
       },
       "bool_color": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "ts_color": {
-        "specific": "#ffa657"
+        "reference": "warning"
       },
       "struct_color": {
         "specific": "#f0a5c0"
       },
       "list_color": {
-        "specific": "#8ad4ff"
+        "reference": "accent_cyan"
       },
       "map_color": {
-        "specific": "#ffcf6b"
+        "reference": "accent_amber"
       }
     },
     "button": {
       "color": {
-        "specific": "#b6bfcb"
+        "reference": "text_control"
       },
       "background": {
         "reference": "surface_tertiary"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "hover_background": {
         "reference": "active"
@@ -88,7 +113,7 @@
         "reference": "tertiary"
       },
       "border_fill": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "focus_border_fill": {
         "reference": "secondary"
@@ -108,36 +133,36 @@
         "reference": "text_inverse"
       },
       "disabled_background": {
-        "specific": "#333d4b"
+        "reference": "active"
       },
       "disabled_hover_background": {
-        "specific": "#333d4b"
+        "reference": "active"
       },
       "disabled_color": {
-        "specific": "#5d6775"
+        "reference": "text_label"
       },
       "running_background": {
-        "specific": "rgba(229,72,77,.16)"
+        "reference": "danger_soft"
       },
       "running_hover_background": {
-        "specific": "rgba(229,72,77,.24)"
+        "reference": "danger_soft_hover"
       },
       "running_color": {
-        "specific": "#ff8a8a"
+        "reference": "error"
       }
     },
     "cancel_button": {
       "background": {
-        "specific": "rgba(229,72,77,.16)"
+        "reference": "danger_soft"
       },
       "hover_background": {
-        "specific": "rgba(229,72,77,.24)"
+        "reference": "danger_soft_hover"
       },
       "border_fill": {
         "specific": "rgba(229,72,77,.3)"
       },
       "color": {
-        "specific": "#ff8a8a"
+        "reference": "error"
       }
     },
     "cell_view": {
@@ -148,7 +173,7 @@
         "specific": "#262c35"
       },
       "border_fill": {
-        "specific": "#414a57"
+        "reference": "border_overlay"
       },
       "divider_fill": {
         "reference": "border"
@@ -186,7 +211,7 @@
         "specific": "#262c35"
       },
       "border_fill": {
-        "specific": "#414a57"
+        "reference": "border_overlay"
       },
       "divider_fill": {
         "reference": "border"
@@ -215,13 +240,13 @@
     },
     "outline_button": {
       "background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "hover_background": {
-        "specific": "#262d37"
+        "reference": "surface_hover"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "focus_border_fill": {
         "reference": "primary"
@@ -235,13 +260,13 @@
         "specific": "#3a4350"
       },
       "background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "color": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "border_fill": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "hover_background": {
         "reference": "active"
@@ -267,7 +292,7 @@
         "specific": "#2f3742"
       },
       "border_fill": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "color": {
         "reference": "text_primary"
@@ -290,7 +315,7 @@
         "reference": "text_primary"
       },
       "shadow": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       }
     },
     "input": {
@@ -307,7 +332,7 @@
         "reference": "text_placeholder"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "focus_border_fill": {
         "reference": "primary"
@@ -327,7 +352,7 @@
         "reference": "text_placeholder"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "focus_border_fill": {
         "reference": "primary"
@@ -347,7 +372,7 @@
         "reference": "text_placeholder"
       },
       "border_fill": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "focus_border_fill": {
         "reference": "primary"
@@ -372,10 +397,10 @@
     },
     "checkbox": {
       "unselected_fill": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "unselected_border_fill": {
-        "specific": "#414a57"
+        "reference": "border_overlay"
       },
       "selected_fill": {
         "reference": "primary"
@@ -401,7 +426,7 @@
         "reference": "primary"
       },
       "border_fill": {
-        "specific": "#414a57"
+        "reference": "border_overlay"
       }
     },
     "select": {
@@ -415,19 +440,19 @@
         "reference": "surface_primary"
       },
       "hover_background": {
-        "specific": "#2f3742"
+        "reference": "surface_hover_strong"
       },
       "color": {
         "reference": "text_primary"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "focus_border_fill": {
         "reference": "primary"
       },
       "arrow_fill": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       }
     },
     "menu_container": {
@@ -438,24 +463,24 @@
         "reference": "shadow"
       },
       "border_fill": {
-        "specific": "#414a57"
+        "reference": "border_overlay"
       }
     },
     "menu_item": {
       "background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "hover_background": {
         "specific": "#383e49"
       },
       "select_background": {
-        "specific": "#333d4b"
+        "reference": "active"
       },
       "border_fill": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "select_border_fill": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "color": {
         "reference": "text_primary"
@@ -491,10 +516,10 @@
     },
     "floating_tab": {
       "background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "hover_background": {
-        "specific": "#262d37"
+        "reference": "surface_hover"
       },
       "color": {
         "reference": "text_secondary"
@@ -505,24 +530,24 @@
         "reference": "surface_tertiary"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       }
     },
     "button_segment": {
       "background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "hover_background": {
-        "specific": "#262d37"
+        "reference": "surface_hover"
       },
       "disabled_background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "selected_background": {
-        "specific": "#333d4b"
+        "reference": "active"
       },
       "focus_background": {
-        "specific": "#262d37"
+        "reference": "surface_hover"
       },
       "color": {
         "reference": "text_secondary"
@@ -536,13 +561,13 @@
         "reference": "surface_secondary"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "divider_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "item_color": {
-        "specific": "#b6bfcb"
+        "reference": "text_control"
       },
       "item_active_background": {
         "specific": "rgba(76,198,255,.13)"
@@ -562,7 +587,7 @@
         "reference": "primary"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "hover_border_fill": {
         "reference": "tertiary"
@@ -594,13 +619,13 @@
         "reference": "text_secondary"
       },
       "background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "active_background": {
         "reference": "active"
       },
       "hover_background": {
-        "specific": "#232831"
+        "reference": "surface_subtle"
       },
       "focus_border_fill": {
         "reference": "primary"
@@ -671,7 +696,7 @@
         "reference": "text_inverse"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       }
     },
     "color_picker": {
@@ -679,7 +704,7 @@
         "specific": "#262c35"
       },
       "border_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "color": {
         "reference": "text_primary"
@@ -690,13 +715,13 @@
         "reference": "surface_primary"
       },
       "arrow_fill": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "row_background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "cell_hover_background": {
-        "specific": "#2a323e"
+        "reference": "surface_row_hover"
       },
       "divider_fill": {
         "specific": "#23272f"
@@ -715,16 +740,16 @@
     },
     "tab": {
       "background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "hover_background": {
-        "specific": "#262d37"
+        "reference": "surface_hover"
       },
       "active_background": {
         "reference": "background"
       },
       "color": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "active_color": {
         "reference": "text_primary"
@@ -749,13 +774,13 @@
         "reference": "surface_primary"
       },
       "item_color": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "item_hover_background": {
-        "specific": "#262d37"
+        "reference": "surface_hover"
       },
       "item_active_background": {
-        "specific": "rgba(76,198,255,.22)"
+        "reference": "accent_soft"
       },
       "item_active_color": {
         "reference": "primary"
@@ -769,7 +794,7 @@
         "reference": "surface_primary"
       },
       "color": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "border_fill": {
         "reference": "border"
@@ -778,7 +803,7 @@
         "reference": "text_placeholder"
       },
       "control_color": {
-        "specific": "#b6bfcb"
+        "reference": "text_control"
       }
     },
     "code_editor": {
@@ -807,7 +832,7 @@
         "reference": "border"
       },
       "line_selected_background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "cursor": {
         "reference": "primary"
@@ -849,134 +874,134 @@
         "reference": "text_secondary"
       },
       "completion_kind_table": {
-        "specific": "#79c0ff"
+        "reference": "accent_blue"
       },
       "completion_kind_view": {
-        "specific": "#c9a5ff"
+        "reference": "accent_orchid"
       },
       "completion_kind_column": {
-        "specific": "#7ee787"
+        "reference": "accent_green"
       },
       "completion_kind_function": {
-        "specific": "#ffcf6b"
+        "reference": "accent_amber"
       },
       "completion_kind_keyword": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       }
     },
     "code_editor_syntax": {
       "text": {
-        "specific": "#edf0f5"
+        "reference": "text_primary"
       },
       "whitespace": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "attribute": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "boolean": {
-        "specific": "#79c0ff"
+        "reference": "accent_blue"
       },
       "comment": {
-        "specific": "#6f7988"
+        "reference": "text_placeholder"
       },
       "constant": {
-        "specific": "#79c0ff"
+        "reference": "accent_blue"
       },
       "constructor": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "escape": {
-        "specific": "#a5d6ff"
+        "reference": "accent_sky"
       },
       "function": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "function_macro": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "function_method": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "keyword": {
-        "specific": "#ff7b9c"
+        "reference": "accent_rose"
       },
       "label": {
-        "specific": "#edf0f5"
+        "reference": "text_primary"
       },
       "module": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "number": {
-        "specific": "#79c0ff"
+        "reference": "accent_blue"
       },
       "operator": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "property": {
-        "specific": "#edf0f5"
+        "reference": "text_primary"
       },
       "punctuation": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "punctuation_bracket": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "punctuation_delimiter": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "punctuation_special": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "string": {
-        "specific": "#a5d6ff"
+        "reference": "accent_sky"
       },
       "string_escape": {
-        "specific": "#a5d6ff"
+        "reference": "accent_sky"
       },
       "string_special": {
-        "specific": "#a5d6ff"
+        "reference": "accent_sky"
       },
       "tag": {
-        "specific": "#ff7b9c"
+        "reference": "accent_rose"
       },
       "text_literal": {
-        "specific": "#a5d6ff"
+        "reference": "accent_sky"
       },
       "text_reference": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "text_title": {
-        "specific": "#edf0f5"
+        "reference": "text_primary"
       },
       "text_uri": {
-        "specific": "#a5d6ff"
+        "reference": "accent_sky"
       },
       "text_emphasis": {
-        "specific": "#edf0f5"
+        "reference": "text_primary"
       },
       "type_": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "variable": {
-        "specific": "#edf0f5"
+        "reference": "text_primary"
       },
       "variable_builtin": {
-        "specific": "#ff7b9c"
+        "reference": "accent_rose"
       },
       "variable_parameter": {
-        "specific": "#edf0f5"
+        "reference": "text_primary"
       }
     },
     "toggle_button": {
       "background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "color": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "active_background": {
-        "specific": "rgba(76,198,255,.22)"
+        "reference": "accent_soft"
       },
       "active_color": {
         "reference": "primary"
@@ -990,16 +1015,16 @@
         "reference": "surface_secondary"
       },
       "border_fill": {
-        "specific": "#23272f"
+        "reference": "border_disabled"
       },
       "group_background": {
         "reference": "background"
       },
       "insight_background": {
-        "specific": "#232831"
+        "reference": "surface_subtle"
       },
       "color": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "value_color": {
         "reference": "text_primary"
@@ -1017,7 +1042,7 @@
         "reference": "warning"
       },
       "warm_color": {
-        "specific": "#e2b98c"
+        "reference": "accent_tan"
       }
     },
     "inspector": {
@@ -1025,7 +1050,7 @@
         "reference": "surface_secondary"
       },
       "label_color": {
-        "specific": "#5d6775"
+        "reference": "text_label"
       },
       "name_color": {
         "reference": "text_primary"
@@ -1037,16 +1062,16 @@
         "reference": "text_secondary"
       },
       "meta_color": {
-        "specific": "#6f7988"
+        "reference": "text_placeholder"
       },
       "note_color": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "border_fill": {
         "reference": "border"
       },
       "divider_fill": {
-        "specific": "#23272f"
+        "reference": "border_disabled"
       },
       "box_background": {
         "reference": "surface_tertiary"
@@ -1061,13 +1086,13 @@
         "reference": "primary"
       },
       "null_color": {
-        "specific": "#4d5765"
+        "reference": "disabled"
       },
       "tile_color": {
         "reference": "primary"
       },
       "format_parquet_color": {
-        "specific": "#79c0ff"
+        "reference": "accent_blue"
       },
       "format_csv_color": {
         "specific": "#7ee787"
@@ -1079,12 +1104,12 @@
         "specific": "#f0a5c0"
       },
       "format_view_color": {
-        "specific": "#c9a5ff"
+        "reference": "accent_orchid"
       }
     },
     "catalog": {
       "label_color": {
-        "specific": "#5d6775"
+        "reference": "text_label"
       },
       "chevron_color": {
         "reference": "text_placeholder"
@@ -1096,19 +1121,19 @@
         "reference": "text_secondary"
       },
       "meta_color": {
-        "specific": "#4d5765"
+        "reference": "disabled"
       },
       "rail_fill": {
         "reference": "border"
       },
       "table_color": {
-        "specific": "#79c0ff"
+        "reference": "accent_blue"
       },
       "view_color": {
-        "specific": "#d2a8ff"
+        "reference": "accent_violet"
       },
       "query_color": {
-        "specific": "#c9a5ff"
+        "reference": "accent_orchid"
       },
       "part_color": {
         "reference": "primary"
@@ -1125,25 +1150,25 @@
         "reference": "surface_primary"
       },
       "arrow_fill": {
-        "specific": "#909aa9"
+        "reference": "text_muted"
       },
       "row_background": {
-        "specific": "rgba(0,0,0,0)"
+        "reference": "transparent"
       },
       "zebra_row_background": {
         "specific": "rgba(255,255,255,.025)"
       },
       "cell_hover_background": {
-        "specific": "#2a323e"
+        "reference": "surface_row_hover"
       },
       "selection_border_fill": {
         "reference": "primary"
       },
       "gutter_color": {
-        "specific": "#4d5765"
+        "reference": "disabled"
       },
       "gutter_active_background": {
-        "specific": "#333d4b"
+        "reference": "active"
       },
       "gutter_active_color": {
         "reference": "primary"
@@ -1158,22 +1183,22 @@
         "specific": "#262d37"
       },
       "header_label_color": {
-        "specific": "#5d6775"
+        "reference": "text_label"
       },
       "header_active_background": {
-        "specific": "#333d4b"
+        "reference": "active"
       },
       "header_active_color": {
         "reference": "primary"
       },
       "divider_fill": {
-        "specific": "#23272f"
+        "reference": "border_disabled"
       },
       "column_divider_fill": {
         "reference": "border"
       },
       "header_divider_fill": {
-        "specific": "#363e4a"
+        "reference": "border_control"
       },
       "comfortable_cell_padding": {
         "specific": [
@@ -1195,7 +1220,7 @@
         "specific": "#9fc6ff"
       },
       "cell_ts_color": {
-        "specific": "#e2b98c"
+        "reference": "accent_tan"
       },
       "color": {
         "reference": "text_secondary"
@@ -1223,48 +1248,26 @@
         "reference": "surface_secondary"
       },
       "rail_background": {
-        "specific": "#262c35"
+        "reference": "surface_overlay"
       },
       "border_fill": {
         "reference": "border"
       },
       "title_color": {
-        "specific": "#b6bfcb"
+        "reference": "text_control"
       },
       "label_color": {
-        "specific": "#5d6775"
+        "reference": "text_label"
       },
       "nav_background": {
         "specific": "rgba(76,198,255,.10)"
       },
       "row_hover_background": {
-        "specific": "#232831"
+        "reference": "surface_subtle"
       },
       "remove_hover_background": {
         "specific": "#14100f"
       }
-    }
-  },
-  "tokens": {
-    "data_type": {
-      "t_str": "#7ee787",
-      "t_num": "#79c0ff",
-      "t_bool": "#d2a8ff",
-      "t_ts": "#ffa657",
-      "t_struct": "#f0a5c0",
-      "t_list": "#8ad4ff",
-      "t_map": "#ffcf6b"
-    },
-    "grid": {
-      "cell": "#cfd6e0",
-      "cell_num": "#9fc6ff",
-      "cell_ts": "#e2b98c",
-      "grid_line": "#23272f",
-      "row_hover": "#2a323e",
-      "zebra": "rgba(255,255,255,.025)"
-    },
-    "accents": {
-      "accent_soft": "rgba(76,198,255,.14)"
     }
   },
   "fonts": {

@@ -152,7 +152,7 @@ impl Component for ToggleSegment {
             SegmentedToggleThemePreference,
             "segmented_toggle"
         );
-        let hover = use_theme().read().colors.text_primary.with_a(18);
+        let hover = use_theme().read().colors().text_primary.with_a(18);
         let mut hovered = use_state(|| false);
 
         let background = if self.selected {
