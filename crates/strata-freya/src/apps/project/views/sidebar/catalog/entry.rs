@@ -12,6 +12,7 @@ use std::time::Duration;
 use async_io::Timer;
 use freya::components::CircularLoader;
 use freya::prelude::*;
+use freya::query::QueryStateData;
 use freya::radio::use_radio;
 use strata_model::{CatalogKind, ColRef};
 use uuid::Uuid;
@@ -21,6 +22,8 @@ use super::menu::{
     open_saved_query, query_menu, rename_saved_query, table_menu, use_catalog_actions, view_menu,
 };
 use super::CatalogTheme;
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::query::{use_profile, ScanId};
 use crate::apps::project::state::{
     use_catalog_selection, Chan, ProjChan, ProjectState, Reg, SessionState,
 };
@@ -30,6 +33,7 @@ use crate::components::icon::{Icon, IconName};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Body, InputTypography, Meta, MonoValue};
+use crate::components::PROGRESS_HOLD;
 use crate::keymap::on_command;
 use crate::state::use_config_station;
 use strata_core::config::Command;
@@ -49,10 +53,18 @@ const LOADING: &str = "Loading…";
 /// How long a row must stay unanswered before it is worth spinning about. Most registrations land
 /// well inside this, so the usual project open is a catalog that simply appears — no flicker of
 /// spinners on the way in.
-const SPINNER_DELAY: Duration = Duration::from_millis(400);
+///
+/// The design system's shared hold (`components::PROGRESS_HOLD`), because the inspector's re-scan
+/// row serves the same one — see there for the half of the rule this row already had: a hold needs
+/// something to hold *onto*, and what this slot holds is the last verdict it showed.
+const SPINNER_DELAY: Duration = PROGRESS_HOLD;
 
 /// The trailing ⋮ actions button — the canvas's 22×22.
 const ACTIONS_SIZE: f32 = 22.;
+/// What the **profiling** spinner says — its own words, because the registration spinner beside
+/// it means something else entirely (a scan is minutes of work the user asked for; a
+/// registration is a metadata read they didn't).
+const PROFILING: &str = "Profiling…";
 
 /// A status glyph wearing its message as a tooltip. Dropped below, like the rest of the app's
 /// overlays, so it can't cover the row above it in a dense list.
@@ -141,6 +153,10 @@ impl Component for EntryRow {
         if self.kind == CatalogKind::View {
             drop(tables_radio.read());
         }
+
+        // Whether this row has a scan in flight to spin about (P3-09) — read on the same channel
+        // as everything else here, since asking for one writes the row.
+        let scan = radio.read().profile_scan(self.kind, &self.name);
 
         // Resolve this row's state and its validity out of the store, cloning what we render, so
         // the read guard drops before any element is built.
@@ -305,6 +321,19 @@ impl Component for EntryRow {
             .on_context_menu(move |e: Event<PressEventData>| {
                 ContextMenu::open_from_event(&e, menu_for_row());
             })
+            // Its own slot, before the registration status: a scan is asked for from *here* (the
+            // row's menu) and can run for minutes with the inspector closed, so the row is the
+            // only thing that can say it is happening. Mounted only when there is a scan to
+            // watch — see `ProfileStatus` for why that matters.
+            .maybe_child(scan.map(|scan| {
+                ProfileStatus {
+                    owner: self.name.clone(),
+                    scan,
+                    key: DiffKey::None,
+                }
+                .key(scan)
+                .into_element()
+            }))
             .maybe_child(status.map(|s| s.into_element()))
             .child(actions_button(build_menu));
 
@@ -374,6 +403,53 @@ impl Component for EntryRow {
             .margin(Gaps::new(0., 0., 2., 0.))
             .child(row)
             .maybe_child(body)
+    }
+}
+
+/// The row's **profiling** glyph (P3-09) — a spinner for exactly as long as this entry's scan is
+/// in flight, and nothing at all once it settles.
+///
+/// Its own component because it **subscribes** to the scan, and a hook cannot be conditional: the
+/// row mounts this only when there is a request to watch, which is also what keeps a sidebar full
+/// of tables from subscribing (and, with an un-run entry, *dispatching*) a scan nobody asked for.
+/// Two subscribers of one request — this and the inspector's zone — attach to the same execution
+/// rather than starting a second, since freya-query counts executions in flight.
+#[derive(PartialEq)]
+struct ProfileStatus {
+    owner: String,
+    scan: ScanId,
+    key: DiffKey,
+}
+
+impl KeyExt for ProfileStatus {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for ProfileStatus {
+    fn render(&self) -> impl IntoElement {
+        let engine = use_consume::<EngineCtx>();
+        let query = use_profile(&engine, &self.owner, self.scan);
+        let reader = query.read();
+        let running = matches!(
+            &*reader.state(),
+            QueryStateData::Pending | QueryStateData::Loading { .. }
+        );
+        drop(reader);
+
+        // No delay hold, unlike the registration spinner next door: a scan is *known* to be slow
+        // — it is the thing the user was warned about — so there is nothing to avoid flickering
+        // over, and starting one has to look like it started.
+        rect().maybe_child(running.then(|| {
+            tip(PROFILING)
+                .child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(PROFILING))
+                .into_element()
+        }))
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
     }
 }
 

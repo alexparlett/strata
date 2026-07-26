@@ -347,6 +347,34 @@ flag). Cancel from either surface is the same action: `engine.cancel(tab, run)` 
 > second subscriber is dangerous. Note the fork fix also covers a real case here: a results body
 > that unmounts and remounts mid-run (a tab switch) no longer re-executes the press.
 
+### 6b. Catalog **profiling** — the same shape, one tier down (P3-09)
+
+A profile is a property of the *data*, not of a tab, and it is the most expensive thing the app
+does. It follows the Run's division exactly:
+
+```rust
+// apps/project/query/profile.rs
+ScanId       // a nonce, fresh per request (a first profile, or a ↻ re-scan)
+ProfileSpec  { owner: String, scan: ScanId }   // tables and views share one namespace, so no kind
+ProfileEntry : QueryCapability<Keys = ProfileSpec, Ok = CatalogProfile, Err = String>
+use_profile(engine, owner, scan) -> UseQuery<ProfileEntry>   // the ONE place the Query is built
+```
+
+- **The store holds the request, never the numbers.** `TableRow::profile` / `ViewRow::profile` are
+  `Option<ScanId>`; the facts live only in the cache entry that id keys. So invalidation is a
+  `None` — `table_registered` / `table_failed` drop the table's and every reader view's,
+  `view_registered` / `view_failed` drop the view's own.
+- **`stale_time(MAX)` + `clean_time(MAX)`.** A settled scan must never re-execute itself, and the
+  five-minute default clean time would silently re-scan on the next mount. "Cached until the entry
+  changes" is what the cost confirm promises, so the entry retires only when its request does.
+- **Both consumers subscribe through `use_profile`** — the inspector's zone and the catalog row's
+  spinner — because the whole `Query` (stale/clean times included) is the cache identity: two
+  spellings would be two entries, i.e. one table scanned twice. They mount their subscription only
+  when a request exists, so nothing dispatches a scan nobody asked for.
+- Engine side: `Engine::profile` / `cancel_profile`, tracked per entry in `Lifecycle::profiles`,
+  superseded by dispatch, aborted by `register` / `create_view` / `drop_view` / `deregister`, and
+  counted by the **window**-close confirm but not the per-tab `is_running` probe.
+
 ---
 
 ## 7. The engine handle (`EngineCtx`) — a direct-call facade

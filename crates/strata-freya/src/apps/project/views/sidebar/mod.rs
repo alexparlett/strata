@@ -181,7 +181,7 @@ mod tests {
     use super::*;
     use crate::apps::project::contexts::EngineCtx;
     use crate::apps::project::state::{ProjChan, ProjectState, ScanRequest, ScanScope};
-    use crate::apps::project::views::DropTarget;
+    use crate::apps::project::views::{DropTarget, ProfileTarget};
     use crate::state::ConfigStation;
     use crate::theme::strata_theme;
 
@@ -229,10 +229,11 @@ mod tests {
                 let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
                 r.provide_root_context(|| State::create(None::<ColRef>));
                 // The catalog rows' menu handles (P3-06): the app config behind "View table"'s
-                // LIMIT, and the drop-confirm slot. Nothing here opens a menu — they only have
-                // to be reachable, since every row gathers them on render.
+                // LIMIT, and the drop- / profile-confirm slots. Nothing here opens a menu — they
+                // only have to be reachable, since every row gathers them on render.
                 r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
                 r.provide_root_context(|| State::create(None::<DropTarget>));
+                r.provide_root_context(|| State::create(None::<ProfileTarget>));
                 r.provide_root_context(|| {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
                 });

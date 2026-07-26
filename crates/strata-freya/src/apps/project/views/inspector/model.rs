@@ -7,15 +7,20 @@
 //! query. They are gone, and the shape below is what replaced them — a fact exists or it
 //! doesn't, and an absent fact is an absent row.
 //!
-//! Free (footer) metadata is all P3-08 has: [`ColumnInfo::stats`], filled by the engine from
-//! DataFusion `Statistics` (one metadata read per file, no data pages), plus `TableMeta.rows`.
-//! Every format but Parquet/Arrow reports nothing at all, and a view reports nothing ever —
-//! which is why the box is a **dynamic list** rather than a grid of blanks. P3-09's scan lands
-//! its facts in the same list, matched on [`StatKey`], so no fact can appear twice.
+//! Two tiers, one list. Free (footer) metadata is [`ColumnInfo::stats`], filled by the engine
+//! from DataFusion `Statistics` (one metadata read per file, no data pages), plus
+//! `TableMeta.rows`; every format but Parquet/Arrow reports nothing at all, and a view reports
+//! nothing ever — which is why the box is a **dynamic list** rather than a grid of blanks. A
+//! **scan** (P3-09) lands its facts in that same list through [`with_scan`], matched on
+//! [`StatKey`], so no fact can appear twice and no absent fact becomes a blank.
 
+use std::time::SystemTime;
+
+use strata_core::engine::profile::CatalogProfile;
 use strata_core::util::fmt_int;
 use strata_model::{CatalogKind, ColRef, ColumnInfo, Kind, Stat, StatKey};
 
+use crate::apps::project::query::ScanId;
 use crate::apps::project::state::{ProjectState, Reg};
 
 /// Display order for the facts box.
@@ -88,12 +93,19 @@ pub struct ColumnFacts {
     /// The owner's row count where the source reports one — `None` for CSV/JSON and for every
     /// view.
     pub rows: Option<u64>,
-    /// The facts the source reported **for free**. Empty for a nested field (footers describe
-    /// leaves and we don't traverse into them), for a view's columns, and for any format
-    /// without metadata to read.
+    /// The facts known about this column — the source's free ones, plus whatever a scan added
+    /// ([`with_scan`]). Empty for a nested field before a scan (footers describe leaves and we
+    /// don't traverse into them), for a view's columns, and for any format without metadata.
     pub stats: Vec<Stat>,
     /// Owned by a view: there are no files under it, so there is no footer tier at all.
     pub derived: bool,
+    /// A **nested field** — a struct's child, not a top-level column whose type is a struct.
+    /// The scan is keyed by top-level column name, so this is what stops `address.city`
+    /// collecting an unrelated top-level `city`'s facts (see [`with_scan`]).
+    pub child: bool,
+    /// The scan the owner has been asked for, if any — the zone shows its card when there is
+    /// none, and subscribes to it when there is (`ProjectState::profile_scan`).
+    pub scan: Option<ScanId>,
 }
 
 /// What the inspector has to show, given the current selection.
@@ -119,13 +131,18 @@ pub enum Inspected {
 /// a namespace, so searching both and hoping the name lands in one is how a view's column ends
 /// up wearing a table's facts.
 pub fn inspect(project: &ProjectState, col: &ColRef) -> Inspected {
+    // Which scan the *owner* has been asked for — a column-level question answered at the entry,
+    // because one scan covers every column at once.
+    let scan = project.profile_scan(col.kind, &col.owner);
     match col.kind {
         CatalogKind::View => match project.views.iter().find(|v| v.def.name == col.owner) {
             None => Inspected::Gone(gone_owner(&col.owner)),
             Some(row) => match &row.reg {
                 Reg::Loading => Inspected::Loading,
                 Reg::Failed(e) => Inspected::Failed(e.clone()),
-                Reg::Ready(info) => facts(col, &info.columns, SourceFormat::View, None, true),
+                Reg::Ready(info) => {
+                    facts(col, &info.columns, SourceFormat::View, None, true, scan)
+                }
             },
         },
         // A saved query is a stored string, not a schema — nothing can select a column of one,
@@ -142,6 +159,7 @@ pub fn inspect(project: &ProjectState, col: &ColRef) -> Inspected {
                     SourceFormat::of_table(&row.def.format),
                     meta.rows,
                     false,
+                    scan,
                 ),
             },
         },
@@ -159,6 +177,7 @@ fn facts(
     format: SourceFormat,
     rows: Option<u64>,
     derived: bool,
+    scan: Option<ScanId>,
 ) -> Inspected {
     let Some(info) = resolve(columns, &col.path) else {
         return Inspected::Gone(format!(
@@ -177,7 +196,76 @@ fn facts(
         rows,
         stats: info.stats.clone(),
         derived,
+        child: col.is_child(),
+        scan,
     }))
+}
+
+/// Fold a settled scan's facts for this column into the free ones (P3-09).
+///
+/// One list, so a fact can never appear twice and the display order stays [`FACT_ORDER`]'s.
+/// Three rules, each with a reason:
+///
+/// - **The scan's row count wins**, and applies to a nested field too (a struct still holds one
+///   value per row). Not merely a fallback for the sources that report none — every CSV and every
+///   view — because the completeness bar *divides* the null count by it, and a bar built from a
+///   footer numerator over a scanned denominator is two reads pretending to be one. The scan
+///   counted both, in a single pass.
+/// - **So `Nulls` follows `rows`.** It is the one key where free does *not* win a tie: the
+///   scan's count is the one that pairs with the scan's row count. And where the scan described
+///   the column but reported no null count at all, a free one is dropped rather than divided by a
+///   denominator it never belonged to.
+/// - **A nested field takes nothing else.** Only top-level columns are profiled and the profile
+///   is keyed by their names, so a lookup by leaf name would hand `address.city` the facts of an
+///   unrelated top-level `city`. Refused outright rather than guessed at.
+/// - **Otherwise free wins a tie, unless the free value is a bound.** The footer's fact cost
+///   nothing and is what the source itself said; but a Parquet footer truncates long strings
+///   routinely, and showing `~Radia Perl` when the scan computed the whole value is exactly the
+///   bound-as-fact this panel exists to avoid — so an *inexact* free stat yields to the computed
+///   one.
+pub fn with_scan(mut facts: ColumnFacts, profile: &CatalogProfile) -> ColumnFacts {
+    facts.rows = Some(profile.rows);
+    if facts.child {
+        return facts;
+    }
+    let Some(scanned) = profile.cols.get(&facts.name) else {
+        return facts;
+    };
+    for stat in scanned {
+        match facts.stats.iter().position(|s| s.key == stat.key) {
+            // `Nulls` and any free *bound* yield to the computed value — see above.
+            Some(i) if stat.key == StatKey::Nulls || !facts.stats[i].exact => {
+                facts.stats[i] = stat.clone()
+            }
+            Some(_) => {}
+            None => facts.stats.push(stat.clone()),
+        }
+    }
+    if !scanned.iter().any(|s| s.key == StatKey::Nulls) {
+        facts.stats.retain(|s| s.key != StatKey::Nulls);
+    }
+    facts
+}
+
+/// What the scan says it covered — the zone's footnote under the facts.
+pub fn scan_footnote(profile: &CatalogProfile) -> String {
+    format!("Full scan · {} rows", fmt_int(profile.rows))
+}
+
+/// How long ago the scan settled, as the zone's header states it.
+///
+/// Coarse on purpose: the point is whether these numbers are minutes or days old, and a figure
+/// that precise would need to tick to stay true. A clock that has gone backwards reads as fresh
+/// rather than as a negative age.
+pub fn scan_age(at: SystemTime) -> String {
+    let secs = at.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+    let ago = match secs {
+        s if s < 60 => "just now".to_string(),
+        s if s < 3600 => format!("{} min ago", s / 60),
+        s if s < 86_400 => format!("{} h ago", s / 3600),
+        s => format!("{} d ago", s / 86_400),
+    };
+    format!("scanned {ago}")
 }
 
 /// Resolve a column path (`["address", "city"]`) by walking `children`.
@@ -192,6 +280,20 @@ fn resolve<'a>(columns: &'a [ColumnInfo], path: &[String]) -> Option<&'a ColumnI
         Some(col)
     } else {
         resolve(&col.children, rest)
+    }
+}
+
+impl ColumnFacts {
+    /// Which catalog section owns this column — what a scan request is addressed to.
+    ///
+    /// `derived` is exactly "owned by a view" ([`inspect`] sets it for `CatalogKind::View` and
+    /// nothing else), so there is no second field to keep in step. A saved query has no schema
+    /// and can't be inspected at all.
+    pub fn owner_kind(&self) -> CatalogKind {
+        match self.derived {
+            true => CatalogKind::View,
+            false => CatalogKind::Table,
+        }
     }
 }
 
@@ -245,11 +347,24 @@ fn fact_label(key: StatKey) -> &'static str {
 /// A fact's value. An **inexact** one is marked `~`: a Parquet footer truncates long strings
 /// and binary routinely, so what it stored is a bound rather than the value, and showing it
 /// bare would be exactly the fabrication this panel exists to avoid.
+///
+/// A **distinct count is a count**, so it wears the thousands separators every other count in the
+/// app wears — including the ROWS row directly above it, which would otherwise read `2,413,118`
+/// over a bare `40312`. Min / Max / Mean / Median are *values*: reformatting one would be
+/// rewriting the data, and a numeric-looking `Min` is not necessarily a number at all.
 fn fact_value(stat: &Stat) -> String {
+    let text = match stat.key {
+        StatKey::Distinct => stat
+            .text
+            .parse::<u64>()
+            .map(fmt_int)
+            .unwrap_or_else(|_| stat.text.clone()),
+        _ => stat.text.clone(),
+    };
     if stat.exact {
-        stat.text.clone()
+        text
     } else {
-        format!("~{}", stat.text)
+        format!("~{text}")
     }
 }
 
@@ -370,6 +485,7 @@ fn walk(children: &[ColumnInfo], depth: usize, out: &mut Vec<NestedField>) {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use strata_core::engine::{TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
@@ -708,6 +824,261 @@ mod tests {
         facts.stats = vec![stat(StatKey::Nulls, "0")];
         facts.rows = None;
         assert_eq!(completeness(&facts), None, "nothing to divide by");
+    }
+
+    // --- the scan tier (P3-09) ---------------------------------------------------------
+
+    /// A settled scan of an entry: `rows` scanned, and facts per **top-level** column name.
+    fn scan(rows: u64, cols: &[(&str, Vec<Stat>)]) -> CatalogProfile {
+        CatalogProfile {
+            at: SystemTime::now(),
+            rows,
+            sql: "SELECT 1".into(),
+            cols: cols
+                .iter()
+                .map(|(name, stats)| ((*name).to_string(), stats.clone()))
+                .collect(),
+        }
+    }
+
+    /// The headline: a scan fills in exactly what the footer couldn't, in the same list, and
+    /// nothing appears twice. The footer's own Min/Max stand — they cost nothing and they are
+    /// what the source said — while Distinct / Mean / Median arrive from the scan.
+    #[test]
+    fn a_scan_fills_the_facts_the_footer_never_carried() {
+        let p = project();
+        let facts = column(&p, &sel(CatalogKind::Table, "events", &["amount"]));
+        let scanned = with_scan(
+            facts,
+            &scan(
+                2_413_118,
+                &[(
+                    "amount",
+                    vec![
+                        stat(StatKey::Nulls, "147200"),
+                        stat(StatKey::Min, "-240.0"),
+                        stat(StatKey::Max, "4990.0"),
+                        stat(StatKey::Distinct, "40312"),
+                        stat(StatKey::Mean, "812.4"),
+                        stat(StatKey::Median, "640.0"),
+                    ],
+                )],
+            ),
+        );
+
+        assert_eq!(
+            fact_rows(&scanned)
+                .into_iter()
+                .map(|r| (r.label, r.value))
+                .collect::<Vec<_>>(),
+            vec![
+                ("TYPE", "Float64".to_string()),
+                ("ROWS", "2,413,118".to_string()),
+                ("DISTINCT", "40,312".to_string()),
+                ("MIN", "-240.0".to_string()),
+                ("MAX", "4990.0".to_string()),
+                ("MEAN", "812.4".to_string()),
+                ("MEDIAN", "640.0".to_string()),
+            ]
+        );
+        assert!(
+            !fact_rows(&scanned).iter().any(|r| r.label == "NULLS"),
+            "the scan's null count is still the bar, not a row as well"
+        );
+    }
+
+    /// An **inexact** footer value is a bound, so a computed one replaces it. This is the one
+    /// case where the free tier does not win: `~Radia Perl` beside a scan that knows the whole
+    /// value is a bound shown as a fact.
+    #[test]
+    fn an_exact_scan_replaces_an_inexact_footer_bound() {
+        let mut p = project();
+        p.table_registered(
+            "events",
+            TableMeta {
+                columns: vec![col(
+                    "name",
+                    "Utf8",
+                    Kind::Str,
+                    vec![Stat {
+                        key: StatKey::Max,
+                        text: "Radia Perl".into(),
+                        exact: false,
+                    }],
+                )],
+                rows: Some(9),
+            },
+        );
+        let facts = column(&p, &sel(CatalogKind::Table, "events", &["name"]));
+        let scanned = with_scan(
+            facts,
+            &scan(9, &[("name", vec![stat(StatKey::Max, "Radia Perlman")])]),
+        );
+
+        assert_eq!(
+            fact_rows(&scanned)
+                .into_iter()
+                .find(|r| r.label == "MAX")
+                .map(|r| r.value),
+            Some("Radia Perlman".to_string()),
+            "no ~ — this is the value, not a bound on it"
+        );
+    }
+
+    /// The case profiling exists for. A CSV reports **nothing**: no row count, no nulls, so no
+    /// completeness bar. One scan answers both — and the bar it produces is the same honest
+    /// derivation, off numbers that were counted rather than read.
+    #[test]
+    fn a_scan_answers_what_a_csv_could_never_report() {
+        let p = project();
+        let facts = column(&p, &sel(CatalogKind::Table, "uploads", &["note"]));
+        assert_eq!(completeness(&facts), None, "nothing to divide by yet");
+
+        let scanned = with_scan(
+            facts,
+            &scan(
+                500,
+                &[(
+                    "note",
+                    vec![stat(StatKey::Nulls, "100"), stat(StatKey::Distinct, "312")],
+                )],
+            ),
+        );
+
+        assert_eq!(
+            fact_rows(&scanned)
+                .into_iter()
+                .map(|r| r.label)
+                .collect::<Vec<_>>(),
+            vec!["TYPE", "ROWS", "DISTINCT"]
+        );
+        let fill = completeness(&scanned).expect("a counted null count and a counted row count");
+        assert_eq!((fill.nulls, fill.rows), (100, 500));
+        assert_eq!(fill.label(), "80%");
+    }
+
+    /// **The identity bug the scan tier could reintroduce.** The profile is keyed by top-level
+    /// column name, so `address.city` must refuse the lookup — by leaf name it would collect the
+    /// facts of the unrelated top-level `city` sitting beside it. The entry's row count still
+    /// applies: a struct holds one value per row like anything else.
+    #[test]
+    fn a_nested_field_takes_no_facts_from_a_scan() {
+        let p = project();
+        let facts = column(&p, &sel(CatalogKind::Table, "events", &["address", "city"]));
+        let scanned = with_scan(
+            facts,
+            &scan(
+                2_413_118,
+                &[(
+                    "city",
+                    vec![stat(StatKey::Distinct, "999"), stat(StatKey::Min, "Aachen")],
+                )],
+            ),
+        );
+
+        assert_eq!(
+            fact_rows(&scanned)
+                .into_iter()
+                .map(|r| r.label)
+                .collect::<Vec<_>>(),
+            vec!["TYPE", "ROWS"],
+            "the row count, and not one fact of the top-level `city`"
+        );
+        assert!(scanned.child, "…because it is a nested field");
+    }
+
+    /// A top-level nested column is **not** a nested field, and the scan does describe it — its
+    /// null count, which is the one fact a container can honestly report (no element traversal).
+    /// So the completeness bar appears for a struct, off a counted number.
+    ///
+    /// It also pins the pairing rule: the scan's row count is what its null count is divided by,
+    /// even though the Parquet footer reported a (stale, larger) one. Mixing the two reads put
+    /// this bar at ">99.9%" when a quarter of the column is null. See
+    /// [`the_bar_never_divides_one_read_by_another`] for the other half of that rule.
+    #[test]
+    fn a_top_level_struct_takes_the_null_count_a_scan_computed() {
+        let p = project();
+        let facts = column(&p, &sel(CatalogKind::Table, "events", &["address"]));
+        assert!(!facts.child);
+        assert_eq!(facts.rows, Some(2_413_118), "what the footer reported");
+
+        let scanned = with_scan(
+            facts,
+            &scan(1_000, &[("address", vec![stat(StatKey::Nulls, "250")])]),
+        );
+
+        assert_eq!(scanned.rows, Some(1_000), "what the scan counted");
+        let fill = completeness(&scanned).expect("counted nulls over counted rows");
+        assert_eq!(fill.label(), "75%");
+    }
+
+    /// **The bar's two numbers come from one read.** A footer's null count is not divided by a
+    /// scanned row count, however exact it is — the footer described the files as they were at
+    /// registration, and the scan has just counted them as they are. So `Nulls` is the one key
+    /// where the scan wins a tie, and where the scan described the column without counting nulls
+    /// there is no bar at all rather than a ratio assembled from two reads.
+    #[test]
+    fn the_bar_never_divides_one_read_by_another() {
+        let p = project();
+        let facts = column(&p, &sel(CatalogKind::Table, "events", &["amount"]));
+        assert_eq!(facts.rows, Some(2_413_118));
+        assert_eq!(completeness(&facts).map(|f| f.nulls), Some(147_200));
+
+        // The files were rewritten under the row: the scan counts a million rows and 100,000
+        // nulls, while the footer still remembers 147,200 of 2,413,118.
+        let scanned = with_scan(
+            facts.clone(),
+            &scan(
+                1_000_000,
+                &[("amount", vec![stat(StatKey::Nulls, "100000")])],
+            ),
+        );
+        let fill = completeness(&scanned).expect("a bar off the scan's own pair");
+        assert_eq!(
+            (fill.nulls, fill.rows),
+            (100_000, 1_000_000),
+            "both numbers are the scan's — mixing them read 85%"
+        );
+        assert_eq!(fill.label(), "90%");
+
+        // And a scan that describes the column without counting its nulls draws nothing: the
+        // footer's count belongs to a row count this one has replaced.
+        let no_nulls = with_scan(
+            facts,
+            &scan(1_000_000, &[("amount", vec![stat(StatKey::Distinct, "7")])]),
+        );
+        assert_eq!(completeness(&no_nulls), None);
+        assert!(
+            fact_rows(&no_nulls).iter().any(|r| r.label == "DISTINCT"),
+            "the facts it did compute still land"
+        );
+    }
+
+    /// The age is coarse on purpose — minutes or days is the question, and anything finer would
+    /// have to tick to stay true.
+    #[test]
+    fn the_scan_age_reads_coarsely() {
+        let ago = |secs: u64| scan_age(SystemTime::now() - Duration::from_secs(secs));
+        assert_eq!(ago(0), "scanned just now");
+        assert_eq!(ago(59), "scanned just now");
+        assert_eq!(ago(60), "scanned 1 min ago");
+        assert_eq!(ago(45 * 60), "scanned 45 min ago");
+        assert_eq!(ago(3 * 3600), "scanned 3 h ago");
+        assert_eq!(ago(50 * 3600), "scanned 2 d ago");
+        // A clock that has gone backwards reads as fresh, never as a negative age.
+        assert_eq!(
+            scan_age(SystemTime::now() + Duration::from_secs(600)),
+            "scanned just now"
+        );
+    }
+
+    /// The footnote states what the scan covered, in the same grouped form every count wears.
+    #[test]
+    fn the_scan_footnote_states_the_rows_it_read() {
+        assert_eq!(
+            scan_footnote(&scan(2_413_118, &[])),
+            "Full scan · 2,413,118 rows"
+        );
     }
 
     /// The percentage never rounds into a claim it can't make. One null in millions is not

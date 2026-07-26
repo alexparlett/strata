@@ -11,7 +11,10 @@ mod shell;
 mod sidebar;
 mod workbench;
 
-pub use dialogs::{CloseConfirm, DropConfirm, DropTarget, OpenPrompt};
+pub use dialogs::{
+    use_profile_actions, CloseConfirm, DropConfirm, DropTarget, OpenPrompt, ProfileActions,
+    ProfileConfirm, ProfileTarget,
+};
 pub use header::{HeaderBar, HeaderBarThemePreference};
 pub use inspector::InspectorThemePreference;
 pub use keeper::RequestKeepers;

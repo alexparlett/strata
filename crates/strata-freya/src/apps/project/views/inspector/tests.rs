@@ -9,15 +9,19 @@
 //! a real null count, and the null count never shown twice.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
-use strata_core::engine::{TableMeta, ViewMeta};
+use futures::executor::block_on;
+use strata_core::engine::{TableMeta, TableSpec, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_model::{ColRef, ColumnInfo, Kind, Stat, StatKey, TableDef, ViewDef};
 
 use super::*;
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::views::ProfileTarget;
 use crate::components::ACTION_HEIGHT;
 use crate::theme::strata_theme;
 
@@ -63,12 +67,26 @@ fn table(name: &str, format: &str) -> TableDef {
     }
 }
 
+/// The one table in these tests the engine can really scan — the `regions.csv` fixture, two `Utf8`
+/// columns and five rows. Its def's `sources` is what `SCAN_TABLE` registers, so the store row and
+/// the engine describe the same file.
+const SCAN_TABLE: &str = "regions";
+const SCAN_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../strata-core/tests/fixtures/loadfix/regions.csv"
+);
+
 /// `events` is Parquet with footer facts and a nested struct; `uploads` is CSV, which reports
-/// nothing at all; `daily` is a view, whose columns are derived.
+/// nothing at all; `daily` is a view, whose columns are derived; `regions` is the CSV the engine
+/// actually holds, for the one test that runs a real scan.
 fn project() -> ProjectState {
     let defs = ProjectDefs {
         name: "test".into(),
-        tables: vec![table("events", "parquet"), table("uploads", "csv")],
+        tables: vec![
+            table("events", "parquet"),
+            table(SCAN_TABLE, "csv"),
+            table("uploads", "csv"),
+        ],
         views: vec![ViewDef {
             name: "daily".into(),
             sql: "SELECT 1".into(),
@@ -108,6 +126,18 @@ fn project() -> ProjectState {
             rows: None,
         },
     );
+    // The scannable one: a CSV, so the source reports nothing at all — no row count, no stats.
+    // Everything the profile test asserts was therefore *computed*.
+    p.table_registered(
+        SCAN_TABLE,
+        TableMeta {
+            columns: vec![
+                col("country", "Utf8", Kind::Str, Vec::new()),
+                col("region", "Utf8", Kind::Str, Vec::new()),
+            ],
+            rows: None,
+        },
+    );
     p.view_registered(
         "daily",
         ViewMeta {
@@ -128,6 +158,7 @@ type Handles = (
     State<Option<ColRef>>,
     RadioStation<ProjectState, ProjChan>,
     RadioStation<SessionState, Chan>,
+    State<Option<ProfileTarget>>,
 );
 
 fn runner() -> (TestingRunner, Handles) {
@@ -141,7 +172,23 @@ fn runner() -> (TestingRunner, Handles) {
             let session = r.provide_root_context(|| {
                 RadioStation::<SessionState, Chan>::create(SessionState::default())
             });
-            (selection, project, session)
+            // The zone's scan half (P3-09): the engine its subscription awaits, and the
+            // profile-confirm slot its card fills. The engine really holds `regions`, so one test
+            // can run a real scan and assert the settled zone; every other test's rows carry no
+            // request, so nothing subscribes and nothing is scanned.
+            r.provide_root_context(|| {
+                let engine = EngineCtx::new();
+                block_on(engine.register(TableSpec {
+                    name: SCAN_TABLE.into(),
+                    paths: vec![SCAN_FIXTURE.into()],
+                    format: "csv".into(),
+                    partitions: Vec::new(),
+                }))
+                .expect("the fixture registers");
+                engine
+            });
+            let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
+            (selection, project, session, profile_target)
         },
         1.,
     )
@@ -355,7 +402,7 @@ fn an_empty_selection_prompts_for_one() {
 /// say what happened, not silently keep the facts of a row that is gone.
 #[test]
 fn a_selection_whose_row_is_dropped_says_so() {
-    let (mut runner, (mut sel, mut project, _)) = runner();
+    let (mut runner, (mut sel, mut project, ..)) = runner();
     settle(&mut runner);
     select(
         &mut runner,
@@ -381,7 +428,7 @@ fn a_selection_whose_row_is_dropped_says_so() {
 /// panel listens on the section channel its selection belongs to.
 #[test]
 fn a_landing_registration_refreshes_the_open_panel() {
-    let (mut runner, (mut sel, mut project, _)) = runner();
+    let (mut runner, (mut sel, mut project, ..)) = runner();
     settle(&mut runner);
     project.write_channel(ProjChan::Tables).reload_tables();
     select(
@@ -417,14 +464,13 @@ fn a_landing_registration_refreshes_the_open_panel() {
     );
 }
 
-/// The scan card is **P3-09's**, so it is offered in full dress but does nothing: the zone keeps
-/// the shape the canvas specifies, and the press has no handler behind it until the task that
-/// owns profiling adds one. It is a committing action, so it wears the design system's 34px —
-/// asserted because Freya's button layout hugs its label (≈28px) unless told otherwise, which
-/// reads as squashed.
+/// The scan card offers the scan and **asks before running it** (P3-09 → P3-10): the press fills
+/// the confirm slot rather than starting a full read of the user's data. It is a committing
+/// action, so it wears the design system's 34px — asserted because Freya's button layout hugs its
+/// label (≈28px) unless told otherwise, which reads as squashed.
 #[test]
-fn the_profile_offer_is_present_and_inert() {
-    let (mut runner, (mut sel, project, session)) = runner();
+fn the_scan_card_asks_the_cost_confirm_rather_than_scanning() {
+    let (mut runner, (mut sel, project, _, target)) = runner();
     settle(&mut runner);
 
     select(
@@ -443,22 +489,99 @@ fn the_profile_offer_is_present_and_inert() {
         "the scan action is a {ACTION_HEIGHT}px action button: {heights:?}"
     );
 
-    // Pressing it changes nothing — no tab opened, no catalog mutation, not even a repaint of the
-    // panel. That is what "inert" has to mean now the control is no longer disabled: it looks
-    // live, so the proof has to be that it *does* nothing rather than that it can't be pressed.
-    let before = texts(&runner);
-    let tabs_before = session.peek().tabs.len();
     click_text(&mut runner, "Profile table");
 
-    assert_eq!(texts(&runner), before, "the panel is unchanged");
-    assert_eq!(session.peek().tabs.len(), tabs_before, "no tab was opened");
+    assert_eq!(
+        target.peek().as_ref().map(|t| t.name.clone()),
+        Some("events".to_string()),
+        "the press asks the question; confirming it is what records the request"
+    );
+    assert_eq!(
+        project.peek().profile_scan(CatalogKind::Table, "events"),
+        None,
+        "nothing is scanned until the confirm says so"
+    );
+}
+
+/// **The whole round trip, against a real engine.** A CSV reports nothing at all, so every number
+/// here was computed by the scan: the distinct count a footer can never carry, a row count the
+/// source never gave, and — off that same pass — the completeness bar. The zone also grows its
+/// header controls once a scan exists, because the card has nothing left to offer.
+///
+/// The only test that scans, and the only one that renders `ScannedStatistics`' settled arm.
+#[test]
+fn a_settled_scan_shows_what_it_computed_and_when() {
+    let (mut runner, (mut sel, mut project, ..)) = runner();
+    settle(&mut runner);
+    select(
+        &mut runner,
+        &mut sel,
+        column(CatalogKind::Table, SCAN_TABLE, &["region"]),
+    );
+    assert!(shows(&runner, "Profile table"), "the offer, before the ask");
+
+    // What the confirm's Run scan does — the request the zone subscribes to.
+    project
+        .write_channel(ProjChan::Tables)
+        .request_profile(CatalogKind::Table, SCAN_TABLE);
+    // A real scan of five rows: poll until it settles rather than assuming a pass count.
+    runner.poll(Duration::from_millis(10), Duration::from_millis(2_000));
+
     assert!(
-        project
-            .peek()
-            .tables
+        shows(&runner, "DISTINCT") && shows(&runner, "2"),
+        "the fact a CSV can never report for free: {:?}",
+        texts(&runner)
+    );
+    assert!(
+        shows(&runner, "ROWS") && shows(&runner, "5"),
+        "…and the row count it never gave either"
+    );
+    assert!(
+        shows(&runner, "Completeness") && shows(&runner, "100%"),
+        "the bar, off a counted null count over a counted row count: {:?}",
+        texts(&runner)
+    );
+    assert!(shows(&runner, "Full scan · 5 rows"), "what it read");
+    assert!(shows(&runner, "scanned just now"), "and how old that is");
+    assert!(
+        !shows(&runner, "Profile table"),
+        "the card is gone: its controls moved to the zone header"
+    );
+    // That header is the crowded one — an age readout beside two icon buttons, in a 292px panel.
+    let past = past_the_edge(&runner);
+    assert!(
+        past.is_empty(),
+        "the scanned zone lays out past the {PANEL_WIDTH}px panel edge: {past:?}"
+    );
+}
+
+/// A **view's** card offers to scan the view, and says what that costs there — its whole query,
+/// not a file read. A view is also where a scan is worth most: it reports nothing for free.
+#[test]
+fn a_view_column_offers_to_scan_the_view() {
+    let (mut runner, (mut sel, _, _, target)) = runner();
+    settle(&mut runner);
+
+    select(
+        &mut runner,
+        &mut sel,
+        column(CatalogKind::View, "daily", &["day"]),
+    );
+
+    assert!(shows(&runner, "Profile view"));
+    assert!(
+        texts(&runner)
             .iter()
-            .all(|t| t.reg.ready().is_some()),
-        "and nothing was asked of the catalog"
+            .any(|t| t.contains("Running the view's query in full")),
+        "{:?}",
+        texts(&runner)
+    );
+
+    click_text(&mut runner, "Profile view");
+    assert_eq!(
+        target.peek().as_ref().map(|t| (t.kind, t.name.clone())),
+        Some((CatalogKind::View, "daily".to_string())),
+        "asked about the view, on the views channel"
     );
 }
 
@@ -469,7 +592,7 @@ fn the_profile_offer_is_present_and_inert() {
 /// shipped with).
 #[test]
 fn nothing_in_the_panel_is_laid_out_past_its_edge() {
-    let (mut runner, (mut sel, mut project, _)) = runner();
+    let (mut runner, (mut sel, mut project, ..)) = runner();
     settle(&mut runner);
     project.write_channel(ProjChan::Tables).table_registered(
         "events",
@@ -498,14 +621,20 @@ fn nothing_in_the_panel_is_laid_out_past_its_edge() {
         ),
     );
 
-    let overflowing: Vec<(f32, f32)> = runner.find_many(|node, _| {
+    let past = past_the_edge(&runner);
+    assert!(
+        past.is_empty(),
+        "laid out past the {PANEL_WIDTH}px panel edge: {past:?}"
+    );
+}
+
+/// Every box laid out past the panel's right edge, as `(min_x, max_x)` — empty is the only
+/// acceptable answer. A run off the edge is invisible however correct the element tree is.
+fn past_the_edge(runner: &TestingRunner) -> Vec<(f32, f32)> {
+    runner.find_many(|node, _| {
         let a = node.layout().area;
         (a.width() > 0. && a.max_x() > PANEL_WIDTH + 0.5).then(|| (a.min_x(), a.max_x()))
-    });
-    assert!(
-        overflowing.is_empty(),
-        "laid out past the {PANEL_WIDTH}px panel edge: {overflowing:?}"
-    );
+    })
 }
 
 /// Headless previews for eyeballing against the canvas's inspector — one per shape the panel
@@ -540,4 +669,27 @@ fn inspector_preview() {
         select(&mut runner, &mut sel, col);
         runner.render_to_file(file);
     }
+}
+
+/// The same, for the STATISTICS zone's **scanned** state — the age / view-as-query / ↻ header over
+/// facts a real scan computed. Ignored like its neighbour:
+/// `cargo test -p strata-freya inspector_scanned_preview -- --ignored`.
+#[test]
+#[ignore = "writes target/inspector-scanned.png for eyeballing; run explicitly"]
+fn inspector_scanned_preview() {
+    let (mut runner, (mut sel, mut project, ..)) = runner();
+    settle(&mut runner);
+    select(
+        &mut runner,
+        &mut sel,
+        column(CatalogKind::Table, SCAN_TABLE, &["region"]),
+    );
+    project
+        .write_channel(ProjChan::Tables)
+        .request_profile(CatalogKind::Table, SCAN_TABLE);
+    runner.poll(Duration::from_millis(10), Duration::from_millis(2_000));
+    runner.render_to_file(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../target/inspector-scanned.png"
+    ));
 }

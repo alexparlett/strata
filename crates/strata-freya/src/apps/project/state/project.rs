@@ -17,6 +17,10 @@
 //! off the user's SQL rather than our strings, so [`ProjectState::view_problem`] looks
 //! them up case-insensitively too.
 //!
+//! Rows also carry the **profile request** (P3-09) — which scan the user asked for, never its
+//! numbers: those live in the freya-query cache under that request's id. So the store still
+//! holds no query results, and invalidating a profile is dropping the request.
+//!
 //! Mutations happen through methods (like `SessionState`) via a `write_channel` guard;
 //! persistence is [`ProjectState::save_defs`] — called at the def-mutation points
 //! (save-as-view, register, drop), never on a timer. The local session file is the
@@ -29,6 +33,8 @@ use strata_core::engine::{TableMeta, ViewMeta};
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
 use strata_model::{CatalogKind, ColumnInfo, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
+
+use crate::apps::project::query::ScanId;
 
 /// The Project store's channels — one per catalog section, so a registration landing
 /// on one table wakes only table subscribers (the Phase-3 sidebar sections subscribe
@@ -81,6 +87,13 @@ impl<T> Reg<T> {
 pub struct TableRow {
     pub def: TableDef,
     pub reg: Reg<TableMeta>,
+    /// The profile scan the user has asked for on this table, if any (P3-09).
+    ///
+    /// A **request**, not a result — the scan's facts live in the freya-query cache under this
+    /// very id ([`use_profile`](crate::apps::project::query::use_profile)), like a Run's rows
+    /// under its `QuerySpec`. So the store still holds no query results, and dropping this
+    /// field *is* invalidating the profile.
+    pub profile: Option<ScanId>,
 }
 
 impl TableRow {
@@ -88,6 +101,7 @@ impl TableRow {
         Self {
             def,
             reg: Reg::Loading,
+            profile: None,
         }
     }
 
@@ -130,6 +144,9 @@ pub struct ViewInfo {
 pub struct ViewRow {
     pub def: ViewDef,
     pub reg: Reg<ViewInfo>,
+    /// The profile scan asked for on this view — see [`TableRow::profile`]. A view is where a
+    /// scan buys the most: it has no files under it, so it reports nothing for free.
+    pub profile: Option<ScanId>,
 }
 
 impl ViewRow {
@@ -137,6 +154,7 @@ impl ViewRow {
         Self {
             def,
             reg: Reg::Loading,
+            profile: None,
         }
     }
 }
@@ -227,21 +245,51 @@ impl ProjectState {
     /// Land a table registration answer on its row.
     ///
     /// The one funnel every table answer arrives through — project open, a catalog re-scan
-    /// (P3-03), and a table-config save (P4-11) all land here. **When P3-09 adds the profile
-    /// cache, this is where it is dropped**: a landing answer means the files may have moved
-    /// under the row, which is exactly when a cached full-scan becomes a lie — and with it the
-    /// profile of every view whose [`ViewInfo::deps`] name this table, the half of "cached until
-    /// it changes" a view can't get from its own row (D10).
+    /// (P3-03), and a table-config save (P4-11) all land here — which is why it is also where
+    /// the **profile is invalidated** (P3-09): a landing answer means the files may have moved
+    /// under the row, and that is exactly when a cached full scan becomes a lie.
     pub fn table_registered(&mut self, name: &str, meta: TableMeta) {
         if let Some(r) = self.tables.iter_mut().find(|r| r.def.name == name) {
             r.reg = Reg::Ready(meta);
+            r.profile = None;
         }
+        self.invalidate_readers(name);
     }
 
     /// Land a failed table registration on its row.
     pub fn table_failed(&mut self, name: &str, error: String) {
         if let Some(r) = self.tables.iter_mut().find(|r| r.def.name == name) {
             r.reg = Reg::Failed(error);
+            r.profile = None;
+        }
+        self.invalidate_readers(name);
+    }
+
+    /// Drop the profile request of every view that **reads** `table` — the half of "cached
+    /// until it changes" a view cannot get from its own row (D10): a view's numbers came from
+    /// the tables underneath it, and re-registering one of those makes them stale even though
+    /// nothing about the view's own def moved.
+    ///
+    /// Usually a no-op, and deliberately so. Every path that re-registers a table also
+    /// re-creates the views over it ([`views_to_refresh`](Self::views_to_refresh)) — their rows
+    /// are already `Loading`, so `dependent_views` sees none of them, and their requests are
+    /// dropped by [`view_registered`](Self::view_registered) moments later *on the views
+    /// channel*, where the inspector is listening. This is here for the landing path that does
+    /// **not** re-create them, so a stale profile can't outlive its data by omission.
+    ///
+    /// Which is why it leads with the cheap question. This runs once per table on **every**
+    /// project open and every re-scan, while `dependent_views` is an O(views × deps) walk that
+    /// allocates — and at project open the answer cannot matter, because nothing has had the
+    /// chance to ask for a scan yet.
+    fn invalidate_readers(&mut self, table: &str) {
+        if self.views.iter().all(|v| v.profile.is_none()) {
+            return;
+        }
+        let readers = self.dependent_views(CatalogKind::Table, table);
+        for v in &mut self.views {
+            if readers.iter().any(|r| r == &v.def.name) {
+                v.profile = None;
+            }
         }
     }
 
@@ -274,6 +322,22 @@ impl ProjectState {
                 deps: meta.tables,
                 view_deps,
             });
+            // Re-created means re-planned, against whatever the tables underneath it now hold —
+            // so a scan of the old plan describes nothing that is still true.
+            //
+            // **Its own row, and deliberately no cascade to the views that read it** — unlike
+            // [`table_registered`](Self::table_registered), which has [`invalidate_readers`]. The
+            // asymmetry is not an oversight. `CREATE OR REPLACE VIEW` inlines the body of every
+            // view it reads *at that moment* (see [`refresh_order`](Self::refresh_order)), so a
+            // view B over this view holds an inlined copy of the **old** body and goes on
+            // answering with it — B's scanned numbers still describe exactly what B returns, and
+            // dropping them would put the scan card over a view whose data has not moved.
+            //
+            // The invariant that makes this self-maintaining: a profile dies when its view's plan
+            // is *re-created*, and this method is that event. So if a later task does start
+            // re-creating dependent views on a single-view edit, their profiles are already
+            // handled — by their own landing answer, on their own channel.
+            v.profile = None;
         }
     }
 
@@ -281,6 +345,7 @@ impl ProjectState {
     pub fn view_failed(&mut self, name: &str, error: String) {
         if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
             v.reg = Reg::Failed(error);
+            v.profile = None;
         }
     }
 
@@ -344,6 +409,82 @@ impl ProjectState {
                 Some(_) => None,
             }
         })
+    }
+
+    // --- profile requests (P3-09) --------------------------------------------------
+    //
+    // A scan is asked for by the user (the inspector's card, a row's menu) and answered by the
+    // freya-query cache under the request's own id. So the store's whole part in profiling is
+    // this one field per row: whether a scan has been asked for, and which one. There is no
+    // result here, nothing to keep in step, and invalidation is a `None`.
+
+    /// The scan asked for on `name`, if any — what the inspector subscribes to and what the
+    /// sidebar row spins about. `None` is the un-profiled state (the zone's scan card).
+    pub fn profile_scan(&self, kind: CatalogKind, name: &str) -> Option<ScanId> {
+        match kind {
+            CatalogKind::View => self
+                .views
+                .iter()
+                .find(|v| Self::same_name(&v.def.name, name))
+                .and_then(|v| v.profile),
+            // A saved query is a stored string — nothing to scan, so nothing to find.
+            CatalogKind::Query => None,
+            CatalogKind::Table => self
+                .tables
+                .iter()
+                .find(|t| Self::same_name(&t.def.name, name))
+                .and_then(|t| t.profile),
+        }
+    }
+
+    /// Ask for a scan of `name`, returning the request's id (`None` when there is no such row).
+    ///
+    /// Always a **fresh** id, so this is both "profile it" and "re-scan it": the id is the cache
+    /// key, so a new one is a new execution rather than a read of the numbers it is replacing. The
+    /// engine supersedes the scan in flight, if there is one.
+    pub fn request_profile(&mut self, kind: CatalogKind, name: &str) -> Option<ScanId> {
+        let scan = ScanId::new();
+        let slot = match kind {
+            CatalogKind::View => self
+                .views
+                .iter_mut()
+                .find(|v| Self::same_name(&v.def.name, name))
+                .map(|v| &mut v.profile),
+            CatalogKind::Query => None,
+            CatalogKind::Table => self
+                .tables
+                .iter_mut()
+                .find(|t| Self::same_name(&t.def.name, name))
+                .map(|t| &mut t.profile),
+        }?;
+        *slot = Some(scan);
+        Some(scan)
+    }
+
+    /// Drop the scan request on `name` — a cancel, or an invalidation. The zone goes back to
+    /// offering the scan, which is the honest state: there is no result to show.
+    pub fn clear_profile(&mut self, kind: CatalogKind, name: &str) {
+        match kind {
+            CatalogKind::View => {
+                if let Some(v) = self
+                    .views
+                    .iter_mut()
+                    .find(|v| Self::same_name(&v.def.name, name))
+                {
+                    v.profile = None;
+                }
+            }
+            CatalogKind::Query => {}
+            CatalogKind::Table => {
+                if let Some(t) = self
+                    .tables
+                    .iter_mut()
+                    .find(|t| Self::same_name(&t.def.name, name))
+                {
+                    t.profile = None;
+                }
+            }
+        }
     }
 
     // --- dependents (P3-05) --------------------------------------------------------
@@ -1185,6 +1326,95 @@ mod tests {
 
         let names: Vec<String> = p.views.iter().map(|v| v.def.name.clone()).collect();
         assert_eq!(p.refresh_order(names.clone()), names);
+    }
+
+    // --- profile requests (P3-09) ------------------------------------------------------
+
+    /// Asking for a scan records the request and nothing else, and a re-scan is a **new**
+    /// request: the id is the cache key, so re-using it would read the old numbers back.
+    #[test]
+    fn a_scan_request_is_a_fresh_id_every_time() {
+        let mut p = settled();
+        assert_eq!(p.profile_scan(CatalogKind::Table, "orders"), None);
+
+        let first = p
+            .request_profile(CatalogKind::Table, "orders")
+            .expect("the row is there");
+        assert_eq!(p.profile_scan(CatalogKind::Table, "orders"), Some(first));
+
+        let again = p.request_profile(CatalogKind::Table, "orders").unwrap();
+        assert_ne!(again, first, "a re-scan is a new execution");
+        assert_eq!(p.profile_scan(CatalogKind::Table, "orders"), Some(again));
+
+        p.clear_profile(CatalogKind::Table, "orders");
+        assert_eq!(
+            p.profile_scan(CatalogKind::Table, "orders"),
+            None,
+            "cancelling puts the row back to offering the scan"
+        );
+        // Names fold like every other def-identity decision, and a name with no row is simply
+        // not a request — never a panic and never a row invented for it.
+        assert!(p.request_profile(CatalogKind::Table, "ORDERS").is_some());
+        assert!(p.request_profile(CatalogKind::Table, "nope").is_none());
+        // A saved query is a stored string: there is nothing to scan.
+        assert!(p
+            .request_profile(CatalogKind::Query, "orders by region")
+            .is_none());
+    }
+
+    /// **The invalidation rule.** A landing registration answer means the files may have moved,
+    /// so the cached scan is a lie — for the table *and* for the views that read it, which is
+    /// the half a view can't derive from its own row (D10). Both arms of the answer count: a
+    /// refusal invalidates just as surely as a success.
+    #[test]
+    fn a_landing_registration_answer_invalidates_the_profiles_it_makes_stale() {
+        let mut p = settled();
+        p.request_profile(CatalogKind::Table, "orders");
+        p.request_profile(CatalogKind::View, "orders_daily");
+        p.request_profile(CatalogKind::Table, "users");
+
+        p.table_registered(
+            "orders",
+            TableMeta {
+                columns: Vec::new(),
+                rows: Some(11),
+            },
+        );
+
+        assert_eq!(p.profile_scan(CatalogKind::Table, "orders"), None);
+        assert_eq!(
+            p.profile_scan(CatalogKind::View, "orders_daily"),
+            None,
+            "the view reads `orders`, so its numbers went with it"
+        );
+        assert!(
+            p.profile_scan(CatalogKind::Table, "users").is_some(),
+            "an unrelated table's scan is untouched"
+        );
+
+        // The refusal arm.
+        p.request_profile(CatalogKind::Table, "orders");
+        p.table_failed("orders", "no such file".into());
+        assert_eq!(p.profile_scan(CatalogKind::Table, "orders"), None);
+
+        // And a view being re-created drops its own, on the views channel where the inspector
+        // is listening.
+        p.request_profile(CatalogKind::View, "orders_daily");
+        p.view_registered("orders_daily", view_meta(&["orders"]));
+        assert_eq!(p.profile_scan(CatalogKind::View, "orders_daily"), None);
+    }
+
+    /// A request is runtime state, so it must not reach the project file — and a dropped row
+    /// takes its request with it.
+    #[test]
+    fn a_scan_request_is_neither_persisted_nor_outlives_its_row() {
+        let mut p = settled();
+        p.request_profile(CatalogKind::Table, "orders");
+        let defs = p.defs();
+        assert_eq!(defs.tables.len(), 2, "the defs are the defs");
+
+        p.remove_table("orders");
+        assert_eq!(p.profile_scan(CatalogKind::Table, "orders"), None);
     }
 
     // --- saved-query rename (P3-06) ----------------------------------------------------
