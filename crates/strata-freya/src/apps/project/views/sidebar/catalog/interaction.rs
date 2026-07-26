@@ -24,6 +24,7 @@ use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
 use crate::apps::project::views::{DropTarget, ProfileTarget};
+use crate::components::PROGRESS_HOLD;
 use crate::state::ConfigStation;
 use crate::theme::strata_theme;
 use strata_core::config::AppConfig;
@@ -633,11 +634,18 @@ fn status_labels(runner: &TestingRunner) -> Vec<String> {
 }
 
 /// Run the tree past the spinner's hold-back, so a row that is genuinely still waiting gets to
-/// spin. Real time, because the delay is a real timer — kept just over the threshold so the suite
-/// pays for it once per test that needs it.
+/// spin. Real time, because the delay is a real timer (`Timer::after(SPINNER_DELAY)`).
+///
+/// **Deliberately generous, and expressed as a multiple of the app's own constant.** This was a
+/// hand-tuned `550ms` against a 400ms hold, and 150ms of slack is not enough on a shared runner:
+/// the first CI run of this suite failed right here, with zero spinners, because the wait expired
+/// before the timer the row had armed. The margin has to cover however long the runner takes to
+/// get from the update that arms the timer to an update after it fires — so it is stated as
+/// `PROGRESS_HOLD * 3`, which tracks the constant instead of drifting from it, and `settle`s
+/// afterwards because `poll` ends on a tick it never renders.
 fn wait_out_the_spinner_delay(runner: &mut TestingRunner) {
-    runner.poll(Duration::from_millis(20), Duration::from_millis(550));
-    runner.sync_and_update();
+    runner.poll(Duration::from_millis(20), PROGRESS_HOLD * 3);
+    settle(runner);
 }
 
 /// The two halves of the slot, and the asymmetry between them. A **failure is a settled answer**,
