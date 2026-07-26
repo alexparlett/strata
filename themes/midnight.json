@@ -47,6 +47,7 @@
     "accent_tan": "#e2b98c",
     "accent_violet": "#d2a8ff",
     "border_control": "#363e4a",
+    "border_hover": "#4e5866",
     "border_overlay": "#414a57",
     "danger_soft": "rgba(229,72,77,.16)",
     "danger_soft_hover": "rgba(229,72,77,.24)",
@@ -382,16 +383,16 @@
     },
     "switch": {
       "background": {
-        "specific": "#333d4b"
+        "reference": "border_overlay"
       },
       "thumb_background": {
         "reference": "text_primary"
       },
       "toggled_background": {
-        "reference": "tertiary"
+        "reference": "primary"
       },
       "toggled_thumb_background": {
-        "reference": "primary"
+        "reference": "text_primary"
       },
       "focus_border_fill": {
         "reference": "primary"
@@ -414,7 +415,7 @@
         "specific": "#ffffff"
       },
       "hover_border_fill": {
-        "specific": "#4e5866"
+        "reference": "border_hover"
       },
       "focus_border_fill": {
         "reference": "border_focus"
@@ -1333,6 +1334,53 @@
       },
       "hint_color": {
         "reference": "text_placeholder"
+      },
+      "card_background": {
+        "reference": "surface_primary"
+      },
+      "card_border_fill": {
+        "reference": "border_control"
+      },
+      "card_hover_border_fill": {
+        "reference": "border_hover"
+      },
+      "card_divider_fill": {
+        "reference": "surface_subtle"
+      },
+      "selected_color": {
+        "reference": "primary"
+      },
+      "badge_builtin_color": {
+        "reference": "text_muted"
+      },
+      "badge_user_color": {
+        "reference": "accent_orchid"
+      }
+    },
+    "switch_layout": {
+      "width": {
+        "specific": 34
+      },
+      "height": {
+        "specific": 19
+      },
+      "padding": {
+        "specific": 0
+      },
+      "thumb_size": {
+        "specific": 15
+      },
+      "toggled_thumb_size": {
+        "specific": 15
+      },
+      "thumb_offset": {
+        "specific": 2
+      },
+      "toggled_thumb_offset": {
+        "specific": 17
+      },
+      "pressed_thumb_size_offset": {
+        "specific": 0
       }
     }
   },

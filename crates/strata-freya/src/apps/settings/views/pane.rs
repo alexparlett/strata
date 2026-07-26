@@ -30,6 +30,13 @@ pub struct Pane {
 }
 
 impl Pane {
+    /// A built category's content, in the frame.
+    pub fn new(content: impl IntoElement) -> Self {
+        Self {
+            content: content.into_element(),
+        }
+    }
+
     /// A category whose page belongs to a task that hasn't landed. `what` names the content,
     /// `owner` the task that brings it.
     pub fn not_built(what: &str, owner: &str) -> Self {

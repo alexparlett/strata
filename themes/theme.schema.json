@@ -1059,6 +1059,27 @@
             },
             "hint_color": {
               "$ref": "#/$defs/colorPref"
+            },
+            "card_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_hover_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "badge_builtin_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "badge_user_color": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },

@@ -6,18 +6,20 @@
 //! is mounted once and only the pane swaps. The nav tree itself is data — see [`model`].
 //!
 //! **Draft / save.** Every control edits [`SettingsCtx::draft`], a working copy of the
-//! settings seeded from the committed ones on mount. **Apply** writes the draft into the
-//! app-global config store (the one thing here that touches disk) and closes; **Cancel**, Esc
-//! and the red button close without writing, which *is* the discard — nothing was committed.
+//! settings seeded from the committed ones on mount. **Apply** commits it into the app-global
+//! config store (the one thing here that touches disk) and closes; **Cancel**, Esc and the red
+//! button close without writing, which *is* the discard — nothing was committed. The commit is
+//! a per-field diff against the seed, so a setting another window wrote while this one was
+//! open survives it ([`SettingsCtx::apply`]).
 //!
 //! **The theme previews live.** Its half of the draft is mirrored into the app-global
 //! [`ThemePreview`] on every edit, so every open window re-themes the instant a theme is
 //! picked while the choice is still uncommitted (`crate::state::theme_preview` has the why).
 //! Dropping that slot on the way out is what makes Cancel a revert.
 //!
-//! This task builds the **shell**: the window, the nav, the draft/save/preview machinery and
-//! the entry points. The category panes belong to P4-04…P4-08 and render a placeholder until
-//! those land, so nothing here writes to the draft yet.
+//! P4-03 built the **shell**: the window, the nav, the draft/save/preview machinery and the
+//! entry points. P4-04 added the first pane ([`views::ThemePane`], the theme picker); the
+//! remaining categories belong to P4-05…P4-08 and render a placeholder until those land.
 
 mod model;
 mod views;
@@ -27,13 +29,12 @@ use freya::router::*;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use strata_core::config::{Command, Settings};
 
-use crate::apps::settings::views::{Pane, SettingsChrome};
+use crate::apps::settings::views::{Pane, SettingsChrome, ThemePane};
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
 use crate::platform::{self, WindowKind};
 use crate::state::{
-    use_config, use_share_config, write_config, AppCtx, ConfigChan, ConfigStation, ThemePreview,
-    ThemeSel,
+    use_share_config, write_config, AppCtx, ConfigChan, ConfigStation, ThemePreview, ThemeSel,
 };
 use crate::theme::{peek_selection, use_strata_theme, window_background};
 
@@ -68,6 +69,19 @@ define_theme!(
         /// Explanatory subtext in a pane — every setting's one-line description, and the
         /// breadcrumb's leading group.
         hint_color: Color,
+        /// A theme card (P4-04): its surface, its resting / hover ring, and the rule between
+        /// the preview and the card's name row.
+        card_background: Color,
+        card_border_fill: Color,
+        card_hover_border_fill: Color,
+        card_divider_fill: Color,
+        /// What "this one is picked" is painted in — the selected card's ring *and* its tick.
+        /// One field, because they are one meaning; two would be the same colour named twice.
+        selected_color: Color,
+        /// A theme card's source badge, per [`Source`](strata_core::theme::Source). The fill is
+        /// derived from these at `Badge`'s tint alpha, so a source is one token, not two.
+        badge_builtin_color: Color,
+        badge_user_color: Color,
     }
 );
 
@@ -101,31 +115,37 @@ pub struct SettingsCtx {
     /// The working copy every control edits. Seeded from the committed settings on mount and
     /// thrown away with the window unless Apply commits it.
     pub draft: State<Settings>,
+    /// The settings the draft was seeded from — written once, at mount, and never again.
+    /// The baseline for both questions this window asks: what the user has changed
+    /// ([`dirty`](Self::dirty)) and what to commit ([`apply`](Self::apply)).
+    seed: State<Settings>,
     /// The live theme preview the draft's theme half is mirrored into.
     preview: ThemePreview,
-    /// The app-global config: Apply's target, and the baseline the dirty check reads.
+    /// The app-global config: Apply's target.
     config: ConfigStation,
 }
 
 impl SettingsCtx {
     fn new(config: ConfigStation, preview: ThemePreview) -> Self {
+        let settings = config.peek().settings.clone();
         Self {
-            draft: State::create(config.peek().settings.clone()),
+            draft: State::create(settings.clone()),
+            seed: State::create(settings),
             preview,
             config,
         }
     }
 
-    /// Whether the draft has anything to commit. Reactive — a control's edit repaints the
-    /// footer's Apply.
+    /// Whether the draft has anything to commit — i.e. whether **the user** has changed
+    /// something. Reactive on the draft, so a control's edit repaints the footer's Apply.
     ///
-    /// A hook, hence the name: the committed side is read through the config's **Settings
-    /// channel**, not the station. Reading the station subscribes the caller to every config
-    /// write, so opening a project anywhere would wake the footer.
-    pub fn use_dirty(&self) -> bool {
-        let committed = use_config(ConfigChan::Settings);
-        let committed = committed.read();
-        *self.draft.read() != committed.settings
+    /// Measured against the seed, not against what is committed now: another window can
+    /// commit a setting while this one is open, and comparing to the live config would then
+    /// enable Apply for a change the user never made — an Apply that, since it is a per-field
+    /// merge, would commit nothing at all. The seed never changes, so this reads no config
+    /// state and the footer isn't woken by config writes it has no interest in.
+    pub fn dirty(&self) -> bool {
+        *self.draft.read() != *self.seed.peek()
     }
 
     /// Publish the draft's theme selection as the live preview. Driven by a side effect at
@@ -144,11 +164,26 @@ impl SettingsCtx {
     /// Commit the draft: publish it to every window and persist it. The preview is dropped in
     /// the same breath — the committed settings now resolve to the identical theme, so the
     /// derivation's id guard means nothing repaints twice.
+    ///
+    /// A **per-field merge** against the seed, not a whole-struct write: this window's draft
+    /// is a snapshot of the settings as they were when it opened, and another window can
+    /// commit one of its own in the meantime (the close confirm's "Don't ask again" writes
+    /// `confirm_close_running` from a window that never shows it). Writing the draft wholesale
+    /// would carry its stale copy of that field back over the top. `Settings::merge_onto`
+    /// commits only the fields this draft actually changed.
+    /// The seed advances to what was just committed, so the diff is always measured against
+    /// the last commit rather than against mount. Today the footer closes the window straight
+    /// after, but an Apply that *didn't* close would otherwise re-commit this same diff on the
+    /// next press — over whatever another window had written in between.
     pub fn apply(&self) {
         let draft = self.draft.peek().clone();
-        write_config(self.config, &[ConfigChan::Settings], move |cfg| {
-            cfg.settings = draft;
+        let seed = self.seed.peek().clone();
+        write_config(self.config, &[ConfigChan::Settings], {
+            let draft = draft.clone();
+            move |cfg| draft.merge_onto(&seed, &mut cfg.settings)
         });
+        let mut reseed = self.seed;
+        reseed.set(draft);
         self.discard();
     }
 
@@ -199,9 +234,15 @@ impl SettingsApp {
 
 impl App for SettingsApp {
     fn render(&self) -> impl IntoElement {
-        // The same window-root steps every app takes: this window's theme derived from the
-        // shared settings (and its own preview), and the app-globals into context.
-        use_strata_theme(self.app.themes.clone(), self.app.config, self.app.preview);
+        // The same window-root steps every app takes. The shared theme **registry** into
+        // context first — the Appearance pane's theme list reads it, and a route component
+        // takes no props, so context is the only way in — then this window's theme derived
+        // from the shared settings and its own preview.
+        let themes = use_provide_context({
+            let themes = self.app.themes.clone();
+            move || themes
+        });
+        use_strata_theme(themes.clone(), self.app.config, self.app.preview);
         use_share_config(self.app.config);
         use_provide_context({
             let app = self.app.clone();
@@ -263,7 +304,8 @@ impl App for SettingsApp {
 }
 
 /// The category pane's content — what [`SettingsChrome`] wraps in the scroll frame and the
-/// breadcrumb. One per [`Route`]; each is a placeholder until its own task lands.
+/// breadcrumb. One per [`Route`]; each is a placeholder until its own task lands. `ThemePane`
+/// has landed (P4-04) and lives in [`views`], so it isn't in this list.
 macro_rules! panes {
     ($( $Comp:ident => $owner:literal, $what:literal ),* $(,)?) => {
         $(
@@ -280,7 +322,6 @@ macro_rules! panes {
 }
 
 panes! {
-    ThemePane => "P4-04", "Theme selection",
     SystemPane => "P4-06", "System preferences",
     DataDisplayPane => "P4-05", "Data-display preferences",
     KeymapPane => "P4-08", "Keyboard shortcuts",

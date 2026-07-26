@@ -129,8 +129,9 @@ pub struct KeyBind {
 /// so it is reached through the one app-global config store rather than living in a store
 /// of its own.
 /// `PartialEq` because the Settings window edits a **draft** copy: comparing it against the
-/// committed settings is what "is there anything to apply?" means, and the whole struct is
-/// the unit of that question (see `strata-freya`'s `SettingsCtx`).
+/// seed it was made from is what "is there anything to apply?" means, and committing it is a
+/// per-field diff against that same seed ([`Settings::merge_onto`], which is also why the
+/// individual fields need to compare — see `strata-freya`'s `SettingsCtx`).
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     /// Active theme id (see `crate::theme`). Persists across sessions/windows.
@@ -193,6 +194,57 @@ pub struct Settings {
     #[serde(default)]
     pub engine: BTreeMap<String, String>,
 }
+
+/// Generates [`Settings::merge_onto`] from one list of the struct's fields.
+///
+/// The list is checked against the struct by the compiler: the `let Settings { … } = self`
+/// pattern names every field, so adding a setting without listing it here is a **build
+/// error** rather than a field the Settings window can edit and never commit. That's the
+/// whole reason this is a macro and not a hand-written sequence of `if`s.
+macro_rules! settings_merge {
+    ($( $field:ident ),* $(,)?) => {
+        impl Settings {
+            /// Commit this **draft** onto the live settings, field by field: a field the draft
+            /// left alone (still equal to `base`, the settings it was seeded from) keeps
+            /// whatever `live` holds *now*.
+            ///
+            /// Why not `*live = draft.clone()`: the Settings window's draft is seeded when it
+            /// opens and committed when Apply is pressed, and in between another window can
+            /// commit a setting of its own — the close confirm's "Don't ask again" writes
+            /// [`Settings::confirm_close_running`] from a window that never showed it. A
+            /// whole-struct write would carry the draft's stale copy of that field back over
+            /// the top, silently undoing a change the user did make. A per-field diff against
+            /// the seed only ever commits what this draft actually changed.
+            pub fn merge_onto(&self, base: &Settings, live: &mut Settings) {
+                // The draft's fields, destructured rather than read through `self` — the
+                // pattern is what makes the list exhaustive (see the macro's docs), and
+                // binding each field means a missing one is reported by name.
+                let Settings { $( $field ),* } = self;
+                $(
+                    if $field != &base.$field {
+                        live.$field = $field.clone();
+                    }
+                )*
+            }
+        }
+    };
+}
+
+settings_merge!(
+    theme,
+    sync_os,
+    density_compact,
+    zebra,
+    default_col_width,
+    row_limit,
+    max_history,
+    reopen_on_startup,
+    default_project_dir,
+    open_pref,
+    confirm_close_running,
+    keybinds,
+    engine,
+);
 
 fn default_theme() -> String {
     DEFAULT_THEME.to_string()
@@ -546,5 +598,59 @@ mod tests {
         assert_eq!(cfg.recent_projects.len(), 1);
         assert_eq!(cfg.recent_projects[0].path, "/data/sample");
         assert_eq!(cfg.open_projects, ["/data/sample"]);
+    }
+
+    /// The reason Apply is a per-field merge and not a whole-struct write: the Settings
+    /// window's draft is seeded when it opens, and another window can commit a setting of
+    /// its own before Apply is pressed. Both edits have to survive.
+    #[test]
+    fn applying_a_draft_keeps_what_another_window_committed_meanwhile() {
+        let seed = Settings::default();
+        // The Settings window's draft: the user picks a theme.
+        let mut draft = seed.clone();
+        draft.theme = "daylight".to_string();
+        // Meanwhile, the close confirm's "Don't ask again" writes this from a window that
+        // never showed the setting — so the draft still holds the old value.
+        let mut live = seed.clone();
+        live.confirm_close_running = false;
+
+        draft.merge_onto(&seed, &mut live);
+
+        assert_eq!(live.theme, "daylight", "the draft's own edit commits");
+        assert!(
+            !live.confirm_close_running,
+            "a field the draft never touched keeps the value the other window committed"
+        );
+    }
+
+    /// The seed is the baseline, not the live value: a field the user edited commits even
+    /// when another window happened to write that same field too. Last Apply wins, which is
+    /// the only answer that doesn't silently discard what the user is looking at.
+    #[test]
+    fn a_field_the_draft_changed_wins_over_a_concurrent_write() {
+        let seed = Settings::default();
+        let mut draft = seed.clone();
+        draft.row_limit = 500;
+        let mut live = seed.clone();
+        live.row_limit = 50;
+
+        draft.merge_onto(&seed, &mut live);
+
+        assert_eq!(live.row_limit, 500);
+    }
+
+    /// An untouched draft commits nothing at all — which is what makes Apply's disabled state
+    /// ("the draft matches its seed") honest rather than just cosmetic.
+    #[test]
+    fn an_untouched_draft_commits_nothing() {
+        let seed = Settings::default();
+        let mut live = seed.clone();
+        live.theme = "daylight".to_string();
+        live.max_history = 12;
+
+        seed.clone().merge_onto(&seed, &mut live);
+
+        assert_eq!(live.theme, "daylight");
+        assert_eq!(live.max_history, 12);
     }
 }

@@ -13,8 +13,11 @@ theme preview (`state/theme_preview.rs`) — and one window path everything open
 **`State::create_global`**, **not** a per-window Radio station; native close uses **`winit
 CloseRequested`** (no objc), and the one place objc *is* reached for is the fork's
 `set_window_parent` (P4-03 pins Settings above the window that opened it). What's left in this
-phase is the settings **categories** (P4-04…P4-09) and the remaining windows: export, the config
-modal — plus P4-13's open/create UI. The Dioxus app shipped all of this (W1–W4, D6–D8) — this is
+phase is the settings **categories** (P4-05…P4-09, Appearance having landed with P4-04) and the
+remaining windows: export, the config modal — plus P4-13's open/create UI. **P4-04 settled how
+every later pane commits**: the draft is diffed per-field against its seed (`Settings::merge_onto`,
+exhaustive by compiler check), never written wholesale, so a setting another window wrote while
+Settings was open survives Apply — add a field, and the build tells you to merge it. The Dioxus app shipped all of this (W1–W4, D6–D8) — this is
 the Freya rebuild.
 
 > **Pull P4-15 before the remaining writers.** `.strata` write failures are reported through
@@ -32,7 +35,7 @@ the Freya rebuild.
 | P4-01 | Multi-window shell + shared state (`create_global`) + native close | 🟡 shared state · window model · quit-vs-close done; per-window fault close + Dock quit remain | W1/A8 | — |
 | P4-02 | Launcher window | ✅ | U1 | P4-01 |
 | P4-03 | Settings window shell (draft/save, live theme, single-instance) | ✅ | W1/U12 | P4-01 |
-| P4-04 | Settings ▸ Appearance | ⬜ | U12 | P4-03 |
+| P4-04 | Settings ▸ Appearance | ✅ | U12 | P4-03 |
 | P4-05 | Settings ▸ Data-display | ⬜ | U12 | P4-03 |
 | P4-06 | Settings ▸ System (+ history limit) | ⬜ | W3/U12 | P4-03 |
 | P4-07 | Settings ▸ Engine (properties editor) | ⬜ | W2 | P4-03 |
