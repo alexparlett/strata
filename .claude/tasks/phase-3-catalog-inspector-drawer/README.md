@@ -12,11 +12,46 @@ gutter) and carries the brand, the project switcher, and the ⌘K / ⌘, cluster
 and open-project actions are placeholders waiting on P6-01 / P4-03 / P4-13. The **catalog sidebar**
 now fills the left pane (**P3-02** ✅) — sections, nested columns, filter, and the column selection
 that drives the inspector — its ↻ re-scans the catalog (**P3-03** ✅), and broken rows carry a
-warning triangle with the reason (**P3-04** ✅). The **drop confirm** is built (**P3-05** ✅),
-naming the views a drop leaves invalid and performing the drop, and **P3-06** ✅ gave every row its
+warning triangle with the reason (**P3-04** ✅). The **drawer** header gained its expand / restore
+toggle (**P3-11** ✅ — see the note below on how little of that task was left). The **drop
+confirm** is built (**P3-05** ✅), naming the views a drop leaves invalid and performing the drop,
+and **P3-06** ✅ gave every row its
 menu (right-click *and* the canvas's ⋮): open in a tab, edit a view's SQL, rename a saved query,
-refresh one table, and the Drop items that open that confirm. The inspector and drawer are still
-**shells** waiting on their content tasks.
+refresh one table, and the Drop items that open that confirm. The **column inspector** now fills
+the right pane (**P3-08** ✅) — the selected column's title + source-format badge, a nested
+column's shape, and the STATISTICS zone: a dynamic facts box over what the source actually
+reported, plus the completeness bar. Its scan half is parked for P3-09 (the card renders in
+full; only its press handler is missing). The drawer is still a **shell** waiting on its content
+tasks.
+
+> **Only real facts** (P3-08 · DEV_TASKS U9). Every number in the inspector was *read*, never
+> derived from the rows on screen — the Dioxus panel once computed them off the current page of the
+> current tab's query and presented them as column facts. So the facts box is a **dynamic list** (a
+> Parquet column shows four rows, a CSV column shows one, neither shows a blank), inexact footer
+> values render `~value`, and the completeness bar needs a real *exact* null count and a real row
+> count or it does not appear. The percentage never rounds into a claim it can't make: with nulls
+> present it reads `>99.9%`, never `100%`. The null count is the bar and **only** the bar.
+
+> **P3-11 was largely already built** (and is now ✅). P3-01 had delivered the drawer container,
+> its resizable/collapsible height, the persisted active-tab state — and the **tab switcher**,
+> which in the design is the **rail's bottom group**, not a pill row in the drawer header (the
+> canvas computes `drawerHistTabStyle` / `drawerProbTabStyle` / `drawerEvtTabStyle` and
+> `onDrawerTab` and never renders them). Don't add a second switcher: it would be a second writer
+> for `Layout::drawer`. The rest of P3-11's brief — the header's count label, Clear, and the
+> "common list frame" — has no consumer until the tab tasks, so it moved to them: **P3-12** owns
+> the count, the Problems-hides-Clear rule, and the frame (a scroll container + a centred empty
+> state, which is all the three tabs genuinely share); **P3-13** and **P3-14** own Clear's action.
+> What shipped is the header's **expand / restore** toggle — see its file, including the fork note
+> that `ResizablePanel` reads `initial_size` only at mount, so programmatic sizing goes through a
+> `ResizableContext` controller.
+
+> **P3-07 was rescoped** (and is now ✅) to *registration failure messages*. Its original three items were PART
+> chips and the nested column tree — both delivered by P3-02, PART exercised end to end by the
+> `sample/` project's Hive-partitioned `events` — plus a "parseable-JSON echo" that had no referent
+> anywhere, and a pre-flight JSON-shape / schema-consistency report that is **dropped**: the
+> register already fails on any shape DataFusion can't read, and P3-04's triangle already carries
+> the reason. What survives is that those reasons are badly worded (and one interpolates the parsed
+> file into the error string). See its file.
 
 > **A row's Refresh re-creates the views over it** (P3-06), and re-creates them in **dependency
 > order** — a view inlines the plan of any view it reads at `CREATE OR REPLACE` time, so an outer
@@ -60,11 +95,11 @@ per-`Kind` hues, one shared group).
 | P3-04 | Catalog validity indicators | ✅ | D11 | P3-02 |
 | P3-05 | View dependencies (UI consumer) + drop confirm | ✅ | D10 | P3-02/04 |
 | P3-06 | Catalog context menus | ✅ | — | P3-02/05 |
-| P3-07 | PART badges · nested JSON · shape detection | ⬜ | D9 | P3-02 |
-| P3-08 | Column inspector (facts box) | ⬜ | U9 | P3-01 |
+| P3-07 | Registration failure messages | ✅ | D9 | P3-04 |
+| P3-08 | Column inspector (facts box) | ✅ | U9 | P3-01 |
 | P3-09 | Column/table profiling (PROFILE zone) | ⬜ | D4 | P3-08 |
 | P3-10 | Profile-cost confirm | ⬜ | U15 | P3-09 |
-| P3-11 | Drawer scaffold (tabbed bottom panel) | ⬜ | U10 | P3-01 |
+| P3-11 | Drawer scaffold (tabbed bottom panel) | ✅ | U10 | P3-01 |
 | P3-12 | Drawer — Problems tab | ⬜ | U10 | P3-11 |
 | P3-13 | Drawer — Events tab | ⬜ | U10 | P3-11 |
 | P3-14 | Drawer — History tab | ⬜ | U10 | P3-11 |

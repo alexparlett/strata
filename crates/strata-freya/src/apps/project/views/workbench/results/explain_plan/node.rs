@@ -7,8 +7,9 @@
 use freya::prelude::*;
 
 use strata_core::engine::plan::{
-    detail_parts, fmt_int, insights, metric_group, DetailPart, PlanKind, PlanNode, METRIC_GROUPS,
+    detail_parts, insights, metric_group, DetailPart, PlanKind, PlanNode, METRIC_GROUPS,
 };
+use strata_core::util::fmt_int;
 
 use super::palette::PlanPalette;
 use crate::components::badge::Badge;

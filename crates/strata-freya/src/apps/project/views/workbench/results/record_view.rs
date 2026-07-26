@@ -26,11 +26,11 @@ use strata_model::Kind;
 use super::cell_view::page_batch_row;
 use super::copy;
 use super::datagrid::GridData;
-use super::status_bar::fmt_int;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue, Path, Readout};
+use strata_core::util::fmt_int;
 
 define_theme!(
     %[component]
@@ -177,8 +177,12 @@ impl Component for RecordView {
             .spacing(8.)
             .padding((12., 16.))
             .child(
-                MonoValue::new(format!("Row {} of {}", fmt_int(abs_n), fmt_int(self.total)))
-                    .color(theme.label_color),
+                MonoValue::new(format!(
+                    "Row {} of {}",
+                    fmt_int(abs_n as u64),
+                    fmt_int(self.total as u64)
+                ))
+                .color(theme.label_color),
             )
             .child(rect().width(Size::flex(1.)))
             .child(copy_button("JSON", "Copy row as JSON", {

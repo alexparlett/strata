@@ -32,9 +32,67 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: "/code-review high --comment ${{ github.event.pull_request.number }}"
+          # A direct instruction, NOT `/code-review`. The skill fans the review out
+          # across background subagents, and a headless run ends the moment the main
+          # loop yields - so on PR #47 it dispatched five of them, said "I'll compile
+          # the final findings once they report back", and the session ended there.
+          # 11 minutes and $10 for a review nobody ever saw. Whatever this prompt
+          # says, it must keep the work in the main loop.
+          prompt: |
+            Review pull request #${{ github.event.pull_request.number }} for real bugs.
+
+            Get the diff with `gh pr diff ${{ github.event.pull_request.number }}`, then
+            read the surrounding files for context - a hunk on its own rarely says whether
+            it is correct. This repository's conventions live in CLAUDE.md and AGENTS.md;
+            a change that contradicts them is a finding.
+
+            Look for correctness above all: wrong or inverted conditions, off-by-one,
+            unwrap/panic on reachable input, dropped errors, removed guards, broken
+            callers of a changed signature, races. Every finding needs a concrete case
+            where the code misbehaves - if you cannot name one, it is not a finding.
+            Prefer a handful of real problems to a long list of style notes.
+
+            Do the whole review YOURSELF, in this conversation. Do not delegate to
+            subagents and do not start background tasks: this runs headless, so the run
+            ends as soon as you stop, and anything still running is discarded unread
+            while you pay for it.
+
+            One command per Bash call. Chaining with `;` or `&&` makes the whole call
+            need approval, which nothing can give here, so the call just fails.
+
+            Post the result yourself before you finish - nothing posts it for you:
+              - a line-specific finding goes inline via the
+                mcp__github_inline_comment__create_inline_comment tool;
+              - then one summary comment with
+                `gh pr comment ${{ github.event.pull_request.number }} --body "..."`,
+                covering what you checked and what you found.
+            If the diff is clean, say so in the summary comment - silence is
+            indistinguishable from the reviewer being broken, which is how this went
+            unnoticed.
+
+            **Budget your turns and post while you still have some.** You have a hard
+            turn limit and the run dies at it with nothing published - that has already
+            happened once. On a large diff, read what you need to judge the risky hunks
+            rather than every file, and once you are around three quarters of the way
+            through your turns, stop looking and post what you have. A partial review
+            that lands beats a thorough one that doesn't.
+
+          # TEMPORARY (with the prompt change above), so the next run is checkable:
+          # show_full_output streams every message and tool result into the step log,
+          # display_report puts the final report in the job summary. Both are
+          # default-off. NOTE this repository is PUBLIC, so these logs are
+          # world-readable; GitHub masks registered secrets and this job only reads
+          # the repo's own diff, so exposure is low. Turn both off once a review
+          # actually lands on a PR.
+          show_full_output: true
+          display_report: true
+          # 40 was sized when the main loop only dispatched subagents and did no work
+          # itself. Now the whole review happens here, and PR #47 spent all 40 on
+          # reading (12 Read, 8 Grep, 20 Bash) and died at the cap before posting a
+          # word. The real guard is `timeout-minutes: 45` above; that run took under
+          # 4 minutes and $2.27, so this has room to be generous.
           claude_args: |
-            --max-turns 40
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+            --max-turns 150
+            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
         env:
           GH_TOKEN: ${{ github.token }}

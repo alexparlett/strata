@@ -1,5 +1,9 @@
 //! Unit-aware formatters shared by the engine (building metric labels + the
 //! self-time chip) and the view, so both render numbers identically.
+//!
+//! Plain thousands separation is **not** here: it has nothing to do with plans, and the
+//! column inspector prints row counts with it too. It lives beside the crate's other
+//! general display helper, as [`crate::util::fmt_int`] — import it from there.
 
 /// Format a millisecond value for the per-node time chip.
 pub fn fmt_ms(v: f64) -> String {
@@ -49,20 +53,6 @@ pub fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
-/// Group a non-negative integer with thousands separators (`48213` → `48,213`).
-pub fn fmt_int(n: u64) -> String {
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +72,5 @@ mod tests {
         assert_eq!(fmt_ns(15_594_334), "15.6 ms");
         assert_eq!(fmt_bytes(605), "605 B");
         assert_eq!(fmt_bytes(3481), "3.4 KB");
-        assert_eq!(fmt_int(48213), "48,213");
     }
 }

@@ -21,6 +21,9 @@ pub enum IconName {
     ChevronUp,
     ChevronLeft,
     ChevronRight,
+    /// Double chevrons — the drawer header's expand / restore toggle.
+    ChevronsUp,
+    ChevronsDown,
     Dots,
     Search,
     Close,
@@ -68,6 +71,8 @@ impl IconName {
             IconName::ChevronUp => CHEVRON_UP,
             IconName::ChevronLeft => CHEVRON_LEFT,
             IconName::ChevronRight => CHEVRON_RIGHT,
+            IconName::ChevronsUp => CHEVRONS_UP,
+            IconName::ChevronsDown => CHEVRONS_DOWN,
             IconName::Dots => DOTS,
             IconName::Search => SEARCH,
             IconName::Close => CLOSE,
@@ -162,6 +167,9 @@ const CHEVRON_UP: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 // Status-bar pager prev/next.
 const CHEVRON_LEFT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>"#;
 const CHEVRON_RIGHT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>"#;
+// Drawer header expand (up) / restore (down) — the canvas's `logExpandIcon` pair.
+const CHEVRONS_UP: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 11-5-5-5 5M17 18l-5-5-5 5"/></svg>"#;
+const CHEVRONS_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 6 5 5 5-5M7 13l5 5 5-5"/></svg>"#;
 const DOTS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>"#;
 const SEARCH: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>"#;
 const CLOSE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>"#;

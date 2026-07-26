@@ -3,8 +3,9 @@
 //! [`group_color`]), the tier-2 [`insights`] ([`Insight`] / [`InsightTone`]), and
 //! the derived per-node [`self_time_ms`]. Mirrors the v19 design's metric model.
 
-use super::fmt::{fmt_bytes, fmt_int, fmt_ns};
+use super::fmt::{fmt_bytes, fmt_ns};
 use super::tree::PlanKind;
+use crate::util::fmt_int;
 
 /// The unit-class of a metric value, so the UI can format and group it without
 /// re-deriving units (mirrors the `type` in EXPLAIN_PLAN_SPEC §4/§8). The engine

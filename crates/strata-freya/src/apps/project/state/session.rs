@@ -15,8 +15,8 @@ use std::mem;
 
 use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
 use strata_model::{
-    Diagnostic, DrawerTab, Layout, Origin, ResultsView, SessionSnapshot, SidebarPane, TabId,
-    TabSnapshot,
+    expanded_drawer_h, Diagnostic, DrawerTab, Layout, Origin, ResultsView, SessionSnapshot,
+    SidebarPane, TabId, TabSnapshot,
 };
 use uuid::Uuid;
 
@@ -223,6 +223,33 @@ impl SessionState {
     /// Collapse the drawer (its header ×).
     pub fn close_drawer(&mut self) {
         self.layout.drawer = None;
+    }
+
+    /// The drawer header's expand / restore toggle (design `onToggleLogHeight`): raise the
+    /// drawer to [`expanded_drawer_h`], remembering the height it had, or put that height
+    /// back. The remembered height *is* the expanded flag, so the icon can never disagree
+    /// with the height.
+    ///
+    /// A structure write ([`Chan::Layout`](super::Chan)), not a size one: it re-seeds the
+    /// panel's `initial_size` for its next mount (a collapse→reopen, or a restart), which the
+    /// per-frame drag channel deliberately never wakes. Moving the *live* panel is the
+    /// container controller's job — see `views::shell::set_drawer_panel_height`.
+    ///
+    /// Dragging the drawer while it is expanded leaves it expanded: the drag records a new
+    /// height on `drawer_h`, and restore still returns to the pre-expand one. Restore means
+    /// "back to before I expanded", not "back to the last drag".
+    ///
+    /// Returns the height it settled on, so the caller can drive the live panel to it without
+    /// re-deriving the rule.
+    pub fn toggle_drawer_height(&mut self) -> f32 {
+        self.layout.drawer_h = match self.layout.drawer_restore_h.take() {
+            Some(restore) => restore,
+            None => {
+                self.layout.drawer_restore_h = Some(self.layout.drawer_h);
+                expanded_drawer_h()
+            }
+        };
+        self.layout.drawer_h
     }
 
     /// Collapse the inspector (its header ×).
@@ -798,6 +825,39 @@ mod tests {
         assert!(!s.layout.inspector_open);
     }
 
+    /// The drawer header's expand / restore toggle (P3-11): expanding remembers the height it
+    /// left and restoring puts exactly that back — including a height the user dragged to,
+    /// which the design's two-fixed-heights version threw away.
+    #[test]
+    fn drawer_expand_restores_the_height_it_left() {
+        let mut s = SessionState::default();
+        s.set_drawer_h(310.0);
+        assert_eq!(s.layout.drawer_restore_h, None, "not expanded to start");
+
+        assert_eq!(s.toggle_drawer_height(), expanded_drawer_h());
+        assert_eq!(s.layout.drawer_h, expanded_drawer_h());
+        assert_eq!(s.layout.drawer_restore_h, Some(310.0), "and is expanded");
+
+        assert_eq!(s.toggle_drawer_height(), 310.0, "the dragged height is back");
+        assert_eq!(s.layout.drawer_h, 310.0);
+        assert_eq!(s.layout.drawer_restore_h, None, "no longer expanded");
+    }
+
+    /// Dragging while expanded records the new height but leaves the drawer expanded: restore
+    /// means "back to before I expanded", not "back to the last drag". Deliberate — clearing
+    /// the flag on drag would need a `Chan::Layout` write per drag frame, which the size
+    /// channel exists to avoid.
+    #[test]
+    fn dragging_while_expanded_keeps_the_pre_expand_height() {
+        let mut s = SessionState::default();
+        let before = s.layout.drawer_h;
+        s.toggle_drawer_height();
+        s.set_drawer_h(400.0);
+
+        assert_eq!(s.layout.drawer_restore_h, Some(before));
+        assert_eq!(s.toggle_drawer_height(), before);
+    }
+
     /// Layout (open panes + sizes) survives the snapshot round-trip alongside the tabs — so a
     /// restart restores the same shell arrangement.
     #[test]
@@ -817,6 +877,23 @@ mod tests {
         assert_eq!(restored.layout.drawer, Some(DrawerTab::Events));
         assert_eq!(restored.layout.sidebar_w, 333.0);
         assert_eq!(restored.layout.drawer_h, 199.0);
+    }
+
+    /// An expanded drawer restarts expanded, with the height to restore — both halves of the
+    /// toggle's state ride the snapshot. Its own test rather than a line in
+    /// [`snapshot_round_trips_layout`], which has to keep asserting that an ordinary *dragged*
+    /// height round-trips.
+    #[test]
+    fn snapshot_round_trips_an_expanded_drawer() {
+        let mut s = SessionState::default();
+        s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        s.set_drawer_h(199.0);
+        s.toggle_drawer_height();
+
+        let restored =
+            SessionState::from_snapshot(s.snapshot()).expect("non-empty snapshot restores");
+        assert_eq!(restored.layout.drawer_h, expanded_drawer_h());
+        assert_eq!(restored.layout.drawer_restore_h, Some(199.0));
     }
 
     /// A dangling `active` (its tab dropped from the snapshot) falls back to the first tab

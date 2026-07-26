@@ -35,6 +35,6 @@ pub use query_error::QueryError;
 pub use results::{Cell, QueryOutput, SnapshotId};
 pub use schema::{ColumnInfo, Kind, Stat, StatKey};
 pub use session::{
-    DrawerTab, Layout, Origin, ResultsView, SessionSnapshot, SidebarPane, TabId, TabSnapshot,
-    WindowGeom,
+    expanded_drawer_h, DrawerTab, Layout, Origin, ResultsView, SessionSnapshot, SidebarPane, TabId,
+    TabSnapshot, WindowGeom,
 };
