@@ -59,7 +59,9 @@
     "text_control": "#474c56",
     "text_label": "#8b929d",
     "text_muted": "#5f6771",
-    "transparent": "rgba(0,0,0,0)"
+    "transparent": "rgba(0,0,0,0)",
+    "warning_soft": "rgba(188,76,0,.10)",
+    "warning_soft_border": "rgba(188,76,0,.26)"
   },
   "components": {
     "type_palette": {
@@ -1384,6 +1386,53 @@
       },
       "pressed_thumb_size_offset": {
         "specific": 0
+      }
+    },
+    "export": {
+      "background": {
+        "reference": "surface_secondary"
+      },
+      "panel_background": {
+        "reference": "surface_overlay"
+      },
+      "border_fill": {
+        "reference": "border"
+      },
+      "control_border_fill": {
+        "reference": "border_control"
+      },
+      "icon_color": {
+        "reference": "primary"
+      },
+      "icon_background": {
+        "reference": "accent_badge"
+      },
+      "label_color": {
+        "reference": "text_label"
+      },
+      "hint_color": {
+        "reference": "text_placeholder"
+      },
+      "card_color": {
+        "reference": "text_primary"
+      },
+      "card_active_background": {
+        "reference": "accent_selection"
+      },
+      "card_active_border_fill": {
+        "reference": "primary"
+      },
+      "badge_background": {
+        "reference": "primary"
+      },
+      "badge_color": {
+        "reference": "surface_primary"
+      },
+      "warning_background": {
+        "reference": "warning_soft"
+      },
+      "warning_border_fill": {
+        "reference": "warning_soft_border"
       }
     }
   },

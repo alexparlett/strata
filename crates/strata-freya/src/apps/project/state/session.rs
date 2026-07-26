@@ -220,6 +220,15 @@ impl SessionState {
         self.tabs.get(&id).map(|t| t.view).unwrap_or_default()
     }
 
+    /// The tab's display name — what the tab strip shows, and what names a run everywhere
+    /// outside this window (the Export window's subtitle and its suggested filename).
+    pub fn name(&self, id: TabId) -> String {
+        self.tabs
+            .get(&id)
+            .map(|t| t.name.clone())
+            .unwrap_or_default()
+    }
+
     /// A settled validation pass: replace `id`'s diagnostics **and** stamp them, so the two can
     /// never disagree about which text and which catalog they describe. Write on
     /// [`Chan::Diagnostics`](super::Chan). A no-op for a tab closed while the pass ran.

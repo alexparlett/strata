@@ -1083,6 +1083,57 @@
             }
           }
         },
+        "export": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "panel_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "control_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hint_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_active_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "badge_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "badge_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "warning_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "warning_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "avatar": {
           "type": "object",
           "additionalProperties": false,

@@ -4,7 +4,9 @@
 //! submodules, re-exported.
 
 mod close;
-mod contexts;
+/// `pub` for the Export window: it is its own OS window, so it can't inherit this window's
+/// context and instead carries an [`EngineCtx`](contexts::EngineCtx) clone as a launch value.
+pub mod contexts;
 pub mod model;
 mod project;
 mod query;

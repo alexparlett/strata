@@ -12,6 +12,6 @@ mod run_query;
 
 pub use profile::{use_profile, ProfileEntry, ProfileSpec, ScanId};
 pub use run_query::{
-    FetchSnapshotPage, PageSpec, QueryMode, QueryOutcome, QuerySpec, RunId, RunQuery,
+    FetchSnapshotPage, PageSpec, QueryMode, QueryOutcome, QueryPage, QuerySpec, RunId, RunQuery,
     DEFAULT_PAGE_SIZE,
 };

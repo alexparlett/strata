@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::apps::export::ExportThemePreference;
 use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
@@ -415,6 +416,20 @@ strata_components! {
         chevron_color, item_color, item_active_background, item_active_color, hint_color,
         card_background, card_border_fill, card_hover_border_fill, card_divider_fill,
         selected_color, badge_builtin_color, badge_user_color,
+    },
+    // The Export window: its body, the raised surface its inset blocks sit on (format cards,
+    // text fields, the preview, the two transfer panes), the rules and control edges, the
+    // window's download mark, the option labels + their hint glyph, a format card's resting
+    // and selected dress, the selected-partition order badge, and the warning banner's tinted
+    // box. The banner's *glyph and text* deliberately are not fields here — they take the
+    // sheet's `warning`, which is semantic and must follow the app-wide ramp wherever it
+    // appears. Its controls are the shared ones: `Switch`, `Select`, `Input`, `Button`, and
+    // `segmented_toggle` for every seg group.
+    "export" => ExportThemePreference {
+        background, panel_background, border_fill, control_border_fill, icon_color,
+        icon_background, label_color, hint_color, card_color, card_active_background,
+        card_active_border_fill, badge_background, badge_color, warning_background,
+        warning_border_fill,
     },
     // The initials tile a project row leads with (header switcher, launcher lists): the resting
     // dress plus the accent one a project with an open window wears.

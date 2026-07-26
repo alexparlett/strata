@@ -8,6 +8,7 @@ use freya::prelude::*;
 
 use super::find::FindState;
 use super::toolbar::ResultsToolbar;
+use crate::apps::export::ExportLaunch;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Prose, Title};
 use strata_model::TabId;
@@ -17,11 +18,13 @@ use strata_model::TabId;
 pub struct ChartView {
     tab: TabId,
     find: FindState,
+    /// What Download would export — the same run, whichever body is showing it (P4-10).
+    export: Option<ExportLaunch>,
 }
 
 impl ChartView {
-    pub fn new(tab: TabId, find: FindState) -> Self {
-        Self { tab, find }
+    pub fn new(tab: TabId, find: FindState, export: Option<ExportLaunch>) -> Self {
+        Self { tab, find, export }
     }
 }
 
@@ -45,7 +48,11 @@ impl Component for ChartView {
             .width(Size::fill())
             .height(Size::fill())
             .content(Content::Flex)
-            .child(ResultsToolbar::new(self.tab, self.find))
+            .child(ResultsToolbar::new(
+                self.tab,
+                self.find,
+                self.export.clone(),
+            ))
             .child(
                 rect()
                     .width(Size::fill())

@@ -37,12 +37,14 @@ use running::Running;
 use sort::SortState;
 use status_bar::StatusBar;
 
+use crate::apps::export::{ExportLaunch, ExportTarget};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{PageSpec, QueryOutcome, QuerySpec, RunId};
+use crate::apps::project::query::{PageSpec, QueryOutcome, QueryPage, QuerySpec, RunId};
 use crate::apps::project::state::{Chan, LogCtx, SessionState};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
+use crate::state::AppCtx;
 pub use cell_view::CellViewThemePreference;
 pub use datagrid::DataGridThemePreference;
 pub use explain_plan::ExplainPlanThemePreference;
@@ -283,6 +285,39 @@ impl Component for ResultsBody {
             move |()| actions::cancel_run(&engine, session, log, ws, run)
         };
 
+        // What Download would export (P4-10). Built here because this is the one place that
+        // knows all of it at once — the snapshot handle, the run's own schema and row count,
+        // the sort the grid is showing, the page the pager is on, and rows already fetched
+        // (the only honest preview source). Both settled-rows bodies carry the same toolbar,
+        // so both resolve it the same way.
+        //
+        // The sample is the **Run's own page 1**, not the page on screen: it is always in
+        // hand, so the preview never waits on a fetch, and every row in it is a real row of
+        // this result.
+        let tab_name = session.read().name(ws);
+        let export_sort = page_spec.sort.clone();
+        // The DI handles ride with it, resolved here rather than consumed in the button: the
+        // toolbar is a shallow, known consumer, which is props' case and not context's
+        // (`AGENTS.md` §4).
+        let export_app = use_consume::<AppCtx>();
+        let export_engine = engine.clone();
+        let export_target = |rows: &QueryPage| -> Option<ExportLaunch> {
+            rows.output.snapshot.map(|snapshot| ExportLaunch {
+                target: ExportTarget {
+                    snapshot,
+                    columns: rows.output.columns.clone(),
+                    total: rows.output.total,
+                    sort: export_sort.clone(),
+                    page: cur_page,
+                    page_size: cur_size,
+                    label: tab_name.clone(),
+                    sample: rows.output.rows.clone(),
+                },
+                engine: export_engine.clone(),
+                app: export_app.clone(),
+            })
+        };
+
         let reader = query.read();
         let (body, bar): (Element, StatusBar) = match &*reader.state() {
             QueryStateData::Pending | QueryStateData::Loading { .. } => (
@@ -296,7 +331,7 @@ impl Component for ResultsBody {
                 res: Ok(QueryOutcome::Rows(rows)),
                 settlement_instant,
             } if results_view == ResultsView::Chart => (
-                ChartView::new(ws, find).into(),
+                ChartView::new(ws, find, export_target(rows)).into(),
                 StatusBar::new(ResultsState::Chart).info(RunInfo {
                     total: rows.output.total,
                     elapsed_ms: rows.output.elapsed_ms,
@@ -368,6 +403,7 @@ impl Component for ResultsBody {
                     DataGrid::new(run_grid, view, row_base, self.spec.tab, find, sort)
                         .row_nums(row_nums)
                         .total(rows.output.total)
+                        .export(export_target(rows))
                         .into(),
                     bar,
                 )

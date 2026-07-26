@@ -133,6 +133,15 @@ Things that must not regress. Each was fought for once already.
   `defs()` is a pure projection for saving. **Identity:** tables/views are keyed by **name** (their
   engine/SQL identity, one shared namespace, case-insensitive compare); saved queries by a stable
   **`Uuid`**. Renames route through the store (a view rename rewrites tab `Origin::View` keys).
+- **A reader that outlives one Run pins the snapshot it reads.** A snapshot belongs to its
+  workspace and is retired the moment that workspace dispatches another run (SNAPSHOT_SPEC §4),
+  which is right for the grid and wrong for anything longer-lived. `Engine::pin_snapshot` hands
+  back an RAII `SnapshotPin` that **defers** the retire to the last release — so the export
+  window (P4-10) writes the result it was opened on even if the user re-runs the query behind
+  it. RAII rather than a pin/unpin pair for the same reason cache entries are held by a mounted
+  subscriber: lifetime is a held handle, never imperative bookkeeping. Never answer this with a
+  warning or a staleness check instead — "your results moved" is a worse product than results
+  that don't move, and a check races the very dispatch it is checking for.
 - **History is a satellite**, persisted to `.strata/history.jsonl` — never a field on
   `ProjectState`/`SessionState`. It records **only successful data runs**, which is a claim the
   surface has to keep: the History drawer shows no status mark, because the canvas's

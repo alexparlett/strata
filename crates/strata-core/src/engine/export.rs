@@ -1,9 +1,16 @@
 //! Export one result snapshot to disk via `COPY … TO` (one file, or a Hive
 //! directory when partition columns are given).
 //!
-//! Not yet reachable from the facade — `Engine::export` lands with the Freya export
-//! task (dead-code-allowed until then, like the other feature reservoirs).
-#![allow(dead_code)]
+//! **The spec is shaped so an impossible export can't be spelled.** Write options belong to
+//! the format that has them ([`Format`] carries its own struct), so "a CSV delimiter on a
+//! Parquet export" is unrepresentable rather than ignored — and [`Format::Arrow`] is a bare
+//! variant because DataFusion exposes **no** Arrow IPC write options at all. Every field
+//! below maps to a real DataFusion 54 `COPY … OPTIONS` key; nothing here offers a knob the
+//! writer would silently drop.
+//!
+//! **The snapshot is the source, never a re-run** (`docs/SNAPSHOT_SPEC.md`): an export reads
+//! the same immutable table the grid pages, with the same [`ExportSpec::sort`] the grid is
+//! showing, so what lands on disk is what was on screen.
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -12,47 +19,213 @@ use datafusion::prelude::*;
 use super::query::snapshot_name;
 use strata_model::SnapshotId;
 
-/// Everything an export needs (one struct to dodge a too-many-arguments fn).
-pub struct ExportArgs {
+/// Everything one export needs: where it goes, how much of the snapshot, in what order, in
+/// what format, and whether it fans out into a Hive tree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportSpec {
+    /// The destination — a file for a flat export, a directory when `partition` has columns.
     pub path: String,
-    pub format: String,
-    pub all: bool,
-    pub page: usize,
-    pub page_size: usize,
-    pub csv_delimiter: char,
-    pub csv_header: bool,
-    pub csv_null: String,
-    pub pq_compression: String,
-    pub pq_level: u32,
-    pub partition_cols: Vec<String>,
-    pub keep_partition: bool,
+    pub scope: Scope,
+    /// `(column name, ascending)` — the grid's active sort, applied over the **whole**
+    /// snapshot before any row window. `None` = snapshot order.
+    pub sort: Option<(String, bool)>,
+    pub format: Format,
+    pub partition: Partition,
+}
+
+/// How much of the snapshot to write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// Every row.
+    All,
+    /// One page window, in the grid's own 1-based paging terms.
+    Page { page: usize, page_size: usize },
+}
+
+/// The output format, each carrying exactly the write options DataFusion honours for it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Format {
+    Csv(Csv),
+    /// Newline-delimited JSON. DataFusion's writer can also emit a JSON array
+    /// (`newline_delimited`), but the canvas offers NDJSON only, so the option isn't spelled.
+    Json(Json),
+    Parquet(Parquet),
+    /// Arrow IPC — **no write options exist**, which is why this variant carries nothing.
+    Arrow,
+}
+
+impl Format {
+    /// The `STORED AS` keyword.
+    fn stored_as(&self) -> &'static str {
+        match self {
+            Self::Csv(_) => "CSV",
+            Self::Json(_) => "JSON",
+            Self::Parquet(_) => "PARQUET",
+            Self::Arrow => "ARROW",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Csv {
+    /// Write the column-name row.
+    pub header: bool,
+    /// Field separator. One ASCII character — the UI resolves `\t` before it gets here.
+    pub delimiter: char,
+    /// Text written for NULL cells (empty by default).
+    pub null_value: String,
+    /// Character fields containing the delimiter are wrapped in.
+    pub quote: char,
+    /// Character that escapes a quote. `None` leaves DataFusion's default.
+    pub escape: Option<char>,
+    /// Escape quotes by doubling them rather than with `escape`.
+    pub double_quote: bool,
+    /// Whole-file compression (changes the extension — the UI reflects that).
+    pub compression: Compression,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Json {
+    pub compression: Compression,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Parquet {
+    pub compression: Codec,
+    pub statistics: Statistics,
+    /// Rows per row group — a **row count**, not a byte size.
+    pub max_row_group_size: usize,
+    pub writer_version: WriterVersion,
+    pub dictionary: bool,
+}
+
+/// Whole-file compression, for the formats where compression wraps the file rather than
+/// encoding columns (CSV / JSON). Levelless: the canvas offers the codec only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compression {
+    None,
+    Gzip,
+    Zstd,
+    Bzip2,
+    Xz,
+}
+
+impl Compression {
+    fn as_option(&self) -> &'static str {
+        match self {
+            Self::None => "uncompressed",
+            Self::Gzip => "gzip",
+            Self::Zstd => "zstd",
+            Self::Bzip2 => "bzip2",
+            Self::Xz => "xz",
+        }
+    }
+
+    /// The suffix this compression adds to the destination's own extension, so a filename
+    /// shown to the user matches what is written (`orders.csv` → `orders.csv.gz`).
+    pub fn extension(&self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Gzip => ".gz",
+            Self::Zstd => ".zst",
+            Self::Bzip2 => ".bz2",
+            Self::Xz => ".xz",
+        }
+    }
+}
+
+/// Parquet's column codec. The level rides with the codecs that take one, so a level can't
+/// be set on a codec that would ignore it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Codec {
+    Uncompressed,
+    Snappy,
+    Lz4,
+    Gzip(u32),
+    Brotli(u32),
+    Zstd(u32),
+}
+
+impl Codec {
+    /// DataFusion takes the level inside the codec string — `zstd(3)`.
+    fn as_option(&self) -> String {
+        match self {
+            Self::Uncompressed => "uncompressed".into(),
+            Self::Snappy => "snappy".into(),
+            Self::Lz4 => "lz4".into(),
+            Self::Gzip(level) => format!("gzip({})", level.clamp(&1, &9)),
+            Self::Brotli(level) => format!("brotli({})", level.clamp(&1, &11)),
+            Self::Zstd(level) => format!("zstd({})", level.clamp(&1, &22)),
+        }
+    }
+}
+
+/// How much column statistics Parquet writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Statistics {
+    None,
+    Chunk,
+    Page,
+}
+
+impl Statistics {
+    fn as_option(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Chunk => "chunk",
+            Self::Page => "page",
+        }
+    }
+}
+
+/// Parquet format version. 2.0 enables newer encodings; 1.0 is the compatible floor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriterVersion {
+    V1,
+    V2,
+}
+
+impl WriterVersion {
+    fn as_option(&self) -> &'static str {
+        match self {
+            Self::V1 => "1.0",
+            Self::V2 => "2.0",
+        }
+    }
+}
+
+/// Hive-style partitioning. Empty `columns` = a flat single-file export, which is why this
+/// is one struct rather than an `Option` the caller has to keep consistent with `keep_columns`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Partition {
+    /// Directory levels, outermost first.
+    pub columns: Vec<String>,
+    /// Also write the partition columns *inside* the files. Off by default — they live in
+    /// the directory names.
+    pub keep_columns: bool,
+}
+
+impl Partition {
+    fn is_flat(&self) -> bool {
+        self.columns.is_empty()
+    }
 }
 
 /// Export one snapshot via `COPY (…) TO … STORED AS`. A plain file path (extension)
-/// → one file; `partition_cols` → a Hive-partitioned directory.
+/// → one file; partition columns → a Hive-partitioned directory.
 /// Returns `(path, rows_written)`.
 pub async fn run_export(
     ctx: &SessionContext,
     snapshot: SnapshotId,
-    a: ExportArgs,
+    spec: ExportSpec,
 ) -> Result<(String, usize), String> {
     let snap = snapshot_name(snapshot);
     if ctx.table(snap.as_str()).await.is_err() {
         return Err("No results to export — run a query first".to_string());
     }
 
-    let select = if a.all {
-        format!("SELECT * FROM {snap}")
-    } else {
-        let offset = a.page.saturating_sub(1) * a.page_size;
-        format!("SELECT * FROM {snap} LIMIT {} OFFSET {offset}", a.page_size)
-    };
-    let stored = match a.format.as_str() {
-        "json" => "JSON",
-        "parquet" => "PARQUET",
-        "arrow" => "ARROW",
-        _ => "CSV",
-    };
+    let select = select_sql(&snap, &spec);
+
     // `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option:
     // DataFusion 54's COPY parser re-renders each one with `Ident::to_string()`, so a
     // quoted name reaches the planner with its quotes still attached and matches no
@@ -60,48 +233,27 @@ pub async fn run_export(
     // name the tokenizer reads as one word round-trips — and one it doesn't simply can't
     // be expressed, which is worth saying plainly instead of emitting a statement that
     // fails with a parser message about a stray token.
-    if let Some(bad) = a.partition_cols.iter().find(|c| !is_bare_word(c)) {
+    if let Some(bad) = spec.partition.columns.iter().find(|c| !is_bare_word(c)) {
         return Err(format!(
             "Can't partition by {bad:?}: COPY takes unquoted column names, so a partition \
              column has to be a single plain word"
         ));
     }
-    let part_clause = if a.partition_cols.is_empty() {
+    let part_clause = if spec.partition.is_flat() {
         String::new()
     } else {
-        format!(" PARTITIONED BY ({})", a.partition_cols.join(", "))
+        format!(" PARTITIONED BY ({})", spec.partition.columns.join(", "))
     };
-    // Format options (JSON/Arrow take none here; JSON always writes NDJSON).
-    let opts = match a.format.as_str() {
-        "csv" => {
-            let nv = match a.csv_null.as_str() {
-                "null" => "NULL",
-                "nan" => "NaN",
-                _ => "",
-            };
-            // Every value here lands inside a `'…'` literal. `nv` and the bool are ours;
-            // the delimiter is the user's, so it gets the same `''` doubling as the path
-            // below (a `'` delimiter would otherwise close the literal early).
-            let delim = a.csv_delimiter.to_string().replace('\'', "''");
-            format!(
-                " OPTIONS ('HAS_HEADER' '{}', 'DELIMITER' '{delim}', 'NULL_VALUE' '{}')",
-                a.csv_header, nv
-            )
-        }
-        "parquet" => format!(
-            " OPTIONS ('COMPRESSION' '{}')",
-            pq_codec(&a.pq_compression, a.pq_level)
-        ),
-        _ => String::new(),
-    };
+
+    let opts = format_options(&spec.format)?;
 
     // `keep_partition_by_columns` is a session config, not a COPY option — set it
     // explicitly per partitioned export (default off).
-    if !a.partition_cols.is_empty() {
+    if !spec.partition.is_flat() {
         if let Ok(df) = ctx
             .sql(&format!(
                 "SET datafusion.execution.keep_partition_by_columns = {}",
-                a.keep_partition
+                spec.partition.keep_columns
             ))
             .await
         {
@@ -109,12 +261,104 @@ pub async fn run_export(
         }
     }
 
-    let esc = a.path.replace('\'', "''");
+    let esc = quote_literal(&spec.path);
+    let stored = spec.format.stored_as();
     let stmt = format!("COPY ({select}) TO '{esc}' STORED AS {stored}{part_clause}{opts}");
 
     let df = ctx.sql(&stmt).await.map_err(|e| e.to_string())?;
     let batches = df.collect().await.map_err(|e| e.to_string())?;
-    Ok((a.path, copy_row_count(&batches)))
+    Ok((spec.path, copy_row_count(&batches)))
+}
+
+/// The `SELECT` the COPY wraps: the whole snapshot or one page window, in the grid's order.
+///
+/// The sort goes **before** the window, so "this page" means the page the user is looking
+/// at rather than an arbitrary slice re-ordered afterwards. `NULLS LAST` in both directions
+/// matches the grid's own ordering (Rz6).
+fn select_sql(snap: &str, spec: &ExportSpec) -> String {
+    let mut sql = format!("SELECT * FROM {snap}");
+    if let Some((name, asc)) = &spec.sort {
+        let dir = if *asc { "ASC" } else { "DESC" };
+        sql.push_str(&format!(
+            " ORDER BY \"{}\" {dir} NULLS LAST",
+            quote_ident(name)
+        ));
+    }
+    if let Scope::Page { page, page_size } = spec.scope {
+        let offset = page.saturating_sub(1) * page_size;
+        sql.push_str(&format!(" LIMIT {page_size} OFFSET {offset}"));
+    }
+    sql
+}
+
+/// The ` OPTIONS (…)` clause for a format, or an empty string for one with no options.
+///
+/// Keys are bare and uppercase: DataFusion's COPY planner lowercases them and applies the
+/// `format.` prefix itself, so these resolve onto `CsvOptions` / `JsonOptions` /
+/// `TableParquetOptions` field names.
+fn format_options(format: &Format) -> Result<String, String> {
+    let pairs: Vec<(&str, String)> = match format {
+        Format::Csv(csv) => {
+            let mut pairs = vec![
+                ("HAS_HEADER", csv.header.to_string()),
+                ("DELIMITER", ascii_byte("delimiter", csv.delimiter)?),
+                ("QUOTE", ascii_byte("quote character", csv.quote)?),
+                ("DOUBLE_QUOTE", csv.double_quote.to_string()),
+                ("NULL_VALUE", quote_literal(&csv.null_value)),
+                ("COMPRESSION", csv.compression.as_option().into()),
+            ];
+            if let Some(escape) = csv.escape {
+                pairs.push(("ESCAPE", ascii_byte("escape character", escape)?));
+            }
+            pairs
+        }
+        Format::Json(json) => vec![("COMPRESSION", json.compression.as_option().into())],
+        Format::Parquet(pq) => vec![
+            ("COMPRESSION", pq.compression.as_option()),
+            ("STATISTICS_ENABLED", pq.statistics.as_option().into()),
+            (
+                "MAX_ROW_GROUP_SIZE",
+                pq.max_row_group_size.max(1).to_string(),
+            ),
+            ("WRITER_VERSION", pq.writer_version.as_option().into()),
+            ("DICTIONARY_ENABLED", pq.dictionary.to_string()),
+        ],
+        Format::Arrow => vec![],
+    };
+    if pairs.is_empty() {
+        return Ok(String::new());
+    }
+    let body = pairs
+        .into_iter()
+        .map(|(key, value)| format!("'{key}' '{value}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!(" OPTIONS ({body})"))
+}
+
+/// A single-character CSV option as its **byte value**, which is how it must be sent.
+///
+/// DataFusion parses these `u8` fields by trying `str::parse::<u8>()` *first* and only then
+/// falling back to "the one ASCII character" — so the character `9` would arrive as byte 9,
+/// a tab. Sending the number always sidesteps that: every character has exactly one reading.
+fn ascii_byte(what: &str, c: char) -> Result<String, String> {
+    if !c.is_ascii() {
+        return Err(format!(
+            "The CSV {what} has to be a single ASCII character, not {c:?}"
+        ));
+    }
+    Ok((c as u32).to_string())
+}
+
+/// Escape a value for a single-quoted SQL literal. Every option value and the path land
+/// inside `'…'`, so an embedded quote would otherwise close the literal early.
+fn quote_literal(raw: &str) -> String {
+    raw.replace('\'', "''")
+}
+
+/// Escape a value for a double-quoted SQL identifier (the `ORDER BY` column).
+fn quote_ident(raw: &str) -> String {
+    raw.replace('"', "\"\"")
 }
 
 /// Whether `name` tokenises as a single **unquoted** identifier, asked of the very
@@ -126,18 +370,6 @@ fn is_bare_word(name: &str) -> bool {
     let mut rest = name.chars();
     matches!(rest.next(), Some(c) if d.is_identifier_start(c))
         && rest.all(|c| d.is_identifier_part(c))
-}
-
-/// Parquet compression codec string, with a level for the codecs that take one.
-fn pq_codec(codec: &str, level: u32) -> String {
-    match codec {
-        "snappy" => "snappy".into(),
-        "lz4" => "lz4".into(),
-        "none" | "uncompressed" => "uncompressed".into(),
-        "gzip" => format!("gzip({})", level.clamp(1, 9)),
-        "brotli" => format!("brotli({})", level.clamp(1, 11)),
-        _ => format!("zstd({})", level.clamp(1, 22)),
-    }
 }
 
 /// `COPY … TO` returns a single `UInt64` "count" column with the rows written.
@@ -156,4 +388,142 @@ fn copy_row_count(batches: &[RecordBatch]) -> usize {
         .filter(|a| !a.is_empty())
         .map(|a| a.value(0) as usize)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(format: Format) -> ExportSpec {
+        ExportSpec {
+            path: "/tmp/out.csv".into(),
+            scope: Scope::All,
+            sort: None,
+            format,
+            partition: Partition::default(),
+        }
+    }
+
+    fn csv() -> Csv {
+        Csv {
+            header: true,
+            delimiter: ',',
+            null_value: String::new(),
+            quote: '"',
+            escape: None,
+            double_quote: true,
+            compression: Compression::None,
+        }
+    }
+
+    #[test]
+    fn scope_all_reads_the_whole_snapshot_in_snapshot_order() {
+        assert_eq!(
+            select_sql("__snap_1", &spec(Format::Arrow)),
+            "SELECT * FROM __snap_1"
+        );
+    }
+
+    #[test]
+    fn a_page_window_is_taken_after_the_sort() {
+        let mut s = spec(Format::Arrow);
+        s.sort = Some(("amount".into(), false));
+        s.scope = Scope::Page {
+            page: 3,
+            page_size: 100,
+        };
+        assert_eq!(
+            select_sql("__snap_7", &s),
+            "SELECT * FROM __snap_7 ORDER BY \"amount\" DESC NULLS LAST LIMIT 100 OFFSET 200"
+        );
+    }
+
+    #[test]
+    fn a_quote_in_a_sorted_column_name_cant_break_out_of_the_identifier() {
+        let mut s = spec(Format::Arrow);
+        s.sort = Some((r#"we"ird"#.into(), true));
+        assert!(select_sql("__snap_1", &s).contains(r#"ORDER BY "we""ird" ASC"#));
+    }
+
+    #[test]
+    fn csv_single_char_options_are_sent_as_byte_values() {
+        let opts = format_options(&Format::Csv(csv())).expect("csv options");
+        // ',' is 44 and '"' is 34 — never the characters themselves, so a digit delimiter
+        // can't be read as a control byte.
+        assert!(opts.contains("'DELIMITER' '44'"), "{opts}");
+        assert!(opts.contains("'QUOTE' '34'"), "{opts}");
+        // No escape was chosen, so the key is absent rather than sent empty.
+        assert!(!opts.contains("ESCAPE"), "{opts}");
+    }
+
+    #[test]
+    fn a_tab_delimiter_survives_as_a_byte() {
+        let opts = format_options(&Format::Csv(Csv {
+            delimiter: '\t',
+            ..csv()
+        }))
+        .expect("csv options");
+        assert!(opts.contains("'DELIMITER' '9'"), "{opts}");
+    }
+
+    #[test]
+    fn a_non_ascii_delimiter_is_refused_in_our_own_words() {
+        let err = format_options(&Format::Csv(Csv {
+            delimiter: '£',
+            ..csv()
+        }))
+        .expect_err("non-ASCII delimiter");
+        assert!(err.contains("single ASCII character"), "{err}");
+    }
+
+    #[test]
+    fn a_quote_in_the_null_text_cant_close_the_literal() {
+        let opts = format_options(&Format::Csv(Csv {
+            null_value: "it's null".into(),
+            ..csv()
+        }))
+        .expect("csv options");
+        assert!(opts.contains("'NULL_VALUE' 'it''s null'"), "{opts}");
+    }
+
+    #[test]
+    fn a_parquet_level_rides_inside_the_codec_string() {
+        let opts = format_options(&Format::Parquet(Parquet {
+            compression: Codec::Zstd(9),
+            statistics: Statistics::Page,
+            max_row_group_size: 1_048_576,
+            writer_version: WriterVersion::V1,
+            dictionary: true,
+        }))
+        .expect("parquet options");
+        assert!(opts.contains("'COMPRESSION' 'zstd(9)'"), "{opts}");
+        assert!(opts.contains("'MAX_ROW_GROUP_SIZE' '1048576'"), "{opts}");
+        assert!(opts.contains("'WRITER_VERSION' '1.0'"), "{opts}");
+    }
+
+    #[test]
+    fn a_levelless_codec_carries_no_parens() {
+        assert_eq!(Codec::Snappy.as_option(), "snappy");
+        assert_eq!(Codec::Uncompressed.as_option(), "uncompressed");
+    }
+
+    #[test]
+    fn arrow_writes_no_options_clause_at_all() {
+        assert_eq!(format_options(&Format::Arrow).expect("arrow"), "");
+    }
+
+    #[test]
+    fn compression_names_the_suffix_it_adds_to_the_destination() {
+        assert_eq!(Compression::None.extension(), "");
+        assert_eq!(Compression::Gzip.extension(), ".gz");
+        assert_eq!(Compression::Zstd.extension(), ".zst");
+    }
+
+    #[test]
+    fn a_partition_column_that_isnt_one_bare_word_is_refused_before_planning() {
+        assert!(is_bare_word("year"));
+        assert!(is_bare_word("_2024"));
+        assert!(!is_bare_word("order date"));
+        assert!(!is_bare_word("2024"));
+    }
 }
