@@ -1162,13 +1162,13 @@
         "reference": "text_secondary"
       },
       "meta_color": {
-        "specific": "#a3a9b3"
+        "reference": "disabled"
       },
       "message_color": {
         "reference": "text_secondary"
       },
       "empty_color": {
-        "specific": "#5f6771"
+        "reference": "text_muted"
       }
     },
     "datagrid": {

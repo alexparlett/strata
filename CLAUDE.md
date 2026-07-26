@@ -321,12 +321,17 @@ DataFusion would surface the `__snap_*` result snapshots and hide defs whose reg
 which are precisely the rows the catalog exists to show. Catalog mutations call the engine and
 then `ProjectState`'s own methods on the matching `ProjChan`; nothing refetches.
 
-**P3-12 (Problems drawer)** is ✅ — and is the reference for reading a query's outcome from a
-second surface: it subscribes the **same** `Query` the results pane does (same capability, keys
-and `stale_time` — the whole of a cache entry's identity), so it attaches to that entry rather
-than mirroring the error onto a store. It lists the **active tab only**, because validation runs
-off the mounted `EditorTab` and an unvisited tab's empty `diagnostics` vec means "unchecked", not
-"clean".
+**P3-12 (Problems drawer)** is ✅, and carries the phase's third standing rule: **diagnostics are
+a reconciliation, not an event.** Every open tab's diagnostics are a pure function of two inputs —
+its buffer revision and the catalog epoch — and each tab stamps the pair its rows describe, so
+`SessionState::stale_tabs` is the whole work list and the window's **one** driver
+(`state::diagnostics`) drains it. Never add a second producer and never enumerate entry points: a
+tab restored at open, reopened, opened from a view or saved query, duplicated, edited, or left
+behind by a pass a tab switch cancelled are all the same thing — the stamp does not match. The
+catalog is a **gate** as well as an input (`Engine::register` deregisters before it re-infers, so
+nothing validates mid-scan and no false "not found" is ever produced). Problems is the
+**SQL-validation** surface across every tab; a run failure belongs to a run, not to the text, and
+stays the results pane's.
 
 **P3-08 (column inspector)** is ✅, and carries the phase's other standing rule: **only real
 facts.** Every number in the inspector was *read* from the source (footer statistics via
