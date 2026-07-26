@@ -97,6 +97,11 @@ pub struct Layout {
     pub inspector_w: f32,
     #[serde(default = "default_drawer_h")]
     pub drawer_h: f32,
+    /// The height the drawer's expand toggle will restore it to — and, by being `Some`, the
+    /// fact that it is currently expanded. `None` is the ordinary state, so the toggle needs
+    /// no separate flag to keep in step with the height.
+    #[serde(default)]
+    pub drawer_restore_h: Option<f32>,
 }
 
 fn default_sidebar_w() -> f32 {
@@ -108,6 +113,10 @@ fn default_inspector_w() -> f32 {
 fn default_drawer_h() -> f32 {
     240.0
 }
+/// The height the drawer's expand toggle raises it to (design `onToggleLogHeight`).
+pub fn expanded_drawer_h() -> f32 {
+    560.0
+}
 
 impl Default for Layout {
     fn default() -> Self {
@@ -118,6 +127,7 @@ impl Default for Layout {
             sidebar_w: default_sidebar_w(),
             inspector_w: default_inspector_w(),
             drawer_h: default_drawer_h(),
+            drawer_restore_h: None,
         }
     }
 }
