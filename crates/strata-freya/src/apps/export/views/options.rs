@@ -22,8 +22,8 @@
 use freya::prelude::*;
 
 use crate::apps::export::{
-    Choice, Control, Edit, ExportCtx, ExportThemePartial, ExportThemePreference, Group, Make,
-    TextField,
+    Choice, Control, Edit, ExportCtx, ExportTheme, ExportThemePartial, ExportThemePreference,
+    Group, Make, TextField,
 };
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
@@ -39,6 +39,8 @@ const CUSTOM_WIDTH: f32 = 62.;
 const SELECT_WIDTH: f32 = 180.;
 const SELECT_HEIGHT: f32 = 32.;
 const FIELD_HEIGHT: f32 = 30.;
+/// A field box's corner (canvas `--r-2`).
+const FIELD_RADIUS: f32 = 8.;
 
 /// Write one control's edit into the draft.
 ///
@@ -207,16 +209,12 @@ impl Component for ToggleControl {
 
 /// A free-text field (the delimiter, a quote character, the custom null text).
 ///
-/// **Left-aligned, including the narrow boxes the canvas centres.** `Input` lays its text out in
-/// a paragraph whose `min_width` comes from `context.parent`, inside a horizontal scroll view;
-/// in a box this narrow that resolves wider than the box itself, so `text_align(Center)` centres
-/// the run in a box you cannot see and it lands visibly right of centre. Left is what the
-/// control can actually honour. Centring these properly is a fix to `Input`'s paragraph sizing
-/// in the fork, not something to re-attempt here.
-///
-/// It keeps its own edit buffer rather than binding the draft directly: the draft holds the
-/// *resolved* intent and this holds what is being typed, so a half-typed `\t` isn't repeatedly
-/// re-resolved under the cursor.
+/// **The box is ours, not the `Input`'s.** `Input` draws its own background and border but sets
+/// no height — its box is whatever its `theme_layout` inner margin plus the text line box comes
+/// to, so a height set on any wrapper just centres a differently-sized box inside it. Since a
+/// field here has to stand exactly as tall as the control beside it, the wrapper carries the
+/// chrome at the height it is told and the `Input` goes fully transparent inside it. Same
+/// recipe as the results find popover and this window's own partition filter.
 #[derive(PartialEq)]
 struct FieldControl {
     field: TextField,
@@ -227,6 +225,7 @@ struct FieldControl {
 
 impl Component for FieldControl {
     fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
         let ctx = use_consume::<ExportCtx>();
         // `Input` writes its bound state directly (there is no on-change prop), so the buffer
         // is the input's and this effect carries it into the draft. No sync-back effect is
@@ -241,8 +240,8 @@ impl Component for FieldControl {
         let max_len = self.field.max_len;
         use_side_effect(move || {
             // The canvas's `maxlength`, enforced on the **box** and not just on the way out:
-            // truncating only the draft would show "ab" in a one-character field and quote with
-            // "a", which is a control disagreeing with the file it produces.
+            // truncating only the draft would show "ab" in a one-character field and quote
+            // with "a", which is a control disagreeing with the file it produces.
             let raw = text.read().clone();
             let capped: String = raw.chars().take(max_len).collect();
             if capped != raw {
@@ -256,19 +255,33 @@ impl Component for FieldControl {
             apply(ctx, make.edit(capped));
         });
 
-        rect()
-            .width(Size::px(self.width))
-            .height(Size::px(self.height))
-            .child(
-                InputTypography::mono(
-                    Input::new(text)
-                        .placeholder(self.field.placeholder)
-                        .width(Size::fill())
-                        .compact(),
-                )
-                .width(Size::fill()),
+        field_box(self.width, self.height, &theme).child(
+            InputTypography::mono(
+                Input::new(text)
+                    .placeholder(self.field.placeholder)
+                    .width(Size::fill())
+                    .compact()
+                    // Bare: the wrapper above wears the whole box.
+                    .background(Color::TRANSPARENT)
+                    .focus_background(Color::TRANSPARENT)
+                    .border_fill(Color::TRANSPARENT)
+                    .focus_border_fill(Color::TRANSPARENT),
             )
+            .width(Size::fill()),
+        )
     }
+}
+
+/// The bordered box every text/number field in this window wears — at exactly the height it is
+/// given, which is the whole point (see [`FieldControl`]).
+fn field_box(width: f32, height: f32, theme: &ExportTheme) -> Rect {
+    rect()
+        .width(Size::px(width))
+        .height(Size::px(height))
+        .corner_radius(FIELD_RADIUS)
+        .cross_align(Alignment::Center)
+        .background(theme.panel_background)
+        .border(Border::new().width(1.).fill(theme.control_border_fill))
 }
 
 /// A bounded number (the Parquet compression level).
@@ -282,6 +295,7 @@ struct NumControl {
 
 impl Component for NumControl {
     fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
         let ctx = use_consume::<ExportCtx>();
         let value = self.value;
         let text = use_state(move || value.to_string());
@@ -302,13 +316,18 @@ impl Component for NumControl {
             }
         });
 
-        rect()
-            .width(Size::px(NUM_WIDTH))
-            .height(Size::px(FIELD_HEIGHT))
-            .child(
-                InputTypography::mono(Input::new(text).width(Size::fill()).compact())
-                    .width(Size::fill()),
+        field_box(NUM_WIDTH, FIELD_HEIGHT, &theme).child(
+            InputTypography::mono(
+                Input::new(text)
+                    .width(Size::fill())
+                    .compact()
+                    .background(Color::TRANSPARENT)
+                    .focus_background(Color::TRANSPARENT)
+                    .border_fill(Color::TRANSPARENT)
+                    .focus_border_fill(Color::TRANSPARENT),
             )
+            .width(Size::fill()),
+        )
     }
 }
 
