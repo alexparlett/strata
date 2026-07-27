@@ -26,7 +26,11 @@ const PANE_MAX_HEIGHT: f32 = 176.;
 const PANE_HEADER_HEIGHT: f32 = 30.;
 /// The filter sits in that header strip, so it is built to clear it.
 const FILTER_HEIGHT: f32 = 24.;
-const ROW_HEIGHT: f32 = 32.;
+/// The two panes' rows are **not** the same height in the canvas: a chosen level carries an
+/// order badge and three buttons, so it is drawn two pixels taller. Named separately because a
+/// single `ROW_HEIGHT` is what let the pane's computed box disagree with its own content.
+const AVAILABLE_ROW_HEIGHT: f32 = 32.;
+const SELECTED_ROW_HEIGHT: f32 = 34.;
 
 #[derive(PartialEq)]
 pub struct Partition;
@@ -94,7 +98,7 @@ impl Component for Panes {
 }
 
 /// The pane frame both halves share — a bordered box with a header strip over a scroll body.
-fn pane(header: impl IntoElement, body: impl IntoElement, rows: usize) -> impl IntoElement {
+fn pane(header: impl IntoElement, body: impl IntoElement, content: f32) -> impl IntoElement {
     let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
     rect()
         .width(Size::fill())
@@ -124,7 +128,7 @@ fn pane(header: impl IntoElement, body: impl IntoElement, rows: usize) -> impl I
         .child(
             rect()
                 .width(Size::fill())
-                .height(Size::px(body_height(rows)))
+                .height(Size::px(body_height(content)))
                 .child(
                     ScrollView::new()
                         .height(Size::fill())
@@ -140,10 +144,14 @@ fn pane(header: impl IntoElement, body: impl IntoElement, rows: usize) -> impl I
         )
 }
 
-/// How tall a pane's list stands: its rows, floored so a short list doesn't leave a hole and
-/// capped so a wide schema scrolls instead of growing the window.
-fn body_height(rows: usize) -> f32 {
-    (rows as f32 * ROW_HEIGHT).clamp(PANE_MIN_HEIGHT, PANE_MAX_HEIGHT)
+/// How tall a pane's list stands: its own content, floored so a short list doesn't leave a hole
+/// and capped so a wide schema scrolls instead of growing the window.
+///
+/// Takes the **content height**, not a row count: the two panes' rows differ, and a helper that
+/// multiplied a count by one shared row height is exactly how the box came out shorter than
+/// what it holds.
+fn body_height(content: f32) -> f32 {
+    content.clamp(PANE_MIN_HEIGHT, PANE_MAX_HEIGHT)
 }
 
 /// The columns not yet chosen. Pressing one appends it as the next directory level.
@@ -219,7 +227,7 @@ impl Component for Available {
                 list = list.child(
                     rect()
                         .width(Size::fill())
-                        .height(Size::px(ROW_HEIGHT))
+                        .height(Size::px(AVAILABLE_ROW_HEIGHT))
                         .horizontal()
                         .cross_align(Alignment::Center)
                         .spacing(8.)
@@ -248,7 +256,7 @@ impl Component for Available {
             list.into_element()
         };
 
-        pane(header, body, row_count)
+        pane(header, body, row_count as f32 * AVAILABLE_ROW_HEIGHT)
     }
 }
 
@@ -295,7 +303,7 @@ impl Component for Selected {
             list.into_element()
         };
 
-        pane(header, body, chosen.len())
+        pane(header, body, chosen.len() as f32 * SELECTED_ROW_HEIGHT)
     }
 }
 
@@ -355,7 +363,7 @@ impl Component for SelectedRow {
 
         rect()
             .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT + 2.))
+            .height(Size::px(SELECTED_ROW_HEIGHT))
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
