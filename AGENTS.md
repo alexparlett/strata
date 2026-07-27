@@ -133,8 +133,22 @@ Things that must not regress. Each was fought for once already.
   `defs()` is a pure projection for saving. **Identity:** tables/views are keyed by **name** (their
   engine/SQL identity, one shared namespace, case-insensitive compare); saved queries by a stable
   **`Uuid`**. Renames route through the store (a view rename rewrites tab `Origin::View` keys).
-- **History is a satellite**, persisted append-only to `.strata/history.jsonl` — never a field on
-  `ProjectState`/`SessionState`.
+- **History is a satellite**, persisted to `.strata/history.jsonl` — never a field on
+  `ProjectState`/`SessionState`. It records **only successful data runs**, which is a claim the
+  surface has to keep: the History drawer shows no status mark, because the canvas's
+  ok/cancelled/failed dot would have exactly one value. Its **Clear** unwrites the file as well as
+  emptying the satellite (an emptied list that refills on the next open is a surface disagreeing
+  with its store), and keeps the `seen` dedup guard — that guard is about *runs*, and the pin
+  holding a cleared run is still mounted, so forgetting it would put the entry straight back.
+- **History is a list of queries, not of presses — and dedupe comes before the cap.** A re-run
+  moves its entry to the top with the newest figures instead of stacking a row, keyed by
+  `util::collapse_sql`, which is the *same* function that renders the drawer's preview (a key
+  looser than the preview merges rows a reader can tell apart; a tighter one lets two identical
+  rows sit in the list). The ordering is the load-bearing part: a query hammered 150 times must
+  occupy one slot of `max_history`, not all of them, so a keep-last-N over the raw log is wrong —
+  collapse, *then* cap. The persisted log follows the same rule without losing the cheap write: a
+  new query is one `O_APPEND` line, and only a run that *replaced* an entry rewrites the file
+  (`project::save_history`), because an append can add a line but not move one.
 - **A window's project subtree is keyed on the project folder; there is no reopen-in-place path.**
   `ProjectApp` is the *window* (theme, app-globals, close bridge, menubar, the `OpenCtx` open
   path); `ProjectRoot` is the *open project* (engine, stores, autosave, catalog, views) and its
@@ -260,6 +274,16 @@ Things that must not regress. Each was fought for once already.
   (`success` / `warning` / `error` / `info` — the status bar's state dot), because those must
   follow the app-wide ramp wherever they appear. Mixing the two sources in one component is how
   `colors.border` ends up beside a `border_fill` that already holds the same value.
+- **A shared theme's fields are named for the role they play, not for whoever needed one first,
+  and a component's own dress never becomes one.** The `drawer` theme dresses three bodies, so a
+  field called `stats_color` is one the other two can never use — it is `value_color`, "a row's
+  secondary fact", and History is merely the first row wanting all three text tones at once. The
+  same question kills a field outright when the colour belongs to a *component*: the line-count
+  pill's outline was briefly `badge_border_fill` on the drawer, but an outline is the badge's own
+  dress, so `Badge::outlined()` derives it from its foreground exactly as the tint derives from
+  `TINT_ALPHA` — and every surface that ever uses an outlined badge pays nothing. Before adding a
+  field, ask which of the surface's other users could name it too; if the answer is none, it is
+  either misnamed or it belongs to the component.
 - **Fonts are never hardcoded.** Text goes through the typography role components
   (src/components/typography.rs); `Input`s are wrapped in `InputTypography::body(..)`/`::mono(..)`;
   `CodeEditor` pulls from the theme's code scale. Mixed-style inline text (one sentence changing

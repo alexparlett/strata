@@ -1,5 +1,5 @@
-//! The bottom **drawer** — the diagnostics panel under the workbench: **Problems** (P3-12),
-//! Events (P3-13) and History (P3-14). Which one it shows is the **rail's bottom group**
+//! The bottom **drawer** — the panel under the workbench: **Problems** (P3-12),
+//! **Events** (P3-13) and **History** (P3-14). Which one it shows is the **rail's bottom group**
 //! (`Layout::drawer`), which is the design's tab switcher — the canvas's drawer-header tab pills
 //! were computed and never rendered, so there is no pill row here (P3-11).
 //!
@@ -14,24 +14,28 @@
 //! - **The Clear rule**: shown on Events / History, **never** on Problems, whose rows self-clear
 //!   when the SQL is fixed or the query re-runs — a Clear there would either lie or imply the
 //!   problems aren't real (DEV_TASKS U10). The rule is this shell's; the *action* belongs to the
-//!   tabs that keep a log. Events' is wired (P3-13); History's stays parked until P3-14 gives it a
-//!   truncate.
+//!   tabs that keep a log — the ephemeral event log (P3-13) and the persisted history satellite
+//!   (P3-14), which is why the two arms are different functions and not one.
 //!
 //! The frame the three bodies share — a scroll container and a centred empty state — is [`frame`].
 
 mod events;
 mod frame;
+mod history;
 mod problems;
 
 use freya::components::{define_theme, get_theme, Tooltip, TooltipContainer};
 use freya::prelude::*;
-use freya::radio::use_radio;
+use freya::radio::{use_radio, use_radio_station};
 use strata_model::DrawerTab;
 
 use self::events::Events;
+use self::history::History;
 use self::problems::Problems;
 use super::shell::set_drawer_panel_height;
-use crate::apps::project::state::{Chan, LogCtx, SessionState};
+use crate::apps::project::state::{
+    clear_history, Chan, HistoryCtx, LogCtx, ProjChan, ProjectState, SessionState,
+};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Caption, Control, Meta};
@@ -52,10 +56,28 @@ define_theme!(
         group_icon_color: Color,
         /// A group header's name — for Problems, the tab its rows belong to.
         group_color: Color,
-        /// The header's count, a group header's tally, and a row's `line L:C`.
+        /// The most recessive run on a row — the header's count, a group header's tally, a
+        /// `line L:C`, a timestamp, a pill's label. The footnote tone.
         meta_color: Color,
-        /// A row's message.
+        /// A row's **secondary fact**: figures that are the row's own data rather than its
+        /// prose. One step forward from [`meta_color`](Self::meta_color) and one back from
+        /// [`message_color`](Self::message_color) — a History row uses all three at once (a
+        /// query, what running it cost, and when), which is why the drawer needs a third text
+        /// tone at all.
+        value_color: Color,
+        /// A row's message — its prose, and the brightest run in a list.
         message_color: Color,
+        /// The surface a **pressable** row takes on hover.
+        ///
+        /// Not History's: Problems' rows are pressable too (they switch to the owning tab) and
+        /// have no hover feedback at all, which is a gap this names rather than creates.
+        ///
+        /// It is the app's `surface_hover`, not the canvas's `--c-surface2`: the canvas's value
+        /// is one step off *its* drawer surface, but ours is `surface_secondary`, which in
+        /// Daylight is pure white — leaving a ~2% step that reads as no hover at all. A History
+        /// card carries no pointer cursor and no tooltip, so the fill is its only affordance; it
+        /// has to be the slot the rail and the tab strip already hover with.
+        row_hover_fill: Color,
         /// The rule under an Events row — the recessive hairline *inside* a list, a step back
         /// from [`border_fill`](Self::border_fill), which separates the header from the body.
         divider_fill: Color,
@@ -105,8 +127,11 @@ impl Component for Drawer {
         // The body's tally. Each body resets it on unmount, so switching tabs can never leave the
         // previous one's number under the new one's title.
         let count: DrawerCount = use_state(|| 0usize);
-        // The window's event log — what **Clear** empties on the Events tab (below).
+        // The two logs **Clear** empties, one per tab (below), and the project whose
+        // `history.jsonl` the History one has to unwrite as well.
         let log = use_consume::<LogCtx>();
+        let history = use_consume::<HistoryCtx>();
+        let project = use_radio_station::<ProjectState, ProjChan>();
 
         let (title, body): (&str, Element) = match tab {
             DrawerTab::Problems => (
@@ -125,8 +150,14 @@ impl Component for Drawer {
                 }
                 .into_element(),
             ),
-            // History (P3-14) fills this same frame, and writes the same count.
-            DrawerTab::History => ("History", rect().expanded().into_element()),
+            DrawerTab::History => (
+                "History",
+                History {
+                    theme: theme.clone(),
+                    count,
+                }
+                .into_element(),
+            ),
         };
 
         let sizing = self.sizing;
@@ -153,22 +184,23 @@ impl Component for Drawer {
 
         let shown = *count.read();
         // Clear: the two log tabs only (never Problems — see the module doc). Events empties the
-        // event log; History has no truncate yet, so its button stays parked (P3-14) rather than
-        // promising something it can't do.
+        // window's ephemeral event log; History empties the satellite **and** removes
+        // `history.jsonl`, so the rows don't come straight back on the next open.
         //
-        // Enabled off the mounted body's **count** rather than a second read of the log: for
-        // Events the count *is* the log's length, so this way the number in the header and the
-        // button beside it can never disagree.
+        // Enabled off the mounted body's **count** rather than a second read of either log: for
+        // both tabs the count *is* the list's length, so the number in the header and the button
+        // beside it can never disagree.
         let clear = (tab != DrawerTab::Problems).then(|| {
             Button::new()
                 .flat()
-                .enabled(tab == DrawerTab::Events && shown > 0)
+                .enabled(shown > 0)
                 .height(Size::px(24.))
-                .maybe(tab == DrawerTab::Events, |button| {
-                    button.on_press(move |_| {
+                .on_press(move |_| match tab {
+                    DrawerTab::History => clear_history(history, project, log),
+                    _ => {
                         let mut log = log;
                         log.write().clear();
-                    })
+                    }
                 })
                 .child(Control::new("Clear"))
         });

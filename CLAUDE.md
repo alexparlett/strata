@@ -270,6 +270,13 @@ src/apps/project/                the project window (Valin-shaped)
       events.rs                  P3-13 — the window's event log, newest first: flat dot · message
                                  · time rows over the shared frame. A view over `state::log`, and
                                  the tab that owns the drawer's first working **Clear**
+      history.rs                 P3-14 — the project's past runs, newest first: pressable cards
+                                 (figures · line-count pill · age over a two-line SQL preview)
+                                 over the `state::history` satellite. Press loads into the active
+                                 tab, double-press loads and runs — both through the editor's own
+                                 `actions`, so a re-run is an ordinary press. Its **Clear**
+                                 unwrites `history.jsonl` as well as emptying the satellite. No
+                                 status dot: only successful data runs are ever recorded
     keeper.rs                    request keepers, mounted by ProjectRoot: one invisible
                                  query subscriber per open tab's current press, so a
                                  backgrounded run keeps its cache entry (lifetime =
@@ -380,6 +387,26 @@ unsubscribed, because clearing the trigger unmounts the keeper in the same pass)
 the store state-arch §8 only sketched — deleting the dead `strata-model::log` vocabulary — and
 wires the drawer's first working **Clear**. An entry carries a level, not an origin; see its task
 file.
+
+**P3-14 (History drawer)** is ✅, and completes the drawer. Query history is the *persisted* log
+next to P3-13's ephemeral one, so its **Clear** has to unwrite `.strata/history.jsonl`
+(`strata_core::project::clear_history`) and not just empty the satellite — while keeping the
+satellite's `seen` dedup guard, because the pin holding a cleared run is still mounted and would
+otherwise re-record it. The rows are *actionable*, which is the one thing that shapes the surface:
+a press loads into the active tab, a double-press loads and runs, both through the editor's own
+`actions::load_sql` / `actions::press_query`, so a re-run from the drawer is an ordinary press with
+its own nonce and cache entry. And there is deliberately **no status dot** — the satellite records
+only successful data runs, so the canvas's ok/cancelled/failed mark would have exactly one value
+(P3-08's "only real facts", applied to a glyph).
+
+History is a list of **queries, not presses**: a re-run moves its entry to the top with the newest
+figures, keyed by `util::collapse_sql` — the same function that renders the row's preview, so no
+two rows can read identically and none a reader can tell apart are merged. **Dedupe runs before
+the cap** at every layer, which is the point rather than a detail: one query pressed 150 times has
+to occupy one slot of `max_history`, not all of them. The log on disk holds to the same rule
+without giving up its cheap write — a new query is one `O_APPEND` line, and only a run that
+*replaced* an entry rewrites the file (`project::save_history`), because an append can add a line
+but not move one.
 
 **P3-08 (column inspector)** is ✅, and carries the phase's other standing rule: **only real
 facts.** Every number in the inspector was *read* from the source (footer statistics via

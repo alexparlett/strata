@@ -1167,8 +1167,14 @@
       "meta_color": {
         "reference": "disabled"
       },
+      "value_color": {
+        "reference": "text_placeholder"
+      },
       "message_color": {
         "reference": "text_secondary"
+      },
+      "row_hover_fill": {
+        "reference": "surface_hover"
       },
       "divider_fill": {
         "reference": "border_disabled"

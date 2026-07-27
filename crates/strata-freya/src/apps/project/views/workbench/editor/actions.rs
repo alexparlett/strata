@@ -58,6 +58,29 @@ pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: Quer
     );
 }
 
+/// Load `sql` into the tab's buffer, replacing what it held — the History drawer's click
+/// (P3-14), and the first half of its double-click, which then calls [`press_query`].
+///
+/// A plain `set_text`, so it is **undoable**: the buffer's own history is what makes replacing a
+/// tab's text a safe click rather than something that needs a confirm. Nothing else changes —
+/// the tab keeps its name, its origin and its save target, because a past run is a string, not
+/// an artifact to bind to.
+pub fn load_sql(mut session: Radio<SessionState, Chan>, id: TabId, sql: &str) {
+    // Read before writing (like `format`): re-loading the query already in the buffer must not
+    // take a write guard, whose drop would wake the editor and re-arm validation for nothing.
+    let changed = session
+        .read()
+        .tabs
+        .get(&id)
+        .is_some_and(|t| t.text() != sql);
+    if !changed {
+        return;
+    }
+    if let Some(t) = session.write_channel(Chan::Tab(id)).tabs.get_mut(&id) {
+        t.editor.set_text(sql);
+    }
+}
+
 /// Cancel the in-flight request — the toolbar's Run→Cancel flip, the Running body's control, and
 /// the Esc that body binds to the same handler (`results::running`'s `on_esc`) all land here:
 /// tag-guarded engine-side abort (S14 — a stale press can't kill a newer run) + drop *this tab's*

@@ -1702,7 +1702,13 @@
             "meta_color": {
               "$ref": "#/$defs/colorPref"
             },
+            "value_color": {
+              "$ref": "#/$defs/colorPref"
+            },
             "message_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "row_hover_fill": {
               "$ref": "#/$defs/colorPref"
             },
             "divider_fill": {

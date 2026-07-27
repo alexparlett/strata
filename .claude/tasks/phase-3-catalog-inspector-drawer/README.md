@@ -27,8 +27,10 @@ fills it with **every** open tab's live diagnostics, grouped by tab and pressabl
 rebuilt the producer behind it (one driver, a per-tab stamp, the catalog as a gate) plus the three
 pieces P3-11 deferred to its first consumer. It also gave the drawer its own component theme and
 the rail its error badge. **P3-13** ✅ fills the second body with the window's **event log** — and
-builds the store state-arch §8 only sketched, plus the drawer's first working **Clear**. History is
-still an empty frame.
+builds the store state-arch §8 only sketched, plus the drawer's first working **Clear**. **P3-14**
+✅ fills the third with **query history**: newest-first cards over the P4-14 satellite, a press to
+load into the active tab and a double-press to load and run, and the Clear that unwrites
+`history.jsonl` as well as emptying the satellite. The drawer is complete.
 
 > **Only real facts** (P3-08 · DEV_TASKS U9). Every number in the inspector was *read*, never
 > derived from the rows on screen — the Dioxus panel once computed them off the current page of the
@@ -92,8 +94,8 @@ still an empty frame.
 > **not** in Problems — they belong to a run, and the results pane renders them in full.
 >
 > P3-11's three handovers landed with it: the header count (now `error_count()`, shared with the
-> new rail badge so they cannot disagree), the Clear show/hide rule (parked on Events/History
-> until they have a log to clear), and the shared frame (`drawer/frame.rs`).
+> new rail badge so they cannot disagree), the Clear show/hide rule (its two actions landing with
+> P3-13 and P3-14), and the shared frame (`drawer/frame.rs`).
 >
 > **A log is the opposite of a reconciliation** (P3-13). Diagnostics are a pure function of the
 > buffer and the catalog, so one driver can re-derive them and no entry point needs enumerating.
@@ -139,7 +141,7 @@ per-`Kind` hues, one shared group).
 | P3-11 | Drawer scaffold (tabbed bottom panel) | ✅ | U10 | P3-01 |
 | P3-12 | Drawer — Problems tab + the diagnostics architecture | ✅ | U10 | P3-11/P2-18/P2-01 |
 | P3-13 | Drawer — Events tab | ✅ | U10 | P3-12 |
-| P3-14 | Drawer — History tab | ⬜ | U10 | P3-12 |
+| P3-14 | Drawer — History tab | ✅ | U10 | P3-12 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.
