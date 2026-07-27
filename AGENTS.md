@@ -142,6 +142,17 @@ Things that must not regress. Each was fought for once already.
   subscriber: lifetime is a held handle, never imperative bookkeeping. Never answer this with a
   warning or a staleness check instead — "your results moved" is a worse product than results
   that don't move, and a check races the very dispatch it is checking for.
+- **Silent corruption is refused, never warned about — and the refusal is checked against read
+  data, not declared metadata.** DataFusion 54 misfiles a NULL partition value into a neighbouring
+  value's directory, so a Hive-partitioned export whose key column has nulls writes rows under the
+  wrong key with nothing to tell the user. A banner is the wrong answer to that (it stands there on
+  every export, warning about what usually cannot happen, and is still only a suggestion when it
+  can) — `Engine::export` refuses and names the column. The *check* is the transferable part:
+  schema nullability answers nothing here (every column reports nullable), so
+  `partition_columns_have_no_nulls` reads the parquet footer's null count and proceeds **only on an
+  exact zero**, which disposes of the `Precision::Exact`/`Inexact` ambiguity in the same move. That
+  is why `snapshot_writer_props` sets `EnabledStatistics::Chunk` explicitly rather than trusting a
+  default — a gate is only as good as the footer it reads.
 - **History is a satellite**, persisted to `.strata/history.jsonl` — never a field on
   `ProjectState`/`SessionState`. It records **only successful data runs**, which is a claim the
   surface has to keep: the History drawer shows no status mark, because the canvas's

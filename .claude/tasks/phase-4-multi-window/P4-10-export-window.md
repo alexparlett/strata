@@ -1,7 +1,6 @@
 # P4-10 · Export window (rebuild to canvas)
 
-**Phase:** 4 · **Status:** 🟡 `[core ✓]` — engine facade + option surface done; the window remains ·
-**DEV_TASKS:** D6 / U13 · **Depends on:** P4-01, P2-01
+**Phase:** 4 · **Status:** ✅ · **DEV_TASKS:** D6 / U13 · **Depends on:** P4-01, P2-01
 
 ## Goal
 The export UI, rebuilt to the v19 canvas — keep the export backend (`COPY … TO`).
@@ -102,8 +101,12 @@ write funnel had not landed, so this calls `log_event` directly — noted in P4-
 with the open question of whether an export (which writes where the *user* chose, not into
 `.strata`) belongs in that funnel at all.
 
-## Still to decide
+## Settled during the build
 - The high-cardinality warning the canvas shows is deliberately absent (see below).
+- **The standing NULL banner was removed.** It went in beside the engine gate and was then cut:
+  the engine already refuses and names the offending column, so a permanent banner warned about
+  something that could not happen and said nothing the refusal doesn't say better, at the moment
+  it matters.
 
 The destination is the native `rfd` save-file / choose-folder dialog (partitioning writes a
 directory, so it asks for a folder). The canvas's hand-built file browser lives in
@@ -150,8 +153,32 @@ where that answer already is.
 - [x] Export writes the snapshot via `COPY … TO`, with the active sort and scope.
 - [x] Per-format options render data-driven (flat, no ADVANCED section); destination via the
       file browser; the window matches the canvas.
-- [ ] **Verified on screen.** Everything above is proved by tests and a clean build; nobody has
-      looked at the window yet. Run it, open a result, press Download.
+- [x] **Verified on screen**, over several passes against the canvas — see below.
+
+## What the on-screen passes cost (read this before building the next window)
+Everything above was proved by tests and a clean build long before the window looked right. The
+drift was all in the same category — *sizing and tone*, the two things a test cannot see — and
+three of the four fixes belonged somewhere other than this window:
+
+- **`Input` had no height.** The controls were slimmer than the canvas because the box sizes
+  itself to its text; several rounds went into sizing the wrong element (a wrapper, then a
+  hand-drawn box around a chrome-less `Input`) before the answer turned out to be a **fork**
+  addition, `Input::height` (AGENTS.md §6 — fix the limitation, don't draw around it).
+- **The segmented control needed a second register.** The canvas's form pill is not the toolbar
+  one: roomier segments, gaps instead of dividers, on the recessed surface. That is
+  `SegmentedToggle::form()`, a `Variant` on the shared component, not a local lookalike.
+- **The window/panel tones were inverted** — the export canvas is a *lighter* body with *darker*
+  recessed panels, and reading it the other way makes every panel float. Worth checking first on
+  any new window: the canvas shares Strata's `DARK` ramp, so a tone that needs inventing is a
+  misread.
+- **The transfer panes are fixed height with scroll views**, not sized from their row counts. A
+  content-derived height was my own invention and produced three successive bugs (viewport vs
+  box mismatch, a row-height constant that disagreed with the draw site, then two panes of
+  different heights) before it was replaced by one constant.
+
+And one Freya rule came out of it, now in AGENTS.md §3: **a border is painted, never laid out**,
+so a bordered box whose child carries its own background needs padding equal to the stroke or
+the child erases the border behind it.
 
 ## Freya / references
 - Design: `Export.dc.html` (markup) + `exportGroups()`/`exportVM()` in `Strata.dc.html` (data).
