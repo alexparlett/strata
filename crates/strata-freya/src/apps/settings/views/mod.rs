@@ -4,10 +4,13 @@
 //! All four are mounted by [`SettingsChrome`], the router layout — so navigating a category
 //! remounts nothing but the pane's content.
 //!
-//! A category page is a [`Pane`] wrapping a [`SettingList`](field::SettingList) of
-//! [`Setting`](field::Setting) rows — the shell in [`field`], so the pages carry only their own
+//! A category page is a [`Pane`] wrapping a [`FormList::divided`] of [`Setting`] rows — the
+//! shared form vocabulary in [`crate::components::form`], so the pages carry only their own
 //! settings. [`ThemePane`] (P4-04) and [`DataDisplayPane`] (P4-05) are built; System, Engine
 //! and Keymap are placeholders until P4-06…P4-08.
+//!
+//! [`FormList::divided`]: crate::components::form::FormList::divided
+//! [`Setting`]: crate::components::form::Setting
 
 mod chrome;
 mod data_display;
