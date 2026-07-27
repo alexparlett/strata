@@ -183,17 +183,29 @@ impl Component for Row {
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
             .on_press(move |e: Event<PressEventData>| {
+                // No button check here, deliberately: `on_press` only ever constructs a
+                // `PressEventData::Mouse` for the **left** button (fork
+                // `elements/extensions.rs` — its `try_map` drops every other, and its doc says
+                // "MouseUp event (Left button)"). A `m.button != Left` early-return would be
+                // unreachable, and unreachable defence reads as a real hazard to the next
+                // person. Right-click reaching this row at all is pinned by a test instead.
+                let double = match e.data() {
+                    PressEventData::Mouse(m) => {
+                        EventsCombos::pressed(m.global_location).is_double()
+                    }
+                    // A keyboard activation (Space/Enter on a focused row) carries no location
+                    // and so no combo: a plain load.
+                    _ => false,
+                };
                 let Some(id) = session.read().active else {
                     return;
                 };
                 actions::load_sql(session, id, &sql);
-                if let PressEventData::Mouse(m) = e.data() {
-                    if EventsCombos::pressed(m.global_location).is_double() {
-                        // The same funnel the toolbar's Run press uses — it reads the tab's
-                        // text back out of the buffer we just wrote, rather than carrying the
-                        // SQL a second time.
-                        actions::press_query(session, id, QueryMode::Run);
-                    }
+                if double {
+                    // The same funnel the toolbar's Run press uses — it reads the tab's text
+                    // back out of the buffer we just wrote, rather than carrying the SQL a
+                    // second time.
+                    actions::press_query(session, id, QueryMode::Run);
                 }
             })
             .child(
@@ -239,6 +251,7 @@ impl Component for Row {
 mod tests {
     use freya::components::get_theme;
     use freya::radio::RadioStation;
+    use freya_testing::prelude::{MouseEventName, PlatformEvent};
     use freya_testing::TestingRunner;
     use std::path::Path as FsPath;
     use strata_core::theme::load;
@@ -324,6 +337,30 @@ mod tests {
         );
         runner.move_cursor(point);
         runner.click_cursor(point);
+        settle(runner);
+    }
+
+    /// Right-click the centre of the first text run equal to `text` — a full press, both
+    /// halves, because it is the *up* that Freya turns into a `PointerPress`.
+    fn right_click_text(runner: &mut TestingRunner, text: &str) {
+        let area = text_area(runner, text);
+        let point = (
+            (area.min_x() + area.width() / 2.) as f64,
+            (area.min_y() + area.height() / 2.) as f64,
+        );
+        runner.move_cursor(point);
+        // `click_cursor`'s exact shape, right button instead of left — including the
+        // `sync_and_update` *between* the two events. Without that pass the down never
+        // resolves against the up and no press is emitted at all, which makes the whole test
+        // pass for the wrong reason.
+        for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+            runner.send_event(PlatformEvent::Mouse {
+                name,
+                cursor: point.into(),
+                button: Some(MouseButton::Right),
+            });
+            runner.sync_and_update();
+        }
         settle(runner);
     }
 
@@ -427,6 +464,40 @@ mod tests {
         assert_eq!(session.peek().tabs.get(&id).unwrap().text(), MULTI);
         // A press alone never runs it — that is the double-press.
         assert!(session.peek().request(id).is_none());
+    }
+
+    /// **A right-click does nothing at all** — the row loads on a *left* press only.
+    ///
+    /// Pinning a guarantee we rely on but do not implement: `on_press` filters to the left
+    /// button inside Freya itself, so this row needs no check of its own. That is worth a test
+    /// precisely because it is invisible here — we vendor the fork and do change it, and a
+    /// widening of `on_press` would otherwise turn a stray right-click into a silent overwrite
+    /// of the active tab's buffer (and, twice, a run, since `EventsCombos` keys on location and
+    /// timing rather than on the button).
+    #[test]
+    fn right_clicking_a_row_neither_loads_nor_runs() {
+        let (mut runner, (mut history, _, session)) = runner();
+        let mut store = session;
+        let id = store.write_channel(Chan::Tabs).open_blank();
+        // Something in the buffer worth not losing.
+        if let Some(t) = store.write_channel(Chan::Tab(id)).tabs.get_mut(&id) {
+            t.editor.set_text("SELECT keep_me");
+        }
+        history.write().entries.push_front(entry(ONE_LINER, 41, 3));
+        settle(&mut runner);
+
+        right_click_text(&mut runner, &collapse_sql(ONE_LINER));
+        right_click_text(&mut runner, &collapse_sql(ONE_LINER));
+
+        assert_eq!(
+            session.peek().tabs.get(&id).unwrap().text(),
+            "SELECT keep_me",
+            "a right-click must not touch the buffer"
+        );
+        assert!(
+            session.peek().request(id).is_none(),
+            "and a right double-click must not run anything"
+        );
     }
 
     /// A double-press loads it **and** runs it, through the same trigger the toolbar sets.
