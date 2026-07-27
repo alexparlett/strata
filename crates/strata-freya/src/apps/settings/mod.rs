@@ -27,12 +27,16 @@
 mod model;
 mod views;
 
+use std::collections::BTreeMap;
+
 use freya::prelude::*;
 use freya::router::*;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use strata_core::config::{Command, Settings};
 
-use crate::apps::settings::views::{DataDisplayPane, Pane, SettingsChrome, ThemePane};
+use crate::apps::settings::views::{
+    DataDisplayPane, EnginePane, Pane, PropRows, SettingsChrome, ThemePane,
+};
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
 use crate::platform::{self, WindowKind};
@@ -86,6 +90,14 @@ define_theme!(
         /// derived from these at `Badge`'s tint alpha, so a source is one token, not two.
         badge_builtin_color: Color,
         badge_user_color: Color,
+        /// The Engine pane's properties grid (P4-07), whose surrounding dress — surface, border,
+        /// rule, radius — is Freya's own `table` component theme. These three are the row states
+        /// a table cannot have an opinion about, because *which* row is selected or striped is
+        /// the caller's answer: the header strip's raised fill, the selected row's accent tint,
+        /// and the alternating wash.
+        table_head_background: Color,
+        table_selection_background: Color,
+        table_zebra_background: Color,
     }
 );
 
@@ -123,6 +135,13 @@ pub struct SettingsCtx {
     /// The baseline for both questions this window asks: what the user has changed
     /// ([`dirty`](Self::dirty)) and what to commit ([`apply`](Self::apply)).
     seed: State<Settings>,
+    /// The Engine pane's rows (P4-07). The one piece of editing state that is **not** a field of
+    /// the draft, because `Settings::engine` is a map and a map cannot hold the row you have not
+    /// named yet or the duplicate you are halfway through fixing. It lives on the window rather
+    /// than in the pane so that navigating to another category and back does not throw away a
+    /// half-finished edit — and so the footer can ask what is blocking Apply without the pane
+    /// being mounted to answer.
+    pub engine: State<PropRows>,
     /// The live theme preview the draft's theme half is mirrored into.
     preview: ThemePreview,
     /// The app-global config: Apply's target.
@@ -133,10 +152,31 @@ impl SettingsCtx {
     fn new(config: ConfigStation, preview: ThemePreview) -> Self {
         let settings = config.peek().settings.clone();
         Self {
+            engine: State::create(PropRows::from_map(&settings.engine)),
             draft: State::create(settings.clone()),
             seed: State::create(settings),
             preview,
             config,
+        }
+    }
+
+    /// The engine overrides the window opened on — what Revert restores the grid to.
+    pub fn seed_engine(&self) -> BTreeMap<String, String> {
+        self.seed.peek().engine.clone()
+    }
+
+    /// What is stopping Apply, if anything — a sentence for the footer, and the reason the button
+    /// is disabled while the draft *is* dirty.
+    ///
+    /// Asked of the context rather than of a pane, because the footer is mounted for every
+    /// category and the pane that can answer is mounted for one. Today only the Engine pane can
+    /// block; a second surface that can would add a branch here rather than a second gate.
+    pub fn blocker(&self) -> Option<String> {
+        let faults = self.engine.read().errors().len();
+        match faults {
+            0 => None,
+            1 => Some("1 engine property is invalid".to_string()),
+            n => Some(format!("{n} engine properties are invalid")),
         }
     }
 
@@ -340,5 +380,4 @@ macro_rules! panes {
 panes! {
     SystemPane => "P4-06", "System preferences",
     KeymapPane => "P4-08", "Keyboard shortcuts",
-    EnginePane => "P4-07", "Engine properties",
 }

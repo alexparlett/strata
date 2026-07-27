@@ -1080,6 +1080,15 @@
             },
             "badge_user_color": {
               "$ref": "#/$defs/colorPref"
+            },
+            "table_head_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "table_selection_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "table_zebra_background": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },

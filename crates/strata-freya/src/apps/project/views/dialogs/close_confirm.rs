@@ -12,7 +12,7 @@ use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
 
 use crate::apps::project::close::CloseTarget;
-use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{Chan, EngineRestart, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
@@ -42,6 +42,9 @@ impl Component for CloseConfirm {
         // The window's open path, for the re-root variant's answer — the same handle every
         // other open surface uses, so a confirmed re-root goes through one mechanism.
         let open = use_consume::<OpenCtx>();
+        // The window's engine generation, for the restart variant's answer — bumping it is the
+        // rebuild, exactly as setting the root is the re-root.
+        let restart = use_consume::<EngineRestart>();
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let config = use_config_station();
@@ -93,6 +96,12 @@ impl Component for CloseConfirm {
                         confirm.set(None);
                         open.reroot_confirmed(root);
                     }
+                    // And the same again: the bump unmounts this subtree, so the slot is
+                    // cleared before it goes.
+                    Some(CloseTarget::Restart) => {
+                        confirm.set(None);
+                        restart.restart();
+                    }
                     None => {}
                 }
             }
@@ -141,6 +150,15 @@ impl Component for CloseConfirm {
                 "Stop & open",
                 IconName::Stop,
             ),
+            CloseTarget::Restart => (
+                "Confirm restart",
+                "These properties change the engine runtime, which is fixed when the engine \
+                 starts. Restarting stops any running query and registers your tables and views \
+                 again.",
+                "Not now",
+                "Restart engine",
+                IconName::Reload,
+            ),
         };
         // The subject line: what is being closed — except for the re-root, where naming the
         // project being *opened* is what identifies the action the user just took.
@@ -156,6 +174,8 @@ impl Component for CloseConfirm {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| root.display().to_string()),
+            // The engine belongs to the project, so naming it is what says *whose* engine.
+            CloseTarget::Restart => project.read().name.clone(),
         };
 
         let c = theme.read().colors().clone();

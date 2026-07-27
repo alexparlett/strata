@@ -107,7 +107,7 @@ mod tests {
     /// reports nothing at all, so every number here was computed.
     #[test]
     fn a_scan_settles_the_facts_the_source_never_reported() {
-        let engine = EngineCtx::new();
+        let engine = EngineCtx::default();
         block_on(engine.register(TableSpec {
             name: "regions".into(),
             paths: vec![format!(

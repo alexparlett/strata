@@ -14,6 +14,7 @@
 
 mod chrome;
 mod data_display;
+mod engine;
 mod footer;
 mod nav;
 mod pane;
@@ -22,5 +23,6 @@ mod title_bar;
 
 pub use chrome::SettingsChrome;
 pub use data_display::DataDisplayPane;
+pub use engine::{EnginePane, PropRows};
 pub use pane::Pane;
 pub use theme::ThemePane;

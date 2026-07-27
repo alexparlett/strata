@@ -62,7 +62,8 @@
     "text_muted": "#909aa9",
     "transparent": "rgba(0,0,0,0)",
     "warning_soft": "rgba(255,166,87,.14)",
-    "warning_soft_border": "rgba(255,166,87,.30)"
+    "warning_soft_border": "rgba(255,166,87,.30)",
+    "surface_zebra": "rgba(255,255,255,.025)"
   },
   "components": {
     "type_palette": {
@@ -752,14 +753,17 @@
       "row_background": {
         "reference": "transparent"
       },
-      "cell_hover_background": {
-        "reference": "surface_row_hover"
-      },
       "divider_fill": {
         "specific": "#23272f"
       },
       "color": {
         "reference": "text_secondary"
+      },
+      "hover_row_background": {
+        "reference": "surface_row_hover"
+      },
+      "corner_radius": {
+        "specific": 6.0
       }
     },
     "tab_bar": {
@@ -1223,7 +1227,7 @@
         "reference": "transparent"
       },
       "zebra_row_background": {
-        "specific": "rgba(255,255,255,.025)"
+        "reference": "surface_zebra"
       },
       "cell_hover_background": {
         "reference": "surface_row_hover"
@@ -1390,6 +1394,15 @@
       },
       "badge_user_color": {
         "reference": "accent_orchid"
+      },
+      "table_head_background": {
+        "reference": "surface_tertiary"
+      },
+      "table_selection_background": {
+        "reference": "accent_selection"
+      },
+      "table_zebra_background": {
+        "reference": "surface_zebra"
       }
     },
     "switch_layout": {

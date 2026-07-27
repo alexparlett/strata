@@ -186,12 +186,36 @@ Things that must not regress. Each was fought for once already.
   and a project another window already has is focused — two windows on one project would both
   autosave over its `session.json`.
 - **Every path that destroys a window's work asks on the same terms.** The T2 confirm is not the
-  close button's — it is the gate for *any* action that aborts running queries, and re-rooting
-  (`OpenPref::This`) is one, since the remount drops the engine. Adding such an action means
-  adding a `CloseTarget` variant and routing through the one dialog, never a second confirm and
-  never a silent abort. The predicate is always the engine's own answer (`guard.running` /
+  close button's — it is the gate for *any* action that aborts running queries. Re-rooting
+  (`OpenPref::This`) is one, since the remount drops the engine; so is an **engine restart**
+  (`CloseTarget::Restart`, P4-07), for the identical reason. Adding such an action means adding a
+  `CloseTarget` variant and routing through the one dialog, never a second confirm and never a
+  silent abort. The predicate is always the engine's own answer (`guard.running` /
   `Engine::is_running`) plus `confirm_close_running` — never derived from mounted UI, which goes
   false the moment the user switches tabs.
+- **An engine's config is a launch value; a live change is `set_config`, and a runtime key is a
+  restart — which is the remount, not a second path.** `Engine::new(overrides)` is the *only* place
+  a `RuntimeEnv` is built, so an engine is only ever born with a full set;
+  `EngineCtx::new(overrides)` takes the app's, and `use_engine_config` keeps the rest in step off
+  `ConfigChan::Settings`. Three rules that each cost a bug to find. A **removed** key is set back to
+  its `ENGINE_KEYS` default rather than skipped — leaving the engine on the value the user just
+  deleted is the one outcome nobody asked for, and it is expressible precisely because the keys
+  `ConfigOptions` accepts are the ones the catalogue names a default for. `restart_owed` is measured
+  against `built_runtime` (what the context was *built* with), never against the previous map — a
+  user who declines the restart keeps the new values, so map-to-map would report "nothing changed"
+  and never offer it again. And the restart itself is a bump of `ProjectRoot`'s diff key
+  (`EngineRestart`, owned by the *window* so it survives the remount it causes), because the
+  re-root mechanism already drops the engine and re-registers the project through the launch hooks
+  — a `restart()` that rebuilt a live store in place would be the second way to configure an engine
+  that the rule above exists to prevent.
+- **A free-form list setting is edited as rows and committed as a map.** `Settings::engine` is a
+  `BTreeMap`, which cannot hold the row you have not named yet or the duplicate you are halfway
+  through fixing — so the Engine pane's model is an ordered list of rows under ids minted by a
+  counter (never the name: the name is the thing being retyped), projected back into the draft on
+  every edit. The window's one commit path is untouched. The list lives on `SettingsCtx`, not the
+  pane, for two reasons that generalise: navigating away and back must not discard a half-finished
+  edit, and the footer has to answer "what is blocking Apply?" (`blocker()`) without the pane being
+  mounted to answer it — a button disabled for a reason the user cannot see reads as broken.
 - **Managed DDL policy.** The editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` only. Views are
   Save's artifact: ⌘S wraps the buffer's plain query in `CREATE OR REPLACE VIEW`
   (`Engine::create_view`); typed DDL is blocked with validation pointing at the owning surface
@@ -283,7 +307,14 @@ Things that must not regress. Each was fought for once already.
   `data-hv` vocabulary maps 1:1 onto existing component themes; duplicating it drifts. Icon-button
   clusters are **28×28**. A missing component *state* (e.g. disabled) belongs on the component's
   own theme **in the fork** (`ButtonColors` grew `disabled_*` for exactly this) — never as a token
-  on the consuming surface's theme. And don't restate at a call site what a variant already
+  on the consuming surface's theme. The same answer scales to a whole component: the Engine pane's
+  properties grid is Freya's `Table`, and the four things it could not do turned out to be fork
+  gaps rather than design limits (`TableRow` had a `pub theme` field with no builder, so a row
+  could not carry a selection fill or decline the hover; only `TableCell` had `on_press`;
+  `TableCell` hardcoded `main_align(End)`; `Table`'s rect had no flex content, so a stated height
+  could not reach a scrolling body). Four small upstream-shaped additions beat a hand-rolled grid —
+  but the test is whether the gap is in the *component*: what a table has no opinion about (which
+  row is selected, what goes between two rows) stays composed in the app. And don't restate at a call site what a variant already
   resolves: `Button::new().filled()` *is* accent-over-inverse-text, so a `theme_colors` override
   naming those same two slots is a second copy of them. Override only for a genuinely different
   tone (the destructive action reading `cancel_button`).

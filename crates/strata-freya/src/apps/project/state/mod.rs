@@ -6,6 +6,7 @@
 mod catalog;
 mod channel;
 mod diagnostics;
+mod engine_config;
 mod history;
 mod hooks;
 mod log;
@@ -23,6 +24,7 @@ pub use catalog::{
 pub use catalog::{CatalogState, ScanRequest, ScanScope};
 pub use channel::Chan;
 pub use diagnostics::use_diagnostics;
+pub use engine_config::{use_engine_config, use_engine_restart, EngineRestart};
 /// Only tests name the satellite itself: they stand its context signal up by hand, where the
 /// window goes through `use_init_history`.
 #[cfg(test)]
