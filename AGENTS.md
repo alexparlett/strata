@@ -331,6 +331,20 @@ Things that must not regress. Each was fought for once already.
   forever and paints a stale hover the moment it is enabled again. Reach for it only for a
   genuinely pass-through overlay, which is the fork's own only use of it (tooltip, drag ghost,
   docking). Clearing the stuck flag in an effect afterwards is treating the symptom.
+- **A field backing a draft publishes on every keystroke, not on submit.** Freya's `Input` has no
+  blur prop and only fires `on_submit` on Enter, so the tempting shape is "parse and publish when
+  the field is left". It loses the value: the thing that commits a draft is a `Button`, and
+  `Button` calls `a11y_id.request_focus()` and its `on_press` handler *in the same breath* — the
+  focus-loss effect hasn't run when Apply reads the draft. Publish each accepted keystroke
+  (clamped) from `on_validate`, which is the fork's own idiom for per-change derived state
+  (`examples/component_input_validation.rs`) and is re-read from the props each render, so it can
+  never capture a stale handler the way a `use_side_effect` closure would (`use_hook` builds that
+  one *once*; a plainly captured `EventHandler` — an `Rc<RefCell<dyn FnMut>>` snapshot — freezes
+  at the first render, and reactive values need `use_reactive`). **Losing focus is instead when
+  the *text* is normalized**: re-echo what the setting holds, so an emptied or out-of-range field
+  snaps back rather than disagreeing with the value it published. Watching for that means owning
+  the `AccessibilityId` yourself and calling `use_focus(id)` beside the `Input`
+  (`apps/settings/views/field.rs`).
 - **A built-in control's press reaches its ancestors, so never wrap one in a pressable parent.**
   `Switch`'s `on_press` does not `stop_propagation`, so a "click the whole row to toggle" ancestor
   takes the same click and toggles **twice** — back to where it started, which reads as a dead

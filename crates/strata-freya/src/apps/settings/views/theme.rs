@@ -16,21 +16,15 @@
 use freya::prelude::*;
 use strata_core::theme::{Source, StrataTheme};
 
+use crate::apps::settings::views::field::{edit_draft, Setting, SettingList};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{Body, Caption, Strong};
+use crate::components::typography::Body;
 use crate::state::ThemeSel;
 use crate::theme::{pc, ThemesCtx};
-
-/// Canvas spacing (`--sp-4` / `--sp-6`): the gap between settings, and between a setting's
-/// label block and its control.
-const SETTING_GAP: f32 = 24.;
-const LABEL_GAP: f32 = 12.;
-/// The gap under "Sync with OS"'s title, before its one-line description (`--sp-1`).
-const HINT_GAP: f32 = 2.;
 
 /// Cards per row (canvas `grid-template-columns: 1fr 1fr`), and the gutter between them.
 const CARDS_PER_ROW: usize = 2;
@@ -46,11 +40,6 @@ pub struct ThemePane;
 
 impl Component for ThemePane {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
         let themes = use_consume::<ThemesCtx>();
         let ctx = use_consume::<SettingsCtx>();
         let preferred = use_hook(Platform::get).preferred_theme;
@@ -69,90 +58,34 @@ impl Component for ThemePane {
         let os_dark = sync_os && *preferred.read() == PreferredTheme::Dark;
         let selected = themes.get_or_default(&sel.effective(os_dark)).id.clone();
 
-        let body = rect()
-            .width(Size::fill())
-            .vertical()
-            .child(SyncWithOs { sync_os })
-            .child(rect().height(Size::px(SETTING_GAP)))
-            .child(Divider::horizontal().color(theme.border_fill))
-            .child(rect().height(Size::px(SETTING_GAP)))
-            .child(Strong::new("Theme"))
-            .child(rect().height(Size::px(LABEL_GAP)))
-            // Why the grid is inert rather than absent: it is still the answer to "which theme
-            // am I using?", which Sync-with-OS doesn't tell you.
-            .maybe(sync_os, |el| {
-                el.child(
-                    Caption::new(
-                        "Following your system appearance. \
-                         Turn off Sync with OS to choose a theme.",
-                    )
-                    .color(theme.hint_color)
-                    .width(Size::fill()),
-                )
-                .child(rect().height(Size::px(LABEL_GAP)))
-            })
-            .child(ThemeGrid {
+        // Why the grid is inert rather than absent: it is still the answer to "which theme am
+        // I using?", which Sync-with-OS doesn't tell you — so while syncing it keeps its place
+        // and gains the line saying whose choice it now is.
+        let mut grid = Setting::stacked(
+            "Theme",
+            ThemeGrid {
                 themes,
                 selected,
                 inert: sync_os,
-            });
+            },
+        );
+        if sync_os {
+            grid = grid.hint(
+                "Following your system appearance. \
+                 Turn off Sync with OS to choose a theme.",
+            );
+        }
+
+        let body = SettingList::new()
+            .child(
+                Setting::switch("Sync with OS", sync_os, move |_| {
+                    edit_draft(ctx, |s| s.sync_os = !s.sync_os)
+                })
+                .hint("Matches your system light/dark appearance automatically."),
+            )
+            .child(grid);
 
         Pane::new(body)
-    }
-}
-
-/// The **Sync with OS** setting: its label block, and the switch that owns `sync_os`.
-///
-/// The label block is pressable so the whole row acts as one control, but it is a *sibling* of
-/// the switch, never its ancestor: `Switch`'s own `on_press` does not stop propagation, so a
-/// pressable ancestor would take the same click and toggle twice.
-#[derive(PartialEq)]
-struct SyncWithOs {
-    sync_os: bool,
-}
-
-impl Component for SyncWithOs {
-    fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
-        let ctx = use_consume::<SettingsCtx>();
-        // `State` is `Copy`, so a local `mut` binding is how a handler gets a write guard
-        // out of the shared context (the same shape `SettingsCtx::discard` uses).
-        let toggle = move || {
-            let mut draft = ctx.draft;
-            let mut draft = draft.write();
-            draft.sync_os = !draft.sync_os;
-        };
-
-        rect()
-            .width(Size::fill())
-            .horizontal()
-            // `Content::Flex` is what makes the label block's `flex(1.)` divide the row rather
-            // than take its natural width — without it the switch is pushed off the pane.
-            .content(Content::Flex)
-            .cross_align(Alignment::Center)
-            .spacing(LABEL_GAP)
-            .child(
-                rect()
-                    .width(Size::flex(1.))
-                    .vertical()
-                    .on_press(move |_: Event<PressEventData>| toggle())
-                    .child(Strong::new("Sync with OS"))
-                    .child(rect().height(Size::px(HINT_GAP)))
-                    .child(
-                        Caption::new("Matches your system light/dark appearance automatically.")
-                            .color(theme.hint_color)
-                            .width(Size::fill()),
-                    ),
-            )
-            .child(
-                Switch::new()
-                    .toggled(self.sync_os)
-                    .on_toggle(move |_| toggle()),
-            )
     }
 }
 

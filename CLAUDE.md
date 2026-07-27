@@ -183,18 +183,30 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
   mod.rs                         root + window config + the `settings` component theme, the
                                  **freya-router** `Route` per category, `SettingsCtx` (the draft ·
                                  its **seed** · Apply · the live-theme mirror), and the category
-                                 panes still awaiting their task (P4-05…P4-08). Apply commits a
+                                 panes still awaiting their task (P4-06…P4-08). Apply commits a
                                  per-field diff of draft-vs-seed (`Settings::merge_onto`), so a
                                  setting another window wrote meanwhile survives it; `dirty()` is
                                  the same comparison, which is why it reads no config state
   model.rs                       the nav tree: CATEGORIES + their groups + breadcrumbs
                                  (unit-tested — one category per route, groups contiguous)
   views/                         chrome (the router layout) · title_bar · nav · pane · footer
-    theme.rs                     P4-04 — the Appearance pane: Sync-with-OS (a `Switch`, sibling
-                                 to the pressable label, never wrapped by it) + the theme grid.
-                                 Each card's thumbnail is painted from **that** theme's own sheet
-                                 slots, so a user theme previews with nothing authored per theme;
-                                 the tick follows `ThemeSel::effective`, not the stored id
+    field.rs                     P4-05 — what **every** pane is made of: `SettingList` (the
+                                 divider-separated list, so no pane spells the rhythm out) ·
+                                 `Setting` (title → hint → control, uniform even where the canvas
+                                 isn't; a switch is trailing with the label block its *sibling*) ·
+                                 `NumberField` · `edit_draft`
+    theme.rs                     P4-04 — the Appearance pane: Sync-with-OS + the theme grid, both
+                                 `Setting`s. Each card's thumbnail is painted from **that** theme's
+                                 own sheet slots, so a user theme previews with nothing authored
+                                 per theme; the tick follows `ThemeSel::effective`, not the stored
+                                 id
+    data_display.rs              P4-05 — the Data-display pane: row density · zebra · default
+                                 column width · default row limit. All four already had their
+                                 consumer (the grid reads three off the config store, the catalog's
+                                 View-table action the fourth), so this is the control, not the
+                                 wiring. Its bounds are `strata_core::config`'s COL_WIDTH_MIN/MAX,
+                                 which the grid clamps to — a field offering a width the grid then
+                                 corrects would be a field that lies
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     two layers: `ProjectApp` = the **window** (theme, app-globals,
                                  close bridge, menubar, OpenCtx) and `ProjectRoot` = the **open

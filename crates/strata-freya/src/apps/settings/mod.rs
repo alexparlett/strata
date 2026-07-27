@@ -18,8 +18,10 @@
 //! Dropping that slot on the way out is what makes Cancel a revert.
 //!
 //! P4-03 built the **shell**: the window, the nav, the draft/save/preview machinery and the
-//! entry points. P4-04 added the first pane ([`views::ThemePane`], the theme picker); the
-//! remaining categories belong to P4-05…P4-08 and render a placeholder until those land.
+//! entry points. P4-04 added the first pane ([`views::ThemePane`], the theme picker) and P4-05
+//! the second ([`views::DataDisplayPane`]) along with the setting-row vocabulary every pane is
+//! built from (`views::field`); the remaining categories belong to P4-06…P4-08 and render a
+//! placeholder until those land.
 
 mod model;
 mod views;
@@ -29,7 +31,7 @@ use freya::router::*;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use strata_core::config::{Command, Settings};
 
-use crate::apps::settings::views::{Pane, SettingsChrome, ThemePane};
+use crate::apps::settings::views::{DataDisplayPane, Pane, SettingsChrome, ThemePane};
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
 use crate::platform::{self, WindowKind};
@@ -305,7 +307,8 @@ impl App for SettingsApp {
 
 /// The category pane's content — what [`SettingsChrome`] wraps in the scroll frame and the
 /// breadcrumb. One per [`Route`]; each is a placeholder until its own task lands. `ThemePane`
-/// has landed (P4-04) and lives in [`views`], so it isn't in this list.
+/// (P4-04) and `DataDisplayPane` (P4-05) have landed and live in [`views`], so they aren't in
+/// this list.
 macro_rules! panes {
     ($( $Comp:ident => $owner:literal, $what:literal ),* $(,)?) => {
         $(
@@ -323,7 +326,6 @@ macro_rules! panes {
 
 panes! {
     SystemPane => "P4-06", "System preferences",
-    DataDisplayPane => "P4-05", "Data-display preferences",
     KeymapPane => "P4-08", "Keyboard shortcuts",
     EnginePane => "P4-07", "Engine properties",
 }
