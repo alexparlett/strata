@@ -55,8 +55,8 @@ const TOOLBAR_TEXT_PADDING: f32 = 12.;
 const FORM_SEGMENT_RADIUS: f32 = 6.;
 const FORM_SEGMENT_SIDE_PADDING: f32 = 16.;
 /// A form segment's height: the canvas's `var(--sp-3)` above and below a 12.5px label. Stated
-/// rather than left to the text metrics, because [`SegmentedToggle::FORM_HEIGHT`] has to be a
-/// number a neighbouring control can be built to.
+/// rather than left to the text metrics, because a control set beside a form pill is built to
+/// it ([`SegmentedToggle::FORM_SEGMENT_HEIGHT`]).
 const FORM_SEGMENT_HEIGHT: f32 = 33.;
 
 /// Which of the canvas's two segmented controls this is — see the module doc.
@@ -95,13 +95,13 @@ impl SegmentedToggle {
         }
     }
 
-    /// A [`Variant::Form`] pill's overall height — its segments plus the inset around them and
-    /// its own border.
+    /// A form segment's height — what a control set *beside* a form pill is built to.
     ///
-    /// Public because a form lays controls out in a row: the box beside a pill has to be built
-    /// to the pill's height, and guessing it (or restating the arithmetic at the call site) is
+    /// The segments, deliberately, and not the pill's outer box: a field next to the pill reads
+    /// as one of the row's controls, so it should match the buttons rather than the container
+    /// they sit in. Public because guessing it at a call site (or restating the arithmetic) is
     /// how the two drift apart the first time either changes.
-    pub const FORM_HEIGHT: f32 = FORM_SEGMENT_HEIGHT + INSET * 2. + 2.;
+    pub const FORM_SEGMENT_HEIGHT: f32 = FORM_SEGMENT_HEIGHT;
 
     /// The roomier form layout (see [`Variant::Form`]). Applies to this pill's segments too —
     /// they read it from context, so it is set here and nowhere else.
