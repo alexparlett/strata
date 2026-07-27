@@ -69,7 +69,7 @@ impl KeyExt for FormatCard {
 impl Component for FormatCard {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
-        let mut ctx = use_consume::<ExportCtx>();
+        let ctx = use_consume::<ExportCtx>();
         let mut hovered = use_state(|| false);
         let accent = use_theme().read().colors().primary;
         let palette = type_palette();
@@ -106,9 +106,14 @@ impl Component for FormatCard {
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
             .on_press(move |_| {
+                // Through `edit`, like every other control: switching format after a failed
+                // export is the obvious way to recover from one, so it has to clear the
+                // message the failure left. Writing the draft directly here left a CSV error
+                // sitting under a now-valid Parquet draft.
+                //
                 // A format switch never discards the other formats' options — the draft keeps
                 // them side by side (see `ExportDraft`).
-                ctx.draft.write().format = format;
+                ctx.edit(|draft| draft.format = format);
             })
             .child(Icon::new(IconName::File).size(17.).color(glyph))
             .child(Strong::new(format.name()).color(theme.card_color))
