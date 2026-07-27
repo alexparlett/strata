@@ -29,11 +29,15 @@ use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Eyebrow, InputTypography, MonoValue, Prose};
 
-/// Field boxes, from the canvas: a one-character field, a short text field, a number, a select.
+/// Field boxes, from the canvas: a one-character field, a short text field, a number, the
+/// custom box beside a segmented control, and a select (the one control the canvas draws 32
+/// tall rather than 30).
 const CHAR_WIDTH: f32 = 48.;
 const TEXT_WIDTH: f32 = 120.;
 const NUM_WIDTH: f32 = 72.;
+const CUSTOM_WIDTH: f32 = 62.;
 const SELECT_WIDTH: f32 = 180.;
+const SELECT_HEIGHT: f32 = 32.;
 const FIELD_HEIGHT: f32 = 30.;
 
 /// Write one control's edit into the draft.
@@ -106,11 +110,13 @@ impl Component for OptionGroup {
             Control::Text(field) => FieldControl {
                 field,
                 width: TEXT_WIDTH,
+                align: TextAlign::Left,
             }
             .into(),
             Control::Char(field) => FieldControl {
                 field,
                 width: CHAR_WIDTH,
+                align: TextAlign::Center,
             }
             .into(),
             Control::Num {
@@ -153,7 +159,9 @@ impl Component for SegControl {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ExportCtx>();
 
-        let mut pill = SegmentedToggle::new();
+        // The canvas's form control, not the compact toolbar one: roomier segments, gaps
+        // instead of dividers, on the recessed surface.
+        let mut pill = SegmentedToggle::new().form();
         for choice in &self.options {
             let edit = choice.edit.clone();
             pill = pill.child(
@@ -168,9 +176,12 @@ impl Component for SegControl {
             .cross_align(Alignment::Center)
             .spacing(8.)
             .child(pill)
+            // The canvas gives the box beside a segmented control its own narrower, centred
+            // treatment — it holds a token like `\N`, not a sentence.
             .maybe_child(self.custom.clone().map(|field| FieldControl {
                 field,
-                width: TEXT_WIDTH,
+                width: CUSTOM_WIDTH,
+                align: TextAlign::Center,
             }))
     }
 }
@@ -201,6 +212,8 @@ impl Component for ToggleControl {
 struct FieldControl {
     field: TextField,
     width: f32,
+    /// The canvas centres the one- and few-character boxes and left-aligns the wider ones.
+    align: TextAlign,
 }
 
 impl Component for FieldControl {
@@ -242,6 +255,7 @@ impl Component for FieldControl {
                     Input::new(text)
                         .placeholder(self.field.placeholder)
                         .width(Size::fill())
+                        .text_align(self.align)
                         .compact(),
                 )
                 .width(Size::fill()),
@@ -306,23 +320,26 @@ impl Component for SelectControl {
             .map(|c| c.label.clone())
             .unwrap_or_default();
 
-        rect().width(Size::px(SELECT_WIDTH)).child(
-            Select::new()
-                .selected_item(MonoValue::new(current))
-                .children(
-                    self.options
-                        .iter()
-                        .map(|choice| {
-                            let edit = choice.edit.clone();
-                            MenuItem::new()
-                                .selected(choice.selected)
-                                .on_press(move |_| apply(ctx, edit.clone()))
-                                .child(MonoValue::new(choice.label.clone()))
-                                .into()
-                        })
-                        .collect::<Vec<Element>>(),
-                ),
-        )
+        rect()
+            .width(Size::px(SELECT_WIDTH))
+            .height(Size::px(SELECT_HEIGHT))
+            .child(
+                Select::new()
+                    .selected_item(MonoValue::new(current))
+                    .children(
+                        self.options
+                            .iter()
+                            .map(|choice| {
+                                let edit = choice.edit.clone();
+                                MenuItem::new()
+                                    .selected(choice.selected)
+                                    .on_press(move |_| apply(ctx, edit.clone()))
+                                    .child(MonoValue::new(choice.label.clone()))
+                                    .into()
+                            })
+                            .collect::<Vec<Element>>(),
+                    ),
+            )
     }
 }
 

@@ -467,8 +467,8 @@ strata_components! {
     // The icon segmented toggle (results Table/Chart switcher, reusable): pill container
     // (bg + border + divider) and per-item rest / active (accent-tint) dress.
     "segmented_toggle" => SegmentedToggleThemePreference {
-        background, border_fill, divider_fill, item_color, item_active_background,
-        item_active_color,
+        background, form_background, border_fill, divider_fill, item_color,
+        item_active_background, item_active_color,
     },
     // The chrome-less icon toggle (plan Raw/Tree switch, reusable): rest bg + glyph, and the
     // accent-tint active dress — matching the segmented toggle's selected look.

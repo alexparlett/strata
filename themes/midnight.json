@@ -565,6 +565,9 @@
       "background": {
         "reference": "surface_secondary"
       },
+      "form_background": {
+        "reference": "surface_primary"
+      },
       "border_fill": {
         "reference": "border_control"
       },
