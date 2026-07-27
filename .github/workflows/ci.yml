@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One test run per branch. A new push supersedes the in-flight run rather than
+# holding a macOS runner for a diff nobody is waiting on any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    # macOS, not ubuntu: the app is macOS-first (the muda menubar, the traffic-light
+    # gutter, `set_window_parent`), so a green Linux build would not be evidence the
+    # thing we ship compiles. It also skips the gtk/webkit apt dance the fork's own
+    # Linux job needs. The repository is public, so macOS runner minutes are free.
+    runs-on: macos-latest
+    # A cold run compiles DataFusion and pulls Skia; warm runs are minutes. The cache
+    # is best-effort, so size this for the cold case.
+    timeout-minutes: 90
+    steps:
+      # Unlike the review job, this one MUST fetch the submodule: `crates/freya` is
+      # our Freya fork and the build resolves it by local path (root Cargo.toml
+      # `[workspace.dependencies]`), so without it nothing compiles at all.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: true
+
+      # Fail loud, and early, on the one submodule failure that otherwise surfaces as
+      # a baffling "no method named ..." deep in a 40-minute compile: the recorded
+      # gitlink not being on the fork remote (a fork commit that was never pushed), or
+      # the checkout landing somewhere else. `git submodule status` prefixes the line
+      # with `+` (wrong commit) or `-` (not initialised) in exactly those cases.
+      - name: Verify the Freya submodule is at the recorded commit
+        run: |
+          git submodule status crates/freya
+          git submodule status crates/freya | grep -qE '^ ' || {
+            echo "::error::crates/freya is not checked out at the commit this repo records."
+            echo "The fork commit is probably not pushed to github.com/alexparlett/freya - see AGENTS.md section 6."
+            exit 1
+          }
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          # Caches ~/.cargo and target/. Keyed on the lockfile, so a Freya-only
+          # change (a path dep, not a lockfile entry) reuses the cache and only
+          # rebuilds the fork crates.
+          cache: true
+          # This action defaults `rustflags` to `-D warnings`, which would make CI
+          # assert something stricter than the check AGENTS.md §7 describes and
+          # every local `cargo test` runs. The first run of this workflow failed on
+          # exactly that: two long-standing warnings (a dead initial assignment in
+          # `drop_confirm.rs`, an unconstructed `CellRole::None`) became hard errors
+          # in a PR that changed no Rust at all. Denying warnings is a worthwhile
+          # policy but a separate decision - it needs those two resolved first, and
+          # one of them is a design call about a variant that is documented and
+          # deliberately unused. Empty keeps RUSTFLAGS unset.
+          rustflags: ''
+
+      # `--workspace` rather than a bare `cargo test`: the root sets
+      # `default-members = ["crates/strata-freya"]`, so a bare run would silently skip
+      # strata-core / strata-model / strata-forms. `crates/strata-dioxus` and
+      # `crates/freya` are workspace `exclude`s and stay out either way - the Dioxus app
+      # no longer builds on purpose, and the fork has its own CI.
+      #
+      # This is also the theme guard: strata-freya's `schema_in_sync` test fails when
+      # `themes/theme.schema.json` no longer matches `theme.rs`'s REGISTRY (regenerate
+      # with `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`).
+      - name: cargo test
+        run: cargo test --workspace --locked
