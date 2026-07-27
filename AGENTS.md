@@ -323,6 +323,15 @@ Things that must not regress. Each was fought for once already.
   one). Pad the bordered rect by the stroke width and subtract it from any child sized from the
   outer edge. Reach for `BorderAlignment::Outer` only when the box may genuinely overflow its
   slot.
+- **A size lands on the node the parent lays out — a component that wraps its control must size
+  the wrapper, not the control inside it.** A relative size is resolved *against a parent*, so a
+  `flex(1.)` on a grandchild is not a flex child of the row at all: the row divides nothing, the
+  wrapper hugs whatever the inner node resolved to, and the fixed sibling beside it is pushed off
+  the surface. `ValueField` sized only its `Input` and not the `InputTypography` rect around it,
+  which is invisible for a `px` width and broke the first row that put a browse button next to a
+  field. So a component whose render adds a wrapper takes the caller's width on the **outer** node
+  and fills the inner one. The tell is that a fixed width works and a relative one doesn't — that
+  is the wrapper hugging, not a layout engine bug.
 - **A disabled control gates its handlers; it does not go `interactive(false)`.** Wrap only the
   action handlers in `.maybe(enabled, …)` and leave `on_pointer_enter` / `on_pointer_leave`
   registered unconditionally, then decline to *dress* the hover while disabled — that is what

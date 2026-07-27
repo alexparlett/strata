@@ -4,7 +4,8 @@
 //! ```text
 //! Form                 the container: sets the register once, separates the rows
 //!   Row                a label, its explanation, and where the control goes
-//!     <control>        just a child — ValueField, NumberField, Switch, SegmentedToggle, …
+//!     <control>        just a child — ValueField, NumberField, DirectoryField, Switch,
+//!                      SegmentedToggle, …
 //! ```
 //!
 //! **One [`Row`], not one per window.** A row's three presentation choices — how the label is
@@ -49,7 +50,7 @@ use freya::prelude::*;
 
 use crate::components::divider::Divider;
 
-pub use field::{NumberField, ValueField, FIELD_HEIGHT};
+pub use field::{DirectoryField, NumberField, ValueField, FIELD_HEIGHT};
 pub use row::{Note, Row};
 
 // `%[no_ext]`: the form's dress is read by its pieces (the form, its rows, its fields) rather
@@ -95,8 +96,10 @@ pub(crate) const HINT_GAP: f32 = 2.;
 /// The gap between a preferences row's label block and its control (canvas `var(--sp-4)`), and
 /// between a trailing control and the label block beside it.
 pub(crate) const CONTROL_GAP: f32 = 12.;
-/// The gap between a [`NumberField`] and the unit beside it (canvas `var(--sp-3)`).
-pub(crate) const UNIT_GAP: f32 = 8.;
+/// The gap between a value box and whatever is set beside it (canvas `var(--sp-3)`) — a
+/// [`NumberField`]'s unit label, a [`DirectoryField`]'s browse button. One constant, because
+/// it is one role: what separates a box from the thing that qualifies it.
+pub(crate) const FIELD_GAP: f32 = 8.;
 /// The gap between two rows of a fields form.
 pub(crate) const ROW_GAP: f32 = 20.;
 /// The gap either side of a preferences form's rule (canvas `var(--sp-6)`).
