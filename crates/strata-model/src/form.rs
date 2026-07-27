@@ -1,5 +1,11 @@
-//! Modal **form drafts** — the transient, UI-editable state of the table-config and
-//! export dialogs, distinct from the persisted definitions they produce.
+//! Modal **form drafts** — the transient, UI-editable state of the table-config dialog,
+//! distinct from the persisted definitions it produces.
+//!
+//! The export dialog's draft used to live here too. It went with P4-10: the Freya export
+//! window owns its own `ExportDraft`, which is where a UI draft belongs — this crate is pure
+//! serde defs, "exactly what `.strata/project.json` stores" (`AGENTS.md` §2), and a modal's
+//! working state is neither persisted nor shared. `ConfigForm` is the same shape and will go
+//! the same way with P4-11; it stays only because it is still the only definition there is.
 
 /// The table-config modal's draft (register / edit an external table).
 #[derive(Clone)]
@@ -39,40 +45,6 @@ impl Default for ConfigForm {
             scanning: false,
             scan_error: None,
             detected_parts: vec![],
-        }
-    }
-}
-
-/// The export modal's draft.
-#[derive(Clone)]
-pub struct ExportForm {
-    pub format: String, // csv / json / parquet / arrow
-    pub name: String,
-    pub scope: String,     // "all" | "page"
-    pub csv_delim: String, // comma | tab | semicolon | pipe
-    pub csv_header: bool,
-    pub csv_null: String,            // empty | null | nan
-    pub pq_compression: String,      // zstd | snappy | gzip | brotli | lz4 | none
-    pub pq_level: u32,               // compression level (codec-dependent)
-    pub partition_cols: Vec<String>, // ordered columns → Hive dir export
-    pub keep_partition: bool,        // keep partition columns inside the files
-    pub adv_open: bool,              // advanced-options disclosure
-}
-
-impl Default for ExportForm {
-    fn default() -> Self {
-        Self {
-            format: "csv".into(),
-            name: "query_result".into(),
-            scope: "all".into(),
-            csv_delim: "comma".into(),
-            csv_header: true,
-            csv_null: "empty".into(),
-            pq_compression: "zstd".into(),
-            pq_level: 3,
-            partition_cols: Vec::new(),
-            keep_partition: false,
-            adv_open: false,
         }
     }
 }

@@ -26,7 +26,7 @@ mod session;
 
 pub use catalog::{CatalogKind, ColRef, RemoveKind, RemoveTarget, SavedQuery, TableDef, ViewDef};
 pub use diagnostics::{Diagnostic, Severity};
-pub use form::{ConfigForm, ExportForm};
+pub use form::ConfigForm;
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;
 pub use query_error::QueryError;
