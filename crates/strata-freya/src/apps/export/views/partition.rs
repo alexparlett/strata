@@ -17,11 +17,9 @@ use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
 use crate::components::field_row::FieldRow;
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{Caption, Meta, MonoValue, Prose};
+use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue, Prose};
 use crate::components::value_field::ValueField;
 
-/// Above this many unselected columns the AVAILABLE pane grows a filter (the canvas's rule).
-const FILTER_THRESHOLD: usize = 8;
 /// The panes' fixed box, so a wide schema scrolls rather than growing the window.
 const PANE_MIN_HEIGHT: f32 = 128.;
 const PANE_MAX_HEIGHT: f32 = 176.;
@@ -96,7 +94,7 @@ impl Component for Panes {
 }
 
 /// The pane frame both halves share — a bordered box with a header strip over a scroll body.
-fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
+fn pane(header: impl IntoElement, body: impl IntoElement, rows: usize) -> impl IntoElement {
     let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
     rect()
         .width(Size::fill())
@@ -118,17 +116,18 @@ fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
                 .child(header),
         )
         .child(Divider::horizontal().color(theme.border_fill))
-        // The pane grows with its rows between a floor and a ceiling, so a short list doesn't
-        // leave a hole and a wide schema scrolls instead of growing the window. `ScrollView`
-        // carries only the ceiling, so the floor is the wrapper's.
+        // **One height, computed, shared by the box and its scroll viewport.** Leaving the two
+        // to a min/max range let them disagree: the viewport settled shorter than the box, so
+        // the list stopped scrolling with dead space still showing under a half-clipped row.
+        // The row count is the only thing that decides how tall this should be, so it decides
+        // it once, and both are told.
         .child(
             rect()
                 .width(Size::fill())
-                .min_height(Size::px(PANE_MIN_HEIGHT))
-                .max_height(Size::px(PANE_MAX_HEIGHT))
+                .height(Size::px(body_height(rows)))
                 .child(
                     ScrollView::new()
-                        .max_height(Size::px(PANE_MAX_HEIGHT))
+                        .height(Size::fill())
                         // This list sits inside the window's own scrolling body, so a wheel
                         // gesture that starts over it (and can move it) stays latched to it —
                         // no mid-gesture spill into the body scrolling underneath — while a
@@ -139,6 +138,12 @@ fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
                         .child(body),
                 ),
         )
+}
+
+/// How tall a pane's list stands: its rows, floored so a short list doesn't leave a hole and
+/// capped so a wide schema scrolls instead of growing the window.
+fn body_height(rows: usize) -> f32 {
+    (rows as f32 * ROW_HEIGHT).clamp(PANE_MIN_HEIGHT, PANE_MAX_HEIGHT)
 }
 
 /// The columns not yet chosen. Pressing one appends it as the next directory level.
@@ -169,7 +174,6 @@ impl Component for Available {
             .filter(|name| name.to_lowercase().contains(&filter))
             .cloned()
             .collect();
-        let show_filter = unchosen.len() > FILTER_THRESHOLD;
         let query = draft.partition.filter.clone();
         drop(draft);
         drop(target);
@@ -185,26 +189,22 @@ impl Component for Available {
             }
         });
 
-        let header: Element = if show_filter {
-            // The magnifier is the input's own `leading`, not a glyph beside a chrome-less
-            // input in a hand-drawn strip — the catalog sidebar's filter is the same control
-            // and does it this way.
-            ValueField::new(filter_text)
-                .placeholder("Filter…")
-                .leading(
-                    Icon::new(IconName::Search)
-                        .color(theme.label_color)
-                        .size(13.),
-                )
-                .height(Size::px(FILTER_HEIGHT))
-                .width(Size::flex(1.))
-                .into_element()
-        } else {
-            Caption::new("AVAILABLE")
-                .color(theme.label_color)
-                .into_element()
-        };
+        // The filter *is* this pane's header, always — not an eyebrow that becomes one past
+        // some column count. The canvas gates it at >8 unselected columns; Alex asked for it
+        // unconditionally, and a search box that appears only once a list is long is a control
+        // you have to discover twice.
+        let header: Element = ValueField::new(filter_text)
+            .placeholder("Filter…")
+            .leading(
+                Icon::new(IconName::Search)
+                    .color(theme.label_color)
+                    .size(13.),
+            )
+            .height(Size::px(FILTER_HEIGHT))
+            .width(Size::flex(1.))
+            .into_element();
 
+        let row_count = matching.len();
         let body: Element = if matching.is_empty() {
             let message = if unchosen.is_empty() {
                 "All columns added".to_string()
@@ -248,7 +248,7 @@ impl Component for Available {
             list.into_element()
         };
 
-        pane(header, body)
+        pane(header, body, row_count)
     }
 }
 
@@ -272,13 +272,13 @@ impl Component for Selected {
             .content(Content::Flex)
             .cross_align(Alignment::Center)
             .main_align(Alignment::SpaceBetween)
-            .child(Caption::new("SELECTED").color(theme.label_color))
+            .child(Eyebrow::new("SELECTED").color(theme.label_color))
             .maybe_child(
                 (chosen.len() > 1).then(|| Meta::new("outermost first").color(theme.label_color)),
             );
 
         let body: Element = if chosen.is_empty() {
-            empty("Press a column on the left to add it here").into_element()
+            empty("Click a column on the left to add it here").into_element()
         } else {
             let mut list = rect().width(Size::fill()).vertical();
             for (index, name) in chosen.iter().enumerate() {
@@ -295,7 +295,7 @@ impl Component for Selected {
             list.into_element()
         };
 
-        pane(header, body)
+        pane(header, body, chosen.len())
     }
 }
 
@@ -487,13 +487,17 @@ fn empty(message: &str) -> impl IntoElement {
     let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
     rect()
         .width(Size::fill())
-        .height(Size::px(PANE_MIN_HEIGHT))
+        .height(Size::fill())
         .center()
         .padding((12., 16.))
         .child(
-            Prose::new(message)
-                .color(theme.label_color)
+            // `width(fill)` as well as the centred alignment: a hugging text box centred by its
+            // parent still sits off-centre once its padding is counted, which is what left this
+            // line visibly right of the middle.
+            Caption::new(message)
+                .color(theme.empty_color)
                 .align(TextAlign::Center)
+                .width(Size::fill())
                 .wrap(),
         )
 }

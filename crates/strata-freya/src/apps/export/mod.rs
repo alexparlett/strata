@@ -73,6 +73,10 @@ define_theme!(
         label_color: Color,
         /// The ⓘ hint glyph beside a label.
         hint_color: Color,
+        /// A transfer pane's empty-state line. `text_muted`, like the drawer's — the canvas's
+        /// `--c-faint` is dimmer than anything else in this window reads at, and a sentence the
+        /// user is meant to act on should not be the faintest thing on screen.
+        empty_color: Color,
         /// A format card's name at rest, and the selected card's dress.
         card_color: Color,
         card_active_background: Color,

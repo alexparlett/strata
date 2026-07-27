@@ -428,7 +428,7 @@ strata_components! {
     // `segmented_toggle` for every seg group.
     "export" => ExportThemePreference {
         background, panel_background, header_background, border_fill, control_border_fill, icon_color,
-        icon_background, label_color, hint_color, card_color, card_active_background,
+        icon_background, label_color, hint_color, empty_color, card_color, card_active_background,
         card_active_border_fill, badge_background, badge_color, warning_background,
         warning_border_fill,
     },

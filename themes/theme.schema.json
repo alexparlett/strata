@@ -1114,6 +1114,9 @@
             "hint_color": {
               "$ref": "#/$defs/colorPref"
             },
+            "empty_color": {
+              "$ref": "#/$defs/colorPref"
+            },
             "card_color": {
               "$ref": "#/$defs/colorPref"
             },

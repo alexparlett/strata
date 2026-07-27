@@ -1439,6 +1439,9 @@
       "hint_color": {
         "reference": "text_placeholder"
       },
+      "empty_color": {
+        "reference": "text_muted"
+      },
       "card_color": {
         "reference": "text_primary"
       },
