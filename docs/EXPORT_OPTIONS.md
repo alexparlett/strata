@@ -1,156 +1,162 @@
-# Export options — per-format breakdown (for modal redesign)
+# Export options — the as-built surface
 
-What the engine (DataFusion 43, via `COPY (query) TO '<file>' STORED AS <fmt> OPTIONS(...)`)
-can actually do per format, so the modal only offers controls that map to real behaviour. By default an export writes a
-**single file** (the destination path carries an extension) — the exception is **partitioning** (see the Partitioning
-section), which writes a *directory* of files instead.
+What the Export window (P4-10) offers per format, and the `COPY … TO` it produces. This replaces
+the pre-build capability survey: that document ranked options **Core / Advanced / Skip** for a
+disclosure the canvas then removed, and described DataFusion 43.
 
-Priority legend: **Core** = worth surfacing prominently · **Advanced** = tuck behind an "Advanced" disclosure ·
-**Skip** = supported but not worth a control.
+Two sources of truth sit under this, and they are the ones to change:
+
+- **`strata-core::engine::export`** — `ExportSpec` and the SQL it renders. Every option a spec can
+  name is a field DataFusion honours; there is no key/value bag.
+- **`strata-freya::apps::export::model`** — `ExportDraft::groups`, the list the window renders.
+  Options are **data**: a group is a label, an optional hint and a control, and every control
+  carries the `Edit` it performs. Adding an option is a row in that function, not a branch in a
+  component, and it is unit-tested without a renderer.
+
+Engine: **DataFusion 54**. Its `COPY` planner lowercases bare option keys and applies the
+`format.` prefix itself, so the keys below resolve onto `CsvOptions` / `JsonOptions` /
+`TableParquetOptions` field names.
+
+```sql
+COPY (SELECT * FROM <snapshot> [ORDER BY "col" ASC|DESC NULLS LAST] [LIMIT n OFFSET m])
+TO '<path>' STORED AS <FMT> [PARTITIONED BY (a, b)] [OPTIONS (…)]
+```
+
+---
+
+## Always shown, whatever the format
+
+| Group | Control | Values | Default |
+|---|---|---|---|
+| ROWS TO EXPORT | segmented | `All · <n>` · `This page` | All |
+| HIVE PARTITIONING | toggle + column transfer | see below | off |
+
+**Scope is applied after the sort, not before.** The `ORDER BY` goes ahead of the `LIMIT/OFFSET`
+window, so "this page" means the page the user is looking at rather than an arbitrary slice
+re-ordered afterwards. `NULLS LAST` in both directions, matching the grid.
+
+**The sort is the grid's**, carried in as a launch value — it is not a control here.
 
 ---
 
 ## CSV
 
-Yes to both of your questions — headers are optional and the delimiter is configurable, plus a few more that matter for
-round-tripping into other tools.
+| Group | Control | Values | Default | `OPTIONS` key |
+|---|---|---|---|---|
+| HEADER ROW | toggle | on / off | on | `HAS_HEADER` |
+| DELIMITER | text (max 8) | any single char; `\t` resolved | `,` | `DELIMITER` |
+| NULL VALUES AS | segmented + custom text (max 16) | Empty · `NULL` · `NaN` · custom | Empty | `NULL_VALUE` |
+| QUOTE CHARACTER | char | single char | `"` | `QUOTE` |
+| ESCAPE CHARACTER | char | single char; blank = double-quote | blank | `ESCAPE` (omitted when blank) |
+| DOUBLE-QUOTE | toggle | on / off | on | `DOUBLE_QUOTE` |
+| COMPRESSION | select | None · Gzip · Zstd · Bzip2 · XZ | None | `COMPRESSION` |
 
-| Control             | Effect                                                                       | Values                                       | Default | Priority |
-|---------------------|------------------------------------------------------------------------------|----------------------------------------------|---------|----------|
-| Include header row  | Write the column-name row                                                    | on / off                                     | on      | **Core** |
-| Delimiter           | Column separator (single char)                                               | comma · tab · semicolon · pipe · custom char | comma   | **Core** |
-| Null value          | Text written for NULL cells                                                  | any string (e.g. empty, `NULL`, `NaN`)       | empty   | **Core** |
-| Quote char          | Character used to quote fields                                               | single char                                  | `"`     | Advanced |
-| Escape char         | Character used to escape specials                                            | single char                                  | none    | Advanced |
-| Double-quote        | Escape quotes by doubling (`""`) instead of escape char                      | on / off                                     | on      | Advanced |
-| Date / time formats | strftime-style format strings for date / datetime / timestamp / time columns | format strings                               | ISO-ish | Advanced |
-| Compression         | Gzip/… the output file                                                       | none · gzip · bzip2 · xz · zstd              | none    | Advanced |
-
-Notes for design:
-
-- Delimiter is **one character** — offer named presets (comma/tab/semicolon/pipe)
-  with an optional "custom" single-char input.
-- Compression changes the file extension (`.csv.gz`). If we expose it, the destination filename/preview should reflect
-  that.
-
----
+- The delimiter, quote and escape are sent as **byte values**, not quoted strings —
+  `export::ascii_byte` rejects a non-ASCII character with a message naming the field rather than
+  emitting SQL that fails in the planner.
+- Compression changes the destination's extension (`orders.csv` → `orders.csv.gz`), and the save
+  dialog is pre-filled with the suffix so what is offered matches what is written.
 
 ## JSON
 
-**Only newline-delimited JSON (NDJSON)** — one JSON object per line. DataFusion's JSON writer does not support a
-pretty-printed or single-array output. So the current "Pretty-print / newlines" toggle is a **no-op and should be
-removed**.
+Newline-delimited only (one object per line). DataFusion's writer can also emit a JSON array, but
+the canvas offers NDJSON alone, so the spec doesn't spell the option.
 
-| Control     | Effect                 | Values                          | Default | Priority |
-|-------------|------------------------|---------------------------------|---------|----------|
-| Compression | Gzip/… the output file | none · gzip · bzip2 · xz · zstd | none    | Advanced |
-
-Notes for design:
-
-- The only real JSON knob is compression. The format section for JSON can be essentially empty (or a short "records, one
-  per line (NDJSON)" explainer).
-- If we ever want a pretty JSON array, that's a custom writer we'd build ourselves — flag as a separate feature, not a
-  DataFusion option.
-
----
+| Group | Control | Values | Default | `OPTIONS` key |
+|---|---|---|---|---|
+| COMPRESSION | select | None · Gzip · Zstd · Bzip2 · XZ | None | `COMPRESSION` |
 
 ## Parquet
 
-The richest format. Compression is the headline; the rest are tuning knobs most users never touch.
+| Group | Control | Values | Default | `OPTIONS` key |
+|---|---|---|---|---|
+| COMPRESSION | select | Zstd · Snappy · Gzip · Brotli · Lz4 · Uncompressed | Zstd | `COMPRESSION` |
+| COMPRESSION LEVEL (min–max) | number | zstd 1–22 · gzip 1–9 · brotli 1–11 | 3 | (rides in the codec string) |
+| STATISTICS | segmented | None · Chunk · Page | Page | `STATISTICS_ENABLED` |
+| MAX ROW GROUP SIZE | segmented | 128K · 512K · 1M · 2M **rows** | 1M | `MAX_ROW_GROUP_SIZE` |
+| WRITER VERSION | segmented | 1.0 · 2.0 | 1.0 | `WRITER_VERSION` |
+| DICTIONARY ENCODING | toggle | on / off | on | `DICTIONARY_ENABLED` |
 
-| Control             | Effect                                         | Values                                             | Default | Priority                     |
-|---------------------|------------------------------------------------|----------------------------------------------------|---------|------------------------------|
-| Compression         | Codec for column data                          | uncompressed · snappy · gzip · brotli · lz4 · zstd | zstd    | **Core**                     |
-| Compression level   | Level for codecs that take one                 | integer (e.g. zstd 1–22, gzip 1–9)                 | zstd(3) | **Core** (paired with codec) |
-| Statistics          | Column statistics written                      | none · chunk · page                                | page    | Advanced                     |
-| Max row group size  | Rows per row group (memory vs scan efficiency) | integer                                            | 1048576 | Advanced                     |
-| Writer version      | Parquet format version                         | 1.0 · 2.0                                          | 1.0     | Advanced                     |
-| Dictionary encoding | Enable dictionary encoding                     | on / off                                           | on      | Advanced                     |
-| Encoding            | Page encoding scheme                           | plain · rle · delta_binary_packed · …              | auto    | Skip (per-column, niche)     |
-| Bloom filters       | Write bloom filters (per column)               | on / off + fpp / ndv                               | off     | Skip (per-column, niche)     |
-
-Notes for design:
-
-- Only **codec + level** are worth prominent placement. Level only applies to gzip / brotli / zstd — hide/disable it for
-  snappy / lz4 / uncompressed.
-- Everything else belongs under "Advanced".
-
----
+- **The level group only exists for codecs that take one.** It appears and disappears with the
+  codec, because a level on snappy is a control that changes nothing. The level also rides *inside*
+  the codec (`Codec::Zstd(3)` → `zstd(3)`), so a level can't be set on a codec that would ignore it.
+- **Row-group size is a row count**, not a byte size — the master canvas's stale `FMT_META` mock
+  labels it in MB, which is wrong.
+- Per-column knobs (encoding, bloom filters) are not offered: they are per-column settings and this
+  is a per-export surface.
 
 ## Arrow
 
-**No configurable write options.** DataFusion writes an Arrow IPC file with no
-`OPTIONS` support (the format-options reference documents only CSV/JSON/Parquet).
-
-| Control | Effect | Values | Default | Priority |
-|---------|--------|--------|---------|----------|
-| —       | —      | —      | —       | —        |
-
-Notes for design:
-
-- The format section for Arrow should be empty — just a one-line explainer ("Arrow IPC file — schema-faithful, no
-  options"). Arrow IPC *can* carry LZ4/ZSTD compression at the format level, but DataFusion doesn't expose it, so we
-  can't offer it without a custom writer.
+No write options exist, so `Format::Arrow` carries no fields and the window shows a
+[`Note`](../crates/strata-freya/src/components/form/row.rs) saying so. An empty row would read as
+"still loading". (Arrow IPC *can* carry LZ4/ZSTD at the format level; DataFusion doesn't expose it.)
 
 ---
 
-## Partitioning (Hive-style) — works with ALL formats
+## Hive partitioning — every format
 
-`COPY … TO '<dir>' STORED AS <fmt>, PARTITIONED BY (col1, col2 …)` writes a **directory** of hive-style partitioned
-files instead of a single file. Confirmed supported for **parquet, csv, json, and arrow** (it's a general COPY clause,
-not parquet-specific) — most useful with parquet, but available everywhere.
+`PARTITIONED BY (a, b)` writes a **directory** of `a=<value>/b=<value>/<part>.<ext>` instead of one
+file, so the destination flips from a save-file dialog to a choose-folder one, and the suggested
+name loses its extension.
 
-Output shape:
+| Group | Control | Values | Default |
+|---|---|---|---|
+| HIVE PARTITIONING | toggle | on / off | off |
+| (columns) | two-pane transfer, ordered | numeric and string columns | none |
+| Keep partition columns inside files | toggle | on / off | off |
 
-```
-<dir>/col1=<value>/col2=<value>/<part>.<ext>
-```
+Rules that cost something to rediscover:
 
-| Control                | Effect                                            | Values                       | Default | Priority                      |
-|------------------------|---------------------------------------------------|------------------------------|---------|-------------------------------|
-| Partition by           | Columns that become directory levels (ordered)    | any subset of result columns | none    | **Core** (parquet) / Advanced |
-| Keep partition columns | Also write the partition columns inside the files | on / off                     | off     | Advanced                      |
+- **The toggle gates the selection, it doesn't clear it.** `PartitionDraft::effective` is the one
+  answer every consumer reads (preview, suggested name, spec) — they once disagreed.
+- **Numeric and string columns only.** A directory name has to be a short stable scalar; a
+  timestamp or a struct has none.
+- **Reordering is ▲▼ buttons, not drag-and-drop.** The canvas uses HTML5 drag events, which have no
+  equivalent here, and order is the whole meaning of the list (outermost level first).
+- **Column names must be a single bare word.** DataFusion 54's COPY parser re-renders each
+  identifier with `Ident::to_string()`, so a quoted name arrives with its quotes attached and
+  matches no field. The export says so plainly rather than emitting SQL that fails on a stray token.
+- **Keep-columns is a session config** (`execution.keep_partition_by_columns`), not a COPY option,
+  so it is set per partitioned export.
+- **A NULL in a partition column is refused, not warned about** — see below.
 
-Key facts:
+### NULL partition values
 
-- Output is a **directory**, not a single file — one subtree per distinct combination of partition-column values, with
-  format-specific part files inside.
-- Partition columns are **removed from the data files** by default (they live in the directory names); "keep" maps to
-  `execution.keep_partition_by_columns = true`.
-- Round-trips with the app's own hive-partition reading (e.g. the sample's
-  `events/year=…/month=…`).
-- Not wired in the app yet — export currently always writes a single file; the engine already supports this via COPY.
+DataFusion 54 has no `__HIVE_DEFAULT_PARTITION__`: given `(1,'emea'), (2,NULL), (3,'amer')`
+partitioned by `region`, it writes `region=emea` and `region=amer` and files the NULL row **inside
+`region=amer`**. It reads back claiming a value it never had — no dropped row, no error, and
+unrecoverable once the source result is gone.
 
-Design implications:
+`export::partition_columns_have_no_nulls` refuses the export and names the column. Two things make
+that cheap and reliable:
 
-- Choosing "partition" flips the destination from a **Save File** dialog to a **Choose Folder** dialog (the app builds
-  the hive tree inside).
-- Needs an **ordered multi-select of columns** to partition by (from the current result's columns) — `col1` is the outer
-  directory.
-- Preview should show the directory-tree shape, not a filename.
-- High-cardinality partition columns explode into many directories — worth a warning.
+- **It is a footer read, not a scan.** The snapshot is a parquet file we wrote, so the per-column
+  null count is already in its metadata — which is why `query::snapshot_writer_props` sets
+  `EnabledStatistics::Chunk` explicitly rather than trusting parquet-rs's default.
+- **The rule is "proceed only on an exact zero"**, which also disposes of DataFusion's statistics
+  ambiguity: `Precision::Exact(num_rows)` doubles as its "no statistics for this column" fallback.
+  An all-NULL column and one we can't vouch for are both reasons to decline.
 
-Priority: **Core-ish** for a parquet-focused tool (a headline workflow), but it's a bigger UI branch (folder picker +
-ordered column select), so it may deserve its own "Partitioned export" mode rather than a single checkbox.
+**Schema nullability is not the signal and cannot be** — DataFusion reports every column of every
+real table as nullable, parquet sources included (measured). Gating on `ColumnInfo.nullable` would
+empty the column list and make partitioning unusable.
 
 ---
 
-## Cross-cutting design implications
+## Deliberately not built
 
-1. **Options are format-specific.** Today the modal shows "Include header row"
-   (CSV-only) and "Pretty-print" (applies to nothing) regardless of format. The redesign should swap the options panel
-   based on the selected format:
-   CSV → header + delimiter + null + advanced; JSON → (compression only); Parquet → codec/level + advanced; Arrow →
-   none; Clipboard → (see below).
-2. **Compression is shared** by CSV / JSON / Parquet but means different things (whole-file gzip for CSV/JSON vs
-   internal codec for Parquet) — label accordingly.
-3. **Scope** (all rows vs current page) is supported by the engine but has no control yet — worth a toggle in the
-   redesign. Default: all rows.
-4. **Clipboard** is a separate path (no file, no DataFusion): currently copies the loaded page as a **markdown table**.
-   Could grow a sub-picker (markdown / TSV / CSV / JSON) — design-dependent.
-5. **Destination + preview** should reflect the chosen extension (and compression suffix) so the filename shown matches
-   what's written.
+Each of these is in the canvas or the pre-build survey and was dropped on purpose:
 
-> Caveat: option tables are from DataFusion's current docs; the exact set should
-> be re-validated against v43 when each control is wired, but the Core ones
-> (header, delimiter, null value, parquet compression) are stable.
+- **The ADVANCED disclosure.** The list is flat: a format's advanced controls are just more of that
+  format's options.
+- **The size estimate** (`≈ 1.2 MB`, in the footer and over the preview). It came from invented
+  per-codec compression factors; a fabricated byte figure beside real ones is what the column
+  inspector rejected (P3-08). The footer quotes the real row count.
+- **The NULL partition warning banner.** The engine refuses and names the column, so a standing
+  banner warned about something that could not happen.
+- **The high-cardinality warning** as the canvas computes it — a distinct count over an 80-row
+  sample is a derived-from-what's-on-screen number of exactly the sort P3-08 rejected.
+- **The Clipboard tile.** The canvas dropped it (2026-07-12) once the grid grew its own copy
+  controls, so "export" here always means a file on disk.
+- **A hand-built file browser.** The destination is the native `rfd` dialog; duplicating an OS
+  dialog is not the deliverable.
