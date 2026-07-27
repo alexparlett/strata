@@ -1702,10 +1702,7 @@
             "meta_color": {
               "$ref": "#/$defs/colorPref"
             },
-            "stats_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "badge_border_fill": {
+            "value_color": {
               "$ref": "#/$defs/colorPref"
             },
             "message_color": {

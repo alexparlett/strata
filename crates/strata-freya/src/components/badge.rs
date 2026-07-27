@@ -23,6 +23,13 @@ use crate::components::typography::{Eyebrow, Meta};
 
 /// Alpha of a badge's fill when it is derived from the foreground colour (≈16%).
 const TINT_ALPHA: u8 = 40;
+/// Alpha of an [outlined](Badge::outlined) badge's edge, derived from the same foreground (50%).
+///
+/// Derived rather than themed for the reason the tint is: an outline is the badge's own dress,
+/// so it must not cost every consuming surface a token. It lands on the design's own border
+/// within a couple of steps per channel on both sheets — over the drawer it resolves to
+/// `#363d48` against a `#363e4a` canvas, and `#d1d4d9` against `#d5d8de`.
+const OUTLINE_ALPHA: u8 = 128;
 
 /// Which type role dresses the label.
 #[derive(PartialEq, Clone, Copy)]
@@ -39,7 +46,7 @@ pub struct Badge {
     role: BadgeRole,
     color: Color,
     background: Option<Color>,
-    border: Option<Color>,
+    outlined: bool,
     radius: f32,
     padding: Gaps,
     height: Option<f32>,
@@ -52,7 +59,7 @@ impl Badge {
             role,
             color,
             background: None,
-            border: None,
+            outlined: false,
             radius: 4.,
             // A tag hugs tighter than a value run — the two paddings the views already used.
             padding: match role {
@@ -80,17 +87,16 @@ impl Badge {
         self
     }
 
-    /// Outline the badge in `color` — and, with it, drop the *derived* tint, because a pill can
-    /// be read as a shape by its edge or by its fill but stating both twice over is the same mark
-    /// said twice. The History row's `3 lines` is the outlined form (canvas `--c-border2`); a
-    /// caller wanting both can still pin a fill with [`background`](Self::background).
+    /// Draw the badge as an **outline** rather than a tint — a pill can be read as a shape by
+    /// its edge or by its fill, and stating both is the same mark said twice, so this drops the
+    /// derived fill. The History row's `3 lines` is the outlined form.
     ///
-    /// It only drops the tint it would have *derived* — an explicit `background` always wins, in
-    /// either order. Setting the field here instead would have made the pair order-dependent:
-    /// `.background(f).border(c)` would silently lose `f` while `.border(c).background(f)` kept
-    /// it, which is not a distinction a builder should have.
-    pub fn border(mut self, color: Color) -> Self {
-        self.border = Some(color);
+    /// The edge is derived from the foreground at [`OUTLINE_ALPHA`], like the tint is from
+    /// [`TINT_ALPHA`] — a badge dresses itself, so an outlined one costs the surface using it
+    /// nothing. It only drops the fill it would have *derived*: an explicit
+    /// [`background`](Self::background) still wins, in either order.
+    pub fn outlined(mut self) -> Self {
+        self.outlined = true;
         self
     }
 
@@ -114,10 +120,10 @@ impl Badge {
 impl Component for Badge {
     fn render(&self) -> impl IntoElement {
         // An explicit fill always wins. Otherwise the fill is derived from the foreground —
-        // except on an outlined badge, which is already a shape without one (see `border`).
-        let background = self.background.unwrap_or(match self.border {
-            Some(_) => Color::TRANSPARENT,
-            None => self.color.with_a(TINT_ALPHA),
+        // except on an outlined badge, which is already a shape without one (see `outlined`).
+        let background = self.background.unwrap_or(match self.outlined {
+            true => Color::TRANSPARENT,
+            false => self.color.with_a(TINT_ALPHA),
         });
         let label = match self.role {
             BadgeRole::Tag => Eyebrow::new(self.text.clone())
@@ -131,8 +137,12 @@ impl Component for Badge {
             .padding(self.padding)
             .corner_radius(self.radius)
             .background(background)
-            .map(self.border, |el, color| {
-                el.border(Border::new().width(1.).fill(color))
+            .maybe(self.outlined, |el| {
+                el.border(
+                    Border::new()
+                        .width(1.)
+                        .fill(self.color.with_a(OUTLINE_ALPHA)),
+                )
             })
             .map(self.height, |el, h| el.height(Size::px(h)).center())
             .child(label)

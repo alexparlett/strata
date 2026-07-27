@@ -208,10 +208,10 @@ impl Component for Row {
                             .horizontal()
                             .cross_align(Alignment::Center)
                             .spacing(META_SPACING)
-                            .child(Meta::new(self.stats.clone()).color(self.theme.stats_color))
+                            .child(Meta::new(self.stats.clone()).color(self.theme.value_color))
                             .maybe_child(self.lines.map(|n| {
                                 Badge::value(plural(n, "line"), self.theme.meta_color)
-                                    .border(self.theme.badge_border_fill)
+                                    .outlined()
                                     .padding(Gaps::new(0., 4., 0., 4.))
                             })),
                     )

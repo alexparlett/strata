@@ -1167,11 +1167,8 @@
       "meta_color": {
         "reference": "disabled"
       },
-      "stats_color": {
+      "value_color": {
         "reference": "text_placeholder"
-      },
-      "badge_border_fill": {
-        "reference": "border_control"
       },
       "message_color": {
         "reference": "text_secondary"

@@ -56,25 +56,27 @@ define_theme!(
         group_icon_color: Color,
         /// A group header's name — for Problems, the tab its rows belong to.
         group_color: Color,
-        /// The header's count, a group header's tally, a row's `line L:C`, and a History row's
-        /// timestamp and line-count pill.
+        /// The most recessive run on a row — the header's count, a group header's tally, a
+        /// `line L:C`, a timestamp, a pill's label. The footnote tone.
         meta_color: Color,
-        /// A History row's run figures (`214 ms · 240 rows`) — a step *forward* from
-        /// [`meta_color`](Self::meta_color), which the timestamp beside it wears: what the run
-        /// did is the line's subject, when it ran is the footnote.
-        stats_color: Color,
-        /// The outline of a History row's line-count pill.
-        badge_border_fill: Color,
-        /// A row's message.
+        /// A row's **secondary fact**: figures that are the row's own data rather than its
+        /// prose. One step forward from [`meta_color`](Self::meta_color) and one back from
+        /// [`message_color`](Self::message_color) — a History row uses all three at once (a
+        /// query, what running it cost, and when), which is why the drawer needs a third text
+        /// tone at all.
+        value_color: Color,
+        /// A row's message — its prose, and the brightest run in a list.
         message_color: Color,
-        /// The surface a pressable row takes on hover — the History card, which is a whole
-        /// clickable block rather than a line of text.
+        /// The surface a **pressable** row takes on hover.
         ///
-        /// The app's `surface_hover`, not the canvas's `--c-surface2`: the canvas's value is one
-        /// step off *its* drawer surface, but ours is `surface_secondary`, which in Daylight is
-        /// pure white — leaving a ~2% step that reads as no hover at all. This card carries no
-        /// pointer cursor and no tooltip, so the fill is its only affordance; it has to be the
-        /// slot the rail and the tab strip already hover with.
+        /// Not History's: Problems' rows are pressable too (they switch to the owning tab) and
+        /// have no hover feedback at all, which is a gap this names rather than creates.
+        ///
+        /// It is the app's `surface_hover`, not the canvas's `--c-surface2`: the canvas's value
+        /// is one step off *its* drawer surface, but ours is `surface_secondary`, which in
+        /// Daylight is pure white — leaving a ~2% step that reads as no hover at all. A History
+        /// card carries no pointer cursor and no tooltip, so the fill is its only affordance; it
+        /// has to be the slot the rail and the tab strip already hover with.
         row_hover_fill: Color,
         /// The rule under an Events row — the recessive hairline *inside* a list, a step back
         /// from [`border_fill`](Self::border_fill), which separates the header from the body.

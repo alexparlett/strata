@@ -23,11 +23,19 @@ tab that finishes the drawer's **Clear**.
   back on the next open. The header's button is no longer parked: both log tabs now enable off the
   mounted body's `DrawerCount`, so the number in the header and the button beside it can't
   disagree.
-- **Theme.** Three fields on the existing `drawer` component theme rather than a second source:
-  `stats_color` (the run's figures — a step forward from `meta_color`, which the timestamp beside
-  them wears), `badge_border_fill` (the pill's outline) and `row_hover_fill` (the card's hover
-  surface). `Badge` grew `.border(..)`, an outlined variant that drops the tint — a pill is read
-  by its edge *or* its fill, and both is the same mark said twice.
+- **Theme.** Two fields on the existing `drawer` component theme, both named for a **row's role**
+  rather than for this tab — the drawer theme dresses three bodies, and a field called
+  `stats_color` is one the other two can never use. `value_color` is a row's *secondary fact*
+  (figures that are its own data, between `message_color`'s prose and `meta_color`'s footnote —
+  History is simply the first row to need all three at once), and `row_hover_fill` is a
+  **pressable** row's hover surface, which names an existing gap rather than creating one:
+  Problems' rows are pressable too and have no hover feedback at all.
+
+  A first pass also added `badge_border_fill` for the line-count pill's outline. That was the
+  overload: an outline is the *badge's* own dress, so `Badge::outlined()` derives it from its
+  foreground at `OUTLINE_ALPHA` exactly as the tint comes from `TINT_ALPHA`, and no consuming
+  surface pays a token for it (AGENTS.md §3). The derived edge lands within a couple of steps per
+  channel of the canvas's border on both sheets — `#363d48` vs `#363e4a`, `#d1d4d9` vs `#d5d8de`.
 
 ## Dedupe: history is a list of queries, not of presses
 

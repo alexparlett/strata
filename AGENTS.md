@@ -274,6 +274,16 @@ Things that must not regress. Each was fought for once already.
   (`success` / `warning` / `error` / `info` — the status bar's state dot), because those must
   follow the app-wide ramp wherever they appear. Mixing the two sources in one component is how
   `colors.border` ends up beside a `border_fill` that already holds the same value.
+- **A shared theme's fields are named for the role they play, not for whoever needed one first,
+  and a component's own dress never becomes one.** The `drawer` theme dresses three bodies, so a
+  field called `stats_color` is one the other two can never use — it is `value_color`, "a row's
+  secondary fact", and History is merely the first row wanting all three text tones at once. The
+  same question kills a field outright when the colour belongs to a *component*: the line-count
+  pill's outline was briefly `badge_border_fill` on the drawer, but an outline is the badge's own
+  dress, so `Badge::outlined()` derives it from its foreground exactly as the tint derives from
+  `TINT_ALPHA` — and every surface that ever uses an outlined badge pays nothing. Before adding a
+  field, ask which of the surface's other users could name it too; if the answer is none, it is
+  either misnamed or it belongs to the component.
 - **Fonts are never hardcoded.** Text goes through the typography role components
   (src/components/typography.rs); `Input`s are wrapped in `InputTypography::body(..)`/`::mono(..)`;
   `CodeEditor` pulls from the theme's code scale. Mixed-style inline text (one sentence changing
