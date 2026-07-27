@@ -107,6 +107,12 @@ impl Component for Panes {
 /// The pane frame both halves share — a bordered box with a header strip over a scroll body.
 fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
     let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
+    // The header carries the pane's own top corners, one border-width tighter because it sits
+    // inset by that much. Without them its square corners stop short of the pane's rounded clip
+    // and the strip's background reads as nicked at each end.
+    let mut header_radius = CornerRadius::default();
+    header_radius.fill_top(PANE_RADIUS - PANE_BORDER);
+
     rect()
         .width(Size::fill())
         .vertical()
@@ -134,6 +140,7 @@ fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
                 .main_align(Alignment::SpaceBetween)
                 .spacing(8.)
                 .padding((0., 12.))
+                .corner_radius(header_radius)
                 .background(theme.header_background)
                 .child(header),
         )
