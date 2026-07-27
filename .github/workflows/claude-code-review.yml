@@ -22,12 +22,22 @@ jobs:
       id-token: write
     steps:
       # The review pulls the diff through gh, but reads the working tree for
-      # context (CLAUDE.md, AGENTS.md, surrounding code). crates/freya is a
-      # submodule and is deliberately not fetched - it is a large checkout and
-      # is not part of any diff under review.
+      # context (CLAUDE.md, AGENTS.md, surrounding code). `crates/freya` - our
+      # Freya fork - comes with it: it is the ground truth for Freya's APIs, so
+      # the reviewer can check a claim about a component, event or theme instead
+      # of guessing, and can tell a genuine fork limitation from app code working
+      # around one (AGENTS.md §6). It is a large checkout, but nothing here
+      # compiles it and `fetch-depth: 1` keeps the fetch shallow.
+      #
+      # `continue-on-error` because the one submodule failure that actually
+      # happens is a fork commit that was never pushed (AGENTS.md §6). CI already
+      # fails loudly on that; here it should cost the reviewer its Freya context,
+      # not the whole review. The prompt tells it to say so when the tree is empty.
       - uses: actions/checkout@v6
+        continue-on-error: true
         with:
           fetch-depth: 1
+          submodules: true
 
       - uses: anthropics/claude-code-action@v1
         with:
@@ -51,6 +61,23 @@ jobs:
             callers of a changed signature, races. Every finding needs a concrete case
             where the code misbehaves - if you cannot name one, it is not a finding.
             Prefer a handful of real problems to a long list of style notes.
+
+            One further class of finding this repository cares about: app code that
+            works around a Freya limitation instead of fixing it in the fork. AGENTS.md
+            §6 is the rule, and the shapes it names are the tell - a registry or bus
+            standing in for something the framework should order, a scale-factor
+            correction in component code, a theme token duplicated onto a consuming
+            surface because a component's own theme lacks the state, a hand-rolled
+            lookalike of a built-in component, reaching past an API for a raw winit or
+            objc2 handle, a `cfg`-gated platform hack outside `freya-winit`.
+
+            Our Freya fork is checked out at `crates/freya`, so verify before you claim
+            it: find the component, event or theme in `crates/freya/crates/**`, name the
+            file, and say what the fork change would be. A guess about Freya's API is
+            worse than no finding - the fork is also the ground truth whenever the diff
+            asserts anything about Freya's behaviour. If `crates/freya` is empty, the
+            submodule checkout failed (usually an unpushed fork commit): say so in the
+            summary, review the rest, and do not guess at Freya's APIs.
 
             Do the whole review YOURSELF, in this conversation. Do not delegate to
             subagents and do not start background tasks: this runs headless, so the run
