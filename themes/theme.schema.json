@@ -1093,6 +1093,9 @@
             "panel_background": {
               "$ref": "#/$defs/colorPref"
             },
+            "header_background": {
+              "$ref": "#/$defs/colorPref"
+            },
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },

@@ -569,7 +569,7 @@
         "reference": "text_placeholder"
       },
       "note_background": {
-        "reference": "surface_overlay"
+        "reference": "surface_primary"
       },
       "note_border_fill": {
         "reference": "border_control"
@@ -1413,10 +1413,13 @@
     },
     "export": {
       "background": {
-        "reference": "surface_secondary"
+        "reference": "surface_overlay"
       },
       "panel_background": {
-        "reference": "surface_overlay"
+        "reference": "surface_primary"
+      },
+      "header_background": {
+        "reference": "surface_secondary"
       },
       "border_fill": {
         "reference": "border"

@@ -53,11 +53,15 @@ define_theme!(
     %[component]
     pub Export {
         %[fields]
-        /// The window body, behind the format cards and the option list.
+        /// The window body (canvas `--c-pop`) — the *lightest* of the three tones here.
         background: Color,
-        /// A raised inset surface — a format card at rest, a text field, the preview block,
-        /// and the two transfer panes.
+        /// A **recessed** inset (canvas `--c-panel`) — a format card at rest, a text field,
+        /// the preview block, and the two transfer panes. Below the body, not above it: the
+        /// canvas sinks a form's boxes into the window rather than floating them on it.
         panel_background: Color,
+        /// A transfer pane's header strip (canvas `--c-surface`), between the two — which is
+        /// what makes it read as a header rather than as more of either.
+        header_background: Color,
         /// The title-bar rule, the preview's separator, and a panel's edge.
         border_fill: Color,
         /// A control's edge — a text field, a card, a transfer pane's header.

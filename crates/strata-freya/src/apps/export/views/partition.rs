@@ -114,7 +114,7 @@ fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
                 .main_align(Alignment::SpaceBetween)
                 .spacing(8.)
                 .padding((0., 12.))
-                .background(theme.background)
+                .background(theme.header_background)
                 .child(header),
         )
         .child(Divider::horizontal().color(theme.border_fill))
