@@ -14,7 +14,6 @@
 //! row wraps a [`ValueField`](crate::components::value_field::ValueField), a `Switch`, a
 //! `Select` or anything else without this knowing which.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 
 use crate::components::icon::{Icon, IconName};
@@ -28,6 +27,10 @@ define_theme!(
         label_color: Color,
         /// The ⓘ that carries the hint.
         hint_color: Color,
+        /// [`FieldNote`]'s box — the same raised inset every other boxed thing in a form sits
+        /// on, so a note reads as a callout rather than a hole in the surface.
+        note_background: Color,
+        note_border_fill: Color,
     }
 );
 
@@ -126,20 +129,17 @@ impl Component for FieldNote {
             FieldRowThemePreference,
             "field_row"
         );
-        // Semantic surfaces, not row tokens: a note sits on the same inset panel every other
-        // boxed thing in a form does, and that is the sheet's, so it stays right on a surface
-        // this component has never seen.
-        let (background, border) = {
-            let base = use_theme();
-            let base = base.read();
-            (base.colors().surface_primary, base.colors().border)
-        };
+        // The box comes off this component's own theme, not the base sheet. Reading
+        // `surface_primary` there looked equivalent and is not: it is a *lower* tone than the
+        // window body, so the note read as a hole punched in the surface while the panes
+        // beside it read as raised. A component's dress is its own theme's (AGENTS.md §3), and
+        // the sheet is only for the semantic ramp — which a note is not.
         rect()
             .width(Size::fill())
             .padding((12., 12.))
             .corner_radius(6.)
-            .background(background)
-            .border(Border::new().width(1.).fill(border))
+            .background(theme.note_background)
+            .border(Border::new().width(1.).fill(theme.note_border_fill))
             .child(
                 crate::components::typography::Prose::new(self.text.clone())
                     .color(theme.label_color)

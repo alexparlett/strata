@@ -567,6 +567,12 @@
       },
       "hint_color": {
         "reference": "text_placeholder"
+      },
+      "note_background": {
+        "reference": "surface_overlay"
+      },
+      "note_border_fill": {
+        "reference": "border_control"
       }
     },
     "segmented_toggle": {
