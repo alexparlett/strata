@@ -111,14 +111,12 @@ impl Component for OptionGroup {
                 field,
                 width: TEXT_WIDTH,
                 height: FIELD_HEIGHT,
-                align: TextAlign::Left,
             }
             .into(),
             Control::Char(field) => FieldControl {
                 field,
                 width: CHAR_WIDTH,
                 height: FIELD_HEIGHT,
-                align: TextAlign::Center,
             }
             .into(),
             Control::Num {
@@ -181,12 +179,11 @@ impl Component for SegControl {
             // The box beside a segmented control is built to the **pill's** height, not the
             // 30px every other field uses: they sit side by side in one row, so a box that is
             // nine pixels short of its neighbour reads as a mistake whatever the canvas says.
-            // Narrow and centred with it — it holds a token like `\N`, not a sentence.
+            // Narrow with it too — it holds a token like `\N`, not a sentence.
             .maybe_child(self.custom.clone().map(|field| FieldControl {
                 field,
                 width: CUSTOM_WIDTH,
                 height: SegmentedToggle::FORM_HEIGHT,
-                align: TextAlign::Center,
             }))
     }
 }
@@ -210,6 +207,13 @@ impl Component for ToggleControl {
 
 /// A free-text field (the delimiter, a quote character, the custom null text).
 ///
+/// **Left-aligned, including the narrow boxes the canvas centres.** `Input` lays its text out in
+/// a paragraph whose `min_width` comes from `context.parent`, inside a horizontal scroll view;
+/// in a box this narrow that resolves wider than the box itself, so `text_align(Center)` centres
+/// the run in a box you cannot see and it lands visibly right of centre. Left is what the
+/// control can actually honour. Centring these properly is a fix to `Input`'s paragraph sizing
+/// in the fork, not something to re-attempt here.
+///
 /// It keeps its own edit buffer rather than binding the draft directly: the draft holds the
 /// *resolved* intent and this holds what is being typed, so a half-typed `\t` isn't repeatedly
 /// re-resolved under the cursor.
@@ -219,8 +223,6 @@ struct FieldControl {
     width: f32,
     /// Normally [`FIELD_HEIGHT`]; the box beside a segmented control matches that pill instead.
     height: f32,
-    /// The canvas centres the one- and few-character boxes and left-aligns the wider ones.
-    align: TextAlign,
 }
 
 impl Component for FieldControl {
@@ -262,7 +264,6 @@ impl Component for FieldControl {
                     Input::new(text)
                         .placeholder(self.field.placeholder)
                         .width(Size::fill())
-                        .text_align(self.align)
                         .compact(),
                 )
                 .width(Size::fill()),
