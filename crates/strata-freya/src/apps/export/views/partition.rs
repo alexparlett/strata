@@ -15,8 +15,10 @@ use freya::prelude::*;
 
 use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
+use crate::components::field_row::FieldRow;
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{Caption, InputTypography, Meta, MonoValue, Prose};
+use crate::components::typography::{Caption, Meta, MonoValue, Prose};
+use crate::components::value_field::ValueField;
 
 /// Above this many unselected columns the AVAILABLE pane grows a filter (the canvas's rule).
 const FILTER_THRESHOLD: usize = 8;
@@ -33,7 +35,6 @@ pub struct Partition;
 
 impl Component for Partition {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
         let ctx = use_consume::<ExportCtx>();
         let draft = ctx.draft.read();
         let enabled = draft.partition.enabled;
@@ -58,14 +59,9 @@ impl Component for Partition {
             )
             .child(Prose::new(state_label));
 
-        rect()
-            .width(Size::fill())
-            .vertical()
-            .spacing(12.)
-            .child(
-                crate::components::typography::Eyebrow::new("HIVE PARTITIONING")
-                    .color(theme.label_color),
-            )
+        // The same labelled row every option group uses — this section is one of them, with a
+        // toggle for its control and the panes beneath.
+        FieldRow::new("HIVE PARTITIONING")
             .child(toggle)
             .maybe_child(enabled.then_some(Panes))
             .maybe_child((enabled && has_selection).then_some(KeepColumns))
@@ -193,20 +189,16 @@ impl Component for Available {
             // The magnifier is the input's own `leading`, not a glyph beside a chrome-less
             // input in a hand-drawn strip — the catalog sidebar's filter is the same control
             // and does it this way.
-            InputTypography::body(
-                Input::new(filter_text)
-                    .placeholder("Filter…")
-                    .leading(
-                        Icon::new(IconName::Search)
-                            .color(theme.label_color)
-                            .size(13.),
-                    )
-                    .height(Size::px(FILTER_HEIGHT))
-                    .width(Size::flex(1.))
-                    .compact(),
-            )
-            .width(Size::flex(1.))
-            .into_element()
+            ValueField::new(filter_text)
+                .placeholder("Filter…")
+                .leading(
+                    Icon::new(IconName::Search)
+                        .color(theme.label_color)
+                        .size(13.),
+                )
+                .height(Size::px(FILTER_HEIGHT))
+                .width(Size::flex(1.))
+                .into_element()
         } else {
             Caption::new("AVAILABLE")
                 .color(theme.label_color)

@@ -561,6 +561,14 @@
         "reference": "primary"
       }
     },
+    "field_row": {
+      "label_color": {
+        "reference": "text_label"
+      },
+      "hint_color": {
+        "reference": "text_placeholder"
+      }
+    },
     "segmented_toggle": {
       "background": {
         "reference": "surface_secondary"

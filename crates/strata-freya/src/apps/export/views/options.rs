@@ -21,13 +21,11 @@
 
 use freya::prelude::*;
 
-use crate::apps::export::{
-    Choice, Control, Edit, ExportCtx, ExportThemePartial, ExportThemePreference, Group, Make,
-    TextField,
-};
-use crate::components::icon::{Icon, IconName};
+use crate::apps::export::{Choice, Control, Edit, ExportCtx, Group, Make, TextField};
+use crate::components::field_row::{FieldNote, FieldRow};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
-use crate::components::typography::{Eyebrow, InputTypography, MonoValue, Prose};
+use crate::components::typography::MonoValue;
+use crate::components::value_field::{NumberField, ValueField, FIELD_HEIGHT};
 
 /// Field boxes, from the canvas: a one-character field, a short text field, a number, the
 /// custom box beside a segmented control, and a select (the one control the canvas draws 32
@@ -38,7 +36,6 @@ const NUM_WIDTH: f32 = 72.;
 const CUSTOM_WIDTH: f32 = 62.;
 const SELECT_WIDTH: f32 = 180.;
 const SELECT_HEIGHT: f32 = 32.;
-const FIELD_HEIGHT: f32 = 30.;
 
 /// Write one control's edit into the draft.
 ///
@@ -88,21 +85,6 @@ impl KeyExt for OptionGroup {
 
 impl Component for OptionGroup {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
-
-        // The label row: the eyebrow, and the ⓘ carrying the hint as a tooltip — the canvas
-        // swept every inline grey explainer into a hover tip.
-        let header = rect()
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .spacing(8.)
-            .child(Eyebrow::new(self.group.label.clone()).color(theme.label_color))
-            .maybe_child(self.group.hint.map(|hint| {
-                TooltipContainer::new(Tooltip::new(hint))
-                    .position(AttachedPosition::Top)
-                    .child(Icon::new(IconName::Info).size(12.).color(theme.hint_color))
-            }));
-
         // One component per shape — see the module doc on why this isn't a helper fn.
         let control: Element = match self.group.control.clone() {
             Control::Seg { options, custom } => SegControl { options, custom }.into(),
@@ -134,14 +116,13 @@ impl Component for OptionGroup {
             }
             .into(),
             Control::Select { options } => SelectControl { options }.into(),
-            Control::Note(text) => NoteControl { text }.into(),
+            Control::Note(text) => FieldNote::new(text).into(),
         };
 
-        rect()
-            .width(Size::fill())
-            .vertical()
-            .spacing(8.)
-            .child(header)
+        // The label, its hint and the gap under them are the shared form row's — this window
+        // contributes only which control goes in it.
+        FieldRow::new(self.group.label.clone())
+            .map(self.group.hint, |row, hint| row.hint(hint))
             .child(control)
     }
 
@@ -210,11 +191,9 @@ impl Component for ToggleControl {
 
 /// A free-text field (the delimiter, a quote character, the custom null text).
 ///
-/// The box is the `Input`'s own. It is told its height directly — the fork grew `Input::height`
-/// for this, because an input sized only by its text cannot stand beside a control of a fixed
-/// size, and wrapping it in a sized container does not help: a wrapper only centres a
-/// differently sized input inside itself, leaving the background and border at the content
-/// height.
+/// The box itself is the shared [`ValueField`] — its height, its length cap and its mono dress
+/// are the app's, not this window's. What is left here is the only export-specific part: the
+/// edit buffer, and carrying what is typed into the draft.
 #[derive(PartialEq)]
 struct FieldControl {
     field: TextField,
@@ -229,7 +208,7 @@ impl Component for FieldControl {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ExportCtx>();
         // `Input` writes its bound state directly (there is no on-change prop), so the buffer
-        // is the input's and this effect carries it into the draft. No sync-back effect is
+        // is the field's and this effect carries it into the draft. No sync-back effect is
         // needed: the group list is keyed by label, so a format switch unmounts these controls
         // outright and the next mount re-seeds from the draft.
         let text = use_state({
@@ -238,36 +217,28 @@ impl Component for FieldControl {
         });
 
         let make = self.field.make;
-        let max_len = self.field.max_len;
         use_side_effect(move || {
-            // The canvas's `maxlength`, enforced on the **box** and not just on the way out:
-            // truncating only the draft would show "ab" in a one-character field and quote
-            // with "a", which is a control disagreeing with the file it produces.
-            let raw = text.read().clone();
-            let capped: String = raw.chars().take(max_len).collect();
-            if capped != raw {
-                let mut text = text;
-                text.set(capped.clone());
-            }
             // Applied unconditionally: `ExportCtx::edit` is idempotent, so a no-op edit costs
             // nothing — and comparing here against a captured value is precisely the bug this
             // replaces (`use_side_effect` builds its closure once, so the capture froze at the
             // first render and typing a field back to its original value wrote nothing).
-            apply(ctx, make.edit(capped));
+            // `ValueField` has already trimmed the state to `max_len`, so this reads what the
+            // box shows.
+            apply(ctx, make.edit(text.read().clone()));
         });
 
-        InputTypography::mono(
-            Input::new(text)
-                .placeholder(self.field.placeholder)
-                .width(Size::px(self.width))
-                .height(Size::px(self.height))
-                .text_align(self.align)
-                .compact(),
-        )
+        ValueField::new(text)
+            .width(Size::px(self.width))
+            .height(Size::px(self.height))
+            .max_len(self.field.max_len)
+            .align(self.align)
+            .placeholder(self.field.placeholder)
     }
 }
 
-/// A bounded number (the Parquet compression level).
+/// A bounded number (the Parquet compression level) — the shared [`NumberField`], bound to the
+/// draft. The parse, the clamp and the buffer are the component's; the only thing here is what
+/// a new value *means*.
 #[derive(PartialEq)]
 struct NumControl {
     value: u32,
@@ -279,31 +250,10 @@ struct NumControl {
 impl Component for NumControl {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ExportCtx>();
-        let value = self.value;
-        let text = use_state(move || value.to_string());
-
-        let (make, min, max) = (self.make, self.min, self.max);
-        use_side_effect(move || {
-            let typed = text.read().trim().to_string();
-            // Clamp rather than accept: the engine clamps too, and a control that disagrees
-            // with the file it produces is worse than one that corrects itself. Applied
-            // unconditionally — `ExportCtx::edit` is idempotent, and the comparison this
-            // replaces was against a value frozen at the first render, so setting the level
-            // back to its starting number wrote nothing.
-            //
-            // An empty or half-typed box is left alone: the draft keeps the last good value
-            // until something parseable arrives.
-            if let Ok(parsed) = typed.parse::<u32>() {
-                apply(ctx, make.edit(parsed.clamp(min, max)));
-            }
-        });
-
-        InputTypography::mono(
-            Input::new(text)
-                .width(Size::px(NUM_WIDTH))
-                .height(Size::px(FIELD_HEIGHT))
-                .compact(),
-        )
+        let make = self.make;
+        NumberField::new(self.value, self.min, self.max)
+            .width(Size::px(NUM_WIDTH))
+            .on_change(move |value: u32| apply(ctx, make.edit(value)))
     }
 }
 
@@ -343,25 +293,5 @@ impl Component for SelectControl {
                             .collect::<Vec<Element>>(),
                     ),
             )
-    }
-}
-
-/// A statement rather than a control — the Arrow explainer. Not an empty list: silence would
-/// read as "options are still loading".
-#[derive(PartialEq)]
-struct NoteControl {
-    text: &'static str,
-}
-
-impl Component for NoteControl {
-    fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
-        rect()
-            .width(Size::fill())
-            .padding((12., 12.))
-            .corner_radius(6.)
-            .background(theme.panel_background)
-            .border(Border::new().width(1.).fill(theme.border_fill))
-            .child(Prose::new(self.text).color(theme.label_color).wrap())
     }
 }

@@ -1401,6 +1401,18 @@
             }
           }
         },
+        "field_row": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hint_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "segmented_toggle": {
           "type": "object",
           "additionalProperties": false,
