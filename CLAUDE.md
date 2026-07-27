@@ -134,6 +134,13 @@ src/platform/open.rs             **where** an open lands, vs windows.rs's *how*:
                                  project = no-op; already-windowed = focus, outranking the pref);
                                  acting is split off (`OpenTarget`) because the menubar handler
                                  has a RendererContext and no Platform
+src/platform/export.rs           where an Export window goes: a native child of the project
+                                 window that asked, gone when that window goes — and pointedly
+                                 **not** single-instance. Settings shows app-wide state so a
+                                 second ⌘, can only mean focus; an export window is opened *on a
+                                 result* and carries that run's snapshot, so focusing an open one
+                                 would show the wrong run. One per press of Download, each
+                                 closing itself when its write lands
 src/menu.rs                      the macOS menubar: App · **File** (Open… · Open Recent ·
                                  Close Project) · Edit. Not static — `app_menu` hands back
                                  `MenuHandles`, and the *focused* window keeps the File menu
@@ -234,6 +241,32 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
                                  one-way, so nothing put the answer back to Ask. The history
                                  floor is `strata_core::config::HISTORY_MIN`, the same floor
                                  `history_cap` applies (a `0` would rotate `history.jsonl` away)
+src/apps/export/                 the export window (P4-10, `Export.dc.html` for the markup,
+                                 `Strata.exportGroups()` for the options) — opened from the
+                                 results toolbar, pinned above the project window that asked
+  mod.rs                         root + window config + the `export` component theme, and
+                                 `ExportCtx`: the draft, the launch values, and **the one write
+                                 path** (`edit`, idempotent, so every control writes the same
+                                 way). **It exports a result, not a tab** — the window carries
+                                 that run's `ExportTarget` (snapshot handle · schema · rows ·
+                                 the grid's sort · the page in hand) and **pins** the snapshot
+                                 for its whole life, so a re-run in the tab behind can neither
+                                 truncate a running `COPY` nor make the export report no results
+  model.rs                       **options are data**: `ExportDraft::groups` returns a
+                                 `Vec<Group>` the view renders blind, so a new option is a row
+                                 in a table, not a branch in a component (D6's actual ask).
+                                 Every option carries the `Edit` it performs, so a control
+                                 cannot write the wrong field; the draft keeps every format's
+                                 options side by side. Unit-tested without a renderer
+  preview.rs                     what the chosen options will produce — P3-08's "only real
+                                 facts" again: real rows from the page in hand, real types from
+                                 the run's schema, no `estSize()` compression guesswork
+  views/                         title_bar · formats (four cards, not five — the canvas dropped
+                                 Clipboard once the grid grew its own copy controls) · options
+                                 (one component per control *shape*, so the hook count per
+                                 render is fixed) · partition (the Hive `key=value` transfer
+                                 panes) · footer (the only thing here that writes: pick a
+                                 destination, build the spec, call the engine, log both arms)
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     two layers: `ProjectApp` = the **window** (theme, app-globals,
                                  close bridge, menubar, OpenCtx) and `ProjectRoot` = the **open
@@ -463,6 +496,20 @@ for the views that read it. `Engine::profile` / `cancel_profile` own the engine 
 scan counts as work in flight for the window-close confirm and not for the per-tab probe. The
 canvas's **distribution bars are deliberately not built** — the scan has no distribution data and
 an honest histogram needs a second full pass (P3-09's file has the reasoning).
+
+**P4-10 (export window)** is ✅ — rebuilt from the canvas rather than ported, because the Dioxus
+modal had drifted from the design and reached its screen through hardcoded `match` arms per
+format. Four things it settled. **Options are data**: `ExportDraft::groups` hands the view a
+`Vec<Group>` and each option carries the `Edit` it performs, so adding one is a table row and no
+control can write the wrong field. **A window opened on a result pins what it reads** — the
+snapshot pin (AGENTS.md §2) exists because of this window: a re-run in the tab behind used to
+retire the table mid-`COPY`. **NULL partition values are refused, not warned about**: DataFusion
+54 misfiles them into a neighbouring value's directory, which is silent corruption, so
+`partition_columns_have_no_nulls` reads the parquet footer and proceeds **only on an exact zero**
+(schema nullability is useless here — every column reports nullable), which is also why
+`snapshot_writer_props` sets `EnabledStatistics::Chunk` explicitly. And the form vocabulary it
+grew — the labelled row, the mono value box, the bounded number — went to
+`components::form` with P4-05 rather than staying the export's own.
 
 ---
 

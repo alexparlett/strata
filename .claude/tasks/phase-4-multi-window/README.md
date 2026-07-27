@@ -14,8 +14,11 @@ theme preview (`state/theme_preview.rs`) — and one window path everything open
 CloseRequested`** (no objc), and the one place objc *is* reached for is the fork's
 `set_window_parent` (P4-03 pins Settings above the window that opened it). What's left in this
 phase is the settings **categories** (P4-07…P4-09, Appearance, Data-display and System having
-landed with P4-04 / P4-05 / P4-06) and the remaining windows: export, the config modal — plus
-P4-13's open/create UI.
+landed with P4-04 / P4-05 / P4-06) and the config modal — plus P4-13's open/create UI. **P4-10
+settled how a window opened *on something* behaves**: an export window carries the run it was
+opened on, so it is a child window with deliberately **no** single-instance rule (focusing an open
+one would show the wrong run), and it **pins** the snapshot it reads for its whole life — the RAII
+pin in AGENTS.md §2 exists because of it.
 **P4-04 settled how every later pane commits**: the draft is diffed per-field against its seed
 (`Settings::merge_onto`, exhaustive by compiler check), never written wholesale, so a setting
 another window wrote while Settings was open survives Apply — add a field, and the build tells you
@@ -25,8 +28,10 @@ them (the module composes `Form` > `Row` > control, the register being a `Varian
 The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebuild.
 
 > **Pull P4-15 before the remaining writers.** `.strata` write failures are reported through
-> `tracing` and nowhere the user can see, and **P4-10 / P4-11 / P4-12 each add a new mutation
-> site** whose surrounding idiom is exactly that silence. P3-13 fixed the three def-mutation paths
+> `tracing` and nowhere the user can see, and **P4-11 / P4-12 each add a new mutation site**
+> whose surrounding idiom is exactly that silence. P4-10 landed ahead of it and reports both
+> arms through P3-13's `log_event` directly — leaving P4-15 the question of whether an export,
+> which writes where the *user* chose rather than into `.strata`, belongs in that funnel at all. P3-13 fixed the three def-mutation paths
 > it touched (Save, Save-as-view, drop) and gave them one helper; P4-15 generalises it, covers the
 > session / history / app-config writers, and settles what the UI says while a write is failing.
 > It is the *write*-side counterpart to **P4-01 item 5** (a file that won't load closes the
@@ -45,7 +50,7 @@ The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebu
 | P4-07 | Settings ▸ Engine (properties editor) | ⬜ | W2 | P4-03 |
 | P4-08 | Settings ▸ Keymap (rebindable) | ⬜ | W4 | P4-03, P2-20 |
 | P4-09 | Settings search | ⬜ | W3 | P4-03 |
-| P4-10 | Export window (rebuild to canvas) | ⬜ | D6/U13 | P4-01, P2-01 |
+| P4-10 | Export window (rebuild to canvas) | ✅ | D6/U13 | P4-01, P2-01 |
 | P4-11 | Config / register-table modal | ⬜ | U14/D7 | — |
 | P4-12 | Import (read) options (CSV/JSON) | ⬜ | D8 | P4-11 |
 | P4-13 | Open / create a project (`.strata/` load) | 🟡 internals + the open path done (`OpenPref` honoured everywhere; This Window = keyed remount); **New Project** UI remains | lifecycle | P4-01 · *pull early* |
