@@ -16,7 +16,7 @@ use freya::prelude::*;
 use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{Caption, Meta, MonoValue, Prose};
+use crate::components::typography::{Caption, InputTypography, Meta, MonoValue, Prose};
 
 /// Above this many unselected columns the AVAILABLE pane grows a filter (the canvas's rule).
 const FILTER_THRESHOLD: usize = 8;
@@ -24,6 +24,8 @@ const FILTER_THRESHOLD: usize = 8;
 const PANE_MIN_HEIGHT: f32 = 128.;
 const PANE_MAX_HEIGHT: f32 = 176.;
 const PANE_HEADER_HEIGHT: f32 = 30.;
+/// The filter sits in that header strip, so it is built to clear it.
+const FILTER_HEIGHT: f32 = 24.;
 const ROW_HEIGHT: f32 = 32.;
 
 #[derive(PartialEq)]
@@ -188,34 +190,23 @@ impl Component for Available {
         });
 
         let header: Element = if show_filter {
-            let text = filter_text;
-            rect()
-                .width(Size::fill())
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .content(Content::Flex)
-                .spacing(8.)
-                .child(
-                    Icon::new(IconName::Search)
-                        .size(12.)
-                        .color(theme.label_color),
-                )
-                .child(
-                    crate::components::typography::InputTypography::body(
-                        Input::new(text)
-                            .placeholder("Filter…")
-                            .width(Size::fill())
-                            .compact()
-                            // Bare: the pane's header strip wears the chrome, so the input's
-                            // own dress goes fully transparent (the find popover's recipe).
-                            .background(Color::TRANSPARENT)
-                            .focus_background(Color::TRANSPARENT)
-                            .border_fill(Color::TRANSPARENT)
-                            .focus_border_fill(Color::TRANSPARENT),
+            // The magnifier is the input's own `leading`, not a glyph beside a chrome-less
+            // input in a hand-drawn strip — the catalog sidebar's filter is the same control
+            // and does it this way.
+            InputTypography::body(
+                Input::new(filter_text)
+                    .placeholder("Filter…")
+                    .leading(
+                        Icon::new(IconName::Search)
+                            .color(theme.label_color)
+                            .size(13.),
                     )
-                    .width(Size::flex(1.)),
-                )
-                .into_element()
+                    .height(Size::px(FILTER_HEIGHT))
+                    .width(Size::flex(1.))
+                    .compact(),
+            )
+            .width(Size::flex(1.))
+            .into_element()
         } else {
             Caption::new("AVAILABLE")
                 .color(theme.label_color)
