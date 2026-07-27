@@ -28,7 +28,7 @@
 mod catalog;
 pub mod config;
 mod explain;
-mod export;
+pub mod export;
 mod functions;
 pub mod plan;
 pub mod profile;
@@ -72,7 +72,7 @@ pub fn stopped_on_purpose(error: &str) -> bool {
     matches!(error, CANCELLED | SUPERSEDED_RUN | SUPERSEDED_SCAN)
 }
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -158,6 +158,17 @@ struct Lifecycle {
     /// In-flight profile scans by entry identity ([`fold_ident`] of the name — tables and
     /// views share one namespace).
     profiles: HashMap<String, ProfileRun>,
+    /// How many exports are writing right now. A **count, not a map**: nothing addresses one
+    /// export — there is no cancel, no supersede and no per-export state to look up. All it
+    /// has to do is keep [`publish_inflight`](Engine::publish_inflight) true while a file is
+    /// half-written.
+    exports: usize,
+    /// Snapshots a caller is **holding open**, and how many holds each has
+    /// ([`Engine::pin_snapshot`]). A pinned snapshot survives its workspace re-running.
+    pins: HashMap<SnapshotId, usize>,
+    /// Snapshots whose retire arrived while they were pinned. They are retired for real
+    /// when the last pin releases — deferred, never skipped, so nothing leaks.
+    deferred: HashSet<SnapshotId>,
 }
 
 /// A window's engine. Create once per project window (cheap to share as `Arc<Engine>`);
@@ -265,10 +276,14 @@ impl Engine {
     /// A **profile counts** (D4): a scan is the most expensive thing the app does, and closing
     /// the window would throw it away — exactly what the confirm exists to ask about. The
     /// per-tab probe below deliberately does not, because a profile is not a tab's work.
+    ///
+    /// An **export counts** for a stronger reason than either: closing mid-write doesn't lose
+    /// work, it leaves a truncated file (or a half-built Hive tree) on the user's disk under
+    /// the name they chose. Like a profile, it is nobody's tab, so the per-tab probe ignores it.
     fn publish_inflight(&self, lc: &Lifecycle) {
         if let Some(flag) = self.inflight_flag.get() {
             flag.store(
-                !lc.inflight.is_empty() || !lc.profiles.is_empty(),
+                !lc.inflight.is_empty() || !lc.profiles.is_empty() || lc.exports > 0,
                 Ordering::Relaxed,
             );
         }
@@ -335,7 +350,9 @@ impl Engine {
             // keeping all lifecycle in this one lock (spec §4). Cached UI pages of it
             // are unaffected; uncached reads of it now fail cleanly.
             if let Some(old) = lc.current.remove(&ws) {
-                retire_snapshot(&self.ctx, self.engine_id, old);
+                // Deferred rather than immediate if something is holding it open — an export
+                // window opened on that result still owes the user those rows.
+                self.retire_or_defer(&mut lc, old);
             }
             let ctx = self.ctx.clone();
             let engine_id = self.engine_id;
@@ -561,6 +578,128 @@ impl Engine {
         cancelled
     }
 
+    // --- snapshot pins ----------------------------------------------------
+
+    /// Hold `snapshot` open for as long as the returned [`SnapshotPin`] lives: while a pin is
+    /// out, retiring the snapshot is **deferred**, not skipped.
+    ///
+    /// A snapshot is owned by its workspace and retired the moment that workspace dispatches
+    /// another run (`docs/SNAPSHOT_SPEC.md` §4) — which is right for the grid, whose pages
+    /// follow the tab, and wrong for anything that outlives one press. The export window is
+    /// the first such reader: it is opened *on a result*, may sit there while the user goes
+    /// back and re-runs the query, and must still write the rows that were on screen when it
+    /// was opened. Without a pin a re-run deregisters the table mid-`COPY` and truncates the
+    /// file, or — the quieter failure — makes a later Export report no results at all when
+    /// there are plainly some on screen.
+    ///
+    /// **RAII rather than a pin/unpin pair**, deliberately: this is the same rule freya-query
+    /// cache entries live by (lifetime is a held handle, never imperative bookkeeping), so a
+    /// caller expresses "I still need this" by keeping the guard, and an early return, a
+    /// panic or a dropped window all release it.
+    pub fn pin_snapshot(self: &Arc<Self>, snapshot: SnapshotId) -> SnapshotPin {
+        let mut lc = self.lifecycle.lock().unwrap();
+        *lc.pins.entry(snapshot).or_insert(0) += 1;
+        drop(lc);
+        SnapshotPin {
+            engine: Arc::clone(self),
+            snapshot,
+        }
+    }
+
+    /// Take one hold without the `Arc` a [`SnapshotPin`] needs — for [`ExportGuard`], which
+    /// borrows the engine for the length of one call. Always released by that guard's `Drop`.
+    fn acquire_pin(&self, snapshot: SnapshotId) {
+        let mut lc = self.lifecycle.lock().unwrap();
+        *lc.pins.entry(snapshot).or_insert(0) += 1;
+    }
+
+    /// Drop one hold, retiring the snapshot for real if this was the last one and a retire
+    /// arrived while it was pinned.
+    fn release_pin(&self, snapshot: SnapshotId) {
+        let mut lc = self.lifecycle.lock().unwrap();
+        match lc.pins.get_mut(&snapshot) {
+            Some(holds) if *holds > 1 => *holds -= 1,
+            Some(_) => {
+                lc.pins.remove(&snapshot);
+                if lc.deferred.remove(&snapshot) {
+                    retire_snapshot(&self.ctx, self.engine_id, snapshot);
+                }
+            }
+            // Unbalanced release — a bug in a caller, and the kind that would otherwise show
+            // up much later as a snapshot that never goes away.
+            None => tracing::error!(
+                "engine {}: released a pin on snapshot {snapshot} that was never held",
+                self.engine_id
+            ),
+        }
+    }
+
+    /// Retire `snapshot` unless someone is holding it open, in which case remember to retire
+    /// it when the last hold releases.
+    ///
+    /// Every retire of a snapshot a caller **has been handed** goes through here. The three
+    /// inside [`query`](Engine::query)'s settle path deliberately do not: they retire a run's
+    /// own partial or a superseded run's output, neither of which is ever returned, so nothing
+    /// can be holding one.
+    fn retire_or_defer(&self, lc: &mut Lifecycle, snapshot: SnapshotId) {
+        if lc.pins.contains_key(&snapshot) {
+            lc.deferred.insert(snapshot);
+        } else {
+            retire_snapshot(&self.ctx, self.engine_id, snapshot);
+        }
+    }
+
+    // --- export -----------------------------------------------------------
+
+    /// Write `snapshot` to disk per `spec` (D6) — one file, or a Hive directory when the
+    /// spec carries partition columns. Returns `(path, rows_written)`.
+    ///
+    /// **The snapshot is the source, not the SQL.** An export never re-runs the query: it
+    /// streams the very table the grid is paging, in the sort the grid is showing, so the
+    /// file matches what was on screen even if the underlying data has since moved. That is
+    /// the whole reason snapshots exist (`docs/SNAPSHOT_SPEC.md`), and it is why this takes a
+    /// [`SnapshotId`] rather than a workspace: an export belongs to a *result*, not to a tab,
+    /// and the result outlives the tab's current text.
+    ///
+    /// Unlike [`query`](Engine::query) there is no dispatch nonce and no supersede: two
+    /// exports are two files, and neither invalidates the other. The bookkeeping is the
+    /// in-flight count, which keeps the close confirm honest while a file is half-written,
+    /// and a [`pin`](Engine::pin_snapshot) for the duration — so a re-run in the owning tab
+    /// can't deregister the table this `COPY` is streaming. The export window holds a pin of
+    /// its own for its whole life; this one makes the call correct on its own terms, for a
+    /// caller that has no window.
+    pub async fn export(
+        &self,
+        snapshot: SnapshotId,
+        spec: export::ExportSpec,
+    ) -> Result<(String, usize), String> {
+        // **A guard, not a bracketed pair.** This method awaits, and the caller is a UI task
+        // that is dropped when its scope goes — so closing the export window mid-write drops
+        // this future at the await below. Decrementing after the await would then never run:
+        // the in-flight flag would stay true for the engine's whole life (every later window
+        // close would claim work was running) and the pin would never release, leaving a
+        // snapshot that survives every re-run for the rest of the session.
+        let _writing = ExportGuard::new(self, snapshot);
+        let task = {
+            let ctx = self.ctx.clone();
+            self.rt()
+                .spawn(async move { export::run_export(&ctx, snapshot, spec).await })
+        };
+
+        // Dropping this future does *not* stop the write: the spawned task detaches and the
+        // file still completes, which is the kinder outcome for a user who closed the window
+        // after committing to an export. What it does stop is anyone hearing how it ended.
+        let joined = task.await;
+
+        match joined {
+            Ok(res) => res,
+            // The shared vocabulary, not the prose: a stopped call must never be presented as a
+            // fault, and every surface asks [`stopped_on_purpose`] rather than matching a string.
+            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
+            Err(join) => Err(format!("export task failed: {join}")),
+        }
+    }
+
     // --- catalog ----------------------------------------------------------
 
     /// (Re)register one external table from its spec, returning its inferred schema +
@@ -671,7 +810,7 @@ impl Engine {
             self.abort_inflight(f);
         }
         if let Some(snap) = lc.current.remove(&ws) {
-            retire_snapshot(&self.ctx, self.engine_id, snap);
+            self.retire_or_defer(&mut lc, snap);
         }
         self.publish_inflight(&lc);
     }
@@ -689,6 +828,68 @@ impl Engine {
         if let Some(snap) = f.snapshot {
             retire_snapshot(&self.ctx, self.engine_id, snap);
         }
+    }
+}
+
+/// One in-flight export's bookkeeping — the count the close confirm reads, and a hold on the
+/// snapshot being written — released together by `Drop`.
+///
+/// A guard rather than a matching pair of statements because [`Engine::export`] awaits, and a
+/// dropped future must not be able to leak either. Borrows the engine, so it cannot outlive the
+/// call; [`SnapshotPin`] is the owned variant, for a holder that outlives one method.
+struct ExportGuard<'a> {
+    engine: &'a Engine,
+    snapshot: SnapshotId,
+}
+
+impl<'a> ExportGuard<'a> {
+    /// Claim both halves. Constructing the guard *is* the acquire, so there is no way to hold
+    /// one without having taken what it releases.
+    fn new(engine: &'a Engine, snapshot: SnapshotId) -> Self {
+        engine.acquire_pin(snapshot);
+        {
+            let mut lc = engine.lifecycle.lock().unwrap();
+            lc.exports += 1;
+            engine.publish_inflight(&lc);
+        }
+        Self { engine, snapshot }
+    }
+}
+
+impl Drop for ExportGuard<'_> {
+    fn drop(&mut self) {
+        {
+            let mut lc = self.engine.lifecycle.lock().unwrap();
+            lc.exports = lc.exports.saturating_sub(1);
+            self.engine.publish_inflight(&lc);
+        }
+        // Outside the lock above: `release_pin` takes it itself, and this mutex is not
+        // reentrant.
+        self.engine.release_pin(self.snapshot);
+    }
+}
+
+/// A hold on one snapshot, keeping it readable past the re-run that would otherwise retire it
+/// (see [`Engine::pin_snapshot`]). Dropping it releases the hold, and retires the snapshot if
+/// a retire arrived while it was pinned and this was the last hold.
+///
+/// Holds an `Arc<Engine>` rather than a borrow so it can be parked in UI state for a window's
+/// lifetime — which is the whole point of it existing.
+pub struct SnapshotPin {
+    engine: Arc<Engine>,
+    snapshot: SnapshotId,
+}
+
+impl SnapshotPin {
+    /// The snapshot this pin is holding open.
+    pub fn snapshot(&self) -> SnapshotId {
+        self.snapshot
+    }
+}
+
+impl Drop for SnapshotPin {
+    fn drop(&mut self) {
+        self.engine.release_pin(self.snapshot);
     }
 }
 

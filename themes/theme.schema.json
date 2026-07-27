@@ -1083,6 +1083,66 @@
             }
           }
         },
+        "export": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "panel_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "header_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "control_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hint_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "empty_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_active_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "badge_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "badge_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "warning_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "warning_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "avatar": {
           "type": "object",
           "additionalProperties": false,
@@ -1350,11 +1410,35 @@
             }
           }
         },
+        "field_row": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hint_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "note_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "note_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "note_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "segmented_toggle": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "form_background": {
               "$ref": "#/$defs/colorPref"
             },
             "border_fill": {

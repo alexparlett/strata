@@ -4,7 +4,9 @@
 //! submodules, re-exported.
 
 mod close;
-mod contexts;
+/// `pub` for the Export window: it is its own OS window, so it can't inherit this window's
+/// context and instead carries an [`EngineCtx`](contexts::EngineCtx) clone as a launch value.
+pub mod contexts;
 pub mod model;
 mod project;
 mod query;
@@ -13,6 +15,10 @@ mod views;
 
 pub use close::{CloseGuard, CloseTarget};
 pub use project::ProjectApp;
+/// The window's event log (P3-13), for the Export window: it is a separate OS window, so it
+/// carries the handle as a launch value and records its outcome into the project window's log
+/// — which is where the user is looking when the export window has closed itself.
+pub use state::{log_event, LogCtx, LogLevel};
 pub use views::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
     DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,

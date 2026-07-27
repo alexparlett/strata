@@ -44,14 +44,25 @@ pub enum WindowKind {
     /// The Settings window — one app-wide, pinned above whichever window last asked for it
     /// ([`Windows::settings_owner`]). See [`crate::platform::settings`].
     Settings,
+    /// An Export window, pinned above the project window that opened it — which it names, so
+    /// it can close when that window does.
+    ///
+    /// Unlike Settings there is **no single-instance rule**: an export window is opened *on a
+    /// result* and carries that result's facts, so "already open" can't mean "focus it" — the
+    /// open one is showing something else. Two exports of two different results at once is a
+    /// reasonable thing to want, and each closes itself when its write lands.
+    Export {
+        owner: WindowId,
+    },
 }
 
 impl WindowKind {
     /// Whether this is a window the user *works* in — a project or the welcome screen.
-    /// Settings is not: it is a panel over one of these, so it can neither be the app's last
-    /// window nor keep the launcher from taking a closing project's place.
+    /// Neither Settings nor an Export window is: each is a panel over one of these, so it can
+    /// neither be the app's last window nor keep the launcher from taking a closing project's
+    /// place.
     fn is_workspace(&self) -> bool {
-        !matches!(self, Self::Settings)
+        !matches!(self, Self::Settings | Self::Export { .. })
     }
 }
 
@@ -109,6 +120,12 @@ impl Windows {
     /// Whether `id` still names a live window.
     pub fn is_open(&self, id: WindowId) -> bool {
         self.by_id.contains_key(&id)
+    }
+
+    /// Every live window by id — for the questions the named accessors above don't cover,
+    /// like an Export window reading back the owner recorded in its own entry.
+    pub fn by_id(&self) -> &HashMap<WindowId, WindowKind> {
+        &self.by_id
     }
 
     /// Record which window Settings is pinned above (`None` when it closes).

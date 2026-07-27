@@ -10,9 +10,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use freya::query::Captured;
-use strata_core::engine::Engine;
+use strata_core::engine::{Engine, SnapshotPin};
 
-use strata_model::TabId;
+use strata_model::{SnapshotId, TabId};
 
 /// A window's engine handle for context — an `Arc` over the shared [`Engine`], cheap to
 /// `Clone`, provided once via `use_provide_context`. Derefs to the engine, so callers
@@ -42,6 +42,16 @@ impl EngineCtx {
     /// tabs, so every close path funnels through one place.
     pub fn cleanup(&self, tab: TabId) {
         self.eng.cleanup_ws(tab.into());
+    }
+
+    /// Hold `snapshot` open for as long as the returned pin lives — the escape hatch from
+    /// retire-on-dispatch for a reader that outlives one Run (SNAPSHOT_SPEC §4). The export
+    /// window holds one for its whole life.
+    ///
+    /// Not reachable through `Deref`: [`Engine::pin_snapshot`] takes `&Arc<Engine>` (the pin
+    /// keeps the engine alive), and deref only ever hands out `&Engine`.
+    pub fn pin_snapshot(&self, snapshot: SnapshotId) -> SnapshotPin {
+        self.eng.pin_snapshot(snapshot)
     }
 }
 

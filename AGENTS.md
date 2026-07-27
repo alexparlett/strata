@@ -133,6 +133,15 @@ Things that must not regress. Each was fought for once already.
   `defs()` is a pure projection for saving. **Identity:** tables/views are keyed by **name** (their
   engine/SQL identity, one shared namespace, case-insensitive compare); saved queries by a stable
   **`Uuid`**. Renames route through the store (a view rename rewrites tab `Origin::View` keys).
+- **A reader that outlives one Run pins the snapshot it reads.** A snapshot belongs to its
+  workspace and is retired the moment that workspace dispatches another run (SNAPSHOT_SPEC §4),
+  which is right for the grid and wrong for anything longer-lived. `Engine::pin_snapshot` hands
+  back an RAII `SnapshotPin` that **defers** the retire to the last release — so the export
+  window (P4-10) writes the result it was opened on even if the user re-runs the query behind
+  it. RAII rather than a pin/unpin pair for the same reason cache entries are held by a mounted
+  subscriber: lifetime is a held handle, never imperative bookkeeping. Never answer this with a
+  warning or a staleness check instead — "your results moved" is a worse product than results
+  that don't move, and a check races the very dispatch it is checking for.
 - **History is a satellite**, persisted to `.strata/history.jsonl` — never a field on
   `ProjectState`/`SessionState`. It records **only successful data runs**, which is a claim the
   surface has to keep: the History drawer shows no status mark, because the canvas's
@@ -303,6 +312,17 @@ Things that must not regress. Each was fought for once already.
   handler (match `e.data().button()` for right-click). Diagnostic fingerprint of a replaced
   handler: sibling events (hover) still fire, the press reaches ancestors, the node's own handler
   is dead.
+- **A border is painted, never laid out — a bordered box whose children have backgrounds needs
+  padding equal to the stroke.** torin has no notion of `border` at all (`BorderAlignment` exists
+  only in `style/border.rs` and `elements/rect.rs`), so the default `Inner` alignment draws the
+  stroke *inside* bounds the children already occupy, and children paint after the parent's
+  background and border. A child at `width(fill)` with its own background therefore erases the
+  border behind it. This is **not** CSS's border box, and the failure is partial and so reads as a
+  rendering bug rather than a layout one: the export window's transfer panes kept their outline
+  around the body (a wrapper with no background) and lost it across the header strip (which has
+  one). Pad the bordered rect by the stroke width and subtract it from any child sized from the
+  outer edge. Reach for `BorderAlignment::Outer` only when the box may genuinely overflow its
+  slot.
 - **A disabled control gates its handlers; it does not go `interactive(false)`.** Wrap only the
   action handlers in `.maybe(enabled, …)` and leave `on_pointer_enter` / `on_pointer_leave`
   registered unconditionally, then decline to *dress* the hover while disabled — that is what

@@ -1,10 +1,12 @@
 use strata_model::{ResultsView, TabId};
 
+use crate::apps::export::ExportLaunch;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::InputTypography;
 use crate::keymap::use_hint_title;
+use crate::platform;
 use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -37,11 +39,15 @@ pub struct ResultsToolbar {
     tab: TabId,
     /// The grid's find state — the Search trigger + popover render it (P2-09).
     find: FindState,
+    /// What a press of Download would open the Export window on (P4-10). `None` when the run
+    /// hasn't settled rows — there is nothing to export, so the button is disabled rather than
+    /// opening a window onto nothing.
+    export: Option<ExportLaunch>,
 }
 
 impl ResultsToolbar {
-    pub fn new(tab: TabId, find: FindState) -> Self {
-        Self { tab, find }
+    pub fn new(tab: TabId, find: FindState, export: Option<ExportLaunch>) -> Self {
+        Self { tab, find, export }
     }
 }
 
@@ -82,6 +88,11 @@ impl Component for ResultsToolbar {
                 .child(button)
         };
         let find_title = use_hint_title("Find in results", Command::Find);
+
+        // The Export window's launch inputs arrive as a prop (see `ExportLaunch`); only the
+        // `Platform` is taken here, because a handler has no scope to read one from.
+        let export = self.export.clone();
+        let platform = use_hook(Platform::get);
 
         // ── find (Search) ─────────────────────────────────────────────────────────────────
         let find = self.find;
@@ -208,7 +219,25 @@ impl Component for ResultsToolbar {
                         sel.set(Selection::None);
                     }),
             ))
-            .child(tip("Export results".into(), tool(IconName::Download)));
+            .child(tip(
+                "Export results".into(),
+                // Opens a window **on this run**, carrying its snapshot handle: the window
+                // pins that snapshot for its life, so re-running here afterwards doesn't
+                // change what it writes (SNAPSHOT_SPEC §4).
+                tool(IconName::Download)
+                    .enabled(export.is_some())
+                    .on_press(move |_| {
+                        if let Some(launch) = export.clone() {
+                            platform::open_export(
+                                platform.clone(),
+                                launch.app,
+                                launch.engine,
+                                launch.target,
+                                launch.log,
+                            );
+                        }
+                    }),
+            ));
 
         rect().width(Size::fill()).vertical().child(row)
     }

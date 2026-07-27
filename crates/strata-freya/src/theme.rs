@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::apps::export::ExportThemePreference;
 use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
@@ -26,6 +27,7 @@ use crate::apps::project::{
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
+use crate::components::field_row::FieldRowThemePreference;
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
@@ -416,6 +418,21 @@ strata_components! {
         card_background, card_border_fill, card_hover_border_fill, card_divider_fill,
         selected_color, badge_builtin_color, badge_user_color,
     },
+    // The Export window: its body, the raised surface its inset blocks sit on (format cards,
+    // text fields, the preview, the two transfer panes), the rules and control edges, the
+    // window's download mark, the option labels + their hint glyph, a format card's resting
+    // and selected dress, the selected-partition order badge, and the warning banner's tinted
+    // box. The banner's *glyph and text* deliberately are not fields here — they take the
+    // sheet's `warning`, which is semantic and must follow the app-wide ramp wherever it
+    // appears. Its controls are the shared ones: `Switch`, `Select`, `Input`, `Button`, and
+    // `segmented_toggle` for every seg group.
+    "export" => ExportThemePreference {
+        background, panel_background, header_background, border_fill, divider_fill,
+        control_border_fill, icon_color,
+        icon_background, label_color, hint_color, empty_color, card_color, card_active_background,
+        card_active_border_fill, badge_background, badge_color, warning_background,
+        warning_border_fill,
+    },
     // The initials tile a project row leads with (header switcher, launcher lists): the resting
     // dress plus the accent one a project with an open window wears.
     "avatar" => AvatarThemePreference {
@@ -451,9 +468,14 @@ strata_components! {
     "cancel_button" => CancelButtonThemePreference { background, hover_background, border_fill, color },
     // The icon segmented toggle (results Table/Chart switcher, reusable): pill container
     // (bg + border + divider) and per-item rest / active (accent-tint) dress.
+    // One labelled row of a form — the uppercase label and the ⓘ that carries its hint. The
+    // control beneath is the caller's, so nothing about it is dressed here.
+    "field_row" => FieldRowThemePreference {
+        label_color, hint_color, note_background, note_border_fill, note_color,
+    },
     "segmented_toggle" => SegmentedToggleThemePreference {
-        background, border_fill, divider_fill, item_color, item_active_background,
-        item_active_color,
+        background, form_background, border_fill, divider_fill, item_color,
+        item_active_background, item_active_color,
     },
     // The chrome-less icon toggle (plan Raw/Tree switch, reusable): rest bg + glyph, and the
     // accent-tint active dress — matching the segmented toggle's selected look.

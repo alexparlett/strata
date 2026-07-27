@@ -51,6 +51,7 @@
     "border_overlay": "#c4c8d0",
     "danger_soft": "rgba(192,51,46,.14)",
     "danger_soft_hover": "rgba(192,51,46,.2)",
+    "line": "#edeef1",
     "surface_hover": "#eef0f4",
     "surface_hover_strong": "#eef0f4",
     "surface_overlay": "#ffffff",
@@ -59,7 +60,9 @@
     "text_control": "#474c56",
     "text_label": "#8b929d",
     "text_muted": "#5f6771",
-    "transparent": "rgba(0,0,0,0)"
+    "transparent": "rgba(0,0,0,0)",
+    "warning_soft": "rgba(188,76,0,.10)",
+    "warning_soft_border": "rgba(188,76,0,.26)"
   },
   "components": {
     "type_palette": {
@@ -559,9 +562,29 @@
         "reference": "primary"
       }
     },
+    "field_row": {
+      "label_color": {
+        "reference": "text_label"
+      },
+      "hint_color": {
+        "reference": "text_placeholder"
+      },
+      "note_background": {
+        "reference": "surface_primary"
+      },
+      "note_border_fill": {
+        "reference": "border_control"
+      },
+      "note_color": {
+        "reference": "text_muted"
+      }
+    },
     "segmented_toggle": {
       "background": {
         "reference": "surface_secondary"
+      },
+      "form_background": {
+        "reference": "surface_primary"
       },
       "border_fill": {
         "reference": "border_control"
@@ -1384,6 +1407,62 @@
       },
       "pressed_thumb_size_offset": {
         "specific": 0
+      }
+    },
+    "export": {
+      "background": {
+        "reference": "surface_overlay"
+      },
+      "panel_background": {
+        "reference": "surface_primary"
+      },
+      "header_background": {
+        "reference": "surface_secondary"
+      },
+      "border_fill": {
+        "reference": "border"
+      },
+      "control_border_fill": {
+        "reference": "border_control"
+      },
+      "icon_color": {
+        "reference": "primary"
+      },
+      "icon_background": {
+        "reference": "accent_badge"
+      },
+      "label_color": {
+        "reference": "text_label"
+      },
+      "hint_color": {
+        "reference": "text_placeholder"
+      },
+      "empty_color": {
+        "reference": "text_muted"
+      },
+      "card_color": {
+        "reference": "text_primary"
+      },
+      "card_active_background": {
+        "reference": "accent_selection"
+      },
+      "card_active_border_fill": {
+        "reference": "primary"
+      },
+      "badge_background": {
+        "reference": "primary"
+      },
+      "badge_color": {
+        "reference": "surface_primary"
+      },
+      "warning_background": {
+        "reference": "warning_soft"
+      },
+      "warning_border_fill": {
+        "reference": "warning_soft_border"
+      },
+      "divider_fill": {
+        "reference": "line"
       }
     }
   },

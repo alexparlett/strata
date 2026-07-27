@@ -34,6 +34,7 @@ use super::record_view::RecordView;
 use super::selection::{SelCtl, Selection};
 use super::sort::SortState;
 use super::toolbar::ResultsToolbar;
+use crate::apps::export::ExportLaunch;
 use crate::components::divider::Divider;
 use crate::keymap::on_commands;
 use strata_model::TabId;
@@ -123,6 +124,10 @@ pub struct DataGrid {
     row_nums: Option<Rc<Vec<usize>>>,
     /// The snapshot's total row count — the record view's `Row n of total` label (P2-10).
     total: usize,
+    /// What the toolbar's Download would export (P4-10) — the settled run's snapshot, schema,
+    /// sort and page. `None` while the run hasn't settled rows, which is exactly when there is
+    /// nothing to export.
+    export: Option<ExportLaunch>,
     pub(crate) theme: Option<DataGridThemePartial>,
 }
 
@@ -144,6 +149,7 @@ impl DataGrid {
             sort,
             row_nums: None,
             total: 0,
+            export: None,
             theme: None,
         }
     }
@@ -157,6 +163,12 @@ impl DataGrid {
     /// The snapshot's total row count (see [`Self::total`]).
     pub fn total(mut self, total: usize) -> Self {
         self.total = total;
+        self
+    }
+
+    /// What Download would export (see [`Self::export`]).
+    pub fn export(mut self, export: Option<ExportLaunch>) -> Self {
+        self.export = export;
         self
     }
 }
@@ -473,7 +485,11 @@ impl Component for DataGrid {
                 Key::Named(NamedKey::Meta) | Key::Named(NamedKey::Control) => meta.set(false),
                 _ => {}
             })
-            .child(ResultsToolbar::new(self.tab, self.find))
+            .child(ResultsToolbar::new(
+                self.tab,
+                self.find,
+                self.export.clone(),
+            ))
             .child(scroll)
             // The open nested-cell modal (an overlay layer — it renders above everything).
             .maybe_child(

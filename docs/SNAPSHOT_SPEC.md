@@ -102,6 +102,7 @@ Retirement (deregister the table + delete the file) happens at exactly these poi
 | **Run fails** | the failed run's partial file (cleaned by the run itself) |
 | **`cleanup_ws(ws)`** (tab close) | the ws's current snapshot + any in-flight partial |
 | **engine drop** (window close) | the engine's whole `e_{pid}_{engine_id}` directory + its `.lock` sibling |
+| **last `SnapshotPin` released** | a snapshot whose retire arrived while it was pinned (see below) |
 | **process start** | `purge_snapshot_root()` — every *dead* engine's leftovers (§2: lock-gated, live directories spared) |
 
 **Retire-on-dispatch**: the previous snapshot is dropped when the new Run *starts*, not when it
@@ -110,6 +111,22 @@ after a failed run — uncached page reads of the old snapshot fail; the UI's al
 are unaffected (§6), and the pane is in its Running / Error state anyway. A run that finishes
 *after* being superseded retires its own snapshot and settles `Err("superseded")` — nothing
 leaks, and only the latest dispatch may publish workspace state.
+
+**Pins defer a retire, never skip it.** Retire-on-dispatch is right for the grid, whose pages
+follow the tab, and wrong for any reader that outlives one press. `Engine::pin_snapshot(id)`
+returns a `SnapshotPin` (RAII — dropping it releases): while at least one pin is out, a retire of
+that snapshot is recorded in `deferred` instead of executed, and lands when the last pin drops.
+Pins are counted, so two holders are independent.
+
+The export window (P4-10) is the first holder and the reason this exists: it is opened *on a
+result*, the user may go back and re-run the query while it sits there, and it must still write
+the rows that were on screen when they asked. Without a pin a re-run deregisters the table
+mid-`COPY` — a truncated file under the user's chosen name — or, more quietly, makes a later
+Export report no results at all when there are plainly some on screen. `Engine::export` also
+brackets its own call with a pin, so the facade is correct for a caller with no window.
+
+Two retires deliberately **bypass** the deferral, because nothing can be holding their subject: a
+run's own partial, and a superseded run's output. Neither id is ever returned to a caller.
 
 **DDL / catalog changes do not retire snapshots.** A snapshot is a point-in-time result
 (Athena-style): dropping a table or reloading the catalog doesn't invalidate what a past Run
