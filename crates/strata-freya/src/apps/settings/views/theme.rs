@@ -20,7 +20,7 @@ use crate::apps::settings::views::Pane;
 use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
-use crate::components::form::{FormList, Setting};
+use crate::components::form::{Form, Row};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Body;
 use crate::state::ThemeSel;
@@ -61,14 +61,11 @@ impl Component for ThemePane {
         // Why the grid is inert rather than absent: it is still the answer to "which theme am
         // I using?", which Sync-with-OS doesn't tell you — so while syncing it keeps its place
         // and gains the line saying whose choice it now is.
-        let mut grid = Setting::stacked(
-            "Theme",
-            ThemeGrid {
-                themes,
-                selected,
-                inert: sync_os,
-            },
-        );
+        let mut grid = Row::new("Theme").child(ThemeGrid {
+            themes,
+            selected,
+            inert: sync_os,
+        });
         if sync_os {
             grid = grid.hint(
                 "Following your system appearance. \
@@ -76,13 +73,18 @@ impl Component for ThemePane {
             );
         }
 
-        let body = FormList::new()
-            .divided()
+        let body = Form::new()
+            .preferences()
             .child(
-                Setting::switch("Sync with OS", sync_os, move |_| {
-                    ctx.edit(|s| s.sync_os = !s.sync_os)
-                })
-                .hint("Matches your system light/dark appearance automatically."),
+                Row::new("Sync with OS")
+                    .hint("Matches your system light/dark appearance automatically.")
+                    .trailing()
+                    .on_press(move |_: Event<PressEventData>| ctx.edit(|s| s.sync_os = !s.sync_os))
+                    .child(
+                        Switch::new()
+                            .toggled(sync_os)
+                            .on_toggle(move |_| ctx.edit(|s| s.sync_os = !s.sync_os)),
+                    ),
             )
             .child(grid);
 

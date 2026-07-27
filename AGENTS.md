@@ -334,12 +334,15 @@ Things that must not regress. Each was fought for once already.
 - **A settings-style surface is built from `components::form`, never from its own rows.** The
   export window, the config modal and the Settings panes are one surface drawn three times, and
   they kept arriving one at a time and re-typing each other's label metrics, field boxes and
-  gaps. One module holds the whole vocabulary — `FormList`, the two rows, `ValueField` /
-  `NumberField` — under one `form` component theme. Two rules keep it that way. **The two rows
-  are deliberate, not a fork to merge**: `FieldRow` is the window form (uppercase eyebrow, ⓘ
-  tooltip) and `Setting` is the settings pane (sentence-case title, inline subtext), because the
-  design swept every inline explainer into a hover tip and then its *Settings consistency pass*
-  swept that window's four back out — so a pane reaching for `FieldRow` regresses a decision.
+  gaps. One module holds the whole vocabulary under one `form` component theme, composed the
+  way a form actually nests: **`Form` > `Row` > control**, where the control is the row's
+  *child*, so a row wraps a field, a `Switch`, a pill or a `Note` without knowing which. **One
+  `Row`, never one per window**: the three presentation choices a row makes (how the label is
+  set, how its explanation is shown, how rows are separated) always move together, so they are
+  a `Variant` on the *form*, provided through context — `Fields` (eyebrow + ⓘ) or `Preferences`
+  (title + inline subtext + rules), the split the design's *Settings consistency pass* settled.
+  A second row type named for the window that first needed it is the failure mode here, not the
+  fix.
   And **where the canvases genuinely differ, name the difference in `form/mod.rs`'s "known
   divergences" rather than averaging it**: a silent split-the-difference is how a surface stops
   matching the canvas it was drawn from, and a named one is a single constant to change when the

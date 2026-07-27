@@ -20,7 +20,7 @@
 //! P4-03 built the **shell**: the window, the nav, the draft/save/preview machinery and the
 //! entry points. P4-04 added the first pane ([`views::ThemePane`], the theme picker) and P4-05
 //! the second ([`views::DataDisplayPane`]), and moved the row vocabulary every pane is built
-//! from into [`crate::components::form`] — a pane is a `FormList::divided` of `Setting`s, and
+//! from into [`crate::components::form`] — a pane is a `Form::preferences` of `Row`s, and
 //! nothing about the rhythm between them lives here. The remaining categories belong to
 //! P4-06…P4-08 and render a placeholder until those land.
 

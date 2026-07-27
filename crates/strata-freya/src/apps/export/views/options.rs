@@ -23,9 +23,7 @@ use freya::prelude::*;
 
 use crate::apps::export::{Choice, Control, Edit, ExportCtx, Group, Make, TextField};
 
-use crate::components::form::{
-    FieldNote, FieldRow, FormList, NumberField, ValueField, FIELD_HEIGHT,
-};
+use crate::components::form::{Form, Note, NumberField, Row, ValueField, FIELD_HEIGHT};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::MonoValue;
 
@@ -59,7 +57,7 @@ impl Component for Options {
 
         // The shared form list, so the rhythm between rows is the app's and not this
         // window's. Spaced rather than divided — the Settings panes are the divided one.
-        let mut list = FormList::new();
+        let mut list = Form::new();
         for group in groups {
             let key = group.label.clone();
             list = list.child(
@@ -120,12 +118,12 @@ impl Component for OptionGroup {
             }
             .into(),
             Control::Select { options } => SelectControl { options }.into(),
-            Control::Note(text) => FieldNote::new(text).into(),
+            Control::Note(text) => Note::new(text).into(),
         };
 
         // The label, its hint and the gap under them are the shared form row's — this window
         // contributes only which control goes in it.
-        FieldRow::new(self.group.label.clone())
+        Row::new(self.group.label.clone())
             .map(self.group.hint, |row, hint| row.hint(hint))
             .child(control)
     }

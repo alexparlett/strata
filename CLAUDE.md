@@ -179,16 +179,16 @@ src/components/                  shared component library
                                  under one `form` component theme. mod.rs carries the theme, the
                                  shared metrics and a "known divergences" list (the canvases
                                  differ; the differences are named, not averaged)
-    list.rs                      `FormList`: the rows in order, and the only place the rhythm
-                                 between them is spelled out. `.divided()` = the Settings panes'
-                                 hairline; the default gap = the window forms'
-    row.rs                       `FieldRow` (uppercase label + ⓘ tooltip — the **window form**'s
-                                 row) + `FieldNote`
-    setting.rs                   `Setting` (sentence-case title + inline subtext — the **settings
-                                 pane**'s row; `::switch` puts it trailing with the label block
-                                 its *sibling*). Two rows and not one because the design's
-                                 Settings consistency pass swept that window's tooltips back out
-                                 to subtext — reaching for the other one regresses a decision
+                                 `Form` > `Row` > control, composed: a control is a `Row`'s
+                                 *child*, so a row wraps a field, a Switch, a pill or a Note
+                                 without knowing which. mod.rs is the `Form` (container + theme
+                                 + the `Variant` it provides through context)
+    row.rs                       `Row` — **one** row, not one per window. Its register comes from
+                                 the form's `Variant`: `Fields` (eyebrow label + ⓘ tooltip + gaps
+                                 — export, config modal) or `Preferences` (title + inline subtext
+                                 + rules — the Settings panes). `.trailing()` puts the control at
+                                 the row's end, `.on_press()` makes the label activate it. Plus
+                                 `Note`, a statement where a control would go
     field.rs                     `ValueField` (the mono box: stated height, length cap enforced
                                  on the state) + `NumberField` (bounded, `.unit("px")`, reports
                                  per keystroke and normalizes its text on blur)
