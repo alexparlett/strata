@@ -20,9 +20,10 @@ use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue, Prose};
 use crate::components::value_field::ValueField;
 
-/// The panes' fixed box, so a wide schema scrolls rather than growing the window.
-const PANE_MIN_HEIGHT: f32 = 128.;
-const PANE_MAX_HEIGHT: f32 = 176.;
+/// The panes' list box. **Fixed**, not sized from its rows: the two panes sit side by side, so
+/// a height derived from each one's own content makes them different heights, and a long list
+/// is what the scroll view is for.
+const PANE_BODY_HEIGHT: f32 = 176.;
 const PANE_HEADER_HEIGHT: f32 = 30.;
 /// The pane's corner (canvas `--r-2`).
 const PANE_RADIUS: f32 = 8.;
@@ -69,7 +70,6 @@ impl Component for Partition {
             .child(toggle)
             .maybe_child(enabled.then_some(Panes))
             .maybe_child((enabled && has_selection).then_some(KeepColumns))
-            .maybe_child((enabled && has_selection).then_some(NullWarning))
     }
 }
 
@@ -100,7 +100,7 @@ impl Component for Panes {
 }
 
 /// The pane frame both halves share — a bordered box with a header strip over a scroll body.
-fn pane(header: impl IntoElement, body: impl IntoElement, content: f32) -> impl IntoElement {
+fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
     let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
     rect()
         .width(Size::fill())
@@ -122,15 +122,10 @@ fn pane(header: impl IntoElement, body: impl IntoElement, content: f32) -> impl 
                 .child(header),
         )
         .child(Divider::horizontal().color(theme.divider_fill))
-        // **One height, computed, shared by the box and its scroll viewport.** Leaving the two
-        // to a min/max range let them disagree: the viewport settled shorter than the box, so
-        // the list stopped scrolling with dead space still showing under a half-clipped row.
-        // The row count is the only thing that decides how tall this should be, so it decides
-        // it once, and both are told.
         .child(
             rect()
                 .width(Size::fill())
-                .height(Size::px(body_height(content)))
+                .height(Size::px(PANE_BODY_HEIGHT))
                 .child(
                     ScrollView::new()
                         .height(Size::fill())
@@ -144,16 +139,6 @@ fn pane(header: impl IntoElement, body: impl IntoElement, content: f32) -> impl 
                         .child(body),
                 ),
         )
-}
-
-/// How tall a pane's list stands: its own content, floored so a short list doesn't leave a hole
-/// and capped so a wide schema scrolls instead of growing the window.
-///
-/// Takes the **content height**, not a row count: the two panes' rows differ, and a helper that
-/// multiplied a count by one shared row height is exactly how the box came out shorter than
-/// what it holds.
-fn body_height(content: f32) -> f32 {
-    content.clamp(PANE_MIN_HEIGHT, PANE_MAX_HEIGHT)
 }
 
 /// The columns not yet chosen. Pressing one appends it as the next directory level.
@@ -217,7 +202,6 @@ impl Component for Available {
             .bare()
             .into_element();
 
-        let row_count = matching.len();
         let body: Element = if matching.is_empty() {
             let message = if unchosen.is_empty() {
                 "All columns added".to_string()
@@ -271,7 +255,7 @@ impl Component for Available {
             list.into_element()
         };
 
-        pane(header, body, row_count as f32 * AVAILABLE_ROW_HEIGHT)
+        pane(header, body)
     }
 }
 
@@ -318,7 +302,7 @@ impl Component for Selected {
             list.into_element()
         };
 
-        pane(header, body, chosen.len() as f32 * SELECTED_ROW_HEIGHT)
+        pane(header, body)
     }
 }
 
@@ -471,47 +455,6 @@ impl Component for KeepColumns {
                         .wrap(),
                     )
             }))
-    }
-}
-
-/// The NULL rule, stated before the user commits to a column.
-///
-/// A directory name can't hold a NULL, and DataFusion 54 does not use the Hive convention
-/// (`__HIVE_DEFAULT_PARTITION__`) for one: it files the row under a neighbouring value's
-/// directory instead, so it reads back labelled with a value it never had. The **engine refuses
-/// such an export** rather than writing it (`export::partition_columns_have_no_nulls`), so this
-/// is not a warning about a risk the user is taking — it is the rule they will hit, said early
-/// enough to pick a different column instead of discovering it at the save dialog.
-///
-/// Not a per-column check here on purpose: knowing *which* chosen column offends means reading
-/// the snapshot's footer, which is the engine's job and is where the authoritative answer comes
-/// from. This states the constraint; the export names the column.
-#[derive(PartialEq)]
-struct NullWarning;
-
-impl Component for NullWarning {
-    fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
-        let warning = use_theme().read().colors().warning;
-
-        rect()
-            .width(Size::fill())
-            .horizontal()
-            .spacing(8.)
-            .padding((8., 12.))
-            .corner_radius(6.)
-            .background(theme.warning_background)
-            .border(Border::new().width(1.).fill(theme.warning_border_fill))
-            .child(Icon::new(IconName::Warning).size(14.).color(warning))
-            .child(
-                Prose::new(
-                    "A partition column can't contain NULLs — a NULL has no folder name, and \
-                     those rows would read back with the wrong value. The export will name any \
-                     column that has them.",
-                )
-                .color(warning)
-                .wrap(),
-            )
     }
 }
 
