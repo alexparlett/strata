@@ -13,6 +13,7 @@
 //! [`resolve_source`] / [`relativize`].
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string, to_string_pretty};
 use strata_model::{HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef};
 
-use crate::util::{sweep_stale_temps, write_atomic, TEMP_GLOB};
+use crate::util::{collapse_sql, sweep_stale_temps, write_atomic, TEMP_GLOB};
 
 /// The project directory name inside a project folder.
 pub const STRATA_DIR: &str = ".strata";
@@ -223,6 +224,9 @@ pub fn history_path(root: &Path) -> PathBuf {
 /// tidying the dir — [`tidy_strata_dir`] — if needed). Append-only (DESIGN_SPEC §"History as `.jsonl`") so a completed
 /// run is one cheap `O_APPEND` write, not a whole-file rewrite; [`load_history`] bounds the
 /// file back down.
+///
+/// This is the write for a run of a query the log does **not** already hold. A re-run has to move
+/// an entry, which an append cannot do — that one goes through [`save_history`].
 pub fn append_history(root: &Path, entry: &HistoryEntry) -> Result<(), String> {
     let dir = strata_dir(root);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -237,19 +241,48 @@ pub fn append_history(root: &Path, entry: &HistoryEntry) -> Result<(), String> {
     file.write_all(line.as_bytes()).map_err(|e| e.to_string())
 }
 
-/// Load history for `root`, newest entries capped to `cap` (keep-last-N). Absent file →
-/// empty (a project with no runs yet); a corrupt *line* is skipped, not fatal — one bad
-/// append can't lose the whole log. Returns entries in **file order** (oldest → newest).
-/// If the file has grown past `cap`, it's **rotated** to the kept window (DESIGN_SPEC:
-/// "rotate to bound size").
+/// Replace `root`'s history log with `entries` (**file order**, oldest → newest) — the write a
+/// re-run needs, where [`append_history`] is the write a new query needs.
 ///
-/// The rotation replaces the file through [`write_atomic`], so it is all-or-nothing: a crash
-/// mid-rotation leaves the un-rotated log, never a truncated one. It is **not** locked
-/// against other writers, and that residual race is deliberate: every other writer opens the
-/// log `O_APPEND` ([`append_history`]), so an entry another window appends between this read
-/// and the rename lands in the file we then replace (now unlinked) and is lost. Bounded by
-/// design — only a *rotating* load can drop entries (rare: the log must be over `cap`), only
-/// the runs completed in that millisecond, and only from history, which is regenerable. The
+/// Re-running a query moves its entry rather than adding one, so the line the log already holds
+/// for it is now stale and no append can take it back. Rewriting is the only way to keep the file
+/// free of entries the app considers impossible, and it is bounded work: the caller passes the
+/// capped in-memory list, not a file it has to read first.
+pub fn save_history(root: &Path, entries: &[HistoryEntry]) -> Result<(), String> {
+    let dir = strata_dir(root);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    tidy_strata_dir(&dir);
+    let mut out = String::new();
+    for entry in entries {
+        out.push_str(&to_string(entry).map_err(|e| e.to_string())?);
+        out.push('\n');
+    }
+    let path = history_path(root);
+    write_atomic(&path, out.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Load history for `root`: the newest `cap` **distinct** queries, in file order (oldest →
+/// newest). Absent file → empty (a project with no runs yet); a corrupt *line* is skipped, not
+/// fatal — one bad append can't lose the whole log.
+///
+/// **Distinct, not merely last-N.** The log is append-only, so re-running one query writes a
+/// line every time; a plain keep-last-N would then hand back a window of the same statement
+/// repeated, and the cap — the user's `max_history`, "how many recent queries to keep" — would
+/// silently mean something else. So repeats collapse to their **newest** occurrence
+/// ([`collapse_sql`] is the key, shared with the History drawer's preview so two kept entries can
+/// never render identically), and the cap counts what is left.
+///
+/// Compaction rides the same path: whenever anything was dropped — a duplicate, an overflowing
+/// entry or a corrupt line — the file is **rewritten** to exactly what was kept (DESIGN_SPEC:
+/// "rotate to bound size"), which is what stops an append-only log of one repeated query growing
+/// without bound.
+///
+/// The rewrite goes through [`write_atomic`], so it is all-or-nothing: a crash mid-rotation
+/// leaves the un-rotated log, never a truncated one. It is **not** locked against other writers,
+/// and that residual race is deliberate: every other writer opens the log `O_APPEND`
+/// ([`append_history`]), so an entry another window appends between this read and the rename
+/// lands in the file we then replace (now unlinked) and is lost. Bounded by design — only the
+/// runs completed in that millisecond, and only from history, which is regenerable. The
 /// alternative is a lock file every append has to take, which is not worth it here.
 pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String> {
     let path = history_path(root);
@@ -258,15 +291,16 @@ pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
-    let mut entries: Vec<HistoryEntry> = text
+    let lines = text.lines().filter(|l| !l.trim().is_empty()).count();
+    let parsed: Vec<HistoryEntry> = text
         .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| from_str(l).ok())
         .collect();
-    if entries.len() > cap {
-        entries.drain(0..entries.len() - cap);
-        // Replace the file with what we kept (rare — only when it overflowed). Best-effort:
-        // a rotation that fails just leaves an over-long log, which the next load retries.
+    let entries = newest_distinct(parsed, cap);
+    if entries.len() != lines {
+        // Best-effort: a rewrite that fails just leaves the longer log, which the next load
+        // retries.
         let mut out = String::new();
         for entry in &entries {
             if let Ok(line) = to_string(entry) {
@@ -277,6 +311,41 @@ pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String
         let _ = write_atomic(&path, out.as_bytes());
     }
     Ok(entries)
+}
+
+/// The newest `cap` entries with distinct SQL, back in oldest → newest order.
+///
+/// Walked from the newest backwards, so the occurrence that survives a repeat is the **most
+/// recent** one — the run whose figures and timestamp are the ones worth keeping, and the
+/// position the drawer should show it at.
+fn newest_distinct(entries: Vec<HistoryEntry>, cap: usize) -> Vec<HistoryEntry> {
+    let mut seen = HashSet::new();
+    let mut kept: Vec<HistoryEntry> = Vec::new();
+    for entry in entries.into_iter().rev() {
+        if kept.len() >= cap {
+            break;
+        }
+        if seen.insert(collapse_sql(&entry.sql)) {
+            kept.push(entry);
+        }
+    }
+    kept.reverse();
+    kept
+}
+
+/// Discard `root`'s query history — the History drawer's **Clear** (P3-14).
+///
+/// The log is *removed* rather than truncated to zero bytes: an absent file is already how
+/// [`load_history`] spells "no runs yet" (a project that has never run one), so removing it is
+/// the same state by the same path, and the next [`append_history`] recreates it. An absent
+/// file is therefore success, not an error — Clear is idempotent.
+pub fn clear_history(root: &Path) -> Result<(), String> {
+    let path = history_path(root);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
 }
 
 /// The housekeeping every durable `.strata/` write does on its way in: keep the
@@ -554,6 +623,90 @@ mod tests {
         // Rotation rewrote the file down to the kept window (and dropped the garbage line).
         let after = load_history(&root.0, 100).unwrap();
         assert_eq!(after.len(), 3);
+    }
+
+    /// **Repeats collapse to their newest occurrence, and the cap counts what is left.** The
+    /// point of doing it in this order: a log full of one hammered query must not hand back a
+    /// window of that query repeated, with every other query aged out of the cap.
+    #[test]
+    fn history_keeps_the_newest_of_each_query_and_caps_the_distinct_ones() {
+        let root = TempRoot::new("history-distinct");
+        append_history(&root.0, &run("SELECT a", 1)).unwrap();
+        append_history(&root.0, &run("SELECT b", 2)).unwrap();
+        for i in 0..20 {
+            append_history(&root.0, &run("SELECT * FROM events", 100 + i)).unwrap();
+        }
+
+        let loaded = load_history(&root.0, 3).unwrap();
+        let sqls: Vec<&str> = loaded.iter().map(|r| r.sql.as_str()).collect();
+        assert_eq!(
+            sqls,
+            ["SELECT a", "SELECT b", "SELECT * FROM events"],
+            "the hammered query takes one slot, not all three"
+        );
+        assert_eq!(
+            loaded.last().unwrap().rows,
+            119,
+            "and it is the newest run of it that survived"
+        );
+
+        // The load compacted the file to exactly what it kept, so an append-only log of one
+        // repeated query can't grow without bound.
+        let text = fs::read_to_string(history_path(&root.0)).unwrap();
+        assert_eq!(text.lines().filter(|l| !l.trim().is_empty()).count(), 3);
+    }
+
+    /// Layout is not identity: the same statement re-indented is one entry, so the drawer can
+    /// never show two rows whose collapsed previews read identically.
+    #[test]
+    fn history_dedupe_ignores_layout() {
+        let root = TempRoot::new("history-layout");
+        append_history(&root.0, &run("SELECT a,\n       b\nFROM t", 1)).unwrap();
+        append_history(&root.0, &run("SELECT a, b FROM t", 2)).unwrap();
+
+        let loaded = load_history(&root.0, 100).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].rows, 2, "the newest layout is the one kept");
+    }
+
+    /// `save_history` is the write a re-run needs — it replaces the log rather than adding to
+    /// it, so the entry that moved leaves no stale line behind.
+    #[test]
+    fn saving_history_replaces_the_log() {
+        let root = TempRoot::new("history-save");
+        append_history(&root.0, &run("SELECT a", 1)).unwrap();
+        append_history(&root.0, &run("SELECT b", 2)).unwrap();
+
+        save_history(&root.0, &[run("SELECT b", 2), run("SELECT a", 3)]).unwrap();
+
+        let loaded = load_history(&root.0, 100).unwrap();
+        let sqls: Vec<&str> = loaded.iter().map(|r| r.sql.as_str()).collect();
+        assert_eq!(
+            sqls,
+            ["SELECT b", "SELECT a"],
+            "order is the file's, oldest first"
+        );
+        assert_eq!(loaded[1].rows, 3, "and the rewritten entry won");
+    }
+
+    /// Clear discards the log, and is idempotent — clearing an already-clear project (or one
+    /// that has never run a query) is success, not an error, because "no file" is what the
+    /// loader already reads as "no history".
+    #[test]
+    fn clearing_history_removes_the_log_and_is_idempotent() {
+        let root = TempRoot::new("history-clear");
+        append_history(&root.0, &run("SELECT 1", 1)).unwrap();
+        assert_eq!(load_history(&root.0, 100).unwrap().len(), 1);
+
+        clear_history(&root.0).unwrap();
+        assert!(load_history(&root.0, 100).unwrap().is_empty());
+        assert!(!history_path(&root.0).exists());
+        clear_history(&root.0).unwrap();
+
+        // …and the log comes back on the next run, rather than the project being left unable
+        // to record one.
+        append_history(&root.0, &run("SELECT 2", 1)).unwrap();
+        assert_eq!(load_history(&root.0, 100).unwrap().len(), 1);
     }
 
     /// A present-but-unparseable file must surface as **damage**, never masquerade as "no

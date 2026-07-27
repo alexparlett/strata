@@ -23,7 +23,11 @@ pub use catalog::{
 pub use catalog::{CatalogState, ScanRequest, ScanScope};
 pub use channel::Chan;
 pub use diagnostics::use_diagnostics;
-pub use history::use_history_recording;
+/// Only tests name the satellite itself: they stand its context signal up by hand, where the
+/// window goes through `use_init_history`.
+#[cfg(test)]
+pub use history::History;
+pub use history::{clear_history, use_history_recording, HistoryCtx};
 pub use hooks::{
     refresh_catalog, refresh_table, use_autosave, use_init_history, use_init_project,
     use_init_session,

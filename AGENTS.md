@@ -133,8 +133,22 @@ Things that must not regress. Each was fought for once already.
   `defs()` is a pure projection for saving. **Identity:** tables/views are keyed by **name** (their
   engine/SQL identity, one shared namespace, case-insensitive compare); saved queries by a stable
   **`Uuid`**. Renames route through the store (a view rename rewrites tab `Origin::View` keys).
-- **History is a satellite**, persisted append-only to `.strata/history.jsonl` — never a field on
-  `ProjectState`/`SessionState`.
+- **History is a satellite**, persisted to `.strata/history.jsonl` — never a field on
+  `ProjectState`/`SessionState`. It records **only successful data runs**, which is a claim the
+  surface has to keep: the History drawer shows no status mark, because the canvas's
+  ok/cancelled/failed dot would have exactly one value. Its **Clear** unwrites the file as well as
+  emptying the satellite (an emptied list that refills on the next open is a surface disagreeing
+  with its store), and keeps the `seen` dedup guard — that guard is about *runs*, and the pin
+  holding a cleared run is still mounted, so forgetting it would put the entry straight back.
+- **History is a list of queries, not of presses — and dedupe comes before the cap.** A re-run
+  moves its entry to the top with the newest figures instead of stacking a row, keyed by
+  `util::collapse_sql`, which is the *same* function that renders the drawer's preview (a key
+  looser than the preview merges rows a reader can tell apart; a tighter one lets two identical
+  rows sit in the list). The ordering is the load-bearing part: a query hammered 150 times must
+  occupy one slot of `max_history`, not all of them, so a keep-last-N over the raw log is wrong —
+  collapse, *then* cap. The persisted log follows the same rule without losing the cheap write: a
+  new query is one `O_APPEND` line, and only a run that *replaced* an entry rewrites the file
+  (`project::save_history`), because an append can add a line but not move one.
 - **A window's project subtree is keyed on the project folder; there is no reopen-in-place path.**
   `ProjectApp` is the *window* (theme, app-globals, close bridge, menubar, the `OpenCtx` open
   path); `ProjectRoot` is the *open project* (engine, stores, autosave, catalog, views) and its

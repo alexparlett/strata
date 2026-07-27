@@ -17,7 +17,7 @@
 use std::time::SystemTime;
 
 use strata_core::engine::profile::CatalogProfile;
-use strata_core::util::fmt_int;
+use strata_core::util::{ago, fmt_int};
 use strata_model::{CatalogKind, ColRef, ColumnInfo, Kind, Stat, StatKey};
 
 use crate::apps::project::query::ScanId;
@@ -250,20 +250,13 @@ pub fn scan_footnote(profile: &CatalogProfile) -> String {
     format!("Full scan · {} rows", fmt_int(profile.rows))
 }
 
-/// How long ago the scan settled, as the zone's header states it.
-///
-/// Coarse on purpose: the point is whether these numbers are minutes or days old, and a figure
-/// that precise would need to tick to stay true. A clock that has gone backwards reads as fresh
-/// rather than as a negative age.
+/// How long ago the scan settled, as the zone's header states it. The age itself is
+/// [`util::ago`](strata_core::util::ago) — shared with the History drawer's timestamps, so the two
+/// surfaces say "3 h ago" the same way. A clock that has gone backwards reads as fresh rather than
+/// as a negative age.
 pub fn scan_age(at: SystemTime) -> String {
     let secs = at.elapsed().map(|d| d.as_secs()).unwrap_or(0);
-    let ago = match secs {
-        s if s < 60 => "just now".to_string(),
-        s if s < 3600 => format!("{} min ago", s / 60),
-        s if s < 86_400 => format!("{} h ago", s / 3600),
-        s => format!("{} d ago", s / 86_400),
-    };
-    format!("scanned {ago}")
+    format!("scanned {}", ago(secs))
 }
 
 /// Resolve a column path (`["address", "city"]`) by walking `children`.

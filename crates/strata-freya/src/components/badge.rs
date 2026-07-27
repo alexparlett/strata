@@ -39,6 +39,7 @@ pub struct Badge {
     role: BadgeRole,
     color: Color,
     background: Option<Color>,
+    border: Option<Color>,
     radius: f32,
     padding: Gaps,
     height: Option<f32>,
@@ -51,6 +52,7 @@ impl Badge {
             role,
             color,
             background: None,
+            border: None,
             radius: 4.,
             // A tag hugs tighter than a value run — the two paddings the views already used.
             padding: match role {
@@ -78,6 +80,20 @@ impl Badge {
         self
     }
 
+    /// Outline the badge in `color` — and, with it, drop the *derived* tint, because a pill can
+    /// be read as a shape by its edge or by its fill but stating both twice over is the same mark
+    /// said twice. The History row's `3 lines` is the outlined form (canvas `--c-border2`); a
+    /// caller wanting both can still pin a fill with [`background`](Self::background).
+    ///
+    /// It only drops the tint it would have *derived* — an explicit `background` always wins, in
+    /// either order. Setting the field here instead would have made the pair order-dependent:
+    /// `.background(f).border(c)` would silently lose `f` while `.border(c).background(f)` kept
+    /// it, which is not a distinction a builder should have.
+    pub fn border(mut self, color: Color) -> Self {
+        self.border = Some(color);
+        self
+    }
+
     pub fn radius(mut self, radius: f32) -> Self {
         self.radius = radius;
         self
@@ -97,7 +113,12 @@ impl Badge {
 
 impl Component for Badge {
     fn render(&self) -> impl IntoElement {
-        let background = self.background.unwrap_or(self.color.with_a(TINT_ALPHA));
+        // An explicit fill always wins. Otherwise the fill is derived from the foreground —
+        // except on an outlined badge, which is already a shape without one (see `border`).
+        let background = self.background.unwrap_or(match self.border {
+            Some(_) => Color::TRANSPARENT,
+            None => self.color.with_a(TINT_ALPHA),
+        });
         let label = match self.role {
             BadgeRole::Tag => Eyebrow::new(self.text.clone())
                 .color(self.color)
@@ -110,6 +131,9 @@ impl Component for Badge {
             .padding(self.padding)
             .corner_radius(self.radius)
             .background(background)
+            .map(self.border, |el, color| {
+                el.border(Border::new().width(1.).fill(color))
+            })
             .map(self.height, |el, h| el.height(Size::px(h)).center())
             .child(label)
     }

@@ -91,6 +91,20 @@ pub fn sql_hash(sql: &str) -> u64 {
     h
 }
 
+/// The SQL as one line — every run of whitespace collapsed to a single space, ends trimmed.
+///
+/// Deliberately **one** function for two jobs, because they have to agree: it is the History
+/// drawer's row preview *and* the key query history dedupes on. A key looser than the preview
+/// would collapse two rows a reader can tell apart; a key tighter than it would let two visually
+/// identical rows sit in the list. Sharing it makes both impossible.
+///
+/// Whitespace only — never case, and never anything that looks inside the statement. Quoted
+/// identifiers are case-sensitive, so `"Id"` and `"id"` are different queries; re-indenting one
+/// is not.
+pub fn collapse_sql(sql: &str) -> String {
+    sql.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Group a non-negative integer with thousands separators (`48213` → `48,213`).
 ///
 /// Every surface that prints a count imports it from here — the EXPLAIN plan's metrics, the
@@ -118,6 +132,23 @@ pub fn plural(n: usize, noun: &str) -> String {
     match n {
         1 => format!("1 {noun}"),
         n => format!("{} {noun}s", fmt_int(n as u64)),
+    }
+}
+
+/// How long ago something happened, `secs` seconds old — `just now`, `4 min ago`, `3 h ago`,
+/// `2 d ago`.
+///
+/// Coarse on purpose: every surface stating an age wants to say whether a number is minutes or
+/// days old, and a figure any more precise would have to tick to stay true. Here rather than in
+/// either caller because the inspector's scan age and the History drawer's timestamps are the
+/// same sentence about different things, and two spellings of it is exactly the near-duplicate
+/// wording AGENTS.md §3 says to merge.
+pub fn ago(secs: u64) -> String {
+    match secs {
+        s if s < 60 => "just now".to_string(),
+        s if s < 3600 => format!("{} min ago", s / 60),
+        s if s < 86_400 => format!("{} h ago", s / 3600),
+        s => format!("{} d ago", s / 86_400),
     }
 }
 
