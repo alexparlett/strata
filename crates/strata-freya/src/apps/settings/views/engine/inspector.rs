@@ -10,7 +10,7 @@
 
 use freya::prelude::*;
 
-use crate::apps::settings::views::engine::model::PropRows;
+use crate::apps::settings::views::engine::model::{KeyStatus, PropRows};
 use crate::apps::settings::{SettingsTheme, SettingsThemePartial, SettingsThemePreference};
 use crate::components::badge::Badge;
 use crate::components::typography::{Meta, Prose, Strong};
@@ -22,9 +22,13 @@ const GAP_ABOVE: f32 = 12.;
 const PILL_GAP: f32 = 8.;
 const ROW_GAP: f32 = 4.;
 
-/// What a custom key can honestly be told about itself.
+/// What a key with no catalogue entry can honestly be told about itself — the two cases the
+/// inspector used to run together, because a lookup that answers `None` cannot tell them apart.
 const CUSTOM: &str =
     "Custom property. Not a recognised DataFusion option, so the engine may decline it.";
+const RESERVED: &str =
+    "Reserved. Strata names the catalog and schema its tables live in, so this property is \
+     skipped when the engine is configured.";
 
 #[derive(PartialEq)]
 pub struct Inspector {
@@ -34,14 +38,28 @@ pub struct Inspector {
 impl Component for Inspector {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
-        let warning = use_theme().read().colors().warning;
+        let colors = use_theme();
+        let warning = colors.read().colors().warning;
+        let error = colors.read().colors().error;
 
         let list = self.rows.read();
-        let Some(row) = list.selected_row().filter(|row| !row.key().is_empty()) else {
+        let Some(row) = list.selected_row() else {
             return rect();
         };
-        let def = row.def();
+        let status = row.status();
+        // Nothing useful to say about a row with no name that its own empty box does not already
+        // say.
+        if status == KeyStatus::Blank {
+            return rect();
+        }
         let restart = strata_core::engine::config::is_restart_key(row.key());
+        // The badge and the sentence are one answer read twice, not two lookups.
+        let (badge, blurb) = match status {
+            KeyStatus::Known(def) => (None, def.desc),
+            KeyStatus::Reserved => (Some(("RESERVED", error)), RESERVED),
+            KeyStatus::Custom => (Some(("CUSTOM", theme.hint_color)), CUSTOM),
+            KeyStatus::Blank => unreachable!("returned above"),
+        };
 
         rect()
             .width(Size::fill())
@@ -66,16 +84,11 @@ impl Component for Inspector {
                     .child(Strong::new(row.key()).color(theme.item_active_color))
                     .maybe_child(restart.then(|| Badge::tag("RESTART", warning)))
                     .maybe_child(
-                        def.is_none()
-                            .then(|| Badge::tag("CUSTOM", theme.hint_color).outlined()),
+                        badge.map(|(text, color)| Badge::tag(text, color).outlined()),
                     ),
             )
-            .child(
-                Prose::new(def.map_or(CUSTOM, |def| def.desc))
-                    .color(theme.hint_color)
-                    .wrap(),
-            )
-            .maybe_child(def.map(|def| {
+            .child(Prose::new(blurb).color(theme.hint_color).wrap())
+            .maybe_child(status.def().map(|def| {
                 rect()
                     .horizontal()
                     .cross_align(Alignment::Center)

@@ -20,10 +20,62 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_core::engine::config::{key_def, value_error, EngineKey, ENGINE_KEYS};
+use strata_core::engine::config::{is_owned_key, key_def, value_error, EngineKey, ENGINE_KEYS};
 
 /// How many catalogue matches the name field offers at once (canvas: 7).
 const MAX_SUGGESTIONS: usize = 7;
+
+/// What the catalogue makes of a row's name.
+///
+/// **One lookup, so the surfaces that dress a row cannot disagree.** Each of them used to ask
+/// `key_def` for itself and read `None` as "custom", which silently folded in the case neither
+/// names: a **reserved** key is recognised *and* refused, so the inspector called it a custom
+/// property the engine "may decline" while the row's own error strip said it was reserved. Two
+/// answers to one question. This is that question, asked once.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeyStatus {
+    /// No name typed yet.
+    Blank,
+    /// A catalogued key, with its entry.
+    Known(&'static EngineKey),
+    /// A key the **app** owns and config may never set — the catalog and schema our tables live
+    /// in, and the planner spans the editor's diagnostics need
+    /// ([`is_owned_key`](strata_core::engine::config::is_owned_key)). Absent from the catalogue,
+    /// so it can only ever be typed by hand or arrive as a stale saved override.
+    Reserved,
+    /// Not in the catalogue. Not an error: it may be a key from a DataFusion newer than this
+    /// build, which the engine will simply decline.
+    Custom,
+}
+
+impl KeyStatus {
+    /// What the catalogue makes of `key` (already trimmed). The whole rule, in one place —
+    /// [`PropRow::status`] is this, and so is every surface that dresses a name box.
+    ///
+    /// Reserved is checked **before** the catalogue: an owned key is absent from `ENGINE_KEYS` by
+    /// design, so a lookup alone cannot tell it from one nobody has heard of.
+    pub fn of(key: &str) -> KeyStatus {
+        if key.is_empty() {
+            return KeyStatus::Blank;
+        }
+        if is_owned_key(key) {
+            return KeyStatus::Reserved;
+        }
+        match key_def(key) {
+            Some(def) => KeyStatus::Known(def),
+            None => KeyStatus::Custom,
+        }
+    }
+
+    /// The catalogue entry behind this status — the *only* thing that carries a default and a
+    /// description, which is why `Reserved` and `Custom` have neither to show.
+    pub fn def(self) -> Option<&'static EngineKey> {
+        match self {
+            KeyStatus::Known(def) => Some(def),
+            _ => None,
+        }
+    }
+}
 
 /// One row of the editor: a property name and its value, under an id that outlives both.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -40,9 +92,9 @@ impl PropRow {
         self.name.trim()
     }
 
-    /// This row's catalogue entry, or `None` for a custom key.
-    pub fn def(&self) -> Option<&'static EngineKey> {
-        (!self.key().is_empty()).then(|| key_def(self.key())).flatten()
+    /// What this row's name is, as far as the catalogue is concerned.
+    pub fn status(&self) -> KeyStatus {
+        KeyStatus::of(self.key())
     }
 }
 
@@ -461,5 +513,44 @@ mod tests {
             rows.errors().contains_key(&owned),
             "Strata names its own catalog and schema"
         );
+    }
+
+    /// The autocomplete can only offer what the catalogue holds, so this is what keeps a reserved
+    /// key from ever being suggested. A comment saying they are "deliberately absent" is not a
+    /// guard: adding one to `ENGINE_KEYS` would put it in the dropdown, where picking it produces
+    /// a row that is invalid the instant it is created.
+    #[test]
+    fn the_catalogue_holds_no_key_the_app_reserves() {
+        for entry in ENGINE_KEYS {
+            assert!(
+                !is_owned_key(entry.key),
+                "{} is reserved and must not be offered",
+                entry.key
+            );
+        }
+    }
+
+    #[test]
+    fn a_reserved_name_is_its_own_status_not_a_custom_one() {
+        let mut rows = PropRows::default();
+        let reserved = rows.push("datafusion.catalog.default_catalog".into(), "x".into());
+        let custom = rows.push("datafusion.made.up".into(), "x".into());
+        let known = rows.push(BATCH.into(), "4096".into());
+        let blank = rows.add();
+
+        let status = |id: u64| {
+            rows.rows()
+                .iter()
+                .find(|row| row.id == id)
+                .expect("row")
+                .status()
+        };
+        // The conflation this type exists to prevent: reserved is recognised *and* refused, so a
+        // surface reading it as "custom" tells the user the engine "may decline" a key it is
+        // certain to.
+        assert_eq!(status(reserved), KeyStatus::Reserved);
+        assert_eq!(status(custom), KeyStatus::Custom);
+        assert!(matches!(status(known), KeyStatus::Known(def) if def.key == BATCH));
+        assert_eq!(status(blank), KeyStatus::Blank);
     }
 }

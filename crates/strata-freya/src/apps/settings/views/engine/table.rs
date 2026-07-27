@@ -17,9 +17,9 @@
 //! nothing.
 
 use freya::prelude::*;
-use strata_core::engine::config::{is_restart_key, key_def};
+use strata_core::engine::config::is_restart_key;
 
-use crate::apps::settings::views::engine::model::PropRows;
+use crate::apps::settings::views::engine::model::{KeyStatus, PropRows};
 use crate::apps::settings::{SettingsTheme, SettingsThemePartial, SettingsThemePreference};
 use crate::components::divider::Divider;
 use crate::components::form::ValueField;
@@ -212,10 +212,16 @@ impl Component for PropTableRow {
         });
 
         let key = name.read().trim().to_string();
-        // A name the catalogue doesn't know is not an error — it may be a key from a DataFusion
-        // newer than this build — but it is worth saying, so it is set in the warning tone.
-        let known = key.is_empty() || key_def(&key).is_some();
         let restart = is_restart_key(&key);
+        // One lookup for the whole row, matching what the inspector says about the same name.
+        // Three tones, because there are three answers: a key the catalogue doesn't know may
+        // simply be newer than this build (warning), while a reserved one is refused outright and
+        // the row is already carrying an error for it.
+        let name_color = match KeyStatus::of(&key) {
+            KeyStatus::Blank | KeyStatus::Known(_) => colors.text_primary,
+            KeyStatus::Custom => colors.warning,
+            KeyStatus::Reserved => colors.error,
+        };
 
         // Suggestions are open exactly while the box has focus and the catalogue has something
         // left to offer. Picking a name fills the box, which empties the list, which closes the
@@ -284,10 +290,7 @@ impl Component for PropTableRow {
                                     // its own, so its text takes the ambient one.
                                     rect()
                                         .width(Size::flex(1.))
-                                        .color(match known {
-                                            true => colors.text_primary,
-                                            false => colors.warning,
-                                        })
+                                        .color(name_color)
                                         .child(
                                             ValueField::new(name)
                                                 .bare()
