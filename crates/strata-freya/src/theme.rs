@@ -27,7 +27,7 @@ use crate::apps::project::{
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
-use crate::components::field_row::FieldRowThemePreference;
+use crate::components::form::FormThemePreference;
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
@@ -470,8 +470,9 @@ strata_components! {
     // (bg + border + divider) and per-item rest / active (accent-tint) dress.
     // One labelled row of a form — the uppercase label and the ⓘ that carries its hint. The
     // control beneath is the caller's, so nothing about it is dressed here.
-    "field_row" => FieldRowThemePreference {
-        label_color, hint_color, note_background, note_border_fill, note_color,
+    "form" => FormThemePreference {
+        title_color, label_color, hint_color, divider_fill, note_background,
+        note_border_fill, note_color,
     },
     "segmented_toggle" => SegmentedToggleThemePreference {
         background, form_background, border_fill, divider_fill, item_color,

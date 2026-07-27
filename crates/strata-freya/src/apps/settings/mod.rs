@@ -138,6 +138,17 @@ impl SettingsCtx {
         }
     }
 
+    /// Edit one field of the draft — the write path every control on every pane goes through.
+    ///
+    /// Takes `self` by value, like `ExportCtx::edit`: the caller consumed the context during
+    /// its own render, so this is safe to call from an event handler, where there is no scope
+    /// left to read one from. (`State` is `Copy`, which is what makes the local `mut` binding
+    /// the way a handler reaches the draft at all.)
+    pub fn edit(self, edit: impl FnOnce(&mut Settings)) {
+        let mut draft = self.draft;
+        edit(&mut draft.write());
+    }
+
     /// Whether the draft has anything to commit — i.e. whether **the user** has changed
     /// something. Reactive on the draft, so a control's edit repaints the footer's Apply.
     ///

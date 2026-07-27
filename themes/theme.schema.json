@@ -1410,14 +1410,20 @@
             }
           }
         },
-        "field_row": {
+        "form": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "title_color": {
+              "$ref": "#/$defs/colorPref"
+            },
             "label_color": {
               "$ref": "#/$defs/colorPref"
             },
             "hint_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
               "$ref": "#/$defs/colorPref"
             },
             "note_background": {

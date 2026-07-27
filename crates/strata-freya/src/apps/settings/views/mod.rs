@@ -11,7 +11,6 @@
 
 mod chrome;
 mod data_display;
-pub mod field;
 mod footer;
 mod nav;
 mod pane;

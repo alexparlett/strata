@@ -15,10 +15,17 @@
 use freya::prelude::*;
 use strata_core::config::{COL_WIDTH_MAX, COL_WIDTH_MIN};
 
-use crate::apps::settings::views::field::{edit_draft, NumberField, Setting, SettingList};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::SettingsCtx;
+use crate::components::form::{FormList, NumberField, Setting};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
+
+/// The canvas's numeric field (`width: 130px`).
+const FIELD_WIDTH: f32 = 130.;
+
+/// The row limit is uncapped by design — `0` already means "no limit", so a huge number is
+/// equivalent to it and harmless. The field's own type is the only bound there is.
+const NO_ROW_CAP: u32 = u32::MAX;
 
 #[derive(PartialEq)]
 pub struct DataDisplayPane;
@@ -38,27 +45,27 @@ impl Component for DataDisplayPane {
             )
         };
 
-        let body = SettingList::new()
+        let body = FormList::new()
+            .divided()
             .child(
                 Setting::stacked("Row density", Density { compact })
                     .hint("Controls row height in the results grid and catalog."),
             )
             .child(
                 Setting::switch("Alternating row colors", zebra, move |_| {
-                    edit_draft(ctx, |s| s.zebra = !s.zebra)
+                    ctx.edit(|s| s.zebra = !s.zebra)
                 })
-                .hint(
-                    "Shades every other row in the results grid for easier scanning.",
-                ),
+                .hint("Shades every other row in the results grid for easier scanning."),
             )
             .child(
                 Setting::stacked(
                     "Default column width",
-                    NumberField::new(col_width as i64, "px", move |px: i64| {
-                        edit_draft(ctx, |s| s.default_col_width = px as f64)
-                    })
-                    .min(COL_WIDTH_MIN as i64)
-                    .max(COL_WIDTH_MAX as i64),
+                    NumberField::new(col_width as u32, COL_WIDTH_MIN as u32, COL_WIDTH_MAX as u32)
+                        .width(Size::px(FIELD_WIDTH))
+                        .unit("px")
+                        .on_change(move |px: u32| {
+                            ctx.edit(|s| s.default_col_width = f64::from(px))
+                        }),
                 )
                 .hint(
                     "Starting width for result-grid columns before you resize them. \
@@ -69,9 +76,12 @@ impl Component for DataDisplayPane {
             .child(
                 Setting::stacked(
                     "Default row limit",
-                    NumberField::new(row_limit as i64, "rows", move |rows: i64| {
-                        edit_draft(ctx, |s| s.row_limit = rows as usize)
-                    }),
+                    // Saturating, not `as`: a hand-edited config holding more than a u32 should
+                    // show the biggest number the field can offer, not wrap round to a small one.
+                    NumberField::new(row_limit.try_into().unwrap_or(NO_ROW_CAP), 0, NO_ROW_CAP)
+                        .width(Size::px(FIELD_WIDTH))
+                        .unit("rows")
+                        .on_change(move |rows: u32| ctx.edit(|s| s.row_limit = rows as usize)),
                 )
                 .hint(
                     "New queries are generated with this LIMIT so a stray SELECT * cannot \
@@ -95,12 +105,17 @@ struct Density {
 impl Component for Density {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<SettingsCtx>();
-        let set = move |compact: bool| edit_draft(ctx, |s| s.density_compact = compact);
+        let set = move |compact: bool| ctx.edit(|s| s.density_compact = compact);
 
-        // The pill hugs its segments, so it needs a hug-content parent of its own — a bare
-        // `SegmentedToggle` in the setting's fill-width column would stretch across the pane.
+        // The **form** layout, not the compact toolbar one: inset rounded segments on the
+        // recessed surface, at the height the canvas draws a settings-form control. The
+        // toolbar pill is a different control that happens to share a component.
+        //
+        // The pill hugs its segments, so it needs a hug-content parent of its own — dropped
+        // straight into the setting's fill-width column it would stretch across the pane.
         rect().horizontal().child(
             SegmentedToggle::new()
+                .form()
                 .child(
                     ToggleSegment::text("Comfortable")
                         .selected(!self.compact)

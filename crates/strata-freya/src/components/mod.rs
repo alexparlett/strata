@@ -38,7 +38,7 @@ pub mod badge;
 pub mod dialog;
 pub mod divider;
 pub mod dot;
-pub mod field_row;
+pub mod form;
 pub mod icon;
 pub mod run_button;
 pub mod segmented_toggle;
@@ -46,7 +46,6 @@ pub mod sidebar_row;
 pub mod toggle_button;
 pub mod type_palette;
 pub mod typography;
-pub mod value_field;
 // NB: the bespoke `icon_button` is retired — icon buttons are now Freya's `Button` variants
 // (`.flat()` / `.outline()`) wrapping an `Icon`. The old `icon_button.rs` is an orphan (unreferenced,
 // not compiled) and can be deleted.

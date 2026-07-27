@@ -174,6 +174,24 @@ src/components/                  shared component library
   type_palette.rs                the seven per-`Kind` hues (`"type_palette"` theme group) +
                                  `kind_color`. Named for Kind, not Arrow; the EXPLAIN plan
                                  borrows the same ramp for operator kinds
+  form/                          **the form vocabulary** every settings-style surface is built
+                                 from — export options, the config modal, the Settings panes —
+                                 under one `form` component theme. mod.rs carries the theme, the
+                                 shared metrics and a "known divergences" list (the canvases
+                                 differ; the differences are named, not averaged)
+    list.rs                      `FormList`: the rows in order, and the only place the rhythm
+                                 between them is spelled out. `.divided()` = the Settings panes'
+                                 hairline; the default gap = the window forms'
+    row.rs                       `FieldRow` (uppercase label + ⓘ tooltip — the **window form**'s
+                                 row) + `FieldNote`
+    setting.rs                   `Setting` (sentence-case title + inline subtext — the **settings
+                                 pane**'s row; `::switch` puts it trailing with the label block
+                                 its *sibling*). Two rows and not one because the design's
+                                 Settings consistency pass swept that window's tooltips back out
+                                 to subtext — reaching for the other one regresses a decision
+    field.rs                     `ValueField` (the mono box: stated height, length cap enforced
+                                 on the state) + `NumberField` (bounded, `.unit("px")`, reports
+                                 per keystroke and normalizes its text on blur)
 src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher.dc.html`)
   mod.rs                         root + window config + the `launcher` component theme
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
@@ -190,11 +208,8 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
   model.rs                       the nav tree: CATEGORIES + their groups + breadcrumbs
                                  (unit-tested — one category per route, groups contiguous)
   views/                         chrome (the router layout) · title_bar · nav · pane · footer
-    field.rs                     P4-05 — what **every** pane is made of: `SettingList` (the
-                                 divider-separated list, so no pane spells the rhythm out) ·
-                                 `Setting` (title → hint → control, uniform even where the canvas
-                                 isn't; a switch is trailing with the label block its *sibling*) ·
-                                 `NumberField` · `edit_draft`
+                                 (the panes' rows are `components::form` — P4-05 moved the row
+                                 vocabulary there rather than keeping a settings-only copy)
     theme.rs                     P4-04 — the Appearance pane: Sync-with-OS + the theme grid, both
                                  `Setting`s. Each card's thumbnail is painted from **that** theme's
                                  own sheet slots, so a user theme previews with nothing authored

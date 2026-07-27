@@ -16,11 +16,11 @@
 use freya::prelude::*;
 use strata_core::theme::{Source, StrataTheme};
 
-use crate::apps::settings::views::field::{edit_draft, Setting, SettingList};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
+use crate::components::form::{FormList, Setting};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Body;
 use crate::state::ThemeSel;
@@ -76,10 +76,11 @@ impl Component for ThemePane {
             );
         }
 
-        let body = SettingList::new()
+        let body = FormList::new()
+            .divided()
             .child(
                 Setting::switch("Sync with OS", sync_os, move |_| {
-                    edit_draft(ctx, |s| s.sync_os = !s.sync_os)
+                    ctx.edit(|s| s.sync_os = !s.sync_os)
                 })
                 .hint("Matches your system light/dark appearance automatically."),
             )
