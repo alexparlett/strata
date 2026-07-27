@@ -24,7 +24,12 @@ use crate::components::value_field::ValueField;
 /// a height derived from each one's own content makes them different heights, and a long list
 /// is what the scroll view is for.
 const PANE_BODY_HEIGHT: f32 = 176.;
+/// The header strip, measured from the pane's outer edge as the canvas draws it — so the strip
+/// itself is this less [`PANE_BORDER`], which the pane's padding takes back.
 const PANE_HEADER_HEIGHT: f32 = 30.;
+/// The pane outline. Named because it is spent twice: painted as the border, and paid again as
+/// the padding that keeps children off it.
+const PANE_BORDER: f32 = 1.;
 /// The pane's corner (canvas `--r-2`).
 const PANE_RADIUS: f32 = 8.;
 /// The filter sits in that header strip, so it is built to clear it.
@@ -108,11 +113,22 @@ fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
         .corner_radius(PANE_RADIUS)
         .overflow(Overflow::Clip)
         .background(theme.panel_background)
-        .border(Border::new().width(1.).fill(theme.control_border_fill))
+        .border(
+            Border::new()
+                .width(PANE_BORDER)
+                .fill(theme.control_border_fill),
+        )
+        // Inset every child by the border's own width. A Freya border is **painted, never laid
+        // out** — torin has no notion of one — so with the default `BorderAlignment::Inner` the
+        // stroke is drawn inside the bounds children already occupy, and a child with its own
+        // background paints straight over it. That is why the border enclosed the body (no
+        // background) but stopped short of the header strip (which has one). Padding by the
+        // stroke width is the border-box behaviour the canvas assumes.
+        .padding(PANE_BORDER)
         .child(
             rect()
                 .width(Size::fill())
-                .height(Size::px(PANE_HEADER_HEIGHT))
+                .height(Size::px(PANE_HEADER_HEIGHT - PANE_BORDER))
                 .horizontal()
                 .cross_align(Alignment::Center)
                 .main_align(Alignment::SpaceBetween)

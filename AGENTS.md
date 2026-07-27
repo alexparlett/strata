@@ -312,6 +312,17 @@ Things that must not regress. Each was fought for once already.
   handler (match `e.data().button()` for right-click). Diagnostic fingerprint of a replaced
   handler: sibling events (hover) still fire, the press reaches ancestors, the node's own handler
   is dead.
+- **A border is painted, never laid out — a bordered box whose children have backgrounds needs
+  padding equal to the stroke.** torin has no notion of `border` at all (`BorderAlignment` exists
+  only in `style/border.rs` and `elements/rect.rs`), so the default `Inner` alignment draws the
+  stroke *inside* bounds the children already occupy, and children paint after the parent's
+  background and border. A child at `width(fill)` with its own background therefore erases the
+  border behind it. This is **not** CSS's border box, and the failure is partial and so reads as a
+  rendering bug rather than a layout one: the export window's transfer panes kept their outline
+  around the body (a wrapper with no background) and lost it across the header strip (which has
+  one). Pad the bordered rect by the stroke width and subtract it from any child sized from the
+  outer edge. Reach for `BorderAlignment::Outer` only when the box may genuinely overflow its
+  slot.
 - **A disabled control gates its handlers; it does not go `interactive(false)`.** Wrap only the
   action handlers in `.maybe(enabled, …)` and leave `on_pointer_enter` / `on_pointer_leave`
   registered unconditionally, then decline to *dress* the hover while disabled — that is what
