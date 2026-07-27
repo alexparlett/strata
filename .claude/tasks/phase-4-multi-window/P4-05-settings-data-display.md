@@ -15,6 +15,12 @@ straight off the config store (`DataGrid::render`) and the catalog's View-table 
 `row_limit` — so this task built the *control*, not the wiring. Nothing downstream changed.
 
 ### `components/form` — the shared form vocabulary
+
+> **Names below are superseded.** The two rows this task shipped (`FormList` + `FieldRow` +
+> `Setting`) were folded into one composing vocabulary straight after: **`Form` > `Row` >
+> control**, where the register is a `Variant` on the *form* (`Fields` / `Preferences`) provided
+> through context, and the control is the row's child. The reasoning below still holds — it is
+> why the `Variant` exists — but read `components/form/mod.rs` for the API.
 P4-05 landed on top of P4-10, which had just shipped the export window's `FieldRow` / `ValueField`
 / `NumberField` and the segmented toggle's form layout. Rather than keep a settings-only copy of
 half of that, the row vocabulary moved into **one module** — `components/form`, under one `form`

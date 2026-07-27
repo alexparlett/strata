@@ -80,6 +80,12 @@ impl Component for Row {
         // label; in preferences it is a line of subtext under it, wrapped — those are full
         // sentences and the pane is narrow, so `Caption`'s default single-line cap would eat
         // the end of half of them.
+        //
+        // A preferences **title** wraps for the same reason: it is a sentence-case phrase and
+        // some of them are whole clauses ("Confirm before closing a tab or window with a
+        // running query"), which at the window's minimum width would otherwise be clipped
+        // mid-word by the single-line default. A fields eyebrow stays capped — it is a short
+        // uppercase label, and one that grew long would be the wrong label.
         let label = match variant {
             Variant::Fields => rect()
                 .horizontal()
@@ -97,7 +103,12 @@ impl Component for Row {
                 })),
             Variant::Preferences => rect()
                 .vertical()
-                .child(Strong::new(self.label.clone()).color(theme.title_color))
+                .child(
+                    Strong::new(self.label.clone())
+                        .color(theme.title_color)
+                        .width(Size::fill())
+                        .wrap(),
+                )
                 .map(self.hint.clone(), |el, hint| {
                     el.child(rect().height(Size::px(HINT_GAP))).child(
                         Caption::new(hint)

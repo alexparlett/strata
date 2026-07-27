@@ -197,8 +197,12 @@ src/components/                  shared component library
                                  the row's end, `.on_press()` makes the label activate it. Plus
                                  `Note`, a statement where a control would go
     field.rs                     `ValueField` (the mono box: stated height, length cap enforced
-                                 on the state) + `NumberField` (bounded, `.unit("px")`, reports
-                                 per keystroke and normalizes its text on blur)
+                                 on the state, the caller's width on the *wrapper* so a relative
+                                 one is a flex child of the row) + `NumberField` (bounded,
+                                 `.unit("px")`, reports per keystroke and normalizes its text on
+                                 blur) + `DirectoryField` (a path box + the native folder picker:
+                                 one buffer, both write it — the picker sets the box and the box
+                                 is what reports)
 src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher.dc.html`)
   mod.rs                         root + window config + the `launcher` component theme
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
@@ -208,7 +212,7 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
   mod.rs                         root + window config + the `settings` component theme, the
                                  **freya-router** `Route` per category, `SettingsCtx` (the draft ·
                                  its **seed** · Apply · the live-theme mirror), and the category
-                                 panes still awaiting their task (P4-06…P4-08). Apply commits a
+                                 panes still awaiting their task (P4-07 / P4-08). Apply commits a
                                  per-field diff of draft-vs-seed (`Settings::merge_onto`), so a
                                  setting another window wrote meanwhile survives it; `dirty()` is
                                  the same comparison, which is why it reads no config state
@@ -229,6 +233,14 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
                                  wiring. Its bounds are `strata_core::config`'s COL_WIDTH_MIN/MAX,
                                  which the grid clamps to — a field offering a width the grid then
                                  corrects would be a field that lies
+    system.rs                    P4-06 — the System pane: reopen-on-startup · default project
+                                 directory · **Opening a project** · confirm-on-running-close ·
+                                 query-history limit. All five already had their reader, so this
+                                 is the control; the open-pref pill is the one worth naming — the
+                                 This/New prompt's "Remember" was the only writer, and it is
+                                 one-way, so nothing put the answer back to Ask. The history
+                                 floor is `strata_core::config::HISTORY_MIN`, the same floor
+                                 `history_cap` applies (a `0` would rotate `history.jsonl` away)
 src/apps/export/                 the export window (P4-10, `Export.dc.html` for the markup,
                                  `Strata.exportGroups()` for the options) — opened from the
                                  results toolbar, pinned above the project window that asked

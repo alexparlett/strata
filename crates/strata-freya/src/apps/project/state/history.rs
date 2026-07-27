@@ -33,6 +33,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use freya::prelude::{spawn, use_consume, use_side_effect, use_state, State, WritableUtils};
 use freya::query::{QueryStateData, UseQuery};
 use freya::radio::{use_radio_station, RadioStation};
+use strata_core::config::HISTORY_MIN;
 use strata_core::project as project_io;
 use strata_core::util::collapse_sql;
 use strata_model::HistoryEntry;
@@ -45,12 +46,13 @@ use super::{ProjChan, ProjectState};
 
 /// How many recent runs are kept, in memory and on disk: the user's `max_history` setting
 /// (design24 System ▸ History), which is the *only* source — a second constant here would
-/// silently outrank the control P4-06 is about to put on it.
+/// silently outrank the control Settings ▸ System puts on it.
 ///
-/// Floored at 1 because a `0` (only reachable by hand-editing the config) would make the
-/// next load rotate `history.jsonl` down to nothing — a setting shouldn't delete the log.
+/// Floored at [`HISTORY_MIN`], the same floor that field offers, because a `0` (only
+/// reachable by hand-editing the config) would make the next load rotate `history.jsonl`
+/// down to nothing — a setting shouldn't delete the log.
 pub fn history_cap(config: ConfigStation) -> usize {
-    config.peek().settings.max_history.max(1)
+    config.peek().settings.max_history.max(HISTORY_MIN)
 }
 
 /// The window's query-history satellite: recent runs newest-first, plus a dedup guard so a

@@ -18,6 +18,11 @@ Not built. Core: `register_external` / `TableSpec`.
 ## Build (to `Configure.dc.html`, DEV_TASKS U14/D7)
 - Multi-path **SOURCE PATHS** with browse + per-path counts; a **REQUIRED badge + resolution tooltip**;
   correct status order (below import-options, above Hive); drop the subtitle.
+  > The path-with-a-browse-button row already exists: `components::form::DirectoryField` (P4-06,
+  > Settings ▸ System). It owns its buffer and reports per keystroke like `NumberField`, and the
+  > picker writes the *box* rather than reaching past it — one buffer, so the two can't disagree.
+  > It picks a **folder**; a source path that may be a file or a glob wants that as a mode on the
+  > same component, not a second control beside it.
 - Format selection; **Hive partition** detection (typed, with the string-cast warning).
 - The LOCATION toggle + remote object stores belong to the **Connections workstream** (W7) — leave a hook.
 

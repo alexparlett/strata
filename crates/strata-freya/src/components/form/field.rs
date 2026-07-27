@@ -20,12 +20,18 @@
 
 use freya::prelude::*;
 
-use crate::components::form::{form_theme, UNIT_GAP};
+use crate::components::form::{form_theme, FIELD_GAP};
+use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Body, InputTypography};
 
 /// The canvas's standard field box — the height a value input stands at unless a surface says
 /// otherwise (a box beside a taller control, say).
 pub const FIELD_HEIGHT: f32 = 30.;
+
+/// A [`DirectoryField`]'s browse button: the canvas's square beside the box, at the height
+/// every value box in a form stands, and the glyph in it.
+const BROWSE_WIDTH: f32 = 34.;
+const BROWSE_ICON: f32 = 15.;
 
 #[derive(PartialEq)]
 pub struct ValueField {
@@ -142,9 +148,17 @@ impl Component for ValueField {
             }
         });
 
+        // The caller's width goes on the **wrapper**, and the `Input` fills it.
+        //
+        // `InputTypography` is a `rect()` around the input, so it — not the input — is what a
+        // parent lays out. Sizing only the input leaves the wrapper hugging whatever that
+        // resolved to, which is invisible for a `px` width and wrong for a relative one: a
+        // `flex(1.)` input inside a hugging wrapper is not a flex child of the row at all, so
+        // the row divides nothing, the wrapper hugs the full width, and the control beside it
+        // (a `DirectoryField`'s browse button) is pushed off the surface.
         InputTypography::mono(
             Input::new(self.value)
-                .width(self.width.clone())
+                .width(Size::fill())
                 .height(self.height.clone())
                 .text_align(self.align)
                 .enabled(self.enabled)
@@ -161,6 +175,7 @@ impl Component for ValueField {
                         .focus_border_fill(Color::TRANSPARENT)
                 }),
         )
+        .width(self.width.clone())
     }
 }
 
@@ -285,10 +300,137 @@ impl Component for NumberField {
             Some(unit) => rect()
                 .horizontal()
                 .cross_align(Alignment::Center)
-                .spacing(UNIT_GAP)
+                .spacing(FIELD_GAP)
                 .child(box_)
                 .child(Body::new(unit).color(form_theme().hint_color))
                 .into_element(),
         }
+    }
+}
+
+/// A **folder path** — the same box, with the native picker beside it.
+///
+/// Two ways to set one value, so there is one buffer and both write it: the picker sets the
+/// box, and what the box holds is what gets reported. A button that reached past the box into
+/// the caller's state would leave the two free to disagree.
+///
+/// It follows [`NumberField`]'s contract, for the same reasons: it **owns the buffer** (`Input`
+/// writes its bound state directly and has no on-change prop), it **reports per keystroke**
+/// (the thing that commits a form is usually a `Button`, which moves focus and calls its
+/// handler in the same breath, so a value that waited for blur would never reach what is being
+/// committed), and it **does not re-read the caller** — `value` seeds the box and nothing more.
+/// What is reported is tracked in state rather than captured, or the comparison would freeze at
+/// the first render and a path typed back to its original could never be reported.
+///
+/// Unlike a number, every string a user can type is a legal path, so there is nothing to
+/// normalize when the box is left — a path that does not exist yet is still the path they mean.
+#[derive(PartialEq)]
+pub struct DirectoryField {
+    value: String,
+    placeholder: Option<&'static str>,
+    /// What the picker calls itself — see [`DirectoryField::dialog_title`].
+    dialog_title: &'static str,
+    on_change: Option<EventHandler<String>>,
+}
+
+impl DirectoryField {
+    /// A field showing `value`, with a folder picker beside it.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            placeholder: None,
+            dialog_title: "Choose a folder",
+            on_change: None,
+        }
+    }
+
+    pub fn placeholder(mut self, placeholder: &'static str) -> Self {
+        self.placeholder = Some(placeholder);
+        self
+    }
+
+    /// The title on the picker. Worth setting: the dialog is a window of its own, so what the
+    /// row said is off screen by the time it is up, and "Choose a folder" is all it would
+    /// otherwise say about which folder.
+    pub fn dialog_title(mut self, dialog_title: &'static str) -> Self {
+        self.dialog_title = dialog_title;
+        self
+    }
+
+    /// Called with each new path the box settles on, typed or picked.
+    pub fn on_change(mut self, on_change: impl Into<EventHandler<String>>) -> Self {
+        self.on_change = Some(on_change.into());
+        self
+    }
+}
+
+impl Component for DirectoryField {
+    fn render(&self) -> impl IntoElement {
+        let mut text = use_state({
+            let value = self.value.clone();
+            move || value
+        });
+        // What was last handed to the caller. Seeded from `value`, so the first pass reports
+        // nothing — the caller already holds this.
+        let mut reported = use_state({
+            let value = self.value.clone();
+            move || value
+        });
+
+        let on_change = self.on_change.clone();
+        use_side_effect(move || {
+            let current = text.read().clone();
+            if current == *reported.peek() {
+                return;
+            }
+            reported.set(current.clone());
+            if let Some(on_change) = &on_change {
+                on_change.call(current);
+            }
+        });
+
+        let dialog_title = self.dialog_title;
+        rect()
+            .width(Size::fill())
+            .horizontal()
+            .content(Content::Flex)
+            .cross_align(Alignment::Center)
+            .spacing(FIELD_GAP)
+            .child(
+                ValueField::new(text)
+                    .width(Size::flex(1.))
+                    .map(self.placeholder, |el, placeholder| {
+                        el.placeholder(placeholder)
+                    }),
+            )
+            .child(
+                Button::new()
+                    .outline()
+                    .theme_layout(
+                        ButtonLayoutThemePartial::default()
+                            .width(Size::px(BROWSE_WIDTH))
+                            .height(Size::px(FIELD_HEIGHT))
+                            // The stated box *is* the size: the stock 6/12 padding would leave
+                            // the glyph 10px to sit in, and a button clips its overflow.
+                            .padding(Gaps::new_all(0.)),
+                    )
+                    .on_press(move |_| {
+                        // Start where the box points, so browsing from a set path opens there
+                        // rather than wherever the OS last left the panel.
+                        let start = text.peek().clone();
+                        spawn(async move {
+                            let mut dialog = rfd::AsyncFileDialog::new().set_title(dialog_title);
+                            if !start.is_empty() {
+                                dialog = dialog.set_directory(&start);
+                            }
+                            // Dismissing the dialog is a decision, not a failure — the box
+                            // keeps what it had.
+                            if let Some(handle) = dialog.pick_folder().await {
+                                text.set(handle.path().to_string_lossy().into_owned());
+                            }
+                        });
+                    })
+                    .child(Icon::new(IconName::Folder).size(BROWSE_ICON)),
+            )
     }
 }
