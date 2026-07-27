@@ -21,6 +21,80 @@ jobs:
       pull-requests: write
       id-token: write
     steps:
+      # Where this review starts. Every run that actually posts a summary ends it
+      # with a `<!-- claude-review-sha: ... -->` marker naming the head it covered,
+      # so the next push only has to look at what arrived since.
+      #
+      # The marker, and not `github.event.before`, is the source of truth: `before`
+      # says what the branch used to point at, which is a lie for every push that
+      # did not get reviewed - a draft, a run this workflow's `cancel-in-progress`
+      # superseded, a run that died at its turn limit before posting. Each of those
+      # would skip a commit permanently, silently. A marker exists only where a
+      # review was published, so the range always starts at code a human has seen.
+      #
+      # `compare` both validates the marker and decides the rebase case: only
+      # `ahead` - the marked commit is still an ancestor of this head - is
+      # incremental. A force-push that rewrote history reports `diverged`, and then
+      # we review the whole PR again rather than hand the reviewer a range full of
+      # phantom reverts. Anything unexpected (deleted commit, API failure) falls
+      # the same way, so the degraded mode is always "review too much", never
+      # "review nothing".
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          last=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+                   --jq '.[] | select(.user.type == "Bot") | .body' \
+                 | grep -oE '<!-- claude-review-sha: [0-9a-f]{40} -->' \
+                 | tail -n1 | grep -oE '[0-9a-f]{40}' || true)
+
+          # Re-triggered without a new commit (a draft toggled ready after a review
+          # already ran). There is nothing to look at.
+          if [ "$last" = "$HEAD_SHA" ]; then
+            echo "$HEAD_SHA has already been reviewed; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base=""
+          if [ -n "$last" ]; then
+            status=$(gh api "repos/$REPO/compare/$last...$HEAD_SHA" --jq .status || echo "")
+            if [ "$status" = "ahead" ]; then
+              base="$last"
+              echo "Incremental review: $last..$HEAD_SHA"
+            else
+              echo "Last reviewed commit $last is '$status' against $HEAD_SHA; reviewing the whole PR."
+            fi
+          else
+            echo "No previous review found; reviewing the whole PR."
+          fi
+
+          if [ -n "$base" ]; then
+            scope=$(printf '%s\n' \
+              "The commits before $base have already been reviewed, in the comments above." \
+              "Review ONLY what has arrived since, which you get with:" \
+              "" \
+              "    gh api repos/$REPO/compare/$base...$HEAD_SHA -H 'Accept: application/vnd.github.diff'" \
+              "" \
+              "If that call fails because the range is too large, fall back to 'gh pr diff $PR' and say in your summary that you reviewed the whole PR instead." \
+              "Do not re-report a problem in code outside that range - but do read that code, and the rest of each file, for the context needed to judge the new hunks. A change is often only wrong in combination with an earlier one." \
+              "If the range includes a merge from the base branch, the commits it brings in were reviewed on their own pull request; judge this author's commits.")
+          else
+            scope=$(printf '%s\n' \
+              "There is no earlier review to carry on from - either this is the first review of this pull request, or its history was rewritten since the last one - so review the whole diff:" \
+              "" \
+              "    gh pr diff $PR")
+          fi
+
+          {
+            echo "scope<<CLAUDE_SCOPE_EOF"
+            printf '%s\n' "$scope"
+            echo "CLAUDE_SCOPE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # The review pulls the diff through gh, but reads the working tree for
       # context (CLAUDE.md, AGENTS.md, surrounding code). `crates/freya` - our
       # Freya fork - comes with it: it is the ground truth for Freya's APIs, so
@@ -34,12 +108,14 @@ jobs:
       # fails loudly on that; here it should cost the reviewer its Freya context,
       # not the whole review. The prompt tells it to say so when the tree is empty.
       - uses: actions/checkout@v6
+        if: steps.scope.outputs.skip != 'true'
         continue-on-error: true
         with:
           fetch-depth: 1
           submodules: true
 
       - uses: anthropics/claude-code-action@v1
+        if: steps.scope.outputs.skip != 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # A direct instruction, NOT `/code-review`. The skill fans the review out
@@ -51,10 +127,11 @@ jobs:
           prompt: |
             Review pull request #${{ github.event.pull_request.number }} for real bugs.
 
-            Get the diff with `gh pr diff ${{ github.event.pull_request.number }}`, then
-            read the surrounding files for context - a hunk on its own rarely says whether
-            it is correct. This repository's conventions live in CLAUDE.md and AGENTS.md;
-            a change that contradicts them is a finding.
+            ${{ steps.scope.outputs.scope }}
+
+            Then read the surrounding files for context - a hunk on its own rarely says
+            whether it is correct. This repository's conventions live in CLAUDE.md and
+            AGENTS.md; a change that contradicts them is a finding.
 
             Look for correctness above all: wrong or inverted conditions, off-by-one,
             unwrap/panic on reachable input, dropped errors, removed guards, broken
@@ -96,6 +173,14 @@ jobs:
             If the diff is clean, say so in the summary comment - silence is
             indistinguishable from the reviewer being broken, which is how this went
             unnoticed.
+
+            The summary comment MUST end with this line, exactly, on its own:
+
+            <!-- claude-review-sha: ${{ github.event.pull_request.head.sha }} -->
+
+            That marker is how the next push knows where to start, so it goes in every
+            summary comment, findings or not. Leave it out and the next run reviews
+            everything here a second time.
 
             **Budget your turns and post while you still have some.** You have a hard
             turn limit and the run dies at it with nothing published - that has already
