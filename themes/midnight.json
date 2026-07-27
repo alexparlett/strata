@@ -573,6 +573,9 @@
       },
       "note_border_fill": {
         "reference": "border_control"
+      },
+      "note_color": {
+        "reference": "text_muted"
       }
     },
     "segmented_toggle": {

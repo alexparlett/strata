@@ -1416,6 +1416,9 @@
             },
             "note_border_fill": {
               "$ref": "#/$defs/colorPref"
+            },
+            "note_color": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },

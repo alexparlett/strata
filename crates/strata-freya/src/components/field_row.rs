@@ -31,6 +31,10 @@ define_theme!(
         /// on, so a note reads as a callout rather than a hole in the surface.
         note_background: Color,
         note_border_fill: Color,
+        /// A note's prose. **Not** `label_color`: that is the eyebrow tone, pitched to recede
+        /// under a control, and a sentence set in it on the note's raised box has too little
+        /// contrast to read. The canvas gives a note `--c-muted`, a step brighter.
+        note_color: Color,
     }
 );
 
@@ -142,7 +146,7 @@ impl Component for FieldNote {
             .border(Border::new().width(1.).fill(theme.note_border_fill))
             .child(
                 crate::components::typography::Prose::new(self.text.clone())
-                    .color(theme.label_color)
+                    .color(theme.note_color)
                     .wrap(),
             )
     }
