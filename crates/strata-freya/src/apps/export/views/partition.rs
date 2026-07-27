@@ -449,19 +449,18 @@ impl Component for KeepColumns {
     }
 }
 
-/// The NULL caveat — the one thing about a partitioned export the user genuinely cannot see
-/// coming, and cannot recover from afterwards.
+/// The NULL rule, stated before the user commits to a column.
 ///
-/// A directory name can't hold a NULL, and DataFusion 54 does **not** use the Hive convention
-/// (`__HIVE_DEFAULT_PARTITION__`) for it: it files a NULL row under a neighbouring value's
-/// directory instead, so the row comes back out labelled with a value it never had. Nothing on
-/// our side can prevent that — the writer chooses the directory — so the honest thing is to say
-/// it before the user commits, while they can still pick a different column.
+/// A directory name can't hold a NULL, and DataFusion 54 does not use the Hive convention
+/// (`__HIVE_DEFAULT_PARTITION__`) for one: it files the row under a neighbouring value's
+/// directory instead, so it reads back labelled with a value it never had. The **engine refuses
+/// such an export** rather than writing it (`export::partition_columns_have_no_nulls`), so this
+/// is not a warning about a risk the user is taking — it is the rule they will hit, said early
+/// enough to pick a different column instead of discovering it at the save dialog.
 ///
-/// The wording is deliberately about the **outcome** rather than the cause: "wrong value" is
-/// what matters, not whose bug it is. Pinned by core's
-/// `a_null_partition_value_is_misfiled_under_another_value`, which fails if a DataFusion
-/// upgrade ever fixes it — at which point this component goes.
+/// Not a per-column check here on purpose: knowing *which* chosen column offends means reading
+/// the snapshot's footer, which is the engine's job and is where the authoritative answer comes
+/// from. This states the constraint; the export names the column.
 #[derive(PartialEq)]
 struct NullWarning;
 
@@ -481,9 +480,9 @@ impl Component for NullWarning {
             .child(Icon::new(IconName::Warning).size(14.).color(warning))
             .child(
                 Prose::new(
-                    "Rows with a NULL in a partition column are written into another value's \
-                     folder, so they read back with the wrong value. Partition on a column \
-                     with no NULLs.",
+                    "A partition column can't contain NULLs — a NULL has no folder name, and \
+                     those rows would read back with the wrong value. The export will name any \
+                     column that has them.",
                 )
                 .color(warning)
                 .wrap(),

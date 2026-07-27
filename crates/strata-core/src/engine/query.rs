@@ -25,6 +25,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::common::Column;
 use datafusion::parquet::arrow::ArrowWriter;
+use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use datafusion::prelude::*;
 use futures::StreamExt;
 
@@ -293,6 +294,23 @@ fn remove_any(path: &Path) {
     }
 }
 
+/// How a snapshot's parquet is written.
+///
+/// **Column statistics are explicit, not left to the default**, because something now depends
+/// on them: a partitioned export refuses to run when a partition column contains NULLs, and it
+/// answers that from the footer's `null_count` rather than by scanning
+/// (`export::partition_columns_have_no_nulls`). parquet-rs enables statistics by default today,
+/// so this changes nothing — it states the requirement so that turning them off has to be a
+/// decision, taken here, by someone who can see what it would break.
+///
+/// `Chunk` rather than `Page`: per-column-chunk statistics carry the null count, and page-level
+/// indexes would cost bytes on every snapshot for something nothing reads.
+fn snapshot_writer_props() -> WriterProperties {
+    WriterProperties::builder()
+        .set_statistics_enabled(EnabledStatistics::Chunk)
+        .build()
+}
+
 /// Run the query **once**, streaming every batch straight to a fresh parquet snapshot
 /// on disk while counting the exact total and capturing the first page — no separate
 /// `COUNT`, no re-read, bounded memory. On failure the partial snapshot is cleaned up
@@ -361,8 +379,10 @@ async fn materialize(
         total += batch.num_rows();
         if writer.is_none() {
             let out = File::create(&file).map_err(|e| e.to_string())?;
-            writer =
-                Some(ArrowWriter::try_new(out, batch.schema(), None).map_err(|e| e.to_string())?);
+            writer = Some(
+                ArrowWriter::try_new(out, batch.schema(), Some(snapshot_writer_props()))
+                    .map_err(|e| e.to_string())?,
+            );
         }
         if let Some(w) = writer.as_mut() {
             w.write(&batch).map_err(|e| e.to_string())?;

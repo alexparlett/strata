@@ -27,12 +27,16 @@ use super::model::{
 
 /// Five rows, unsorted on `id`, with a NULL and a comma-bearing value so quoting and null
 /// handling are observable in the file.
+///
+/// `region` carries the NULL; `tier` deliberately does not. Partitioning is refused on a column
+/// containing NULLs, so the partition tests need a column that has none — and keeping both here
+/// means the refusal is testable from this side too.
 const SQL: &str = "SELECT * FROM (VALUES \
-     (3, 'charlie', 'apac'), \
-     (1, 'alpha', 'emea'), \
-     (5, 'echo, jr', 'amer'), \
-     (2, 'bravo', NULL), \
-     (4, 'delta', 'emea')) AS t(id, name, region)";
+     (3, 'charlie', 'apac', 'gold'), \
+     (1, 'alpha', 'emea', 'silver'), \
+     (5, 'echo, jr', 'amer', 'gold'), \
+     (2, 'bravo', NULL, 'silver'), \
+     (4, 'delta', 'emea', 'gold')) AS t(id, name, region, tier)";
 
 /// A scratch directory per test, removed by the caller on the way out.
 fn scratch(name: &str) -> PathBuf {
@@ -97,10 +101,10 @@ fn the_default_draft_writes_a_plain_csv() {
     assert_eq!(rows, 5);
 
     let lines = lines(&out);
-    assert_eq!(lines[0], "id,name,region", "header on by default");
+    assert_eq!(lines[0], "id,name,region,tier", "header on by default");
     assert_eq!(lines.len(), 6);
     // The default null text is empty, and a value containing the delimiter gets quoted.
-    assert!(lines.iter().any(|l| l == "2,bravo,"), "{lines:?}");
+    assert!(lines.iter().any(|l| l == "2,bravo,,silver"), "{lines:?}");
     assert!(
         lines.iter().any(|l| l.contains("\"echo, jr\"")),
         "{lines:?}"
@@ -122,9 +126,12 @@ fn editing_the_delimiter_in_the_window_reaches_the_file() {
 
     export_to(&engine, &draft, &target, &out);
     let lines = lines(&out);
-    assert_eq!(lines[0], "id|name|region");
+    assert_eq!(lines[0], "id|name|region|tier");
     // The comma in 'echo, jr' is no longer special, so it is no longer quoted.
-    assert!(lines.iter().any(|l| l == "5|echo, jr|amer"), "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l == "5|echo, jr|amer|gold"),
+        "{lines:?}"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -142,7 +149,7 @@ fn a_tab_delimiter_typed_as_an_escape_lands_as_a_real_tab() {
     export_to(&engine, &draft, &target, &out);
     let lines = lines(&out);
     assert_eq!(
-        lines[0], "id\tname\tregion",
+        lines[0], "id\tname\tregion\ttier",
         "one tab byte, not a backslash-t"
     );
 
@@ -174,9 +181,9 @@ fn the_chosen_null_text_is_what_a_null_cell_becomes() {
     let target = open_on_a_result(&engine, None);
 
     for (choice, custom, expected) in [
-        (NullChoice::Null, None, "2,bravo,NULL"),
-        (NullChoice::NaN, None, "2,bravo,NaN"),
-        (NullChoice::Custom, Some("\\N"), "2,bravo,\\N"),
+        (NullChoice::Null, None, "2,bravo,NULL,silver"),
+        (NullChoice::NaN, None, "2,bravo,NaN,silver"),
+        (NullChoice::Custom, Some("\\N"), "2,bravo,\\N,silver"),
     ] {
         let out = dir.join(format!("{choice:?}.csv"));
         let mut draft = ExportDraft::default();
@@ -333,7 +340,7 @@ fn the_partition_toggle_is_what_decides_between_a_file_and_a_tree() {
     // Columns chosen but the toggle off: still one flat file.
     let flat = dir.join("flat.csv");
     let mut draft = ExportDraft::default();
-    draft.partition.columns = vec!["region".into()];
+    draft.partition.columns = vec!["tier".into()];
     export_to(&engine, &draft, &target, &flat);
     assert!(flat.is_file(), "toggle off → a file, not a directory");
 
@@ -348,11 +355,11 @@ fn the_partition_toggle_is_what_decides_between_a_file_and_a_tree() {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     levels.sort();
-    // One directory per distinct *non-null* value. The NULL-region row is not given a
-    // directory of its own — DataFusion files it under a neighbouring value instead, which is
-    // why the pane warns whenever partitioning is on (core's
-    // `a_null_partition_value_is_misfiled_under_another_value` pins that behaviour).
-    assert_eq!(levels, vec!["region=amer", "region=apac", "region=emea"]);
+    assert_eq!(
+        levels,
+        vec!["tier=gold", "tier=silver"],
+        "one per distinct value"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -365,17 +372,15 @@ fn the_selected_order_is_the_directory_nesting_order() {
 
     let mut draft = ExportDraft::default();
     draft.partition.enabled = true;
-    // The order the SELECTED pane shows: region outermost, then id.
-    draft.partition.columns = vec!["region".into(), "id".into()];
+    // The order the SELECTED pane shows: tier outermost, then id.
+    draft.partition.columns = vec!["tier".into(), "id".into()];
 
     let tree = dir.join("tree");
     export_to(&engine, &draft, &target, &tree);
 
-    // The outer level is region and the inner one is id — the order the SELECTED pane showed.
-    // (emea claims ids 1 and 4, plus the NULL-region row 2 that DataFusion misfiles here; the
-    // point of this test is the *nesting*, which the misfiling doesn't affect.)
-    let mut inner: Vec<String> = fs::read_dir(tree.join("region=emea"))
-        .expect("outer level is region")
+    // The outer level is tier and the inner one is id — the order the SELECTED pane showed.
+    let mut inner: Vec<String> = fs::read_dir(tree.join("tier=gold"))
+        .expect("outer level is tier")
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
@@ -384,7 +389,7 @@ fn the_selected_order_is_the_directory_nesting_order() {
         inner.iter().all(|name| name.starts_with("id=")),
         "inner level is id: {inner:?}"
     );
-    assert!(inner.contains(&"id=1".to_string()) && inner.contains(&"id=4".to_string()));
+    assert_eq!(inner, vec!["id=3", "id=4", "id=5"], "the gold rows");
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -396,7 +401,7 @@ fn keeping_partition_columns_is_visible_in_the_written_rows() {
     let target = open_on_a_result(&engine, None);
 
     let read_header = |tree: &Path| -> String {
-        let leaf = fs::read_dir(tree.join("region=emea"))
+        let leaf = fs::read_dir(tree.join("tier=gold"))
             .expect("leaf")
             .filter_map(|e| e.ok())
             .next()
@@ -411,12 +416,12 @@ fn keeping_partition_columns_is_visible_in_the_written_rows() {
 
     let mut draft = ExportDraft::default();
     draft.partition.enabled = true;
-    draft.partition.columns = vec!["region".into()];
+    draft.partition.columns = vec!["tier".into()];
 
     let dropped = dir.join("dropped");
     export_to(&engine, &draft, &target, &dropped);
     assert!(
-        !read_header(&dropped).contains("region"),
+        !read_header(&dropped).contains("tier"),
         "off by default: the column lives in the directory name"
     );
 
@@ -427,6 +432,30 @@ fn keeping_partition_columns_is_visible_in_the_written_rows() {
         read_header(&kept).contains("region"),
         "kept inside the files"
     );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A partition column containing NULLs is refused outright, because DataFusion would file
+/// those rows under a neighbouring value and they would read back wrong. The engine answers it
+/// from the snapshot's parquet footer, so this costs no scan.
+#[test]
+fn partitioning_on_a_column_with_nulls_is_refused() {
+    let dir = scratch("partition-null");
+    let out = dir.join("tree");
+    let engine = Engine::new(Default::default());
+    let target = open_on_a_result(&engine, None);
+
+    let mut draft = ExportDraft::default();
+    draft.partition.enabled = true;
+    draft.partition.columns = vec!["region".into()];
+
+    let spec = draft
+        .spec(&target, out.to_string_lossy().into_owned())
+        .expect("the draft itself is fine");
+    let err = block_on(engine.export(target.snapshot, spec)).expect_err("region has a NULL");
+    assert!(err.contains("Can't partition by 'region'"), "{err}");
+    assert!(!out.exists(), "nothing written");
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -500,7 +529,7 @@ fn a_rerun_behind_the_window_does_not_change_what_it_writes() {
     let rows = export_to(&engine, &ExportDraft::default(), &target, &out);
     assert_eq!(rows, 5);
     let written = lines(&out);
-    assert_eq!(written[0], "id,name,region");
+    assert_eq!(written[0], "id,name,region,tier");
     assert!(
         !written.iter().any(|l| l.contains("later")),
         "the newer run's rows are not in this file: {written:?}"
@@ -580,5 +609,5 @@ fn the_partitionable_columns_are_the_ones_a_directory_name_can_hold() {
         .iter()
         .map(|c| c.name.as_str())
         .collect();
-    assert_eq!(offered, vec!["id", "name", "region"]);
+    assert_eq!(offered, vec!["id", "name", "region", "tier"]);
 }

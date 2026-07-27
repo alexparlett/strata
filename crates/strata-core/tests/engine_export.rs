@@ -619,17 +619,16 @@ async fn exporting_without_a_snapshot_says_so_plainly() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// **Where does a NULL partition value go?** A directory name can't hold a NULL, so every
-/// engine has to invent something — and DataFusion 54's answer is *wrong*: rather than the
-/// Hive convention (`__HIVE_DEFAULT_PARTITION__`), it files the NULL row under a **neighbouring
-/// value's** directory, relabelling it as a value it does not have.
+/// **A partition column containing NULLs is refused, not written.**
 ///
-/// This test pins that, deliberately, rather than asserting what ought to happen. It is the
-/// only record of a silent data-corruption path the export window can reach, it is what the
-/// window's partition warning is worded from, and if a DataFusion upgrade ever fixes it this
-/// test fails and tells us the warning can go.
+/// DataFusion 54 has no Hive `__HIVE_DEFAULT_PARTITION__` for a NULL: it files the row under a
+/// neighbouring value's directory, so it reads back claiming a value it never had. Since nothing
+/// on our side can steer that, the export declines instead.
+///
+/// The check is a footer read, not a scan — the snapshot is written with column statistics on
+/// (`query::snapshot_writer_props`), so the null count is already in its metadata.
 #[tokio::test]
-async fn a_null_partition_value_is_misfiled_under_another_value() {
+async fn a_partition_column_with_nulls_is_refused() {
     let dir = scratch("partition-null");
     let out = dir.join("tree");
     let eng = std::sync::Arc::new(engine());
@@ -650,7 +649,45 @@ async fn a_null_partition_value_is_misfiled_under_another_value() {
         columns: vec!["region".into()],
         keep_columns: false,
     };
-    let (_, written) = eng.export(snap, s).await.expect("partitioned export");
+    let err = eng
+        .export(snap, s)
+        .await
+        .expect_err("region contains a NULL");
+    assert!(err.contains("Can't partition by 'region'"), "{err}");
+    assert!(err.contains("NULL"), "{err}");
+    assert!(
+        !out.exists(),
+        "and nothing is written — the refusal comes before the COPY"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The other side of the gate: a column with no NULLs partitions as before.
+#[tokio::test]
+async fn a_partition_column_without_nulls_is_allowed() {
+    let dir = scratch("partition-no-null");
+    let out = dir.join("tree");
+    let eng = std::sync::Arc::new(engine());
+
+    let (output, _) = eng
+        .query(
+            WsId(1),
+            RunTag(1),
+            "SELECT * FROM (VALUES (1, 'emea'), (2, 'apac'), (3, 'amer')) AS t(id, region)".into(),
+            100,
+        )
+        .await
+        .expect("run");
+    let snap = output.snapshot.expect("snapshot");
+
+    let mut s = spec(&out, Format::Csv(csv()));
+    s.partition = Partition {
+        columns: vec!["region".into()],
+        keep_columns: false,
+    };
+    let (_, rows) = eng.export(snap, s).await.expect("no NULLs, so it writes");
+    assert_eq!(rows, 3);
 
     let mut levels: Vec<String> = fs::read_dir(&out)
         .expect("tree root")
@@ -658,33 +695,10 @@ async fn a_null_partition_value_is_misfiled_under_another_value() {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     levels.sort();
-
-    // Every row that reached disk, and which directory claimed it.
-    let mut placed = Vec::new();
-    for level in &levels {
-        for entry in fs::read_dir(out.join(level)).expect("level").flatten() {
-            let text = fs::read_to_string(entry.path()).expect("part");
-            for line in text.lines().skip(1) {
-                placed.push((level.clone(), line.to_string()));
-            }
-        }
-    }
-    placed.sort();
-
-    assert_eq!(written, 3, "COPY reports all three rows");
-    assert_eq!(placed.len(), 3, "no row is dropped");
-    assert!(
-        !levels
-            .iter()
-            .any(|l| l.contains("__HIVE_DEFAULT_PARTITION__")),
-        "DataFusion 54 does NOT use the Hive NULL convention: {levels:?}"
-    );
-    // The corruption itself: id=2 has a NULL region and is filed under a real one.
-    assert!(
-        placed
-            .iter()
-            .any(|(level, row)| row == "2" && level != "region=" && !level.is_empty()),
-        "the NULL row is filed under a value it does not have: {placed:?}"
+    assert_eq!(
+        levels,
+        vec!["region=amer", "region=apac", "region=emea"],
+        "one directory per distinct value"
     );
 
     let _ = fs::remove_dir_all(&dir);

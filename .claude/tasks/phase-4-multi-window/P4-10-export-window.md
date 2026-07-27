@@ -109,23 +109,31 @@ The destination is the native `rfd` save-file / choose-folder dialog (partitioni
 directory, so it asks for a folder). The canvas's hand-built file browser lives in
 `Strata.dc.html`, not in the export master, and duplicating an OS dialog is not the deliverable.
 
-## ⚠️ DataFusion 54 misfiles NULL partition values — found building this
-A partitioned export over a column containing NULLs **relabels those rows**. With
-`(1,'emea'), (2,NULL), (3,'amer')` partitioned by `region`, DataFusion writes only
-`region=emea` and `region=amer`, and the NULL row lands **inside `region=amer`** — it comes back
-out claiming a value it never had. No `__HIVE_DEFAULT_PARTITION__`, no dropped row, no error.
+## NULL partition values — refused, not warned about (settled)
+DataFusion 54 has no Hive `__HIVE_DEFAULT_PARTITION__` for a NULL: with
+`(1,'emea'), (2,NULL), (3,'amer')` partitioned by `region` it writes only `region=emea` and
+`region=amer`, and files the NULL row **inside `region=amer`** — it reads back claiming a value
+it never had. No dropped row, no error, and unrecoverable once the source result is gone.
 
-Nothing on our side can prevent it (the writer picks the directory), so the window **warns**
-whenever partitioning is enabled with a selection: "Rows with a NULL in a partition column are
-written into another value's folder, so they read back with the wrong value. Partition on a
-column with no NULLs."
+**The export refuses** (`export::partition_columns_have_no_nulls`), naming the column. Alex chose
+the hard block over a warning.
 
-Pinned by `a_null_partition_value_is_misfiled_under_another_value` in
-`crates/strata-core/tests/engine_export.rs`, deliberately asserting the *broken* behaviour: if
-a DataFusion upgrade fixes it, that test fails and the warning (`views/partition.rs`'s
-`NullWarning`) can be deleted. **Open question for Alex:** whether a warning is enough, or
-whether the AVAILABLE pane should refuse nullable columns / the export should pre-check for
-NULLs (a scan) and fail loud instead.
+Two things make it cheap and reliable:
+- **It is a footer read, not a scan.** The snapshot is a parquet file we wrote, so the per-column
+  null count is already in its metadata. `query::snapshot_writer_props` now sets
+  `EnabledStatistics::Chunk` **explicitly** — parquet-rs defaults to statistics on, so this
+  changes nothing today, but the gate depends on it and turning them off must be a decision
+  someone takes deliberately rather than a default that quietly disarms the check.
+- **The rule is "proceed only on an exact zero"**, which also disposes of DataFusion's one
+  statistics ambiguity: `Exact(num_rows)` doubles as its "no statistics for this column"
+  fallback (see `catalog::free_stats`). An all-NULL column and one we can't vouch for are both
+  reasons to decline, so they need not be told apart.
+
+**Schema nullability is not the signal** and can't be: DataFusion reports *every* column of every
+real table as nullable, parquet sources included (measured — a probe over `sample/users.parquet`
+and `sample/regions.csv` came back all-nullable). Gating on `ColumnInfo.nullable` would empty the
+AVAILABLE pane and make partitioning unusable. The gate has to look at data, and the footer is
+where that answer already is.
 
 ## Honesty calls (per the P3-08 "only real facts" rule)
 - **The size estimate is dropped.** The canvas's `estSize()` invents compression factors

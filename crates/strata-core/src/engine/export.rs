@@ -239,6 +239,8 @@ pub async fn run_export(
              column has to be a single plain word"
         ));
     }
+    partition_columns_have_no_nulls(ctx, &snap, &spec.partition.columns).await?;
+
     let part_clause = if spec.partition.is_flat() {
         String::new()
     } else {
@@ -359,6 +361,70 @@ fn quote_literal(raw: &str) -> String {
 /// Escape a value for a double-quoted SQL identifier (the `ORDER BY` column).
 fn quote_ident(raw: &str) -> String {
     raw.replace('"', "\"\"")
+}
+
+/// Refuse a partitioned export whose partition columns contain NULLs.
+///
+/// **Why this is a hard block and not a warning.** A directory name cannot hold a NULL, and
+/// DataFusion 54 does not use the Hive convention (`__HIVE_DEFAULT_PARTITION__`) for one: it
+/// files the row under a *neighbouring* value's directory instead, so it reads back claiming a
+/// value it never had. That is silent data corruption, in the user's own output, discoverable
+/// only by comparing against the source — so the export declines rather than warns.
+///
+/// **Answered from the footer, not by scanning.** The snapshot is a parquet file we wrote with
+/// statistics on (`query::snapshot_writer_props`), so the null count per column is already in
+/// its metadata: this reads it, and touches no row data.
+///
+/// The rule is "proceed only on an exact zero", which also disposes of the one ambiguity in
+/// DataFusion's statistics: `Exact(num_rows)` doubles as its "no statistics for this column"
+/// fallback (see `catalog::free_stats`). Both readings — an all-NULL column, or a column we
+/// cannot vouch for — are reasons to decline, so the two need not be told apart.
+async fn partition_columns_have_no_nulls(
+    ctx: &SessionContext,
+    snap: &str,
+    columns: &[String],
+) -> Result<(), String> {
+    use datafusion::catalog::TableProvider;
+    use datafusion::datasource::listing::ListingTable;
+
+    if columns.is_empty() {
+        return Ok(());
+    }
+
+    let provider = ctx
+        .table_provider(snap)
+        .await
+        .map_err(|e| format!("Can't read the result's metadata: {e}"))?;
+    let listing = provider
+        .downcast_ref::<ListingTable>()
+        .ok_or("Can't read the result's metadata: the snapshot is not a file table")?;
+    let state = ctx.state();
+    let stats = listing
+        .list_files_for_scan(&state, &[], None)
+        .await
+        .map_err(|e| format!("Can't read the result's metadata: {e}"))?
+        .statistics;
+
+    let schema = listing.schema();
+    for name in columns {
+        let index = schema
+            .fields()
+            .iter()
+            .position(|f: &std::sync::Arc<datafusion::arrow::datatypes::Field>| f.name() == name)
+            .ok_or_else(|| format!("Can't partition by '{name}': the result has no such column"))?;
+        let nulls = stats
+            .column_statistics
+            .get(index)
+            .and_then(|cs| cs.null_count.get_value().copied());
+        if nulls != Some(0) {
+            return Err(format!(
+                "Can't partition by '{name}': it contains NULL values, and a NULL has no folder \
+                 name — those rows would be written under another value and read back wrong. \
+                 Partition by a column with no NULLs, or filter them out of the query first"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Whether `name` tokenises as a single **unquoted** identifier, asked of the very
