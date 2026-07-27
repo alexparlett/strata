@@ -669,6 +669,31 @@ mod tests {
         assert_eq!(loaded[0].rows, 2, "the newest layout is the one kept");
     }
 
+    /// **We write LF and read either.** Both writers terminate with a literal `'\n'` — never
+    /// the platform's ending — because this is a data format, not a document: a log written on
+    /// one machine and read on another must not depend on which wrote it, and the file is
+    /// gitignored, so git's own translation never sees it.
+    ///
+    /// Reading is the tolerant half. `str::lines()` splits on `\n` *and* strips a trailing
+    /// `\r`, so a log some other tool has converted to CRLF still parses — pinned here because
+    /// it is the whole reason the strict writer is safe, and it is invisible at the call site.
+    #[test]
+    fn history_writes_lf_and_reads_crlf() {
+        let root = TempRoot::new("history-endings");
+        append_history(&root.0, &run("SELECT a", 1)).unwrap();
+        append_history(&root.0, &run("SELECT b", 2)).unwrap();
+
+        let path = history_path(&root.0);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains('\r'), "the writer must emit LF, never CRLF");
+
+        // Now hand it the CRLF version some other tool might leave behind.
+        fs::write(&path, text.replace('\n', "\r\n")).unwrap();
+        let loaded = load_history(&root.0, 100).unwrap();
+        let sqls: Vec<&str> = loaded.iter().map(|r| r.sql.as_str()).collect();
+        assert_eq!(sqls, ["SELECT a", "SELECT b"], "CRLF must still parse");
+    }
+
     /// `save_history` is the write a re-run needs — it replaces the log rather than adding to
     /// it, so the entry that moved leaves no stale line behind.
     #[test]
