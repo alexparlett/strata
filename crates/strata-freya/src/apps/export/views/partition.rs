@@ -15,10 +15,9 @@ use freya::prelude::*;
 
 use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
-use crate::components::field_row::FieldRow;
+use crate::components::form::{Row, ValueField};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue, Prose};
-use crate::components::value_field::ValueField;
 
 /// The panes' list box. **Fixed**, not sized from its rows: the two panes sit side by side, so
 /// a height derived from each one's own content makes them different heights, and a long list
@@ -71,7 +70,7 @@ impl Component for Partition {
 
         // The same labelled row every option group uses — this section is one of them, with a
         // toggle for its control and the panes beneath.
-        FieldRow::new("HIVE PARTITIONING")
+        Row::new("HIVE PARTITIONING")
             .child(toggle)
             .maybe_child(enabled.then_some(Panes))
             .maybe_child((enabled && has_selection).then_some(KeepColumns))

@@ -20,7 +20,8 @@
 
 use freya::prelude::*;
 
-use crate::components::typography::InputTypography;
+use crate::components::form::{form_theme, UNIT_GAP};
+use crate::components::typography::{Body, InputTypography};
 
 /// The canvas's standard field box — the height a value input stands at unless a surface says
 /// otherwise (a box beside a taller control, say).
@@ -40,6 +41,8 @@ pub struct ValueField {
     enabled: bool,
     /// No chrome of its own — see [`ValueField::bare`].
     bare: bool,
+    /// The box's own id, when the caller needs to watch it — see [`ValueField::a11y_id`].
+    a11y_id: Option<AccessibilityId>,
 }
 
 impl ValueField {
@@ -55,6 +58,7 @@ impl ValueField {
             leading: None,
             enabled: true,
             bare: false,
+            a11y_id: None,
         }
     }
 
@@ -107,6 +111,17 @@ impl ValueField {
         self.enabled = enabled;
         self
     }
+
+    /// Give the box an id the caller already holds, so it can watch the field's focus with
+    /// `use_focus(id)`.
+    ///
+    /// `Input` has no blur prop and only reports on Enter, and losing focus is when a field
+    /// whose text is *derived* from something else re-echoes it ([`NumberField`]). Owning the
+    /// id is the only way to see that moment.
+    pub fn a11y_id(mut self, a11y_id: AccessibilityId) -> Self {
+        self.a11y_id = Some(a11y_id);
+        self
+    }
 }
 
 impl Component for ValueField {
@@ -134,6 +149,7 @@ impl Component for ValueField {
                 .text_align(self.align)
                 .enabled(self.enabled)
                 .compact()
+                .map(self.a11y_id, |el, id| el.a11y_id(id))
                 .maybe(self.placeholder.is_some(), |el| {
                     el.placeholder(self.placeholder.unwrap_or_default())
                 })
@@ -161,6 +177,14 @@ impl Component for ValueField {
 /// captured — `use_side_effect` builds its closure once, so a captured comparison value freezes
 /// at the first render and the field can never be typed back to where it started. That bug is
 /// why this comparison lives where it does.
+///
+/// **Reporting is per keystroke; the box is normalized when it is left.** Every accepted
+/// keystroke reports, because the thing that commits a value is usually a `Button` and `Button`
+/// moves focus and calls its handler in the same breath — a value that waited for blur would
+/// never reach the draft being committed. But that leaves the box free to show something the
+/// caller never received (`abc`, an empty box, `9999` where the max is 2000), so losing focus
+/// re-echoes what was last reported. Echoed from `reported` and not from `value`, which keeps
+/// the rule above: this still never re-reads the parent.
 #[derive(PartialEq)]
 pub struct NumberField {
     value: u32,
@@ -168,6 +192,8 @@ pub struct NumberField {
     max: u32,
     width: Size,
     height: Size,
+    /// What the number is measured in — see [`NumberField::unit`].
+    unit: Option<&'static str>,
     on_change: Option<EventHandler<u32>>,
 }
 
@@ -180,8 +206,20 @@ impl NumberField {
             max,
             width: Size::fill(),
             height: Size::px(FIELD_HEIGHT),
+            unit: None,
             on_change: None,
         }
+    }
+
+    /// The unit this number is measured in (`px`, `rows`, `runs`), set beside the box.
+    ///
+    /// **Beside**, not inside it, which is the canvas's own arrangement in every form that has
+    /// one: the unit labels the number rather than being part of what you type, so it neither
+    /// scrolls with the text nor takes the field's focus. Absent for a bare count (the export
+    /// window's compression level), which is why this is opt-in rather than a required word.
+    pub fn unit(mut self, unit: &'static str) -> Self {
+        self.unit = Some(unit);
+        self
     }
 
     pub fn width(mut self, width: impl Into<Size>) -> Self {
@@ -204,9 +242,12 @@ impl NumberField {
 impl Component for NumberField {
     fn render(&self) -> impl IntoElement {
         let value = self.value;
-        let text = use_state(move || value.to_string());
+        let mut text = use_state(move || value.to_string());
         // What was last handed to the caller. In state, not captured — see the type doc.
         let mut reported = use_state(move || value);
+        // The box's id is ours, so the effect below can see it lose focus.
+        let a11y_id = use_a11y();
+        let focus = use_focus(a11y_id);
 
         let (min, max) = (self.min, self.max);
         let on_change = self.on_change.clone();
@@ -223,8 +264,31 @@ impl Component for NumberField {
             }
         });
 
-        ValueField::new(text)
+        // Leaving the box is when it is made to agree with what it reported — see the type doc.
+        // `reported` is peeked, not read: this must wake on focus alone, or the echo would land
+        // mid-keystroke and overwrite what is being typed.
+        use_side_effect(move || {
+            if focus() == Focus::Not {
+                text.set_if_modified(reported.peek().to_string());
+            }
+        });
+
+        let box_ = ValueField::new(text)
             .width(self.width.clone())
             .height(self.height.clone())
+            .a11y_id(a11y_id);
+
+        // Without a unit the box *is* the control, so it is returned bare — a wrapper would
+        // change how a caller's `width` lands in the row around it.
+        match self.unit {
+            None => box_.into_element(),
+            Some(unit) => rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(UNIT_GAP)
+                .child(box_)
+                .child(Body::new(unit).color(form_theme().hint_color))
+                .into_element(),
+        }
     }
 }

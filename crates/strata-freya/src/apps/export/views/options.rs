@@ -22,10 +22,10 @@
 use freya::prelude::*;
 
 use crate::apps::export::{Choice, Control, Edit, ExportCtx, Group, Make, TextField};
-use crate::components::field_row::{FieldNote, FieldRow};
+
+use crate::components::form::{Form, Note, NumberField, Row, ValueField, FIELD_HEIGHT};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::MonoValue;
-use crate::components::value_field::{NumberField, ValueField, FIELD_HEIGHT};
 
 /// Field boxes, from the canvas: a one-character field, a short text field, a number, the
 /// custom box beside a segmented control, and a select (the one control the canvas draws 32
@@ -55,7 +55,9 @@ impl Component for Options {
         // point — the level group appears and disappears with the codec.
         let groups = ctx.draft.read().groups(&ctx.target.read());
 
-        let mut list = rect().width(Size::fill()).vertical().spacing(20.);
+        // The shared form list, so the rhythm between rows is the app's and not this
+        // window's. Spaced rather than divided — the Settings panes are the divided one.
+        let mut list = Form::new();
         for group in groups {
             let key = group.label.clone();
             list = list.child(
@@ -116,12 +118,12 @@ impl Component for OptionGroup {
             }
             .into(),
             Control::Select { options } => SelectControl { options }.into(),
-            Control::Note(text) => FieldNote::new(text).into(),
+            Control::Note(text) => Note::new(text).into(),
         };
 
         // The label, its hint and the gap under them are the shared form row's — this window
         // contributes only which control goes in it.
-        FieldRow::new(self.group.label.clone())
+        Row::new(self.group.label.clone())
             .map(self.group.hint, |row, hint| row.hint(hint))
             .child(control)
     }

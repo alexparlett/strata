@@ -562,12 +562,18 @@
         "reference": "primary"
       }
     },
-    "field_row": {
+    "form": {
+      "title_color": {
+        "reference": "text_primary"
+      },
       "label_color": {
         "reference": "text_label"
       },
       "hint_color": {
         "reference": "text_placeholder"
+      },
+      "divider_fill": {
+        "reference": "border"
       },
       "note_background": {
         "reference": "surface_primary"

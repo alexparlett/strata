@@ -331,6 +331,37 @@ Things that must not regress. Each was fought for once already.
   forever and paints a stale hover the moment it is enabled again. Reach for it only for a
   genuinely pass-through overlay, which is the fork's own only use of it (tooltip, drag ghost,
   docking). Clearing the stuck flag in an effect afterwards is treating the symptom.
+- **A settings-style surface is built from `components::form`, never from its own rows.** The
+  export window, the config modal and the Settings panes are one surface drawn three times, and
+  they kept arriving one at a time and re-typing each other's label metrics, field boxes and
+  gaps. One module holds the whole vocabulary under one `form` component theme, composed the
+  way a form actually nests: **`Form` > `Row` > control**, where the control is the row's
+  *child*, so a row wraps a field, a `Switch`, a pill or a `Note` without knowing which. **One
+  `Row`, never one per window**: the three presentation choices a row makes (how the label is
+  set, how its explanation is shown, how rows are separated) always move together, so they are
+  a `Variant` on the *form*, provided through context — `Fields` (eyebrow + ⓘ) or `Preferences`
+  (title + inline subtext + rules), the split the design's *Settings consistency pass* settled.
+  A second row type named for the window that first needed it is the failure mode here, not the
+  fix.
+  And **where the canvases genuinely differ, name the difference in `form/mod.rs`'s "known
+  divergences" rather than averaging it**: a silent split-the-difference is how a surface stops
+  matching the canvas it was drawn from, and a named one is a single constant to change when the
+  design settles it.
+- **A field backing a draft publishes on every keystroke, and normalizes its box when it is
+  left.** Freya's `Input` has no blur prop and only fires `on_submit` on Enter, so the tempting
+  shape is "parse and publish when the field is left". It loses the value: the thing that commits
+  a draft is a `Button`, and `Button` calls `a11y_id.request_focus()` and its `on_press` handler
+  *in the same breath* — a focus-loss effect hasn't run when Apply reads the draft. So report per
+  keystroke. But that leaves the box free to show something the caller never received (`abc`, an
+  empty box, `9999` past the max), so **losing focus is when the text is re-echoed** — from what
+  the field last *reported*, not by re-reading the parent, which keeps the field's one direction
+  of travel. Watching for that means owning the `AccessibilityId` and calling `use_focus(id)`;
+  both halves live in the shared `components::value_field::NumberField`, so a surface with a
+  numeric setting reaches for that and writes neither. The comparison that decides "did this
+  change?" belongs in **state**, never captured: `use_side_effect` builds its closure once
+  (`use_hook`), so a captured value freezes at the first render and the field can never be typed
+  back to where it started — and a plainly captured `EventHandler` (an `Rc<RefCell<dyn FnMut>>`
+  snapshot) freezes the same way. Reactive values need `use_reactive`.
 - **A built-in control's press reaches its ancestors, so never wrap one in a pressable parent.**
   `Switch`'s `on_press` does not `stop_propagation`, so a "click the whole row to toggle" ancestor
   takes the same click and toggles **twice** — back to where it started, which reads as a dead

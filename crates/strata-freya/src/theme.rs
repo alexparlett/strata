@@ -27,7 +27,7 @@ use crate::apps::project::{
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
-use crate::components::field_row::FieldRowThemePreference;
+use crate::components::form::FormThemePreference;
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
@@ -466,13 +466,17 @@ strata_components! {
     // The results pane's Cancel control. Its values track `run_button`'s `running_*` set —
     // the same cancel dress, kept consistent when either is retuned.
     "cancel_button" => CancelButtonThemePreference { background, hover_background, border_fill, color },
-    // The icon segmented toggle (results Table/Chart switcher, reusable): pill container
-    // (bg + border + divider) and per-item rest / active (accent-tint) dress.
-    // One labelled row of a form — the uppercase label and the ⓘ that carries its hint. The
-    // control beneath is the caller's, so nothing about it is dressed here.
-    "field_row" => FieldRowThemePreference {
-        label_color, hint_color, note_background, note_border_fill, note_color,
+    // The whole form vocabulary (`components::form`), one theme for all of it: a window form's
+    // uppercase label + its ⓘ, a settings row's title + inline subtext, the rule a divided
+    // list draws between rows, and a note's box. What a row *controls* is the caller's child,
+    // so no control is dressed here.
+    "form" => FormThemePreference {
+        title_color, label_color, hint_color, divider_fill, note_background,
+        note_border_fill, note_color,
     },
+    // The segmented toggle (results Table/Chart switcher, the plan tabs, a form's pill): the
+    // container per variant (raised `background` / recessed `form_background`, border,
+    // divider) and per-item rest / active (accent-tint) dress.
     "segmented_toggle" => SegmentedToggleThemePreference {
         background, form_background, border_fill, divider_fill, item_color,
         item_active_background, item_active_color,

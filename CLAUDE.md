@@ -174,6 +174,24 @@ src/components/                  shared component library
   type_palette.rs                the seven per-`Kind` hues (`"type_palette"` theme group) +
                                  `kind_color`. Named for Kind, not Arrow; the EXPLAIN plan
                                  borrows the same ramp for operator kinds
+  form/                          **the form vocabulary** every settings-style surface is built
+                                 from — export options, the config modal, the Settings panes —
+                                 under one `form` component theme. mod.rs carries the theme, the
+                                 shared metrics and a "known divergences" list (the canvases
+                                 differ; the differences are named, not averaged)
+                                 `Form` > `Row` > control, composed: a control is a `Row`'s
+                                 *child*, so a row wraps a field, a Switch, a pill or a Note
+                                 without knowing which. mod.rs is the `Form` (container + theme
+                                 + the `Variant` it provides through context)
+    row.rs                       `Row` — **one** row, not one per window. Its register comes from
+                                 the form's `Variant`: `Fields` (eyebrow label + ⓘ tooltip + gaps
+                                 — export, config modal) or `Preferences` (title + inline subtext
+                                 + rules — the Settings panes). `.trailing()` puts the control at
+                                 the row's end, `.on_press()` makes the label activate it. Plus
+                                 `Note`, a statement where a control would go
+    field.rs                     `ValueField` (the mono box: stated height, length cap enforced
+                                 on the state) + `NumberField` (bounded, `.unit("px")`, reports
+                                 per keystroke and normalizes its text on blur)
 src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher.dc.html`)
   mod.rs                         root + window config + the `launcher` component theme
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
@@ -183,18 +201,27 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
   mod.rs                         root + window config + the `settings` component theme, the
                                  **freya-router** `Route` per category, `SettingsCtx` (the draft ·
                                  its **seed** · Apply · the live-theme mirror), and the category
-                                 panes still awaiting their task (P4-05…P4-08). Apply commits a
+                                 panes still awaiting their task (P4-06…P4-08). Apply commits a
                                  per-field diff of draft-vs-seed (`Settings::merge_onto`), so a
                                  setting another window wrote meanwhile survives it; `dirty()` is
                                  the same comparison, which is why it reads no config state
   model.rs                       the nav tree: CATEGORIES + their groups + breadcrumbs
                                  (unit-tested — one category per route, groups contiguous)
   views/                         chrome (the router layout) · title_bar · nav · pane · footer
-    theme.rs                     P4-04 — the Appearance pane: Sync-with-OS (a `Switch`, sibling
-                                 to the pressable label, never wrapped by it) + the theme grid.
-                                 Each card's thumbnail is painted from **that** theme's own sheet
-                                 slots, so a user theme previews with nothing authored per theme;
-                                 the tick follows `ThemeSel::effective`, not the stored id
+                                 (the panes' rows are `components::form` — P4-05 moved the row
+                                 vocabulary there rather than keeping a settings-only copy)
+    theme.rs                     P4-04 — the Appearance pane: Sync-with-OS + the theme grid, both
+                                 `Setting`s. Each card's thumbnail is painted from **that** theme's
+                                 own sheet slots, so a user theme previews with nothing authored
+                                 per theme; the tick follows `ThemeSel::effective`, not the stored
+                                 id
+    data_display.rs              P4-05 — the Data-display pane: row density · zebra · default
+                                 column width · default row limit. All four already had their
+                                 consumer (the grid reads three off the config store, the catalog's
+                                 View-table action the fourth), so this is the control, not the
+                                 wiring. Its bounds are `strata_core::config`'s COL_WIDTH_MIN/MAX,
+                                 which the grid clamps to — a field offering a width the grid then
+                                 corrects would be a field that lies
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     two layers: `ProjectApp` = the **window** (theme, app-globals,
                                  close bridge, menubar, OpenCtx) and `ProjectRoot` = the **open

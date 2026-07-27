@@ -19,6 +19,7 @@ per-widget CSS. Do these once the surfaces exist; several can run in parallel wi
 | P5-04 | Theme dial-in (Midnight / Daylight) | ⬜ | W5 | — |
 | P5-05 | Per-surface design audit (Freya drift pass) | ⬜ | Part 1 | phases 2–4 |
 | P5-06 | Panel overflow & small-size behaviour (scroll / fold / hide) | ⬜ | — | P3-01 + content |
+| P5-07 | One `Search` control for the app's four filter boxes | ⬜ | — | surfaces exist |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo.

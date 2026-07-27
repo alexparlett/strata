@@ -60,8 +60,11 @@ const CELL_LINE_H: f32 = 16.; // mono cell line box; a row is this tall plus the
 /// test pins the pair). Reached only when the setting can't be honoured at all; every column
 /// width the grid actually uses comes from the seed `DataGrid::render` computes from it.
 const DEFAULT_COL_W: f32 = 168.;
-const MIN_COL_W: f32 = 56.;
-const MAX_COL_W: f32 = 2000.;
+/// The bounds a column width is held to — seeded from the setting or dragged. Defined once, in
+/// core beside the setting itself, so the Settings ▸ Data display input offers exactly the
+/// range the grid honours (see `strata_core::config::COL_WIDTH_MIN`).
+const MIN_COL_W: f32 = strata_core::config::COL_WIDTH_MIN as f32;
+const MAX_COL_W: f32 = strata_core::config::COL_WIDTH_MAX as f32;
 const GRIP_W: f32 = 6.; // resize hot-zone width on a column's right edge
 const EDGE_MARGIN: f32 = 36.; // how close to the viewport edge a resize drag starts auto-scrolling
 const EDGE_STEP: f32 = 24.; // px scrolled per pointer-move tick while resizing at an edge

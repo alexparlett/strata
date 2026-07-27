@@ -145,8 +145,8 @@ pub struct Settings {
     pub zebra: bool,
     /// Default results-grid column width in px (V20). Per-column overrides live on the run
     /// (session-scoped); this is the starting width the grid seeds every column from
-    /// (`DataGrid::render`, clamped to the grid's min/max). No UI control yet — the
-    /// Settings ▸ Data display input is P4-05.
+    /// (`DataGrid::render`, clamped to [`COL_WIDTH_MIN`]/[`COL_WIDTH_MAX`]). Edited by
+    /// Settings ▸ Data display.
     ///
     /// Its default is the grid's own `DEFAULT_COL_W` and must stay that way: the setting
     /// took over a hardcoded width, so a default that differs would silently re-render
@@ -156,8 +156,8 @@ pub struct Settings {
     /// The `LIMIT` clause **generated** queries carry, so a stray `SELECT *` can't pull a
     /// whole file into memory; `0` = no limit (design24 Data-display ▸ "Default row
     /// limit"). Deliberately *not* the results page size — that is per-run and lives on
-    /// `QuerySpec`. **Not read yet:** the only generator is the catalog's View-table
-    /// action, P3-06; its control is P4-05 (Settings ▸ Data display).
+    /// `QuerySpec`. Read by the catalog's View-table action; edited by Settings ▸ Data
+    /// display.
     #[serde(default = "default_row_limit")]
     pub row_limit: usize,
     /// Query-history cap (design24 System ▸ History): the newest runs kept, both in the
@@ -245,6 +245,16 @@ settings_merge!(
     keybinds,
     engine,
 );
+
+/// The legal range for [`Settings::default_col_width`], in px — the bounds the results grid
+/// holds every column width to, whether seeded from this setting or set by a resize drag.
+///
+/// Named beside the setting rather than inside the grid because the Settings ▸ Data display
+/// input has to offer **exactly** the range the grid will honour: a field that accepts a width
+/// the grid then silently clamps is a field that lies. The grid's own `MIN_COL_W`/`MAX_COL_W`
+/// are these, so there is one definition and not two to drift apart.
+pub const COL_WIDTH_MIN: f64 = 56.;
+pub const COL_WIDTH_MAX: f64 = 2000.;
 
 fn default_theme() -> String {
     DEFAULT_THEME.to_string()
