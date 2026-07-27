@@ -131,6 +131,13 @@ fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
                 .child(
                     ScrollView::new()
                         .max_height(Size::px(PANE_MAX_HEIGHT))
+                        // This list sits inside the window's own scrolling body, so a wheel
+                        // gesture that starts over it (and can move it) stays latched to it —
+                        // no mid-gesture spill into the body scrolling underneath — while a
+                        // gesture starting at its end, or over a list too short to scroll,
+                        // passes through, so the pane is never a hover trap. The record view's
+                        // nested block does exactly this, for exactly this reason.
+                        .latch_wheel()
                         .child(body),
                 ),
         )

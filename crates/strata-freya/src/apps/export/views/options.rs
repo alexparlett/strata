@@ -110,12 +110,14 @@ impl Component for OptionGroup {
             Control::Text(field) => FieldControl {
                 field,
                 width: TEXT_WIDTH,
+                height: FIELD_HEIGHT,
                 align: TextAlign::Left,
             }
             .into(),
             Control::Char(field) => FieldControl {
                 field,
                 width: CHAR_WIDTH,
+                height: FIELD_HEIGHT,
                 align: TextAlign::Center,
             }
             .into(),
@@ -176,11 +178,14 @@ impl Component for SegControl {
             .cross_align(Alignment::Center)
             .spacing(8.)
             .child(pill)
-            // The canvas gives the box beside a segmented control its own narrower, centred
-            // treatment — it holds a token like `\N`, not a sentence.
+            // The box beside a segmented control is built to the **pill's** height, not the
+            // 30px every other field uses: they sit side by side in one row, so a box that is
+            // nine pixels short of its neighbour reads as a mistake whatever the canvas says.
+            // Narrow and centred with it — it holds a token like `\N`, not a sentence.
             .maybe_child(self.custom.clone().map(|field| FieldControl {
                 field,
                 width: CUSTOM_WIDTH,
+                height: SegmentedToggle::FORM_HEIGHT,
                 align: TextAlign::Center,
             }))
     }
@@ -212,6 +217,8 @@ impl Component for ToggleControl {
 struct FieldControl {
     field: TextField,
     width: f32,
+    /// Normally [`FIELD_HEIGHT`]; the box beside a segmented control matches that pill instead.
+    height: f32,
     /// The canvas centres the one- and few-character boxes and left-aligns the wider ones.
     align: TextAlign,
 }
@@ -249,7 +256,7 @@ impl Component for FieldControl {
 
         rect()
             .width(Size::px(self.width))
-            .height(Size::px(FIELD_HEIGHT))
+            .height(Size::px(self.height))
             .child(
                 InputTypography::mono(
                     Input::new(text)

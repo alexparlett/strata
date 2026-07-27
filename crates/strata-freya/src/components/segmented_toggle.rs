@@ -51,10 +51,13 @@ const TOOLBAR_SEGMENT_HEIGHT: f32 = 24.;
 const TOOLBAR_ICON_WIDTH: f32 = 32.;
 /// A toolbar text segment's side padding.
 const TOOLBAR_TEXT_PADDING: f32 = 12.;
-/// A form segment's corner (canvas `--r-1`) and its padding (canvas `var(--sp-3) var(--sp-5)`)
-/// — what makes it stand a full 30px-field's height beside one.
+/// A form segment's corner (canvas `--r-1`) and its side padding (canvas `var(--sp-5)`).
 const FORM_SEGMENT_RADIUS: f32 = 6.;
-const FORM_SEGMENT_PADDING: Gaps = Gaps::new(8., 16., 8., 16.);
+const FORM_SEGMENT_SIDE_PADDING: f32 = 16.;
+/// A form segment's height: the canvas's `var(--sp-3)` above and below a 12.5px label. Stated
+/// rather than left to the text metrics, because [`SegmentedToggle::FORM_HEIGHT`] has to be a
+/// number a neighbouring control can be built to.
+const FORM_SEGMENT_HEIGHT: f32 = 33.;
 
 /// Which of the canvas's two segmented controls this is — see the module doc.
 #[derive(PartialEq, Clone, Copy, Default, Debug)]
@@ -91,6 +94,14 @@ impl SegmentedToggle {
             theme: None,
         }
     }
+
+    /// A [`Variant::Form`] pill's overall height — its segments plus the inset around them and
+    /// its own border.
+    ///
+    /// Public because a form lays controls out in a row: the box beside a pill has to be built
+    /// to the pill's height, and guessing it (or restating the arithmetic at the call site) is
+    /// how the two drift apart the first time either changes.
+    pub const FORM_HEIGHT: f32 = FORM_SEGMENT_HEIGHT + INSET * 2. + 2.;
 
     /// The roomier form layout (see [`Variant::Form`]). Applies to this pill's segments too —
     /// they read it from context, so it is set here and nowhere else.
@@ -251,7 +262,9 @@ impl Component for ToggleSegment {
         // is a fixed box clipped by the pill.
         let segment = match variant {
             Variant::Toolbar => segment.height(Size::px(TOOLBAR_SEGMENT_HEIGHT)),
-            Variant::Form => segment.corner_radius(FORM_SEGMENT_RADIUS),
+            Variant::Form => segment
+                .height(Size::px(FORM_SEGMENT_HEIGHT))
+                .corner_radius(FORM_SEGMENT_RADIUS),
         };
         let segment = match (&self.content, variant) {
             (SegmentContent::Icon(icon), _) => segment
@@ -261,7 +274,7 @@ impl Component for ToggleSegment {
                 .padding((0., TOOLBAR_TEXT_PADDING))
                 .child(Control::new(label.clone()).color(color)),
             (SegmentContent::Text(label), Variant::Form) => segment
-                .padding(FORM_SEGMENT_PADDING)
+                .padding((0., FORM_SEGMENT_SIDE_PADDING))
                 .child(Control::new(label.clone()).color(color)),
         };
         match &self.title {
