@@ -24,6 +24,8 @@ use crate::components::value_field::ValueField;
 const PANE_MIN_HEIGHT: f32 = 128.;
 const PANE_MAX_HEIGHT: f32 = 176.;
 const PANE_HEADER_HEIGHT: f32 = 30.;
+/// The pane's corner (canvas `--r-2`).
+const PANE_RADIUS: f32 = 8.;
 /// The filter sits in that header strip, so it is built to clear it.
 const FILTER_HEIGHT: f32 = 24.;
 /// The two panes' rows are **not** the same height in the canvas: a chosen level carries an
@@ -103,7 +105,7 @@ fn pane(header: impl IntoElement, body: impl IntoElement, content: f32) -> impl 
     rect()
         .width(Size::fill())
         .vertical()
-        .corner_radius(6.)
+        .corner_radius(PANE_RADIUS)
         .overflow(Overflow::Clip)
         .background(theme.panel_background)
         .border(Border::new().width(1.).fill(theme.control_border_fill))
@@ -119,7 +121,7 @@ fn pane(header: impl IntoElement, body: impl IntoElement, content: f32) -> impl 
                 .background(theme.header_background)
                 .child(header),
         )
-        .child(Divider::horizontal().color(theme.border_fill))
+        .child(Divider::horizontal().color(theme.divider_fill))
         // **One height, computed, shared by the box and its scroll viewport.** Leaving the two
         // to a min/max range let them disagree: the viewport settled shorter than the box, so
         // the list stopped scrolling with dead space still showing under a half-clipped row.
@@ -205,11 +207,14 @@ impl Component for Available {
             .placeholder("Filter…")
             .leading(
                 Icon::new(IconName::Search)
-                    .color(theme.label_color)
-                    .size(13.),
+                    .color(theme.hint_color)
+                    .size(12.),
             )
             .height(Size::px(FILTER_HEIGHT))
             .width(Size::flex(1.))
+            // The strip around it *is* the box — the canvas's filter is a chrome-less input
+            // inside the pane's header, not a bordered field sitting in one.
+            .bare()
             .into_element();
 
         let row_count = matching.len();
@@ -228,6 +233,16 @@ impl Component for Available {
                     rect()
                         .width(Size::fill())
                         .height(Size::px(AVAILABLE_ROW_HEIGHT))
+                        .border(
+                            Border::new()
+                                .width(BorderWidth {
+                                    top: 0.,
+                                    right: 0.,
+                                    bottom: 1.,
+                                    left: 0.,
+                                })
+                                .fill(theme.divider_fill),
+                        )
                         .horizontal()
                         .cross_align(Alignment::Center)
                         .spacing(8.)
@@ -364,6 +379,16 @@ impl Component for SelectedRow {
         rect()
             .width(Size::fill())
             .height(Size::px(SELECTED_ROW_HEIGHT))
+            .border(
+                Border::new()
+                    .width(BorderWidth {
+                        top: 0.,
+                        right: 0.,
+                        bottom: 1.,
+                        left: 0.,
+                    })
+                    .fill(theme.divider_fill),
+            )
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)

@@ -38,6 +38,8 @@ pub struct ValueField {
     /// A glyph inside the box, before the text — a filter's magnifier, a unit marker.
     leading: Option<Element>,
     enabled: bool,
+    /// No chrome of its own — see [`ValueField::bare`].
+    bare: bool,
 }
 
 impl ValueField {
@@ -52,7 +54,19 @@ impl ValueField {
             align: TextAlign::default(),
             leading: None,
             enabled: true,
+            bare: false,
         }
+    }
+
+    /// Drop the box: no background, no border, no focus ring.
+    ///
+    /// For a field inside a container that already draws the chrome — a pane's header strip, a
+    /// popover panel — where a second box inside the first reads as a mistake. The canvas
+    /// writes these inputs as `background: transparent; border: none; outline: none` for the
+    /// same reason.
+    pub fn bare(mut self) -> Self {
+        self.bare = true;
+        self
     }
 
     pub fn placeholder(mut self, placeholder: &'static str) -> Self {
@@ -123,7 +137,13 @@ impl Component for ValueField {
                 .maybe(self.placeholder.is_some(), |el| {
                     el.placeholder(self.placeholder.unwrap_or_default())
                 })
-                .map(self.leading.clone(), |el, leading| el.leading(leading)),
+                .map(self.leading.clone(), |el, leading| el.leading(leading))
+                .maybe(self.bare, |el| {
+                    el.background(Color::TRANSPARENT)
+                        .focus_background(Color::TRANSPARENT)
+                        .border_fill(Color::TRANSPARENT)
+                        .focus_border_fill(Color::TRANSPARENT)
+                }),
         )
     }
 }

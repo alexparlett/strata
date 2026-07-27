@@ -51,6 +51,7 @@
     "border_overlay": "#414a57",
     "danger_soft": "rgba(229,72,77,.16)",
     "danger_soft_hover": "rgba(229,72,77,.24)",
+    "line": "#23272f",
     "surface_hover": "#262d37",
     "surface_hover_strong": "#2f3742",
     "surface_overlay": "#262c35",
@@ -1462,6 +1463,9 @@
       },
       "warning_border_fill": {
         "reference": "warning_soft_border"
+      },
+      "divider_fill": {
+        "reference": "line"
       }
     }
   },

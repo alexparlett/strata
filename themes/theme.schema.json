@@ -1099,6 +1099,9 @@
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "control_border_fill": {
               "$ref": "#/$defs/colorPref"
             },

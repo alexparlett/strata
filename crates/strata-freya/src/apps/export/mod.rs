@@ -64,6 +64,10 @@ define_theme!(
         header_background: Color,
         /// The title-bar rule, the preview's separator, and a panel's edge.
         border_fill: Color,
+        /// A rule *inside* a panel — a transfer pane's header strip from its list, and a row
+        /// from the next. The canvas's `--c-line`, a step below `border`: a division within a
+        /// box should be quieter than the box's own edge.
+        divider_fill: Color,
         /// A control's edge — a text field, a card, a transfer pane's header.
         control_border_fill: Color,
         /// The window's download glyph, and the tile behind it.
