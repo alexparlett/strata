@@ -56,10 +56,6 @@ impl Component for Hive {
                 draft.partitions_are_text(),
             )
         };
-        if !may_partition {
-            return rect().into_element();
-        }
-
         // The switch is a **sibling** of its sentence, never wrapped in a pressable row: a
         // built-in's `on_press` does not stop propagation, so an ancestor would take the same
         // click and toggle twice, back to where it started.
@@ -80,28 +76,35 @@ impl Component for Hive {
                 false => "Ignoring the folder tree, reading the files as one flat table",
             }));
 
-        // The same labelled row every option group uses, exactly as export builds its own.
-        Row::new("HIVE PARTITIONING")
-            .child(toggle)
-            .maybe_child(on.then(|| {
-                rect()
-                    .width(Size::fill())
-                    .vertical()
-                    .spacing(ROW_GAP)
-                    .padding(Gaps::new(HEADER_GAP, 0., 0., 0.))
-                    .children(columns.iter().enumerate().map(|(index, (name, dtype))| {
-                        PartitionRow {
-                            index,
-                            name: name.clone(),
-                            dtype: dtype.clone(),
-                            key: DiffKey::None,
-                        }
-                        .key(name.clone())
-                        .into_element()
+        // **One `rect()` either way, with the section as an optional child.** Returning a bare
+        // `rect()` in one branch and a `Row` — a *component* — in the other swaps the kind of
+        // node at this position, and Freya's differ then finds no `scope_id` where it expects a
+        // component's and unwraps a `None` (`runner.rs`). A conditional section is a child that
+        // comes and goes, never a return type that does.
+        rect()
+            .width(Size::fill())
+            .maybe_child(may_partition.then(|| {
+                Row::new("HIVE PARTITIONING")
+                    .child(toggle)
+                    .maybe_child(on.then(|| {
+                        rect()
+                            .width(Size::fill())
+                            .vertical()
+                            .spacing(ROW_GAP)
+                            .padding(Gaps::new(HEADER_GAP, 0., 0., 0.))
+                            .children(columns.iter().enumerate().map(|(index, (name, dtype))| {
+                                PartitionRow {
+                                    index,
+                                    name: name.clone(),
+                                    dtype: dtype.clone(),
+                                    key: DiffKey::None,
+                                }
+                                .key(name.clone())
+                                .into_element()
+                            }))
+                            .maybe_child(warn.then(|| Warning))
                     }))
-                    .maybe_child(warn.then(|| Warning))
             }))
-            .into_element()
     }
 }
 
