@@ -1108,7 +1108,17 @@ fn runtime_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, Stri
 }
 
 /// A `RuntimeEnv` from the `datafusion.runtime.*` overrides, or `None` when none are
-/// set (default runtime). Sizes ("2G", "100G") parse via `parse_capacity_limit`.
+/// set (default runtime). Sizes ("2G", "100G") parse via `parse_capacity_limit`; the TTL via
+/// [`crate::util::parse_duration`], the same function [`config::value_error`] validates the
+/// field with.
+///
+/// **Every key [`config::ENGINE_KEYS`] catalogues as `runtime.*` is read here.** Four of them
+/// were catalogued — named, described, and treated as restart-required by
+/// [`is_restart_key`](config::is_restart_key) — but never consumed, which nothing noticed while
+/// there was no way to set them. P4-07's properties editor is that way: it offers the key,
+/// validates the value, badges it RESTART and rebuilds the engine, and the setting then did
+/// nothing, with no error to say so. A catalogue entry is a promise that the key applies, so
+/// adding one to `ENGINE_KEYS` means adding it here in the same change.
 fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<RuntimeEnv>>, String> {
     use datafusion::execution::runtime_env::RuntimeEnvBuilder;
     let val = |k: &str| {
@@ -1117,22 +1127,58 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     };
+    let bytes = |key: &str, raw: &str| {
+        SessionContext::parse_capacity_limit(key, raw).map_err(|e| e.to_string())
+    };
+
     let mem = val("datafusion.runtime.memory_limit");
-    let tmp = val("datafusion.runtime.max_temp_directory_size");
-    if mem.is_none() && tmp.is_none() {
+    let max_temp = val("datafusion.runtime.max_temp_directory_size");
+    let temp_dir = val("datafusion.runtime.temp_directory");
+    let metadata_cache = val("datafusion.runtime.metadata_cache_limit");
+    let list_cache = val("datafusion.runtime.list_files_cache_limit");
+    let list_ttl = val("datafusion.runtime.list_files_cache_ttl");
+    // Nothing to configure — a default `RuntimeEnv` rather than a hand-built one that happens to
+    // match it.
+    if [
+        &mem,
+        &max_temp,
+        &temp_dir,
+        &metadata_cache,
+        &list_cache,
+        &list_ttl,
+    ]
+    .iter()
+    .all(|v| v.is_none())
+    {
         return Ok(None);
     }
+
     let mut b = RuntimeEnvBuilder::new();
-    if let Some(m) = mem {
-        let bytes = SessionContext::parse_capacity_limit("datafusion.runtime.memory_limit", &m)
-            .map_err(|e| e.to_string())?;
-        b = b.with_memory_limit(bytes, 1.0);
+    if let Some(v) = &mem {
+        b = b.with_memory_limit(bytes("datafusion.runtime.memory_limit", v)?, 1.0);
     }
-    if let Some(t) = tmp {
-        let bytes =
-            SessionContext::parse_capacity_limit("datafusion.runtime.max_temp_directory_size", &t)
-                .map_err(|e| e.to_string())?;
-        b = b.with_max_temp_directory_size(bytes as u64);
+    if let Some(v) = &max_temp {
+        b = b.with_max_temp_directory_size(
+            bytes("datafusion.runtime.max_temp_directory_size", v)? as u64,
+        );
+    }
+    if let Some(v) = &temp_dir {
+        b = b.with_temp_file_path(v);
+    }
+    if let Some(v) = &metadata_cache {
+        b = b.with_metadata_cache_limit(bytes("datafusion.runtime.metadata_cache_limit", v)?);
+    }
+    if let Some(v) = &list_cache {
+        b = b.with_object_list_cache_limit(bytes(
+            "datafusion.runtime.list_files_cache_limit",
+            v,
+        )?);
+    }
+    if let Some(v) = &list_ttl {
+        let ttl = crate::util::parse_duration(v).ok_or_else(|| {
+            format!("datafusion.runtime.list_files_cache_ttl: expected a duration like 30s or 2m, got {v}")
+        })?;
+        b = b.with_object_list_cache_ttl(Some(ttl));
     }
     b.build_arc().map(Some).map_err(|e| e.to_string())
 }
@@ -1213,6 +1259,58 @@ mod tests {
         // Rebuilding is what settles it — which is exactly what the window's remount does.
         let restarted = Engine::new(engine.overrides());
         assert!(!restarted.restart_owed());
+    }
+
+    /// A catalogue entry is a promise that the key applies. Four `runtime.*` keys were
+    /// catalogued, described and badged RESTART while `build_runtime` never read them, so setting
+    /// one did nothing at all — invisible until P4-07 gave them an editor. This is the guard:
+    /// every `runtime.*` key the catalogue names must reach `RuntimeEnvBuilder`, which shows up
+    /// here as "the builder accepts its documented default without erroring".
+    #[test]
+    fn every_catalogued_runtime_key_reaches_the_runtime_builder() {
+        for entry in config::ENGINE_KEYS
+            .iter()
+            .filter(|e| config::is_restart_key(e.key))
+        {
+            // Blank means "unset" for several of these, so exercise a real value instead.
+            let value = match entry.default {
+                "" => match entry.kind {
+                    config::Kind::Bytes => "64M",
+                    config::Kind::Duration => "30s",
+                    _ => "/tmp/strata-runtime-test",
+                },
+                default => default,
+            };
+            let one = overrides(&[(entry.key, value)]);
+            let built = build_runtime(&one)
+                .unwrap_or_else(|e| panic!("{} = {value} was rejected: {e}", entry.key));
+            assert!(
+                built.is_some(),
+                "{} = {value} built a default runtime — the key is catalogued but never read, so \
+                 setting it does nothing and says nothing",
+                entry.key
+            );
+        }
+    }
+
+    #[test]
+    fn a_runtime_ttl_is_read_the_way_the_field_validates_it() {
+        // The validator and the parser are one function (`util::parse_duration`), so a field that
+        // accepts `2m` cannot be read as two seconds.
+        assert!(build_runtime(&overrides(&[(
+            "datafusion.runtime.list_files_cache_ttl",
+            "2m"
+        )]))
+        .is_ok_and(|rt| rt.is_some()));
+        assert_eq!(
+            crate::util::parse_duration("2m"),
+            Some(std::time::Duration::from_secs(120))
+        );
+        assert!(build_runtime(&overrides(&[(
+            "datafusion.runtime.list_files_cache_ttl",
+            "nonsense"
+        )]))
+        .is_err());
     }
 
     #[test]

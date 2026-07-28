@@ -87,7 +87,17 @@ deleted from `strata-core` with P2-01** and must not come back. What replaced th
   value, because the `RuntimeEnv` half is fixed the moment the context is built.
 - **`use_engine_config`** (mounted by `ProjectRoot`) subscribes `ConfigChan::Settings` and calls
   `set_config`. Settings has no engine of its own to talk to, so Apply just writes the config and
-  each open project window picks the change up.
+  each open project window picks the change up. It only raises the restart confirm when the slot is
+  **free**: every other writer of it is a press inside that window, which an open dialog's modal
+  barrier blocks, but this one arrives from the Settings window and could otherwise replace a
+  `CloseTarget::Window` raised by ⌘Q — abandoning the held close and latching the quitting flag.
+- **`build_runtime` now reads every `runtime.*` key the catalogue names.** Four of the six
+  (`temp_directory`, `metadata_cache_limit`, `list_files_cache_limit`, `list_files_cache_ttl`) were
+  catalogued, described and treated as restart-required while nothing ever consumed them — setting
+  one passed validation, earned the RESTART badge, rebuilt the engine, and did nothing, with no
+  error to say so. Nothing noticed while there was no way to set them; this pane is that way. A
+  catalogue entry is a **promise that the key applies**, and
+  `every_catalogued_runtime_key_reaches_the_runtime_builder` is the guard that keeps it one.
 
 ### The restart is the remount, through the one confirm
 A changed `datafusion.runtime.*` needs a new `SessionContext`. `ProjectRoot`'s `render_key` already
@@ -101,17 +111,27 @@ Because it drops the engine, it aborts what is in flight, so it goes through the
 `confirm_close_running`) — not a confirm of its own. Declining leaves the restart owed.
 
 ### Theme
-Three new `settings` fields — `table_head_background`, `table_selection_background`,
-`table_zebra_background`: the row states a table cannot have an opinion about, because *which* row
-is selected or striped is the caller's answer. Everything else the grid paints is Freya's builtin
-`table` theme or the sheet's semantic slots (`error` / `warning`).
+**Two** new `settings` fields — `table_head_background` and `table_selection_background`: what a
+table cannot have an opinion about, because *which* row is selected is the caller's answer.
+Everything else the grid paints is Freya's builtin `table` theme or the sheet's semantic slots
+(`error` / `warning`).
 
-Two authoring bugs fixed on the way, both invisible until this task became `table`'s first
+**There is no zebra token, deliberately.** An early draft striped the rows and carried a
+`table_zebra_background` field plus a `surface_zebra` palette slot; review removed both. Banding is
+a reading aid for dense data, and this is a settings list, not a results grid — on a form it only
+competes with the selection tint, the one row state the surface has. Removing it left the wash with
+a single consumer, so the datagrid's `zebra_row_background` went back to being its own `specific`.
+
+The head sits **one** step over the grid's own surface (the canvas's `--c-surface` over
+`--c-panel`, i.e. `surface_secondary`), which is *not* the step the results grid's header takes.
+Borrowing that slot (`surface_tertiary`) was how the strip first landed too light, and daylight
+cannot catch that class of error because both slots resolve to white there.
+
+Three authoring bugs fixed on the way, all invisible until this task became `table`'s first
 consumer: both themes authored `cell_hover_background`, which is not a field of `TableTheme` (the
-schema forbids unknown keys, so it was simply never read) and neither authored
-`hover_row_background` or `corner_radius`. And the zebra wash is now one palette slot
-(`surface_zebra`) referenced by both the datagrid and this grid, instead of a repeated `specific` —
-which also fixed daylight, whose copy was the *dark* theme's `rgba(255,255,255,.025)`.
+schema forbids unknown keys, so it was simply never read); neither authored `hover_row_background`
+or `corner_radius`; and daylight's datagrid zebra was a copy of the *dark* theme's
+`rgba(255,255,255,.025)`.
 
 Two new icons: `Minus` (remove — a minus, not a bin: the row is one of a list you are editing) and
 `Clipboard` (paste).
@@ -135,7 +155,10 @@ Two new icons: `Minus` (remove — a minus, not a bin: the row is one of a list 
 - `views/engine/model.rs` — 10 unit tests over `PropRows` (projection, the three error kinds,
   removal/duplication selection, paste parsing, revert id-freshness, suggestion filtering + cap).
 - `strata-core::engine` — `set_config` moves a live option and restores a removed one to its
-  default; a runtime key stays owed until the engine is rebuilt; the owned catalog names are fenced.
+  default; a runtime key stays owed until the engine is rebuilt; the owned catalog names are
+  fenced; **every catalogued `runtime.*` key reaches `RuntimeEnvBuilder`**; and a TTL is read by
+  the same function that validates it (`util::parse_duration`, which `is_duration` now *is*, so a
+  field accepting `2m` cannot be read as two seconds).
 
 ## Freya / references
 - Design: `Settings.dc.html` Engine. Core `engine_config` (`ENGINE_KEYS`, `value_error`,

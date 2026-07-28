@@ -217,15 +217,30 @@ pub fn is_byte_size(v: &str) -> bool {
 
 /// A number with an optional duration unit (s/m/h).
 pub fn is_duration(v: &str) -> bool {
+    parse_duration(v).is_some()
+}
+
+/// A duration written as a number with an optional s/m/h unit (a bare number is seconds), or
+/// `None` if it isn't one.
+///
+/// [`is_duration`] *is* this — the validator that answers "would this apply?" and the parser that
+/// applies it have to agree, and the only way to guarantee that is for there to be one of them.
+/// A settings field that accepts `2h` and an engine that then reads it as two seconds is the
+/// failure mode worth designing out.
+pub fn parse_duration(v: &str) -> Option<Duration> {
     let (num, unit) = split_num_unit(v);
-    if num.parse::<f64>().is_err() {
-        return false;
+    let num: f64 = num.parse().ok()?;
+    if num < 0. || !num.is_finite() {
+        return None;
     }
-    unit.is_empty()
-        || matches!(
-            unit.chars().next().map(|c| c.to_ascii_lowercase()),
-            Some('s') | Some('m') | Some('h')
-        )
+    let seconds = match unit.chars().next().map(|c| c.to_ascii_lowercase()) {
+        None => num,
+        Some('s') => num,
+        Some('m') => num * 60.,
+        Some('h') => num * 3600.,
+        Some(_) => return None,
+    };
+    Some(Duration::from_secs_f64(seconds))
 }
 
 /// A `±HH:MM` offset (hours 00-14, minutes 00-59) or a named zone (letters, digits, `/_+-`).
