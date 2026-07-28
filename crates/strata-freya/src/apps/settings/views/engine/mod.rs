@@ -39,7 +39,6 @@ pub use model::PropRows;
 /// `var(--sp-3)`).
 const BLURB_GAP: f32 = 16.;
 const TOOLBAR_GAP: f32 = 8.;
-/// The toolbar's icon buttons — the app's standard 28×28 cluster (AGENTS.md §3).
 
 /// What the pane says about itself, once, above the table.
 const BLURB: &str = "DataFusion options applied to every engine this app starts. Enter any \
