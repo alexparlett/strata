@@ -1419,6 +1419,51 @@
             }
           }
         },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "panel_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "control_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "row_selected_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "muted_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "busy_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "busy_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "error_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "error_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "form": {
           "type": "object",
           "additionalProperties": false,

@@ -23,6 +23,7 @@ use crate::apps::project::{ProjChan, ProjectState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Body, Caption, Eyebrow, MonoValue};
+use crate::components::window::window_theme;
 
 /// The gap under the section header, between its rows, and beside a control.
 const HEADER_GAP: f32 = 8.;
@@ -174,7 +175,7 @@ impl KeyExt for PartitionRow {
 
 impl Component for PartitionRow {
     fn render(&self) -> impl IntoElement {
-        let colors = use_theme().read().colors().clone();
+        let win = window_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
@@ -210,9 +211,9 @@ impl Component for PartitionRow {
                     .child(
                         Icon::new(IconName::Brackets)
                             .size(NAME_ICON)
-                            .color(colors.primary),
+                            .color(win.icon_color),
                     )
-                    .child(MonoValue::new(self.name.clone()).color(colors.primary)),
+                    .child(MonoValue::new(self.name.clone()).color(win.icon_color)),
             )
             .child(pill)
     }

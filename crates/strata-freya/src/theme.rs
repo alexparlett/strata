@@ -32,6 +32,7 @@ use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
 use crate::components::type_palette::TypePaletteThemePreference;
+use crate::components::window::WindowThemePreference;
 use crate::state::{use_config_channel, ConfigChan, ConfigStation, ThemePreview, ThemeSel};
 use freya::prelude::*;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
@@ -474,6 +475,14 @@ strata_components! {
     // uppercase label + its ⓘ, a settings row's title + inline subtext, the rule a divided
     // list draws between rows, and a note's box. What a row *controls* is the caller's child,
     // so no control is dressed here.
+    // Window chrome — the body every window floats on, its insets, rules and status blocks.
+    // One theme for all of them: these tones live in the *palette*, which only a `reference`
+    // resolves, so a window cannot reach them through the sheet at all.
+    "window" => WindowThemePreference {
+        background, panel_background, border_fill, divider_fill, control_border_fill,
+        row_selected_background, icon_color, icon_background, muted_color, busy_background,
+        busy_color, error_background, error_border_fill,
+    },
     "form" => FormThemePreference {
         title_color, label_color, hint_color, required_color, divider_fill, note_background,
         note_border_fill, note_color,

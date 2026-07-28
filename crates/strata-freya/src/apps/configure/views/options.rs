@@ -21,6 +21,7 @@ use crate::apps::configure::ConfigureCtx;
 use crate::components::divider::Divider;
 use crate::components::form::OptionList;
 use crate::components::typography::Eyebrow;
+use crate::components::window::window_theme;
 
 /// The gap under the block's label.
 const BLOCK_GAP: f32 = 12.;
@@ -30,7 +31,7 @@ pub struct ImportOptions;
 
 impl Component for ImportOptions {
     fn render(&self) -> impl IntoElement {
-        let colors = use_theme().read().colors().clone();
+        let win = window_theme();
         let form = crate::components::form::form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let (has_options, label, options) = {
@@ -46,7 +47,7 @@ impl Component for ImportOptions {
             .vertical()
             .spacing(BLOCK_GAP)
             // The canvas rules this block off from the paths above it.
-            .child(Divider::horizontal().color(colors.border))
+            .child(Divider::horizontal().color(win.border_fill))
             .child(Eyebrow::new(label).color(form.label_color))
             .child(OptionList::new(options, move |edit| {
                 ctx.edit(|draft| draft.apply(edit))

@@ -16,6 +16,7 @@ use crate::components::form::{form_theme, Row, ValueField, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::Prose;
+use crate::components::window::window_theme;
 
 /// The gap between the toolbar's buttons (their size is the shared control's).
 const TOOL_GAP: f32 = 6.;
@@ -60,7 +61,10 @@ struct Toolbar;
 
 impl Component for Toolbar {
     fn render(&self) -> impl IntoElement {
-        let colors = use_theme().read().colors().clone();
+        let win = window_theme();
+        // `error` is one of the sheet's four semantic slots, so it is read from there wherever
+        // it appears rather than restated on a component theme.
+        let error = use_theme().read().colors().error;
         let ctx = use_consume::<ConfigureCtx>();
         // Subscribes: remove is disabled on an empty list, which is the one thing the toolbar
         // has to know about the list.
@@ -73,13 +77,13 @@ impl Component for Toolbar {
             .child(
                 ToolButton::new(IconName::Plus, "Add path")
                     .outlined()
-                    .color(colors.primary)
+                    .color(win.icon_color)
                     .on_press(move |_| ctx.edit(|draft| draft.add_path())),
             )
             .child(
                 ToolButton::new(IconName::Minus, "Remove path")
                     .outlined()
-                    .color(colors.error)
+                    .color(error)
                     .enabled(has_rows)
                     .on_press(move |_| ctx.edit(|draft| draft.remove_path())),
             )
@@ -194,7 +198,7 @@ struct PathList;
 
 impl Component for PathList {
     fn render(&self) -> impl IntoElement {
-        let colors = use_theme().read().colors().clone();
+        let win = window_theme();
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let (count, selected) = {
@@ -209,8 +213,8 @@ impl Component for PathList {
             .vertical()
             .padding(Gaps::new_all(1.))
             .corner_radius(6.)
-            .background(colors.surface_secondary)
-            .border(Border::new().width(1.).fill(colors.border));
+            .background(win.panel_background)
+            .border(Border::new().width(1.).fill(win.border_fill));
 
         if count == 0 {
             return list.child(
@@ -229,7 +233,7 @@ impl Component for PathList {
         // the container a child at a time.
         list.children((0..count).flat_map(|index| {
             let rule =
-                (index > 0).then(|| Divider::horizontal().color(colors.border).into_element());
+                (index > 0).then(|| Divider::horizontal().color(win.border_fill).into_element());
             let row = PathRow {
                 index,
                 selected: index == selected,
@@ -259,7 +263,7 @@ impl KeyExt for PathRow {
 
 impl Component for PathRow {
     fn render(&self) -> impl IntoElement {
-        let colors = use_theme().read().colors().clone();
+        let win = window_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
@@ -325,7 +329,9 @@ impl Component for PathRow {
             .width(Size::fill())
             .height(Size::px(FIELD_HEIGHT))
             .cross_align(Alignment::Center)
-            .maybe(self.selected, |el| el.background(colors.active))
+            .maybe(self.selected, |el| {
+                el.background(win.row_selected_background)
+            })
             .on_pointer_down(move |_| ctx.edit(move |draft| draft.selected = index))
             .child(
                 // No placeholder: the ⓘ beside the label already says what a path can be, and

@@ -10,6 +10,7 @@ use crate::apps::configure::ConfigureCtx;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Title;
+use crate::components::window::window_theme;
 
 /// The strip's height (canvas `padding: var(--sp-4) var(--sp-5)` around a 26px tile).
 pub const TITLE_BAR_HEIGHT: f32 = 50.;
@@ -23,7 +24,7 @@ pub struct TitleBar;
 
 impl Component for TitleBar {
     fn render(&self) -> impl IntoElement {
-        let colors = use_theme().read().colors().clone();
+        let win = window_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let title = ctx.target.read().title();
 
@@ -33,11 +34,11 @@ impl Component for TitleBar {
             .height(Size::px(26.))
             .corner_radius(6.)
             .center()
-            .background(colors.surface_tertiary)
+            .background(win.icon_background)
             .child(
                 Icon::new(IconName::Database)
                     .size(15.)
-                    .color(colors.primary),
+                    .color(win.icon_color),
             );
 
         // One line, not the export bar's two: the canvas gives this window a title and no
@@ -60,6 +61,6 @@ impl Component for TitleBar {
                     .child(mark)
                     .child(rect().width(Size::flex(1.)).child(Title::new(title))),
             )
-            .child(Divider::horizontal().color(colors.border))
+            .child(Divider::horizontal().color(win.border_fill))
     }
 }

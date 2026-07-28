@@ -513,6 +513,10 @@ impl ConfigureDraft {
                 Group {
                     label: "HEADER ROW".into(),
                     hint: None,
+                    // Kept **inline**, unlike the two below: this sentence changes with the
+                    // switch, so it reports the current state rather than explaining the option
+                    // — which is a thing a hover tip cannot be, because it is not there to read
+                    // while you decide.
                     control: Control::Toggle {
                         on: self.csv_header,
                         edit: Edit::CsvHeader(!self.csv_header),
@@ -613,28 +617,26 @@ impl ConfigureDraft {
                 },
                 Group {
                     label: "NEWLINES IN VALUES".into(),
-                    hint: None,
+                    hint: Some(
+                        "Allow quoted fields to contain line breaks. Files are then read whole \
+                         rather than split and read in parallel",
+                    ),
                     control: Control::Toggle {
                         on: self.csv_newlines,
                         edit: Edit::CsvNewlines(!self.csv_newlines),
-                        hint: Some(
-                            "Allow quoted fields to contain line breaks (files are read whole, \
-                             not in parallel)"
-                                .into(),
-                        ),
+                        hint: None,
                     },
                 },
                 Group {
                     label: "RAGGED ROWS".into(),
-                    hint: None,
+                    hint: Some(
+                        "Pad rows and files that are short of a column with nulls, instead of \
+                         failing the read",
+                    ),
                     control: Control::Toggle {
                         on: self.csv_truncated,
                         edit: Edit::CsvTruncated(!self.csv_truncated),
-                        hint: Some(
-                            "Pad rows and files that are short of a column with nulls, instead \
-                             of failing the read"
-                                .into(),
-                        ),
+                        hint: None,
                     },
                 },
                 Group {

@@ -26,6 +26,7 @@ use crate::apps::project::{
 };
 use crate::components::divider::Divider;
 use crate::components::typography::{Control, Path};
+use crate::components::window::window_theme;
 use crate::components::ACTION_HEIGHT;
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`).
@@ -36,7 +37,7 @@ pub struct Footer;
 
 impl Component for Footer {
     fn render(&self) -> impl IntoElement {
-        let colors = use_theme().read().colors().clone();
+        let win = window_theme();
         let form = crate::components::form::form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
@@ -88,7 +89,7 @@ impl Component for Footer {
         rect()
             .width(Size::fill())
             .vertical()
-            .child(Divider::horizontal().color(colors.border))
+            .child(Divider::horizontal().color(win.border_fill))
             .child(
                 rect()
                     .width(Size::fill())
@@ -97,7 +98,7 @@ impl Component for Footer {
                     .cross_align(Alignment::Center)
                     .spacing(12.)
                     .padding(FOOTER_PADDING)
-                    .background(colors.background)
+                    .background(win.background)
                     // Why the button is off, rather than an unexplained dead control. A
                     // registration failure is *not* shown here — it is a paragraph the engine
                     // wrote, and it has its own block at the end of the body.

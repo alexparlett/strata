@@ -15,6 +15,7 @@ use crate::apps::configure::ConfigureCtx;
 use crate::apps::configure::Status;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Path, Readout, Strong};
+use crate::components::window::window_theme;
 
 /// The blocks' inset and the gap inside them (canvas `padding: var(--sp-4) var(--sp-5)`).
 const BLOCK_PADDING: Gaps = Gaps::new(12., 16., 12., 16.);
@@ -26,7 +27,7 @@ pub struct StatusBlock;
 
 impl Component for StatusBlock {
     fn render(&self) -> impl IntoElement {
-        let colors = use_theme().read().colors().clone();
+        let win = window_theme();
         let error = use_theme().read().colors().error;
         let ctx = use_consume::<ConfigureCtx>();
         let status = ctx.status.read().clone();
@@ -40,10 +41,10 @@ impl Component for StatusBlock {
                 .spacing(BLOCK_GAP)
                 .padding(BLOCK_PADDING)
                 .corner_radius(8.)
-                .background(colors.surface_secondary)
-                .border(Border::new().width(1.).fill(colors.border))
+                .background(win.panel_background)
+                .border(Border::new().width(1.).fill(win.border_fill))
                 .child(CircularLoader::new().size(GLYPH))
-                .child(Path::new(format!("Registering '{name}'…")).color(colors.text_secondary)),
+                .child(Path::new(format!("Registering '{name}'…")).color(win.busy_color)),
             // A failure is a *sentence the engine wrote*, so it gets room to wrap rather than a
             // single clipped line — several of P3-07's messages are two clauses long.
             Status::Failed(why) => rect()
@@ -53,8 +54,8 @@ impl Component for StatusBlock {
                 .spacing(BLOCK_GAP)
                 .padding(BLOCK_PADDING)
                 .corner_radius(8.)
-                .background(colors.surface_secondary)
-                .border(Border::new().width(1.).fill(colors.error))
+                .background(win.panel_background)
+                .border(Border::new().width(1.).fill(error))
                 .child(Icon::new(IconName::Alert).size(GLYPH).color(error))
                 .child(
                     rect()

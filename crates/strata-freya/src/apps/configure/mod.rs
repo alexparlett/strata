@@ -50,6 +50,7 @@ use crate::apps::configure::views::{use_watch_registration, ConfigureBody, Foote
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::LogCtx;
 use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
+use crate::components::window::window_theme;
 use crate::keymap::on_commands;
 use crate::platform::{self, WindowKind};
 use crate::state::{use_share_config, AppCtx};
@@ -279,7 +280,8 @@ impl App for ConfigureApp {
         // the row. See the module doc.
         use_watch_registration(ctx);
 
-        let colors = use_theme().read().colors().clone();
+        let win = window_theme();
+        let text = use_theme().read().colors().text_primary;
         let config = self.app.config;
         let platform = use_hook(Platform::get);
 
@@ -287,10 +289,10 @@ impl App for ConfigureApp {
             .expanded()
             .vertical()
             .content(Content::Flex)
-            .background(colors.background)
+            .background(win.background)
             // The window's ambient text colour, like every other window root's: runs that don't
             // name one inherit it rather than Freya's base-theme default.
-            .color(colors.text_primary)
+            .color(text)
             .child(TitleBar)
             .child(ConfigureBody)
             .child(Footer)
