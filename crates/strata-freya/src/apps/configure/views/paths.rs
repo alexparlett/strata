@@ -11,8 +11,7 @@
 use freya::prelude::*;
 
 use crate::apps::configure::ConfigureCtx;
-use crate::components::divider::Divider;
-use crate::components::form::{form_theme, Row, ValueField, FIELD_HEIGHT};
+use crate::components::form::{form_theme, Row, ValueField};
 use crate::components::icon::{Icon, IconName};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::Prose;
@@ -20,9 +19,11 @@ use crate::components::window::window_theme;
 
 /// The gap between the toolbar's buttons (their size is the shared control's).
 const TOOL_GAP: f32 = 6.;
-/// The list's empty state (canvas `min-height: 88px`). A row's own height is the form's
-/// `FIELD_HEIGHT` — this list holds fields, so it does not get to invent a height for them.
+/// The list's empty state (canvas `min-height: 88px`), and the gap between two path fields. A
+/// row's own height is the form's `FIELD_HEIGHT` — this list holds fields, so it does not get to
+/// invent a height for them.
 const EMPTY_HEIGHT: f32 = 88.;
+const ROW_GAP: f32 = 6.;
 /// The gap between the label row, the toolbar and the list.
 const STACK_GAP: f32 = 8.;
 /// The browse dropdown's width — enough for its two labels without the card hugging them.
@@ -209,13 +210,17 @@ fn pick(ctx: ConfigureCtx, kind: Pick) {
     });
 }
 
-/// The bordered list of path rows, or its empty state.
+/// The list of path rows, or its empty state.
+///
+/// Each row is an ordinary [`ValueField`] — its own box, its own focus ring, like every other
+/// input in the app. So the list itself draws no chrome: a bordered container around boxed
+/// fields is the second box the canvas's own bare rows were avoiding, and the rows are what the
+/// user is actually pointing at.
 #[derive(PartialEq)]
 struct PathList;
 
 impl Component for PathList {
     fn render(&self) -> impl IntoElement {
-        let win = window_theme();
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let (count, selected) = {
@@ -223,48 +228,36 @@ impl Component for PathList {
             (draft.sources.len(), draft.selected())
         };
 
-        // Padded by the border's own width: torin draws a border *inside* the bounds its
-        // children already occupy, so a row with a background would otherwise erase it.
-        let list = rect()
-            .width(Size::fill())
-            .vertical()
-            .padding(Gaps::new_all(1.))
-            .corner_radius(6.)
-            .background(win.panel_background)
-            .border(Border::new().width(1.).fill(win.border_fill));
-
         if count == 0 {
-            return list.child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::px(EMPTY_HEIGHT))
-                    .center()
-                    .child(
-                        Prose::new("No paths yet. Add one to point at your data.")
-                            .color(form.hint_color),
-                    ),
-            );
+            return rect()
+                .width(Size::fill())
+                .height(Size::px(EMPTY_HEIGHT))
+                .center()
+                .child(
+                    Prose::new("No paths yet. Add one to point at your data.")
+                        .color(form.hint_color),
+                );
         }
 
-        // Rows with a rule between them, built as one list of children rather than folded onto
-        // the container a child at a time.
-        list.children((0..count).flat_map(|index| {
-            let rule =
-                (index > 0).then(|| Divider::horizontal().color(win.border_fill).into_element());
-            let row = PathRow {
-                index,
-                selected: index == selected,
-                key: DiffKey::None,
-            }
-            // Keyed by position, and the row syncs both ways against the draft — see `PathRow`.
-            .key(index)
-            .into_element();
-            rule.into_iter().chain(std::iter::once(row))
-        }))
+        rect()
+            .width(Size::fill())
+            .vertical()
+            .spacing(ROW_GAP)
+            .children((0..count).map(|index| {
+                PathRow {
+                    index,
+                    selected: index == selected,
+                    key: DiffKey::None,
+                }
+                // Keyed by position, and the row syncs both ways against the draft — see
+                // `PathRow`.
+                .key(index)
+                .into_element()
+            }))
     }
 }
 
-/// One path row: a bare mono field on the row's own background, selected by pressing it.
+/// One path row: the field, marked when it is the row the toolbar acts on.
 #[derive(PartialEq)]
 struct PathRow {
     index: usize,
@@ -280,7 +273,6 @@ impl KeyExt for PathRow {
 
 impl Component for PathRow {
     fn render(&self) -> impl IntoElement {
-        let win = window_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
@@ -344,16 +336,7 @@ impl Component for PathRow {
 
         rect()
             .width(Size::fill())
-            .height(Size::px(FIELD_HEIGHT))
-            .cross_align(Alignment::Center)
-            .maybe(self.selected, |el| {
-                el.background(win.row_selected_background)
-            })
             .on_pointer_down(move |_| ctx.edit(move |draft| draft.selected = index))
-            .child(
-                // No placeholder: the ⓘ beside the label already says what a path can be, and
-                // a fake path sitting in every empty row reads as a value until you look twice.
-                ValueField::new(text).bare().width(Size::fill()),
-            )
+            .child(ValueField::new(text).width(Size::fill()))
     }
 }

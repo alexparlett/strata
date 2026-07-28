@@ -34,13 +34,10 @@ impl Component for ImportOptions {
         let win = window_theme();
         let form = crate::components::form::form_theme();
         let ctx = use_consume::<ConfigureCtx>();
-        let (has_options, label, options) = {
+        let (label, options) = {
             let draft = ctx.draft.read();
-            (draft.has_options(), draft.options_label(), draft.options())
+            (draft.options_label(), draft.options())
         };
-        if !has_options {
-            return rect();
-        }
 
         rect()
             .width(Size::fill())

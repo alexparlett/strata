@@ -20,9 +20,9 @@ use crate::apps::configure::model::PARTITION_TYPES;
 use crate::apps::configure::ConfigureCtx;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{ProjChan, ProjectState};
+use crate::components::form::{Row, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
-use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
-use crate::components::typography::{Caption, Eyebrow, MonoValue};
+use crate::components::typography::{Caption, MonoValue, Prose};
 use crate::components::window::window_theme;
 
 /// The gap under the section header, between its rows, and beside a control.
@@ -32,6 +32,8 @@ const CONTROL_GAP: f32 = 12.;
 /// The canvas's fixed column for a partition column's name.
 const NAME_WIDTH: f32 = 110.;
 const NAME_ICON: f32 = 11.;
+/// The type picker's column.
+const TYPE_WIDTH: f32 = 120.;
 const WARNING_ICON: f32 = 12.;
 
 #[derive(PartialEq)]
@@ -39,7 +41,6 @@ pub struct Hive;
 
 impl Component for Hive {
     fn render(&self) -> impl IntoElement {
-        let form = crate::components::form::form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         // The project folder every relative source is measured from. A station, not a radio:
         // the root does not change under an open window.
@@ -56,50 +57,51 @@ impl Component for Hive {
             )
         };
         if !may_partition {
-            return rect();
+            return rect().into_element();
         }
 
-        rect()
-            .width(Size::fill())
-            .vertical()
-            .spacing(HEADER_GAP)
-            // No subtext under the label: the section only appears at all when there is
-            // something to partition on, so saying so is a sentence that is always true where it
-            // is shown. The switch's own line says what the current position means, which is the
-            // thing that actually changes.
-            .child(Eyebrow::new("HIVE PARTITIONING").color(form.label_color))
-            // The switch stands alone: anyone reaching this window knows what Hive
-            // partitioning is, and a sentence restating the position of a two-state control is
-            // one more line to read past.
+        // The switch is a **sibling** of its sentence, never wrapped in a pressable row: a
+        // built-in's `on_press` does not stop propagation, so an ancestor would take the same
+        // click and toggle twice, back to where it started.
+        //
+        // `Prose`, with no colour of its own, is the export window's treatment of the very same
+        // control — a sentence to read, not a label to skim past.
+        let toggle = rect()
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .spacing(CONTROL_GAP)
             .child(Switch::new().toggled(on).on_toggle({
                 let root = root.clone();
                 let engine = engine.clone();
                 move |_| toggle(ctx, engine.clone(), &root)
             }))
+            .child(Prose::new(match on {
+                true => "Reading the folder tree as partition columns",
+                false => "Ignoring the folder tree, reading the files as one flat table",
+            }));
+
+        // The same labelled row every option group uses, exactly as export builds its own.
+        Row::new("HIVE PARTITIONING")
+            .child(toggle)
             .maybe_child(on.then(|| {
-                let list = rect()
+                rect()
                     .width(Size::fill())
                     .vertical()
                     .spacing(ROW_GAP)
-                    .padding(Gaps::new(4., 0., 0., 0.))
-                    .child(
-                        Caption::new("Confirm the type each partition column is read as.")
-                            .color(form.label_color)
-                            .width(Size::fill())
-                            .wrap(),
-                    );
-                list.children(columns.iter().enumerate().map(|(index, (name, dtype))| {
-                    PartitionRow {
-                        index,
-                        name: name.clone(),
-                        dtype: dtype.clone(),
-                        key: DiffKey::None,
-                    }
-                    .key(name.clone())
-                    .into_element()
-                }))
-                .maybe_child(warn.then(|| Warning))
+                    .padding(Gaps::new(HEADER_GAP, 0., 0., 0.))
+                    .children(columns.iter().enumerate().map(|(index, (name, dtype))| {
+                        PartitionRow {
+                            index,
+                            name: name.clone(),
+                            dtype: dtype.clone(),
+                            key: DiffKey::None,
+                        }
+                        .key(name.clone())
+                        .into_element()
+                    }))
+                    .maybe_child(warn.then(|| Warning))
             }))
+            .into_element()
     }
 }
 
@@ -162,7 +164,7 @@ impl Component for PartitionRow {
             .iter()
             .map(|dtype| {
                 let dtype = *dtype;
-                ToggleSegment::text(dtype)
+                MenuItem::new()
                     .selected(dtype == self.dtype)
                     .on_press(move |_| {
                         ctx.edit(move |draft| {
@@ -171,10 +173,18 @@ impl Component for PartitionRow {
                             }
                         })
                     })
+                    .child(MonoValue::new(dtype))
                     .into()
             })
             .collect();
-        let pill = SegmentedToggle::new().form().children(types);
+        let picker = rect()
+            .width(Size::px(TYPE_WIDTH))
+            .height(Size::px(FIELD_HEIGHT))
+            .child(
+                Select::new()
+                    .selected_item(MonoValue::new(self.dtype.clone()))
+                    .children(types),
+            );
 
         rect()
             .width(Size::fill())
@@ -194,7 +204,7 @@ impl Component for PartitionRow {
                     )
                     .child(MonoValue::new(self.name.clone()).color(win.icon_color)),
             )
-            .child(pill)
+            .child(picker)
     }
 }
 

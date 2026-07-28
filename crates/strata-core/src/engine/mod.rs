@@ -1837,6 +1837,58 @@ mod read_options_tests {
         meta.columns.iter().map(|c| c.name.clone()).collect()
     }
 
+    /// **Why there is no "NULL value" option**, proved against DataFusion's own DDL rather than
+    /// against its source — because its `CREATE EXTERNAL TABLE` docs advertise `NULL_VALUE` in
+    /// exactly this position, which is what makes the absence look like an oversight.
+    ///
+    /// - `format.null_value` is the **writer's** null representation. The DDL accepts it, the
+    ///   reader never consults it, and the result is byte-identical to passing nothing.
+    /// - `format.null_regex` is the reader's, and it is wired into schema *inference* only
+    ///   (`CsvFormat::infer_schema`), not into `CsvSource`'s reader. So it re-types the column
+    ///   on what it saw and then fails the scan on the very token it was told was null.
+    ///
+    /// Offering either would be a control that does nothing or a control that breaks the table.
+    /// If a future DataFusion wires `null_regex` through to the scan, this test starts failing
+    /// on the third case and the option can be added.
+    #[tokio::test]
+    async fn a_csv_null_value_is_the_writers_and_a_null_regex_breaks_the_scan() {
+        use datafusion::prelude::SessionContext;
+
+        let d = dir("csv_null_options");
+        std::fs::write(d.join("t.csv"), "a,b\n1,NAN\n2,3\n").expect("fixture");
+        let loc = d.to_string_lossy().to_string();
+
+        let read = |opts: &'static str| {
+            let loc = loc.clone();
+            async move {
+                let ctx = SessionContext::new();
+                let ddl =
+                    format!("CREATE EXTERNAL TABLE t STORED AS csv LOCATION '{loc}/' {opts}");
+                ctx.sql(&ddl).await.expect("ddl").collect().await.expect("ddl");
+                let df = ctx.sql("SELECT b IS NULL AS n FROM t ORDER BY a").await?;
+                df.collect().await
+            }
+        };
+
+        // The writer's option: accepted, and read exactly as if it were absent.
+        let with = read("OPTIONS('format.null_value' 'NAN')").await.expect("scan");
+        let without = read("").await.expect("scan");
+        assert_eq!(
+            format!("{with:?}"),
+            format!("{without:?}"),
+            "NULL_VALUE changes nothing a reader can see"
+        );
+
+        // The reader's option: inference types the column on it, then the scan cannot parse it.
+        let err = read("OPTIONS('format.null_regex' 'NAN')")
+            .await
+            .expect_err("the scan cannot parse what inference called null");
+        assert!(
+            err.to_string().contains("Error while parsing value 'NAN'"),
+            "{err}"
+        );
+    }
+
     #[tokio::test]
     async fn a_delimiter_changes_how_the_columns_are_found() {
         let d = dir("delimiter");

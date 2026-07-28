@@ -423,21 +423,9 @@ impl ConfigureDraft {
 
     // --- import options ---
 
-    /// Whether this format has read options at all.
-    ///
-    /// Parquet and Arrow have none worth a control: `ArrowFormat` has no options in DataFusion
-    /// 54, and every `ParquetFormat` knob is an engine-wide setting that already has one in
-    /// Settings ▸ Engine. A per-table copy would be a second place to set the same key.
-    pub fn has_options(&self) -> bool {
-        matches!(self.format, FormatId::Csv | FormatId::Json)
-    }
-
     /// The label over the import block.
-    pub fn options_label(&self) -> &'static str {
-        match self.format {
-            FormatId::Csv => "CSV OPTIONS",
-            _ => "JSON OPTIONS",
-        }
+    pub fn options_label(&self) -> String {
+        format!("{} OPTIONS", self.format.label())
     }
 
     /// The format's options — **one flat list**, in canvas order.
@@ -494,9 +482,10 @@ impl ConfigureDraft {
             FormatId::Json => vec![Group {
                 label: "SHAPE".into(),
                 hint: Some("How the records are laid out in the file"),
-                control: Control::Seg {
+                // A `Select`, like every other closed list of values in this window.
+                control: Control::Select {
                     options: [
-                        (JsonShape::NewlineDelimited, "One per line"),
+                        (JsonShape::NewlineDelimited, "One record per line"),
                         (JsonShape::Array, "JSON array"),
                     ]
                     .into_iter()
@@ -506,10 +495,26 @@ impl ConfigureDraft {
                         edit: Edit::JsonShape(shape),
                     })
                     .collect(),
-                    custom: None,
                 },
             }],
-            _ => Vec::new(),
+            // Never an empty list, for the export window's reason: silence reads as "the
+            // options are still loading" rather than as "there are none".
+            FormatId::Arrow => vec![Group {
+                label: "FORMAT".into(),
+                hint: None,
+                control: Control::Note(
+                    "Arrow IPC files describe themselves. DataFusion exposes no read options \
+                     for them.",
+                ),
+            }],
+            FormatId::Parquet | FormatId::Unknown(_) => vec![Group {
+                label: "FORMAT".into(),
+                hint: None,
+                control: Control::Note(
+                    "Parquet files carry their own compression and types, so nothing here is \
+                     needed to read one. Engine-wide parquet settings are in Settings, Engine.",
+                ),
+            }],
         }
     }
 
@@ -598,7 +603,7 @@ impl ConfigureDraft {
                 },
                 compression_group(self.json_compression, Edit::JsonCompression),
             ],
-            _ => Vec::new(),
+            FormatId::Parquet | FormatId::Arrow | FormatId::Unknown(_) => Vec::new(),
         }
     }
 }
@@ -692,14 +697,16 @@ mod tests {
     }
 
     #[test]
-    fn parquet_and_arrow_show_no_import_block_at_all() {
+    fn parquet_and_arrow_say_they_have_nothing_rather_than_showing_nothing() {
+        // The export window's rule: an empty list reads as "still loading".
         for format in [FormatId::Parquet, FormatId::Arrow] {
             let draft = ConfigureDraft {
                 format,
                 ..csv_draft()
             };
-            assert!(!draft.has_options());
-            assert!(draft.options().is_empty());
+            let groups = draft.options();
+            assert_eq!(groups.len(), 1);
+            assert!(matches!(groups[0].control, Control::Note(_)));
         }
     }
 
