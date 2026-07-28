@@ -22,7 +22,7 @@ use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{ProjChan, ProjectState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
-use crate::components::typography::{Body, Caption, Eyebrow, MonoValue};
+use crate::components::typography::{Caption, Eyebrow, MonoValue};
 use crate::components::window::window_theme;
 
 /// The gap under the section header, between its rows, and beside a control.
@@ -68,27 +68,14 @@ impl Component for Hive {
             // is shown. The switch's own line says what the current position means, which is the
             // thing that actually changes.
             .child(Eyebrow::new("HIVE PARTITIONING").color(form.label_color))
-            // The switch is a **sibling** of its sentence, never wrapped in a pressable row: a
-            // built-in's `on_press` does not stop propagation, so an ancestor would take the
-            // same click and toggle twice, back to where it started.
-            .child(
-                rect()
-                    .horizontal()
-                    .cross_align(Alignment::Center)
-                    .spacing(CONTROL_GAP)
-                    .child(Switch::new().toggled(on).on_toggle({
-                        let root = root.clone();
-                        let engine = engine.clone();
-                        move |_| toggle(ctx, engine.clone(), &root)
-                    }))
-                    .child(
-                        Body::new(match on {
-                            true => "Reading the folder tree as partition columns",
-                            false => "Ignoring the folder tree. Files are read as one flat table",
-                        })
-                        .color(form.label_color),
-                    ),
-            )
+            // The switch stands alone: anyone reaching this window knows what Hive
+            // partitioning is, and a sentence restating the position of a two-state control is
+            // one more line to read past.
+            .child(Switch::new().toggled(on).on_toggle({
+                let root = root.clone();
+                let engine = engine.clone();
+                move |_| toggle(ctx, engine.clone(), &root)
+            }))
             .maybe_child(on.then(|| {
                 let list = rect()
                     .width(Size::fill())

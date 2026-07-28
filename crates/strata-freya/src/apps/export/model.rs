@@ -23,7 +23,7 @@ use strata_core::engine::export::{
 };
 use strata_model::{Cell, ColumnInfo, Kind, SnapshotId};
 
-use crate::components::form::{self, Make};
+use crate::components::form::{self, one_char, Make};
 
 /// The shared option vocabulary (`components::form::options`), at this window's edit type.
 /// Aliases rather than re-declarations: the export window was the first consumer of these and
@@ -653,29 +653,6 @@ fn compression_select(current: Compression, edit: fn(Compression) -> Edit) -> Co
             })
             .collect(),
     }
-}
-
-/// Resolve a single-character field: the two escapes the canvas documents (`\t`, `\n`), a
-/// literal backslash, or one plain character. Empty is `None` (the field is optional);
-/// anything longer is an error the footer shows rather than a silent truncation.
-fn one_char(what: &str, raw: &str) -> Result<Option<char>, String> {
-    let resolved = match raw {
-        "" => return Ok(None),
-        "\\t" => '\t',
-        "\\n" => '\n',
-        "\\\\" => '\\',
-        other => {
-            let mut chars = other.chars();
-            let first = chars.next().expect("non-empty");
-            if chars.next().is_some() {
-                return Err(format!(
-                    "The CSV {what} has to be a single character (or \\t for tab), not {other:?}"
-                ));
-            }
-            first
-        }
-    };
-    Ok(Some(resolved))
 }
 
 /// Thousands-separated, for the row counts the window quotes.

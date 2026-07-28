@@ -20,7 +20,7 @@ use std::path::Path;
 use strata_core::project::resolve_source;
 use strata_model::{CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat, TableDef};
 
-use crate::components::form::{Choice, Control, Group, Make, TextField};
+use crate::components::form::{one_char, Choice, Control, Group, Make, TextField};
 
 /// DataFusion's own `DEFAULT_SCHEMA_INFER_MAX_RECORD`.
 ///
@@ -110,60 +110,12 @@ impl FormatId {
     }
 }
 
-/// The delimiter pill's values. The custom box shows only while [`Custom`](Self::Custom) is
-/// picked, and is resolved to a character by [`ConfigureDraft::def`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum DelimiterChoice {
-    Comma,
-    Tab,
-    Semicolon,
-    Pipe,
-    Custom,
-}
-
-impl DelimiterChoice {
-    /// The character this choice stands for, or `None` for `Custom` (whose character is the
-    /// draft's own text).
-    fn char(self) -> Option<char> {
-        match self {
-            Self::Comma => Some(','),
-            Self::Tab => Some('\t'),
-            Self::Semicolon => Some(';'),
-            Self::Pipe => Some('|'),
-            Self::Custom => None,
-        }
-    }
-
-    /// Which pill a stored delimiter lands on — so a def opens showing the value it holds
-    /// rather than the default.
-    fn of(c: char) -> (Self, String) {
-        match c {
-            ',' => (Self::Comma, String::new()),
-            '\t' => (Self::Tab, String::new()),
-            ';' => (Self::Semicolon, String::new()),
-            '|' => (Self::Pipe, String::new()),
-            other => (Self::Custom, other.to_string()),
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Comma => "Comma",
-            Self::Tab => "Tab",
-            Self::Semicolon => "Semicolon",
-            Self::Pipe => "Pipe",
-            Self::Custom => "Custom",
-        }
-    }
-}
-
 /// One thing a control can do to the draft. Exhaustive: [`ConfigureDraft::apply`] matches every
 /// variant, and a control is built holding the exact edit it performs.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Edit {
     CsvHeader(bool),
-    CsvDelimiter(DelimiterChoice),
-    CsvDelimiterCustom(String),
+    CsvDelimiter(String),
     CsvQuote(String),
     CsvEscape(String),
     CsvComment(String),
@@ -188,8 +140,7 @@ pub struct ConfigureDraft {
     pub selected: usize,
     // --- CSV ---
     pub csv_header: bool,
-    pub csv_delimiter: DelimiterChoice,
-    pub csv_delimiter_custom: String,
+    pub csv_delimiter: String,
     pub csv_quote: String,
     pub csv_escape: String,
     pub csv_comment: String,
@@ -212,15 +163,13 @@ impl Default for ConfigureDraft {
     fn default() -> Self {
         let csv = CsvRead::default();
         let json = JsonRead::default();
-        let (csv_delimiter, csv_delimiter_custom) = DelimiterChoice::of(csv.delimiter);
         Self {
             name: String::new(),
             format: FormatId::Parquet,
             sources: vec![String::new()],
             selected: 0,
             csv_header: csv.header,
-            csv_delimiter,
-            csv_delimiter_custom,
+            csv_delimiter: csv.delimiter.to_string(),
             csv_quote: csv.quote.to_string(),
             csv_escape: String::new(),
             csv_comment: String::new(),
@@ -256,10 +205,8 @@ impl ConfigureDraft {
         };
         match &def.format {
             SourceFormat::Csv(o) => {
-                let (choice, custom) = DelimiterChoice::of(o.delimiter);
                 draft.csv_header = o.header;
-                draft.csv_delimiter = choice;
-                draft.csv_delimiter_custom = custom;
+                draft.csv_delimiter = escaped(o.delimiter);
                 draft.csv_quote = o.quote.to_string();
                 draft.csv_escape = o.escape.map(String::from).unwrap_or_default();
                 draft.csv_comment = o.comment.map(String::from).unwrap_or_default();
@@ -283,7 +230,6 @@ impl ConfigureDraft {
         match edit {
             Edit::CsvHeader(v) => self.csv_header = v,
             Edit::CsvDelimiter(v) => self.csv_delimiter = v,
-            Edit::CsvDelimiterCustom(v) => self.csv_delimiter_custom = v,
             Edit::CsvQuote(v) => self.csv_quote = v,
             Edit::CsvEscape(v) => self.csv_escape = v,
             Edit::CsvComment(v) => self.csv_comment = v,
@@ -429,12 +375,9 @@ impl ConfigureDraft {
         }
     }
 
-    /// The delimiter the pill and its custom box between them name.
+    /// The character the delimiter box names, or `None` when it is blank or unresolvable.
     fn delimiter_char(&self) -> Option<char> {
-        match self.csv_delimiter.char() {
-            Some(c) => Some(c),
-            None => first_char(&self.csv_delimiter_custom),
-        }
+        one_char("delimiter", &self.csv_delimiter).ok().flatten()
     }
 
     /// The def this draft describes.
@@ -464,8 +407,12 @@ impl ConfigureDraft {
             ));
         }
         if self.format == FormatId::Csv {
-            if self.delimiter_char().is_none() {
-                return Some("The CSV delimiter can't be empty.".into());
+            // The box's own complaint when it holds something that is not one character, and
+            // "it can't be empty" when it holds nothing.
+            match one_char("delimiter", &self.csv_delimiter) {
+                Err(why) => return Some(why),
+                Ok(None) => return Some("The CSV delimiter can't be empty.".into()),
+                Ok(Some(_)) => {}
             }
             if first_char(&self.csv_quote).is_none() {
                 return Some("The CSV quote character can't be empty.".into());
@@ -531,31 +478,17 @@ impl ConfigureDraft {
                 },
                 Group {
                     label: "DELIMITER".into(),
-                    hint: None,
-                    control: Control::Seg {
-                        options: [
-                            DelimiterChoice::Comma,
-                            DelimiterChoice::Tab,
-                            DelimiterChoice::Semicolon,
-                            DelimiterChoice::Pipe,
-                            DelimiterChoice::Custom,
-                        ]
-                        .into_iter()
-                        .map(|c| Choice {
-                            label: c.label().into(),
-                            selected: c == self.csv_delimiter,
-                            edit: Edit::CsvDelimiter(c),
-                        })
-                        .collect(),
-                        custom: (self.csv_delimiter == DelimiterChoice::Custom).then(|| {
-                            TextField {
-                                value: self.csv_delimiter_custom.clone(),
-                                placeholder: "char",
-                                max_len: 1,
-                                make: Make(Edit::CsvDelimiterCustom),
-                            }
-                        }),
-                    },
+                    // One free-text box rather than a pill of the four common separators plus a
+                    // custom slot: the export window asks the same question this way, and a
+                    // control that means one thing in one window should not mean another next
+                    // door. It also takes the escapes a pill cannot.
+                    hint: Some("Field separator (use \\t for tab)"),
+                    control: Control::Text(TextField {
+                        value: self.csv_delimiter.clone(),
+                        placeholder: ",",
+                        max_len: 8,
+                        make: Make(Edit::CsvDelimiter),
+                    }),
                 },
             ],
             FormatId::Json => vec![Group {
@@ -670,13 +603,16 @@ impl ConfigureDraft {
     }
 }
 
-/// The compression pill, shared by CSV and JSON — the same whole-file wrapping, and the same
+/// The compression dropdown, shared by CSV and JSON — the same whole-file wrapping, and the same
 /// effect on the listing's file extension.
+///
+/// A `Select`, like the export window's, rather than a pill: five codecs is more than a pill
+/// reads well at, and the same question should not be asked two ways in two windows.
 fn compression_group(current: FileCompression, edit: fn(FileCompression) -> Edit) -> Group<Edit> {
     Group {
         label: "COMPRESSION".into(),
         hint: Some("Whole-file compression. The source files carry the matching suffix"),
-        control: Control::Seg {
+        control: Control::Select {
             options: FileCompression::ALL
                 .into_iter()
                 .map(|c| Choice {
@@ -685,8 +621,18 @@ fn compression_group(current: FileCompression, edit: fn(FileCompression) -> Edit
                     edit: edit(c),
                 })
                 .collect(),
-            custom: None,
         },
+    }
+}
+
+/// How a character reads *in* a delimiter box: the escapes [`one_char`] understands, so a tab
+/// opens as `\t` rather than as an invisible cell.
+fn escaped(c: char) -> String {
+    match c {
+        '\t' => "\\t".into(),
+        '\n' => "\\n".into(),
+        '\\' => "\\\\".into(),
+        other => other.to_string(),
     }
 }
 
@@ -758,25 +704,43 @@ mod tests {
     }
 
     #[test]
-    fn the_custom_delimiter_box_shows_only_while_custom_is_picked() {
+    fn the_delimiter_is_one_text_box_that_takes_the_escapes() {
         let mut draft = csv_draft();
-        let delimiter = |d: &ConfigureDraft| {
-            let groups = d.options();
-            let g = groups.iter().find(|g| g.label == "DELIMITER").unwrap();
-            g.control.clone()
+        let groups = draft.options();
+        let g = groups.iter().find(|g| g.label == "DELIMITER").unwrap();
+        assert!(
+            matches!(g.control, Control::Text(_)),
+            "one box, as in export"
+        );
+
+        draft.apply(Edit::CsvDelimiter("\\t".into()));
+        let SourceFormat::Csv(csv) = draft.def().format else {
+            panic!("csv")
         };
-        assert!(matches!(
-            delimiter(&draft),
-            Control::Seg { custom: None, .. }
-        ));
-        draft.apply(Edit::CsvDelimiter(DelimiterChoice::Custom));
-        assert!(matches!(
-            delimiter(&draft),
-            Control::Seg {
-                custom: Some(_),
-                ..
-            }
-        ));
+        assert_eq!(csv.delimiter, '\t', "the escape resolves");
+    }
+
+    #[test]
+    fn a_stored_tab_delimiter_opens_as_its_escape_rather_than_an_invisible_box() {
+        let def = TableDef {
+            name: "t".into(),
+            format: SourceFormat::Csv(CsvRead {
+                delimiter: '\t',
+                ..Default::default()
+            }),
+            sources: vec!["/data".into()],
+            partition_cols: vec![],
+        };
+        assert_eq!(ConfigureDraft::of(&def).csv_delimiter, "\\t");
+    }
+
+    #[test]
+    fn a_delimiter_that_is_not_one_character_is_reported_rather_than_truncated() {
+        let mut draft = csv_draft();
+        draft.apply(Edit::CsvDelimiter("||".into()));
+        assert!(draft
+            .blocker()
+            .is_some_and(|b| b.contains("single character")));
     }
 
     #[test]
@@ -795,7 +759,7 @@ mod tests {
     #[test]
     fn the_def_carries_only_the_active_formats_options() {
         let mut draft = csv_draft();
-        draft.apply(Edit::CsvDelimiter(DelimiterChoice::Semicolon));
+        draft.apply(Edit::CsvDelimiter(";".into()));
         let SourceFormat::Csv(csv) = draft.def().format else {
             panic!("csv");
         };
@@ -808,11 +772,11 @@ mod tests {
     #[test]
     fn switching_format_and_back_keeps_the_options_you_set() {
         let mut draft = csv_draft();
-        draft.apply(Edit::CsvDelimiter(DelimiterChoice::Pipe));
+        draft.apply(Edit::CsvDelimiter("|".into()));
         draft.format = FormatId::Json;
         draft.apply(Edit::JsonShape(JsonShape::Array));
         draft.format = FormatId::Csv;
-        assert_eq!(draft.csv_delimiter, DelimiterChoice::Pipe);
+        assert_eq!(draft.csv_delimiter, "|");
         assert_eq!(draft.json_shape, JsonShape::Array);
     }
 
@@ -882,9 +846,9 @@ mod tests {
     #[test]
     fn an_emptied_delimiter_blocks_save_rather_than_defaulting() {
         let mut draft = csv_draft();
-        draft.apply(Edit::CsvDelimiter(DelimiterChoice::Custom));
+        draft.apply(Edit::CsvDelimiter(String::new()));
         assert!(draft.blocker().is_some_and(|b| b.contains("delimiter")));
-        draft.apply(Edit::CsvDelimiterCustom(";".into()));
+        draft.apply(Edit::CsvDelimiter(";".into()));
         assert_eq!(draft.blocker(), None);
     }
 
