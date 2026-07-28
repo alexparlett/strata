@@ -230,17 +230,19 @@ pub fn is_duration(v: &str) -> bool {
 pub fn parse_duration(v: &str) -> Option<Duration> {
     let (num, unit) = split_num_unit(v);
     let num: f64 = num.parse().ok()?;
-    if num < 0. || !num.is_finite() {
-        return None;
-    }
     let seconds = match unit.chars().next().map(|c| c.to_ascii_lowercase()) {
-        None => num,
-        Some('s') => num,
+        None | Some('s') => num,
         Some('m') => num * 60.,
         Some('h') => num * 3600.,
         Some(_) => return None,
     };
-    Some(Duration::from_secs_f64(seconds))
+    // `try_from_secs_f64`, not `from_secs_f64`: the latter **panics** on a value `Duration` can't
+    // hold, and this function is the Properties editor's per-keystroke validator — a number too
+    // big to be a duration is something a user types on the way to a smaller one, not a bug. It
+    // is also the only bound worth stating: it rejects negative, non-finite and overflowing
+    // values, so a hand-rolled guard beside it could only drift from it. That covers the
+    // multiplication above too, which is why `seconds` is what's checked rather than `num`.
+    Duration::try_from_secs_f64(seconds).ok()
 }
 
 /// A `±HH:MM` offset (hours 00-14, minutes 00-59) or a named zone (letters, digits, `/_+-`).
@@ -615,5 +617,34 @@ mod tests {
     fn sweep_of_a_missing_directory_is_a_no_op() {
         let dir = TempDir::new("sweep-missing");
         sweep_stale_temps(&dir.0.join("nope"));
+    }
+
+    #[test]
+    fn a_duration_carries_its_unit() {
+        assert_eq!(parse_duration("30"), Some(Duration::from_secs(30)));
+        assert_eq!(parse_duration("30s"), Some(Duration::from_secs(30)));
+        assert_eq!(parse_duration("2m"), Some(Duration::from_secs(120)));
+        assert_eq!(parse_duration("1h"), Some(Duration::from_secs(3600)));
+        assert_eq!(parse_duration(" 90 S "), Some(Duration::from_secs(90)));
+        assert_eq!(parse_duration("nonsense"), None);
+        assert_eq!(parse_duration("5d"), None, "days are not a unit we take");
+    }
+
+    /// A number too big to be a `Duration` is something a user types on the way to a smaller one,
+    /// so it has to come back `None` rather than take the app down. `from_secs_f64` **panics** on
+    /// overflow, and this function is `is_duration` — the per-keystroke validator behind the
+    /// Properties editor's `Kind::Duration` rows — so the panic would land before Apply is ever
+    /// pressed.
+    #[test]
+    fn a_duration_too_large_to_hold_is_refused_rather_than_fatal() {
+        for huge in ["99999999999999999999", "1e30", "99999999999999999h"] {
+            assert_eq!(parse_duration(huge), None, "{huge}");
+            assert!(!is_duration(huge), "{huge}");
+        }
+        // Negative and non-finite go the same way, through the same constructor.
+        assert_eq!(parse_duration("-1"), None);
+        assert_eq!(parse_duration("-5m"), None);
+        assert_eq!(parse_duration("inf"), None);
+        assert_eq!(parse_duration("NaN"), None);
     }
 }
