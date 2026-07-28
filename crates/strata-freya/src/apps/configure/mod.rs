@@ -46,7 +46,7 @@ use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
 use strata_core::config::Command;
 
-use crate::apps::configure::views::{ConfigureBody, Footer, TitleBar};
+use crate::apps::configure::views::{use_watch_registration, ConfigureBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::LogCtx;
 use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
@@ -277,7 +277,7 @@ impl App for ConfigureApp {
         // The registration this window is waiting on, watched on the catalog store rather than
         // awaited: the pass belongs to the project window's driver, and its answer arrives on
         // the row. See the module doc.
-        views::use_watch_registration(ctx);
+        use_watch_registration(ctx);
 
         let colors = use_theme().read().colors().clone();
         let config = self.app.config;

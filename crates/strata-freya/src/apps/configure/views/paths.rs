@@ -11,15 +11,16 @@
 use freya::prelude::*;
 
 use crate::apps::configure::ConfigureCtx;
-use crate::components::form::{Row, ValueField};
+use crate::components::divider::Divider;
+use crate::components::form::{form_theme, Row, ValueField, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::Prose;
 
 /// The gap between the toolbar's buttons (their size is the shared control's).
 const TOOL_GAP: f32 = 6.;
-/// A path row's height, and the list's empty state (canvas `min-height: 88px`).
-const ROW_HEIGHT: f32 = 34.;
+/// The list's empty state (canvas `min-height: 88px`). A row's own height is the form's
+/// `FIELD_HEIGHT` — this list holds fields, so it does not get to invent a height for them.
 const EMPTY_HEIGHT: f32 = 88.;
 /// The gap between the label row, the toolbar and the list.
 const STACK_GAP: f32 = 8.;
@@ -92,7 +93,7 @@ struct BrowseButton;
 
 impl Component for BrowseButton {
     fn render(&self) -> impl IntoElement {
-        let form = crate::components::form::form_theme();
+        let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let mut open = use_state(|| false);
 
@@ -194,7 +195,7 @@ struct PathList;
 impl Component for PathList {
     fn render(&self) -> impl IntoElement {
         let colors = use_theme().read().colors().clone();
-        let form = crate::components::form::form_theme();
+        let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let (count, selected) = {
             let draft = ctx.draft.read();
@@ -203,7 +204,7 @@ impl Component for PathList {
 
         // Padded by the border's own width: torin draws a border *inside* the bounds its
         // children already occupy, so a row with a background would otherwise erase it.
-        let mut list = rect()
+        let list = rect()
             .width(Size::fill())
             .vertical()
             .padding(Gaps::new_all(1.))
@@ -218,29 +219,27 @@ impl Component for PathList {
                     .height(Size::px(EMPTY_HEIGHT))
                     .center()
                     .child(
-                        Prose::new("No paths yet — add one to point at your data.")
+                        Prose::new("No paths yet. Add one to point at your data.")
                             .color(form.hint_color),
                     ),
             );
         }
 
-        for index in 0..count {
-            if index > 0 {
-                list = list
-                    .child(crate::components::divider::Divider::horizontal().color(colors.border));
+        // Rows with a rule between them, built as one list of children rather than folded onto
+        // the container a child at a time.
+        list.children((0..count).flat_map(|index| {
+            let rule =
+                (index > 0).then(|| Divider::horizontal().color(colors.border).into_element());
+            let row = PathRow {
+                index,
+                selected: index == selected,
+                key: DiffKey::None,
             }
-            list = list.child(
-                PathRow {
-                    index,
-                    selected: index == selected,
-                    key: DiffKey::None,
-                }
-                // Keyed by position: a removed row must take its buffer with it, or the row
-                // below would inherit what the removed one was showing.
-                .key(index),
-            );
-        }
-        list
+            // Keyed by position, and the row syncs both ways against the draft — see `PathRow`.
+            .key(index)
+            .into_element();
+            rule.into_iter().chain(std::iter::once(row))
+        }))
     }
 }
 
@@ -324,17 +323,14 @@ impl Component for PathRow {
 
         rect()
             .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT))
+            .height(Size::px(FIELD_HEIGHT))
             .cross_align(Alignment::Center)
             .maybe(self.selected, |el| el.background(colors.active))
             .on_pointer_down(move |_| ctx.edit(move |draft| draft.selected = index))
             .child(
                 // No placeholder: the ⓘ beside the label already says what a path can be, and
                 // a fake path sitting in every empty row reads as a value until you look twice.
-                ValueField::new(text)
-                    .bare()
-                    .width(Size::fill())
-                    .height(Size::px(ROW_HEIGHT)),
+                ValueField::new(text).bare().width(Size::fill()),
             )
     }
 }

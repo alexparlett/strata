@@ -36,7 +36,7 @@ mod query;
 pub mod serialize;
 pub mod sql;
 
-pub use catalog::{detect_partitions, TableMeta, TableSpec, ViewMeta};
+pub use catalog::{TableMeta, TableSpec, ViewMeta};
 pub use query::purge_snapshot_root;
 
 /// The Arrow batch type engine results carry (the type-aware source for Copy/Export),
@@ -780,6 +780,17 @@ impl Engine {
             .map_err(|e| format!("register task failed: {e}"))?
     }
 
+    /// The Hive partition keys under `paths`, outermost first — what the Configure window's
+    /// Hive section offers (P4-11). Listed through the session's object store, so it answers for
+    /// a bucket as readily as for a local folder.
+    pub async fn detect_partitions(&self, paths: Vec<String>) -> Vec<String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { catalog::detect_partitions(&ctx, &paths).await })
+            .await
+            .unwrap_or_default()
+    }
+
     /// Drop a registered table.
     pub fn deregister(&self, table: &str) {
         self.cancel_profile(table);
@@ -1159,7 +1170,7 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
     }
     if let Some(v) = &max_temp {
         b = b.with_max_temp_directory_size(
-            bytes("datafusion.runtime.max_temp_directory_size", v)? as u64,
+            bytes("datafusion.runtime.max_temp_directory_size", v)? as u64
         );
     }
     if let Some(v) = &temp_dir {
@@ -1169,10 +1180,7 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
         b = b.with_metadata_cache_limit(bytes("datafusion.runtime.metadata_cache_limit", v)?);
     }
     if let Some(v) = &list_cache {
-        b = b.with_object_list_cache_limit(bytes(
-            "datafusion.runtime.list_files_cache_limit",
-            v,
-        )?);
+        b = b.with_object_list_cache_limit(bytes("datafusion.runtime.list_files_cache_limit", v)?);
     }
     if let Some(v) = &list_ttl {
         let ttl = crate::util::parse_duration(v).ok_or_else(|| {
@@ -1318,7 +1326,10 @@ mod tests {
         let engine = Engine::new(BTreeMap::new());
         // A stale saved override naming a key the app owns must not re-point name resolution at
         // a catalog that was never created (`is_owned_key`).
-        engine.set_config(overrides(&[("datafusion.catalog.default_schema", "elsewhere")]));
+        engine.set_config(overrides(&[(
+            "datafusion.catalog.default_schema",
+            "elsewhere",
+        )]));
         assert_eq!(live(&engine, "datafusion.catalog.default_schema"), SCHEMA);
     }
 

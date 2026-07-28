@@ -16,10 +16,9 @@
 use freya::prelude::*;
 use freya::radio::use_radio_station;
 
-use strata_core::engine::detect_partitions;
-
 use crate::apps::configure::model::PARTITION_TYPES;
 use crate::apps::configure::ConfigureCtx;
+use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{ProjChan, ProjectState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
@@ -45,6 +44,7 @@ impl Component for Hive {
         // the root does not change under an open window.
         let project = use_radio_station::<ProjectState, ProjChan>();
         let root = project.peek().root.clone();
+        let engine = use_consume::<EngineCtx>();
         let (may_partition, on, columns, warn) = {
             let draft = ctx.draft.read();
             (
@@ -85,18 +85,19 @@ impl Component for Hive {
                     .spacing(CONTROL_GAP)
                     .child(Switch::new().toggled(on).on_toggle({
                         let root = root.clone();
-                        move |_| toggle(ctx, &root)
+                        let engine = engine.clone();
+                        move |_| toggle(ctx, engine.clone(), &root)
                     }))
                     .child(
                         Body::new(match on {
                             true => "Reading the folder tree as partition columns",
-                            false => "Ignoring the folder tree — files read as one flat table",
+                            false => "Ignoring the folder tree. Files are read as one flat table",
                         })
                         .color(form.label_color),
                     ),
             )
             .maybe_child(on.then(|| {
-                let mut list = rect()
+                let list = rect()
                     .width(Size::fill())
                     .vertical()
                     .spacing(ROW_GAP)
@@ -107,36 +108,52 @@ impl Component for Hive {
                             .width(Size::fill())
                             .wrap(),
                     );
-                for (index, (name, dtype)) in columns.iter().enumerate() {
-                    list = list.child(
-                        PartitionRow {
-                            index,
-                            name: name.clone(),
-                            dtype: dtype.clone(),
-                            key: DiffKey::None,
-                        }
-                        .key(name.clone()),
-                    );
-                }
-                list.maybe_child(warn.then(|| Warning))
+                list.children(columns.iter().enumerate().map(|(index, (name, dtype))| {
+                    PartitionRow {
+                        index,
+                        name: name.clone(),
+                        dtype: dtype.clone(),
+                        key: DiffKey::None,
+                    }
+                    .key(name.clone())
+                    .into_element()
+                }))
+                .maybe_child(warn.then(|| Warning))
             }))
     }
 }
 
 /// Turn partitioning on or off — **detecting the columns on the way on**, and only when there
 /// are none yet, so a def's own stored types are never overwritten by a fresh scan.
-fn toggle(ctx: ConfigureCtx, root: &std::path::Path) {
+///
+/// The toggle flips at once and the columns arrive after: detection lists the store, which is a
+/// round trip per level and may be a network one. Spawned rather than awaited inline for that
+/// reason, and re-checked inside the write, because the user can flip it back while it runs.
+fn toggle(ctx: ConfigureCtx, engine: EngineCtx, root: &std::path::Path) {
     let paths = ctx.draft.peek().resolved_sources(root);
-    ctx.edit(move |draft| {
+    let detect = {
+        let mut draft = ctx.draft.peek().clone();
         draft.hive_on = !draft.hive_on;
-        if draft.hive_on && draft.partitions.is_empty() {
-            draft.partitions = detect_partitions(&paths)
-                .into_iter()
-                // Text is what DataFusion infers on its own, so it is what an undecided column
-                // starts as — and what the warning below is about.
-                .map(|name| (name, "Utf8".to_string()))
-                .collect();
-        }
+        let detect = draft.hive_on && draft.partitions.is_empty();
+        ctx.edit(move |d| d.hive_on = !d.hive_on);
+        detect
+    };
+    if !detect {
+        return;
+    }
+    spawn(async move {
+        let found = engine.detect_partitions(paths).await;
+        ctx.edit(move |draft| {
+            // Still on, and still empty: a flip back while this ran means the answer is stale.
+            if draft.hive_on && draft.partitions.is_empty() {
+                draft.partitions = found
+                    .into_iter()
+                    // Text is what DataFusion infers on its own, so it is what an undecided
+                    // column starts as, and what the warning below is about.
+                    .map(|name| (name, "Utf8".to_string()))
+                    .collect();
+            }
+        });
     });
 }
 
@@ -161,9 +178,10 @@ impl Component for PartitionRow {
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
-        let mut pill = SegmentedToggle::new().form();
-        for dtype in PARTITION_TYPES {
-            pill = pill.child(
+        let types: Vec<Element> = PARTITION_TYPES
+            .iter()
+            .map(|dtype| {
+                let dtype = *dtype;
                 ToggleSegment::text(dtype)
                     .selected(dtype == self.dtype)
                     .on_press(move |_| {
@@ -172,9 +190,11 @@ impl Component for PartitionRow {
                                 *slot = dtype.to_string();
                             }
                         })
-                    }),
-            );
-        }
+                    })
+                    .into()
+            })
+            .collect();
+        let pill = SegmentedToggle::new().form().children(types);
 
         rect()
             .width(Size::fill())
@@ -220,8 +240,8 @@ impl Component for Warning {
             )
             .child(
                 Caption::new(
-                    "Partition values are read as text — WHERE year = 2024 needs a cast unless \
-                     you set Int or Date.",
+                    "Partition values are read as text, so WHERE year = 2024 needs a cast \
+                     unless you set Int or Date.",
                 )
                 .color(warning)
                 .width(Size::flex(1.))

@@ -218,8 +218,8 @@ fn save(
     // not to claim the save happened, and not to close as though it had.
     if !landed {
         ctx.status.set(Status::Failed(
-            "The table is registered, but the project file could not be written — it will be \
-             gone when this project is reopened."
+            "The table is registered, but the project file could not be written, so it will \
+             be gone when this project is reopened."
                 .into(),
         ));
     } else {

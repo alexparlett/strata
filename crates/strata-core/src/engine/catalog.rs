@@ -141,34 +141,44 @@ pub async fn register_external(
 
 // ---- Hive partition detection (P4-11) ----
 
-/// How deep the walk below looks for partition levels. Hive layouts are a handful of levels
-/// (`year=/month=/day=/hour=`); anything deeper is not a layout this can help with, and the
-/// bound is also what stops a symlink cycle.
+/// How many levels down the listing below will look.
+///
+/// Not a safety valve for a runaway walk: each level is a **network round trip** against
+/// whatever store the table lives on, so this is the cost ceiling. Real Hive layouts are
+/// `year=/month=/day=/hour=` at their deepest, so four is the practical maximum and this is
+/// comfortably past it while still bounding a pathological tree (or a symlink cycle on a local
+/// disk) to a fixed number of requests.
 const MAX_PARTITION_DEPTH: usize = 8;
 
 /// The Hive partition **keys** under `paths`, outermost first — `["year", "month"]` for a lake
 /// laid out as `…/year=2024/month=03/*.parquet`.
 ///
 /// The Configure window's Hive section says it "found `key=value` folders in the source paths",
-/// so it has to have looked. Two ways a path can say so, and both are answered from what is
-/// really there rather than from a guess:
+/// so it has to have looked. Two ways a path can say so:
 ///
 /// - the path **names** the keys itself (`/data/year=*/month=*/`, a glob or a literal), in which
-///   case the pattern is the answer and nothing needs listing;
-/// - the path is a directory, which is walked one level at a time, following the first
-///   `key=value` entry at each level for as long as they keep appearing.
+///   case the pattern is the answer and nothing needs listing at all;
+/// - otherwise it is **listed**, one level at a time, following the first `key=value` prefix at
+///   each level for as long as they keep appearing.
+///
+/// The listing goes through the session's **object store**, not `std::fs`. That is the whole
+/// reason this lives in the engine: a source is a `ListingTableUrl`, and the store behind it is
+/// a local disk today and an S3 or GCS bucket once connections land (W7). `list_with_delimiter`
+/// is the same call for both, and `common_prefixes` is what "a directory" means to a store that
+/// has no directories. A `std::fs::read_dir` walk would have had to be rewritten from scratch
+/// for the first remote table.
 ///
 /// Empty when neither finds anything — which is what keeps the section off a table that isn't
 /// partitioned, rather than offering a toggle over an empty list.
-pub fn detect_partitions(paths: &[String]) -> Vec<String> {
+pub async fn detect_partitions(ctx: &SessionContext, paths: &[String]) -> Vec<String> {
     for path in paths.iter().filter(|p| !p.trim().is_empty()) {
         let named = keys_in_pattern(path);
         if !named.is_empty() {
             return named;
         }
-        let walked = keys_on_disk(Path::new(path.trim()));
-        if !walked.is_empty() {
-            return walked;
+        let listed = keys_in_store(ctx, path.trim()).await;
+        if !listed.is_empty() {
+            return listed;
         }
     }
     Vec::new()
@@ -177,38 +187,43 @@ pub fn detect_partitions(paths: &[String]) -> Vec<String> {
 /// The `key=` segments the path itself spells out, in order.
 fn keys_in_pattern(path: &str) -> Vec<String> {
     path.split(['/', '\\'])
-        .filter_map(|seg| partition_key(seg))
+        .filter_map(partition_key)
         .map(str::to_string)
         .collect()
 }
 
-/// The `key=` levels found by walking down from `dir`, following the first partition-shaped
-/// entry at each level.
-fn keys_on_disk(dir: &Path) -> Vec<String> {
+/// The `key=` levels found by listing down from `path`, following the first partition-shaped
+/// prefix at each level. Silent on any store error: a path that cannot be listed is a path with
+/// no partitions to offer, and the *register* is where an unreadable source is reported.
+async fn keys_in_store(ctx: &SessionContext, path: &str) -> Vec<String> {
+    let Ok(url) = listing_url(path) else {
+        return Vec::new();
+    };
+    let Ok(store) = ctx.runtime_env().object_store(&url) else {
+        return Vec::new();
+    };
+
     let mut keys = Vec::new();
-    let mut here = dir.to_path_buf();
+    let mut prefix = url.prefix().clone();
     for _ in 0..MAX_PARTITION_DEPTH {
-        let Ok(entries) = std::fs::read_dir(&here) else {
+        let Ok(listed) = store.list_with_delimiter(Some(&prefix)).await else {
             break;
         };
-        // Sorted, so the level's key is the same on every machine — `read_dir` order is the
-        // filesystem's, and a level with a stray non-partition directory in it would otherwise
-        // answer differently run to run.
-        let mut level: Vec<_> = entries
-            .flatten()
-            .filter(|e| e.path().is_dir())
-            .map(|e| e.file_name())
-            .collect();
-        level.sort();
-        let found = level.iter().find_map(|name| {
-            let name = name.to_str()?;
-            partition_key(name).map(|key| (key.to_string(), name.to_string()))
+        // Sorted, so the level's key is the same on every run: a store's listing order is its
+        // own, and a level holding one stray non-partition prefix would otherwise answer
+        // differently each time.
+        let mut prefixes = listed.common_prefixes;
+        prefixes.sort();
+        let found = prefixes.into_iter().find_map(|p| {
+            // The key is read out before `p` moves into the pair — a `Path`'s parts borrow it.
+            let key = partition_key(p.parts().next_back()?.as_ref())?.to_string();
+            Some((key, p))
         });
-        let Some((key, entry)) = found else {
+        let Some((key, next)) = found else {
             break;
         };
         keys.push(key);
-        here = here.join(entry);
+        prefix = next;
     }
     keys
 }
@@ -746,25 +761,38 @@ mod tests {
 
     // ---- Hive partition detection ----
 
+    /// Detection now lists through the session's object store rather than `std::fs`, so these
+    /// go through a real `SessionContext` — which for a local path is the store DataFusion
+    /// registers for `file://`, the same code path a bucket will take.
+    fn detect(paths: &[&str]) -> Vec<String> {
+        let ctx = SessionContext::new();
+        let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(detect_partitions(&ctx, &paths))
+    }
+
     #[test]
     fn a_path_that_names_its_partition_keys_needs_no_listing() {
         assert_eq!(
-            detect_partitions(&["/data/events/year=*/month=*/*.parquet".into()]),
+            detect(&["/data/events/year=*/month=*/*.parquet"]),
             vec!["year", "month"]
         );
         assert_eq!(
-            detect_partitions(&["/data/events/year=2024/month=03/".into()]),
+            detect(&["/data/events/year=2024/month=03/"]),
             vec!["year", "month"]
         );
     }
 
     #[test]
-    fn a_directory_is_walked_for_its_partition_levels() {
+    fn a_directory_is_listed_for_its_partition_levels() {
         let root = tmp("hive_walk");
         std::fs::create_dir_all(root.join("year=2024/month=03")).unwrap();
         std::fs::create_dir_all(root.join("year=2025/month=01")).unwrap();
         assert_eq!(
-            detect_partitions(&[root.to_string_lossy().into_owned()]),
+            detect(&[&format!("{}/", root.to_string_lossy())]),
             vec!["year", "month"]
         );
     }
@@ -773,15 +801,15 @@ mod tests {
     fn an_unpartitioned_directory_finds_nothing_rather_than_guessing() {
         let root = tmp("hive_flat");
         std::fs::create_dir_all(root.join("2024/03")).unwrap();
-        assert!(detect_partitions(&[root.to_string_lossy().into_owned()]).is_empty());
+        assert!(detect(&[&format!("{}/", root.to_string_lossy())]).is_empty());
     }
 
     #[test]
     fn a_segment_whose_key_is_not_an_identifier_is_not_a_partition() {
         // `=` shows up in perfectly ordinary names; only an identifier can become a column.
-        assert!(detect_partitions(&["/data/a b=1/x.parquet".into()]).is_empty());
-        assert!(detect_partitions(&["/data/=1/x.parquet".into()]).is_empty());
-        assert!(detect_partitions(&["/data/2024=1/x.parquet".into()]).is_empty());
+        assert!(detect(&["/data/a b=1/x.parquet"]).is_empty());
+        assert!(detect(&["/data/=1/x.parquet"]).is_empty());
+        assert!(detect(&["/data/2024=1/x.parquet"]).is_empty());
     }
 
     // ---- JSON shapes ----

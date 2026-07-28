@@ -8,14 +8,18 @@ use freya::prelude::*;
 
 use crate::apps::configure::model::FormatId;
 use crate::apps::configure::ConfigureCtx;
-use crate::components::form::{Row, ValueField};
+use crate::components::form::{Row, ValueField, FIELD_HEIGHT};
 use crate::components::typography::MonoValue;
 
 /// The canvas's `width: 128px` on the format picker, and the gap between the two controls.
+///
+/// Both are the **layout's**, applied by [`Identity`] to the columns it divides — the two rows
+/// inside know nothing about how wide they are. Neither states a *height*: every control in
+/// this window stands at the form's own `FIELD_HEIGHT`, so a form never has two field heights
+/// in it. (The canvas draws this pair a few pixels taller than the rest; matching that would
+/// mean this row diverging from every other form in the app, which is the worse trade.)
 const FORMAT_WIDTH: f32 = 128.;
 const COLUMN_GAP: f32 = 12.;
-/// The canvas stands this row's two controls a touch taller than a form field.
-const CONTROL_HEIGHT: f32 = 34.;
 
 #[derive(PartialEq)]
 pub struct Identity;
@@ -29,7 +33,7 @@ impl Component for Identity {
             .cross_align(Alignment::End)
             .spacing(COLUMN_GAP)
             .child(rect().width(Size::flex(1.)).child(NameField))
-            .child(FormatPicker)
+            .child(rect().width(Size::px(FORMAT_WIDTH)).child(FormatPicker))
     }
 }
 
@@ -54,7 +58,6 @@ impl Component for NameField {
         Row::new("TABLE NAME").required().child(
             ValueField::new(text)
                 .width(Size::fill())
-                .height(Size::px(CONTROL_HEIGHT))
                 .placeholder("my_table"),
         )
     }
@@ -72,37 +75,33 @@ impl Component for FormatPicker {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
         let current = ctx.draft.read().format.clone();
+        let options: Vec<Element> = FormatId::OFFERED
+            .iter()
+            .map(|format| {
+                let format = format.clone();
+                MenuItem::new()
+                    .selected(format == current)
+                    .on_press({
+                        let format = format.clone();
+                        move |_| {
+                            let format = format.clone();
+                            ctx.edit(move |draft| draft.format = format);
+                        }
+                    })
+                    .child(MonoValue::new(format.label()))
+                    .into()
+            })
+            .collect();
 
-        rect().width(Size::px(FORMAT_WIDTH)).child(
-            Row::new("FORMAT").child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::px(CONTROL_HEIGHT))
-                    .child(
-                        Select::new()
-                            .selected_item(MonoValue::new(current.label()))
-                            .children(
-                                FormatId::OFFERED
-                                    .iter()
-                                    .map(|format| {
-                                        let format = format.clone();
-                                        let selected = format == current;
-                                        MenuItem::new()
-                                            .selected(selected)
-                                            .on_press({
-                                                let format = format.clone();
-                                                move |_| {
-                                                    let format = format.clone();
-                                                    ctx.edit(move |draft| draft.format = format);
-                                                }
-                                            })
-                                            .child(MonoValue::new(format.label()))
-                                            .into()
-                                    })
-                                    .collect::<Vec<Element>>(),
-                            ),
-                    ),
-            ),
+        Row::new("FORMAT").child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(FIELD_HEIGHT))
+                .child(
+                    Select::new()
+                        .selected_item(MonoValue::new(current.label()))
+                        .children(options),
+                ),
         )
     }
 }
