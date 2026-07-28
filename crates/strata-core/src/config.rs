@@ -256,6 +256,15 @@ settings_merge!(
 pub const COL_WIDTH_MIN: f64 = 56.;
 pub const COL_WIDTH_MAX: f64 = 2000.;
 
+/// The floor for [`Settings::max_history`] — the smallest history a project can keep.
+///
+/// Named here for the same reason as the column-width bounds: the Settings ▸ System field has
+/// to offer exactly the range its consumer honours, and the app's `history_cap` floors at this
+/// number. `0` is not among them, and the reason is stronger than a lower bound usually is —
+/// the cap drives the **rotation**, so a zero would have the next open rewrite
+/// `history.jsonl` down to nothing.
+pub const HISTORY_MIN: usize = 1;
+
 fn default_theme() -> String {
     DEFAULT_THEME.to_string()
 }

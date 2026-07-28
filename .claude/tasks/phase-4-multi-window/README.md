@@ -13,18 +13,19 @@ theme preview (`state/theme_preview.rs`) — and one window path everything open
 **`State::create_global`**, **not** a per-window Radio station; native close uses **`winit
 CloseRequested`** (no objc), and the one place objc *is* reached for is the fork's
 `set_window_parent` (P4-03 pins Settings above the window that opened it). What's left in this
-phase is the settings **categories** (P4-06…P4-09, Appearance and Data-display having landed with
-P4-04 / P4-05) and the config modal — plus P4-13's open/create UI. **P4-10 settled how a window
-opened *on something* behaves**: an export window carries the run it was opened on, so it is a
-child window with deliberately **no** single-instance rule (focusing an open one would show the
-wrong run), and it **pins** the snapshot it reads for its whole life — the RAII pin in AGENTS.md
-§2 exists because of it.
+phase is the settings **categories** (P4-07…P4-09, Appearance, Data-display and System having
+landed with P4-04 / P4-05 / P4-06) and the config modal — plus P4-13's open/create UI. **P4-10
+settled how a window opened *on something* behaves**: an export window carries the run it was
+opened on, so it is a child window with deliberately **no** single-instance rule (focusing an open
+one would show the wrong run), and it **pins** the snapshot it reads for its whole life — the RAII
+pin in AGENTS.md §2 exists because of it.
 **P4-04 settled how every later pane commits**: the draft is diffed per-field against its seed
 (`Settings::merge_onto`, exhaustive by compiler check), never written wholesale, so a setting
 another window wrote while Settings was open survives Apply — add a field, and the build tells you
-to merge it. **P4-05 settled what every later pane is made of**: `views::field`'s `SettingList` /
-`Setting` / `NumberField`, so a pane carries its own settings and nothing about the rhythm between
-them. The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebuild.
+to merge it. **P4-05 settled what every later pane is made of**: `components::form` — a pane is a
+`Form::preferences` of `Row`s, so it carries its own settings and nothing about the rhythm between
+them (the module composes `Form` > `Row` > control, the register being a `Variant` on the form).
+The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebuild.
 
 > **Pull P4-15 before the remaining writers.** `.strata` write failures are reported through
 > `tracing` and nowhere the user can see, and **P4-11 / P4-12 each add a new mutation site**
@@ -45,7 +46,7 @@ them. The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Frey
 | P4-03 | Settings window shell (draft/save, live theme, single-instance) | ✅ | W1/U12 | P4-01 |
 | P4-04 | Settings ▸ Appearance | ✅ | U12 | P4-03 |
 | P4-05 | Settings ▸ Data-display | ✅ | U12 | P4-03 |
-| P4-06 | Settings ▸ System (+ history limit) | ⬜ | W3/U12 | P4-03 |
+| P4-06 | Settings ▸ System (+ history limit) | ✅ | W3/U12 | P4-03 |
 | P4-07 | Settings ▸ Engine (properties editor) | ⬜ | W2 | P4-03 |
 | P4-08 | Settings ▸ Keymap (rebindable) | ⬜ | W4 | P4-03, P2-20 |
 | P4-09 | Settings search | ⬜ | W3 | P4-03 |

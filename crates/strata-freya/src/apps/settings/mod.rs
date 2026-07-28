@@ -21,8 +21,11 @@
 //! entry points. P4-04 added the first pane ([`views::ThemePane`], the theme picker) and P4-05
 //! the second ([`views::DataDisplayPane`]), and moved the row vocabulary every pane is built
 //! from into [`crate::components::form`] — a pane is a `Form::preferences` of `Row`s, and
-//! nothing about the rhythm between them lives here. The remaining categories belong to
-//! P4-06…P4-08 and render a placeholder until those land.
+//! nothing about the rhythm between them lives here. P4-06 added the third
+//! ([`views::SystemPane`]), and P4-07 the fourth ([`views::EnginePane`]) — which is the one
+//! category that is a *surface* rather than a list of settings, so it is the only page to take
+//! [`views::Pane`]'s two opt-outs. Keymap belongs to P4-08 and renders a placeholder until it
+//! lands.
 
 mod model;
 mod views;
@@ -35,7 +38,7 @@ use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use strata_core::config::{Command, Settings};
 
 use crate::apps::settings::views::{
-    DataDisplayPane, EnginePane, Pane, PropRows, SettingsChrome, ThemePane,
+    DataDisplayPane, EnginePane, Pane, PropRows, SettingsChrome, SystemPane, ThemePane,
 };
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
@@ -364,8 +367,8 @@ impl App for SettingsApp {
 
 /// The category pane's content — what [`SettingsChrome`] wraps in the scroll frame and the
 /// breadcrumb. One per [`Route`]; each is a placeholder until its own task lands. `ThemePane`
-/// (P4-04) and `DataDisplayPane` (P4-05) have landed and live in [`views`], so they aren't in
-/// this list.
+/// (P4-04), `DataDisplayPane` (P4-05) and `SystemPane` (P4-06) have landed and live in
+/// [`views`], so they aren't in this list.
 macro_rules! panes {
     ($( $Comp:ident => $owner:literal, $what:literal ),* $(,)?) => {
         $(
@@ -382,6 +385,5 @@ macro_rules! panes {
 }
 
 panes! {
-    SystemPane => "P4-06", "System preferences",
     KeymapPane => "P4-08", "Keyboard shortcuts",
 }
