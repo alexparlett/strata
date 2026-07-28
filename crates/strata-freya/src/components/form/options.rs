@@ -26,7 +26,7 @@ use freya::prelude::*;
 
 use crate::components::form::{Form, Note, NumberField, Row, ValueField, FIELD_HEIGHT};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
-use crate::components::typography::MonoValue;
+use crate::components::typography::{MonoValue, Prose};
 
 /// Field boxes, from the canvas: a one-character field, a short text field, a number, the
 /// custom box beside a segmented control, and a select (the one control the canvas draws 32
@@ -330,10 +330,12 @@ impl<E: Clone + PartialEq + 'static> Component for ToggleControl<E> {
                 .cross_align(Alignment::Center)
                 .spacing(12.)
                 .child(switch)
-                .child(
-                    crate::components::typography::Body::new(hint)
-                        .color(crate::components::form::form_theme().hint_color),
-                )
+                // `Prose` at the ambient colour, which is how the export window sets the
+                // sentence beside its own switch. Not the hint tone: that is the eyebrow's
+                // register, pitched to recede under a control, and this is a sentence the reader
+                // is meant to read — set in it, the row's own explanation is dimmer than the
+                // label above it.
+                .child(Prose::new(hint))
                 .into_element(),
         }
     }
