@@ -65,6 +65,14 @@ wrong about something:
   row has any business holding. So `views::configure_launch` is the drop-confirm shape: the
   trigger sets `ConfigureRequest` and stops, and `ConfigureLauncher` (mounted at the project root,
   where those handles live) acts on it. Adding a trigger is setting the slot.
+- **Closing discards the draft, and does not ask.** Cancel, Esc and the red button all close
+  outright — including mid-registration, where the pass belongs to the project window's driver
+  and lands on the catalog row whether this window is watching or not. A dirty-close confirm was
+  considered and **declined** (Alex): nothing here is written until Save, so what a close costs
+  is a form, not data, and the window is light enough that guarding it would be friction on
+  every dismissal to protect the rare one. Don't add one back without a reason that isn't
+  symmetry with the T2 confirm — that dialog exists for *running queries*, which this window
+  never has.
 - **Browse is one button with two answers.** `NSOpenPanel` is configured for files *or* folders,
   never both, so the canvas's single "Browse… (file or folder)" is a button opening a two-item
   menu. Picking files is multi-select, because a table *is* many paths.

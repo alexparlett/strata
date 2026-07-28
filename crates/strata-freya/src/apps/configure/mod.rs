@@ -23,6 +23,11 @@
 //! four blocks to keep in step for one reskin, which is the drift a shared vocabulary exists to
 //! prevent. (The three windows that still carry one predate this and should follow.)
 //!
+//! **Closing discards the draft, deliberately without asking.** Nothing here is written until
+//! Save, so a close costs a form rather than data — and that stays true mid-registration, where
+//! the pass belongs to the project window's scan driver and answers on the catalog row whether
+//! this window is still watching or not. A dirty-close confirm was considered and declined.
+//!
 //! **Save does not register anything itself.** It writes the def, persists it, and asks the
 //! project window's one scan driver for a pass over that table
 //! ([`refresh_table`](crate::apps::project::state::refresh_table)) — the same pass project open
