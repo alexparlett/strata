@@ -180,6 +180,7 @@ mod tests {
     use strata_model::{ColRef, SourceFormat, TableDef};
 
     use super::*;
+    use crate::apps::configure::ConfigureTarget;
     use crate::apps::project::contexts::EngineCtx;
     use crate::apps::project::state::{ProjChan, ProjectState, ScanRequest, ScanScope};
     use crate::apps::project::views::{DropTarget, ProfileTarget};
@@ -235,6 +236,9 @@ mod tests {
                 r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
                 r.provide_root_context(|| State::create(None::<DropTarget>));
                 r.provide_root_context(|| State::create(None::<ProfileTarget>));
+                // The Configure-window request slot (P4-11): the TABLES `+` and the row menus
+                // set it, and the project root's launcher — not mounted here — acts on it.
+                r.provide_root_context(|| State::create(None::<ConfigureTarget>));
                 r.provide_root_context(|| {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
                 });

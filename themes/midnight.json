@@ -572,6 +572,9 @@
       "hint_color": {
         "reference": "text_placeholder"
       },
+      "required_color": {
+        "reference": "text_placeholder"
+      },
       "divider_fill": {
         "reference": "border"
       },

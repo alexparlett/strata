@@ -31,7 +31,7 @@ use std::path::PathBuf;
 use freya::radio::RadioChannel;
 use strata_core::engine::{TableMeta, ViewMeta};
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
-use strata_model::{CatalogKind, ColumnInfo, SavedQuery, SourceFormat, TableDef, ViewDef};
+use strata_model::{CatalogKind, ColumnInfo, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::query::ScanId;
@@ -735,6 +735,7 @@ impl ProjectState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strata_model::SourceFormat;
 
     fn table_def(name: &str) -> TableDef {
         TableDef {

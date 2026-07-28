@@ -31,6 +31,7 @@ use freya::prelude::*;
 use freya::winit::window::WindowId;
 use strata_core::project::STRATA_DIR;
 
+use crate::apps::configure::ConfigureTarget;
 use crate::apps::launcher::LauncherApp;
 use crate::apps::project::ProjectApp;
 use crate::state::{write_config, AppCtx, ConfigChan, ConfigStation};
@@ -54,15 +55,28 @@ pub enum WindowKind {
     Export {
         owner: WindowId,
     },
+    /// A Configure window, pinned above the project window that opened it — which it names, so
+    /// it can close when that window does.
+    ///
+    /// **One per target**, unlike Export: it is opened on a *def*, which is shared mutable
+    /// state, so two windows on one def would both write it and the second would revert the
+    /// first. Two different tables at once is fine — see [`crate::platform::configure`].
+    Configure {
+        owner: WindowId,
+        target: ConfigureTarget,
+    },
 }
 
 impl WindowKind {
     /// Whether this is a window the user *works* in — a project or the welcome screen.
-    /// Neither Settings nor an Export window is: each is a panel over one of these, so it can
+    /// None of Settings, Export or Configure is: each is a panel over one of these, so it can
     /// neither be the app's last window nor keep the launcher from taking a closing project's
     /// place.
     fn is_workspace(&self) -> bool {
-        !matches!(self, Self::Settings | Self::Export { .. })
+        !matches!(
+            self,
+            Self::Settings | Self::Export { .. } | Self::Configure { .. }
+        )
     }
 }
 

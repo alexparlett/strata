@@ -18,7 +18,7 @@ use std::time::SystemTime;
 
 use strata_core::engine::profile::CatalogProfile;
 use strata_core::util::{ago, fmt_int};
-use strata_model::{CatalogKind, ColRef, ColumnInfo, Kind, SourceFormat, Stat, StatKey};
+use strata_model::{CatalogKind, ColRef, ColumnInfo, Kind, Stat, StatKey};
 
 use crate::apps::project::query::ScanId;
 use crate::apps::project::state::{ProjectState, Reg};
@@ -485,6 +485,7 @@ mod tests {
     use strata_model::{TableDef, ViewDef};
 
     use super::*;
+    use strata_model::SourceFormat;
 
     fn col(name: &str, dtype: &str, kind: Kind, stats: Vec<Stat>) -> ColumnInfo {
         ColumnInfo {

@@ -471,7 +471,7 @@ strata_components! {
     // list draws between rows, and a note's box. What a row *controls* is the caller's child,
     // so no control is dressed here.
     "form" => FormThemePreference {
-        title_color, label_color, hint_color, divider_fill, note_background,
+        title_color, label_color, hint_color, required_color, divider_fill, note_background,
         note_border_fill, note_color,
     },
     // The segmented toggle (results Table/Chart switcher, the plan tabs, a form's pill): the

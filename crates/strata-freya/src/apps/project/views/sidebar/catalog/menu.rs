@@ -37,11 +37,14 @@ use freya::radio::{use_radio_station, RadioStation};
 use strata_model::{CatalogKind, Origin, SavedQuery};
 use uuid::Uuid;
 
+use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{
     refresh_table, use_catalog, use_catalog_rescan, Catalog, CatalogRescan, Chan, ProjChan,
     ProjectState, Reg, SessionState,
 };
-use crate::apps::project::views::{use_profile_actions, DropTarget, ProfileActions, ProfileTarget};
+use crate::apps::project::views::{
+    use_profile_actions, ConfigureRequest, DropTarget, ProfileActions, ProfileTarget,
+};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Prose;
@@ -82,6 +85,9 @@ pub struct CatalogActions {
     /// The sheet's destructive tone, resolved here because the menu itself is built from an
     /// event handler, where no hook — `use_theme` included — may run.
     pub danger: Color,
+    /// The Configure-window request slot (P4-11). Setting it *is* the action — the root's
+    /// `ConfigureLauncher` holds the handles a window needs, so a row does not have to.
+    pub configure_target: ConfigureRequest,
 }
 
 /// Gather this row's action handles from the window's stores + context.
@@ -95,6 +101,7 @@ pub fn use_catalog_actions() -> CatalogActions {
         drop_target: use_consume::<State<Option<DropTarget>>>(),
         profile: use_profile_actions(),
         danger: use_theme().read().colors().error,
+        configure_target: use_consume::<ConfigureRequest>(),
     }
 }
 
@@ -119,10 +126,20 @@ impl CatalogActions {
 
     /// An item whose target isn't built yet: rendered, disabled, so the menu shows the row's
     /// full vocabulary and the shape can't drift when the owning task lands.
+    #[allow(dead_code)]
     fn parked(&self, icon: IconName, label: impl Into<String>) -> MenuButton {
         MenuButton::new()
             .enabled(false)
             .child(menu_row(icon, label))
+    }
+
+    /// Ask for the **Configure** window on `target` — a new table, or this row's def.
+    ///
+    /// Sets the slot and stops, like the drop item: the project root's `ConfigureLauncher` is
+    /// the one thing that opens the window, so the row menu and the TABLES `+` cannot drift.
+    pub fn configure(&self, target: ConfigureTarget) {
+        let mut slot = self.configure_target;
+        slot.set(Some(target));
     }
 
     /// Has the engine actually answered for this row? The precondition for offering a **scan**:
@@ -226,8 +243,12 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
                 )
                 .enabled(!scanning)
         })
-        // P4-11 owns the table-config modal.
-        .child(actions.parked(IconName::Gear, "Configure"))
+        .child({
+            let name = name.clone();
+            actions.item(IconName::Gear, "Configure", move |a| {
+                a.configure(ConfigureTarget::Edit(name.clone()))
+            })
+        })
         .child(Divider::menu())
         .child(actions.danger("Drop table", move |a| {
             let mut slot = a.drop_target;

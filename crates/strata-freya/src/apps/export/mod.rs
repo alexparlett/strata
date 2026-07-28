@@ -41,9 +41,7 @@ use crate::platform::{self, WindowKind};
 use crate::state::{use_share_config, AppCtx};
 use crate::theme::{peek_selection, use_strata_theme, window_background};
 
-pub use model::{
-    Choice, Control, Edit, ExportDraft, ExportTarget, FormatId, Group, Make, ScopeChoice, TextField,
-};
+pub use model::{ExportDraft, ExportTarget, FormatId, ScopeChoice};
 
 // `%[no_ext]`: the window's dress is read by its sibling views (title bar · formats · options ·
 // partition · preview · footer) rather than by one `Export` component, so there is no type for

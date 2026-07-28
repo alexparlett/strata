@@ -3,11 +3,13 @@
 //! which window an open lands in, and the two child windows' pinning — Settings'
 //! single-instance pin, and the Export window's owner binding.
 
+pub mod configure;
 pub mod export;
 pub mod open;
 pub mod settings;
 pub mod windows;
 
+pub use configure::{open_configure, use_configure_pin};
 pub use export::{open_export, use_export_pin};
 pub use open::{create_global_open, FocusedOpen, OpenCtx, OpenTarget};
 pub use settings::{open_settings, use_settings_pin};

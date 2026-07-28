@@ -16,7 +16,6 @@
 
 mod catalog;
 mod diagnostics;
-mod form;
 mod history;
 mod profile;
 mod query_error;
@@ -29,7 +28,6 @@ pub use catalog::{
     SavedQuery, SourceFormat, TableDef, ViewDef,
 };
 pub use diagnostics::{Diagnostic, Severity};
-pub use form::ConfigForm;
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;
 pub use query_error::QueryError;

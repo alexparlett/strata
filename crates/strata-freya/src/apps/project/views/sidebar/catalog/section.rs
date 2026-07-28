@@ -17,6 +17,10 @@ pub struct CatalogSection {
     count: usize,
     /// Drop the header's leading gap — the first section already sits under the scroll padding.
     first: bool,
+    /// A control at the header's trailing edge — TABLES' `+`. A **sibling** of the collapse
+    /// press, never inside it: a built-in's press does not stop propagation, so a button nested
+    /// in the pressable header would collapse the section on its way through.
+    action: Option<Element>,
     children: Vec<Element>,
     theme: CatalogTheme,
 }
@@ -27,9 +31,16 @@ impl CatalogSection {
             label,
             count,
             first: false,
+            action: None,
             children: Vec::new(),
             theme,
         }
+    }
+
+    /// A control at the header's trailing edge — see [`action`](Self::action).
+    pub fn action(mut self, action: impl IntoElement) -> Self {
+        self.action = Some(action.into_element());
+        self
     }
 
     pub fn first(mut self) -> Self {
@@ -49,12 +60,13 @@ impl Component for CatalogSection {
         let mut open = use_state(|| true);
         let top = if self.first { 4. } else { 12. };
 
-        let header = rect()
-            .width(Size::fill())
+        // The pressable part is the label block, and the action sits beside it — so pressing the
+        // action cannot also collapse the section.
+        let title = rect()
+            .width(Size::flex(1.))
             .horizontal()
             .cross_align(Alignment::Center)
             .spacing(8.)
-            .padding(Gaps::new(top, 8., 8., 8.))
             .on_press(move |_| {
                 let now = *open.peek();
                 open.set(!now);
@@ -72,6 +84,16 @@ impl Component for CatalogSection {
                 Eyebrow::new(format!("{} · {}", self.label, self.count))
                     .color(self.theme.label_color),
             );
+
+        let header = rect()
+            .width(Size::fill())
+            .horizontal()
+            .content(Content::Flex)
+            .cross_align(Alignment::Center)
+            .spacing(8.)
+            .padding(Gaps::new(top, 8., 8., 8.))
+            .child(title)
+            .maybe_child(self.action.clone());
 
         rect()
             .width(Size::fill())

@@ -44,6 +44,7 @@
 //! Each is one constant here when the design settles it.
 
 mod field;
+mod options;
 mod row;
 
 use freya::prelude::*;
@@ -51,6 +52,7 @@ use freya::prelude::*;
 use crate::components::divider::Divider;
 
 pub use field::{DirectoryField, NumberField, ValueField, FIELD_HEIGHT};
+pub use options::{Choice, Control, Group, Make, OptionList, TextField};
 pub use row::{Note, Row};
 
 // `%[no_ext]`: the form's dress is read by its pieces (the form, its rows, its fields) rather
@@ -69,6 +71,10 @@ define_theme!(
         /// and the inline subtext under a preferences row's title. One field because it is one
         /// role: what a row says about itself, pitched under the label.
         hint_color: Color,
+        /// The `REQUIRED` marker beside a label ([`Row::required`]). Its own field rather than
+        /// the hint's: a hint is an explanation the reader may skip, and this is a constraint on
+        /// what they can do next, so the two do not have to move together.
+        required_color: Color,
         /// The rule between two rows of a [`Form::preferences`].
         divider_fill: Color,
         /// [`Note`]'s box — the same raised inset every other boxed thing in a form sits on, so
@@ -84,7 +90,7 @@ define_theme!(
 
 /// Read the form dress. Every piece in this module resolves its colours through here, so a
 /// form's look is one theme rather than one per window (AGENTS.md §3).
-pub(crate) fn form_theme() -> FormTheme {
+pub fn form_theme() -> FormTheme {
     get_theme!(&None::<FormThemePartial>, FormThemePreference, "form")
 }
 

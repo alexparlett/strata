@@ -1,6 +1,6 @@
 # P4-11 · Configure-table window (register / edit + import options)
 
-**Phase:** 4 · **Status:** ⬜ `[core ~]` · **DEV_TASKS:** U14 / D7 / D8 · **Depends on:** —
+**Phase:** 4 · **Status:** ✅ `[core ✓]` · **DEV_TASKS:** U14 / D7 / D8 · **Depends on:** —
 
 ## Goal
 The window that registers and edits an external table: name, format, source paths, format-specific
@@ -20,21 +20,16 @@ The window that registers and edits an external table: name, format, source path
 > silence is exactly what P4-15 exists to remove, and a registration the project file never heard
 > about reverts on the next open.
 
-## Current state
-Not built. The catalog's **Configure** menu item is parked
-([catalog/menu.rs:230](crates/strata-freya/src/apps/project/views/sidebar/catalog/menu.rs:230)),
-`ProjectState::name_in_use` and `upsert_table` / `remove_table` are waiting for it, and
-`table_registered` already names this as one of its three callers.
+## Built
+`apps/configure/` (root · model · seven views), `platform/configure.rs`, and the two triggers: a
+catalog row's **Configure** and the TABLES section's **+**. Core grew the typed
+`SourceFormat`/`CsvRead`/`JsonRead` the def and the spec now carry, `detect_partitions`, and the
+read-option wiring in `register_external`.
 
-Core is **partly** there: `TableSpec` / `register_external` register a multi-path listing table with
-typed Hive partition columns, and P3-07 owns its failure messages. What is missing is everything the
-import block needs — `TableSpec` carries no read options, so `CsvFormat::default()` /
-`JsonFormat::default()` are constructed with nothing on them. Hence `[core ~]`, not `[core ✓]`.
-
-`strata_model::form::ConfigForm` is the Dioxus-era draft and says in its own doc comment that it
-goes with this task. **Delete it** (and `strata-model/src/form.rs` with it, if it is then empty) —
-the draft belongs to the window, exactly as `ExportDraft` does. Its `all_dirs` / `file_count` /
-`scanning` / `scan_error` fields are the pre-flight scan D9 already dropped; do not rebuild them.
+`strata_model::form::ConfigForm` — the Dioxus-era draft, which said in its own doc comment that it
+went with this task — is **deleted**, and `strata-model/src/form.rs` with it: a draft belongs to
+its window, exactly as `ExportDraft` does. Its `all_dirs` / `file_count` / `scanning` /
+`scan_error` fields were the pre-flight scan D9 already dropped, and are not rebuilt.
 
 ## Location: local disk only — do not build the toggle
 The canvas opens with a **LOCATION** segmented control (Local disk · Object store) and, in the
@@ -47,6 +42,32 @@ Leave the section out entirely rather than shipping it disabled: everything down
 `pathsLabel` / `pathPlaceholder`) collapses to its local branch, so the path list is simply the
 path list and the label is simply `SOURCE PATHS`. **W7 ▸ 04** adds the toggle and the remote
 branch back; its file records what it re-introduces.
+
+## Settled during the build
+
+Four things this task decided that were not in the plan, each because the plan turned out to be
+wrong about something:
+
+- **No per-window theme.** The window carries no `define_theme!` block of its own. Its chrome is
+  the app's **sheet** (`background` · `surface_*` · `border` · the four semantic slots) and
+  everything form-shaped is the shared `form` theme. A sixteen-field block per window resolving to
+  the same handful of sheet slots is four blocks to keep in step for one reskin — which is exactly
+  what a shared vocabulary exists to prevent. **The three windows that still carry one (export,
+  settings, launcher) predate this and should follow**; that is a task of its own, and until it
+  lands the app is inconsistent in the direction of the new rule rather than the old one.
+- **`REQUIRED` is a `Row`, not a label.** The marker went on `components::form::Row::required()`
+  in both registers, beside the title and the explanation it belongs with, rather than as a
+  per-window label component. A window that drew its own would be a window whose label line drifts
+  from every other one's.
+- **A trigger sets a slot; one place opens the window.** A catalog row's menu is built inside an
+  event handler, where no hook may run, so every handle it will need has to be resolved at the
+  *row's* render — and opening a window needs the window's app-globals, engine and log, which no
+  row has any business holding. So `views::configure_launch` is the drop-confirm shape: the
+  trigger sets `ConfigureRequest` and stops, and `ConfigureLauncher` (mounted at the project root,
+  where those handles live) acts on it. Adding a trigger is setting the slot.
+- **Browse is one button with two answers.** `NSOpenPanel` is configured for files *or* folders,
+  never both, so the canvas's single "Browse… (file or folder)" is a button opening a two-item
+  menu. Picking files is multi-select, because a table *is* many paths.
 
 ## Shape: a window, not a modal
 The canvas is a 620 × 640 **window** — traffic lights, drag bar, resize grip, its own footer — not
@@ -246,16 +267,22 @@ reach. Views written against the old name break — that is the user's edit, and
 their rows through the normal re-registration path; do not try to rewrite their SQL.
 
 ## Acceptance
-- [ ] Register a table over one or more paths / globs with a format and typed Hive partition
+- [x] Register a table over one or more paths / globs with a format and typed Hive partition
       columns; the REQUIRED badges and the resolution tooltip are present; a failure shows
       `register_external`'s own message and leaves the window open.
-- [ ] CSV shows its core group (header · delimiter) and ADVANCED (quote · escape · comment ·
-      newlines-in-values · truncated rows · infer rows · compression); JSON shows shape as core and
+- [x] CSV shows its core group (header · delimiter) and ADVANCED (quote · escape · comment ·
+      newlines-in-values · ragged rows · infer rows · compression); JSON shows shape as core and
       infer-rows + compression as ADVANCED; parquet and arrow show no import block.
-- [ ] Every one of those values reaches `TableSpec`, changes what is read, and survives a
+- [x] Every one of those values reaches `TableSpec`, changes what is read, and survives a
       project reopen. A gzipped CSV registers from a `.csv.gz` file.
-- [ ] A whole-document JSON array registers and queries with shape set to array.
-- [ ] Configure on a table already open in a Configure window focuses that window.
+- [x] A whole-document JSON array registers and queries with shape set to array.
+- [x] Configure on a table already open in a Configure window focuses that window.
+
+**Tests.** 12 engine round-trips (`strata-core::engine::read_options_tests`) asserting each
+option's *effect* rather than its call; 5 serde tests over the persisted format (including the
+legacy bare-`"format"` string and a legacy `avro`); 4 over partition detection; 19 over the draft
+(`apps::configure::model`). The whole workspace stays green, and `schema_in_sync` covers the one
+theme field this added (`form.required_color`).
 
 ## Freya / references
 - Design: `Configure.dc.html` (markup + the `cfg` VM), `strata-windows.js` `SW.importOptsVM` /

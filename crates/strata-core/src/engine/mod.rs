@@ -36,7 +36,7 @@ mod query;
 pub mod serialize;
 pub mod sql;
 
-pub use catalog::{TableMeta, TableSpec, ViewMeta};
+pub use catalog::{detect_partitions, TableMeta, TableSpec, ViewMeta};
 pub use query::purge_snapshot_root;
 
 /// The Arrow batch type engine results carry (the type-aware source for Copy/Export),

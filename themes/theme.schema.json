@@ -1423,6 +1423,9 @@
             "hint_color": {
               "$ref": "#/$defs/colorPref"
             },
+            "required_color": {
+              "$ref": "#/$defs/colorPref"
+            },
             "divider_fill": {
               "$ref": "#/$defs/colorPref"
             },

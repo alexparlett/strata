@@ -17,6 +17,8 @@ pub enum IconName {
     Stop,
     Rows,
     Plus,
+    /// Remove — the Configure window's source-path toolbar, paired with [`Plus`](Self::Plus).
+    Minus,
     ChevronDown,
     ChevronUp,
     ChevronLeft,
@@ -73,6 +75,7 @@ impl IconName {
             IconName::Stop => STOP,
             IconName::Rows => ROWS,
             IconName::Plus => PLUS,
+            IconName::Minus => MINUS,
             IconName::ChevronDown => CHEVRON_DOWN,
             IconName::ChevronUp => CHEVRON_UP,
             IconName::ChevronLeft => CHEVRON_LEFT,
@@ -170,6 +173,8 @@ const STOP: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24
 const ROWS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18"/></svg>"#;
 // New query (+), tab-list chevron, and tab-actions overflow dots — from the strip's right cluster.
 const PLUS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>"#;
+// The canvas's remove glyph — the same stroke as PLUS, one stroke short.
+const MINUS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14"/></svg>"#;
 const CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
 // Header sort chevron, ascending (Rz6).
 const CHEVRON_UP: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>"#;

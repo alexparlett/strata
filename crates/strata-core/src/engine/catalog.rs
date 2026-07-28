@@ -139,6 +139,91 @@ pub async fn register_external(
     table_meta(ctx, spec.name.as_str()).await
 }
 
+// ---- Hive partition detection (P4-11) ----
+
+/// How deep the walk below looks for partition levels. Hive layouts are a handful of levels
+/// (`year=/month=/day=/hour=`); anything deeper is not a layout this can help with, and the
+/// bound is also what stops a symlink cycle.
+const MAX_PARTITION_DEPTH: usize = 8;
+
+/// The Hive partition **keys** under `paths`, outermost first — `["year", "month"]` for a lake
+/// laid out as `…/year=2024/month=03/*.parquet`.
+///
+/// The Configure window's Hive section says it "found `key=value` folders in the source paths",
+/// so it has to have looked. Two ways a path can say so, and both are answered from what is
+/// really there rather than from a guess:
+///
+/// - the path **names** the keys itself (`/data/year=*/month=*/`, a glob or a literal), in which
+///   case the pattern is the answer and nothing needs listing;
+/// - the path is a directory, which is walked one level at a time, following the first
+///   `key=value` entry at each level for as long as they keep appearing.
+///
+/// Empty when neither finds anything — which is what keeps the section off a table that isn't
+/// partitioned, rather than offering a toggle over an empty list.
+pub fn detect_partitions(paths: &[String]) -> Vec<String> {
+    for path in paths.iter().filter(|p| !p.trim().is_empty()) {
+        let named = keys_in_pattern(path);
+        if !named.is_empty() {
+            return named;
+        }
+        let walked = keys_on_disk(Path::new(path.trim()));
+        if !walked.is_empty() {
+            return walked;
+        }
+    }
+    Vec::new()
+}
+
+/// The `key=` segments the path itself spells out, in order.
+fn keys_in_pattern(path: &str) -> Vec<String> {
+    path.split(['/', '\\'])
+        .filter_map(|seg| partition_key(seg))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The `key=` levels found by walking down from `dir`, following the first partition-shaped
+/// entry at each level.
+fn keys_on_disk(dir: &Path) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut here = dir.to_path_buf();
+    for _ in 0..MAX_PARTITION_DEPTH {
+        let Ok(entries) = std::fs::read_dir(&here) else {
+            break;
+        };
+        // Sorted, so the level's key is the same on every machine — `read_dir` order is the
+        // filesystem's, and a level with a stray non-partition directory in it would otherwise
+        // answer differently run to run.
+        let mut level: Vec<_> = entries
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.file_name())
+            .collect();
+        level.sort();
+        let found = level.iter().find_map(|name| {
+            let name = name.to_str()?;
+            partition_key(name).map(|key| (key.to_string(), name.to_string()))
+        });
+        let Some((key, entry)) = found else {
+            break;
+        };
+        keys.push(key);
+        here = here.join(entry);
+    }
+    keys
+}
+
+/// The key in a `key=value` path segment — `None` for anything else. The key has to be an
+/// identifier: it becomes a column name.
+fn partition_key(segment: &str) -> Option<&str> {
+    let (key, _) = segment.split_once('=')?;
+    let mut chars = key.chars();
+    let first = chars.next()?;
+    (first.is_ascii_alphabetic() || first == '_')
+        .then_some(key)
+        .filter(|_| chars.all(|c| c.is_ascii_alphanumeric() || c == '_'))
+}
+
 /// One CSV option that has to be a **byte**, because that is what DataFusion's reader takes.
 ///
 /// Reported rather than truncated: a delimiter the user typed as `→` is not `\xe2`, and a
@@ -652,6 +737,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    // ---- Hive partition detection ----
+
+    #[test]
+    fn a_path_that_names_its_partition_keys_needs_no_listing() {
+        assert_eq!(
+            detect_partitions(&["/data/events/year=*/month=*/*.parquet".into()]),
+            vec!["year", "month"]
+        );
+        assert_eq!(
+            detect_partitions(&["/data/events/year=2024/month=03/".into()]),
+            vec!["year", "month"]
+        );
+    }
+
+    #[test]
+    fn a_directory_is_walked_for_its_partition_levels() {
+        let root = tmp("hive_walk");
+        std::fs::create_dir_all(root.join("year=2024/month=03")).unwrap();
+        std::fs::create_dir_all(root.join("year=2025/month=01")).unwrap();
+        assert_eq!(
+            detect_partitions(&[root.to_string_lossy().into_owned()]),
+            vec!["year", "month"]
+        );
+    }
+
+    #[test]
+    fn an_unpartitioned_directory_finds_nothing_rather_than_guessing() {
+        let root = tmp("hive_flat");
+        std::fs::create_dir_all(root.join("2024/03")).unwrap();
+        assert!(detect_partitions(&[root.to_string_lossy().into_owned()]).is_empty());
+    }
+
+    #[test]
+    fn a_segment_whose_key_is_not_an_identifier_is_not_a_partition() {
+        // `=` shows up in perfectly ordinary names; only an identifier can become a column.
+        assert!(detect_partitions(&["/data/a b=1/x.parquet".into()]).is_empty());
+        assert!(detect_partitions(&["/data/=1/x.parquet".into()]).is_empty());
+        assert!(detect_partitions(&["/data/2024=1/x.parquet".into()]).is_empty());
     }
 
     // ---- JSON shapes ----

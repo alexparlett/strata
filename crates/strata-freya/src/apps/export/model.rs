@@ -23,6 +23,17 @@ use strata_core::engine::export::{
 };
 use strata_model::{Cell, ColumnInfo, Kind, SnapshotId};
 
+use crate::components::form::{self, Make};
+
+/// The shared option vocabulary (`components::form::options`), at this window's edit type.
+/// Aliases rather than re-declarations: the export window was the first consumer of these and
+/// P4-11 is the second, so the shapes live in the form module and each surface names its own
+/// `Edit`.
+pub type Choice = form::Choice<Edit>;
+pub type TextField = form::TextField<Edit>;
+pub type Group = form::Group<Edit>;
+pub type Control = form::Control<Edit>;
+
 /// What this window is exporting — every field read from the run that opened it, and none of
 /// it editable. Immutable because the snapshot is: the window pins it for its whole life
 /// (SNAPSHOT_SPEC §4), so these facts stay true even if the tab behind re-runs.
@@ -180,94 +191,6 @@ pub enum Edit {
     PqRowGroup(usize),
     PqWriterVersion(WriterVersion),
     PqDictionary(bool),
-}
-
-/// A control's write-back — the function that turns what the user entered into an [`Edit`].
-///
-/// A newtype rather than a bare `fn` pointer so the comparison is explicit: a derived `==` over
-/// a function pointer warns, because pointer addresses are not guaranteed unique.
-/// `fn_addr_eq` is the sanctioned comparison, and it is enough here — a group is keyed by its
-/// label, so two groups with the same label always carry the same write-back.
-#[derive(Debug)]
-pub struct Make<T>(pub fn(T) -> Edit);
-
-// Hand-written, all three of them: `derive` would bound them on `T: Clone`/`T: Copy`, and the
-// only `T` here is the *argument* type — `Make<String>` is a bare function pointer and copies
-// regardless of what it takes.
-impl<T> Clone for Make<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for Make<T> {}
-
-impl<T> Make<T> {
-    /// Build the edit for `value`.
-    pub fn edit(&self, value: T) -> Edit {
-        (self.0)(value)
-    }
-}
-
-impl<T> PartialEq for Make<T> {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::fn_addr_eq(self.0, other.0)
-    }
-}
-
-/// One selectable value in a segmented control or a dropdown.
-#[derive(Clone, PartialEq, Debug)]
-pub struct Choice {
-    pub label: String,
-    pub edit: Edit,
-    pub selected: bool,
-}
-
-/// A free-text control's current value and what typing in it does.
-#[derive(Clone, PartialEq, Debug)]
-pub struct TextField {
-    pub value: String,
-    pub placeholder: &'static str,
-    pub max_len: usize,
-    /// What typing in this field does.
-    pub make: Make<String>,
-}
-
-/// The control a group renders. One variant per shape the canvas draws.
-#[derive(Clone, PartialEq, Debug)]
-pub enum Control {
-    /// A pill of mutually exclusive values, optionally with a custom text field that shows
-    /// only while the "custom" value is picked.
-    Seg {
-        options: Vec<Choice>,
-        custom: Option<TextField>,
-    },
-    /// A switch.
-    Toggle { on: bool, edit: Edit },
-    /// A short free-text field (the delimiter).
-    Text(TextField),
-    /// A one-character field (quote / escape).
-    Char(TextField),
-    /// A bounded number (the compression level).
-    Num {
-        value: u32,
-        min: u32,
-        max: u32,
-        make: Make<u32>,
-    },
-    /// A dropdown.
-    Select { options: Vec<Choice> },
-    /// A statement, not a control — the Arrow explainer.
-    Note(&'static str),
-}
-
-/// One labelled option group, as the canvas draws it: an uppercase label, an optional hover
-/// hint, and a control.
-#[derive(Clone, PartialEq, Debug)]
-pub struct Group {
-    pub label: String,
-    pub hint: Option<&'static str>,
-    pub control: Control,
 }
 
 /// Which columns a Hive export fans out on, and whether they stay in the files.
@@ -445,6 +368,7 @@ impl ExportDraft {
                 control: Control::Toggle {
                     on: self.csv_header,
                     edit: Edit::CsvHeader(!self.csv_header),
+                    hint: None,
                 },
             },
             Group {
@@ -501,6 +425,7 @@ impl ExportDraft {
                 control: Control::Toggle {
                     on: self.csv_double_quote,
                     edit: Edit::CsvDoubleQuote(!self.csv_double_quote),
+                    hint: None,
                 },
             },
             Group {
@@ -604,6 +529,7 @@ impl ExportDraft {
             control: Control::Toggle {
                 on: self.pq_dictionary,
                 edit: Edit::PqDictionary(!self.pq_dictionary),
+                hint: None,
             },
         });
         groups
@@ -895,7 +821,7 @@ mod tests {
         let mut draft = ExportDraft::default();
         let groups = draft.groups(&target());
         let header = groups.iter().find(|g| g.label == "HEADER ROW").unwrap();
-        let Control::Toggle { on, edit } = &header.control else {
+        let Control::Toggle { on, edit, .. } = &header.control else {
             panic!("a toggle");
         };
         assert!(*on);

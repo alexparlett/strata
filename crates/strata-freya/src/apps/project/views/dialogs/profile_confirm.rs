@@ -23,7 +23,7 @@
 use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_model::{CatalogKind, ColRef, SourceFormat};
+use strata_model::{CatalogKind, ColRef};
 
 use crate::apps::project::state::{
     use_catalog_selection, CatalogSelection, Chan, ProjChan, ProjectState, SessionState,
@@ -295,6 +295,7 @@ mod tests {
 
     use super::*;
     use crate::theme::strata_theme;
+    use strata_model::SourceFormat;
 
     fn col(name: &str) -> ColumnInfo {
         ColumnInfo {
