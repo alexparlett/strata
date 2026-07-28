@@ -71,9 +71,15 @@ impl ValueField {
     /// Drop the box: no background, no border, no focus ring.
     ///
     /// For a field inside a container that already draws the chrome — a pane's header strip, a
-    /// popover panel — where a second box inside the first reads as a mistake. The canvas
-    /// writes these inputs as `background: transparent; border: none; outline: none` for the
-    /// same reason.
+    /// popover panel, a row of a bordered list — where a second box inside the first reads as a
+    /// mistake.
+    ///
+    /// **It drops the box, not the focus ring.** The two are not the same kind of thing: the
+    /// resting border is decoration the container already provides, while the focus ring is how
+    /// a keyboard user knows where they are, and a field that cannot show focus is a field they
+    /// cannot find. This used to clear `focus_border_fill` too, which made every bare field in
+    /// the app silently unfocusable-looking. Freya paints borders rather than laying them out
+    /// (AGENTS.md §3), so a ring that appears only on focus costs no reflow.
     pub fn bare(mut self) -> Self {
         self.bare = true;
         self
@@ -168,11 +174,12 @@ impl Component for ValueField {
                     el.placeholder(self.placeholder.unwrap_or_default())
                 })
                 .map(self.leading.clone(), |el, leading| el.leading(leading))
+                // The resting box goes; `focus_border_fill` is left at the theme's accent, so
+                // the field still says where the caret is. See [`ValueField::bare`].
                 .maybe(self.bare, |el| {
                     el.background(Color::TRANSPARENT)
                         .focus_background(Color::TRANSPARENT)
                         .border_fill(Color::TRANSPARENT)
-                        .focus_border_fill(Color::TRANSPARENT)
                 }),
         )
         .width(self.width.clone())

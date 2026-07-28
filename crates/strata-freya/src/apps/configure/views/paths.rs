@@ -100,6 +100,20 @@ impl Component for BrowseButton {
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let mut open = use_state(|| false);
+        // **The picked request, not the picking.** A `MenuButton`'s press closes the menu, and
+        // `spawn` binds a task to the scope it is called from — which inside that handler is the
+        // item the press just unmounted, so the dialog was dropped before it was ever polled and
+        // nothing happened at all. The request crosses the scope boundary in state instead, and
+        // this component (which stays mounted when the menu goes) is what acts on it. The same
+        // reason the catalog's re-scan raises a counter rather than spawning its own pass.
+        let mut request = use_state(|| None::<Pick>);
+        use_side_effect(move || {
+            let Some(kind) = *request.read() else {
+                return;
+            };
+            request.set(None);
+            pick(ctx, kind);
+        });
 
         let menu = Menu::new()
             .min_width(Size::px(MENU_WIDTH))
@@ -108,7 +122,7 @@ impl Component for BrowseButton {
                 MenuButton::new()
                     .on_press(move |_| {
                         open.set(false);
-                        pick(ctx, Pick::Files);
+                        request.set(Some(Pick::Files));
                     })
                     .child(menu_row(IconName::File, "Choose files…")),
             )
@@ -116,7 +130,7 @@ impl Component for BrowseButton {
                 MenuButton::new()
                     .on_press(move |_| {
                         open.set(false);
-                        pick(ctx, Pick::Folder);
+                        request.set(Some(Pick::Folder));
                     })
                     .child(menu_row(IconName::Folder, "Choose a folder…")),
             );
@@ -144,6 +158,9 @@ fn menu_row(icon: IconName, label: &str) -> impl IntoElement {
         .child(Prose::new(label.to_string()))
 }
 
+/// Which dialog the browse menu asked for. `Copy`, because it rides a `State` across the scope
+/// boundary described in [`BrowseButton`].
+#[derive(Clone, Copy, PartialEq)]
 enum Pick {
     Files,
     Folder,

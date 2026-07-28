@@ -63,19 +63,11 @@ impl Component for Hive {
             .width(Size::fill())
             .vertical()
             .spacing(HEADER_GAP)
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .vertical()
-                    .spacing(2.)
-                    .child(Eyebrow::new("HIVE PARTITIONING").color(form.label_color))
-                    .child(
-                        Caption::new("Found key=value folders in the source paths.")
-                            .color(form.label_color)
-                            .width(Size::fill())
-                            .wrap(),
-                    ),
-            )
+            // No subtext under the label: the section only appears at all when there is
+            // something to partition on, so saying so is a sentence that is always true where it
+            // is shown. The switch's own line says what the current position means, which is the
+            // thing that actually changes.
+            .child(Eyebrow::new("HIVE PARTITIONING").color(form.label_color))
             // The switch is a **sibling** of its sentence, never wrapped in a pressable row: a
             // built-in's `on_press` does not stop propagation, so an ancestor would take the
             // same click and toggle twice, back to where it started.
