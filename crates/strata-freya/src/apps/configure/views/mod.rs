@@ -28,10 +28,11 @@ use crate::apps::configure::views::paths::SourcePaths;
 use crate::apps::configure::views::status::StatusBlock;
 use crate::apps::configure::{ConfigureCtx, Status};
 use crate::apps::project::{ProjChan, ProjectState, Reg};
+use crate::components::form::Form;
 
-/// The window body's inset (canvas `padding: var(--sp-5)`), and the gap between its sections.
+/// The window body's inset (canvas `padding: var(--sp-5)`). The gap *between* sections is the
+/// form's own `ROW_GAP` — this body is a [`Form`], so it does not get to invent one.
 const BODY_PADDING: Gaps = Gaps::new(16., 16., 16., 16.);
-const SECTION_SPACING: f32 = 20.;
 
 /// Everything between the title bar and the footer, scrolling as one.
 #[derive(PartialEq)]
@@ -44,16 +45,18 @@ impl Component for ConfigureBody {
                 .width(Size::fill())
                 .height(Size::fill())
                 .child(
-                    rect()
-                        .width(Size::fill())
-                        .vertical()
-                        .spacing(SECTION_SPACING)
-                        .padding(BODY_PADDING)
-                        .child(Identity)
-                        .child(SourcePaths)
-                        .child(ImportOptions)
-                        .child(Hive)
-                        .child(StatusBlock),
+                    // **A `Form`.** Every section here is a `Row` (or a pair of them), so the
+                    // rhythm between them is the shared form's, and the register is set once at
+                    // the top rather than assumed by each section. A `rect()` with a spacing of
+                    // its own would be this window quietly keeping its own copy of both.
+                    rect().width(Size::fill()).padding(BODY_PADDING).child(
+                        Form::new()
+                            .child(Identity)
+                            .child(SourcePaths)
+                            .child(ImportOptions)
+                            .child(Hive)
+                            .child(StatusBlock),
+                    ),
                 ),
         )
     }

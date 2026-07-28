@@ -212,3 +212,102 @@ impl Component for Form {
         form
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use freya_testing::TestingRunner;
+
+    use super::*;
+    use crate::components::form::{Choice, Control, Group, Make, OptionList, TextField};
+    use crate::theme::strata_theme;
+
+    /// A form's row count **changes** — an option list is rebuilt when the format switches, and
+    /// CSV's nine groups become JSON's three and back again. This is that, and it used to
+    /// panic in Freya's differ (`runner.rs`, `Option::unwrap()` on a missing `scope_id`):
+    /// the separators between rows were unkeyed raw elements interleaved with keyed row
+    /// *components*, so once the list shortened a position that had held a component was diffed
+    /// against a spacer.
+    #[test]
+    fn a_form_survives_its_row_count_changing() {
+        #[derive(Clone, PartialEq, Debug)]
+        struct Edit(usize);
+
+        /// The Configure window's real label/control sets. The shape that matters is that the
+        /// two lists **share keys in different positions**: `SCHEMA-INFER ROWS` is 7th in one
+        /// and 1st in the other, `COMPRESSION` 8th and 2nd, and `SHAPE` exists only in the
+        /// shorter one. A prefix-subset does not reproduce this.
+        fn groups(csv: bool) -> Vec<Group<Edit>> {
+            let select = || Control::Select {
+                options: vec![Choice {
+                    label: "a".into(),
+                    edit: Edit(0),
+                    selected: true,
+                }],
+            };
+            let text = || {
+                Control::Text(TextField {
+                    value: ",".into(),
+                    placeholder: ",",
+                    max_len: 8,
+                    make: Make(|_: String| Edit(0)),
+                })
+            };
+            let toggle = || Control::Toggle {
+                on: true,
+                edit: Edit(0),
+                hint: None,
+            };
+            let num = || Control::Num {
+                value: 1000,
+                min: 0,
+                max: 10_000,
+                make: Make(|v: u32| Edit(v as usize)),
+            };
+            let spec: Vec<(&str, Control<Edit>)> = if csv {
+                vec![
+                    ("HEADER ROW", toggle()),
+                    ("DELIMITER", text()),
+                    ("QUOTE CHARACTER", text()),
+                    ("ESCAPE CHARACTER", text()),
+                    ("COMMENT CHARACTER", text()),
+                    ("NEWLINES IN VALUES", toggle()),
+                    ("RAGGED ROWS", toggle()),
+                    ("SCHEMA-INFER ROWS", num()),
+                    ("COMPRESSION", select()),
+                ]
+            } else {
+                vec![
+                    ("SHAPE", select()),
+                    ("SCHEMA-INFER ROWS", num()),
+                    ("COMPRESSION", select()),
+                ]
+            };
+            spec.into_iter()
+                .map(|(label, control)| Group {
+                    label: label.into(),
+                    hint: None,
+                    control,
+                })
+                .collect()
+        }
+
+        let (mut runner, count) = TestingRunner::new(
+            move || {
+                use_init_theme(|| strata_theme(&strata_core::theme::load("midnight")));
+                let csv = consume_context::<State<bool>>();
+                OptionList::new(groups(*csv.read()), move |_: Edit| {})
+            },
+            (600., 800.).into(),
+            |r| r.provide_root_context(|| State::create(true)),
+            1.,
+        );
+
+        // CSV, then JSON, then CSV — the switch the crash report named, both ways.
+        for next in [true, false, true] {
+            let mut csv = count;
+            csv.set(next);
+            runner.render();
+            runner.render();
+        }
+    }
+}

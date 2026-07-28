@@ -24,6 +24,8 @@ const TOOL_GAP: f32 = 6.;
 /// invent a height for them.
 const EMPTY_HEIGHT: f32 = 88.;
 const ROW_GAP: f32 = 6.;
+/// The band around the selected row's field — enough to read as a band rather than a hairline.
+const SELECTED_INSET: f32 = 4.;
 /// The gap between the label row, the toolbar and the list.
 const STACK_GAP: f32 = 8.;
 /// The browse dropdown's width — enough for its two labels without the card hugging them.
@@ -258,6 +260,10 @@ impl Component for PathList {
 }
 
 /// One path row: the field, marked when it is the row the toolbar acts on.
+///
+/// The mark earns its place — it is not decoration. **Remove path** deletes this row and
+/// **Browse** opens in this row's directory, so with three paths in the list there is otherwise
+/// no way to see what either button is about to do before pressing it.
 #[derive(PartialEq)]
 struct PathRow {
     index: usize,
@@ -334,8 +340,15 @@ impl Component for PathRow {
             text.set(outer);
         });
 
+        // The band sits *around* the field rather than behind it: the field now draws its own
+        // box, so a background directly under it would show as a hairline and read as nothing.
         rect()
             .width(Size::fill())
+            .padding(Gaps::new_all(SELECTED_INSET))
+            .corner_radius(8.)
+            .maybe(self.selected, |el| {
+                el.background(window_theme().row_selected_background)
+            })
             .on_pointer_down(move |_| ctx.edit(move |draft| draft.selected = index))
             .child(ValueField::new(text).width(Size::fill()))
     }

@@ -51,3 +51,57 @@ impl Component for ImportOptions {
             }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use freya::prelude::*;
+    use freya_testing::TestingRunner;
+
+    use super::ImportOptions;
+    use crate::apps::configure::model::FormatId;
+    use crate::apps::configure::{ConfigureCtx, ConfigureDraft, ConfigureTarget, Status};
+    use crate::theme::strata_theme;
+
+    /// **CSV → JSON → CSV**, the switch that crashed the window in Freya's differ. The two
+    /// option lists share keys in different positions and mix control *shapes* (a toggle and a
+    /// text box where the other has a select), which is the part a synthetic list of identical
+    /// rows never reproduces.
+    #[test]
+    fn switching_format_back_and_forth_does_not_break_the_tree() {
+        let (mut runner, ctx) = TestingRunner::new(
+            || {
+                use_init_theme(|| strata_theme(&strata_core::theme::load("midnight")));
+                let _ = use_consume::<ConfigureCtx>();
+                ImportOptions
+            },
+            (600., 900.).into(),
+            |r| {
+                r.provide_root_context(|| ConfigureCtx {
+                    draft: State::create(ConfigureDraft {
+                        format: FormatId::Csv,
+                        name: "t".into(),
+                        sources: vec!["/data".into()],
+                        ..Default::default()
+                    }),
+                    target: State::create(ConfigureTarget::New),
+                    status: State::create(Status::Idle),
+                })
+            },
+            1.,
+        );
+
+        for format in [
+            FormatId::Csv,
+            FormatId::Json,
+            FormatId::Csv,
+            FormatId::Parquet,
+        ] {
+            let mut draft = ctx.draft;
+            let mut next = draft.peek().clone();
+            next.format = format;
+            draft.set(next);
+            runner.render();
+            runner.render();
+        }
+    }
+}
