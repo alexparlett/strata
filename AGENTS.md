@@ -489,6 +489,12 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
 
 ## 7. Git, worktrees, and verification
 
+- **Formatting is the `fmt` skill, never `cargo fmt --all`.** `--all` means "all packages *and
+  their local path-based dependencies*" (its own `--help` says so), and `crates/freya` is a path
+  dependency — so `--all` reformats the fork, whose `rustfmt.toml` our stable toolchain does not
+  apply. Measured once: 344 files, 4006 deletions, none intended, and invisible in
+  `git submodule status` because the gitlink never moves. Use `.claude/skills/fmt`, which names the
+  six members explicitly.
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
