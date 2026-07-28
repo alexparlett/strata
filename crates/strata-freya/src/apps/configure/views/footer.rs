@@ -21,7 +21,9 @@ use freya::radio::{use_radio_station, RadioStation};
 use crate::apps::configure::{ConfigureCtx, Status};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{log_event, LogCtx, LogLevel};
-use crate::apps::project::{persisted, refresh_table, CatalogRescan, ProjChan, ProjectState};
+use crate::apps::project::{
+    persisted, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState,
+};
 use crate::components::divider::Divider;
 use crate::components::typography::{Control, Path};
 use crate::components::ACTION_HEIGHT;
@@ -39,11 +41,17 @@ impl Component for Footer {
         let ctx = use_consume::<ConfigureCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
         let rescan = use_consume::<CatalogRescan>();
+        let catalog = use_consume::<Catalog>();
         let engine = use_consume::<EngineCtx>();
         let log = use_consume::<LogCtx>();
         let platform = use_hook(Platform::get);
 
         let registering = matches!(*ctx.status.read(), Status::Registering(_));
+        // The project window's driver **drops** a request raised while a pass is already in
+        // flight, and nothing retries it — so pressing Save then would leave the row `Loading`
+        // for good. The sidebar's ↻ answers this by disabling itself for the duration; so does
+        // this. Subscribes, so the button comes back by itself when the pass settles.
+        let scanning = catalog.read().is_scanning();
         // What the *draft* can answer, plus the one thing only the catalog can: a name another
         // def already owns. Both are the same kind of blocker, so they read as one line.
         let blocker = ctx
@@ -56,7 +64,8 @@ impl Component for Footer {
             let platform = platform.clone();
             Button::new()
                 .height(Size::px(ACTION_HEIGHT))
-                .enabled(!registering)
+                // Always available: a registration in flight is the project window's, and it
+                // answers on the catalog row whether this window is here to watch or not.
                 .on_press(move |_: Event<PressEventData>| platform.close_current_window())
                 .child(Control::new("Cancel"))
         };
@@ -64,7 +73,7 @@ impl Component for Footer {
         let save = Button::new()
             .filled()
             .height(Size::px(ACTION_HEIGHT))
-            .enabled(!registering && blocker.is_none())
+            .enabled(!registering && !scanning && blocker.is_none())
             .on_press({
                 let engine = engine.clone();
                 move |_: Event<PressEventData>| save(ctx, project, rescan, engine.clone(), log)
@@ -101,6 +110,12 @@ impl Component for Footer {
                     .child(save),
             )
     }
+}
+
+/// Why Save is off while the project window is re-scanning. Ahead of the draft's own blockers
+/// because it is the one the user can do nothing about except wait.
+fn scan_note(scanning: bool) -> Option<String> {
+    scanning.then(|| "The catalog is being re-scanned. Save is available when it settles.".into())
 }
 
 /// The one blocker the draft cannot see: a name that belongs to something else.
@@ -155,14 +170,22 @@ fn save(
         p.upsert_table(def);
         persisted(&p, log)
     };
+    // The store write above has already happened, so the row exists either way and **must** be
+    // registered either way: returning here would leave it in `Reg::Loading` with nothing left
+    // to answer it — a permanent spinner in the catalog. So the pass is asked for below whatever
+    // the persist said; what the failure changes is only what this window claims.
+    //
+    // `persisted` has already logged the cause, in the project window where the user will look
+    // for it. Saying so here too would be the same failure twice; what this window owes them is
+    // not to claim the save happened, and not to close as though it had.
     if !landed {
-        // `persisted` has already logged what went wrong, in the project window where the user
-        // will look for it. Saying so here too would be the same failure twice; what this
-        // window owes them is not to claim the save happened.
         ctx.status.set(Status::Failed(
-            "The project file could not be written, so this table was not saved.".into(),
+            "The table is registered, but the project file could not be written — it will be \
+             gone when this project is reopened."
+                .into(),
         ));
-        return;
+    } else {
+        ctx.status.set(Status::Registering(name.clone()));
     }
 
     // A rename leaves the engine still holding the old name, which the scan pass cannot know
@@ -178,6 +201,5 @@ fn save(
         );
     }
 
-    ctx.status.set(Status::Registering(name.clone()));
     refresh_table(rescan, name);
 }

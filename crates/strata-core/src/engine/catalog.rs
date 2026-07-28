@@ -230,8 +230,13 @@ fn partition_key(segment: &str) -> Option<&str> {
 /// reader configured with the first byte of a multi-byte character splits fields in the middle
 /// of the next one.
 fn ascii_byte(what: &str, c: char) -> Result<u8, String> {
-    u8::try_from(c as u32)
-        .map_err(|_| format!("The CSV {what} has to be a single-byte character, not '{c}'."))
+    // **ASCII, not "fits in a u8".** `'é' as u32` is 0xE9, which converts to a byte quite
+    // happily — but 'é' is *encoded* as 0xC3 0xA9, so that byte appears nowhere in the file and
+    // is itself a UTF-8 lead byte, so the reader would split records mid-character. Only a
+    // character whose UTF-8 encoding is one byte can be one of these options.
+    c.is_ascii()
+        .then_some(c as u8)
+        .ok_or_else(|| format!("The CSV {what} has to be a single-byte character, not '{c}'."))
 }
 
 /// Dress a `CsvFormat` in the def's options.

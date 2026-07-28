@@ -284,9 +284,27 @@ impl SourceFormat {
     }
 }
 
+/// Write a format the way it will read back.
+///
+/// The four readers emit the tagged form. [`Unknown`](SourceFormat::Unknown) emits the **bare
+/// string** it arrived as — which it has to, twice over. Serde cannot serialize an internally
+/// tagged *newtype* variant holding a string at all (it fails at runtime, which would have made
+/// every `save_defs` of a project containing one legacy `avro` def fail, taking the whole
+/// project file with it). And it is the honest form anyway: a def this build cannot read should
+/// come back out of `project.json` exactly as it went in, so a Strata save never mangles a
+/// table some other tool wrote.
+fn se_format<S>(format: &SourceFormat, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match format {
+        SourceFormat::Unknown(name) => s.serialize_str(name),
+        known => known.serialize(s),
+    }
+}
+
 /// Accept a format as either the legacy bare `"csv"` (→ that reader's defaults) or the current
-/// tagged `{"type":"csv", …}` form, so old project files keep loading. Serialization always
-/// emits the tagged form.
+/// tagged `{"type":"csv", …}` form, so old project files keep loading.
 fn de_format<'de, D>(d: D) -> Result<SourceFormat, D::Error>
 where
     D: Deserializer<'de>,
@@ -309,7 +327,7 @@ where
 pub struct TableDef {
     pub name: String,
     /// The reader and its options — see [`SourceFormat`].
-    #[serde(deserialize_with = "de_format")]
+    #[serde(deserialize_with = "de_format", serialize_with = "se_format")]
     pub format: SourceFormat,
     pub sources: Vec<String>,
     /// Hive partition columns as `(name, arrow_type)` — the persisted source of truth for
@@ -365,6 +383,22 @@ mod format_tests {
         };
         let round: TableDef = parse(&serde_json::to_string(&def).expect("serialize"));
         assert_eq!(round.format, def.format);
+    }
+
+    #[test]
+    fn an_unreadable_format_survives_a_save_as_the_string_it_arrived_as() {
+        // Serde cannot serialize an internally tagged newtype variant holding a string, so the
+        // derived impl would fail here — and `save_defs` serializes the whole `ProjectDefs`, so
+        // one such def would block every write of that project file.
+        let def = TableDef {
+            name: "legacy".into(),
+            format: SourceFormat::Unknown("avro".into()),
+            sources: vec!["/data".into()],
+            partition_cols: vec![],
+        };
+        let json = serde_json::to_string(&def).expect("an unreadable format still serializes");
+        assert!(json.contains(r#""format":"avro""#), "{json}");
+        assert_eq!(parse(&json).format, def.format, "and reads back unchanged");
     }
 
     #[test]

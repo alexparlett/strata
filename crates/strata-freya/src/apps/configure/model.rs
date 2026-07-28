@@ -15,6 +15,9 @@
 //! Which options exist at all is [`strata_model::CsvRead`]'s subject: the bar is that an option
 //! reaches the read, in both halves of it, and three that look available do not.
 
+use std::path::Path;
+
+use strata_core::project::resolve_source;
 use strata_model::{CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat, TableDef};
 
 use crate::components::form::{Choice, Control, Group, Make, TextField};
@@ -296,6 +299,19 @@ impl ConfigureDraft {
 
     // --- source paths ---
 
+    /// The paths as the **engine** will see them: resolved against the project folder, because
+    /// a def's sources are stored project-relative where they sit inside it.
+    ///
+    /// Anything that asks the filesystem a question about a source has to ask about this, not
+    /// about the stored string — `is_dir` on a relative path answers about the process's working
+    /// directory, which is not the project's.
+    pub fn resolved_sources(&self, root: &Path) -> Vec<String> {
+        self.nonblank_sources()
+            .iter()
+            .map(|p| resolve_source(root, p))
+            .collect()
+    }
+
     /// The paths that are actually paths. A blank row is a row being typed.
     pub fn nonblank_sources(&self) -> Vec<String> {
         self.sources
@@ -351,19 +367,28 @@ impl ConfigureDraft {
     /// a parquet one — DataFusion reads a Hive-partitioned CSV lake perfectly well, and
     /// `TableDef.partition_cols` has always been format-agnostic. Gating the section would hide
     /// a def's own stored columns the moment its format changed.
-    pub fn may_partition(&self) -> bool {
-        self.nonblank_sources().iter().any(|p| {
-            p.contains('*')
-                || p.contains('?')
-                || p.ends_with('/')
-                || std::path::Path::new(p).is_dir()
-        })
+    pub fn may_partition(&self, root: &Path) -> bool {
+        // A def that already carries partition columns always shows them, whatever its paths
+        // look like from here — they are the user's decision, and hiding the section would hide
+        // a value that is still being saved.
+        !self.partitions.is_empty()
+            || self.resolved_sources(root).iter().any(|p| {
+                p.contains('*') || p.contains('?') || p.ends_with('/') || Path::new(p).is_dir()
+            })
     }
 
     /// The partition columns that reach the def: a detected list with the toggle off is not
     /// partitioning at all. One helper, so the def and the surface cannot disagree.
+    ///
+    /// Gated on the **toggle only**, never on [`may_partition`](Self::may_partition). That
+    /// predicate asks the filesystem about the path as *typed*, and a def's sources are stored
+    /// project-relative where they sit inside the project folder — so `is_dir` answers about the
+    /// process's working directory, not the project's. Letting it gate the saved value meant a
+    /// perfectly good partitioned table silently lost its partition columns the moment it was
+    /// opened in this window and saved. What the section *offers* may depend on the disk; what
+    /// the user already decided may not.
     pub fn effective_partitions(&self) -> Vec<(String, String)> {
-        match self.hive_on && self.may_partition() {
+        match self.hive_on {
             true => self.partitions.clone(),
             false => Vec::new(),
         }
@@ -878,6 +903,26 @@ mod tests {
     }
 
     #[test]
+    fn a_partitioned_def_keeps_its_columns_when_its_sources_are_project_relative() {
+        // `sources` are stored relative to the *project* folder, so a filesystem probe from
+        // here answers about the process's working directory. Gating the saved value on it lost
+        // the columns of any table whose path did not happen to resolve.
+        let def = TableDef {
+            name: "events".into(),
+            format: SourceFormat::Parquet,
+            sources: vec!["data/events".into()],
+            partition_cols: vec![("year".into(), "Int32".into())],
+        };
+        let draft = ConfigureDraft::of(&def);
+        assert!(draft.hive_on, "the def has columns, so the toggle opens on");
+        assert!(
+            draft.may_partition(Path::new("/nowhere")),
+            "and the section shows them"
+        );
+        assert_eq!(draft.def().partition_cols, def.partition_cols);
+    }
+
+    #[test]
     fn the_toolbars_row_actions_keep_the_selection_inside_the_list() {
         let mut draft = ConfigureDraft::default();
         draft.add_path();
@@ -905,18 +950,35 @@ mod tests {
 
     #[test]
     fn only_a_many_file_path_can_be_partitioned() {
+        let root = Path::new("/project");
         let single = ConfigureDraft {
             sources: vec!["/data/one.parquet".into()],
             ..Default::default()
         };
-        assert!(!single.may_partition());
+        assert!(!single.may_partition(root));
         for many in ["/data/year=*/", "/data/2024/", "/data/**/*.parquet"] {
             let draft = ConfigureDraft {
                 sources: vec![many.into()],
                 ..Default::default()
             };
-            assert!(draft.may_partition(), "{many}");
+            assert!(draft.may_partition(root), "{many}");
         }
+    }
+
+    #[test]
+    fn a_relative_source_is_asked_about_where_the_project_actually_is() {
+        // `sources` are stored relative to the project folder, so every filesystem question
+        // about one has to be resolved first — otherwise it is answered about the process's
+        // working directory, and a perfectly ordinary partitioned folder looks like a file.
+        let draft = ConfigureDraft {
+            sources: vec!["events/year=2024/".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            draft.resolved_sources(Path::new("/project")),
+            vec!["/project/events/year=2024/"]
+        );
+        assert!(draft.may_partition(Path::new("/project")));
     }
 
     #[test]

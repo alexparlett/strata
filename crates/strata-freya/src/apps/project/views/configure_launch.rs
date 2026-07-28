@@ -18,7 +18,7 @@ use freya::radio::use_radio_station;
 
 use crate::apps::configure::{ConfigureLaunch, ConfigureTarget};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::{use_catalog_rescan, ProjChan, ProjectState};
+use crate::apps::project::state::{use_catalog, use_catalog_rescan, ProjChan, ProjectState};
 use crate::apps::project::LogCtx;
 use crate::platform::open_configure;
 use crate::state::AppCtx;
@@ -38,6 +38,7 @@ impl Component for ConfigureLauncher {
         let log = use_consume::<LogCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
         let rescan = use_catalog_rescan();
+        let catalog = use_catalog();
         let platform = use_hook(Platform::get);
 
         use_side_effect(move || {
@@ -54,6 +55,7 @@ impl Component for ConfigureLauncher {
                     app: app.clone(),
                     project,
                     rescan,
+                    catalog,
                     engine: engine.clone(),
                     log,
                 },

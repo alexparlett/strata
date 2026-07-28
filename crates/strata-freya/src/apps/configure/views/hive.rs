@@ -14,11 +14,13 @@
 //! looked.
 
 use freya::prelude::*;
+use freya::radio::use_radio_station;
 
 use strata_core::engine::detect_partitions;
 
 use crate::apps::configure::model::PARTITION_TYPES;
 use crate::apps::configure::ConfigureCtx;
+use crate::apps::project::{ProjChan, ProjectState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Body, Caption, Eyebrow, MonoValue};
@@ -39,10 +41,14 @@ impl Component for Hive {
     fn render(&self) -> impl IntoElement {
         let form = crate::components::form::form_theme();
         let ctx = use_consume::<ConfigureCtx>();
+        // The project folder every relative source is measured from. A station, not a radio:
+        // the root does not change under an open window.
+        let project = use_radio_station::<ProjectState, ProjChan>();
+        let root = project.peek().root.clone();
         let (may_partition, on, columns, warn) = {
             let draft = ctx.draft.read();
             (
-                draft.may_partition(),
+                draft.may_partition(&root),
                 draft.hive_on,
                 draft.partitions.clone(),
                 draft.partitions_are_text(),
@@ -77,7 +83,10 @@ impl Component for Hive {
                     .horizontal()
                     .cross_align(Alignment::Center)
                     .spacing(CONTROL_GAP)
-                    .child(Switch::new().toggled(on).on_toggle(move |_| toggle(ctx)))
+                    .child(Switch::new().toggled(on).on_toggle({
+                        let root = root.clone();
+                        move |_| toggle(ctx, &root)
+                    }))
                     .child(
                         Body::new(match on {
                             true => "Reading the folder tree as partition columns",
@@ -116,8 +125,8 @@ impl Component for Hive {
 
 /// Turn partitioning on or off — **detecting the columns on the way on**, and only when there
 /// are none yet, so a def's own stored types are never overwritten by a fresh scan.
-fn toggle(ctx: ConfigureCtx) {
-    let paths = ctx.draft.peek().nonblank_sources();
+fn toggle(ctx: ConfigureCtx, root: &std::path::Path) {
+    let paths = ctx.draft.peek().resolved_sources(root);
     ctx.edit(move |draft| {
         draft.hive_on = !draft.hive_on;
         if draft.hive_on && draft.partitions.is_empty() {

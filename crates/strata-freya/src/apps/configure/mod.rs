@@ -44,7 +44,7 @@ use strata_core::config::Command;
 use crate::apps::configure::views::{ConfigureBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::LogCtx;
-use crate::apps::project::{CatalogRescan, ProjChan, ProjectState};
+use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
 use crate::keymap::on_commands;
 use crate::platform::{self, WindowKind};
 use crate::state::{use_share_config, AppCtx};
@@ -69,6 +69,11 @@ pub struct ConfigureLaunch {
     pub project: RadioStation<ProjectState, ProjChan>,
     /// The project window's re-scan request. Save bumps it; the driver over there runs the pass.
     pub rescan: CatalogRescan,
+    /// …and that driver's gate. A request raised while a pass is already in flight is **dropped**
+    /// (`claim_scan`), and nothing retries it — the sidebar's ↻ lives with that by disabling
+    /// itself for the duration, so Save has to do the same or it would leave a row `Loading` for
+    /// good and this window watching it for ever.
+    pub catalog: Catalog,
     /// The project window's engine. Registration is the scan driver's, not this window's — the
     /// engine is here for the one thing the driver cannot do, which is drop the table a
     /// **rename** left behind under its old name.
@@ -146,6 +151,7 @@ pub struct ConfigureApp {
     pub app: AppCtx,
     pub project: RadioStation<ProjectState, ProjChan>,
     pub rescan: CatalogRescan,
+    pub catalog: Catalog,
     pub engine: EngineCtx,
     pub target: ConfigureTarget,
     pub log: LogCtx,
@@ -160,6 +166,7 @@ impl ConfigureApp {
         app: AppCtx,
         project: RadioStation<ProjectState, ProjChan>,
         rescan: CatalogRescan,
+        catalog: Catalog,
         engine: EngineCtx,
         target: ConfigureTarget,
         log: LogCtx,
@@ -176,6 +183,7 @@ impl ConfigureApp {
             app,
             project,
             rescan,
+            catalog,
             engine,
             target,
             log,
@@ -217,6 +225,8 @@ impl App for ConfigureApp {
         use_share_radio(move || project);
         let rescan = self.rescan;
         use_provide_context(move || rescan);
+        let catalog = self.catalog;
+        use_provide_context(move || catalog);
         use_provide_context({
             let engine = self.engine.clone();
             move || engine
@@ -287,13 +297,13 @@ impl App for ConfigureApp {
             // document order, so anything a view mounts outranks this.
             .child(rect().on_global_key_down(on_commands(config, {
                 move |cmd| match cmd {
-                    // Esc closes. The def is written only by Save, so there is nothing to undo
-                    // — except while a registration is in flight, which the catalog row is
-                    // about to answer and this window is the only thing waiting to explain.
+                    // Esc closes, always. The def is written only by Save, so there is nothing
+                    // to undo — and a registration in flight belongs to the *project* window's
+                    // scan driver, which lands its answer on the catalog row whether this window
+                    // is watching or not. Refusing to close here would only mean a window that
+                    // cannot be dismissed if that pass never answers.
                     Command::Cancel => {
-                        if !matches!(*ctx.status.peek(), Status::Registering(_)) {
-                            platform.close_current_window();
-                        }
+                        platform.close_current_window();
                         true
                     }
                     Command::Quit => {

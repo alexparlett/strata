@@ -1890,5 +1890,20 @@ mod read_options_tests {
             .await
             .expect_err("not a byte");
         assert!(err.contains("single-byte character"), "{err}");
+
+        // The half of the range that used to pass: 'é' is U+00E9, so `c as u32` fits a byte —
+        // but the file holds 0xC3 0xA9, and 0xE9 is a UTF-8 lead byte the reader would split on.
+        let err = eng
+            .register(spec(
+                "latin1",
+                vec![write(&d, "s2.csv", "a,b\n1,2\n")],
+                SourceFormat::Csv(CsvRead {
+                    delimiter: 'é',
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect_err("not one byte in UTF-8");
+        assert!(err.contains("single-byte character"), "{err}");
     }
 }

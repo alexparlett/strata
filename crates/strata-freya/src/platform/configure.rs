@@ -58,6 +58,7 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             launch.app.clone(),
             launch.project,
             launch.rescan,
+            launch.catalog,
             launch.engine.clone(),
             launch.target.clone(),
             launch.log,

@@ -320,26 +320,62 @@ impl Component for PathRow {
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
-        // The row owns its buffer and reports into the draft, like every other field here. It
-        // is seeded once: the draft is only ever written *from* here for this row, so there is
-        // nothing to sync back — and a pick, which does write it, re-keys the list.
+        // The row owns its buffer, and the traffic runs **both ways** — which a one-way field
+        // cannot do here, because this row's value changes underneath it for two reasons that
+        // have nothing to do with typing:
+        //
+        // - **a row above it is removed.** The list is keyed by position, so the scope at index
+        //   0 is *kept* when the list shrinks; a buffer seeded once would then write the deleted
+        //   path back over the survivor.
+        // - **the browse picker sets it.** That writes the draft, not the box, so a
+        //   report-only field would leave the box showing the old path while the draft held the
+        //   new one.
+        //
+        // `reported` is what keeps the two directions from fighting: it tracks the last value
+        // this row and the draft agreed on, so neither effect acts on a change the other made.
+        // In state rather than captured — `use_side_effect` builds its closure once, so a
+        // captured comparison value freezes at the first render.
+        let initial = ctx
+            .draft
+            .peek()
+            .sources
+            .get(index)
+            .cloned()
+            .unwrap_or_default();
         let text = use_state({
-            let initial = ctx
-                .draft
-                .peek()
-                .sources
-                .get(index)
-                .cloned()
-                .unwrap_or_default();
+            let initial = initial.clone();
             move || initial
         });
+        let mut reported = use_state(move || initial);
+
+        // Out: what was typed reaches the draft.
         use_side_effect(move || {
             let path = text.read().clone();
+            if path == *reported.peek() {
+                return;
+            }
+            reported.set(path.clone());
             ctx.edit(move |draft| {
                 if let Some(slot) = draft.sources.get_mut(index) {
                     *slot = path;
                 }
             });
+        });
+        // In: a value this row did not type reaches the box.
+        use_side_effect(move || {
+            let outer = ctx
+                .draft
+                .read()
+                .sources
+                .get(index)
+                .cloned()
+                .unwrap_or_default();
+            if outer == *reported.peek() {
+                return;
+            }
+            reported.set(outer.clone());
+            let mut text = text;
+            text.set(outer);
         });
 
         rect()
