@@ -31,7 +31,7 @@ use std::path::PathBuf;
 use freya::radio::RadioChannel;
 use strata_core::engine::{TableMeta, ViewMeta};
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
-use strata_model::{CatalogKind, ColumnInfo, SavedQuery, TableDef, ViewDef};
+use strata_model::{CatalogKind, ColumnInfo, SavedQuery, SourceFormat, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::query::ScanId;
@@ -739,7 +739,7 @@ mod tests {
     fn table_def(name: &str) -> TableDef {
         TableDef {
             name: name.into(),
-            format: "parquet".into(),
+            format: SourceFormat::Parquet,
             sources: vec![format!("{name}.parquet")],
             partition_cols: vec![("year".into(), "Int32".into())],
         }

@@ -31,7 +31,7 @@ use strata_model::{CatalogKind, Origin};
 
 use super::model::{
     completeness, fact_rows, nested_fields, scan_age, scan_footnote, with_scan, ColumnFacts,
-    NestedField, SourceFormat,
+    FormatBadge, NestedField,
 };
 use super::{InspectorTheme, PANEL_PAD};
 use crate::apps::project::contexts::EngineCtx;
@@ -169,12 +169,12 @@ impl ColumnPanel {
     fn format_color(&self) -> Color {
         let t = &self.theme;
         match self.facts.format {
-            SourceFormat::Parquet => t.format_parquet_color,
-            SourceFormat::Csv => t.format_csv_color,
-            SourceFormat::Json => t.format_json_color,
-            SourceFormat::Arrow => t.format_arrow_color,
-            SourceFormat::View => t.format_view_color,
-            SourceFormat::Other(_) => t.meta_color,
+            FormatBadge::Parquet => t.format_parquet_color,
+            FormatBadge::Csv => t.format_csv_color,
+            FormatBadge::Json => t.format_json_color,
+            FormatBadge::Arrow => t.format_arrow_color,
+            FormatBadge::View => t.format_view_color,
+            FormatBadge::Other(_) => t.meta_color,
         }
     }
 

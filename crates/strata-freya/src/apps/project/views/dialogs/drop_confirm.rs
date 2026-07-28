@@ -407,7 +407,7 @@ mod tests {
     use strata_core::engine::{TableMeta, ViewMeta};
     use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
-    use strata_model::{Origin, SavedQuery, TableDef, ViewDef};
+    use strata_model::{Origin, SavedQuery, SourceFormat, TableDef, ViewDef};
 
     use super::*;
     use crate::theme::strata_theme;
@@ -415,7 +415,7 @@ mod tests {
     fn table(name: &str) -> TableDef {
         TableDef {
             name: name.into(),
-            format: "parquet".into(),
+            format: SourceFormat::Parquet,
             sources: vec![format!("{name}.parquet")],
             partition_cols: Vec::new(),
         }

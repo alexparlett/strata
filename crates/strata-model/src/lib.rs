@@ -24,7 +24,10 @@ mod results;
 mod schema;
 mod session;
 
-pub use catalog::{CatalogKind, ColRef, RemoveKind, RemoveTarget, SavedQuery, TableDef, ViewDef};
+pub use catalog::{
+    CatalogKind, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoveKind, RemoveTarget,
+    SavedQuery, SourceFormat, TableDef, ViewDef,
+};
 pub use diagnostics::{Diagnostic, Severity};
 pub use form::ConfigForm;
 pub use history::HistoryEntry;

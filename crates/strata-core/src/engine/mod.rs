@@ -1067,7 +1067,7 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
 
 #[cfg(test)]
 mod tests {
-    use strata_model::StatKey;
+    use strata_model::{SourceFormat, StatKey};
 
     use super::*;
 
@@ -1294,7 +1294,7 @@ mod tests {
                 "{}/tests/fixtures/loadfix/regions.csv",
                 env!("CARGO_MANIFEST_DIR")
             )],
-            format: "csv".into(),
+            format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
         })
         .await
@@ -1524,5 +1524,371 @@ mod tests {
             eng.cancel(ws, tag).is_none(),
             "both settled — nothing left in flight"
         );
+    }
+}
+
+/// **Read options, end to end** — every option the Configure window offers, proved against a
+/// real file rather than against DataFusion's builder signature.
+///
+/// This is the point of P4-11's validation pass. The bar for offering an option is that it
+/// reaches the read, and the only way to hold that bar over a DataFusion upgrade is to register
+/// a table whose schema or rows are *different* because the option is set. Each test here
+/// therefore asserts the difference, not the call.
+#[cfg(test)]
+mod read_options_tests {
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    use strata_model::{CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat};
+
+    use super::*;
+
+    /// A fresh directory per test, so a stale fixture can never make one pass.
+    fn dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join("strata_read_options").join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("temp dir");
+        d
+    }
+
+    fn write(dir: &PathBuf, name: &str, body: &str) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("fixture");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// The same, gzipped — a compression option can only be proved by a genuinely compressed
+    /// file whose name carries the suffix.
+    fn write_gz(dir: &PathBuf, name: &str, body: &str) -> String {
+        let path = dir.join(name);
+        let mut enc = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).expect("fixture"),
+            flate2::Compression::default(),
+        );
+        enc.write_all(body.as_bytes()).expect("compress");
+        enc.finish().expect("finish");
+        path.to_string_lossy().into_owned()
+    }
+
+    fn spec(name: &str, paths: Vec<String>, format: SourceFormat) -> TableSpec {
+        TableSpec {
+            name: name.into(),
+            paths,
+            format,
+            partitions: Vec::new(),
+        }
+    }
+
+    fn names(meta: &TableMeta) -> Vec<String> {
+        meta.columns.iter().map(|c| c.name.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_delimiter_changes_how_the_columns_are_found() {
+        let d = dir("delimiter");
+        let path = write(&d, "s.csv", "a;b;c\n1;2;3\n");
+        let eng = Engine::new(Default::default());
+
+        // Read with the default comma the whole line is one column, header and all.
+        let meta = eng
+            .register(spec(
+                "commas",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a;b;c"]);
+
+        let meta = eng
+            .register(spec(
+                "semis",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    delimiter: ';',
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn no_header_row_names_the_columns_positionally() {
+        let d = dir("header");
+        let path = write(&d, "s.csv", "1,2\n3,4\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "t",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    header: false,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["column_1", "column_2"]);
+    }
+
+    #[tokio::test]
+    async fn a_comment_character_keeps_the_commented_line_out_of_the_schema() {
+        let d = dir("comment");
+        let path = write(&d, "s.csv", "# generated\na,b\n1,2\n");
+        let eng = Engine::new(Default::default());
+
+        // Without it the comment line is read as the header — a one-column table whose next
+        // row has two, which is a register that fails rather than a schema that is merely odd.
+        let err = eng
+            .register(spec(
+                "raw",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect_err("the comment line is taken as the header");
+        assert!(err.contains("unequal lengths"), "{err}");
+
+        let meta = eng
+            .register(spec(
+                "commented",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    comment: Some('#'),
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a", "b"]);
+    }
+
+    /// The option that earns its place *because* a table is many files — and the one whose
+    /// absence is worst, because it does not fail the register.
+    ///
+    /// Schema inference merges the files happily: the table comes back with the union of the
+    /// columns and looks perfectly registered. It is the **scan** that then fails, on every
+    /// query, for the files that are short of a column. So this asserts the schema is the same
+    /// either way and the *read* is not.
+    #[tokio::test]
+    async fn truncated_rows_is_what_makes_differently_shaped_files_readable_not_merely_registrable()
+    {
+        let d = dir("truncated");
+        write(&d, "a.csv", "x,y\n1,2\n");
+        write(&d, "b.csv", "x,y,z\n3,4,5\n");
+        let path = d.to_string_lossy().into_owned();
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "strict",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect("registration succeeds — which is the trap");
+        assert_eq!(names(&meta), vec!["x", "y", "z"]);
+        let err = eng
+            .query(WsId(1), RunTag(1), "SELECT * FROM strict".into(), 100)
+            .await
+            .expect_err("the short file cannot be read against the merged schema");
+        assert!(
+            err.to_string().contains("incorrect number of fields"),
+            "{err}"
+        );
+
+        let meta = eng
+            .register(spec(
+                "union",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    truncated_rows: true,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["x", "y", "z"]);
+        eng.query(WsId(2), RunTag(2), "SELECT * FROM union".into(), 100)
+            .await
+            .expect("the missing column is padded with nulls");
+    }
+
+    /// The same option, within one file: a row short of a column fails the register outright.
+    #[tokio::test]
+    async fn truncated_rows_also_covers_a_ragged_row_inside_one_file() {
+        let d = dir("ragged");
+        let path = write(&d, "r.csv", "x,y\n1,2\n3\n");
+        let eng = Engine::new(Default::default());
+
+        assert!(eng
+            .register(spec(
+                "strict",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .is_err());
+
+        let meta = eng
+            .register(spec(
+                "ragged",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    truncated_rows: true,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["x", "y"]);
+        eng.query(WsId(3), RunTag(3), "SELECT * FROM ragged".into(), 100)
+            .await
+            .expect("the short row is padded");
+    }
+
+    /// Infer-rows at 0 is DataFusion's own "read everything as text" — the one claim the
+    /// canvas's hint makes about this field, so it is the one asserted.
+    #[tokio::test]
+    async fn zero_infer_rows_reads_every_csv_column_as_text() {
+        let d = dir("infer");
+        let path = write(&d, "s.csv", "n\n1\n2\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "typed",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(meta.columns[0].dtype, "Int64");
+
+        let meta = eng
+            .register(spec(
+                "text",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    infer_rows: Some(0),
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(meta.columns[0].dtype, "Utf8");
+    }
+
+    /// Compression is two things, and the second is the one that bit: the listing filters on
+    /// the file **extension**, so a gzipped CSV is only found when the filter says `.csv.gz`.
+    #[tokio::test]
+    async fn a_compressed_csv_is_both_found_and_decoded() {
+        let d = dir("gzip");
+        let path = write_gz(&d, "s.csv.gz", "a,b\n1,2\n");
+        let eng = Engine::new(Default::default());
+
+        // Uncompressed, the listing's `.csv` filter does not match `s.csv.gz` at all.
+        let err = eng
+            .register(spec(
+                "plain",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect_err("the extension filter excludes it");
+        assert!(err.contains("not one"), "{err}");
+
+        let meta = eng
+            .register(spec(
+                "gz",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    compression: FileCompression::Gzip,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a", "b"]);
+    }
+
+    /// The option the canvas never had: a whole-document JSON array is readable, and the
+    /// failure message for reading it in the wrong shape now names the setting that fixes it.
+    #[tokio::test]
+    async fn a_json_array_document_reads_in_array_shape_and_explains_itself_in_the_other() {
+        let d = dir("json_shape");
+        let path = write(&d, "s.json", "[{\"a\": 1}, {\"a\": 2}]\n");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "ndjson",
+                vec![path.clone()],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect_err("an array is not newline-delimited");
+        assert!(err.contains("Set the JSON shape to array"), "{err}");
+
+        let meta = eng
+            .register(spec(
+                "array",
+                vec![path],
+                SourceFormat::Json(JsonRead {
+                    shape: JsonShape::Array,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a"]);
+    }
+
+    /// A def naming a reader this build does not have fails **by name**. The arm this
+    /// replaces was a fallthrough onto parquet, so such a table registered as parquet and
+    /// said nothing — the register's one job is to be the check.
+    #[tokio::test]
+    async fn an_unreadable_format_fails_by_name_rather_than_being_read_as_parquet() {
+        let d = dir("unknown");
+        let path = write(&d, "s.avro", "not really avro");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "legacy",
+                vec![path],
+                SourceFormat::Unknown("avro".into()),
+            ))
+            .await
+            .expect_err("no reader");
+        assert_eq!(
+            err,
+            "Table 'legacy' is defined as 'avro', which Strata cannot read."
+        );
+    }
+
+    /// A multi-byte delimiter is reported, never truncated to its first byte — which would
+    /// split fields in the middle of the next character.
+    #[tokio::test]
+    async fn a_multi_byte_delimiter_is_refused_by_name() {
+        let d = dir("wide_delimiter");
+        let path = write(&d, "s.csv", "a,b\n1,2\n");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "t",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    delimiter: '→',
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect_err("not a byte");
+        assert!(err.contains("single-byte character"), "{err}");
     }
 }

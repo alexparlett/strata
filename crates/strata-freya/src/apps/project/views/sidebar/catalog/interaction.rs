@@ -15,7 +15,7 @@ use freya_testing::TestingRunner;
 use strata_core::engine::{TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ColRef, ColumnInfo, Kind, Origin, SavedQuery, TableDef, ViewDef};
+use strata_model::{ColRef, ColumnInfo, Kind, Origin, SavedQuery, SourceFormat, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::state::CatalogState;
@@ -56,7 +56,7 @@ fn nested(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
 fn table(name: &str, partition_cols: Vec<(String, String)>) -> TableDef {
     TableDef {
         name: name.into(),
-        format: "parquet".into(),
+        format: SourceFormat::Parquet,
         sources: vec![format!("{name}.parquet")],
         partition_cols,
     }

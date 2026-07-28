@@ -147,11 +147,16 @@ table that otherwise works is not a control; leave it out and say why in the mod
 case is already covered: an empty field is null in `arrow-csv` regardless.) Revisit if a later
 DataFusion wires it through — that is a one-line check at `source.rs`'s `builder()`.
 
-**TRUNCATED ROWS earns its place precisely because this table is multi-path.** `truncated_rows`
-is wired into *both* infer and scan, and it is what makes a set of CSV files with different column
-counts register as the union schema, padding the missing columns with nulls, instead of failing the
-register outright ("Encountered unequal lengths between records…"). A single-file reader could live
-without it; a surface whose whole subject is "these paths are one table" cannot. Advanced group.
+**TRUNCATED ROWS earns its place precisely because this table is multi-path — and its absence is
+the worst of the three, because it does not fail the register.** Measured, not assumed (the first
+version of this note claimed it was needed for the *register* to succeed, and the round-trip test
+written to prove that disproved it): schema inference merges differently-shaped CSV files happily,
+so the table comes back with the union of the columns and looks perfectly registered. It is the
+**scan** that then fails, on every query, for the files short of a column — `Csv error: incorrect
+number of fields for line 1, expected 3 got 2`. With the option on, the missing columns are padded
+with nulls and the same table reads. (Within a *single* file, a ragged row does fail the register.)
+So this is the option whose absence produces a catalog row that looks fine and cannot be read.
+Advanced group.
 
 **TERMINATOR is wired at scan but not at inference** (`infer_schema_from_stream` sets header,
 delimiter, quote, truncated-rows, null-regex, escape and comment — not terminator). A file with a

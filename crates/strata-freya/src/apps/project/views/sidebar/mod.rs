@@ -177,7 +177,7 @@ mod tests {
     use strata_core::config::AppConfig;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_model::{ColRef, TableDef};
+    use strata_model::{ColRef, SourceFormat, TableDef};
 
     use super::*;
     use crate::apps::project::contexts::EngineCtx;
@@ -200,7 +200,7 @@ mod tests {
             name: "test".into(),
             tables: vec![TableDef {
                 name: "orders".into(),
-                format: "parquet".into(),
+                format: SourceFormat::Parquet,
                 sources: vec!["orders.parquet".into()],
                 partition_cols: vec![],
             }],

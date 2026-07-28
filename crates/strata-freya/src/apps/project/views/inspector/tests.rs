@@ -17,7 +17,7 @@ use futures::executor::block_on;
 use strata_core::engine::{TableMeta, TableSpec, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ColRef, ColumnInfo, Kind, Stat, StatKey, TableDef, ViewDef};
+use strata_model::{ColRef, ColumnInfo, Kind, SourceFormat, Stat, StatKey, TableDef, ViewDef};
 
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
@@ -61,7 +61,7 @@ fn stat(key: StatKey, text: &str) -> Stat {
 fn table(name: &str, format: &str) -> TableDef {
     TableDef {
         name: name.into(),
-        format: format.into(),
+        format: SourceFormat::from_name(format),
         sources: vec![format!("{name}.{format}")],
         partition_cols: Vec::new(),
     }
@@ -181,7 +181,7 @@ fn runner() -> (TestingRunner, Handles) {
                 block_on(engine.register(TableSpec {
                     name: SCAN_TABLE.into(),
                     paths: vec![SCAN_FIXTURE.into()],
-                    format: "csv".into(),
+                    format: SourceFormat::from_name("csv"),
                     partitions: Vec::new(),
                 }))
                 .expect("the fixture registers");

@@ -10,7 +10,9 @@ use datafusion::common::stats::Precision;
 use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
 
-use strata_model::{ColumnInfo, Kind, Stat, StatKey};
+use strata_model::{
+    ColumnInfo, CsvRead, FileCompression, JsonRead, JsonShape, Kind, SourceFormat, Stat, StatKey,
+};
 
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 
@@ -22,13 +24,15 @@ pub struct TableMeta {
     pub rows: Option<u64>,
 }
 
-/// Everything needed to register one external table: its name, source paths, format,
-/// and Hive partition columns.
+/// Everything needed to register one external table: its name, source paths, the reader and
+/// its options, and Hive partition columns.
 #[derive(Clone, Debug)]
 pub struct TableSpec {
     pub name: String,
     pub paths: Vec<String>,
-    pub format: String,
+    /// The reader *and* the options it takes — see [`SourceFormat`]. One field, so a CSV
+    /// delimiter cannot be named on a parquet table.
+    pub format: SourceFormat,
     pub partitions: Vec<(String, String)>,
 }
 
@@ -65,8 +69,6 @@ pub async fn register_external(
     spec: &TableSpec,
 ) -> Result<TableMeta, String> {
     use datafusion::datasource::file_format::arrow::ArrowFormat;
-    use datafusion::datasource::file_format::csv::CsvFormat;
-    use datafusion::datasource::file_format::json::JsonFormat;
     use datafusion::datasource::file_format::parquet::ParquetFormat;
     use datafusion::datasource::file_format::FileFormat;
     use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
@@ -81,15 +83,27 @@ pub async fn register_external(
         return Err("No source paths".into());
     }
 
-    let (fmt, ext): (Arc<dyn FileFormat>, &str) = match spec.format.as_str() {
-        "csv" => (Arc::new(CsvFormat::default()), ".csv"),
-        "json" => (Arc::new(JsonFormat::default()), ".json"),
-        "arrow" => (Arc::new(ArrowFormat), ".arrow"),
-        _ => (
-            Arc::new(ParquetFormat::default().with_skip_metadata(true)),
-            ".parquet",
-        ),
+    // The reader, dressed in the def's own options — and **exhaustive**: a format with no
+    // reader in this build fails its registration by name. The arm this replaces was a
+    // `_ =>` fallthrough onto parquet, so a legacy `avro` def was read as parquet and said
+    // nothing about it.
+    let fmt: Arc<dyn FileFormat> = match &spec.format {
+        SourceFormat::Csv(o) => Arc::new(csv_format(o)?),
+        SourceFormat::Json(o) => Arc::new(json_format(o)),
+        SourceFormat::Arrow => Arc::new(ArrowFormat),
+        SourceFormat::Parquet => Arc::new(ParquetFormat::default().with_skip_metadata(true)),
+        SourceFormat::Unknown(name) => {
+            return Err(format!(
+                "Table '{}' is defined as '{name}', which Strata cannot read.",
+                spec.name
+            ))
+        }
     };
+    // The listing's filter is the format's extension **plus its compression suffix**: a
+    // gzipped CSV is `events.csv.gz`, and a filter of `.csv` matches none of them — which
+    // DataFusion reports as an empty location, with the files sitting right there.
+    let ext = spec.format.extension();
+    let ext = ext.as_str();
     // `with_session_config_options` *before* any explicit option: it carries the
     // session's `collect_statistics` (and `target_partitions`) onto the options and
     // would otherwise clobber them.
@@ -123,6 +137,70 @@ pub async fn register_external(
         .map_err(|e| register_error(spec, ext, &e.to_string()))?;
 
     table_meta(ctx, spec.name.as_str()).await
+}
+
+/// One CSV option that has to be a **byte**, because that is what DataFusion's reader takes.
+///
+/// Reported rather than truncated: a delimiter the user typed as `→` is not `\xe2`, and a
+/// reader configured with the first byte of a multi-byte character splits fields in the middle
+/// of the next one.
+fn ascii_byte(what: &str, c: char) -> Result<u8, String> {
+    u8::try_from(c as u32)
+        .map_err(|_| format!("The CSV {what} has to be a single-byte character, not '{c}'."))
+}
+
+/// Dress a `CsvFormat` in the def's options.
+///
+/// Every option set here reaches **both** halves of the read — `infer_schema` and the scan. The
+/// ones DataFusion only wires into one of the two are deliberately absent; [`CsvRead`] records
+/// which and why.
+fn csv_format(o: &CsvRead) -> Result<datafusion::datasource::file_format::csv::CsvFormat, String> {
+    use datafusion::datasource::file_format::csv::CsvFormat;
+
+    let mut fmt = CsvFormat::default()
+        .with_has_header(o.header)
+        .with_delimiter(ascii_byte("delimiter", o.delimiter)?)
+        .with_quote(ascii_byte("quote character", o.quote)?)
+        .with_newlines_in_values(o.newlines_in_values)
+        .with_truncated_rows(o.truncated_rows)
+        .with_file_compression_type(compression(o.compression));
+    if let Some(escape) = o.escape {
+        fmt = fmt.with_escape(Some(ascii_byte("escape character", escape)?));
+    }
+    if let Some(comment) = o.comment {
+        fmt = fmt.with_comment(Some(ascii_byte("comment character", comment)?));
+    }
+    if let Some(rows) = o.infer_rows {
+        fmt = fmt.with_schema_infer_max_rec(rows);
+    }
+    Ok(fmt)
+}
+
+/// Dress a `JsonFormat` in the def's options.
+fn json_format(o: &JsonRead) -> datafusion::datasource::file_format::json::JsonFormat {
+    use datafusion::datasource::file_format::json::JsonFormat;
+
+    let mut fmt = JsonFormat::default()
+        .with_newline_delimited(o.shape == JsonShape::NewlineDelimited)
+        .with_file_compression_type(compression(o.compression));
+    if let Some(rows) = o.infer_rows {
+        fmt = fmt.with_schema_infer_max_rec(rows);
+    }
+    fmt
+}
+
+/// Our compression vocabulary as DataFusion's.
+fn compression(
+    c: FileCompression,
+) -> datafusion::datasource::file_format::file_compression_type::FileCompressionType {
+    use datafusion::datasource::file_format::file_compression_type::FileCompressionType as F;
+    match c {
+        FileCompression::None => F::UNCOMPRESSED,
+        FileCompression::Gzip => F::GZIP,
+        FileCompression::Bzip2 => F::BZIP2,
+        FileCompression::Xz => F::XZ,
+        FileCompression::Zstd => F::ZSTD,
+    }
 }
 
 /// The spec's non-blank source paths.
@@ -166,7 +244,7 @@ fn is_glob(p: &str) -> bool {
 /// would mean guessing at its cause, and a confident wrong diagnosis is worse than a raw
 /// one the user can search for.
 fn register_error(spec: &TableSpec, ext: &str, raw: &str) -> String {
-    if let Some(m) = json_shape_error(spec, ext, raw) {
+    if let Some(m) = json_shape_error(spec, raw) {
         return m;
     }
     if let Some(m) = no_files_error(spec, ext, raw) {
@@ -179,26 +257,38 @@ fn register_error(spec: &TableSpec, ext: &str, raw: &str) -> String {
     raw.to_string()
 }
 
-/// The JSON reader is **line-delimited**: one record per line. Every other JSON shape a
-/// user is likely to have — a pretty-printed record, a whole-document `[…]` array, a single
-/// object spread over several lines — fails, and Arrow's own wording for it
-/// (`Not valid JSON: EOF while parsing an object at line 1 column 1`) says neither what is
-/// wrong nor that it is a *shape* problem at all: the file usually is valid JSON.
+/// A JSON source is read in one of two **shapes** (`JsonShape`), and reading it in the wrong
+/// one fails with wording that says neither what is wrong nor that it is a shape problem at
+/// all: Arrow's `Not valid JSON: EOF while parsing an object at line 1 column 1` for a file
+/// that usually *is* valid JSON.
+///
+/// The advice names the setting rather than stating a rule. It used to say "JSON sources must
+/// be newline-delimited, one record per line", which was true of the reader as it was
+/// configured and false of the reader as a whole — DataFusion 54 reads a whole-document array
+/// perfectly well, so the fix is a shape to change, not a file to rewrite.
 ///
 /// A genuine syntax error lands here too and is **not** rewritten into a shape complaint —
 /// it keeps Arrow's diagnosis, which points at the offending line and column. The two are
 /// told apart by Arrow running out of input mid-record (a record that doesn't end on its
 /// line) versus rejecting what it read.
-fn json_shape_error(spec: &TableSpec, ext: &str, raw: &str) -> Option<String> {
+fn json_shape_error(spec: &TableSpec, raw: &str) -> Option<String> {
     // Only a JSON table can have a JSON read problem. Without this, any failure whose text
     // merely mentions `Json error:` would be rewritten into a confident "Cannot read … as
     // JSON" for a table that isn't JSON — the mis-attribution this mapping exists to remove.
-    if ext != ".json" {
+    let SourceFormat::Json(options) = &spec.format else {
         return None;
-    }
+    };
     let detail = raw.split("Json error: ").nth(1)?;
     let name = &spec.name;
-    let rule = "JSON sources must be newline-delimited, one record per line.";
+    // Only worth suggesting while the def is still in the other shape. Told to read an array
+    // and still failing, the shape is not the problem, and repeating the advice would send the
+    // user to a setting that already says what it should.
+    let fix = match options.shape {
+        JsonShape::NewlineDelimited => {
+            " Set the JSON shape to array in Table Config, or use newline-delimited JSON."
+        }
+        JsonShape::Array => "",
+    };
 
     if let Some(found) = detail.strip_prefix("Expected JSON record to be an object, found ") {
         // Never the value itself — this is the arm whose text carried the whole parsed
@@ -209,9 +299,9 @@ fn json_shape_error(spec: &TableSpec, ext: &str, raw: &str) -> Option<String> {
             .unwrap_or("value")
             .trim();
         return Some(if kind == "Array" {
-            format!("Cannot read '{name}' as JSON: the source is a JSON array. {rule}")
+            format!("Cannot read '{name}' as JSON: the source is a JSON array.{fix}")
         } else {
-            format!("Cannot read '{name}' as JSON: a top-level {kind} is not a record. {rule}")
+            format!("Cannot read '{name}' as JSON: a top-level {kind} is not a record.{fix}")
         });
     }
 
@@ -221,7 +311,7 @@ fn json_shape_error(spec: &TableSpec, ext: &str, raw: &str) -> Option<String> {
         .trim();
     if syntax.starts_with("EOF while parsing") {
         return Some(format!(
-            "Cannot read '{name}' as JSON: a record does not end on its line. {rule}"
+            "Cannot read '{name}' as JSON: a record does not end on its line.{fix}"
         ));
     }
     Some(format!(
@@ -550,7 +640,7 @@ mod tests {
         TableSpec {
             name: name.into(),
             paths: paths.iter().map(|s| s.to_string()).collect(),
-            format: format.into(),
+            format: SourceFormat::from_name(format),
             partitions: Vec::new(),
         }
     }
@@ -566,6 +656,17 @@ mod tests {
 
     // ---- JSON shapes ----
 
+    /// A JSON spec already set to read whole-document arrays.
+    fn array_spec(name: &str) -> TableSpec {
+        TableSpec {
+            format: SourceFormat::Json(JsonRead {
+                shape: JsonShape::Array,
+                ..Default::default()
+            }),
+            ..spec(name, &[], "json")
+        }
+    }
+
     #[test]
     fn a_pretty_printed_record_is_named_as_a_shape_problem() {
         // The file is valid JSON; Arrow's own "Not valid JSON" is the wrong story.
@@ -573,7 +674,7 @@ mod tests {
         assert_eq!(
             register_error(&spec("signups", &[], "json"), ".json", raw),
             "Cannot read 'signups' as JSON: a record does not end on its line. \
-             JSON sources must be newline-delimited, one record per line."
+             Set the JSON shape to array in Table Config, or use newline-delimited JSON."
         );
     }
 
@@ -585,7 +686,7 @@ mod tests {
         assert_eq!(
             msg,
             "Cannot read 'signups' as JSON: the source is a JSON array. \
-             JSON sources must be newline-delimited, one record per line."
+             Set the JSON shape to array in Table Config, or use newline-delimited JSON."
         );
         assert!(
             !msg.contains("Number("),
@@ -599,7 +700,18 @@ mod tests {
         assert_eq!(
             register_error(&spec("nums", &[], "json"), ".json", raw),
             "Cannot read 'nums' as JSON: a top-level Number is not a record. \
-             JSON sources must be newline-delimited, one record per line."
+             Set the JSON shape to array in Table Config, or use newline-delimited JSON."
+        );
+    }
+
+    #[test]
+    fn a_table_already_reading_arrays_is_not_told_to_set_the_shape_it_has() {
+        // The advice is only a fix while the def is in the other shape. Repeating it here
+        // sends the user to a setting that already says what it should.
+        let raw = "Arrow error: Json error: Expected JSON record to be an object, found Number 3";
+        assert_eq!(
+            register_error(&array_spec("nums"), ".json", raw),
+            "Cannot read 'nums' as JSON: a top-level Number is not a record."
         );
     }
 

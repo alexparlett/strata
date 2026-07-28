@@ -23,7 +23,7 @@
 use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_model::{CatalogKind, ColRef};
+use strata_model::{CatalogKind, ColRef, SourceFormat};
 
 use crate::apps::project::state::{
     use_catalog_selection, CatalogSelection, Chan, ProjChan, ProjectState, SessionState,
@@ -313,7 +313,7 @@ mod tests {
             name: "test".into(),
             tables: vec![TableDef {
                 name: "events".into(),
-                format: "parquet".into(),
+                format: SourceFormat::Parquet,
                 sources: vec!["events.parquet".into()],
                 partition_cols: Vec::new(),
             }],
