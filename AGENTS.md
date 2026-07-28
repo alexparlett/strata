@@ -312,9 +312,13 @@ Things that must not regress. Each was fought for once already.
   gaps rather than design limits (`TableRow` had a `pub theme` field with no builder, so a row
   could not carry a selection fill or decline the hover; only `TableCell` had `on_press`;
   `TableCell` hardcoded `main_align(End)`; `Table`'s rect had no flex content, so a stated height
-  could not reach a scrolling body). Four small upstream-shaped additions beat a hand-rolled grid —
+  could not reach a scrolling body; and one `divider_fill` painted both the box and the rules
+  between rows, so a theme could author the grid's outline or its row rules but never both — it
+  grew a `border_fill`). Five small upstream-shaped additions beat a hand-rolled grid —
   but the test is whether the gap is in the *component*: what a table has no opinion about (which
-  row is selected, what goes between two rows) stays composed in the app. And don't restate at a call site what a variant already
+  row is selected, what goes between two rows) stays composed in the app. And the other way round —
+  a settings list is **not** a results grid, so it gets no zebra: banding is a reading aid for
+  dense data, and on a form it only competes with the one row state the surface has. And don't restate at a call site what a variant already
   resolves: `Button::new().filled()` *is* accent-over-inverse-text, so a `theme_colors` override
   naming those same two slots is a second copy of them. Override only for a genuinely different
   tone (the destructive action reading `cancel_button`).

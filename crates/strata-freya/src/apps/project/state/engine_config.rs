@@ -77,11 +77,22 @@ pub fn use_engine_config(engine: &EngineCtx, confirm: State<Option<CloseTarget>>
         // The same predicate as the `on_close` hook, `TabCloser::close` and `OpenCtx::reroot`:
         // the engine's own in-flight answer, and the user's pref about being asked.
         let running = guard.running.load(Ordering::Relaxed);
-        if running && station.peek().settings.confirm_close_running {
-            let mut confirm = confirm;
-            confirm.set_if_modified(Some(CloseTarget::Restart));
-        } else {
+        if !(running && station.peek().settings.confirm_close_running) {
             restart.restart();
+            return;
+        }
+        // **Never over-write a question already on screen.** Every other writer of this slot is
+        // a press inside *this* window, which the open dialog's own modal barrier already blocks;
+        // this one arrives from the Settings window and can land while the T2 confirm is up. The
+        // one it would replace is the one that matters most: a `CloseTarget::Window` raised by
+        // ⌘Q holds a vetoed close *and* the app-wide quitting flag, which only that variant's
+        // answer clears (`keep_open`'s `end_quit`). Swapping it for a restart abandons the close
+        // and latches the flag, and every later close then skips the launcher hand-off. The
+        // restart stays owed either way (`Engine::restart_owed`), so the next config write asks
+        // again — which is exactly the behaviour a declined restart already has.
+        let mut confirm = confirm;
+        if confirm.peek().is_none() {
+            confirm.set(Some(CloseTarget::Restart));
         }
     });
 }

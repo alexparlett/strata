@@ -58,7 +58,7 @@ impl Component for PropTable {
         let errors = list.errors();
 
         let mut body = TableBody::new();
-        for (index, row) in list.rows().iter().enumerate() {
+        for row in list.rows() {
             let error = errors.get(&row.id).cloned();
             body = body
                 .child(
@@ -67,7 +67,6 @@ impl Component for PropTable {
                         id: row.id,
                         name: row.name.clone(),
                         value: row.value.clone(),
-                        index,
                         invalid: error.is_some(),
                         key: DiffKey::None,
                     }
@@ -164,7 +163,6 @@ struct PropTableRow {
     id: u64,
     name: String,
     value: String,
-    index: usize,
     invalid: bool,
     key: DiffKey,
 }
@@ -244,13 +242,14 @@ impl Component for PropTableRow {
             );
         }
 
-        // Selection outranks the zebra stripe, and both pin the hover fill to themselves: a row
-        // that answers a press with a selection must not also light up as the pointer crosses it.
-        let selected = rows.read().selected == Some(id);
-        let fill = match (selected, self.index % 2 == 1) {
-            (true, _) => theme.table_selection_background,
-            (false, true) => theme.table_zebra_background,
-            (false, false) => Color::TRANSPARENT,
+        // Selection is the row's *only* fill, and it pins the hover fill to itself: a row that
+        // answers a press with a selection must not also light up as the pointer crosses it.
+        // Deliberately **not** striped — this is a settings list, not a results grid, and the
+        // canvas paints every unselected row the same. Banding here would compete with the one
+        // row state the surface actually has.
+        let fill = match rows.read().selected == Some(id) {
+            true => theme.table_selection_background,
+            false => Color::TRANSPARENT,
         };
 
         TableRow::new()

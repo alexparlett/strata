@@ -504,11 +504,12 @@ an honest histogram needs a second full pass (P3-09's file has the reasoning).
 
 **P4-07 (Settings ▸ Engine)** is ✅, and is where Freya's builtin `Table` earned its first use.
 The investigation it started with is the transferable part: the table gave the bordered box, the
-shared column widths and the per-row rule, and the four things it could not do were all **fork
+shared column widths and the per-row rule, and the five things it could not do were all **fork
 gaps rather than design limits** — `TableRow` had a `pub theme` field with no builder (so a row
 could not carry a selection fill, nor decline the hover a selectable table doesn't want), only
-`TableCell` had `on_press`, `TableCell` hardcoded `main_align(End)`, and `Table`'s rect had no flex
-content so a stated height could not reach a scrolling body. Four small upstream-shaped additions,
+`TableCell` had `on_press`, `TableCell` hardcoded `main_align(End)`, `Table`'s rect had no flex
+content so a stated height could not reach a scrolling body, and one `divider_fill` painted both
+the box and the row rules so a theme could never author them apart. Five small upstream additions,
 not a hand-rolled grid; what a table has *no opinion* about (which row is selected, what goes
 between two rows) stayed composed in the app. It also wired the setting for the first time — the
 engine was being built with `Default::default()` — and settled how an engine config change lands:

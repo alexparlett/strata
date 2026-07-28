@@ -90,14 +90,18 @@ define_theme!(
         /// derived from these at `Badge`'s tint alpha, so a source is one token, not two.
         badge_builtin_color: Color,
         badge_user_color: Color,
-        /// The Engine pane's properties grid (P4-07), whose surrounding dress — surface, border,
-        /// rule, radius — is Freya's own `table` component theme. These three are the row states
-        /// a table cannot have an opinion about, because *which* row is selected or striped is
-        /// the caller's answer: the header strip's raised fill, the selected row's accent tint,
-        /// and the alternating wash.
+        /// The Engine pane's properties grid (P4-07), whose surrounding dress — surface, box
+        /// border, row rule, radius — is Freya's own `table` component theme. These two are what
+        /// a table cannot have an opinion about, because *which* row is selected is the caller's
+        /// answer: the header strip's raised fill, and the selected row's accent tint. There is
+        /// no zebra token; the grid is a settings list, not a results grid.
+        ///
+        /// The head sits **one** step over the grid's own surface (the canvas's `--c-surface`
+        /// over `--c-panel`), which is not the same step the results grid's header takes — that
+        /// one is reading dense data and stands further out. Borrowing its slot was how this
+        /// landed too light, and daylight hid it because both resolve to white there.
         table_head_background: Color,
         table_selection_background: Color,
-        table_zebra_background: Color,
     }
 );
 

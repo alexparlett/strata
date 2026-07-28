@@ -246,10 +246,15 @@ impl App for ProjectApp {
         let engine_restart = use_engine_restart();
 
         let root = open.root.read().clone();
-        // The autosave seed is the launch project's alone — the window was *created* at that
-        // geometry. A re-root leaves the window exactly where it is, so the project that
-        // arrives simply records the geometry it finds itself at on its first save.
-        let geometry = (root == self.root).then_some(self.geometry).flatten();
+        // The autosave seed is the launch project's alone, on its **first** mount — the window
+        // was *created* at that geometry. A re-root leaves the window exactly where it is, so the
+        // project that arrives simply records the geometry it finds itself at on its first save;
+        // an engine restart is the same case even though the folder has not changed, because by
+        // then the window may have been moved or resized and the launch geometry is stale. Re-
+        // seeding it would resurrect that stale value the next time the window saves while filled
+        // (the pass that keeps the last *non*-transient geometry rather than reading the screen).
+        let first_mount = root == self.root && engine_restart.generation() == 0;
+        let geometry = first_mount.then_some(self.geometry).flatten();
 
         rect()
             .expanded()

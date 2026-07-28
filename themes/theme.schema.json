@@ -943,6 +943,9 @@
             "divider_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "corner_radius": {
               "$ref": "#/$defs/numberPref"
             },
@@ -1085,9 +1088,6 @@
               "$ref": "#/$defs/colorPref"
             },
             "table_selection_background": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "table_zebra_background": {
               "$ref": "#/$defs/colorPref"
             }
           }

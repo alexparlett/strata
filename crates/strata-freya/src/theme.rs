@@ -411,16 +411,16 @@ strata_components! {
     // the shared `sidebar_item` dress, and its footer buttons `button`'s. The `card_*` /
     // `selected_color` / `badge_*` set is the Appearance pane's theme grid (P4-04) — the cards'
     // own dress; the *swatches* inside a card are the previewed theme's colours, not this
-    // window's, so they aren't tokens here. The `table_*` set is the Engine pane's properties
-    // grid (P4-07): its surface, border, rule and radius are Freya's builtin `table` theme below,
-    // and these three are the row states a table cannot have an opinion about, because *which*
-    // row is selected or striped is the caller's answer.
+    // window's, so they aren't tokens here. The `table_*` pair is the Engine pane's properties
+    // grid (P4-07): its surface, box border, row rule and radius are Freya's builtin `table`
+    // theme below, and these two are what a table cannot have an opinion about, because *which*
+    // row is selected is the caller's answer.
     "settings" => SettingsThemePreference {
         background, nav_background, border_fill, icon_color, icon_background, group_color,
         chevron_color, item_color, item_active_background, item_active_color, hint_color,
         card_background, card_border_fill, card_hover_border_fill, card_divider_fill,
         selected_color, badge_builtin_color, badge_user_color,
-        table_head_background, table_selection_background, table_zebra_background,
+        table_head_background, table_selection_background,
     },
     // The Export window: its body, the raised surface its inset blocks sit on (format cards,
     // text fields, the preview, the two transfer panes), the rules and control edges, the
@@ -652,7 +652,7 @@ theme_registry! {
     "resizable_handle" => ResizableHandleThemePreference { background: color, hover_background: color, corner_radius: corner },
     "slider"           => SliderThemePreference { background: color, thumb_background: color, thumb_inner_background: color, border_fill: color },
     "color_picker"     => ColorPickerThemePreference { background: color, border_fill: color, color: color },
-    "table"            => TableThemePreference { background: color, arrow_fill: color, row_background: color, hover_row_background: color, divider_fill: color, corner_radius: corner, color: color },
+    "table"            => TableThemePreference { background: color, arrow_fill: color, row_background: color, hover_row_background: color, divider_fill: color, border_fill: color, corner_radius: corner, color: color },
     // NB: Freya's built-in `typography` component (title/subtitle/body/caption/overline) is
     // intentionally NOT registered — Strata's type scale is the richer role-based top-level
     // `typography` section (see `generate_schema` + `crate::components::typography`), not a

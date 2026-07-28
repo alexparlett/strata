@@ -62,8 +62,7 @@
     "text_muted": "#909aa9",
     "transparent": "rgba(0,0,0,0)",
     "warning_soft": "rgba(255,166,87,.14)",
-    "warning_soft_border": "rgba(255,166,87,.30)",
-    "surface_zebra": "rgba(255,255,255,.025)"
+    "warning_soft_border": "rgba(255,166,87,.30)"
   },
   "components": {
     "type_palette": {
@@ -754,7 +753,7 @@
         "reference": "transparent"
       },
       "divider_fill": {
-        "specific": "#23272f"
+        "reference": "line"
       },
       "color": {
         "reference": "text_secondary"
@@ -764,6 +763,9 @@
       },
       "corner_radius": {
         "specific": 6.0
+      },
+      "border_fill": {
+        "reference": "border_control"
       }
     },
     "tab_bar": {
@@ -1227,7 +1229,7 @@
         "reference": "transparent"
       },
       "zebra_row_background": {
-        "reference": "surface_zebra"
+        "specific": "rgba(255,255,255,.025)"
       },
       "cell_hover_background": {
         "reference": "surface_row_hover"
@@ -1396,13 +1398,10 @@
         "reference": "accent_orchid"
       },
       "table_head_background": {
-        "reference": "surface_tertiary"
+        "reference": "surface_secondary"
       },
       "table_selection_background": {
         "reference": "accent_selection"
-      },
-      "table_zebra_background": {
-        "reference": "surface_zebra"
       }
     },
     "switch_layout": {
