@@ -20,9 +20,9 @@ it:
 | Decision | one: close the window | a per-mutation policy |
 | Owner | P4-01 item 5 | **this task** |
 
-And it belongs *early* in the remaining phase-4 work, because three phase-4 tasks add **new**
-def-mutation sites — **P4-11** (register-table modal), **P4-12** (import read options), **P4-10**
-(export, which writes files of its own) — and every existing site's local idiom is
+And it belongs *early* in the remaining phase-4 work, because two phase-4 tasks add **new**
+def-mutation sites — **P4-11** (the Configure-table window, which registers, edits and renames
+table defs) and **P4-10** (export, which writes files of its own) — and every existing site's local idiom is
 `if let Err(e) = … { tracing::error!(…) }`. Decide the policy before the writers land, or each one
 copies the silence.
 

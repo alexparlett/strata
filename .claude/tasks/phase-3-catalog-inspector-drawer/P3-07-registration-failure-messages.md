@@ -63,8 +63,8 @@ location is empty when the file plainly exists; it just didn't match the format'
 ## Build
 Map registration failures to honest messages at the **one** place registration returns `Err` —
 `register_external` in `strata-core/src/engine/catalog.rs` — so every caller inherits them: the
-whole-catalog ↻ (P3-03), a row's Refresh (P3-06), project open, and the config modal when it lands
-(P4-11 / P4-12). Not in the UI, and not per-caller.
+whole-catalog ↻ (P3-03), a row's Refresh (P3-06), project open, and the Configure-table window when
+it lands (P4-11). Not in the UI, and not per-caller.
 
 1. **Recognise the JSON read shapes.** A file that parses as JSON but isn't one record per line
    (pretty-printed objects, a top-level array, a single document) says so, and says what the reader
@@ -141,5 +141,8 @@ The delivered messages:
 - `strata-core/src/engine/catalog.rs` (`register_external`); `Reg::Failed` + P3-04's status slot are
   the consumers that exist today.
 - Handoff `FEATURES.md` §6 (the error cases, and the honesty rules that killed §7's pre-flight).
-- **Wire into P4-11 / P4-12:** the config modal shows these same messages on a failed Register. It
-  must not grow a second set — noted in P4-11's file.
+- **Wire into P4-11:** the Configure-table window shows these same messages on a failed Register. It
+  must not grow a second set — noted in P4-11's file. That task also touches two of these mappings
+  from the other side: `json_shape_error`'s "must be newline-delimited" stops being a rule once the
+  JSON shape is an option, and `no_files_error`'s extension advice must name the *compressed*
+  extension (`.csv.gz`) when the table sets a compression.

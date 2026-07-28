@@ -14,7 +14,10 @@ theme preview (`state/theme_preview.rs`) — and one window path everything open
 CloseRequested`** (no objc), and the one place objc *is* reached for is the fork's
 `set_window_parent` (P4-03 pins Settings above the window that opened it). What's left in this
 phase is the settings **categories** (P4-07…P4-09, Appearance, Data-display and System having
-landed with P4-04 / P4-05 / P4-06) and the config modal — plus P4-13's open/create UI. **P4-10
+landed with P4-04 / P4-05 / P4-06) and the **Configure-table window** — plus P4-13's open/create UI.
+(That window is one task, not two: **P4-12 was folded into P4-11**, because the format dropdown is
+what selects the import-option set, the option set moves the file-extension filter, and both halves
+reach the engine through one `TableSpec`.) **P4-10
 settled how a window opened *on something* behaves**: an export window carries the run it was
 opened on, so it is a child window with deliberately **no** single-instance rule (focusing an open
 one would show the wrong run), and it **pins** the snapshot it reads for its whole life — the RAII
@@ -28,7 +31,7 @@ them (the module composes `Form` > `Row` > control, the register being a `Varian
 The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebuild.
 
 > **Pull P4-15 before the remaining writers.** `.strata` write failures are reported through
-> `tracing` and nowhere the user can see, and **P4-11 / P4-12 each add a new mutation site**
+> `tracing` and nowhere the user can see, and **P4-11 adds a new mutation site**
 > whose surrounding idiom is exactly that silence. P4-10 landed ahead of it and reports both
 > arms through P3-13's `log_event` directly — leaving P4-15 the question of whether an export,
 > which writes where the *user* chose rather than into `.strata`, belongs in that funnel at all. P3-13 fixed the three def-mutation paths
@@ -51,8 +54,7 @@ The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebu
 | P4-08 | Settings ▸ Keymap (rebindable) | ⬜ | W4 | P4-03, P2-20 |
 | P4-09 | Settings search | ⬜ | W3 | P4-03 |
 | P4-10 | Export window (rebuild to canvas) | ✅ | D6/U13 | P4-01, P2-01 |
-| P4-11 | Config / register-table modal | ⬜ | U14/D7 | — |
-| P4-12 | Import (read) options (CSV/JSON) | ⬜ | D8 | P4-11 |
+| P4-11 | Configure-table window (register / edit + import options) | ⬜ | U14/D7/D8 | — |
 | P4-13 | Open / create a project (`.strata/` load) | 🟡 internals + the open path done (`OpenPref` honoured everywhere; This Window = keyed remount); **New Project** UI remains | lifecycle | P4-01 · *pull early* |
 | P4-14 | Session persistence + autosave | 🟡 tabs + history + window geometry done (load + autosave, incl. a final save on close/re-root); layout awaits its store | lifecycle | P4-13 |
 | P4-15 | `.strata` write resiliency (one funnel, nothing silent) | ⬜ **pull before P4-10/11/12** | lifecycle | P4-13, P4-14, P3-13 |
