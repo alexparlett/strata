@@ -177,7 +177,7 @@ fn runner() -> (TestingRunner, Handles) {
             // can run a real scan and assert the settled zone; every other test's rows carry no
             // request, so nothing subscribes and nothing is scanned.
             r.provide_root_context(|| {
-                let engine = EngineCtx::new();
+                let engine = EngineCtx::default();
                 block_on(engine.register(TableSpec {
                     name: SCAN_TABLE.into(),
                     paths: vec![SCAN_FIXTURE.into()],

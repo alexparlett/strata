@@ -224,7 +224,7 @@ mod tests {
             app,
             (PANEL_WIDTH, 700.).into(),
             |r| {
-                r.provide_root_context(EngineCtx::new);
+                r.provide_root_context(EngineCtx::default);
                 // Catalog · CatalogRescan · CatalogSelection — the three context signals
                 // the pane's header and rows consume (`state/catalog.rs`).
                 r.provide_root_context(|| State::create(CatalogState::Settled(0)));

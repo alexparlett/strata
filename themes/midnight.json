@@ -755,14 +755,20 @@
       "row_background": {
         "reference": "transparent"
       },
-      "cell_hover_background": {
-        "reference": "surface_row_hover"
-      },
       "divider_fill": {
-        "specific": "#23272f"
+        "reference": "line"
       },
       "color": {
         "reference": "text_secondary"
+      },
+      "hover_row_background": {
+        "reference": "surface_row_hover"
+      },
+      "corner_radius": {
+        "specific": 6.0
+      },
+      "border_fill": {
+        "reference": "border_control"
       }
     },
     "tab_bar": {
@@ -1393,6 +1399,12 @@
       },
       "badge_user_color": {
         "reference": "accent_orchid"
+      },
+      "table_head_background": {
+        "reference": "surface_secondary"
+      },
+      "table_selection_background": {
+        "reference": "accent_selection"
       }
     },
     "switch_layout": {

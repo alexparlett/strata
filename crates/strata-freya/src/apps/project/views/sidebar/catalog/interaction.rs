@@ -211,7 +211,7 @@ fn runner() -> (TestingRunner, Handles) {
             // The row menus' remaining handles: the engine (never asked anything here — no test
             // presses Refresh), the scan flag, the app config behind "View table"'s LIMIT, and
             // the drop-confirm slot the Drop items set.
-            r.provide_root_context(EngineCtx::new);
+            r.provide_root_context(EngineCtx::default);
             r.provide_root_context(|| State::create(CatalogState::Settled(0)));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));

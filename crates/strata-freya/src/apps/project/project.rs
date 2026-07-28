@@ -21,8 +21,9 @@ use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    use_autosave, use_diagnostics, use_init_catalog_selection, use_init_history, use_init_log,
-    use_init_project, use_init_session, Chan, SessionState,
+    use_autosave, use_diagnostics, use_engine_config, use_engine_restart,
+    use_init_catalog_selection, use_init_history, use_init_log, use_init_project, use_init_session,
+    Chan, SessionState,
 };
 use crate::apps::project::views::{
     CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
@@ -241,12 +242,20 @@ impl App for ProjectApp {
         // which does persist. Owned here rather than in the project subtree because it is a fact
         // about the *window*: re-rooting doesn't unfill it.
         let filled_by_app = use_state(|| false);
+        // The engine generation this window is on. A window fact for the same reason as the fill
+        // flag: the thing it keys must survive the remount it causes.
+        let engine_restart = use_engine_restart();
 
         let root = open.root.read().clone();
-        // The autosave seed is the launch project's alone — the window was *created* at that
-        // geometry. A re-root leaves the window exactly where it is, so the project that
-        // arrives simply records the geometry it finds itself at on its first save.
-        let geometry = (root == self.root).then_some(self.geometry).flatten();
+        // The autosave seed is the launch project's alone, on its **first** mount — the window
+        // was *created* at that geometry. A re-root leaves the window exactly where it is, so the
+        // project that arrives simply records the geometry it finds itself at on its first save;
+        // an engine restart is the same case even though the folder has not changed, because by
+        // then the window may have been moved or resized and the launch geometry is stale. Re-
+        // seeding it would resurrect that stale value the next time the window saves while filled
+        // (the pass that keeps the last *non*-transient geometry rather than reading the screen).
+        let first_mount = root == self.root && engine_restart.generation() == 0;
+        let geometry = first_mount.then_some(self.geometry).flatten();
 
         rect()
             .expanded()
@@ -265,6 +274,7 @@ impl App for ProjectApp {
             })
             .child(ProjectRoot {
                 root,
+                generation: engine_restart.generation(),
                 geometry,
                 confirm,
                 filled_by_app,
@@ -331,9 +341,13 @@ impl App for ProjectApp {
 /// re-open a project; it is only ever mounted at one.
 #[derive(PartialEq)]
 struct ProjectRoot {
-    /// The project folder this subtree is standing up. **Its diff key**, so a different
+    /// The project folder this subtree is standing up. Half of **its diff key**, so a different
     /// folder is a different subtree.
     root: PathBuf,
+    /// The window's engine generation — the other half of the key. Bumping it (P4-07's restart)
+    /// is a remount of this same project, which is the only way to apply a changed
+    /// `datafusion.runtime.*` property: the `RuntimeEnv` is fixed when the engine is built.
+    generation: u64,
     /// The geometry the window was created at, when this is the project it was created for
     /// — the autosave seed. `None` for a project opened into an existing window.
     geometry: Option<WindowGeom>,
@@ -359,8 +373,12 @@ impl Component for ProjectRoot {
         let guard = use_consume::<Arc<CloseGuard>>();
         let engine = use_provide_context({
             let running = guard.running.clone();
+            // The app's `datafusion.*` overrides are a launch value (Settings ▸ Engine, W2): the
+            // `RuntimeEnv` half is fixed the moment the context is built, so an engine is only
+            // ever *born* with a full set. `use_engine_config` below keeps the rest in step.
+            let overrides = config.peek().settings.engine.clone();
             move || {
-                let engine = EngineCtx::new();
+                let engine = EngineCtx::new(overrides);
                 engine.watch_inflight(running);
                 engine
             }
@@ -394,6 +412,10 @@ impl Component for ProjectRoot {
         // the project (which provides the catalog state it gates on) and the session, because
         // it reconciles all three. Nothing else in the app writes diagnostics.
         use_diagnostics();
+        // Keep that engine pointed at the app's engine overrides for as long as the project is
+        // open: a `ConfigOptions` change lands on the live session, and a changed
+        // `datafusion.runtime.*` asks for a restart through this window's own close confirm.
+        use_engine_config(&engine, self.confirm);
         // The inspected-column slot (P3-02): the catalog sidebar writes it, the inspector
         // (P3-08) reads it. A context signal, not a store — see `state/catalog.rs`.
         use_init_catalog_selection();
@@ -471,7 +493,7 @@ impl Component for ProjectRoot {
     /// same hooks that run at launch. Without the key, Freya would keep the scope and its
     /// hooks, and every store would still hold the old project.
     fn render_key(&self) -> DiffKey {
-        DiffKey::from(&self.root)
+        DiffKey::from(&(self.root.clone(), self.generation))
     }
 }
 
