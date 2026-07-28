@@ -329,11 +329,12 @@ impl Component for PathRow {
             .maybe(self.selected, |el| el.background(colors.active))
             .on_pointer_down(move |_| ctx.edit(move |draft| draft.selected = index))
             .child(
+                // No placeholder: the ⓘ beside the label already says what a path can be, and
+                // a fake path sitting in every empty row reads as a value until you look twice.
                 ValueField::new(text)
                     .bare()
                     .width(Size::fill())
-                    .height(Size::px(ROW_HEIGHT))
-                    .placeholder("/data/2024/  ·  *.parquet"),
+                    .height(Size::px(ROW_HEIGHT)),
             )
     }
 }
