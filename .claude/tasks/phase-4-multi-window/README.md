@@ -1,7 +1,7 @@
 # Phase 4 — Multi-window
 
 The other OS windows and the machinery that lets them share state: **launcher**, **settings**,
-**export**, the **config / register-table** modal, cross-window shared state, native close
+**export**, the **Configure-table** window, cross-window shared state, native close
 handling, and **project lifecycle** (open/load + session persistence).
 
 ## State of play
@@ -14,10 +14,13 @@ theme preview (`state/theme_preview.rs`) — and one window path everything open
 CloseRequested`** (no objc), and the one place objc *is* reached for is the fork's
 `set_window_parent` (P4-03 pins Settings above the window that opened it). What's left in this
 phase is the settings **categories** (P4-07…P4-09, Appearance, Data-display and System having
-landed with P4-04 / P4-05 / P4-06) and the **Configure-table window** — plus P4-13's open/create UI.
-(That window is one task, not two: **P4-12 was folded into P4-11**, because the format dropdown is
+landed with P4-04 / P4-05 / P4-06) — plus P4-13's open/create UI. **P4-11** shipped the
+Configure-table window as one task, not two (**P4-12 was folded into it**: the format dropdown is
 what selects the import-option set, the option set moves the file-extension filter, and both halves
-reach the engine through one `TableSpec`.) **P4-10
+reach the engine through one `TableSpec`), and settled two things every later surface inherits —
+a window carries **no theme of its own** (chrome is the sheet, form vocabulary is the `form` theme),
+and a trigger that opens a window **sets a slot** the root acts on rather than holding the window's
+handles itself. **P4-10
 settled how a window opened *on something* behaves**: an export window carries the run it was
 opened on, so it is a child window with deliberately **no** single-instance rule (focusing an open
 one would show the wrong run), and it **pins** the snapshot it reads for its whole life — the RAII
@@ -58,7 +61,7 @@ The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebu
 | P4-11 | Configure-table window (register / edit + import options) | ✅ | U14/D7/D8 | — |
 | P4-13 | Open / create a project (`.strata/` load) | 🟡 internals + the open path done (`OpenPref` honoured everywhere; This Window = keyed remount); **New Project** UI remains | lifecycle | P4-01 · *pull early* |
 | P4-14 | Session persistence + autosave | 🟡 tabs + history + window geometry done (load + autosave, incl. a final save on close/re-root); layout awaits its store | lifecycle | P4-13 |
-| P4-15 | `.strata` write resiliency (one funnel, nothing silent) | ⬜ **pull before P4-10/11/12** | lifecycle | P4-13, P4-14, P3-13 |
+| P4-15 | `.strata` write resiliency (one funnel, nothing silent) | ⬜ | lifecycle | P4-13, P4-14, P3-13 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.
