@@ -85,6 +85,12 @@ pub enum CloseTarget {
     /// window, so it asks on the same terms rather than being the one destructive path that
     /// doesn't.
     Reroot(PathBuf),
+    /// The window's **engine**, in favour of one built with changed `datafusion.runtime.*`
+    /// properties (P4-07). Those configure the `RuntimeEnv`, which is fixed when the
+    /// `SessionContext` is built, so applying one means a new engine — which unmounts the
+    /// project subtree exactly as a re-root does, and aborts everything in flight for the same
+    /// reason.
+    Restart,
 }
 
 /// The UI half of the bridge, carried in the `ProjectApp`: the shared guard plus the

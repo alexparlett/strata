@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 /// The value shape of a known key — drives editor-side validation ([`value_error`]).
 /// Deliberately lenient: DataFusion does the final, authoritative validation when the
 /// value is applied; this only catches the clearly-wrong so Apply can flag it inline.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     /// Free-form string — not validated (names, formats, paths, codecs).
     Text,
@@ -40,6 +40,7 @@ pub enum Kind {
 
 /// One known engine config key: DataFusion name, built-in default (string form), value
 /// [`Kind`], and a one-line description.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct EngineKey {
     pub key: &'static str,
     pub default: &'static str,

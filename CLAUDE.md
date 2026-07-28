@@ -241,6 +241,16 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
                                  one-way, so nothing put the answer back to Ask. The history
                                  floor is `strata_core::config::HISTORY_MIN`, the same floor
                                  `history_cap` applies (a `0` would rotate `history.jsonl` away)
+    engine/                      P4-07 — the Engine pane: the DataFusion properties editor, and the
+                                 one category that is a *surface* rather than a list of settings
+                                 (hence `Pane::filled` + `maybe_trailing`). mod.rs is the frame +
+                                 toolbar + Revert; model.rs the row list (`PropRows` — rows are the
+                                 editing model, the `BTreeMap` is what commits, ids are a counter
+                                 because the *name* is the thing you retype; unit-tested);
+                                 table.rs the grid on Freya's builtin `Table` (five fork additions
+                                 rather than a lookalike — see the task file); inspector.rs the
+                                 selected key's catalogue entry. Nothing here reaches an engine:
+                                 Apply writes the config, and each project window picks it up
 src/apps/export/                 the export window (P4-10, `Export.dc.html` for the markup,
                                  `Strata.exportGroups()` for the options) — opened from the
                                  results toolbar, pinned above the project window that asked
@@ -273,12 +283,19 @@ src/apps/project/                the project window (Valin-shaped)
                                  project** (engine, stores, autosave, catalog, views), whose
                                  `render_key` is the project folder — so "open in this window"
                                  is a `State` write and the remount *is* the reopen path
-  contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context
+  contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context, built
+                                 with the app's `datafusion.*` overrides — a launch value, since
+                                 the RuntimeEnv is fixed when the SessionContext is
   query/                         the freya-query capabilities over the engine facade — run_query
                                  (RunQuery · FetchSnapshotPage), validate, profile (P3-09: the
                                  scan, keyed by `ProfileSpec { owner, scan }`, with `use_profile`
                                  the one place that Query is built)
   state/                         per-window state (Radio): channel, hooks, session
+                                 engine_config.rs = P4-07's driver: `Engine::set_config` off
+                                 `ConfigChan::Settings`, and `EngineRestart` — a runtime key can
+                                 only be applied by a new engine, so the restart is a bump of
+                                 ProjectRoot's diff key (the re-root mechanism), asked through the
+                                 one T2 confirm (`CloseTarget::Restart`)
                                  diagnostics.rs = **the window's one validation driver**: every
                                  open tab's diagnostics kept in step with its text and the
                                  catalog. Each tab carries `validated: Option<Stamp>` (buffer
@@ -496,6 +513,22 @@ for the views that read it. `Engine::profile` / `cancel_profile` own the engine 
 scan counts as work in flight for the window-close confirm and not for the per-tab probe. The
 canvas's **distribution bars are deliberately not built** — the scan has no distribution data and
 an honest histogram needs a second full pass (P3-09's file has the reasoning).
+
+**P4-07 (Settings ▸ Engine)** is ✅, and is where Freya's builtin `Table` earned its first use.
+The investigation it started with is the transferable part: the table gave the bordered box, the
+shared column widths and the per-row rule, and the five things it could not do were all **fork
+gaps rather than design limits** — `TableRow` had a `pub theme` field with no builder (so a row
+could not carry a selection fill, nor decline the hover a selectable table doesn't want), only
+`TableCell` had `on_press`, `TableCell` hardcoded `main_align(End)`, `Table`'s rect had no flex
+content so a stated height could not reach a scrolling body, and one `divider_fill` painted both
+the box and the row rules so a theme could never author them apart. Five small upstream additions,
+not a hand-rolled grid; what a table has *no opinion* about (which row is selected, what goes
+between two rows) stayed composed in the app. It also wired the setting for the first time — the
+engine was being built with `Default::default()` — and settled how an engine config change lands:
+`Engine::set_config` writes the `ConfigOptions` half live (a **removed** key going back to its
+catalogue default, not skipped), and a changed `datafusion.runtime.*` is a **restart**, which is a
+bump of `ProjectRoot`'s diff key through the one T2 confirm rather than a second way to configure
+a live engine. See its task file; AGENTS.md §2 carries the rules.
 
 **P4-10 (export window)** is ✅ — rebuilt from the canvas rather than ported, because the Dioxus
 modal had drifted from the design and reached its screen through hardcoded `match` arms per

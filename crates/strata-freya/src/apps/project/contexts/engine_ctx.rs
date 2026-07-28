@@ -6,6 +6,7 @@
 //! [`TabId`] → [`WsId`](strata_core::engine::WsId) identity (a tab *is* an engine
 //! workspace) and the tab-close cleanup hook the window root drives.
 
+use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -23,10 +24,16 @@ pub struct EngineCtx {
 }
 
 impl EngineCtx {
-    /// Spawn this window's engine (its private runtime + context) and wrap it for context.
-    pub fn new() -> Self {
+    /// Spawn this window's engine (its private runtime + context) with the app's
+    /// `datafusion.*` overrides (Settings ▸ Engine ▸ Properties, W2), and wrap it for context.
+    ///
+    /// The overrides are a **launch value**, not a subscription: the `RuntimeEnv` half of them is
+    /// fixed the moment the `SessionContext` is built, so an engine is only ever *born* with a
+    /// full set. Keeping them in step after that is
+    /// [`use_engine_config`](crate::apps::project::state::use_engine_config)'s job.
+    pub fn new(overrides: BTreeMap<String, String>) -> Self {
         Self {
-            eng: Arc::new(Engine::new(Default::default())),
+            eng: Arc::new(Engine::new(overrides)),
         }
     }
 
@@ -65,6 +72,6 @@ impl Deref for EngineCtx {
 
 impl Default for EngineCtx {
     fn default() -> Self {
-        Self::new()
+        Self::new(BTreeMap::new())
     }
 }

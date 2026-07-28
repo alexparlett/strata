@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn run_then_page_through_the_capabilities() {
-        let engine = EngineCtx::new();
+        let engine = EngineCtx::default();
         let (run, spec) = spec(&engine, QueryMode::Run);
 
         let QueryOutcome::Rows(page) = block_on(run.run(&spec)).expect("run") else {
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn explain_settles_to_a_plan() {
-        let engine = EngineCtx::new();
+        let engine = EngineCtx::default();
         let (run, spec) = spec(&engine, QueryMode::Explain { analyze: false });
         let QueryOutcome::Plan(plan) = block_on(run.run(&spec)).expect("explain") else {
             panic!("mode Explain settles to a plan");

@@ -72,7 +72,7 @@ pub fn stopped_on_purpose(error: &str) -> bool {
     matches!(error, CANCELLED | SUPERSEDED_RUN | SUPERSEDED_SCAN)
 }
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -181,9 +181,15 @@ pub struct Engine {
     /// e.g. a `#[tokio::test]`); always `Some` while the engine lives.
     rt: Option<Runtime>,
     ctx: SessionContext,
-    /// The `datafusion.*` config overrides this engine runs with (W2). Mutex'd so a
-    /// future live `set_config` doesn't change the field's shape.
+    /// The `datafusion.*` config overrides this engine runs with (W2). Mutex'd because
+    /// [`set_config`](Engine::set_config) re-points a live engine at a new set.
     overrides: Mutex<BTreeMap<String, String>>,
+    /// The `datafusion.runtime.*` overrides this engine was **built** with. The `RuntimeEnv`
+    /// is fixed when the `SessionContext` is built, so this — not the live `overrides` — is
+    /// what [`restart_owed`](Engine::restart_owed) measures against: a user who declines the
+    /// restart keeps the new values in `overrides`, and comparing the two maps to each other
+    /// would then report "nothing changed" and never offer the restart again.
+    built_runtime: BTreeMap<String, String>,
     /// Snapshot-id allocator — ids are per-engine unique for the process lifetime,
     /// which is what makes a snapshot immutable-by-identity.
     snap_seq: AtomicU64,
@@ -236,6 +242,7 @@ impl Engine {
             engine_id,
             rt: Some(rt),
             ctx,
+            built_runtime: runtime_subset(&overrides),
             overrides: Mutex::new(overrides),
             snap_seq: AtomicU64::new(1),
             dispatch_seq: AtomicU64::new(1),
@@ -300,6 +307,61 @@ impl Engine {
     /// The registered SQL functions (the editor's language catalog).
     pub fn functions(&self) -> &FunctionCatalog {
         &self.functions
+    }
+
+    /// Re-point this live engine at `overrides` (Settings ▸ Engine ▸ Properties, W2), and
+    /// answer whether a restart is still owed.
+    ///
+    /// Every `ConfigOptions` key is written straight onto the live `SessionState`, so the
+    /// next query planned sees it. A key the user **removed** is not skipped — it is set back
+    /// to the built-in default from [`config::ENGINE_KEYS`], because leaving it at the value
+    /// that was just deleted is the one outcome nobody asked for. That completes the mapping:
+    /// the keys `ConfigOptions` accepts are exactly the ones the catalog names a default for,
+    /// so every key that ever applied can also be un-applied. (An unrecognised
+    /// `datafusion.*` key was already rejected by `set` at build time and stays rejected
+    /// here — it never took effect, so removing it is a no-op either way.)
+    ///
+    /// `datafusion.runtime.*` is the exception, and the reason this returns anything: those
+    /// configure the `RuntimeEnv`, which is fixed when the `SessionContext` is built. They
+    /// are recorded, not applied, and `true` means the caller owes the user a restart.
+    pub fn set_config(&self, overrides: BTreeMap<String, String>) -> bool {
+        let mut current = self.overrides.lock().unwrap();
+        if *current != overrides {
+            let state = self.ctx.state_ref();
+            let mut state = state.write();
+            let options = state.config_mut().options_mut();
+            let touched: BTreeSet<&String> = current.keys().chain(overrides.keys()).collect();
+            for key in touched {
+                if config::is_restart_key(key) || config::is_owned_key(key) {
+                    continue;
+                }
+                let value = match overrides.get(key) {
+                    Some(value) => value.as_str(),
+                    None => match config::key_def(key) {
+                        Some(def) => def.default,
+                        // Never applied, so there is nothing to put back.
+                        None => continue,
+                    },
+                };
+                if let Err(e) = options.set(key, value) {
+                    tracing::warn!("engine config: skipping {key}={value}: {e}");
+                }
+            }
+            *current = overrides;
+        }
+        runtime_subset(&current) != self.built_runtime
+    }
+
+    /// Whether this engine's `datafusion.runtime.*` overrides have moved on from the ones its
+    /// `RuntimeEnv` was built with — i.e. whether a restart would change anything. Stays true
+    /// until the engine is actually rebuilt, so a declined restart can be offered again.
+    pub fn restart_owed(&self) -> bool {
+        runtime_subset(&self.overrides.lock().unwrap()) != self.built_runtime
+    }
+
+    /// The `datafusion.*` overrides this engine is running with.
+    pub fn overrides(&self) -> BTreeMap<String, String> {
+        self.overrides.lock().unwrap().clone()
     }
 
     /// Validate `sql` against this engine's live session (P2-18): lexical lints,
@@ -1035,8 +1097,28 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
 const CATALOG: &str = "strata";
 const SCHEMA: &str = "public";
 
+/// Just the `datafusion.runtime.*` entries of `overrides` — the half that
+/// [`build_runtime`] reads, and so the half a restart would change.
+fn runtime_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    overrides
+        .iter()
+        .filter(|(k, _)| config::is_restart_key(k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
 /// A `RuntimeEnv` from the `datafusion.runtime.*` overrides, or `None` when none are
-/// set (default runtime). Sizes ("2G", "100G") parse via `parse_capacity_limit`.
+/// set (default runtime). Sizes ("2G", "100G") parse via `parse_capacity_limit`; the TTL via
+/// [`crate::util::parse_duration`], the same function [`config::value_error`] validates the
+/// field with.
+///
+/// **Every key [`config::ENGINE_KEYS`] catalogues as `runtime.*` is read here.** Four of them
+/// were catalogued — named, described, and treated as restart-required by
+/// [`is_restart_key`](config::is_restart_key) — but never consumed, which nothing noticed while
+/// there was no way to set them. P4-07's properties editor is that way: it offers the key,
+/// validates the value, badges it RESTART and rebuilds the engine, and the setting then did
+/// nothing, with no error to say so. A catalogue entry is a promise that the key applies, so
+/// adding one to `ENGINE_KEYS` means adding it here in the same change.
 fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<RuntimeEnv>>, String> {
     use datafusion::execution::runtime_env::RuntimeEnvBuilder;
     let val = |k: &str| {
@@ -1045,22 +1127,58 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     };
+    let bytes = |key: &str, raw: &str| {
+        SessionContext::parse_capacity_limit(key, raw).map_err(|e| e.to_string())
+    };
+
     let mem = val("datafusion.runtime.memory_limit");
-    let tmp = val("datafusion.runtime.max_temp_directory_size");
-    if mem.is_none() && tmp.is_none() {
+    let max_temp = val("datafusion.runtime.max_temp_directory_size");
+    let temp_dir = val("datafusion.runtime.temp_directory");
+    let metadata_cache = val("datafusion.runtime.metadata_cache_limit");
+    let list_cache = val("datafusion.runtime.list_files_cache_limit");
+    let list_ttl = val("datafusion.runtime.list_files_cache_ttl");
+    // Nothing to configure — a default `RuntimeEnv` rather than a hand-built one that happens to
+    // match it.
+    if [
+        &mem,
+        &max_temp,
+        &temp_dir,
+        &metadata_cache,
+        &list_cache,
+        &list_ttl,
+    ]
+    .iter()
+    .all(|v| v.is_none())
+    {
         return Ok(None);
     }
+
     let mut b = RuntimeEnvBuilder::new();
-    if let Some(m) = mem {
-        let bytes = SessionContext::parse_capacity_limit("datafusion.runtime.memory_limit", &m)
-            .map_err(|e| e.to_string())?;
-        b = b.with_memory_limit(bytes, 1.0);
+    if let Some(v) = &mem {
+        b = b.with_memory_limit(bytes("datafusion.runtime.memory_limit", v)?, 1.0);
     }
-    if let Some(t) = tmp {
-        let bytes =
-            SessionContext::parse_capacity_limit("datafusion.runtime.max_temp_directory_size", &t)
-                .map_err(|e| e.to_string())?;
-        b = b.with_max_temp_directory_size(bytes as u64);
+    if let Some(v) = &max_temp {
+        b = b.with_max_temp_directory_size(
+            bytes("datafusion.runtime.max_temp_directory_size", v)? as u64,
+        );
+    }
+    if let Some(v) = &temp_dir {
+        b = b.with_temp_file_path(v);
+    }
+    if let Some(v) = &metadata_cache {
+        b = b.with_metadata_cache_limit(bytes("datafusion.runtime.metadata_cache_limit", v)?);
+    }
+    if let Some(v) = &list_cache {
+        b = b.with_object_list_cache_limit(bytes(
+            "datafusion.runtime.list_files_cache_limit",
+            v,
+        )?);
+    }
+    if let Some(v) = &list_ttl {
+        let ttl = crate::util::parse_duration(v).ok_or_else(|| {
+            format!("datafusion.runtime.list_files_cache_ttl: expected a duration like 30s or 2m, got {v}")
+        })?;
+        b = b.with_object_list_cache_ttl(Some(ttl));
     }
     b.build_arc().map(Some).map_err(|e| e.to_string())
 }
@@ -1078,6 +1196,131 @@ mod tests {
     /// A view body whose **profile** is still counting when a test acts on it: 50M distinct
     /// values, aborted within a few dozen milliseconds, so the scan never accumulates far.
     const SLOW_ROWS: &str = "SELECT * FROM generate_series(1, 50000000)";
+
+    fn overrides(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// What the live session actually holds for `key` — the thing `set_config` claims to move.
+    fn live(engine: &Engine, key: &str) -> String {
+        engine
+            .ctx
+            .state()
+            .config()
+            .options()
+            .entries()
+            .into_iter()
+            .find(|entry| entry.key == key)
+            .and_then(|entry| entry.value)
+            .unwrap_or_default()
+    }
+
+    const BATCH: &str = "datafusion.execution.batch_size";
+    const MEMORY: &str = "datafusion.runtime.memory_limit";
+
+    #[test]
+    fn set_config_moves_a_live_option_and_puts_a_removed_one_back_to_its_default() {
+        let engine = Engine::new(overrides(&[(BATCH, "4096")]));
+        assert_eq!(live(&engine, BATCH), "4096", "built with the override");
+
+        assert!(!engine.set_config(overrides(&[(BATCH, "1024")])));
+        assert_eq!(live(&engine, BATCH), "1024", "applied without a restart");
+
+        // The half that is easy to get wrong: dropping a key must not leave the engine on the
+        // value that was just deleted.
+        assert!(!engine.set_config(BTreeMap::new()));
+        assert_eq!(
+            live(&engine, BATCH),
+            config::key_def(BATCH).expect("catalogued").default,
+            "a removed override goes back to the built-in default"
+        );
+    }
+
+    #[test]
+    fn a_runtime_key_owes_a_restart_until_the_engine_is_rebuilt() {
+        let engine = Engine::new(BTreeMap::new());
+        assert!(!engine.restart_owed());
+
+        assert!(
+            engine.set_config(overrides(&[(MEMORY, "2G")])),
+            "the RuntimeEnv is fixed at build, so this is owed"
+        );
+        // Declining the restart must not settle the debt: the map has moved on, the runtime has
+        // not, and the next config write has to offer it again.
+        assert!(engine.restart_owed());
+        assert!(
+            engine.set_config(overrides(&[(MEMORY, "2G"), (BATCH, "1024")])),
+            "a second write still owes the same restart"
+        );
+
+        // Rebuilding is what settles it — which is exactly what the window's remount does.
+        let restarted = Engine::new(engine.overrides());
+        assert!(!restarted.restart_owed());
+    }
+
+    /// A catalogue entry is a promise that the key applies. Four `runtime.*` keys were
+    /// catalogued, described and badged RESTART while `build_runtime` never read them, so setting
+    /// one did nothing at all — invisible until P4-07 gave them an editor. This is the guard:
+    /// every `runtime.*` key the catalogue names must reach `RuntimeEnvBuilder`, which shows up
+    /// here as "the builder accepts its documented default without erroring".
+    #[test]
+    fn every_catalogued_runtime_key_reaches_the_runtime_builder() {
+        for entry in config::ENGINE_KEYS
+            .iter()
+            .filter(|e| config::is_restart_key(e.key))
+        {
+            // Blank means "unset" for several of these, so exercise a real value instead.
+            let value = match entry.default {
+                "" => match entry.kind {
+                    config::Kind::Bytes => "64M",
+                    config::Kind::Duration => "30s",
+                    _ => "/tmp/strata-runtime-test",
+                },
+                default => default,
+            };
+            let one = overrides(&[(entry.key, value)]);
+            let built = build_runtime(&one)
+                .unwrap_or_else(|e| panic!("{} = {value} was rejected: {e}", entry.key));
+            assert!(
+                built.is_some(),
+                "{} = {value} built a default runtime — the key is catalogued but never read, so \
+                 setting it does nothing and says nothing",
+                entry.key
+            );
+        }
+    }
+
+    #[test]
+    fn a_runtime_ttl_is_read_the_way_the_field_validates_it() {
+        // The validator and the parser are one function (`util::parse_duration`), so a field that
+        // accepts `2m` cannot be read as two seconds.
+        assert!(build_runtime(&overrides(&[(
+            "datafusion.runtime.list_files_cache_ttl",
+            "2m"
+        )]))
+        .is_ok_and(|rt| rt.is_some()));
+        assert_eq!(
+            crate::util::parse_duration("2m"),
+            Some(std::time::Duration::from_secs(120))
+        );
+        assert!(build_runtime(&overrides(&[(
+            "datafusion.runtime.list_files_cache_ttl",
+            "nonsense"
+        )]))
+        .is_err());
+    }
+
+    #[test]
+    fn set_config_leaves_the_catalog_names_alone() {
+        let engine = Engine::new(BTreeMap::new());
+        // A stale saved override naming a key the app owns must not re-point name resolution at
+        // a catalog that was never created (`is_owned_key`).
+        engine.set_config(overrides(&[("datafusion.catalog.default_schema", "elsewhere")]));
+        assert_eq!(live(&engine, "datafusion.catalog.default_schema"), SCHEMA);
+    }
 
     #[test]
     fn a_nameable_ident_is_emitted_bare_and_case_folded() {

@@ -509,7 +509,7 @@ mod tests {
             app,
             (900., 700.).into(),
             move |r| {
-                r.provide_root_context(EngineCtx::new);
+                r.provide_root_context(EngineCtx::default);
                 r.provide_root_context(|| State::create(CatalogState::Settled(0)));
                 let target = r.provide_root_context(|| State::create(None::<DropTarget>));
                 let session = r.provide_root_context(|| {

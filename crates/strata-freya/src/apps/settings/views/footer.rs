@@ -12,6 +12,7 @@ use freya::prelude::*;
 
 use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
 use crate::components::divider::Divider;
+use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Control;
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`) and its buttons' height.
@@ -31,6 +32,10 @@ impl Component for Footer {
         let ctx = use_consume::<SettingsCtx>();
         let platform = use_hook(Platform::get);
         let dirty = ctx.dirty();
+        // Why Apply is off while the draft *is* dirty. Said out loud, because a button that is
+        // disabled for a reason the user cannot see reads as a broken button.
+        let blocker = ctx.blocker();
+        let error = use_theme().read().colors().error;
 
         let cancel = {
             let platform = platform.clone();
@@ -42,7 +47,7 @@ impl Component for Footer {
         let apply = Button::new()
             .filled()
             .height(Size::px(BUTTON_HEIGHT))
-            .enabled(dirty)
+            .enabled(dirty && blocker.is_none())
             .on_press(move |_: Event<PressEventData>| {
                 ctx.apply();
                 platform.close_current_window();
@@ -57,11 +62,26 @@ impl Component for Footer {
                 rect()
                     .width(Size::fill())
                     .horizontal()
+                    .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .main_align(Alignment::End)
                     .spacing(12.)
                     .padding(FOOTER_PADDING)
                     .background(theme.background)
+                    .child(
+                        rect()
+                            .width(Size::flex(1.))
+                            .horizontal()
+                            .cross_align(Alignment::Center)
+                            .spacing(6.)
+                            .maybe_child(blocker.map(|blocker| {
+                                rect()
+                                    .horizontal()
+                                    .cross_align(Alignment::Center)
+                                    .spacing(6.)
+                                    .child(Icon::new(IconName::Alert).size(14.).color(error))
+                                    .child(Control::new(blocker).color(error))
+                            })),
+                    )
                     .child(cancel)
                     .child(apply),
             )
