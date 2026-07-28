@@ -13,11 +13,10 @@ use freya::prelude::*;
 use crate::apps::configure::ConfigureCtx;
 use crate::components::form::{Row, ValueField};
 use crate::components::icon::{Icon, IconName};
+use crate::components::tool_button::ToolButton;
 use crate::components::typography::Prose;
 
-/// The toolbar's square buttons (the app's icon-button size), and the gap between them.
-const TOOL_SIZE: f32 = 28.;
-const TOOL_ICON: f32 = 15.;
+/// The gap between the toolbar's buttons (their size is the shared control's).
 const TOOL_GAP: f32 = 6.;
 /// A path row's height, and the list's empty state (canvas `min-height: 88px`).
 const ROW_HEIGHT: f32 = 34.;
@@ -71,60 +70,19 @@ impl Component for Toolbar {
             .cross_align(Alignment::Center)
             .spacing(TOOL_GAP)
             .child(
-                ToolButton {
-                    icon: IconName::Plus,
-                    color: colors.primary,
-                    label: "Add path",
-                    enabled: true,
-                }
-                .on_press(move |_| ctx.edit(|draft| draft.add_path())),
+                ToolButton::new(IconName::Plus, "Add path")
+                    .outlined()
+                    .color(colors.primary)
+                    .on_press(move |_| ctx.edit(|draft| draft.add_path())),
             )
             .child(
-                ToolButton {
-                    icon: IconName::Minus,
-                    color: colors.error,
-                    label: "Remove path",
-                    enabled: has_rows,
-                }
-                .on_press(move |_| ctx.edit(|draft| draft.remove_path())),
+                ToolButton::new(IconName::Minus, "Remove path")
+                    .outlined()
+                    .color(colors.error)
+                    .enabled(has_rows)
+                    .on_press(move |_| ctx.edit(|draft| draft.remove_path())),
             )
             .child(BrowseButton)
-    }
-}
-
-/// One 28 × 28 toolbar button. `Button::new().outline()` at the app's icon-button size — never
-/// a hand-rolled square.
-#[derive(PartialEq)]
-struct ToolButton {
-    icon: IconName,
-    color: Color,
-    label: &'static str,
-    enabled: bool,
-}
-
-impl ToolButton {
-    fn on_press(self, on_press: impl Into<EventHandler<Event<PressEventData>>>) -> Element {
-        let on_press = on_press.into();
-        let enabled = self.enabled;
-        let button = Button::new()
-            .outline()
-            .enabled(enabled)
-            .theme_layout(
-                ButtonLayoutThemePartial::default()
-                    .width(Size::px(TOOL_SIZE))
-                    .height(Size::px(TOOL_SIZE))
-                    // The stated box *is* the size: the stock padding would leave the glyph
-                    // ~10px to sit in, and a button clips its overflow.
-                    .padding(Gaps::new_all(0.)),
-            )
-            .on_press(move |e: Event<PressEventData>| on_press.call(e))
-            .child(Icon::new(self.icon).size(TOOL_ICON).color(self.color));
-        // The tooltip is the label: an icon-only button has no text of its own, and the app's
-        // other icon clusters name themselves the same way.
-        TooltipContainer::new(Tooltip::new(self.label))
-            .position(AttachedPosition::Top)
-            .child(button)
-            .into_element()
     }
 }
 
@@ -159,24 +117,10 @@ impl Component for BrowseButton {
             );
 
         Attached::new(
-            TooltipContainer::new(Tooltip::new("Browse for a source"))
-                .position(AttachedPosition::Top)
-                .child(
-                    Button::new()
-                        .outline()
-                        .theme_layout(
-                            ButtonLayoutThemePartial::default()
-                                .width(Size::px(TOOL_SIZE))
-                                .height(Size::px(TOOL_SIZE))
-                                .padding(Gaps::new_all(0.)),
-                        )
-                        .on_press(move |_| open.toggle())
-                        .child(
-                            Icon::new(IconName::Folder)
-                                .size(TOOL_ICON)
-                                .color(form.label_color),
-                        ),
-                ),
+            ToolButton::new(IconName::Folder, "Browse for a source")
+                .outlined()
+                .color(form.label_color)
+                .on_press(move |_| open.toggle()),
         )
         .bottom()
         .align_start()

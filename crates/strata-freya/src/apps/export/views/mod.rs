@@ -54,9 +54,10 @@ impl Component for ExportBody {
 /// This window's option list — the format's groups, rendered by the shared vocabulary.
 ///
 /// **Flat: there is no ADVANCED disclosure.** The canvas folded it away on the grounds that a
-/// format's advanced controls are just more of that format's options. (The Configure window's
-/// canvas kept one, which is why the disclosure belongs to that window rather than to
-/// [`OptionList`].)
+/// format's advanced controls are just more of that format's options. The Configure window's
+/// canvas kept one and it was built that way first; it was then flattened to match this, because
+/// the reasoning is not specific to exporting. Neither window has a disclosure, so neither does
+/// [`OptionList`].
 #[derive(PartialEq)]
 struct Options;
 

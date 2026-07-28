@@ -52,13 +52,15 @@ impl Component for Footer {
         // for good. The sidebar's ↻ answers this by disabling itself for the duration; so does
         // this. Subscribes, so the button comes back by itself when the pass settles.
         let scanning = catalog.read().is_scanning();
-        // What the *draft* can answer, plus the one thing only the catalog can: a name another
-        // def already owns. Both are the same kind of blocker, so they read as one line.
-        let blocker = ctx
-            .draft
-            .read()
-            .blocker()
-            .or_else(|| name_clash(ctx, project));
+        // What the *draft* can answer, the one thing only the catalog can (a name another def
+        // already owns), and last the one nobody can — see [`save_note`].
+        let note = save_note(
+            ctx.draft
+                .read()
+                .blocker()
+                .or_else(|| name_clash(ctx, project)),
+            scanning,
+        );
 
         let cancel = {
             let platform = platform.clone();
@@ -73,7 +75,7 @@ impl Component for Footer {
         let save = Button::new()
             .filled()
             .height(Size::px(ACTION_HEIGHT))
-            .enabled(!registering && !scanning && blocker.is_none())
+            .enabled(!registering && note.is_none())
             .on_press({
                 let engine = engine.clone();
                 move |_: Event<PressEventData>| save(ctx, project, rescan, engine.clone(), log)
@@ -101,7 +103,7 @@ impl Component for Footer {
                     // wrote, and it has its own block at the end of the body.
                     .child(
                         rect().width(Size::flex(1.)).maybe_child(
-                            blocker.filter(|_| !registering).map(|why| {
+                            note.filter(|_| !registering).map(|why| {
                                 Path::new(why).color(form.hint_color).max_lines(2).wrap()
                             }),
                         ),
@@ -112,10 +114,46 @@ impl Component for Footer {
     }
 }
 
-/// Why Save is off while the project window is re-scanning. Ahead of the draft's own blockers
-/// because it is the one the user can do nothing about except wait.
-fn scan_note(scanning: bool) -> Option<String> {
-    scanning.then(|| "The catalog is being re-scanned. Save is available when it settles.".into())
+/// The one line the footer shows about why Save is off — and **the same value that disables it**,
+/// so the button and its explanation cannot disagree. They did: this used to be two expressions,
+/// and the scanning half was wired into `enabled` but not into the text, leaving a dead button
+/// with nothing beside it.
+///
+/// `blocker` — what the draft and the catalog can answer — comes **first**, ahead of the
+/// re-scan. That is the opposite of what this file first claimed, and the reason is that a note
+/// should always name the next thing the user can *do*: a blank name is fixable now, and the
+/// scan will very likely settle while they are fixing it. Leading with the scan would say "wait"
+/// to someone who still has a field to fill in, and then say "name it" once they had.
+fn save_note(blocker: Option<String>, scanning: bool) -> Option<String> {
+    blocker.or_else(|| {
+        scanning
+            .then(|| "The catalog is being re-scanned. Save is available when it settles.".into())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::save_note;
+
+    #[test]
+    fn an_actionable_blocker_outranks_the_re_scan() {
+        let blocker = || Some("A table needs a name.".to_string());
+        assert_eq!(save_note(blocker(), true), blocker());
+        assert_eq!(save_note(blocker(), false), blocker());
+    }
+
+    #[test]
+    fn a_re_scan_is_explained_once_it_is_the_only_thing_left() {
+        // The regression this guards: Save was disabled while scanning and the footer said
+        // nothing, because the two were computed separately.
+        let note = save_note(None, true).expect("a scanning footer says why");
+        assert!(note.contains("re-scanned"), "{note}");
+    }
+
+    #[test]
+    fn nothing_to_say_when_save_is_available() {
+        assert_eq!(save_note(None, false), None);
+    }
 }
 
 /// The one blocker the draft cannot see: a name that belongs to something else.

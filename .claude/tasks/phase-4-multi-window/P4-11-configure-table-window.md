@@ -65,6 +65,13 @@ wrong about something:
   row has any business holding. So `views::configure_launch` is the drop-confirm shape: the
   trigger sets `ConfigureRequest` and stops, and `ConfigureLauncher` (mounted at the project root,
   where those handles live) acts on it. Adding a trigger is setting the slot.
+- **No ADVANCED disclosure, though the canvas draws one.** It was built with the accordion the
+  canvas specifies and then flattened (Alex): the export canvas folded its own away because a
+  format's advanced controls are just more of that format's options, and that reasoning is not
+  specific to exporting. In a window whose entire subject is how a file is read, the split is one
+  more thing to open before reaching a CSV's quote character. Both windows are now the same
+  shape, which is worth more than either canvas's local choice — and it is why `OptionList` has
+  no disclosure of its own to inherit.
 - **Closing discards the draft, and does not ask.** Cancel, Esc and the red button all close
   outright — including mid-registration, where the pass belongs to the project window's driver
   and lands on the catalog row whether this window is watching or not. A dirty-close confirm was
@@ -117,7 +124,9 @@ error blocks are the **last** things in the scroll body, after Hive. The canvas 
    > disagreeing. The canvas puts Browse in the toolbar (acting on the selected row) rather than on
    > each row, which is the same component with its button lifted out; decide which shape the
    > widened `DirectoryField` supports before writing the list.
-3. **Import (read) options** — format-specific; see the next section. Hidden for parquet and arrow.
+3. **Import (read) options** — format-specific, **one flat list** (see "Settled during the
+   build": the canvas's ADVANCED accordion is deliberately not built). Hidden for parquet and
+   arrow.
 4. **HIVE PARTITIONING** — header + subtext on their own line, enable `Switch` below (Export's
    PARTITION BY COLUMNS rhythm), then one row per detected column: the column name and a pill of
    `Utf8 · Int32 · Int64 · Date32`. The string-cast warning shows while any column is left `Utf8`.
@@ -278,9 +287,9 @@ their rows through the normal re-registration path; do not try to rewrite their 
 - [x] Register a table over one or more paths / globs with a format and typed Hive partition
       columns; the REQUIRED badges and the resolution tooltip are present; a failure shows
       `register_external`'s own message and leaves the window open.
-- [x] CSV shows its core group (header · delimiter) and ADVANCED (quote · escape · comment ·
-      newlines-in-values · ragged rows · infer rows · compression); JSON shows shape as core and
-      infer-rows + compression as ADVANCED; parquet and arrow show no import block.
+- [x] CSV shows one flat list (header · delimiter · quote · escape · comment ·
+      newlines-in-values · ragged rows · infer rows · compression); JSON shows shape · infer-rows
+      · compression; parquet and arrow show no import block.
 - [x] Every one of those values reaches `TableSpec`, changes what is read, and survives a
       project reopen. A gzipped CSV registers from a `.csv.gz` file.
 - [x] A whole-document JSON array registers and queries with shape set to array.

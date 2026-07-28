@@ -493,8 +493,21 @@ impl ConfigureDraft {
         }
     }
 
-    /// The options shown outright.
-    pub fn core(&self) -> Vec<Group<Edit>> {
+    /// The format's options — **one flat list**, in canvas order.
+    ///
+    /// There is no ADVANCED disclosure, though this window's canvas draws one. The export
+    /// window's canvas folded its own away on the grounds that a format's advanced controls are
+    /// just more of that format's options, and that reasoning does not stop being true here:
+    /// the split would only be one more thing to open before a CSV's quote character can be
+    /// reached, in a window whose whole subject is how a file is read.
+    pub fn options(&self) -> Vec<Group<Edit>> {
+        let mut groups = self.core();
+        groups.extend(self.advanced());
+        groups
+    }
+
+    /// The options the canvas showed outright.
+    fn core(&self) -> Vec<Group<Edit>> {
         match self.format {
             FormatId::Csv => vec![
                 Group {
@@ -563,8 +576,9 @@ impl ConfigureDraft {
         }
     }
 
-    /// The options behind the ADVANCED disclosure.
-    pub fn advanced(&self) -> Vec<Group<Edit>> {
+    /// The options the canvas put behind its disclosure — kept as a separate builder only
+    /// because the two halves read in a different order from the canvas's own list.
+    fn advanced(&self) -> Vec<Group<Edit>> {
         match self.format {
             FormatId::Csv => vec![
                 Group {
@@ -700,12 +714,12 @@ mod tests {
     }
 
     #[test]
-    fn csv_offers_its_core_and_advanced_groups_in_canvas_order() {
-        let draft = csv_draft();
-        assert_eq!(labels(&draft.core()), vec!["HEADER ROW", "DELIMITER"]);
+    fn csv_offers_one_flat_list_in_canvas_order() {
         assert_eq!(
-            labels(&draft.advanced()),
+            labels(&csv_draft().options()),
             vec![
+                "HEADER ROW",
+                "DELIMITER",
                 "QUOTE CHARACTER",
                 "ESCAPE CHARACTER",
                 "COMMENT CHARACTER",
@@ -723,10 +737,9 @@ mod tests {
             format: FormatId::Json,
             ..csv_draft()
         };
-        assert_eq!(labels(&draft.core()), vec!["SHAPE"]);
         assert_eq!(
-            labels(&draft.advanced()),
-            vec!["SCHEMA-INFER ROWS", "COMPRESSION"]
+            labels(&draft.options()),
+            vec!["SHAPE", "SCHEMA-INFER ROWS", "COMPRESSION"]
         );
     }
 
@@ -738,7 +751,7 @@ mod tests {
                 ..csv_draft()
             };
             assert!(!draft.has_options());
-            assert!(draft.core().is_empty() && draft.advanced().is_empty());
+            assert!(draft.options().is_empty());
         }
     }
 
@@ -746,7 +759,7 @@ mod tests {
     fn the_custom_delimiter_box_shows_only_while_custom_is_picked() {
         let mut draft = csv_draft();
         let delimiter = |d: &ConfigureDraft| {
-            let groups = d.core();
+            let groups = d.options();
             let g = groups.iter().find(|g| g.label == "DELIMITER").unwrap();
             g.control.clone()
         };
@@ -767,7 +780,7 @@ mod tests {
     #[test]
     fn every_control_carries_the_edit_it_performs() {
         let mut draft = csv_draft();
-        let groups = draft.core();
+        let groups = draft.options();
         let header = groups.iter().find(|g| g.label == "HEADER ROW").unwrap();
         let Control::Toggle { on, edit, .. } = &header.control else {
             panic!("a toggle");

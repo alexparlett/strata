@@ -55,7 +55,7 @@ use crate::platform::{self, WindowKind};
 use crate::state::{use_share_config, AppCtx};
 use crate::theme::{peek_selection, use_strata_theme, window_background};
 
-pub use model::{ConfigureDraft, ConfigureTarget, Edit};
+pub use model::{ConfigureDraft, ConfigureTarget};
 
 /// Everything a press of the catalog's **Configure** (or New table) needs, resolved where the
 /// stores and the DI handles both live and carried to the trigger as a prop.
@@ -118,9 +118,6 @@ pub struct ConfigureCtx {
     /// What this window opened on. A `State` only so the context stays `Copy` — nothing writes it.
     pub target: State<ConfigureTarget>,
     pub status: State<Status>,
-    /// Whether the ADVANCED disclosure is open. Window state rather than the disclosure's own,
-    /// so switching format and back does not fold it up again.
-    pub advanced_open: State<bool>,
 }
 
 impl ConfigureCtx {
@@ -273,7 +270,6 @@ impl App for ConfigureApp {
                     draft: State::create(draft),
                     target: State::create(target),
                     status: State::create(Status::Idle),
-                    advanced_open: State::create(false),
                 }
             }
         });
