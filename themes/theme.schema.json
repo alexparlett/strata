@@ -1432,6 +1432,9 @@
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
+            "divider_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "row_selected_background": {
               "$ref": "#/$defs/colorPref"
             },

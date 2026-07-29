@@ -40,6 +40,9 @@ define_theme!(
         panel_background: Color,
         /// The window's own rules — a title bar's underline, a footer's overline, a panel's edge.
         border_fill: Color,
+        /// A rule *inside* a panel, one step quieter than the panel's own edge (`line`): one row
+        /// of a list from the next.
+        divider_fill: Color,
         /// A selected row within a panel.
         row_selected_background: Color,
         /// The window's mark, and the accent-tinted tile behind it.

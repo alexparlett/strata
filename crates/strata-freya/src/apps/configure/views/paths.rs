@@ -11,7 +11,8 @@
 use freya::prelude::*;
 
 use crate::apps::configure::ConfigureCtx;
-use crate::components::form::{form_theme, Row, ValueField};
+use crate::components::divider::Divider;
+use crate::components::form::{form_theme, Row, ValueField, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::Prose;
@@ -23,9 +24,6 @@ const TOOL_GAP: f32 = 6.;
 /// row's own height is the form's `FIELD_HEIGHT` — this list holds fields, so it does not get to
 /// invent a height for them.
 const EMPTY_HEIGHT: f32 = 88.;
-const ROW_GAP: f32 = 6.;
-/// The band around the selected row's field — enough to read as a band rather than a hairline.
-const SELECTED_INSET: f32 = 4.;
 /// The gap between the label row, the toolbar and the list.
 const STACK_GAP: f32 = 8.;
 /// The browse dropdown's width — enough for its two labels without the card hugging them.
@@ -236,15 +234,19 @@ fn pick(ctx: ConfigureCtx, kind: Pick) {
 
 /// The list of path rows, or its empty state.
 ///
-/// Each row is an ordinary [`ValueField`] — its own box, its own focus ring, like every other
-/// input in the app. So the list itself draws no chrome: a bordered container around boxed
-/// fields is the second box the canvas's own bare rows were avoiding, and the rows are what the
-/// user is actually pointing at.
+/// **One bordered box with hairline-separated rows**, as the canvas draws it — not a stack of
+/// individually boxed inputs. The fields inside are [`ValueField::bare`] for exactly the reason
+/// that method exists: the container is the chrome, and a box inside a box reads as a mistake.
+///
+/// Which row is active is said by the **row**, not by a border around a field: the selected row
+/// takes `row_selected_background` edge to edge. That is what a table does, and it is also the
+/// affordance the toolbar needs — Remove deletes this row and Browse opens in its directory.
 #[derive(PartialEq)]
 struct PathList;
 
 impl Component for PathList {
     fn render(&self) -> impl IntoElement {
+        let win = window_theme();
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let (count, selected) = {
@@ -255,40 +257,46 @@ impl Component for PathList {
             )
         };
 
-        if count == 0 {
-            return rect()
-                .width(Size::fill())
-                .height(Size::px(EMPTY_HEIGHT))
-                .center()
-                .child(
-                    Prose::new("No paths yet. Add one to point at your data.")
-                        .color(form.hint_color),
-                );
-        }
-
-        rect()
+        // Padded by the border's own width: torin paints a border *inside* the bounds its
+        // children already occupy, so a row with a background would otherwise erase it.
+        let list = rect()
             .width(Size::fill())
             .vertical()
-            .spacing(ROW_GAP)
-            .children((0..count).map(|index| {
-                PathRow {
-                    index,
-                    selected: index == selected,
-                    key: DiffKey::None,
-                }
-                // Keyed by position, and the row syncs both ways against the draft — see
-                // `PathRow`.
-                .key(index)
-                .into_element()
-            }))
+            .padding(Gaps::new_all(1.))
+            .corner_radius(6.)
+            .background(win.panel_background)
+            .border(Border::new().width(1.).fill(win.border_fill));
+
+        if count == 0 {
+            return list.child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(EMPTY_HEIGHT))
+                    .center()
+                    .child(
+                        Prose::new("No paths yet. Add one to point at your data.")
+                            .color(form.hint_color),
+                    ),
+            );
+        }
+
+        list.children((0..count).flat_map(|index| {
+            let rule =
+                (index > 0).then(|| Divider::horizontal().color(win.divider_fill).into_element());
+            let row = PathRow {
+                index,
+                selected: index == selected,
+                key: DiffKey::None,
+            }
+            // Keyed by position, and the row syncs both ways against the draft — see `PathRow`.
+            .key(index)
+            .into_element();
+            rule.into_iter().chain(std::iter::once(row))
+        }))
     }
 }
 
-/// One path row: the field, marked when it is the row the toolbar acts on.
-///
-/// The mark earns its place — it is not decoration. **Remove path** deletes this row and
-/// **Browse** opens in this row's directory, so with three paths in the list there is otherwise
-/// no way to see what either button is about to do before pressing it.
+/// One row of the table: a bare field, on the row's own background when it is the selected one.
 #[derive(PartialEq)]
 struct PathRow {
     index: usize,
@@ -304,6 +312,7 @@ impl KeyExt for PathRow {
 
 impl Component for PathRow {
     fn render(&self) -> impl IntoElement {
+        let win = window_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
@@ -334,6 +343,7 @@ impl Component for PathRow {
             move || initial
         });
         let mut reported = use_state(move || initial);
+
         // **Selection follows focus**, not a press on the row. Freya's `Input` registers
         // `on_focus_press` — sugar over `on_pointer_down` — and stops propagation, so a press
         // handler on the wrapper never fires over the field itself: clicking into a row to edit
@@ -375,15 +385,18 @@ impl Component for PathRow {
             text.set(outer);
         });
 
-        // The band sits *around* the field rather than behind it: the field now draws its own
-        // box, so a background directly under it would show as a hairline and read as nothing.
         rect()
             .width(Size::fill())
-            .padding(Gaps::new_all(SELECTED_INSET))
-            .corner_radius(8.)
+            .height(Size::px(FIELD_HEIGHT))
+            .cross_align(Alignment::Center)
             .maybe(self.selected, |el| {
-                el.background(window_theme().row_selected_background)
+                el.background(win.row_selected_background)
             })
-            .child(ValueField::new(text).width(Size::fill()).a11y_id(field))
+            .child(
+                ValueField::new(text)
+                    .bare()
+                    .width(Size::fill())
+                    .a11y_id(field),
+            )
     }
 }
