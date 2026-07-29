@@ -8,6 +8,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::stats::Precision;
 use datafusion::common::ScalarValue;
+use datafusion::functions::math::log;
 use datafusion::prelude::*;
 
 use strata_model::{
@@ -130,11 +131,17 @@ pub async fn register_external(
         .with_listing_options(opts)
         .infer_schema(&ctx.state())
         .await
-        .map_err(|e| register_error(spec, ext, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("Failed to infer schema: {}", e);
+            register_error(spec, ext, &e.to_string())
+        })?;
     let table =
         ListingTable::try_new(config).map_err(|e| register_error(spec, ext, &e.to_string()))?;
     ctx.register_table(spec.name.as_str(), Arc::new(table))
-        .map_err(|e| register_error(spec, ext, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("Failed to register table: {}", e);
+            register_error(spec, ext, &e.to_string())
+        })?;
 
     table_meta(ctx, spec.name.as_str()).await
 }
@@ -418,6 +425,23 @@ fn json_shape_error(spec: &TableSpec, raw: &str) -> Option<String> {
         } else {
             format!("Cannot read '{name}' as JSON: a top-level {kind} is not a record.{fix}")
         });
+    }
+
+    // Schema inference gives up when one field holds different JSON shapes across records — an
+    // array of scalars in one, an object in another — so no single schema fits. The tail after
+    // `found:` is arrow's internal `InferredType` debug (`Array(Scalar({Utf8, Boolean}))`), not
+    // data the user typed and nothing they can act on, so it is dropped rather than shown. This
+    // is a conflict in the file itself, not the JSON shape, so the shape advice is omitted.
+    const CONFLICT: [&str; 3] = [
+        "Expected object json type, found:",
+        "Expected array json type, found:",
+        "Expected scalar or scalar array JSON type, found:",
+    ];
+    if CONFLICT.iter().any(|p| detail.starts_with(p)) {
+        return Some(format!(
+            "Cannot read '{name}' as JSON: a field has more than one type across records, \
+             so no single schema fits."
+        ));
     }
 
     let syntax = detail
@@ -897,6 +921,26 @@ mod tests {
         assert_eq!(
             register_error(&spec("bad", &[], "json"), ".json", raw),
             "Cannot read 'bad' as JSON: key must be a string at line 1 column 9"
+        );
+    }
+
+    #[test]
+    fn a_field_with_conflicting_types_is_named_as_a_schema_conflict() {
+        // The measured case for `config.json`: one record has a field as an array of scalars,
+        // another has the same field as an object, so inference can't settle on one schema.
+        // The `found:` tail is arrow's internal `InferredType` debug, never data, and must not
+        // reach the user; the fix is the file, so the shape advice is deliberately absent.
+        let raw = "Arrow error: Json error: Expected object json type, \
+                   found: Array(Scalar({Utf8, Boolean}))";
+        let msg = register_error(&spec("config", &[], "json"), ".json", raw);
+        assert_eq!(
+            msg,
+            "Cannot read 'config' as JSON: a field has more than one type across records, \
+             so no single schema fits."
+        );
+        assert!(
+            !msg.contains("Scalar("),
+            "arrow's internal inferred type never reaches the user"
         );
     }
 
