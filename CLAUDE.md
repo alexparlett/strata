@@ -33,8 +33,10 @@ To build something you can hand to a tester — a universal `.app` + DMG in `tar
 ```
 
 The same script is what the **Release** workflow runs (Actions → Release → Run workflow), which
-can also tag the commit and publish a release page in the same press. Signing degrades honestly:
-ad-hoc today, notarized the moment the secrets exist. See **`docs/RELEASING.md`**.
+can also bump the crate version, tag the commit and publish a release page in the same press.
+`scripts/version.sh` owns the version number (read it, resolve a bump, write it + `Cargo.lock`).
+Signing degrades honestly: ad-hoc today, notarized the moment the secrets exist. See
+**`docs/RELEASING.md`**.
 
 > **Environment note:** some agent sandboxes can't build this (no crates.io access, no Skia
 > toolchain). If you're in one, you can't run `cargo build`/`test` — verify changes against the fork
@@ -417,8 +419,10 @@ Shipping:
 
 - **`RELEASING.md`** — how a build reaches a tester: `scripts/bundle-macos.sh` (the whole
   pipeline — universal binary, `.app`, icon, signing, notarization, DMG) and the **Release**
-  workflow that runs it on demand and can tag + publish in the same press. Also the Gatekeeper
-  bypass testers need while builds are unsigned, and the secrets that switch notarization on.
+  workflow that runs it on demand and can bump + tag + publish in the same press. Also
+  `scripts/version.sh` (the one place the version number lives), the Claude-written release notes
+  and their fallback, the Gatekeeper bypass testers need while builds are unsigned, and the secrets
+  that switch notarization on.
 
 Product / design:
 

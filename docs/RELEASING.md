@@ -11,17 +11,21 @@ in what is done.
 
 ## From GitHub, on demand
 
-**Actions → Release → Run workflow.** Four inputs:
+**Actions → Release → Run workflow.** Six inputs:
 
 | Input | Default | What it does |
 |---|---|---|
 | **Architectures** | `universal` | `universal` runs on both Apple Silicon and Intel. `arm64` is roughly half the build time when every tester is on Apple Silicon. |
 | **Tag this commit and publish a release page** | off | Off: the DMG appears as an artifact on the run page and nothing about the repo changes. On: the run also creates the tag and a release page with the DMG attached. |
-| **Version** | *(blank)* | Blank uses the version in `crates/strata-freya/Cargo.toml`. Set it only to override. |
+| **Bump the crate version first** | `none` | `patch` / `minor` / `major` rewrites the version in `crates/strata-freya/Cargo.toml`, commits it, and pushes it once the build has produced a DMG. Needs the release box ticked. |
+| **Exact version instead of a bump** | *(blank)* | Blank uses the version already in the manifest. Set it to release a specific number instead of bumping to the next one. Rejected if a bump is also chosen — they are two answers to one question. |
+| **How the release notes are written** | `claude` | `claude` summarises the commits since the last release into a *What's new* section. `generated` uses GitHub's changelog on its own. |
 | **Mark as prerelease** | on | Keeps tester builds out of the "Latest release" slot. |
 
 With the release box **off**, nothing about the repository changes: download the artifact from the
-run page and hand the DMG over however you like. Artifacts expire after 30 days. Note this is not
+run page and hand the DMG over however you like. That holds even with the bump input in front of
+you — a bump is refused without the release box rather than performed and thrown away, so the "just
+build me a DMG" case can never move the version. Artifacts expire after 30 days. Note this is not
 a privacy mechanism — the repo is public, so any signed-in GitHub user can reach the artifact. It
 just keeps unfinished builds off the releases page.
 
@@ -32,27 +36,79 @@ of a build that then fails would leave a permanent tag pointing at a broken comm
 also checks up front that the tag and release do not already exist, because finding that out
 after a two-hour build is a bad trade.
 
-The release notes are written from what the run actually did: an unsigned build's page carries the
-Gatekeeper instructions below, a notarized one says to just open it. GitHub's generated changelog
-lands underneath.
-
 ### Cutting a version
 
-1. Bump `version` in `crates/strata-freya/Cargo.toml`.
-2. Commit and push to `main`.
-3. Run the workflow with **Tag this commit and publish a release page** ticked.
+Pick a **Bump**, tick **Tag this commit and publish a release page**, run it. That is the whole
+thing: the run resolves the next version, writes it into `crates/strata-freya/Cargo.toml` and
+`Cargo.lock`, builds, and then — once a DMG exists — pushes that commit and creates the tag on it.
 
-The crate version is the only place a version number is written. The bundle script reads it for
-`CFBundleShortVersionString` and the workflow reads it for the tag, so the three cannot disagree.
+The order is the part worth knowing, because each half of it fixes something:
+
+- The version is **written before the build**, so the DMG's filename, `CFBundleShortVersionString`
+  and the tag are one number. Before this, an exact version passed by hand tagged `v0.4.0` and
+  attached a DMG called `Strata-0.2.0-universal.dmg` — the bundle script reads the manifest, and
+  the manifest had not moved.
+- The commit is **pushed after the build**, next to the tag it belongs with. A bump pushed first is
+  a bump left behind by a build that failed.
+- A bump **needs the release box**, so the repo only moves for a build that becomes a release.
+
+If the branch moved during the build, the push is refused rather than rebased — a rebase would put
+the tag on a tree this run never built. The DMG is still on the run page and nothing was tagged, so
+bumping locally and re-running is the whole recovery. The bump commit is pushed with `GITHUB_TOKEN`,
+which means it gets no CI run of its own; it moves one version string, and the release run just
+built it.
+
+The one asymmetric outcome is a push that lands and a publish that then fails: the version has moved
+with no release behind it. Give that number to the **Exact version** input on the next run rather
+than bumping past it.
+
+`crates/strata-freya/Cargo.toml` is the only place a version number is written, and
+[`scripts/version.sh`](../scripts/version.sh) is the only thing that knows that. The bundle script
+reads the version through it and the workflow resolves and writes through it, so the DMG, the plist
+and the tag cannot disagree, and a bump is a command rather than an edit plus a `sed` buried in a
+YAML file:
+
+```bash
+./scripts/version.sh                  # what a build here would call itself
+./scripts/version.sh --resolve minor  # what a minor bump would produce, changing nothing
+./scripts/version.sh --bump minor     # write it, Cargo.lock included
+```
+
+The lockfile matters: it records the member's own version and the release build passes `--locked`,
+so a manifest bumped on its own fails the build.
 
 `CFBundleVersion` — the build number macOS compares to decide what is newer — is
 `git rev-list --count HEAD`, which is why the workflow checks out at full depth.
+
+### Release notes
+
+The release page is three things in this order: the install instructions, a **What's new** section,
+and GitHub's generated changelog.
+
+The install instructions are written from what the run actually did — an unsigned build carries the
+Gatekeeper command below, a notarized one says to just open it. They stay at the top on purpose: on
+an unsigned build, "why will it not open" is the tester's first question and "what changed" is the
+second.
+
+*What's new* is written by [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)
+from the `git log` between the last reachable `v*` tag and the commit being released, aimed at
+testers rather than contributors. It needs the `CLAUDE_CODE_OAUTH_TOKEN` secret — the same one the
+review workflow uses. Set **How the release notes are written** to `generated` to skip it.
+
+It degrades the way signing does. The step is `continue-on-error`, so a missing secret, a failed
+step or an empty result all still publish the release with GitHub's changelog, and the run says
+which happened. Better notes are a better release page, not a precondition for having one.
 
 ### Tagging locally instead
 
 Pushing a `v*` tag by hand triggers the same workflow and publishes the same release. This does not
 double-fire when the workflow creates a tag itself: GitHub does not trigger workflows from pushes
 made with `GITHUB_TOKEN`.
+
+A tag push carries its own version, so nothing is bumped and nothing is committed — the tag is
+already there, and `HEAD` is detached, so there is no branch for the run to guess at. It still
+writes the version into the manifest for the length of the build, so a tag pushed at a commit whose
+manifest disagrees with it produces a DMG named after the tag rather than after the stale number.
 
 ---
 
