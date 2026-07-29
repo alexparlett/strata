@@ -58,6 +58,7 @@ now have their read model.
 | P2-21 | Tabs & split — remaining nits | ✅ | — | — |
 | P2-22 | Function signatures in autocomplete (docs panel + sig-help dropped) | ✅ | E2 | P2-04 |
 | P2-23 | Validation engine fitness — multi-error + mid-edit semantics | ✅ | E1 | P2-18 |
+| P2-24 | Record view — large nested cells (serialize in render) | ⬜ | — | P2-10, P2-12 |
 
 **Already done (no task file):** datagrid core, cell/row/col selection (`selection.rs` + `SelCtl`),
 resizable columns + autofit, tab strip (`tab_bar/*`).

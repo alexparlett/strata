@@ -33,6 +33,8 @@ Two things this is **not**, both checked against arrow-json 58.3 source before b
 |---|---|---|---|---|
 | 01 | Postgres-style JSON accessors over Utf8 columns | ✅ | — | — |
 | 02 | `PolyJsonFormat` — union-tolerant JSON reader | ✅ | — | 01 (for the payoff, not to build) |
+| 03 | Table Config silently caps JSON schema inference at 1000 | ✅ | — | 02 |
+| 04 | Should the SQL parser default to the postgres dialect? | ⬜ | — | 01 |
 
 ## Why the order
 

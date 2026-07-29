@@ -218,11 +218,13 @@ pub async fn run_export(
     ctx: &SessionContext,
     snapshot: SnapshotId,
     spec: ExportSpec,
+    stats: &crate::engine::query::SnapshotStats,
 ) -> Result<(String, usize), String> {
     let snap = snapshot_name(snapshot);
-    if ctx.table(snap.as_str()).await.is_err() {
+    let Ok(table) = ctx.table(snap.as_str()).await else {
         return Err("No results to export — run a query first".to_string());
-    }
+    };
+    let schema = table.schema().inner().clone();
 
     let select = select_sql(&snap, &spec);
 
@@ -239,7 +241,7 @@ pub async fn run_export(
              column has to be a single plain word"
         ));
     }
-    partition_columns_have_no_nulls(ctx, &snap, &spec.partition.columns).await?;
+    partition_columns_have_no_nulls(&spec.partition.columns, &schema, stats)?;
 
     let part_clause = if spec.partition.is_flat() {
         String::new()
@@ -371,52 +373,30 @@ fn quote_ident(raw: &str) -> String {
 /// value it never had. That is silent data corruption, in the user's own output, discoverable
 /// only by comparing against the source — so the export declines rather than warns.
 ///
-/// **Answered from the footer, not by scanning.** The snapshot is a parquet file we wrote with
-/// statistics on (`query::snapshot_writer_props`), so the null count per column is already in
-/// its metadata: this reads it, and touches no row data.
+/// **Answered from what the write pass counted, not by scanning and not from a footer.** The
+/// snapshot is Arrow IPC, which carries no column statistics at all — but nothing was ever gained
+/// by asking the file. `query::materialize` streams every batch to write it, and
+/// `Array::null_count` is a stored field, so the exact per-column count is a running sum over
+/// data already in hand ([`query::SnapshotStats`], held for the snapshot's lifetime in
+/// `Lifecycle`). Free to produce, and a slice index to read.
 ///
-/// The rule is "proceed only on an exact zero", which also disposes of the one ambiguity in
-/// DataFusion's statistics: `Exact(num_rows)` doubles as its "no statistics for this column"
-/// fallback (see `catalog::free_stats`). Both readings — an all-NULL column, or a column we
-/// cannot vouch for — are reasons to decline, so the two need not be told apart.
-async fn partition_columns_have_no_nulls(
-    ctx: &SessionContext,
-    snap: &str,
+/// The rule is "proceed only on an exact zero". `stats` is exact by construction — it counted
+/// every row that was written — so there is no "unknown" reading to disambiguate, which the
+/// footer route did have.
+fn partition_columns_have_no_nulls(
     columns: &[String],
+    schema: &datafusion::arrow::datatypes::Schema,
+    stats: &crate::engine::query::SnapshotStats,
 ) -> Result<(), String> {
-    use datafusion::catalog::TableProvider;
-    use datafusion::datasource::listing::ListingTable;
-
-    if columns.is_empty() {
-        return Ok(());
-    }
-
-    let provider = ctx
-        .table_provider(snap)
-        .await
-        .map_err(|e| format!("Can't read the result's metadata: {e}"))?;
-    let listing = provider
-        .downcast_ref::<ListingTable>()
-        .ok_or("Can't read the result's metadata: the snapshot is not a file table")?;
-    let state = ctx.state();
-    let stats = listing
-        .list_files_for_scan(&state, &[], None)
-        .await
-        .map_err(|e| format!("Can't read the result's metadata: {e}"))?
-        .statistics;
-
-    let schema = listing.schema();
     for name in columns {
         let index = schema
             .fields()
             .iter()
-            .position(|f: &std::sync::Arc<datafusion::arrow::datatypes::Field>| f.name() == name)
+            .position(|f| f.name() == name)
             .ok_or_else(|| format!("Can't partition by '{name}': the result has no such column"))?;
-        let nulls = stats
-            .column_statistics
-            .get(index)
-            .and_then(|cs| cs.null_count.get_value().copied());
-        if nulls != Some(0) {
+        // A missing entry is not "zero nulls" — it means the count is unavailable, which under
+        // the exact-zero rule is a reason to decline just as a positive count is.
+        if stats.nulls.get(index).copied() != Some(0) {
             return Err(format!(
                 "Can't partition by '{name}': it contains NULL values, and a NULL has no folder \
                  name — those rows would be written under another value and read back wrong. \

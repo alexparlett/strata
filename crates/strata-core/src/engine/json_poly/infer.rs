@@ -19,11 +19,16 @@
 //!
 //! # Why `Utf8` and not a union
 //!
-//! Parquet has no union logical type, so a union column could not be exported — and the export
-//! window is opened *on a result*, pinning the snapshot precisely so it can always write what it
-//! is showing. A struct-of-variants cannot hold the array arm at all. `Utf8` costs nothing
-//! downstream: the grid, inspector, profiler and export all handle it unchanged, and the
-//! `json_get` family reads straight into it.
+//! A conflicted path has no single arrow type by definition, and the candidates are worse than
+//! text. A struct-of-variants cannot hold the array arm at all. An Arrow union could now be
+//! *stored* (the snapshot is IPC), but it would be a union whose arms are "whatever this file
+//! happened to contain" — unstable across re-scans, and unreadable by the `json_get` family,
+//! which takes JSON text. `Utf8` costs nothing downstream: the grid, inspector, profiler and
+//! export handle it unchanged, and the accessors read straight into it.
+//!
+//! Note this is a decision about **representing a conflict**, not a storage workaround. Where the
+//! source has an unambiguous type — including an empty object — inference says so and the
+//! snapshot stores it.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -210,19 +215,16 @@ pub fn kind_word(v: &Value) -> &'static str {
 /// `Schema::project` preserves field metadata, so it survives the opener's projection.
 pub const JSON_TEXT_KEY: &str = "strata.json_text";
 
-/// Whether this node is carried as JSON text rather than as a typed column.
+/// Whether this node is carried as JSON text rather than as a typed column — the conflict state,
+/// and only that.
 ///
-/// Two nodes qualify. [`Text`](Inferred::Text) is the conflict state. An **empty object** is the
-/// other: `{}` tells us a value was an object and nothing about its keys, and the honest arrow
-/// type for that is not `Struct([])` — parquet cannot write a zero-field struct at all
-/// (`Parquet does not support writing empty structs`), so inferring one produces a table that
-/// registers and then fails every query that touches it. `sample/config.json` has 19,159 of them.
+/// An **empty object** briefly qualified too, because parquet cannot write a zero-field struct
+/// (`Parquet does not support writing empty structs`) and `sample/config.json` has 19,159 of them.
+/// That was a storage workaround, not an inference rule: `{}` *is* an empty object, and the
+/// snapshot is Arrow IPC now, which stores one. Inference stays as close to the source as the
+/// type system allows.
 fn is_json_text(t: &Inferred) -> bool {
-    match t {
-        Inferred::Text => true,
-        Inferred::Object(map) => map.is_empty(),
-        _ => false,
-    }
+    matches!(t, Inferred::Text)
 }
 
 fn fields_of(map: &BTreeMap<String, Inferred>) -> Fields {
@@ -243,9 +245,6 @@ fn fields_of(map: &BTreeMap<String, Inferred>) -> Fields {
 /// [`Any`](Inferred::Any) becomes `Null` exactly as arrow does — a key seen only as JSON `null`
 /// has no other honest type, and `Null` is what the stock reader produces for it.
 pub fn datatype_of(t: &Inferred) -> DataType {
-    if is_json_text(t) {
-        return DataType::Utf8;
-    }
     match t {
         Inferred::Any => DataType::Null,
         Inferred::Text => DataType::Utf8,

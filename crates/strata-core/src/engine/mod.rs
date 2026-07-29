@@ -170,6 +170,14 @@ struct Lifecycle {
     /// Snapshots whose retire arrived while they were pinned. They are retired for real
     /// when the last pin releases — deferred, never skipped, so nothing leaks.
     deferred: HashSet<SnapshotId>,
+    /// What each live snapshot's write pass observed ([`query::SnapshotStats`]) — today the
+    /// exact per-column null counts a partitioned export has to check.
+    ///
+    /// Here rather than in the file because a snapshot never outlives its process, so this has
+    /// exactly its lifetime: inserted when it materializes, dropped when it retires. The Arrow
+    /// IPC snapshot carries no statistics of its own, and asking the file was never the point —
+    /// the write pass already streams every batch.
+    stats: HashMap<SnapshotId, query::SnapshotStats>,
 }
 
 /// A window's engine. Create once per project window (cheap to share as `Arc<Engine>`);
@@ -448,10 +456,11 @@ impl Engine {
         }
         self.publish_inflight(&lc);
         match joined {
-            Ok(Ok((output, batch))) => {
+            Ok(Ok((output, batch, stats))) => {
                 if latest {
                     if let Some(snap) = output.snapshot {
                         lc.current.insert(ws, snap);
+                        lc.stats.insert(snap, stats);
                     }
                     Ok((output, batch))
                 } else {
@@ -465,7 +474,7 @@ impl Engine {
             Err(join) if join.is_cancelled() => {
                 // Aborted. The aborter retired the partial too, but `abort()` only lands
                 // at the task's next await — so the task may have gone on to finish
-                // `register_parquet` *after* that retire, leaving a table registered over
+                // `register_arrow` *after* that retire, leaving a table registered over
                 // a deleted file. Awaiting the handle is what makes this definitive: the
                 // task is finished by the time we see `is_cancelled`, so retiring again
                 // (idempotent, best-effort) sweeps whatever it managed to create.
@@ -685,7 +694,7 @@ impl Engine {
             Some(_) => {
                 lc.pins.remove(&snapshot);
                 if lc.deferred.remove(&snapshot) {
-                    retire_snapshot(&self.ctx, self.engine_id, snapshot);
+                    self.retire_now(&mut lc, snapshot);
                 }
             }
             // Unbalanced release — a bug in a caller, and the kind that would otherwise show
@@ -708,8 +717,16 @@ impl Engine {
         if lc.pins.contains_key(&snapshot) {
             lc.deferred.insert(snapshot);
         } else {
-            retire_snapshot(&self.ctx, self.engine_id, snapshot);
+            self.retire_now(lc, snapshot);
         }
+    }
+
+    /// Retire a snapshot and forget what its write pass recorded. Every path that actually
+    /// deletes a live snapshot goes through here, so `Lifecycle::stats` cannot outlive the
+    /// snapshots it describes.
+    fn retire_now(&self, lc: &mut Lifecycle, snapshot: SnapshotId) {
+        lc.stats.remove(&snapshot);
+        retire_snapshot(&self.ctx, self.engine_id, snapshot);
     }
 
     // --- export -----------------------------------------------------------
@@ -743,10 +760,22 @@ impl Engine {
         // close would claim work was running) and the pin would never release, leaving a
         // snapshot that survives every re-run for the rest of the session.
         let _writing = ExportGuard::new(self, snapshot);
+        // Copied out under the lock: the partitioned-export gate reads what this snapshot's write
+        // pass counted, and the spawned task must not hold the lifecycle lock across an await.
+        // A snapshot with no recorded stats is one nothing counted, which the gate treats as
+        // "cannot vouch for" rather than as zero nulls.
+        let stats = self
+            .lifecycle
+            .lock()
+            .unwrap()
+            .stats
+            .get(&snapshot)
+            .cloned()
+            .unwrap_or_default();
         let task = {
             let ctx = self.ctx.clone();
             self.rt()
-                .spawn(async move { export::run_export(&ctx, snapshot, spec).await })
+                .spawn(async move { export::run_export(&ctx, snapshot, spec, &stats).await })
         };
 
         // Dropping this future does *not* stop the write: the spawned task detaches and the
@@ -833,12 +862,6 @@ impl Engine {
                     .await
                     .map_err(|e| e.to_string())?;
                 let deps = catalog::plan_deps(t.logical_plan());
-                // The same projection every run gets (`query::flatten_json_unions`), so the
-                // columns recorded here are the ones a scan of this view will actually produce.
-                // Without it a view over `payload -> 'user'` stored a `Union` type — shown in the
-                // catalog row and the inspector, with no `Kind` mapping — that no run could ever
-                // return, and profiling that column planned min/max over a union and errored.
-                let t = query::flatten_json_unions(t)?;
                 let columns = t
                     .schema()
                     .fields()
@@ -906,6 +929,8 @@ impl Engine {
     fn abort_inflight(&self, f: InFlight) {
         f.abort.abort();
         if let Some(snap) = f.snapshot {
+            // No `stats` entry can exist for this one — it is only recorded on a settle the
+            // caller was handed — but the retire itself still has to happen.
             retire_snapshot(&self.ctx, self.engine_id, snap);
         }
     }
@@ -1376,23 +1401,27 @@ mod tests {
         );
     }
 
-    /// A union nested inside a struct has nothing to wrap — `json_union_to_text` takes the union
-    /// itself — and parquet would panic on it just the same. It is refused **by name**, which is
-    /// the one thing the panic could not do.
+    /// A union **nested** inside a struct now stores as itself.
+    ///
+    /// It used to be refused by name, because `json_union_to_text` takes the union directly so
+    /// there was nothing to wrap it with, and parquet would have panicked on it. The IPC snapshot
+    /// holds it, which is the fidelity the format change bought: the type that reaches the writer
+    /// is the type the query produced, and no coercion or refusal stands between them.
     #[tokio::test]
-    async fn a_json_value_nested_in_a_struct_is_refused_by_name() {
+    async fn a_json_value_nested_in_a_struct_round_trips() {
         let eng = Engine::new(Default::default());
-        let err = eng
+        let (out, _) = eng
             .query(
                 WsId(1),
                 RunTag(1),
-                r#"SELECT struct('{"a":1}' -> 'a') AS wrapped"#.into(),
+                r#"SELECT struct('{"a":1}' -> 'a' AS v) AS wrapped"#.into(),
                 10,
             )
             .await
-            .expect_err("cannot be stored");
-        assert!(err.contains("wrapped"), "names the column: {err}");
-        assert!(err.contains("json_get_str"), "names the fix: {err}");
+            .expect("a nested union is storable under IPC");
+        assert_eq!(out.total, 1);
+        assert_eq!(out.columns.len(), 1);
+        assert_eq!(out.columns[0].name, "wrapped");
     }
 
     /// And they evaluate. A path accessor over a JSON *string* with nothing registered is the
@@ -2343,6 +2372,45 @@ mod read_options_tests {
                 "false".to_string(),
             ]
         );
+    }
+
+    /// An empty JSON object stays an empty struct, end to end.
+    ///
+    /// It was briefly coerced to text, because parquet cannot write a zero-field struct
+    /// (`Parquet does not support writing empty structs`) and `sample/config.json` has 19,159 of
+    /// them — a storage workaround wearing an inference rule's clothes. The snapshot is Arrow IPC
+    /// now, which stores one, so the reader can say what the source actually contains.
+    #[tokio::test]
+    async fn an_empty_json_object_stays_an_empty_struct() {
+        let d = dir("json_poly_empty_obj");
+        let path = write(&d, "t.json", "{\"id\": 1, \"tags\": {}}\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "t",
+                vec![path],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect("register");
+        let tags = meta
+            .columns
+            .iter()
+            .find(|c| c.name == "tags")
+            .expect("tags column");
+        assert!(
+            tags.dtype.starts_with("Struct"),
+            "an empty object is an empty struct, not text: {}",
+            tags.dtype
+        );
+
+        // And it survives the snapshot, which is the half parquet could not do.
+        let (out, _) = eng
+            .query(WsId(1), RunTag(1), "SELECT * FROM t".into(), 10)
+            .await
+            .expect("an empty struct reaches the grid");
+        assert_eq!(out.total, 1);
     }
 
     /// A conflict that spans **files** is the same conflict. It used to fail registration:

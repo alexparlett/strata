@@ -554,7 +554,10 @@ the render thread), spawns each call onto it, and the caller awaits the `JoinHan
 executor-agnostic, so Freya's non-Tokio UI executor awaits engine methods like any async fn. No
 UI-side runtime, no channels, no request ids. freya-query capabilities call the facade directly
 (`engine.query(…)`, `engine.fetch_page(…)`); snapshot lifecycle (supersede / cancel / retire) is
-the facade's own bookkeeping — see **`docs/SNAPSHOT_SPEC.md`**. In Freya the handle is `EngineCtx`
+the facade's own bookkeeping — see **`docs/SNAPSHOT_SPEC.md`**. Snapshots are **Arrow IPC**, not
+parquet, so a result's type survives the round trip (parquet cannot write a union or a zero-field
+struct at all); compressed they are the same size on disk. The export null-gate's exact counts come
+from the write pass (`query::SnapshotStats`), not a footer. In Freya the handle is `EngineCtx`
 (an `Arc<Engine>` + Deref) held in context — not stored in any god-object `AppState`. Managed DDL
 policy: the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` **only**. Views are Save's artifact,
 never typed DDL — ⌘S / Save-as-view wraps the buffer's *plain query* in `CREATE OR REPLACE VIEW`

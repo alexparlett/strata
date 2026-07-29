@@ -124,18 +124,22 @@ Things that must not regress. Each was fought for once already.
   the plan with `does not support projection pushdown`. And each normalization rule was found by
   running the real file, not by reading the spec — arrow can infer a schema its own decoder then
   refuses to read (a scalar promoted into a list), which no amount of design review surfaced.
-- **A type that cannot be written to parquet cannot reach a result — the snapshot is the
-  boundary that enforces it.** Every run materializes to a parquet snapshot before the grid sees a
-  row, so the *read model* constrains the type system: `json_get` (and `->`) returns a sparse
-  `Union` — the JSON-functions crate's stand-in for Postgres `jsonb`, which Arrow has no
-  equivalent of — and parquet has no union logical type at all, `arrow_to_parquet_schema`
-  **panicking** rather than erroring. `query::flatten_json_unions` projects such a column to its
-  canonical JSON text (`json_union_to_text`) on the **logical plan**, so the snapshot, the grid's
-  `ColumnInfo`, page reads and export all agree on one schema — a per-batch repair would leave
-  `df.schema()` claiming a type the file does not hold. The transferable rule: a new function or
-  reader that can produce an exotic Arrow type must be checked against the snapshot writer, not
-  against the grid, and the same SQL working in `datafusion-cli` proves nothing here because
-  nothing persists there.
+- **The snapshot is Arrow IPC, so a result's type survives it.** Every run materializes to a
+  snapshot before the grid sees a row, which makes the snapshot's format a constraint on the whole
+  type system. Parquet was that format and is narrower than Arrow: it cannot write a union at all
+  (`arrow_to_parquet_schema` **panics**, ARROW-8817) nor a zero-field struct, so results were
+  coerced on the way in — and the record view, `cell_pretty_json` and JSON/CSV export all read the
+  *re-read* snapshot, so they read the coerced form, not what the query produced. Each new exotic
+  type meant another arm in a gate that was twice found incomplete. IPC round-trips anything the
+  engine emits, and **compressed it is the same size** (measured over 1M–20M rows in three shapes:
+  raw IPC is 1.4–4.4x parquet, LZ4 IPC is 0.46–0.73x — i.e. half of the *uncompressed* parquet it
+  replaced, which is what our snapshots were). The one thing parquet's footer gave us was exact
+  null counts for the partitioned-export gate; those are now counted during the write pass
+  (`query::SnapshotStats`) because `materialize` already streams every batch and
+  `Array::null_count` is a stored field — free to produce, and held in `Lifecycle` for exactly the
+  snapshot's lifetime rather than in a footer or a sidecar. What remains of the old gate is
+  `json_unions_as_text`, which is now **presentation, not storage**: `json_get`'s union renders as
+  `{str=x}` and nobody typing `content -> 'type'` wants to read that.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the

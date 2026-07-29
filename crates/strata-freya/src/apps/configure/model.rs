@@ -214,7 +214,10 @@ impl ConfigureDraft {
             }
             SourceFormat::Json(o) => {
                 draft.json_shape = o.shape;
-                draft.json_infer_rows = o.infer_rows.unwrap_or(DEFAULT_INFER_ROWS as usize) as u32;
+                // `None` means **scan everything**, which the pane shows as 0 — not
+                // `DEFAULT_INFER_ROWS`. Seeding 1000 here is what made an unbounded def come
+                // back capped after a Save the user never meant as a change.
+                draft.json_infer_rows = o.infer_rows.unwrap_or(0) as u32;
                 draft.json_compression = o.compression;
             }
             SourceFormat::Parquet | SourceFormat::Arrow | SourceFormat::Unknown(_) => {}
@@ -390,10 +393,16 @@ impl ConfigureDraft {
             }),
             FormatId::Json => SourceFormat::Json(JsonRead {
                 shape: self.json_shape,
-                // Floored at 1: `JsonFormat::infer_schema` breaks out before reading anything
-                // at 0, leaving a table with no columns. CSV's 0 means "read all as text";
-                // JSON's would mean "no table".
-                infer_rows: Some(self.json_infer_rows.max(1) as usize),
+                // **0 means scan every record** (`None`), not "no rows" — the engine refuses
+                // `Some(0)` outright because it would infer a schema with no columns.
+                //
+                // The sentinel matters more than it looks. This used to write `Some(..)`
+                // unconditionally, seeded at 1000, so opening Table Config on an unbounded def
+                // and pressing Save silently capped it: inference then saw 1000 clean records,
+                // typed a conflicted column as `Struct`, and every later SELECT failed at scan
+                // on a table the catalog called healthy. Nothing the user did looked like a
+                // change. CSV spends 0 the same way, on its own "read every column as text".
+                infer_rows: (self.json_infer_rows > 0).then_some(self.json_infer_rows as usize),
                 compression: self.json_compression,
             }),
         }
@@ -625,11 +634,13 @@ impl ConfigureDraft {
             FormatId::Json => vec![
                 Group {
                     label: "SCHEMA-INFER ROWS".into(),
-                    hint: Some("Records scanned to infer the schema"),
+                    hint: Some("Records scanned to infer the schema. 0 scans every record"),
                     control: Control::Num {
                         value: self.json_infer_rows,
-                        // Floored at 1, unlike CSV: zero here is a table with no columns.
-                        min: 1,
+                        // 0 is "scan everything", the honest default for a reader whose job is
+                        // to notice type conflicts wherever they are — a capped scan that misses
+                        // one types the column wrong and fails at query time instead.
+                        min: 0,
                         max: MAX_INFER_ROWS,
                         make: Make(Edit::JsonInferRows),
                     },
@@ -896,7 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn json_infer_rows_never_reaches_the_engine_as_zero() {
+    fn json_zero_infer_rows_means_scan_everything() {
         let mut draft = ConfigureDraft {
             format: FormatId::Json,
             ..csv_draft()
@@ -906,10 +917,32 @@ mod tests {
             panic!("json");
         };
         assert_eq!(
-            json.infer_rows,
-            Some(1),
-            "zero would mean no columns at all"
+            json.infer_rows, None,
+            "0 is the unbounded scan, not a request for no columns"
         );
+    }
+
+    /// The round trip that was broken: an unbounded def has to survive being opened and saved.
+    /// It used to come back `Some(1000)` — a silent cap from a dialog the user only looked at.
+    #[test]
+    fn an_unbounded_json_def_survives_a_no_op_save() {
+        let def = TableDef {
+            name: "t".into(),
+            format: SourceFormat::Json(JsonRead::default()),
+            sources: vec!["/data".into()],
+            partition_cols: vec![],
+        };
+        assert!(matches!(def.format, SourceFormat::Json(ref o) if o.infer_rows.is_none()));
+
+        let draft = ConfigureDraft::of(&def);
+        assert_eq!(
+            draft.json_infer_rows, 0,
+            "unset opens as the unbounded scan"
+        );
+        let SourceFormat::Json(saved) = draft.def(Path::new("/project")).format else {
+            panic!("json");
+        };
+        assert_eq!(saved.infer_rows, None, "and saving it back changes nothing");
     }
 
     #[test]

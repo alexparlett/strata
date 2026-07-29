@@ -22,8 +22,8 @@ Keying results by raw SQL is unsafe and insufficient:
   files compacted) and show row 101 twice or never.
 - **Sort / filter / export** must operate over a *fixed set*, not re-run the query each time.
 
-So a **Run executes the SQL exactly once** and spools the full result to an on-disk parquet
-**snapshot** (the `__snap_*` mechanism carried forward from the Dioxus app). Every later read —
+So a **Run executes the SQL exactly once** and spools the full result to an on-disk **Arrow IPC
+snapshot** (LZ4-compressed) (the `__snap_*` mechanism carried forward from the Dioxus app). Every later read —
 page, sort, filter, export — is a bounded read *of that snapshot*, and the snapshot is
 **immutable**: once materialized it is never rewritten. Immutability is what makes downstream
 caching sound.
@@ -38,7 +38,7 @@ A snapshot's id comes from the engine's own monotonic allocator — unique per e
 of the process. It is the snapshot's identity and its storage name:
 
 - table: `__snap_{id}` (registered in the engine's `strata.public` schema)
-- file: `<tmp>/strata_snapshots/e_{pid}_{engine_id}/s_{id}.parquet` (pid-scoped: engine ids
+- file: `<tmp>/strata_snapshots/e_{pid}_{engine_id}/s_{id}.arrow` (pid-scoped: engine ids
   are only process-unique, and the temp root is machine-shared)
 - lock: `<tmp>/strata_snapshots/e_{pid}_{engine_id}.lock` — a **sibling** of the directory,
   opened and exclusively locked by `Engine::new` and held open for the engine's whole life

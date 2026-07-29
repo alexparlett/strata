@@ -58,103 +58,96 @@ and no chance of the completion pool and the engine disagreeing about what exist
 | `json_length(doc, 'arr')` | ✅ `3` |
 | validator on `->` / `->>` | ✅ no diagnostics |
 | `doc -> 'a' -> 'b'` (bare `->` in the select list) | ✅ JSON text — **used to panic the query task**, see below |
-| `doc ? 'a'` | ❌ `ParserError: Expected: end of statement, found: ?` — unavailable, use `json_contains` |
+| `doc ? 'a'` | ⚠️ parses **only** under the postgres dialect — see below |
 
-### The blocker, and its fix: a bare `->` used to panic
+### A bare `->` used to panic, and no longer can
 
 ```
 not implemented: See ARROW-8817.
   parquet-58.3.0/src/arrow/schema/mod.rs:851
-query task failed: task 9 panicked with message "not implemented: See ARROW-8817."
 ```
 
-**parquet-rs cannot write a `DataType::Union` at all**, and every run materializes its result to a
-parquet snapshot (`engine::query`, `docs/SNAPSHOT_SPEC.md`) before a single row reaches the grid.
-So this is not an *export* problem as first assumed — it is a **query** problem, and the failure is
-a panic rather than an error.
+`json_get` returns a sparse `Union` — the crate's stand-in for Postgres `jsonb`, which Arrow has no
+equivalent of. **parquet-rs cannot write a union at all**, and at the time every run materialized to
+a *parquet* snapshot before the grid saw a row, so a bare `->` took the query task down. Registering
+these functions is what made that reachable: before, nothing could produce a union column.
 
-This is a regression introduced by registering the functions: before, no query could produce a
-Union column. `content -> 'type'` is the most natural thing a user will type after reading any
-`json_get` documentation.
+The first fix was `query::flatten_json_unions`, a **storage gate** — project the union to text, and
+refuse the cases that could not be projected (a union nested in a struct, a dictionary-wrapped one,
+and later a zero-field struct). It was found incomplete twice in one review, which is the argument
+that eventually replaced it.
 
-**Fixed by `query::flatten_json_unions`** — a projection on the logical plan, applied in
-`materialize` right after the SQL is planned:
+**The snapshot is Arrow IPC now** (see AGENTS.md §2), which stores unions natively, so the gate and
+all of its refusals are gone. What remains is `query::json_unions_as_text`, doing one job and no
+longer a correctness boundary: arrow renders a union as `{str=x}` / `{int=7}`, and nobody typing
+`content -> 'type'` wants to read that. `json_union_to_text` gives back exactly the JSON the value
+came from, so it changes how the column reads and not what it holds.
 
-- a column whose type is the JSON union is wrapped in **`json_union_to_text`**, the crate's own
-  answer to this (its doc comment names the parquet writer explicitly). Scalars render as
-  `true` / `42`, strings are JSON-quoted, the array and object arms pass through **verbatim** —
-  they are already raw source text inside the union, so nothing re-serializes them — and the
-  JSON-null arm becomes a real SQL `NULL`.
-- a union **nested** inside a struct or list (`struct(x -> 'a')`) has nothing to wrap, since
-  `json_union_to_text` takes the union itself. It is refused by name instead, which is the one
-  thing the panic could not do.
-- a result with no union is returned untouched, so nothing is planned in the common case.
-
-On the **logical plan** rather than per batch, deliberately: the snapshot, the grid's `ColumnInfo`,
-the page reads and every later export then agree on one schema. A batch-level repair would leave
-`df.schema()` claiming a type the file does not hold.
-
-This also disposes of the three "needs a decision" items below without deciding them — a union can
-no longer reach a result at all, so `Kind::from_arrow`'s fallthrough, `Cell.null` on a
-`UnionArray`, and union export are all unreachable. The flattened column is `Utf8View`, which
-`Kind::from_arrow` already reads as `Kind::Str`, correctly.
-
-### Still open: the `?` operator does not parse
+### The `?` operator is dialect-gated, not broken
 
 ```
-SELECT doc ? 'a'  →  ParserError: Expected: end of statement, found: ?
+generic  →  ParserError: Expected: end of statement, found: ?
+postgres →  true
+duckdb   →  ParserError
 ```
 
-sqlparser reads `?` as a placeholder before the crate's `ExprPlanner` ever sees it. `json_contains`
-is the working spelling. Small, and cosmetic next to the above — but it means the README's third
-operator is unavailable here and should be documented as such rather than left to be discovered.
+Not a placeholder-vs-operator problem as first assumed. sqlparser tokenizes `?` as
+`Token::Question` and maps it to `BinaryOperator::Question` either way; what differs is
+**precedence**. `GenericDialect` — DataFusion's default, and ours — overrides
+`get_next_precedence` and omits `Token::Question`, so the parser stops before the operator is ever
+consulted. `PostgreSqlDialect` includes it (sqlparser-0.62 `dialect/postgresql.rs:139`).
 
-## The consequence behind it: `json_get` returns a Union
+`datafusion.sql_parser.dialect` is **already a catalogued engine key** (`engine/config.rs:302`), so
+anyone who wants `?` can set it to `postgres` in Settings ▸ Engine today. `json_contains` is the
+spelling that works in every dialect, and is what the docs should keep naming.
 
-`json_get` (and therefore `->`) returns arrow's `JsonUnion` — a **`DataType::Union`**. That is the
-same type WJ-02 rejects for the reader, arriving from the other direction, and the same constraint
-applies: **Parquet has no union logical type**, so `COPY (SELECT content->'type' …) TO 'x.parquet'`
-cannot be written.
+Changing the *default* is [WJ-04](WJ-04-postgres-dialect-default.md) — it is a broader change than
+it looks, because `engine/sql/lex.rs` hardcodes `GenericDialect`.
 
-Traced through every surface before assuming a break. Most of it already works:
+## The union, and where it now lands
 
-- **The grid renders it.** Cells go through arrow's `ArrayFormatter` (`engine/query.rs`), which has
-  a `DataType::Union` arm (arrow-cast display.rs:563). So `SELECT content->'type'` returns rows
-  rather than failing the run. It renders in arrow's union form (`{str=foo}`), which is *legible
-  but ugly* — the argument for steering at `->>`, not a defect to fix here.
-- **Copy already handles it.** `serialize::is_nested` lists `Union(..)` beside Struct/List/Map, so
+`json_get` (and therefore `->`) returns arrow's `JsonUnion` — a `DataType::Union` with seven arms
+(null / bool / int / float / str / array / object), the crate's stand-in for Postgres `jsonb`.
+Traced through every surface:
+
+- **The grid** renders it via arrow's `ArrayFormatter`, which has a `DataType::Union` arm
+  (arrow-cast display.rs:563) — but as `{str=foo}`, which is why `json_unions_as_text` projects it
+  to JSON text before it gets there.
+- **Copy** handles it already: `serialize::is_nested` lists `Union(..)` beside Struct/List/Map, so
   the CSV/TSV/Markdown writers stringify it to compact JSON.
+- **The snapshot** stores it natively (Arrow IPC), so nothing has to be refused.
 
-Three that *would* have needed a decision, all now unreachable — see the fix above:
+Two loose ends, for a union that reaches the grid **without** passing through
+`json_unions_as_text` — which only projects *top-level* JSON-union columns:
 
-- **`Kind::from_arrow`** (`strata-model/src/schema.rs`) has no Union arm and matches on the arrow
-  type's *display string*, so `Union(...)` falls through the final `else` to `Kind::Str`. Reached
-  via the single `catalog::column_info` builder, which serves query results as well as the catalog
-  (`query.rs:366`). Not obviously wrong — the cell *is* rendered as text — but it is a fallthrough
-  rather than a decision, and `dtype` still reads `Union(...)` in the inspector beside a string dot.
-- **Nulls.** `Cell.null` comes from `cols[ci].is_null(r)`, and a `UnionArray` has no top-level null
-  buffer, so that is always `false`. A JSON null therefore renders as arrow's union display of the
-  null variant rather than the configured NULL text, and the grid will not dim it.
-- **Export.** Parquet cannot hold a union at all. Decide between refusing with a message that names
-  `->>` as the fix, or letting DataFusion's own error through. Prefer the former — but note this
-  one is loud on its own, so it is a message-quality call, not the correctness case that
-  AGENTS.md's "silent corruption is refused" rule is about.
+- `Kind::from_arrow` (`strata-model/src/schema.rs`) has no Union arm. `catalog::short_type` reduces
+  `Union(Sparse, …)` to the base word `Union`, and the prefix chain has no match for it, so it
+  falls through to `Kind::Str` — a string-coloured type dot beside a `dtype` reading `Union`.
+- `Cell.null` comes from `cols[ci].is_null(r)` in `batches_to_rows`, and a `UnionArray` has no
+  top-level null buffer (nulls live in the null-typed arm), so it is always `false`. A JSON null
+  would render as arrow's `{null=}` instead of the configured NULL text, and would not dim.
 
-`->>` / `json_as_text` / `json_get_str` return Utf8 and have none of these properties. Every one of
-the three above is an argument for making those the documented path rather than for reshaping the
-union handling.
+**Where they actually bite.** Not a nested union, as first thought: `catalog::column_info` recurses
+(`nested_children`), so a union inside a struct picks up `Kind::Str` on its *child* entry in the
+inspector — cosmetic — while `Cell.null` only applies to top-level columns and so never fires. The
+live path is a **top-level union that is not the JSON union**: an Arrow/IPC source file with a real
+union column, which the removal of the parquet gate made reachable where it used to be refused.
+Reasoned, not measured — no such file was constructed.
+
+A `Kind::Union` arm plus a null check closes both. Not worth pre-empting: nothing produces such a
+column today except an Arrow file someone deliberately built.
 
 ## State of play
 
-Done. Registered, reaching the function catalogue, and the union/parquet incompatibility is
-handled at the snapshot boundary. The `?` operator is unavailable (sqlparser); `json_contains` is
-the spelling that works.
+Done. Registered, reaching the function catalogue. The union/parquet incompatibility that this task
+uncovered no longer exists — the snapshot is Arrow IPC. The `?` operator is unavailable
+(sqlparser); `json_contains` is the spelling that works.
 
 ## Acceptance
 - `SELECT json_get_str('{"a":"x"}', 'a')` returns `x` with no table registered. ✅
 - The `json_*` names appear in autocomplete with signatures, sourced from the registry snapshot. ✅
 - The validator accepts `->` and `->>`. ✅
-- **A `Union` result column never reaches the parquet snapshot writer.** ✅ — flattened to its
-  canonical JSON text, one test per union arm; a nested one is refused by name.
+- **A `Union` result column round-trips.** ✅ — rendered as canonical JSON text for the grid
+  (one test per union arm), and stored as itself, including nested inside a struct.
 - The `?` operator is documented as unavailable (`json_contains` is the working spelling). ✅
 - `cargo test -p strata-core`.

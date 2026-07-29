@@ -120,9 +120,11 @@ existing project is the thing to avoid here.
 ## Why Utf8 and not a Union or a struct-of-variants
 Considered and rejected:
 
-- **`DataType::Union`.** Parquet has no union logical type, so the export window could not write the
-  table it was opened on — and P4-10 pins a snapshot precisely so that it always can. (WJ-01 meets
-  the same wall from the other side: `json_get` *returns* a union.)
+- **`DataType::Union`.** A conflicted path's arms would be "whatever this file happened to contain"
+  — unstable across re-scans, and unreadable by the `json_get` family, which takes JSON text. (At
+  the time there was a harder reason too: the snapshot was parquet, which cannot write a union at
+  all. That is no longer so — the snapshot is Arrow IPC — but the representation argument stands
+  on its own.)
 - **Struct of nullable variants.** Does not hold the array arm at all — `["...", true]` is not a
   struct, whatever its fields are.
 - **Utf8 of raw JSON.** The grid, inspector, profiler and export all keep working with no change,
