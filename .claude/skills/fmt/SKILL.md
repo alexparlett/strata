@@ -6,7 +6,7 @@ description: Format the Strata crates without reformatting the Freya fork. Use w
 # Format Strata
 
 ```bash
-cargo fmt -p strata-freya -p strata-forms -p strata-forms-macro -p strata-model -p strata-core -p strata-code-editor
+cargo fmt -p strata-freya -p strata-forms -p strata-forms-macro -p strata-model -p strata-core
 ```
 
 That is the whole thing. Run it from the repo root (or any worktree root).
@@ -53,9 +53,23 @@ git -C crates/freya status --short && git submodule status
 The stash is recoverable with `git -C crates/freya stash pop` — check the diff is *only* import
 re-wrapping before dropping it, in case a real fork edit got swept in with it.
 
+## Not `strata-code-editor` either
+
+`crates/strata-code-editor` is **vendored** from Freya's own editor and carries that project's
+layout (vertical imports, `StdExternalCrate` grouping) even though it is a workspace member. Our
+stable rustfmt collapses all of it — measured once at ~190 lines across seven files, landing as
+pure noise in an unrelated PR and permanently diverging the vendored source from upstream. It is
+excluded here for the same reason `crates/freya` is: it is not ours to reformat.
+
+Format it deliberately, with the layout it is written in, if you have actually changed it:
+
+```bash
+cargo +nightly fmt -p strata-code-editor
+```
+
 ## When the member list changes
 
-The command names the six members explicitly, which is the point — it cannot silently grow to
+The command names the five it owns explicitly, which is the point — it cannot silently grow to
 include a path dependency. If a crate is added to `members` in the root `Cargo.toml`, add it here
 too. To check the list matches:
 

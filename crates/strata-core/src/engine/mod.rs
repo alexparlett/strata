@@ -1862,16 +1862,22 @@ mod read_options_tests {
             let loc = loc.clone();
             async move {
                 let ctx = SessionContext::new();
-                let ddl =
-                    format!("CREATE EXTERNAL TABLE t STORED AS csv LOCATION '{loc}/' {opts}");
-                ctx.sql(&ddl).await.expect("ddl").collect().await.expect("ddl");
+                let ddl = format!("CREATE EXTERNAL TABLE t STORED AS csv LOCATION '{loc}/' {opts}");
+                ctx.sql(&ddl)
+                    .await
+                    .expect("ddl")
+                    .collect()
+                    .await
+                    .expect("ddl");
                 let df = ctx.sql("SELECT b IS NULL AS n FROM t ORDER BY a").await?;
                 df.collect().await
             }
         };
 
         // The writer's option: accepted, and read exactly as if it were absent.
-        let with = read("OPTIONS('format.null_value' 'NAN')").await.expect("scan");
+        let with = read("OPTIONS('format.null_value' 'NAN')")
+            .await
+            .expect("scan");
         let without = read("").await.expect("scan");
         assert_eq!(
             format!("{with:?}"),

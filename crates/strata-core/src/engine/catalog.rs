@@ -156,8 +156,8 @@ const MAX_PARTITION_DEPTH: usize = 8;
 /// The Configure window's Hive section says it "found `key=value` folders in the source paths",
 /// so it has to have looked. Two ways a path can say so:
 ///
-/// - the path **names** the keys itself (`/data/year=*/month=*/`, a glob or a literal), in which
-///   case the pattern is the answer and nothing needs listing at all;
+/// - the path **globs** the keys itself (`/data/year=*/month=*/`), in which case the pattern is
+///   the answer and nothing needs listing at all;
 /// - otherwise it is **listed**, one level at a time, following the first `key=value` prefix at
 ///   each level for as long as they keep appearing.
 ///
@@ -184,9 +184,19 @@ pub async fn detect_partitions(ctx: &SessionContext, paths: &[String]) -> Vec<St
     Vec::new()
 }
 
-/// The `key=` segments the path itself spells out, in order.
+/// The `key=` segments the path itself spells out **as globs**, in order.
+///
+/// A *literal* `key=value` segment is deliberately not one of them, and the distinction is not
+/// cosmetic: a source path is the listing **root**, so a literal `…/year=2024/` means the
+/// `year=` level is already consumed and only what is *below* it is still partitioned.
+/// Declaring `year` there produces a table that registers with a plausible schema and then
+/// returns **zero rows for every query** — DataFusion's `parse_partitions_for_path` needs the
+/// relative segment's key to equal the column name, the relative segment is `month=03`, and so
+/// every file is filtered out silently. A glob (`year=*`) does not consume the level and is the
+/// only form that genuinely declares a column here.
 fn keys_in_pattern(path: &str) -> Vec<String> {
     path.split(['/', '\\'])
+        .filter(|seg| seg.contains('*') || seg.contains('?'))
         .filter_map(partition_key)
         .map(str::to_string)
         .collect()
@@ -775,15 +785,19 @@ mod tests {
     }
 
     #[test]
-    fn a_path_that_names_its_partition_keys_needs_no_listing() {
+    fn a_path_that_globs_its_partition_keys_needs_no_listing() {
         assert_eq!(
             detect(&["/data/events/year=*/month=*/*.parquet"]),
             vec!["year", "month"]
         );
-        assert_eq!(
-            detect(&["/data/events/year=2024/month=03/"]),
-            vec!["year", "month"]
-        );
+    }
+
+    #[test]
+    fn a_literal_partition_segment_is_a_root_and_declares_nothing() {
+        // The level is already consumed by the path, so declaring it registers a table that
+        // silently returns no rows at all — see `keys_in_pattern`. Nothing on disk here, so
+        // the store walk finds nothing either and the honest answer is "no columns".
+        assert!(detect(&["/data/events/year=2024/month=03/"]).is_empty());
     }
 
     #[test]

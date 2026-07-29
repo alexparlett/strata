@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use strata_core::project::resolve_source;
+use strata_core::project::{relativize, resolve_source};
 use strata_model::{CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat, TableDef};
 
 use crate::components::form::{one_char, Choice, Control, Group, Make, TextField};
@@ -136,8 +136,6 @@ pub struct ConfigureDraft {
     /// Source paths, in the order they were added. A blank row is a row being typed, not a
     /// path — [`nonblank_sources`](Self::nonblank_sources) is what anything downstream reads.
     pub sources: Vec<String>,
-    /// Which row the toolbar's remove and browse act on.
-    pub selected: usize,
     // --- CSV ---
     pub csv_header: bool,
     pub csv_delimiter: String,
@@ -167,7 +165,6 @@ impl Default for ConfigureDraft {
             name: String::new(),
             format: FormatId::Parquet,
             sources: vec![String::new()],
-            selected: 0,
             csv_header: csv.header,
             csv_delimiter: csv.delimiter.to_string(),
             csv_quote: csv.quote.to_string(),
@@ -268,23 +265,27 @@ impl ConfigureDraft {
             .collect()
     }
 
-    /// The row the toolbar acts on, clamped — the list shrinks under the selection.
-    pub fn selected(&self) -> usize {
-        self.selected.min(self.sources.len().saturating_sub(1))
+    /// Clamp a selection to the list — it shrinks under the caller.
+    pub fn clamp_selection(&self, selected: usize) -> usize {
+        selected.min(self.sources.len().saturating_sub(1))
     }
 
-    pub fn add_path(&mut self) {
+    /// Add a blank row; returns the index to select.
+    pub fn add_path(&mut self) -> usize {
         self.sources.push(String::new());
-        self.selected = self.sources.len() - 1;
+        self.sources.len() - 1
     }
 
-    pub fn remove_path(&mut self) {
+    /// Remove row `at`; returns the index to select afterwards.
+    pub fn remove_path(&mut self, at: usize) -> usize {
         if self.sources.is_empty() {
-            return;
+            return 0;
         }
-        let at = self.selected();
+        let at = self.clamp_selection(at);
         self.sources.remove(at);
-        self.selected = at.min(self.sources.len().saturating_sub(1));
+        // Any path change invalidates a detected partition layout — see `set_paths`.
+        self.partitions.clear();
+        at.min(self.sources.len().saturating_sub(1))
     }
 
     /// Put `paths` into the list at the selection: the first replaces the selected row (or
@@ -292,18 +293,34 @@ impl ConfigureDraft {
     ///
     /// Multi-select is the picker's, not a flourish: a table *is* many paths, and picking five
     /// files one dialog at a time is the same five rows with four more dialogs.
-    pub fn set_paths(&mut self, paths: Vec<String>) {
+    /// Returns the index to select afterwards.
+    ///
+    /// **Clears the detected partition columns**, as every path mutator does. They describe the
+    /// layout of the paths that were there when the switch was flipped; keeping them across a
+    /// re-point means Save writing one lake's keys onto another's, which registers as
+    /// "no files match the partition columns" at best and mislabels a column at worst.
+    pub fn set_paths(&mut self, at: usize, paths: Vec<String>) -> usize {
         if paths.is_empty() {
-            return;
+            return at;
         }
+        self.partitions.clear();
         if self.sources.is_empty() {
             self.sources = paths;
-            self.selected = 0;
-            return;
+            return 0;
         }
-        let at = self.selected();
+        let at = self.clamp_selection(at);
         self.sources.splice(at..=at, paths.iter().cloned());
-        self.selected = at + paths.len() - 1;
+        at + paths.len() - 1
+    }
+
+    /// Type into row `at`. Clears the detected partitions for the reason above.
+    pub fn set_path(&mut self, at: usize, path: String) {
+        if let Some(slot) = self.sources.get_mut(at) {
+            if *slot != path {
+                *slot = path;
+                self.partitions.clear();
+            }
+        }
     }
 
     /// Whether the Hive section has anything to offer: a partition layout only exists under a
@@ -381,11 +398,20 @@ impl ConfigureDraft {
     }
 
     /// The def this draft describes.
-    pub fn def(&self) -> TableDef {
+    ///
+    /// Sources are stored **project-relative** where they sit inside `root`
+    /// (`project::relativize`), which is what [`TableDef`]'s own doc promises and what
+    /// `resolve_source` assumes when reading them back. Without it a project that is moved,
+    /// synced, or opened on another machine loses every table the picker wrote.
+    pub fn def(&self, root: &Path) -> TableDef {
         TableDef {
             name: self.name.trim().to_string(),
             format: self.source_format(),
-            sources: self.nonblank_sources(),
+            sources: self
+                .nonblank_sources()
+                .iter()
+                .map(|p| relativize(root, p))
+                .collect(),
             partition_cols: self.effective_partitions(),
         }
     }
@@ -405,6 +431,13 @@ impl ConfigureDraft {
             return Some(format!(
                 "'{name}' is not a format Strata can read. Choose another."
             ));
+        }
+        // Partitioning on with nothing to partition on: the switch says the folder tree is
+        // being read as columns while the def would record a flat table. Either the detection
+        // found nothing or it has not answered yet; both are worth waiting for rather than
+        // saving a def that contradicts the control above it.
+        if self.hive_on && self.partitions.is_empty() {
+            return Some("No key=value folders were found in the source paths.".into());
         }
         if self.format == FormatId::Csv {
             // The box's own complaint when it holds something that is not one character, and
@@ -714,7 +747,7 @@ mod tests {
         );
 
         draft.apply(Edit::CsvDelimiter("\\t".into()));
-        let SourceFormat::Csv(csv) = draft.def().format else {
+        let SourceFormat::Csv(csv) = draft.def(Path::new("/project")).format else {
             panic!("csv")
         };
         assert_eq!(csv.delimiter, '\t', "the escape resolves");
@@ -760,13 +793,16 @@ mod tests {
     fn the_def_carries_only_the_active_formats_options() {
         let mut draft = csv_draft();
         draft.apply(Edit::CsvDelimiter(";".into()));
-        let SourceFormat::Csv(csv) = draft.def().format else {
+        let SourceFormat::Csv(csv) = draft.def(Path::new("/project")).format else {
             panic!("csv");
         };
         assert_eq!(csv.delimiter, ';');
 
         draft.format = FormatId::Parquet;
-        assert_eq!(draft.def().format, SourceFormat::Parquet);
+        assert_eq!(
+            draft.def(Path::new("/project")).format,
+            SourceFormat::Parquet
+        );
     }
 
     #[test]
@@ -804,7 +840,7 @@ mod tests {
         // already has partition columns keeps them regardless, which is what this asserts.
         let mut draft = ConfigureDraft::of(&def);
         draft.sources = vec!["/data/year=*/".into()];
-        let round = draft.def();
+        let round = draft.def(Path::new("/project"));
         assert_eq!(round.format, def.format);
         assert_eq!(round.partition_cols, def.partition_cols);
     }
@@ -859,7 +895,7 @@ mod tests {
             ..csv_draft()
         };
         draft.json_infer_rows = 0;
-        let SourceFormat::Json(json) = draft.def().format else {
+        let SourceFormat::Json(json) = draft.def(Path::new("/project")).format else {
             panic!("json");
         };
         assert_eq!(
@@ -898,32 +934,35 @@ mod tests {
             draft.may_partition(Path::new("/nowhere")),
             "and the section shows them"
         );
-        assert_eq!(draft.def().partition_cols, def.partition_cols);
+        assert_eq!(
+            draft.def(Path::new("/project")).partition_cols,
+            def.partition_cols
+        );
     }
 
     #[test]
     fn the_toolbars_row_actions_keep_the_selection_inside_the_list() {
         let mut draft = ConfigureDraft::default();
-        draft.add_path();
-        draft.add_path();
-        assert_eq!((draft.sources.len(), draft.selected()), (3, 2));
-        draft.remove_path();
-        draft.remove_path();
-        draft.remove_path();
-        assert_eq!((draft.sources.len(), draft.selected()), (0, 0));
+        assert_eq!(draft.add_path(), 1);
+        assert_eq!(draft.add_path(), 2);
+        assert_eq!((draft.sources.len(), draft.clamp_selection(2)), (3, 2));
+        let mut at = 2;
+        for _ in 0..3 {
+            at = draft.remove_path(at);
+        }
+        assert_eq!((draft.sources.len(), at), (0, 0));
         // Removing from an empty list is a no-op, not a panic.
-        draft.remove_path();
+        assert_eq!(draft.remove_path(0), 0);
         assert!(draft.sources.is_empty());
     }
 
     #[test]
     fn a_multi_file_pick_lands_as_one_row_each() {
         let mut draft = ConfigureDraft::default();
-        draft.set_paths(vec!["/a".into(), "/b".into(), "/c".into()]);
+        draft.set_paths(0, vec!["/a".into(), "/b".into(), "/c".into()]);
         assert_eq!(draft.sources, vec!["/a", "/b", "/c"]);
         // …replacing the row it was invoked on, not appending blindly.
-        draft.selected = 1;
-        draft.set_paths(vec!["/x".into()]);
+        draft.set_paths(1, vec!["/x".into()]);
         assert_eq!(draft.sources, vec!["/a", "/x", "/c"]);
     }
 

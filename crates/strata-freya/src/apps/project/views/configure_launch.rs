@@ -54,6 +54,7 @@ impl Component for ConfigureLauncher {
                     target,
                     app: app.clone(),
                     project,
+                    project_root: project.peek().root.to_string_lossy().into_owned(),
                     rescan,
                     catalog,
                     engine: engine.clone(),

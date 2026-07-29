@@ -18,11 +18,11 @@
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
 
-use crate::apps::configure::{ConfigureCtx, Status};
+use crate::apps::configure::{ConfigureCtx, ConfigureTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{log_event, LogCtx, LogLevel};
 use crate::apps::project::{
-    persisted, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState,
+    persisted, refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState,
 };
 use crate::components::divider::Divider;
 use crate::components::typography::{Control, Path};
@@ -190,7 +190,8 @@ fn save(
     engine: EngineCtx,
     log: LogCtx,
 ) {
-    let def = ctx.draft.peek().def();
+    let root = project.peek().root.clone();
+    let def = ctx.draft.peek().def(&root);
     let renamed_from = ctx
         .target
         .peek()
@@ -226,13 +227,21 @@ fn save(
     } else {
         ctx.status.set(Status::Registering(name.clone()));
     }
+    // **The window is now configuring what it just wrote.** Without this a second Save — after a
+    // registration failure, say — measures `renamed_from` against the name the window *opened*
+    // on, so the row the first Save created is never removed and the catalog keeps a phantom
+    // table under the intermediate name.
+    {
+        let mut target = ctx.target;
+        target.set(ConfigureTarget::Edit(name.clone()));
+    }
 
     // A rename leaves the engine still holding the old name, which the scan pass cannot know
     // about — it registers the defs, and this one no longer has a def. Dropping it is the one
     // engine call this window makes. Views written against the old name break, which is the
     // user's edit: their rows fail their own re-create and say so.
-    if let Some(old) = renamed_from {
-        engine.deregister(&old);
+    if let Some(old) = &renamed_from {
+        engine.deregister(old);
         log_event(
             log,
             LogLevel::Info,
@@ -240,5 +249,12 @@ fn save(
         );
     }
 
-    refresh_table(rescan, name);
+    match renamed_from {
+        // **A rename is a whole-catalog pass, not a one-table one.** `views_to_refresh` can only
+        // find views whose deps name the table it is given, and a view that read the *old* name
+        // names neither — so scoping to the new name leaves those views `Ready`, still answering
+        // from the provider this rename just deregistered.
+        Some(_) => refresh_catalog(rescan),
+        None => refresh_table(rescan, name),
+    }
 }

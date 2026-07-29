@@ -64,6 +64,11 @@ pub enum WindowKind {
     Configure {
         owner: WindowId,
         target: ConfigureTarget,
+        /// The project folder this window was opened on. A project window keeps its id across a
+        /// re-root (`OpenPref::This` is a keyed remount, not a new window), which drops the very
+        /// stores this window holds — so "is my owner still open?" is not enough to tell whether
+        /// what it is configuring is still there.
+        project: String,
     },
 }
 

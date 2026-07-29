@@ -1432,12 +1432,6 @@
             "border_fill": {
               "$ref": "#/$defs/colorPref"
             },
-            "divider_fill": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "control_border_fill": {
-              "$ref": "#/$defs/colorPref"
-            },
             "row_selected_background": {
               "$ref": "#/$defs/colorPref"
             },
@@ -1445,21 +1439,6 @@
               "$ref": "#/$defs/colorPref"
             },
             "icon_background": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "muted_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "busy_background": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "busy_color": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "error_background": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "error_border_fill": {
               "$ref": "#/$defs/colorPref"
             }
           }

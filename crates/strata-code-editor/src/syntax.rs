@@ -4,7 +4,15 @@ use ropey::Rope;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use tree_sitter::{
-    InputEdit, Language, Node, Parser, Point, Query, QueryCursor, StreamingIterator, TextProvider,
+    InputEdit,
+    Language,
+    Node,
+    Parser,
+    Point,
+    Query,
+    QueryCursor,
+    StreamingIterator,
+    TextProvider,
     Tree,
 };
 
@@ -187,12 +195,7 @@ impl SyntaxHighlighter {
     }
 
     /// Incrementally re-parse the rope and rebuild syntax blocks.
-    pub fn parse(
-        &mut self,
-        rope: &Rope,
-        syntax_blocks: &mut SyntaxBlocks,
-        edit: Option<InputEdit>,
-    ) {
+    pub fn parse(&mut self, rope: &Rope, syntax_blocks: &mut SyntaxBlocks, edit: Option<InputEdit>) {
         syntax_blocks.clear();
 
         if let Some(input_edit) = edit

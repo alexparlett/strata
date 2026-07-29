@@ -81,14 +81,25 @@ impl Component for Toolbar {
                 ToolButton::new(IconName::Plus, "Add path")
                     .outlined()
                     .color(win.icon_color)
-                    .on_press(move |_| ctx.edit(|draft| draft.add_path())),
+                    .on_press(move |_| {
+                        let mut selected = ctx.selected_path;
+                        let mut at = 0;
+                        ctx.edit(|draft| at = draft.add_path());
+                        selected.set(at);
+                    }),
             )
             .child(
                 ToolButton::new(IconName::Minus, "Remove path")
                     .outlined()
                     .color(error)
                     .enabled(has_rows)
-                    .on_press(move |_| ctx.edit(|draft| draft.remove_path())),
+                    .on_press(move |_| {
+                        let mut selected = ctx.selected_path;
+                        let at = *selected.peek();
+                        let mut next = at;
+                        ctx.edit(|draft| next = draft.remove_path(at));
+                        selected.set(next);
+                    }),
             )
             .child(BrowseButton)
     }
@@ -176,7 +187,10 @@ fn pick(ctx: ConfigureCtx, kind: Pick) {
     // wherever the OS last left the panel.
     let start = {
         let draft = ctx.draft.peek();
-        draft.sources.get(draft.selected()).cloned()
+        draft
+            .sources
+            .get(draft.clamp_selection(*ctx.selected_path.peek()))
+            .cloned()
     }
     .filter(|s| !s.trim().is_empty());
 
@@ -208,7 +222,11 @@ fn pick(ctx: ConfigureCtx, kind: Pick) {
                 .into_iter()
                 .collect(),
         };
-        ctx.edit(move |draft| draft.set_paths(picked));
+        let mut selected = ctx.selected_path;
+        let at = *selected.peek();
+        let mut next = at;
+        ctx.edit(|draft| next = draft.set_paths(at, picked));
+        selected.set(next);
     });
 }
 
@@ -227,7 +245,10 @@ impl Component for PathList {
         let ctx = use_consume::<ConfigureCtx>();
         let (count, selected) = {
             let draft = ctx.draft.read();
-            (draft.sources.len(), draft.selected())
+            (
+                draft.sources.len(),
+                draft.clamp_selection(*ctx.selected_path.read()),
+            )
         };
 
         if count == 0 {
@@ -309,6 +330,20 @@ impl Component for PathRow {
             move || initial
         });
         let mut reported = use_state(move || initial);
+        // **Selection follows focus**, not a press on the row. Freya's `Input` registers
+        // `on_focus_press` — sugar over `on_pointer_down` — and stops propagation, so a press
+        // handler on the wrapper never fires over the field itself: clicking into a row to edit
+        // it left the toolbar pointing at whichever row was selected before, and Remove deleted
+        // that one instead. Focus is the thing the click actually causes, so it is what the
+        // selection reads.
+        let field = use_a11y();
+        let focus = use_focus(field);
+        let mut selected = ctx.selected_path;
+        use_side_effect(move || {
+            if focus() != Focus::Not && *selected.peek() != index {
+                selected.set(index);
+            }
+        });
 
         // Out: what was typed reaches the draft.
         use_side_effect(move || {
@@ -317,11 +352,7 @@ impl Component for PathRow {
                 return;
             }
             reported.set(path.clone());
-            ctx.edit(move |draft| {
-                if let Some(slot) = draft.sources.get_mut(index) {
-                    *slot = path;
-                }
-            });
+            ctx.edit(move |draft| draft.set_path(index, path));
         });
         // In: a value this row did not type reaches the box.
         use_side_effect(move || {
@@ -349,7 +380,6 @@ impl Component for PathRow {
             .maybe(self.selected, |el| {
                 el.background(window_theme().row_selected_background)
             })
-            .on_pointer_down(move |_| ctx.edit(move |draft| draft.selected = index))
-            .child(ValueField::new(text).width(Size::fill()))
+            .child(ValueField::new(text).width(Size::fill()).a11y_id(field))
     }
 }

@@ -68,6 +68,7 @@ impl EditorMetrics {
     }
 
     pub fn run_parser(&mut self, rope: &Rope, edit: Option<InputEdit>) {
-        self.highlighter.parse(rope, &mut self.syntax_blocks, edit);
+        self.highlighter
+            .parse(rope, &mut self.syntax_blocks, edit);
     }
 }

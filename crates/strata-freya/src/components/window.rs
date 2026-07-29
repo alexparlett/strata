@@ -1,9 +1,13 @@
 //! **Window chrome** — the tones every one of the app's windows is built out of: the body it
 //! floats on, the recessed insets inside it, its rules, and the two status blocks.
 //!
+//! Only what a window's chrome actually paints: a field is added here when a surface reads it,
+//! not in anticipation (AGENTS.md §1) — an unread slot still has to be authored in every theme
+//! file and pinned by the committed schema, for no rendered pixel.
+//!
 //! One theme for *all* windows, not one per window. A window is not a component in the sense
 //! that a button is, but its dress is shared vocabulary in exactly the way a button's is, and a
-//! per-window block of the same fifteen fields is four blocks to keep in step for one reskin.
+//! per-window block of the same fields is four blocks to keep in step for one reskin.
 //!
 //! **This is also the only way to reach the tones at all.** A window's surfaces live in the
 //! theme's **palette** — `surface_overlay`, `border_control`, `line`, `accent_badge`,
@@ -36,28 +40,11 @@ define_theme!(
         panel_background: Color,
         /// The window's own rules — a title bar's underline, a footer's overline, a panel's edge.
         border_fill: Color,
-        /// A rule *inside* a panel, one step quieter than the panel's own edge (`line`): one row
-        /// of a list from the next.
-        divider_fill: Color,
-        /// A control's edge — a text field, a bordered list, an outlined button.
-        control_border_fill: Color,
         /// A selected row within a panel.
         row_selected_background: Color,
         /// The window's mark, and the accent-tinted tile behind it.
         icon_color: Color,
         icon_background: Color,
-        /// Recessive prose a window writes about itself — an empty state, a line explaining why
-        /// an action is unavailable. Brighter than a form's label, which is an eyebrow pitched to
-        /// recede under a control; this is a sentence meant to be read.
-        muted_color: Color,
-        /// A work-in-flight strip.
-        busy_background: Color,
-        busy_color: Color,
-        /// A failure block. Its glyph and text take the sheet's `error` directly — that is one of
-        /// the four semantic slots and must follow the app-wide ramp wherever it appears — so
-        /// only the tinted box is named here.
-        error_background: Color,
-        error_border_fill: Color,
     }
 );
 

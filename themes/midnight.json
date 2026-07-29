@@ -1499,12 +1499,6 @@
       "border_fill": {
         "reference": "border"
       },
-      "divider_fill": {
-        "reference": "line"
-      },
-      "control_border_fill": {
-        "reference": "border_control"
-      },
       "row_selected_background": {
         "reference": "accent_selection"
       },
@@ -1513,21 +1507,6 @@
       },
       "icon_background": {
         "reference": "accent_badge"
-      },
-      "muted_color": {
-        "reference": "text_muted"
-      },
-      "busy_background": {
-        "reference": "surface_primary"
-      },
-      "busy_color": {
-        "reference": "text_muted"
-      },
-      "error_background": {
-        "reference": "danger_soft"
-      },
-      "error_border_fill": {
-        "reference": "danger_soft_hover"
       }
     }
   },

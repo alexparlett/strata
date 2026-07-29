@@ -28,7 +28,9 @@ pub struct StatusBlock;
 impl Component for StatusBlock {
     fn render(&self) -> impl IntoElement {
         let win = window_theme();
-        let error = use_theme().read().colors().error;
+        let colors = use_theme().read().colors().clone();
+        let error = colors.error;
+        let text = colors.text_secondary;
         let ctx = use_consume::<ConfigureCtx>();
         let status = ctx.status.read().clone();
 
@@ -44,7 +46,7 @@ impl Component for StatusBlock {
                 .background(win.panel_background)
                 .border(Border::new().width(1.).fill(win.border_fill))
                 .child(CircularLoader::new().size(GLYPH))
-                .child(Path::new(format!("Registering '{name}'…")).color(win.busy_color)),
+                .child(Path::new(format!("Registering '{name}'…")).color(text)),
             // A failure is a *sentence the engine wrote*, so it gets room to wrap rather than a
             // single clipped line — several of P3-07's messages are two clauses long.
             Status::Failed(why) => rect()

@@ -1,6 +1,9 @@
 use freya_components::{
     define_theme,
-    theming::{component_themes::Theme, macros::Preference},
+    theming::{
+        component_themes::Theme,
+        macros::Preference,
+    },
 };
 use freya_core::prelude::Color;
 
@@ -341,9 +344,7 @@ impl From<EditorTheme> for EditorThemePreference {
             panel_border: Preference::Specific(theme.panel_border),
             completion_background: Preference::Specific(theme.completion_background),
             completion_border: Preference::Specific(theme.completion_border),
-            completion_selected_background: Preference::Specific(
-                theme.completion_selected_background,
-            ),
+            completion_selected_background: Preference::Specific(theme.completion_selected_background),
             completion_detail: Preference::Specific(theme.completion_detail),
             completion_kind_table: Preference::Specific(theme.completion_kind_table),
             completion_kind_view: Preference::Specific(theme.completion_kind_view),

@@ -23,7 +23,9 @@ pub use state::{log_event, LogCtx, LogLevel};
 /// window, which is its own OS window and so carries the station as a launch value rather than
 /// inheriting this one's context. It writes the def and asks for the pass; the driver here runs
 /// it, which is what keeps "make the engine match the defs" a single implementation.
-pub use state::{refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState, Reg};
+pub use state::{
+    refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState, Reg,
+};
 /// The `.strata` write funnel, for the same window: a def written by Configure is persisted the
 /// way every other def mutation is, and its answer is checked rather than assumed.
 pub use views::persisted;

@@ -73,6 +73,9 @@ pub struct ConfigureLaunch {
     /// config store shareable too (`state::config`) — this is the same move, scoped to one
     /// project.
     pub project: RadioStation<ProjectState, ProjChan>,
+    /// The project folder this window is configuring — what ties its lifetime to the *project*
+    /// rather than to the window id (see [`crate::platform::configure`]).
+    pub project_root: String,
     /// The project window's re-scan request. Save bumps it; the driver over there runs the pass.
     pub rescan: CatalogRescan,
     /// …and that driver's gate. A request raised while a pass is already in flight is **dropped**
@@ -119,6 +122,12 @@ pub struct ConfigureCtx {
     /// What this window opened on. A `State` only so the context stays `Copy` — nothing writes it.
     pub target: State<ConfigureTarget>,
     pub status: State<Status>,
+    /// Which source-path row the toolbar acts on.
+    ///
+    /// **Window state, not draft state.** It is a way of looking, not part of the def — and
+    /// keeping it on the draft meant every click on a row counted as an edit, which cleared the
+    /// engine's failure message out from under a user who was still reading it.
+    pub selected_path: State<usize>,
 }
 
 impl ConfigureCtx {
@@ -134,6 +143,12 @@ impl ConfigureCtx {
     /// Clearing the failure here means no control has to remember to: a message describes the
     /// draft that produced it, so any change to the draft makes it a lie.
     pub fn edit(mut self, f: impl FnOnce(&mut ConfigureDraft)) {
+        // A registration is in flight for the def as it was written; the window closes on its
+        // answer, so a change accepted now would be silently discarded. Refusing keeps the form
+        // honest about what it is about to become.
+        if matches!(*self.status.peek(), Status::Registering(_)) {
+            return;
+        }
         {
             let mut next = self.draft.peek().clone();
             f(&mut next);
@@ -153,6 +168,7 @@ impl ConfigureCtx {
 pub struct ConfigureApp {
     pub app: AppCtx,
     pub project: RadioStation<ProjectState, ProjChan>,
+    pub project_root: String,
     pub rescan: CatalogRescan,
     pub catalog: Catalog,
     pub engine: EngineCtx,
@@ -168,6 +184,7 @@ impl ConfigureApp {
     pub fn window(
         app: AppCtx,
         project: RadioStation<ProjectState, ProjChan>,
+        project_root: String,
         rescan: CatalogRescan,
         catalog: Catalog,
         engine: EngineCtx,
@@ -185,6 +202,7 @@ impl ConfigureApp {
         WindowConfig::new_app(ConfigureApp {
             app,
             project,
+            project_root,
             rescan,
             catalog,
             engine,
@@ -243,9 +261,11 @@ impl App for ConfigureApp {
         let target = self.target.clone();
         platform::use_register_window(self.app.windows, {
             let target = target.clone();
+            let project_root = self.project_root.clone();
             move || WindowKind::Configure {
                 owner,
                 target: target.clone(),
+                project: project_root.clone(),
             }
         });
         platform::use_configure_pin(self.app.clone());
@@ -259,18 +279,26 @@ impl App for ConfigureApp {
                 // def that was already there.
                 let draft = match target.editing() {
                     None => ConfigureDraft::default(),
+                    // **No blank fallback** (AGENTS.md §1). A window titled "Configure events"
+                    // whose draft is an empty New-table form still reports `events` as its
+                    // rename source, so its first Save deregisters a table it never showed. A
+                    // row that is gone between the open and the first render is a fault, not a
+                    // state to render.
                     Some(name) => project
                         .peek()
                         .tables
                         .iter()
                         .find(|t| ProjectState::same_name(&t.def.name, name))
                         .map(|row| ConfigureDraft::of(&row.def))
-                        .unwrap_or_default(),
+                        .unwrap_or_else(|| {
+                            panic!("configure '{name}': no such table in this project")
+                        }),
                 };
                 ConfigureCtx {
                     draft: State::create(draft),
                     target: State::create(target),
                     status: State::create(Status::Idle),
+                    selected_path: State::create(0),
                 }
             }
         });

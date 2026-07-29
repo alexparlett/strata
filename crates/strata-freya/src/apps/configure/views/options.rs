@@ -92,6 +92,7 @@ mod tests {
                     }),
                     target: State::create(ConfigureTarget::New),
                     status: State::create(Status::Idle),
+                    selected_path: State::create(0),
                 })
             },
             1.,

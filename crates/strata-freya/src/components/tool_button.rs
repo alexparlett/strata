@@ -90,6 +90,12 @@ impl Component for ToolButton {
                     .map(self.color, |el, color| el.color(color)),
             );
 
+        // The label reaches the user on hover, but **not yet the accessibility tree**: `Button`
+        // sets a role and focusability and no name, `Tooltip` sets only its own role, and the
+        // child is a raw-SVG `Icon`, so these announce unnamed. `a11y_alt` is an element
+        // extension and `Button` is a component, so naming it belongs on `Button` in the fork
+        // (AGENTS.md §6) rather than on a wrapper rect here, whose name would not necessarily
+        // reach the focusable node.
         TooltipContainer::new(Tooltip::new(self.label))
             .position(AttachedPosition::Top)
             .child(button)

@@ -42,8 +42,13 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             .peek()
             .by_id()
             .iter()
+            // **Keyed by owner *and* target.** A target names a def, and a def belongs to one
+            // project — two windows on different projects can both hold a table called `events`,
+            // and matching on the name alone hands the second one the first project's def and
+            // then writes to its store.
             .find(|(_, kind)| {
-                matches!(kind, WindowKind::Configure { target, .. } if *target == launch.target)
+                matches!(kind, WindowKind::Configure { owner: o, target, .. }
+                    if *o == owner && *target == launch.target)
             })
             .map(|(id, _)| *id)
             .filter(|id| ctx.windows().contains_key(id));
@@ -57,6 +62,7 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
         let id = ctx.launch_window(ConfigureApp::window(
             launch.app.clone(),
             launch.project,
+            launch.project_root.clone(),
             launch.rescan,
             launch.catalog,
             launch.engine.clone(),
@@ -73,6 +79,7 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             WindowKind::Configure {
                 owner,
                 target: launch.target.clone(),
+                project: launch.project_root.clone(),
             },
         );
         ctx.set_window_parent(id, Some(owner));
@@ -106,11 +113,18 @@ pub fn use_configure_pin(app: crate::state::AppCtx) {
         let Some(id) = *me.read() else {
             return;
         };
-        let owner = registry.by_id().get(&id).and_then(|kind| match kind {
-            WindowKind::Configure { owner, .. } => Some(*owner),
+        let Some(WindowKind::Configure { owner, project, .. }) = registry.by_id().get(&id) else {
+            return;
+        };
+        // Gone with its owner — **or with its owner's project**. A re-root keeps the window id
+        // and remounts `ProjectRoot`, dropping the store, the log, the catalog and the scan
+        // counter this window holds; staying open would mean reading dropped values on the next
+        // repaint and writing a def into a project nobody is looking at.
+        let owner_project = registry.by_id().get(owner).and_then(|kind| match kind {
+            WindowKind::Project(path) => Some(path.clone()),
             _ => None,
         });
-        if owner.is_some_and(|owner| !registry.is_open(owner)) {
+        if !registry.is_open(*owner) || owner_project.as_ref() != Some(project) {
             platform.close_current_window();
         }
     });
