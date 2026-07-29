@@ -21,12 +21,16 @@ use std::time::Instant;
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::common::Column;
+use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use datafusion::prelude::*;
+use datafusion_functions_json::udfs::json_union_to_text_udf;
+use datafusion_functions_json::JSON_UNION_DATA_TYPE;
 use futures::StreamExt;
 
 use super::catalog::column_info;
@@ -333,6 +337,108 @@ pub async fn run_and_snapshot(
     result
 }
 
+/// Project any **JSON union** result column to its canonical JSON text.
+///
+/// `json_get` (and therefore `->`) has no Arrow type to return. Postgres answers this with
+/// `jsonb`, a first-class type; Arrow has no equivalent and a column must be exactly one
+/// `DataType`, so `datafusion-functions-json` models a JSON value as a sparse **`Union`** of the
+/// seven arms it can hold (null / bool / int / float / str / array / object).
+///
+/// That type cannot leave memory. **Parquet has no union logical type at all**, and
+/// `arrow_to_parquet_schema` does not error on one — it `panic!`s ("See ARROW-8817"). Every run
+/// here materializes to a parquet snapshot before the grid sees a row, so `SELECT content -> 'x'`
+/// took down the query task. In plain DataFusion the same SQL is fine, because nothing persists
+/// the result; the incompatibility is between that type and *our* read model, not the function.
+///
+/// So the union is flattened here, at the one boundary that cannot carry it. `json_union_to_text`
+/// is the crate's own answer to this — its doc names the parquet writer explicitly — and it
+/// renders scalars as `true` / `42`, JSON-quotes strings, passes the array and object arms through
+/// (already raw JSON text) and maps the JSON-null arm to SQL `NULL`.
+///
+/// Done as a **projection on the logical plan** rather than a fix-up of each batch, so the
+/// snapshot, the grid's `ColumnInfo`, the page reads and every later export all agree on one
+/// schema — a batch-level repair would leave `df.schema()` claiming a type the file does not hold.
+/// A result with no union is returned untouched, so nothing is planned for the overwhelmingly
+/// common case.
+pub fn flatten_json_unions(df: DataFrame) -> Result<DataFrame, String> {
+    let schema = df.schema().clone();
+    if !schema
+        .fields()
+        .iter()
+        .any(|f| unwritable(f.data_type()).is_some())
+    {
+        return Ok(df);
+    }
+
+    let mut exprs = Vec::with_capacity(schema.fields().len());
+    for (column, field) in schema.columns().into_iter().zip(schema.fields()) {
+        let name = field.name();
+        if field.data_type() == &*JSON_UNION_DATA_TYPE {
+            exprs.push(
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    json_union_to_text_udf(),
+                    vec![Expr::Column(column)],
+                ))
+                .alias(name),
+            );
+        } else if let Some(why) = unwritable(field.data_type()) {
+            // Anything else parquet cannot hold: a union nested inside a struct or list
+            // (`struct(x -> 'a')`, which `json_union_to_text` cannot take because it wants the
+            // union itself), a dictionary-wrapped JSON union, a union from an Arrow source that
+            // is not JSON at all, or a zero-field struct. Refused **by name and by reason**,
+            // which is the one thing the panic could not do.
+            return Err(format!(
+                "Column '{name}' has a type that cannot be stored: {why}.{}",
+                if holds_json_union(field.data_type()) {
+                    " Select it with '->>' or json_get_str instead of '->'."
+                } else {
+                    ""
+                }
+            ));
+        } else {
+            exprs.push(Expr::Column(column));
+        }
+    }
+    df.select(exprs).map_err(|e| e.to_string())
+}
+
+/// Why parquet cannot write `dt`, or `None` if it can.
+///
+/// The gate is **not** "is this a union". That was the first version and it missed the very next
+/// case the user hit: parquet's arrow schema conversion also refuses a zero-field struct
+/// ("Parquet does not support writing empty structs", `parquet/src/arrow/schema/mod.rs:799`),
+/// which the JSON reader itself used to manufacture from `{}`. It also missed
+/// `Dictionary(Int64, Union(..))`, which is what `json_get` returns for a dictionary-encoded
+/// input. A boundary that converts *one* unwritable type and lets the rest through as a panic is
+/// not a gate; this enumerates what the writer rejects and names it.
+fn unwritable(dt: &DataType) -> Option<&'static str> {
+    match dt {
+        DataType::Union(..) => Some("a JSON or union value"),
+        DataType::Struct(fields) if fields.is_empty() => Some("an empty struct"),
+        DataType::Struct(fields) => fields.iter().find_map(|f| unwritable(f.data_type())),
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _) => unwritable(f.data_type()),
+        DataType::Dictionary(_, v) => unwritable(v),
+        _ => None,
+    }
+}
+
+/// Whether the JSON accessors are the likely source, so the message can name their fix.
+fn holds_json_union(dt: &DataType) -> bool {
+    match dt {
+        DataType::Union(..) => dt == &*JSON_UNION_DATA_TYPE,
+        DataType::Struct(fields) => fields.iter().any(|f| holds_json_union(f.data_type())),
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _) => holds_json_union(f.data_type()),
+        DataType::Dictionary(_, v) => holds_json_union(v),
+        _ => false,
+    }
+}
+
 async fn materialize(
     ctx: &SessionContext,
     engine_id: u64,
@@ -358,6 +464,7 @@ async fn materialize(
         .sql_with_options(sql, opts)
         .await
         .map_err(|e| e.to_string())?;
+    let df = flatten_json_unions(df)?;
     // capture columns before the DataFrame is consumed by the stream
     let columns: Vec<ColumnInfo> = df
         .schema()

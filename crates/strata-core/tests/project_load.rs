@@ -48,8 +48,10 @@ async fn fixture_project_registers_and_queries() {
             Err(_) => failed.push(t.name.clone()),
         }
     }
-    // The fixture's one deliberate dud: `signups.json` is pretty-printed JSON and
-    // DataFusion's JSON format reads NDJSON — a useful Failed-state fixture.
+    // The fixture's one deliberate dud: `signups.json` has a record missing its closing brace,
+    // so no reader can take it — a useful Failed-state fixture. (It was pretty-printed JSON until
+    // `engine::json_poly` replaced arrow's line-based reader and started reading that correctly;
+    // see the fixture README.)
     assert_eq!(failed, ["signups"]);
 
     // The hive-partitioned table carries its partition columns in the schema.

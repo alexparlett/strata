@@ -11,6 +11,6 @@ mod profile;
 mod run_query;
 
 pub use profile::{use_profile, ScanId};
-pub use run_query::{PageSpec, QueryMode, QueryOutcome, QueryPage, QuerySpec, RunId, RunQuery,
-                    DEFAULT_PAGE_SIZE,
+pub use run_query::{
+    PageSpec, QueryMode, QueryOutcome, QueryPage, QuerySpec, RunId, RunQuery, DEFAULT_PAGE_SIZE,
 };

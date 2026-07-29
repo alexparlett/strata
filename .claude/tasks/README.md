@@ -70,6 +70,11 @@ Read this index first, then open only the phase/workstream file you're working i
 - **Chart view** (`workstream-chart-view/`, DEV_TASKS **Rz2**) — the results Chart surface: chart
   types, encoder strip, client-side aggregate, guardrails. A whole feature surface, not drift.
   Spec: `docs/CHART_SPEC.md`.
+- **Polymorphic JSON** (`workstream-json-polymorphic/`) — reading JSON whose fields disagree across
+  records (a type-discriminated union), and querying inside the result. Two halves: **WJ-01** the
+  Postgres-style JSON accessors (`json_get` / `->` / `->>`), and **WJ-02** a union-tolerant
+  `FileFormat` that stringifies a conflicted field to `Utf8` instead of failing schema inference.
+  Entirely `strata-core`; no UI surface of its own.
 
 ## Known bugs (carried from DEV_TASKS; re-verify under Freya)
 

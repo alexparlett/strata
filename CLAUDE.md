@@ -562,6 +562,17 @@ itself (`Engine::create_view`), so typed `CREATE`/`DROP VIEW` is blocked (valida
 Save / the catalog), like `CREATE EXTERNAL TABLE` / CTAS / `INSERT` (use Table Config) and the
 hard-blocked `CREATE DATABASE`/`SCHEMA`.
 
+**The SQL function set is the live registry, not a list we keep.** `build_context` registers
+`datafusion-functions-json`'s Postgres-style accessors (`json_get` / `->` / `->>`; **not** `?`,
+which sqlparser reads as a placeholder before the crate's planner sees it — `json_contains` is the
+spelling that works) over Utf8
+columns holding JSON text, and that call is the whole integration: `engine::functions::snapshot`
+walks `ctx.udfs()`, so anything registered reaches autocomplete, signature help and the docs panel
+with no per-function table and no way for the completion pool and the engine to disagree. Adding a
+UDF family means one `register_*` call in `build_context` and nothing else.
+(`.claude/tasks/workstream-json-polymorphic/` — WJ-01, and WJ-02 for the union-tolerant JSON
+reader that makes the accessors pay off.)
+
 > The Dioxus-era `Command`/`Event` channel protocol + worker loop was **deleted from
 > `strata-core`** with P2-01. `crates/strata-dioxus` still references it and therefore **no longer
 > builds** — it is kept as *reference code only* for porting features to Freya. Don't try to fix

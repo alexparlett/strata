@@ -110,6 +110,32 @@ Things that must not regress. Each was fought for once already.
   that no user should ever read as a problem. Putting it in a cross-tab view costs either a copy
   on the store that outlives the run, or one freya-query subscription per tab in the drawer
   *and* in the rail badge. The results pane already renders it in full.
+- **JSON is read by our own `FileFormat`, and a replaced reader inherits the replaced reader's
+  diagnostics.** `engine::json_poly` is now the *only* JSON reader — arrow's `JsonFormat` is not
+  constructed anywhere. It exists because arrow's inference admits five type combinations and
+  errors on every other pair, so a type-discriminated union fails registration outright; ours
+  stringifies **only** the paths arrow would have rejected and infers everything else identically
+  (asserted against arrow's own inference, not argued). Three things generalise. A reader swap is
+  also a **diagnostics** swap: `catalog::json_shape_error` keys off arrow's `Json error: ` prefix
+  and its exact `Expected JSON record to be an object, found Array` wording, so ours speaks that
+  dialect deliberately — replacing a reader must not quietly replace the message the user reads.
+  A `FileSource` **must** handle its own projection: leaving `projection()` at its `None` default
+  does not mean "plan a projection above the scan", it means `FileScanConfigBuilder::build` fails
+  the plan with `does not support projection pushdown`. And each normalization rule was found by
+  running the real file, not by reading the spec — arrow can infer a schema its own decoder then
+  refuses to read (a scalar promoted into a list), which no amount of design review surfaced.
+- **A type that cannot be written to parquet cannot reach a result — the snapshot is the
+  boundary that enforces it.** Every run materializes to a parquet snapshot before the grid sees a
+  row, so the *read model* constrains the type system: `json_get` (and `->`) returns a sparse
+  `Union` — the JSON-functions crate's stand-in for Postgres `jsonb`, which Arrow has no
+  equivalent of — and parquet has no union logical type at all, `arrow_to_parquet_schema`
+  **panicking** rather than erroring. `query::flatten_json_unions` projects such a column to its
+  canonical JSON text (`json_union_to_text`) on the **logical plan**, so the snapshot, the grid's
+  `ColumnInfo`, page reads and export all agree on one schema — a per-batch repair would leave
+  `df.schema()` claiming a type the file does not hold. The transferable rule: a new function or
+  reader that can produce an exotic Arrow type must be checked against the snapshot writer, not
+  against the grid, and the same SQL working in `datafusion-cli` proves nothing here because
+  nothing persists there.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the
@@ -529,7 +555,8 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   dependency — so `--all` reformats the fork, whose `rustfmt.toml` our stable toolchain does not
   apply. Measured once: 344 files, 4006 deletions, none intended, and invisible in
   `git submodule status` because the gitlink never moves. Use `.claude/skills/fmt`, which names the
-  six members explicitly.
+  three it owns explicitly (and fails closed on a stale list — `cargo fmt -p` errors out entirely
+  on a non-member, so a wrong list formats *nothing*).
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
