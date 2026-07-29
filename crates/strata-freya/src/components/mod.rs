@@ -44,8 +44,10 @@ pub mod run_button;
 pub mod segmented_toggle;
 pub mod sidebar_row;
 pub mod toggle_button;
+pub mod tool_button;
 pub mod type_palette;
 pub mod typography;
+pub mod window;
 // NB: the bespoke `icon_button` is retired — icon buttons are now Freya's `Button` variants
 // (`.flat()` / `.outline()`) wrapping an `Icon`. The old `icon_button.rs` is an orphan (unreferenced,
 // not compiled) and can be deleted.

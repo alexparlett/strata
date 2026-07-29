@@ -35,45 +35,47 @@ const FACT_ORDER: [StatKey; 5] = [
     StatKey::Median,
 ];
 
-/// The source format behind the inspected column — the title's second badge.
+/// What the inspected column's **source badge** says, and which tone it says it in — the
+/// title's second badge.
 ///
-/// A closed set plus [`Other`](SourceFormat::Other), because the badge is *coloured* per format
-/// and a theme can only name the ones it knows. `View` is not a file format: a view has no files
-/// under it at all, which is the whole reason it carries no free facts.
+/// Deliberately *not* [`strata_model::SourceFormat`], which is a table's reader and its options.
+/// This is a display vocabulary: a closed set plus [`Other`](FormatBadge::Other), because the
+/// badge is *coloured* per format and a theme can only name the ones it knows, plus `View` —
+/// which is not a file format at all (a view has no files under it, the whole reason it carries
+/// no free facts) and so could never be a variant of the reader enum.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SourceFormat {
+pub enum FormatBadge {
     Parquet,
     Csv,
     Json,
     Arrow,
     View,
-    /// A format string the app doesn't recognise — shown as written, in the recessive tone.
+    /// A format the app has no reader for — shown as written, in the recessive tone.
     Other(String),
 }
 
-impl SourceFormat {
-    /// The format a table def names. Matched the way the engine matches it
-    /// (`register_external`): lower case, and anything unknown is its own thing rather than
-    /// silently one of ours.
-    fn of_table(format: &str) -> Self {
-        match format.to_ascii_lowercase().as_str() {
-            "parquet" => SourceFormat::Parquet,
-            "csv" => SourceFormat::Csv,
-            "json" => SourceFormat::Json,
-            "arrow" => SourceFormat::Arrow,
-            _ => SourceFormat::Other(format.to_string()),
+impl FormatBadge {
+    /// The badge for a table def's reader.
+    fn of_table(format: &strata_model::SourceFormat) -> Self {
+        use strata_model::SourceFormat as F;
+        match format {
+            F::Parquet => FormatBadge::Parquet,
+            F::Csv(_) => FormatBadge::Csv,
+            F::Json(_) => FormatBadge::Json,
+            F::Arrow => FormatBadge::Arrow,
+            F::Unknown(name) => FormatBadge::Other(name.clone()),
         }
     }
 
     /// The badge's text.
     pub fn label(&self) -> String {
         match self {
-            SourceFormat::Parquet => "PARQUET".into(),
-            SourceFormat::Csv => "CSV".into(),
-            SourceFormat::Json => "JSON".into(),
-            SourceFormat::Arrow => "ARROW".into(),
-            SourceFormat::View => "VIEW".into(),
-            SourceFormat::Other(f) => f.to_uppercase(),
+            FormatBadge::Parquet => "PARQUET".into(),
+            FormatBadge::Csv => "CSV".into(),
+            FormatBadge::Json => "JSON".into(),
+            FormatBadge::Arrow => "ARROW".into(),
+            FormatBadge::View => "VIEW".into(),
+            FormatBadge::Other(f) => f.to_uppercase(),
         }
     }
 }
@@ -87,7 +89,7 @@ pub struct ColumnFacts {
     pub name: String,
     pub dtype: String,
     pub kind: Kind,
-    pub format: SourceFormat,
+    pub format: FormatBadge,
     /// A nested column's fields, at every depth (display only).
     pub children: Vec<ColumnInfo>,
     /// The owner's row count where the source reports one — `None` for CSV/JSON and for every
@@ -140,7 +142,7 @@ pub fn inspect(project: &ProjectState, col: &ColRef) -> Inspected {
             Some(row) => match &row.reg {
                 Reg::Loading => Inspected::Loading,
                 Reg::Failed(e) => Inspected::Failed(e.clone()),
-                Reg::Ready(info) => facts(col, &info.columns, SourceFormat::View, None, true, scan),
+                Reg::Ready(info) => facts(col, &info.columns, FormatBadge::View, None, true, scan),
             },
         },
         // A saved query is a stored string, not a schema — nothing can select a column of one,
@@ -154,7 +156,7 @@ pub fn inspect(project: &ProjectState, col: &ColRef) -> Inspected {
                 Reg::Ready(meta) => facts(
                     col,
                     &meta.columns,
-                    SourceFormat::of_table(&row.def.format),
+                    FormatBadge::of_table(&row.def.format),
                     meta.rows,
                     false,
                     scan,
@@ -172,7 +174,7 @@ fn gone_owner(owner: &str) -> String {
 fn facts(
     col: &ColRef,
     columns: &[ColumnInfo],
-    format: SourceFormat,
+    format: FormatBadge,
     rows: Option<u64>,
     derived: bool,
     scan: Option<ScanId>,
@@ -483,6 +485,7 @@ mod tests {
     use strata_model::{TableDef, ViewDef};
 
     use super::*;
+    use strata_model::SourceFormat;
 
     fn col(name: &str, dtype: &str, kind: Kind, stats: Vec<Stat>) -> ColumnInfo {
         ColumnInfo {
@@ -517,7 +520,7 @@ mod tests {
     fn table(name: &str, format: &str) -> TableDef {
         TableDef {
             name: name.into(),
-            format: format.into(),
+            format: SourceFormat::from_name(format),
             sources: vec![format!("{name}.{format}")],
             partition_cols: Vec::new(),
         }
@@ -602,7 +605,7 @@ mod tests {
         let p = project();
         let facts = column(&p, &sel(CatalogKind::Table, "events", &["amount"]));
 
-        assert_eq!(facts.format, SourceFormat::Parquet);
+        assert_eq!(facts.format, FormatBadge::Parquet);
         assert_eq!(
             fact_rows(&facts)
                 .into_iter()
@@ -647,7 +650,7 @@ mod tests {
         let p = project();
         let facts = column(&p, &sel(CatalogKind::Table, "uploads", &["note"]));
 
-        assert_eq!(facts.format, SourceFormat::Csv);
+        assert_eq!(facts.format, FormatBadge::Csv);
         assert_eq!(
             fact_rows(&facts)
                 .into_iter()
@@ -667,7 +670,7 @@ mod tests {
         let facts = column(&p, &sel(CatalogKind::View, "daily", &["day"]));
 
         assert!(facts.derived);
-        assert_eq!(facts.format, SourceFormat::View);
+        assert_eq!(facts.format, FormatBadge::View);
         assert_eq!(facts.format.label(), "VIEW");
         assert_eq!(
             fact_rows(&facts)

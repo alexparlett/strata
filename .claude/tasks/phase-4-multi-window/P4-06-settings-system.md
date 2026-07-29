@@ -32,8 +32,8 @@ decision is undone.
 ### Decisions worth keeping
 
 **`DirectoryField` is form vocabulary, not this pane's** (`components::form::field`). A path
-box with a picker beside it is what every surface that names a location wants — the config
-modal's source (P4-11) and the import options (P4-12) next — so it landed in the shared module
+box with a picker beside it is what every surface that names a location wants — the Configure-table
+window's source paths (P4-11) next — so it landed in the shared module
 rather than as a private control here. It follows `NumberField`'s contract for the same
 reasons: it owns the buffer (`Input` writes its bound state directly and has no on-change
 prop), reports per keystroke (Apply is a `Button`, which moves focus and calls its handler in

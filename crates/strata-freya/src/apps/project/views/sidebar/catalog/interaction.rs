@@ -15,9 +15,10 @@ use freya_testing::TestingRunner;
 use strata_core::engine::{TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ColRef, ColumnInfo, Kind, Origin, SavedQuery, TableDef, ViewDef};
+use strata_model::{ColRef, ColumnInfo, Kind, Origin, SavedQuery, SourceFormat, TableDef, ViewDef};
 use uuid::Uuid;
 
+use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::CatalogState;
 
 use super::*;
@@ -56,7 +57,7 @@ fn nested(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
 fn table(name: &str, partition_cols: Vec<(String, String)>) -> TableDef {
     TableDef {
         name: name.into(),
-        format: "parquet".into(),
+        format: SourceFormat::Parquet,
         sources: vec![format!("{name}.parquet")],
         partition_cols,
     }
@@ -215,6 +216,9 @@ fn runner() -> (TestingRunner, Handles) {
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
+            // The Configure-window request slot (P4-11). The row menus only ever *set* it —
+            // the window is opened by the project root's launcher, which is not mounted here.
+            r.provide_root_context(|| State::create(None::<ConfigureTarget>));
             let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
             (
                 filter,

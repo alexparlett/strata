@@ -93,6 +93,15 @@ a window is opened *on a result*, so focusing an existing one would show the wro
 - 55 tests: 19 model, 16 preview, 20 end-to-end (`tests.rs` — draft → spec → `Engine::export`
   → a real file in a temp dir → read back), plus 18 engine round-trips in core.
 
+> **P4-11 is the second consumer of the data-driven groups, and lifts them.** The Configure
+> window's import (read) options are the same problem in the other direction — a format picks an
+> option set, each option carries the `Edit` it performs, and the canvas uses the very same control
+> shapes (toggle · seg-with-custom · char · text · num). So `Group` / `Control` / `Choice` /
+> `TextField` and the per-shape view components move to a shared home (with `components::form`)
+> **as part of P4-11**, and `apps/export/` keeps only its own `Edit` enum and its `groups()`.
+> Not now, and not a copy: pre-building the shared module here would be unreferenced pre-work
+> (AGENTS §5), and a second copy is how the two surfaces drift.
+
 **The outcome is reported**, per this file's own directive: on success the project window's
 event log (P3-13) gets `Exported <n> rows to <path>` and this window closes; on failure it gets
 an `Error` row *and* the footer keeps the message, so the user can change one option and retry

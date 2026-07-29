@@ -9,7 +9,7 @@ use freya::prelude::*;
 
 use crate::components::form::{form_theme, Variant, CONTROL_GAP, HINT_GAP, LABEL_GAP};
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{Caption, Eyebrow, Prose, Strong};
+use crate::components::typography::{Caption, Eyebrow, Meta, Prose, Strong};
 
 /// The ⓘ that carries a fields row's explanation.
 const HINT_SIZE: f32 = 12.;
@@ -18,6 +18,7 @@ const HINT_SIZE: f32 = 12.;
 pub struct Row {
     label: String,
     hint: Option<String>,
+    required: bool,
     trailing: bool,
     on_press: Option<EventHandler<Event<PressEventData>>>,
     children: Vec<Element>,
@@ -28,10 +29,23 @@ impl Row {
         Self {
             label: label.into(),
             hint: None,
+            required: false,
             trailing: false,
             on_press: None,
             children: Vec::new(),
         }
+    }
+
+    /// Mark this row's value as **required** — the `REQUIRED` marker on the label line.
+    ///
+    /// On the label rather than on the control, and here rather than as a per-window label
+    /// component, for the reason the row exists at all: it is one of the three things a row
+    /// says about itself, beside its title and its explanation, and a window that drew its own
+    /// would be a window whose label line drifts from every other one's. The marker sits
+    /// between the label and the ⓘ, which is the canvases' order.
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
     }
 
     /// This row's explanation — a hover tooltip in the fields register, inline subtext under
@@ -86,12 +100,19 @@ impl Component for Row {
         // running query"), which at the window's minimum width would otherwise be clipped
         // mid-word by the single-line default. A fields eyebrow stays capped — it is a short
         // uppercase label, and one that grew long would be the wrong label.
+        // The marker reads as a small mono note beside the label in either register — quieter
+        // than the label it qualifies, because it describes the field rather than naming it.
+        let required = self
+            .required
+            .then(|| Meta::new("REQUIRED").color(theme.required_color));
+
         let label = match variant {
             Variant::Fields => rect()
                 .horizontal()
                 .cross_align(Alignment::Center)
                 .spacing(LABEL_GAP)
                 .child(Eyebrow::new(self.label.clone()).color(theme.label_color))
+                .maybe_child(required)
                 .maybe_child(self.hint.clone().map(|hint| {
                     TooltipContainer::new(Tooltip::new(hint))
                         .position(AttachedPosition::Top)
@@ -104,10 +125,17 @@ impl Component for Row {
             Variant::Preferences => rect()
                 .vertical()
                 .child(
-                    Strong::new(self.label.clone())
-                        .color(theme.title_color)
-                        .width(Size::fill())
-                        .wrap(),
+                    rect()
+                        .horizontal()
+                        .cross_align(Alignment::Center)
+                        .spacing(LABEL_GAP)
+                        .child(
+                            Strong::new(self.label.clone())
+                                .color(theme.title_color)
+                                .width(Size::flex(1.))
+                                .wrap(),
+                        )
+                        .maybe_child(required),
                 )
                 .map(self.hint.clone(), |el, hint| {
                     el.child(rect().height(Size::px(HINT_GAP))).child(

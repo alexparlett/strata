@@ -98,7 +98,7 @@ pub fn use_profile(engine: &EngineCtx, owner: &str, scan: ScanId) -> UseQuery<Pr
 mod tests {
     use futures::executor::block_on;
     use strata_core::engine::TableSpec;
-    use strata_model::StatKey;
+    use strata_model::{SourceFormat, StatKey};
 
     use super::*;
 
@@ -114,7 +114,7 @@ mod tests {
                 "{}/../strata-core/tests/fixtures/loadfix/regions.csv",
                 env!("CARGO_MANIFEST_DIR")
             )],
-            format: "csv".into(),
+            format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
         }))
         .expect("register");

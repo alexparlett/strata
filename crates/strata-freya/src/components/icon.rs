@@ -17,6 +17,9 @@ pub enum IconName {
     Stop,
     Rows,
     Plus,
+    /// Remove, paired with [`Plus`](Self::Plus) — Settings ▸ Engine's **Remove property** and
+    /// the Configure window's source-path toolbar. Both arrived at it independently, which is
+    /// the argument for one glyph: they are the same gesture on two lists.
     Minus,
     Clipboard,
     ChevronDown,
@@ -174,8 +177,9 @@ const STOP: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24
 const ROWS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18"/></svg>"#;
 // New query (+), tab-list chevron, and tab-actions overflow dots — from the strip's right cluster.
 const PLUS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>"#;
-// Plus's opposite — Settings ▸ Engine's **Remove property**. A minus and not a bin: the row is
-// one of a list you are editing, not a stored thing being destroyed.
+// Plus's opposite, the same stroke one path short — Settings ▸ Engine's **Remove property** and
+// the Configure window's **Remove path**. A minus and not a bin: in both cases the row is one of
+// a list you are editing, not a stored thing being destroyed.
 const MINUS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14"/></svg>"#;
 // A clipboard — Settings ▸ Engine's **Paste properties**.
 const CLIPBOARD: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>"#;

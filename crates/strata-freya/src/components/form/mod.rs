@@ -44,6 +44,7 @@
 //! Each is one constant here when the design settles it.
 
 mod field;
+mod options;
 mod row;
 
 use freya::prelude::*;
@@ -51,6 +52,7 @@ use freya::prelude::*;
 use crate::components::divider::Divider;
 
 pub use field::{DirectoryField, NumberField, ValueField, FIELD_HEIGHT};
+pub use options::{Choice, Control, Group, Make, OptionList, TextField};
 pub use row::{Note, Row};
 
 // `%[no_ext]`: the form's dress is read by its pieces (the form, its rows, its fields) rather
@@ -69,6 +71,10 @@ define_theme!(
         /// and the inline subtext under a preferences row's title. One field because it is one
         /// role: what a row says about itself, pitched under the label.
         hint_color: Color,
+        /// The `REQUIRED` marker beside a label ([`Row::required`]). Its own field rather than
+        /// the hint's: a hint is an explanation the reader may skip, and this is a constraint on
+        /// what they can do next, so the two do not have to move together.
+        required_color: Color,
         /// The rule between two rows of a [`Form::preferences`].
         divider_fill: Color,
         /// [`Note`]'s box — the same raised inset every other boxed thing in a form sits on, so
@@ -82,9 +88,36 @@ define_theme!(
     }
 );
 
+/// Resolve a **single-character field**: the two escapes the canvases document (`\t`, `\n`), a
+/// literal backslash, or one plain character. Empty is `None` (such a field is optional);
+/// anything longer is an error the surface shows rather than a silent truncation.
+///
+/// Shared, because a delimiter, a quote and a comment marker are the same field wherever they
+/// appear: the export window and the Configure window both offer them, and a `\t` that resolved
+/// in one and not the other would be the same control meaning two things.
+pub fn one_char(what: &str, raw: &str) -> Result<Option<char>, String> {
+    let resolved = match raw {
+        "" => return Ok(None),
+        "\\t" => '\t',
+        "\\n" => '\n',
+        "\\\\" => '\\',
+        other => {
+            let mut chars = other.chars();
+            let first = chars.next().expect("non-empty");
+            if chars.next().is_some() {
+                return Err(format!(
+                    "The CSV {what} has to be a single character (or \\t for tab), not {other:?}"
+                ));
+            }
+            first
+        }
+    };
+    Ok(Some(resolved))
+}
+
 /// Read the form dress. Every piece in this module resolves its colours through here, so a
 /// form's look is one theme rather than one per window (AGENTS.md §3).
-pub(crate) fn form_theme() -> FormTheme {
+pub fn form_theme() -> FormTheme {
     get_theme!(&None::<FormThemePartial>, FormThemePreference, "form")
 }
 
@@ -177,5 +210,108 @@ impl Component for Form {
             form = form.child(row.clone());
         }
         form
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use freya_testing::TestingRunner;
+
+    use super::*;
+    use crate::components::form::{Choice, Control, Group, Make, OptionList, TextField};
+    use crate::theme::strata_theme;
+
+    /// A form's row count **changes** — an option list is rebuilt when the format switches, and
+    /// CSV's nine groups become JSON's three and back again. This is that, and it used to
+    /// panic in Freya's differ (`runner.rs`, `Option::unwrap()` on a missing `scope_id`):
+    /// the separators between rows were unkeyed raw elements interleaved with keyed row
+    /// *components*, so once the list shortened a position that had held a component was diffed
+    /// against a spacer.
+    #[test]
+    fn a_form_survives_its_row_count_changing() {
+        #[derive(Clone, PartialEq, Debug)]
+        struct Edit(usize);
+
+        /// The Configure window's real label/control sets. The shape that matters is that the
+        /// two lists **share keys in different positions**: `SCHEMA-INFER ROWS` is 7th in one
+        /// and 1st in the other, `COMPRESSION` 8th and 2nd, and `SHAPE` exists only in the
+        /// shorter one. A prefix-subset does not reproduce this.
+        fn groups(csv: bool) -> Vec<Group<Edit>> {
+            let select = || Control::Select {
+                options: vec![Choice {
+                    label: "a".into(),
+                    edit: Edit(0),
+                    selected: true,
+                }],
+            };
+            let text = || {
+                Control::Text(TextField {
+                    value: ",".into(),
+                    placeholder: ",",
+                    max_len: 8,
+                    make: Make(|_: String| Edit(0)),
+                })
+            };
+            let toggle = || Control::Toggle {
+                on: true,
+                edit: Edit(0),
+                hint: None,
+            };
+            let num = || Control::Num {
+                value: 1000,
+                min: 0,
+                max: 10_000,
+                make: Make(|v: u32| Edit(v as usize)),
+            };
+            let spec: Vec<(&str, Control<Edit>)> = if csv {
+                vec![
+                    ("HEADER ROW", toggle()),
+                    ("DELIMITER", text()),
+                    ("QUOTE CHARACTER", text()),
+                    ("ESCAPE CHARACTER", text()),
+                    ("COMMENT CHARACTER", text()),
+                    ("NEWLINES IN VALUES", toggle()),
+                    ("RAGGED ROWS", toggle()),
+                    ("SCHEMA-INFER ROWS", num()),
+                    ("COMPRESSION", select()),
+                ]
+            } else {
+                vec![
+                    ("SHAPE", select()),
+                    ("SCHEMA-INFER ROWS", num()),
+                    ("COMPRESSION", select()),
+                ]
+            };
+            spec.into_iter()
+                .map(|(label, control)| Group {
+                    label: label.into(),
+                    hint: None,
+                    control,
+                })
+                .collect()
+        }
+
+        let (mut runner, count) = TestingRunner::new(
+            move || {
+                use_init_theme(|| strata_theme(&strata_core::theme::load("midnight")));
+                let csv = consume_context::<State<bool>>();
+                let csv = *csv.read();
+                // The scope is the format, exactly as both real windows pass it — which is the
+                // thing under test: without it the shared labels pair across the switch.
+                let scope = if csv { "CSV" } else { "JSON" };
+                OptionList::new(scope, groups(csv), move |_: Edit| {})
+            },
+            (600., 800.).into(),
+            |r| r.provide_root_context(|| State::create(true)),
+            1.,
+        );
+
+        // CSV, then JSON, then CSV — the switch the crash report named, both ways.
+        for next in [true, false, true] {
+            let mut csv = count;
+            csv.set(next);
+            runner.render();
+            runner.render();
+        }
     }
 }

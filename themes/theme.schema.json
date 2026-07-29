@@ -1419,6 +1419,30 @@
             }
           }
         },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "panel_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "row_selected_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_background": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "form": {
           "type": "object",
           "additionalProperties": false,
@@ -1430,6 +1454,9 @@
               "$ref": "#/$defs/colorPref"
             },
             "hint_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "required_color": {
               "$ref": "#/$defs/colorPref"
             },
             "divider_fill": {

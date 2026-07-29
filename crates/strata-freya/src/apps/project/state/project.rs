@@ -735,11 +735,12 @@ impl ProjectState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strata_model::SourceFormat;
 
     fn table_def(name: &str) -> TableDef {
         TableDef {
             name: name.into(),
-            format: "parquet".into(),
+            format: SourceFormat::Parquet,
             sources: vec![format!("{name}.parquet")],
             partition_cols: vec![("year".into(), "Int32".into())],
         }

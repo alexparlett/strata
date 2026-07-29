@@ -6776,6 +6776,7 @@ version = "0.2.0"
 dependencies = [
  "chrono",
  "datafusion",
+ "flate2",
  "futures",
  "preferences",
  "serde",
@@ -6830,6 +6831,7 @@ name = "strata-model"
 version = "0.2.0"
 dependencies = [
  "serde",
+ "serde_json",
  "uuid",
 ]
 

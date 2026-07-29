@@ -74,6 +74,11 @@ impl ValueField {
     /// popover panel — where a second box inside the first reads as a mistake. The canvas
     /// writes these inputs as `background: transparent; border: none; outline: none` for the
     /// same reason.
+    ///
+    /// **It drops the focus ring too**, which is the whole point: a surface reaches for this
+    /// when the container is what the user sees, and a ring appearing inside it would be the
+    /// second box all over again. A field that wants to look like an input — its own box, its
+    /// own focus ring — should simply not ask to be bare.
     pub fn bare(mut self) -> Self {
         self.bare = true;
         self

@@ -6,7 +6,6 @@
 
 mod footer;
 mod formats;
-mod options;
 mod partition;
 mod title_bar;
 
@@ -16,10 +15,10 @@ pub use footer::Footer;
 pub use title_bar::TitleBar;
 
 use crate::apps::export::views::formats::Formats;
-use crate::apps::export::views::options::Options;
 use crate::apps::export::views::partition::Partition;
 use crate::apps::export::{preview, ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
+use crate::components::form::OptionList;
 use crate::components::typography::{Eyebrow, Readout};
 
 /// The window body's inset (canvas `padding: var(--sp-5)`), and the gap between its sections.
@@ -49,6 +48,31 @@ impl Component for ExportBody {
                         .child(Preview),
                 ),
         )
+    }
+}
+
+/// This window's option list — the format's groups, rendered by the shared vocabulary.
+///
+/// **Flat: there is no ADVANCED disclosure.** The canvas folded it away on the grounds that a
+/// format's advanced controls are just more of that format's options. The Configure window's
+/// canvas kept one and it was built that way first; it was then flattened to match this, because
+/// the reasoning is not specific to exporting. Neither window has a disclosure, so neither does
+/// [`OptionList`].
+#[derive(PartialEq)]
+struct Options;
+
+impl Component for Options {
+    fn render(&self) -> impl IntoElement {
+        let ctx = use_consume::<ExportCtx>();
+        // Both reads subscribe: a format switch or any edit rebuilds the list, which is the
+        // point — the Parquet level group appears and disappears with the codec.
+        let (scope, groups) = {
+            let draft = ctx.draft.read();
+            (draft.format.name(), draft.groups(&ctx.target.read()))
+        };
+        OptionList::new(scope, groups, move |edit| {
+            ctx.edit(|draft| draft.apply(edit))
+        })
     }
 }
 

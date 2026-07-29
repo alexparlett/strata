@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
@@ -25,8 +26,8 @@ use crate::apps::project::state::{
     Chan, SessionState,
 };
 use crate::apps::project::views::{
-    CloseConfirm, DropConfirm, DropTarget, HeaderBar, OpenPrompt, ProfileConfirm, ProfileTarget,
-    RequestKeepers, Shell,
+    CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
+    ProfileConfirm, ProfileTarget, RequestKeepers, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
@@ -426,6 +427,11 @@ impl Component for ProjectRoot {
         // confirmed for. Its triggers are the catalog row menus and the inspector's scan card;
         // a re-scan never fills it (`ProfileActions::ask`).
         let profile_target = use_provide_context(|| State::create(None::<ProfileTarget>));
+        // The Configure-window request slot (P4-11) — the same shape as the two above, though
+        // what it opens is a window rather than a dialog. Its triggers (a catalog row's
+        // Configure, the TABLES section's `+`) set it and stop; `ConfigureLauncher` below holds
+        // the app-globals and the engine a window needs, so no row has to.
+        use_provide_context(|| State::create(None::<ConfigureTarget>));
 
         // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
         // structural change and retire the engine state of tabs that are gone. One
@@ -466,6 +472,10 @@ impl Component for ProjectRoot {
             .child(ProfileConfirm {
                 target: profile_target,
             })
+            // Not a dialog and not a barrier: it draws nothing and only watches the request
+            // slot. Mounted here because this is where the handles opening a window needs
+            // actually live.
+            .child(ConfigureLauncher)
             // Invisible, zero-size: every open tab's current press keeps a query
             // subscriber mounted for this project's whole life, so backgrounded runs
             // neither lose their cache entry nor miss their history settle. Root-level

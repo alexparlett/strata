@@ -33,6 +33,10 @@ use std::collections::HashSet;
 
 use freya::components::{define_theme, get_theme, ScrollView};
 use freya::prelude::*;
+
+use crate::apps::configure::ConfigureTarget;
+use crate::apps::project::views::sidebar::catalog::menu::use_catalog_actions;
+use crate::components::icon::{Icon, IconName};
 use freya::radio::use_radio;
 use strata_model::CatalogKind;
 
@@ -155,9 +159,32 @@ impl Component for TablesSection {
             .filter(|n| matches(n, &self.filter))
             .collect();
 
-        // TABLES leads the pane, so it drops the inter-section gap the others carry.
+        // TABLES leads the pane, so it drops the inter-section gap the others carry — and it is
+        // the section that can gain a row, so it carries the New-table action (P4-11). VIEWS and
+        // QUERIES are made by saving a query, not by a form, so neither has one.
+        let actions = use_catalog_actions();
         CatalogSection::new("TABLES", names.len(), self.theme.clone())
             .first()
+            .action(
+                TooltipContainer::new(Tooltip::new("New table"))
+                    .position(AttachedPosition::Bottom)
+                    .child(
+                        Button::new()
+                            .flat()
+                            .theme_layout(
+                                ButtonLayoutThemePartial::default()
+                                    .width(Size::px(20.))
+                                    .height(Size::px(20.))
+                                    .padding(Gaps::new_all(0.)),
+                            )
+                            .on_press(move |_| actions.configure(ConfigureTarget::New))
+                            .child(
+                                Icon::new(IconName::Plus)
+                                    .size(13.)
+                                    .color(self.theme.label_color),
+                            ),
+                    ),
+            )
             .children(names.into_iter().map(|name| {
                 EntryRow::new(
                     CatalogKind::Table,

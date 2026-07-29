@@ -91,7 +91,7 @@ anything):
 
 ## Follow-ups for other tasks
 - **P3-14 (History)** owns History's Clear (its truncate) and writes the same `DrawerCount`.
-- **Export (P4-10) / Table Config (P4-11) / import options (P4-12)** should record their outcomes
+- **Export (P4-10) / the Configure-table window (P4-11)** should record their outcomes
   the same way — capture the `LogCtx` at render time and call `log_event`; there is no producer to
   register with. Each of those files now carries the pointer.
 - **P4-15 · `.strata` write resiliency** picks up what this task started and deliberately scoped

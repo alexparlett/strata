@@ -3,9 +3,10 @@
 //! symmetrically; only genuinely global state, DS widgets, and the engine bridge sit at
 //! the crate top level. See `docs/FREYA_PORT_PLAN.md` §3.
 //!
-//! Phase 4 adds the `launcher`, `settings` and `export`; `configure` / `connections` land
-//! with their tasks (§6). Spawning and focusing between them is `crate::platform::windows`.
+//! Phase 4 adds the `launcher`, `settings`, `export` and `configure`; `connections` lands with
+//! its workstream (§6). Spawning and focusing between them is `crate::platform::windows`.
 
+pub mod configure;
 pub mod export;
 pub mod launcher;
 pub mod project;

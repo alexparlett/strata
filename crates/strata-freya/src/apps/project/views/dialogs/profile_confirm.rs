@@ -295,6 +295,7 @@ mod tests {
 
     use super::*;
     use crate::theme::strata_theme;
+    use strata_model::SourceFormat;
 
     fn col(name: &str) -> ColumnInfo {
         ColumnInfo {
@@ -313,7 +314,7 @@ mod tests {
             name: "test".into(),
             tables: vec![TableDef {
                 name: "events".into(),
-                format: "parquet".into(),
+                format: SourceFormat::Parquet,
                 sources: vec!["events.parquet".into()],
                 partition_cols: Vec::new(),
             }],

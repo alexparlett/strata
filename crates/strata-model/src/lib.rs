@@ -16,7 +16,6 @@
 
 mod catalog;
 mod diagnostics;
-mod form;
 mod history;
 mod profile;
 mod query_error;
@@ -24,9 +23,11 @@ mod results;
 mod schema;
 mod session;
 
-pub use catalog::{CatalogKind, ColRef, RemoveKind, RemoveTarget, SavedQuery, TableDef, ViewDef};
+pub use catalog::{
+    CatalogKind, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoveKind, RemoveTarget,
+    SavedQuery, SourceFormat, TableDef, ViewDef,
+};
 pub use diagnostics::{Diagnostic, Severity};
-pub use form::ConfigForm;
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;
 pub use query_error::QueryError;
