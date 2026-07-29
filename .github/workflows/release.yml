@@ -1,0 +1,273 @@
+name: Release
+
+# One button: build Strata into a DMG and, if asked, tag the commit and publish a release page
+# for it. Run it from the Actions tab (Release -> Run workflow).
+#
+# Leaving "Tag and publish a release" off is the everyday case: a DMG appears as an artifact on
+# the run page and nothing about the repository changes. Turning it on is what makes a build
+# public, and it happens *after* the build succeeds - a published release's tag cannot be moved
+# or deleted, so tagging first would let a failed build leave a permanent tag behind.
+#
+# The `v*` tag trigger stays for the "I tagged locally" path. It does not double-fire on releases
+# this workflow publishes: GitHub does not trigger workflows from pushes made with GITHUB_TOKEN.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Architectures to build"
+        type: choice
+        default: universal
+        options: [universal, arm64]
+      release:
+        description: "Tag this commit and publish a release page"
+        type: boolean
+        default: false
+      version:
+        description: "Version to release (defaults to the crate version)"
+        type: string
+        default: ""
+      prerelease:
+        description: "Mark the release as a prerelease"
+        type: boolean
+        default: true
+
+# Deliberately not cancel-in-progress, unlike ci.yml: a superseded test run is wasted minutes,
+# but a cancelled release run can be one that has already published something.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    runs-on: macos-latest
+    # A cold universal build compiles DataFusion and links Skia twice over. The cache is keyed on
+    # the lockfile and this job runs rarely enough to miss it often, so size for cold.
+    timeout-minutes: 150
+    permissions:
+      # Creating the tag and the release page. Nothing else needs writing.
+      contents: write
+    steps:
+      # `submodules: true` is not optional: the build resolves Freya from the local `crates/freya`
+      # checkout, so without it nothing compiles at all.
+      - uses: actions/checkout@v6
+        with:
+          # The bundle script derives CFBundleVersion from `git rev-list --count HEAD`, which a
+          # shallow clone answers wrong - every build would call itself build 1 and macOS would
+          # stop seeing newer ones as newer.
+          fetch-depth: 0
+          submodules: true
+
+      # Same guard as ci.yml, for the same reason: a submodule that is not at the recorded commit
+      # otherwise surfaces an hour into the compile as a missing method. See AGENTS.md section 6.
+      - name: Verify the Freya submodule is at the recorded commit
+        run: |
+          git submodule status crates/freya
+          git submodule status crates/freya | grep -qE '^ ' || {
+            echo "::error::crates/freya is not checked out at the commit this repo records."
+            echo "The fork commit is probably not pushed to github.com/alexparlett/freya - see AGENTS.md section 6."
+            exit 1
+          }
+
+      # Everything about *what this build calls itself*, decided before the two hours of compiling
+      # rather than after. A tag that already exists is the failure worth catching early: the
+      # build would otherwise finish and then refuse to publish.
+      - name: Resolve the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # A tag push names its own version, and the tag already exists by definition.
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            PUBLISH=true
+          else
+            # The crate version is the source of truth the bundle script already uses, so a
+            # release is a version bump plus this button and never a number typed twice.
+            VERSION="${{ inputs.version }}"
+            if [ -z "$VERSION" ]; then
+              VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' \
+                crates/strata-freya/Cargo.toml | head -1)"
+            fi
+            TAG="v$VERSION"
+            PUBLISH="${{ inputs.release }}"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION (tag $TAG, publish $PUBLISH)"
+
+          if [ "$PUBLISH" = "true" ] && [ "${{ github.event_name }}" != "push" ]; then
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "::error::Release $TAG already exists. Bump the version in crates/strata-freya/Cargo.toml, or pass a different one."
+              exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "::error::Tag $TAG already exists. Bump the version in crates/strata-freya/Cargo.toml, or pass a different one."
+              exit 1
+            fi
+          fi
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          # Both halves of the universal build, so the x86_64 target is present before the script
+          # would otherwise have to `rustup target add` it mid-run.
+          target: aarch64-apple-darwin,x86_64-apple-darwin
+          cache: true
+          # Matches ci.yml: this action defaults to `-D warnings`, which would fail the release on
+          # warnings the test workflow tolerates. Denying warnings is a real policy but it belongs
+          # in one place, applied deliberately.
+          rustflags: ""
+
+      # Signing is opt-in and degrades honestly: with no secrets set the script ad-hoc signs and
+      # says so, which is still a usable tester build. Adding these secrets is the only change
+      # needed to start producing notarized ones - the script already takes that path.
+      #
+      #   MACOS_CERTIFICATE           base64 of a Developer ID Application .p12
+      #   MACOS_CERTIFICATE_PASSWORD  the .p12 export password
+      #   MACOS_SIGN_IDENTITY         e.g. "Developer ID Application: Name (TEAMID)"
+      #   AC_API_KEY                  base64 of the App Store Connect .p8 private key
+      #   AC_API_KEY_ID               that key's id
+      #   AC_API_ISSUER_ID            the issuer id it belongs to
+      #
+      # This step exists because the `secrets` context is not available in a step-level `if` -
+      # only `steps` is. Testing presence here keeps the material scoped to the steps that
+      # actually handle it instead of hoisting every secret into the whole job's environment.
+      - name: Detect the signing configuration
+        id: signing
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          AC_API_KEY: ${{ secrets.AC_API_KEY }}
+        run: |
+          if [ -n "$MACOS_CERTIFICATE" ]; then
+            echo "cert=true" >> "$GITHUB_OUTPUT"
+            echo "Developer ID certificate configured."
+          else
+            echo "cert=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No signing certificate configured - this build will be ad-hoc signed."
+          fi
+          if [ -n "$AC_API_KEY" ]; then
+            echo "notary=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notary=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No notary key configured - this build will not be notarized."
+          fi
+
+      - name: Import the signing certificate
+        if: steps.signing.outputs.cert == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          # A dedicated throwaway keychain rather than the runner's login one: it is unlocked with
+          # a password that lives only in this job, and it disappears with the runner.
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo -n "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          # Without this, codesign blocks on a GUI keychain prompt no one is there to answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # The build keychain has to be on the search list, and login has to stay on it.
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Write the notary API key
+        if: steps.signing.outputs.notary == 'true'
+        env:
+          AC_API_KEY: ${{ secrets.AC_API_KEY }}
+        run: |
+          # notarytool wants a .p8 file on disk, not the key material in an environment variable.
+          echo -n "$AC_API_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          chmod 600 "$RUNNER_TEMP/notary.p8"
+
+      - name: Bundle
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        run: |
+          # Only point the script at the key file if it was actually written, so an unset secret
+          # leaves the script on its no-credentials path rather than failing on a missing file.
+          if [ -f "$RUNNER_TEMP/notary.p8" ]; then
+            export AC_API_KEY_PATH="$RUNNER_TEMP/notary.p8"
+          fi
+          ./scripts/bundle-macos.sh --arch "${{ inputs.arch || 'universal' }}"
+
+      - name: Clean up signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/cert.p12"
+          security delete-keychain "$RUNNER_TEMP/build.keychain" 2>/dev/null || true
+
+      # Always uploaded, published or not - this is how a build with the release box unticked
+      # reaches a tester, and it is also the copy that survives if publishing fails.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strata-macos-${{ steps.version.outputs.version }}-${{ inputs.arch || 'universal' }}
+          path: target/dist/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      # `gh release create` creates the tag itself when it does not exist, pointed at the commit
+      # that was actually built (`--target`). One step, and no tag exists until there is a DMG to
+      # attach to it.
+      - name: Tag and publish the release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ARGS=(--title "Strata $VERSION" --generate-notes --target "$GITHUB_SHA")
+          if [ "${{ inputs.prerelease }}" != "false" ]; then
+            ARGS+=(--prerelease)
+          fi
+          # The tester-facing half of the release page. What testers need at the top is how to
+          # open the thing, and that depends on how it was signed - so the note is written from
+          # what this run actually did, not from a fixed template that can quietly go stale.
+          #
+          # `--notes`, not `--notes-file`: it is the flag documented to *prepend* to the notes
+          # `--generate-notes` produces, so the changelog still lands underneath this.
+          #
+          # Built with `printf '%s\n'`, one argument per line, because a plain multi-line shell
+          # string would have to start its continuation lines in column 0 and that ends the YAML
+          # block scalar this whole step lives in.
+          if [ "${{ steps.signing.outputs.notary }}" = "true" ] && [ "${{ steps.signing.outputs.cert }}" = "true" ]; then
+            INSTALL_NOTE="$(printf '%s\n' \
+              '## Installing' \
+              '' \
+              'Download the DMG, drag Strata to your Applications folder, and open it. This' \
+              'build is signed and notarized by Apple, so it opens like any other app.')"
+          else
+            INSTALL_NOTE="$(printf '%s\n' \
+              '## Installing' \
+              '' \
+              'Download the DMG and drag Strata to your Applications folder.' \
+              '' \
+              'This build is **not** signed with an Apple Developer ID, so the first time you' \
+              'open it macOS will say it is damaged or from an unidentified developer. It is' \
+              'neither - it just has not been through Apple notarization. Clear the download' \
+              'quarantine flag once:' \
+              '' \
+              '```' \
+              'xattr -dr com.apple.quarantine /Applications/Strata.app' \
+              '```' \
+              '' \
+              'After that it opens normally, and stays that way until the next build.')"
+          fi
+          ARGS+=(--notes "$INSTALL_NOTE")
+          gh release create "$TAG" target/dist/*.dmg "${ARGS[@]}"
