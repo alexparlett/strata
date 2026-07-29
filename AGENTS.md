@@ -584,6 +584,21 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   a tester's Mac while reading like success locally. And **the tag is created after the build, not
   before**: a published release's tag cannot be moved or deleted, so `gh release create --target`
   mints it only once there is a DMG to attach.
+- **The version lives in one file and is reached through one script; a bump rides the publish.**
+  `scripts/version.sh` is the only thing that knows the number is in
+  `crates/strata-freya/Cargo.toml` — the bundle script reads it through that, and the Release
+  workflow resolves *and writes* through it. Writing, not only reading, is the fix for a real bug: a
+  version passed to the workflow moved the tag and not the manifest, and the bundle script reads the
+  manifest, so `v0.4.0` shipped `Strata-0.2.0-universal.dmg`. Resolving is a separate entry point
+  (`--resolve` touches nothing and needs no cargo) so a typo or a taken tag is rejected before a
+  runner installs a toolchain, and writing updates `Cargo.lock` because the release build passes
+  `--locked`. Then the tag rule above, pointed at the commit: a bump is **refused without the
+  release box** rather than performed and discarded, so "just build me a DMG" cannot move the
+  repository's version; and the commit is **pushed after the build and never rebased**, because the
+  tag names that commit and a rebase would make a permanent tag point at a tree nothing ever built.
+  The release notes are the signing rule again — written by `claude-code-action`, `continue-on-error`,
+  falling back to GitHub's changelog with a warning that says so, because better notes are a better
+  release page and not a precondition for having one.
 - **The app bundle is self-contained, and that is a claim each new asset has to keep.** Themes are
   `include_str!`'d and the two families the themes name (`themes/*.json` `fonts`) are
   `include_bytes!`'d and registered through `LaunchConfig::with_font` in `main.rs` — because
