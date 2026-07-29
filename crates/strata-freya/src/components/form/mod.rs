@@ -295,7 +295,11 @@ mod tests {
             move || {
                 use_init_theme(|| strata_theme(&strata_core::theme::load("midnight")));
                 let csv = consume_context::<State<bool>>();
-                OptionList::new(groups(*csv.read()), move |_: Edit| {})
+                let csv = *csv.read();
+                // The scope is the format, exactly as both real windows pass it — which is the
+                // thing under test: without it the shared labels pair across the switch.
+                let scope = if csv { "CSV" } else { "JSON" };
+                OptionList::new(scope, groups(csv), move |_: Edit| {})
             },
             (600., 800.).into(),
             |r| r.provide_root_context(|| State::create(true)),

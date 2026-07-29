@@ -66,8 +66,13 @@ impl Component for Options {
         let ctx = use_consume::<ExportCtx>();
         // Both reads subscribe: a format switch or any edit rebuilds the list, which is the
         // point — the Parquet level group appears and disappears with the codec.
-        let groups = ctx.draft.read().groups(&ctx.target.read());
-        OptionList::new(groups, move |edit| ctx.edit(|draft| draft.apply(edit)))
+        let (scope, groups) = {
+            let draft = ctx.draft.read();
+            (draft.format.name(), draft.groups(&ctx.target.read()))
+        };
+        OptionList::new(scope, groups, move |edit| {
+            ctx.edit(|draft| draft.apply(edit))
+        })
     }
 }
 

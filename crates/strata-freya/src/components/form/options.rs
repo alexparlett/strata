@@ -150,14 +150,37 @@ pub struct Group<E> {
 #[derive(PartialEq)]
 pub struct OptionList<E: Clone + PartialEq + 'static> {
     groups: Vec<Group<E>>,
+    scope: String,
     on_edit: EventHandler<E>,
 }
 
 impl<E: Clone + PartialEq + 'static> OptionList<E> {
     /// Render `groups`, reporting each control's edit to `on_edit`.
-    pub fn new(groups: Vec<Group<E>>, on_edit: impl Into<EventHandler<E>>) -> Self {
+    ///
+    /// `scope` names **which list this is** — the format, in both windows that use this. It
+    /// joins each row's label to make the key, and it is not optional, for two reasons that turn
+    /// out to be the same one.
+    ///
+    /// A row is identified by its label, and two formats can label different rows the same way:
+    /// CSV's `COMPRESSION` and JSON's `COMPRESSION` are not the same control — they carry
+    /// different `Edit`s, writing different fields. Keyed on the label alone the differ pairs
+    /// them across a format switch and *reuses the scope*, so a control's buffer would carry
+    /// from one format's option to another's.
+    ///
+    /// And the same pairing crashed the window. Freya's differ matches siblings by key
+    /// (`path_element.rs::diff`) and records a matched pair at different indices as **moved** —
+    /// CSV's `COMPRESSION` is the 9th row where JSON's is the 3rd — after which `run_scope`
+    /// looks the component up at its new path and unwraps the `scope_id` that a move left
+    /// behind. Scoping the key means a format switch is a clean remove-and-add, which is what it
+    /// actually is.
+    pub fn new(
+        scope: impl Into<String>,
+        groups: Vec<Group<E>>,
+        on_edit: impl Into<EventHandler<E>>,
+    ) -> Self {
         Self {
             groups,
+            scope: scope.into(),
             on_edit: on_edit.into(),
         }
     }
@@ -168,9 +191,9 @@ impl<E: Clone + PartialEq + 'static> Component for OptionList<E> {
         // The shared form list, so the rhythm between rows is the app's and not one window's.
         let mut list = Form::new();
         for group in &self.groups {
-            // Keyed by label: a format switch replaces the list wholesale, and an unkeyed
-            // diff would leave a text field's buffer sitting under the next format's control.
-            let key = group.label.clone();
+            // Keyed by **scope and** label — see [`OptionList::new`]. The scope is what keeps a
+            // row from being paired with a same-named row belonging to another format.
+            let key = format!("{}·{}", self.scope, group.label);
             list = list.child(
                 OptionGroup {
                     group: group.clone(),

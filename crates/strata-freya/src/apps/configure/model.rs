@@ -423,6 +423,11 @@ impl ConfigureDraft {
 
     // --- import options ---
 
+    /// Whether this format has read options at all — parquet and Arrow have none worth showing.
+    pub fn has_options(&self) -> bool {
+        !self.options().is_empty()
+    }
+
     /// The label over the import block.
     pub fn options_label(&self) -> String {
         format!("{} OPTIONS", self.format.label())
@@ -497,24 +502,12 @@ impl ConfigureDraft {
                     .collect(),
                 },
             }],
-            // Never an empty list, for the export window's reason: silence reads as "the
-            // options are still loading" rather than as "there are none".
-            FormatId::Arrow => vec![Group {
-                label: "FORMAT".into(),
-                hint: None,
-                control: Control::Note(
-                    "Arrow IPC files describe themselves. DataFusion exposes no read options \
-                     for them.",
-                ),
-            }],
-            FormatId::Parquet | FormatId::Unknown(_) => vec![Group {
-                label: "FORMAT".into(),
-                hint: None,
-                control: Control::Note(
-                    "Parquet files carry their own compression and types, so nothing here is \
-                     needed to read one. Engine-wide parquet settings are in Settings, Engine.",
-                ),
-            }],
+            // **Nothing at all** for parquet and Arrow — not even a note saying so. A block
+            // headed PARQUET OPTIONS whose only content explains that there are none reads as a
+            // section that failed to load. (Export shows a note in the same position, but there
+            // it sits among real option groups; here it would be the whole block.) The parquet
+            // read options that *are* per-table are their own task.
+            FormatId::Parquet | FormatId::Arrow | FormatId::Unknown(_) => Vec::new(),
         }
     }
 
@@ -697,16 +690,16 @@ mod tests {
     }
 
     #[test]
-    fn parquet_and_arrow_say_they_have_nothing_rather_than_showing_nothing() {
-        // The export window's rule: an empty list reads as "still loading".
+    fn parquet_and_arrow_show_no_import_block_at_all() {
+        // Not even a note: a block headed PARQUET OPTIONS whose only content says there are
+        // none reads as a section that failed to load.
         for format in [FormatId::Parquet, FormatId::Arrow] {
             let draft = ConfigureDraft {
                 format,
                 ..csv_draft()
             };
-            let groups = draft.options();
-            assert_eq!(groups.len(), 1);
-            assert!(matches!(groups[0].control, Control::Note(_)));
+            assert!(draft.options().is_empty());
+            assert!(!draft.has_options());
         }
     }
 
