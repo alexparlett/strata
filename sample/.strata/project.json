@@ -3,9 +3,7 @@
   "tables": [
     {
       "name": "events",
-      "format": {
-        "type": "parquet"
-      },
+      "format": "parquet",
       "sources": [
         "events"
       ],
@@ -13,25 +11,6 @@
         [
           "year",
           "Utf8"
-        ],
-        [
-          "month",
-          "Utf8"
-        ]
-      ]
-    },
-    {
-      "name": "events_2",
-      "format": {
-        "type": "parquet"
-      },
-      "sources": [
-        "events"
-      ],
-      "partition_cols": [
-        [
-          "year",
-          "Int32"
         ],
         [
           "month",
@@ -41,9 +20,7 @@
     },
     {
       "name": "products",
-      "format": {
-        "type": "parquet"
-      },
+      "format": "parquet",
       "sources": [
         "products.parquet"
       ],
@@ -51,18 +28,7 @@
     },
     {
       "name": "regions",
-      "format": {
-        "type": "csv",
-        "header": true,
-        "delimiter": ",",
-        "quote": "\"",
-        "escape": null,
-        "comment": null,
-        "newlines_in_values": false,
-        "truncated_rows": false,
-        "infer_rows": null,
-        "compression": "none"
-      },
+      "format": "csv",
       "sources": [
         "regions.csv"
       ],
@@ -70,12 +36,7 @@
     },
     {
       "name": "signups",
-      "format": {
-        "type": "json",
-        "shape": "newline_delimited",
-        "infer_rows": null,
-        "compression": "none"
-      },
+      "format": "json",
       "sources": [
         "signups.json"
       ],
@@ -83,18 +44,7 @@
     },
     {
       "name": "test",
-      "format": {
-        "type": "csv",
-        "header": true,
-        "delimiter": ",",
-        "quote": "\"",
-        "escape": null,
-        "comment": null,
-        "newlines_in_values": false,
-        "truncated_rows": false,
-        "infer_rows": null,
-        "compression": "none"
-      },
+      "format": "csv",
       "sources": [
         "regions.csv"
       ],
@@ -102,9 +52,7 @@
     },
     {
       "name": "users",
-      "format": {
-        "type": "parquet"
-      },
+      "format": "parquet",
       "sources": [
         "users.parquet"
       ],
@@ -123,19 +71,16 @@
   ],
   "saved_queries": [
     {
-      "id": "121fda3d-ef35-4be6-9442-e3849e833d33",
       "name": "cross-file join",
       "sql": "SELECT u.country, e.action, COUNT(*) AS n, SUM(e.amount) AS total\nFROM events e\nJOIN users u ON e.user_id = u.user_id\nWHERE e.amount IS NOT NULL\nGROUP BY u.country, e.action\nORDER BY total DESC\nLIMIT 20;",
       "meta": "—"
     },
     {
-      "id": "0ce40e04-2ba6-4d49-a176-180ba2891c6f",
       "name": "test",
       "sql": "select * from test;",
       "meta": "5 rows"
     },
     {
-      "id": "a8b7956e-7a27-494d-92d3-5383d615e866",
       "name": "top spenders",
       "sql": "SELECT u.name, SUM(e.amount) AS spend\nFROM users u\nJOIN events e ON e.user_id = u.user_id\nWHERE e.action = 'purchase'\nGROUP BY u.name\nORDER BY spend DESC;",
       "meta": "—"
