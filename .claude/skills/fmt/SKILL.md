@@ -6,10 +6,14 @@ description: Format the Strata crates without reformatting the Freya fork. Use w
 # Format Strata
 
 ```bash
-cargo fmt -p strata-freya -p strata-forms -p strata-forms-macro -p strata-model -p strata-core
+cargo fmt -p strata-freya -p strata-core -p strata-model
 ```
 
 That is the whole thing. Run it from the repo root (or any worktree root).
+
+(`strata-forms` / `strata-forms-macro` were named here until they were deleted in 812afbc, which
+made this command fail outright — `cargo fmt` errors on a `-p` it cannot resolve rather than
+skipping it. See "When the member list changes" below; that check catches this in one command.)
 
 ## Never `cargo fmt --all`
 

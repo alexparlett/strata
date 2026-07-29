@@ -85,7 +85,7 @@ fn main() {
         open: focused_open,
     };
     let menu_app = app.clone();
-    let launch_config = LaunchConfig::new()
+    let launch_config = with_embedded_fonts(LaunchConfig::new())
         // The muda menubar replaces winit's default menu at resume. Crucially its
         // Quit is a *custom* item routed through the close-request path (red-button
         // semantics, T2 confirm keeps its say) — winit's own Quit sent Cocoa's
@@ -112,6 +112,55 @@ fn main() {
         Startup::Launcher => launch_config.with_window(LauncherApp::window(app)),
     };
     launch(launch_config);
+}
+
+/// The families the themes name (`themes/*.json` `fonts`), embedded rather than assumed. Neither
+/// ships with macOS, so on any machine that has not installed them by hand every surface fell back
+/// to the system UI font — which is the whole type scale gone, silently, and only on somebody
+/// else's machine. A build we hand to a tester has to look like the build we drew.
+///
+/// One file per weight the themes actually ask for: 400, 500 and 600 are the only values that
+/// appear across `typography` and the component overrides. Registering all three under **one**
+/// alias is what makes them a family rather than three families sharing a name — Skia's
+/// `TypefaceFontProvider` appends every typeface registered under an alias into a single style set
+/// and matches the requested weight against it (`freya-winit`'s launch does the registering).
+///
+/// Glyphs neither family covers still resolve: the launch keeps the system font manager as the
+/// *default* one and only adds ours as dynamic, so fallback is unaffected.
+static EMBEDDED_FONTS: [(&str, &[u8]); 6] = [
+    (
+        "IBM Plex Sans",
+        include_bytes!("../../../assets/fonts/IBMPlexSans-Regular.ttf"),
+    ),
+    (
+        "IBM Plex Sans",
+        include_bytes!("../../../assets/fonts/IBMPlexSans-Medium.ttf"),
+    ),
+    (
+        "IBM Plex Sans",
+        include_bytes!("../../../assets/fonts/IBMPlexSans-SemiBold.ttf"),
+    ),
+    (
+        "JetBrains Mono",
+        include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
+    ),
+    (
+        "JetBrains Mono",
+        include_bytes!("../../../assets/fonts/JetBrainsMono-Medium.ttf"),
+    ),
+    (
+        "JetBrains Mono",
+        include_bytes!("../../../assets/fonts/JetBrainsMono-SemiBold.ttf"),
+    ),
+];
+
+/// Register [`EMBEDDED_FONTS`] on the launch config.
+fn with_embedded_fonts(config: LaunchConfig) -> LaunchConfig {
+    EMBEDDED_FONTS
+        .iter()
+        .fold(config, |config, (family, data)| {
+            config.with_font(*family, *data)
+        })
 }
 
 /// What the app opens on launch.
