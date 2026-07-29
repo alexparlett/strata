@@ -6,17 +6,16 @@ description: Format the Strata crates without reformatting the Freya fork. Use w
 # Format Strata
 
 ```bash
-cargo fmt -p strata-freya -p strata-model -p strata-core
+cargo fmt -p strata-freya -p strata-core -p strata-model
 ```
 
 That is the whole thing. Run it from the repo root (or any worktree root).
 
-> The list named `strata-forms` and `strata-forms-macro` until they were removed from the workspace
-> ("Fmt, remove dioxus and forms"). `cargo fmt -p` **errors out entirely** on a package that is not
-> a member — `package 'strata-forms' is not a member of the workspace` — so the stale list did not
-> merely skip them, it formatted **nothing at all**, silently, for as long as it was wrong. If this
-> command ever fails that way again, re-derive the list (see the bottom of this file) rather than
-> dropping the failing name and hoping.
+(`strata-forms` / `strata-forms-macro` were named here until they were deleted in 812afbc, which
+made this command **fail outright** — `cargo fmt` errors on a `-p` it cannot resolve rather than
+skipping it, so the stale list did not merely miss those two, it formatted *nothing at all*,
+silently, for as long as it was wrong. If this command ever fails that way again, re-derive the
+list from "When the member list changes" below rather than dropping the failing name and hoping.)
 
 ## Never `cargo fmt --all`
 

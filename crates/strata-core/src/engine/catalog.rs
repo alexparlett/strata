@@ -131,11 +131,17 @@ pub async fn register_external(
         .with_listing_options(opts)
         .infer_schema(&ctx.state())
         .await
-        .map_err(|e| register_error(spec, ext, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("Failed to infer schema: {}", e);
+            register_error(spec, ext, &e.to_string())
+        })?;
     let table =
         ListingTable::try_new(config).map_err(|e| register_error(spec, ext, &e.to_string()))?;
     ctx.register_table(spec.name.as_str(), Arc::new(table))
-        .map_err(|e| register_error(spec, ext, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("Failed to register table: {}", e);
+            register_error(spec, ext, &e.to_string())
+        })?;
 
     table_meta(ctx, spec.name.as_str()).await
 }
@@ -419,6 +425,14 @@ fn json_shape_error(spec: &TableSpec, raw: &str) -> Option<String> {
             format!("Cannot read '{name}' as JSON: a top-level {kind} is not a record.{fix}")
         });
     }
+
+    // Note for anyone reading the history: main briefly translated arrow's
+    // `Expected object json type, found: …` family here, into "a field has more than one type
+    // across records". That message is unreachable on this branch — `engine::json_poly` replaced
+    // arrow's JSON inference outright and *handles* the conflict rather than failing on it, so
+    // nothing can produce the string. The arm was dropped in the merge rather than kept as a
+    // translation for an error that cannot occur (and a test over a hardcoded `raw` string that
+    // would pass forever regardless).
 
     let syntax = detail
         .strip_prefix("Not valid JSON: ")
@@ -899,6 +913,32 @@ mod tests {
         assert_eq!(
             register_error(&spec("bad", &[], "json"), ".json", raw),
             "Cannot read 'bad' as JSON: key must be a string at line 1 column 9"
+        );
+    }
+
+    /// The conflict main translated is now **read**, not reported. This is the replacement for
+    /// `a_field_with_conflicting_types_is_named_as_a_schema_conflict`: rather than asserting the
+    /// wording of an error, assert that the case producing it registers.
+    /// (`engine::tests::a_polymorphic_json_field_registers_as_text_and_queries` is the end-to-end
+    /// version, through `Engine::register` and a real `SELECT`.)
+    #[test]
+    fn a_field_with_conflicting_types_is_read_rather_than_refused() {
+        use serde_json::json;
+        let schema = crate::engine::json_poly::infer(
+            [
+                json!({"content": "plain"}),
+                json!({"content": {"kind": "block"}}),
+                json!({"content": ["a", true]}),
+            ]
+            .iter(),
+        )
+        .expect("a conflicted field no longer fails inference");
+        assert_eq!(
+            schema
+                .field_with_name("content")
+                .expect("content")
+                .data_type(),
+            &DataType::Utf8
         );
     }
 

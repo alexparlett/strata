@@ -572,6 +572,28 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `cargo test`, which `default-members` would narrow to `strata-freya` alone. It asserts the
   submodule sits at the recorded gitlink **before** compiling, so §6's unpushed-fork-commit trap
   fails in seconds with that named as the cause instead of as a missing method 40 minutes in.
+- **The release path is a script CI calls, never a pipeline written in YAML.**
+  `scripts/bundle-macos.sh` builds the universal binary, assembles the `.app`, signs, notarizes and
+  makes the DMG; `.github/workflows/release.yml` sets up secrets and runs it. So the build a
+  laptop makes and the build a release publishes differ only in what is *configured*, never in what
+  is *done* — a release path that exists only inside a workflow file is one nobody can run when it
+  breaks. Two rules the script holds. Signing **degrades honestly and says which rung it took**:
+  ad-hoc with nothing configured, real signature with a Developer ID, notarized when notary
+  credentials exist — and it deliberately will **not** fall back to an *Apple Development*
+  certificate, which signs but cannot be notarized, so it would buy a signature that still fails on
+  a tester's Mac while reading like success locally. And **the tag is created after the build, not
+  before**: a published release's tag cannot be moved or deleted, so `gh release create --target`
+  mints it only once there is a DMG to attach.
+- **The app bundle is self-contained, and that is a claim each new asset has to keep.** Themes are
+  `include_str!`'d and the two families the themes name (`themes/*.json` `fonts`) are
+  `include_bytes!`'d and registered through `LaunchConfig::with_font` in `main.rs` — because
+  neither IBM Plex Sans nor JetBrains Mono ships with macOS, and a font that is merely *installed
+  on the developer's machine* fails silently and only on somebody else's, falling back to the
+  system UI font with the whole type scale going with it. Naming a new family or weight in a theme
+  means embedding it in the same change; the weights are 400/500/600 because that is exactly what
+  `typography` and the component overrides ask for. The icon is the same rule pointed the other
+  way: `assets/icon/strata.png` is the master and the `.icns` is **generated during the bundle**,
+  so there is no committed second copy of the artwork to drift from the design.
 - **One Strata window across every session — enforced.** Several sessions can be live in several
   worktrees, and each can build its own binary; a second instance clobbers the shared app config
   (read once at startup, last writer wins for recents / settings / the open-project set). So

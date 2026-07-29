@@ -1,13 +1,12 @@
 # Strata
 
-A local, **Athena-style parquet query workspace** — a polished dark IDE for querying parquet with SQL, no Glue catalog
-or schema setup. Built with
-[Dioxus](https://dioxuslabs.com/) (desktop) and
+A local, **Athena-style parquet query workspace** — a polished native IDE for querying parquet, CSV and JSON with SQL,
+with no Glue catalog or schema setup. Built with
+[Freya](https://freyaui.dev/) 0.4 (Skia, native — no webview) and
 [Apache DataFusion](https://datafusion.apache.org/).
 
-Implements the `Strata` design (Claude Design handoff). See
-[`docs/DESIGN_SPEC.md`](docs/DESIGN_SPEC.md) — **§14** is the current source of truth (stack, design tokens, UI
-surfaces, DDL policy).
+Work is organised into **projects**: a folder with a `.strata/` directory holding its catalog, session and query
+history. Open one per window; the app reopens what you had at last quit.
 
 ---
 
@@ -15,74 +14,136 @@ surfaces, DDL policy).
 
 - **Catalog** of external **tables** (parquet/csv/json over files, directories, or globs — one table over any mix) and
   **views** (saved SQL), in a filterable sidebar with type-coloured columns and Hive `PART` badges.
-- **Query workspace** — tabs, a syntax-highlighted SQL editor (DataFusion dialect), Run (⌘/Ctrl+Enter), Format, Clear,
-  Save-as-view.
-- **Results grid** — type-coloured cells, nested cells open a JSON popover, find-in-results, pagination.
-- **Column inspector** — type, stats over the current result, nested-field tree, completeness.
-- **Table Config** — multi-path sources with browse, format, and Hive-partition detection (typed, with the string-cast
-  warning).
-- **Export** (via `COPY … TO`), **command palette** (⌘K), **query history**.
-- **Managed catalog DDL policy** — the editor runs `SELECT`/`EXPLAIN`/`SHOW`/
-  `DESCRIBE` and captures `CREATE`/`DROP VIEW`; it blocks `CREATE EXTERNAL TABLE`
-  / CTAS / `INSERT` (use Table Config) and hard-blocks `CREATE DATABASE`/`SCHEMA`.
+- **Query workspace** — tabs, a syntax-highlighted SQL editor (DataFusion dialect) with completion and live
+  diagnostics, Run (⌘/Ctrl+Enter), Explain and Explain analyze, Format SQL, Save and Save-as-view.
+- **Results grid** — virtualized, type-coloured cells with per-column resize and autofit, sort, find-in-results,
+  pagination, and cell/row/column selection with copy as TSV / CSV / JSON / Markdown. Double-click a nested cell for
+  its JSON, or the row gutter for the whole record. `EXPLAIN` renders as a plan tree.
+- **Column inspector** — type, nested-field tree, and **only facts that were actually read**: parquet footer
+  statistics and the table row count, plus an opt-in full **scan** (behind a cost confirm) for the numbers the footer
+  can't answer.
+- **Bottom drawer** — **Problems** (every open tab's SQL diagnostics, grouped by tab), **Events** (what the session
+  did), **History** (past runs; press to load, double-press to load and run).
+- **Table Config** — multi-path sources with browse, format options, and Hive-partition detection (typed, with the
+  string-cast warning).
+- **Export window** (via `COPY … TO`) — parquet/csv/json/arrow with per-format options, Hive partitioning, and a
+  preview built from the run's real schema and rows.
+- **Settings window** — Theme (with sync-with-OS), System, Data display, and **Engine ▸ Properties**, which edits
+  DataFusion's own configuration keys directly.
+- **Themes** — `Midnight` (dark) and `Daylight` (light) ship built in; user themes are JSON files in the themes
+  directory. See [`docs/FREYA_THEME_SPEC.md`](docs/FREYA_THEME_SPEC.md).
+- **Managed catalog DDL policy** — the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` **only**. Everything else is
+  blocked with a message naming the surface that owns it: `CREATE TABLE` / `CREATE EXTERNAL TABLE` / `INSERT` → Table
+  Config, `CREATE VIEW` → Save as view, `DROP` → the catalog, `COPY TO` → Export, `SET`/`RESET` → Settings.
+  `CREATE DATABASE`/`SCHEMA` are refused outright.
 
 ---
 
 ## Prerequisites
 
-Rust toolchain via [rustup](https://rustup.rs). Dioxus desktop uses a system webview:
+- A Rust toolchain via [rustup](https://rustup.rs).
+- **The `crates/freya` submodule.** Freya is our fork, and the build resolves it from the **local checkout path**
+  (root `Cargo.toml`, `[workspace.dependencies]`) — without it nothing compiles:
 
-- **macOS** — nothing extra (WKWebView is built in).
-- **Linux** — `webkit2gtk` + `libxdo`, e.g. on Debian/Ubuntu:
-  `sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev`.
-- **Windows** — WebView2 runtime (ships with modern Windows).
+  ```bash
+  git submodule update --init --checkout
+  ```
 
-Optional: the Dioxus CLI (`cargo install dioxus-cli`) gives `dx serve` with hot-reload.
+  `git submodule status crates/freya` should print no `+` or `-` prefix. (`git worktree add` does **not** update
+  submodules — run the command above in each new worktree.)
+
+There is no webview and no system GUI dependency to install; Freya renders with Skia, which compiles from source on
+the first build. macOS is the platform Strata ships and is tested on — CI runs on macOS, and the menubar,
+traffic-light gutter and child-window pinning are macOS-specific.
 
 ---
 
 ## Build & run
 
 ```bash
-# Plain cargo (first build pulls Dioxus + DataFusion — give it a few minutes)
-cargo run --release
-
-# …or with the Dioxus CLI + hot reload
-dx serve --platform desktop
+cargo run
 ```
 
-Click **✨ / Generate sample data** (command palette, ⌘K) to write two demo parquet files and register them, then Run the
-pre-filled cross-file join.
+The root's `default-members` is the Freya app, so a bare `cargo run` at the repo root is the app. `cargo run --release`
+is the one to use for real work. Either way the first build pulls DataFusion and compiles Skia — give it time.
+
+To try it against real data, open the repo's **`sample/`** folder as a project: it registers parquet, CSV and JSON
+tables, a Hive-partitioned `events/` directory, and two saved views.
+
+### Tests
+
+```bash
+cargo test --workspace --locked
+```
+
+`--workspace` rather than a bare `cargo test`, which `default-members` would narrow to `strata-freya` alone. After any
+theme change, regenerate and verify the committed schema:
+
+```bash
+UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync
+```
+
+---
+
+## Getting a build
+
+For a distributable `.app` and DMG:
+
+```bash
+./scripts/bundle-macos.sh
+```
+
+Universal binary and DMG land in `target/dist/`; `--arch arm64` is roughly half the build time, `--no-dmg` stops at
+the `.app`. The same script runs on a GitHub runner via **Actions → Release**, which can attach the DMG to a run or
+publish a release page.
+
+**[`docs/RELEASING.md`](docs/RELEASING.md)** is the full account — the workflow's inputs, cutting a version, what
+signing rung the build took, and the `xattr -dr com.apple.quarantine` step testers need while builds are unsigned.
 
 ---
 
 ## Architecture
 
+A virtual Cargo workspace (no root package):
+
 ```
-assets/main.css             design system (tokens + component styles), injected at the app root
-src/main.rs                 Dioxus launch + window config
-src/app.rs                  root component; owns Signal<AppState>; engine bridge; controller actions
-src/state.rs                AppState (+ a seed matching the prototype)
-src/engine.rs               DataFusion on a background thread; channels; multi-path register;
-                            view create/drop; typed + nested-aware results; sample generation
-src/ddl.rs                  DDL policy classifier (DataFusion's DFParser / sqlparser AST)
-src/util.rs                 Kind (type→colour map), name/byte helpers
-src/ui/{header,sidebar,workspace,inspector,statusbar,modals,icons}.rs
+crates/strata-freya         the Freya (Skia/native) frontend — the app; one module per OS window
+                            under apps/ (project, launcher, settings, export, configure)
+crates/strata-core          engine logic: the DataFusion boundary (query/plan/profile/serialize),
+                            config, theme, SQL language service. The only place DataFusion is touched
+crates/strata-model         leaf data vocabulary, serde only (schema, results, catalog, session…)
+crates/strata-code-editor   vendored Skia code editor (Rope buffer + tree-sitter highlighting)
+crates/freya                our Freya fork (git submodule), resolved by local path — excluded
+                            from the workspace, but the build depends on this checkout
 ```
 
-The DataFusion engine runs on its own thread with a Tokio runtime; the UI talks to it over `tokio::mpsc` channels and a
-Dioxus coroutine drains engine events into the single `Signal<AppState>`. Syntax highlighting comes from
-`dioxus-code` / `dioxus-code-editor` (tree-sitter): `CodeEditor` for the SQL editor, `Code` for the nested-cell JSON
-view.
+The engine (`strata_core::engine::Engine`) is a **direct-call async facade**: it owns a private multi-thread Tokio
+runtime, spawns each call onto it, and the caller awaits the `JoinHandle` — so query CPU never touches the render
+thread and Freya's non-Tokio UI executor awaits engine methods like any async fn. There are no channels, no request
+ids and no worker loop; the Dioxus-era `Command`/`Event` protocol was deleted in the port.
+
+The full per-module map is in **[`CLAUDE.md`](CLAUDE.md)**, and the state design in
+[`docs/FREYA_STATE_ARCHITECTURE.md`](docs/FREYA_STATE_ARCHITECTURE.md).
+
+---
+
+## Docs
+
+- [`CLAUDE.md`](CLAUDE.md) — build, workspace layout, module map, docs index.
+- [`AGENTS.md`](AGENTS.md) — the engineering bar and every settled convention.
+- [`docs/FREYA_PORT_PLAN.md`](docs/FREYA_PORT_PLAN.md) — why the migration, and the phased plan.
+- [`docs/FREYA_STATE_ARCHITECTURE.md`](docs/FREYA_STATE_ARCHITECTURE.md) — the per-window state design.
+- [`docs/SNAPSHOT_SPEC.md`](docs/SNAPSHOT_SPEC.md) — the result-snapshot read model.
+- [`docs/DEV_TASKS.md`](docs/DEV_TASKS.md) — the backlog. Task files live in `.claude/tasks/`.
 
 ---
 
 ## Status
 
-This is the first Dioxus cut of the redesign, built to match the prototype. It was **assembled against the design, not
-compiled in the authoring environment**
-(the sandbox blocks crates.io), so expect to shake out compile fixups on the first `cargo build` — particularly around
-exact Dioxus 0.7 / `dioxus-code` APIs. Report errors and they're quick to resolve.
+Under active development. Strata began as a Dioxus (webview) app and was rewritten on Freya for native rendering; the
+Dioxus frontend has since been removed, so the Freya app is the only one. The catalog, editor, results grid,
+inspector, drawer, export and settings surfaces are in place. Remaining work — the connections and chart workstreams
+among it — is tracked in [`docs/DEV_TASKS.md`](docs/DEV_TASKS.md) and `.claude/tasks/`.
 
 ## License
 
