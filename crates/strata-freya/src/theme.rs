@@ -479,8 +479,8 @@ strata_components! {
     // One theme for all of them: these tones live in the *palette*, which only a `reference`
     // resolves, so a window cannot reach them through the sheet at all.
     "window" => WindowThemePreference {
-        background, panel_background, border_fill, divider_fill, row_selected_background,
-        icon_color, icon_background,
+        background, panel_background, border_fill, row_selected_background, icon_color,
+        icon_background,
     },
     "form" => FormThemePreference {
         title_color, label_color, hint_color, required_color, divider_fill, note_background,

@@ -11,7 +11,6 @@
 use freya::prelude::*;
 
 use crate::apps::configure::ConfigureCtx;
-use crate::components::divider::Divider;
 use crate::components::form::{form_theme, Row, ValueField, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
 use crate::components::tool_button::ToolButton;
@@ -24,6 +23,8 @@ const TOOL_GAP: f32 = 6.;
 /// row's own height is the form's `FIELD_HEIGHT` — this list holds fields, so it does not get to
 /// invent a height for them.
 const EMPTY_HEIGHT: f32 = 88.;
+/// A cell's inset — the properties grid's own (`padding: 0 var(--sp-3)`).
+const CELL_INSET: f32 = 12.;
 /// The gap between the label row, the toolbar and the list.
 const STACK_GAP: f32 = 8.;
 /// The browse dropdown's width — enough for its two labels without the card hugging them.
@@ -234,19 +235,17 @@ fn pick(ctx: ConfigureCtx, kind: Pick) {
 
 /// The list of path rows, or its empty state.
 ///
-/// **One bordered box with hairline-separated rows**, as the canvas draws it — not a stack of
-/// individually boxed inputs. The fields inside are [`ValueField::bare`] for exactly the reason
-/// that method exists: the container is the chrome, and a box inside a box reads as a mistake.
-///
-/// Which row is active is said by the **row**, not by a border around a field: the selected row
-/// takes `row_selected_background` edge to edge. That is what a table does, and it is also the
-/// affordance the toolbar needs — Remove deletes this row and Browse opens in its directory.
+/// **Freya's built-in `Table`**, the same one Settings ▸ Engine's properties grid is built from
+/// (`apps/settings/views/engine/table.rs`) — not a hand-rolled box-with-rules lookalike
+/// (AGENTS.md §3). The row rule, the shared column width and the hover response come with it,
+/// and the four fork additions that pane paid for (`TableRow::theme`, `TableRow::on_press`,
+/// `TableCell::main_align`, flex content) are exactly what a selectable single-column list of
+/// text fields needs. One column, so no header: the section's own label already names it.
 #[derive(PartialEq)]
 struct PathList;
 
 impl Component for PathList {
     fn render(&self) -> impl IntoElement {
-        let win = window_theme();
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let (count, selected) = {
@@ -257,18 +256,8 @@ impl Component for PathList {
             )
         };
 
-        // Padded by the border's own width: torin paints a border *inside* the bounds its
-        // children already occupy, so a row with a background would otherwise erase it.
-        let list = rect()
-            .width(Size::fill())
-            .vertical()
-            .padding(Gaps::new_all(1.))
-            .corner_radius(6.)
-            .background(win.panel_background)
-            .border(Border::new().width(1.).fill(win.border_fill));
-
         if count == 0 {
-            return list.child(
+            return Table::new().child(
                 rect()
                     .width(Size::fill())
                     .height(Size::px(EMPTY_HEIGHT))
@@ -280,23 +269,25 @@ impl Component for PathList {
             );
         }
 
-        list.children((0..count).flat_map(|index| {
-            let rule =
-                (index > 0).then(|| Divider::horizontal().color(win.divider_fill).into_element());
-            let row = PathRow {
-                index,
-                selected: index == selected,
-                key: DiffKey::None,
-            }
-            // Keyed by position, and the row syncs both ways against the draft — see `PathRow`.
-            .key(index)
-            .into_element();
-            rule.into_iter().chain(std::iter::once(row))
-        }))
+        let mut body = TableBody::new();
+        for index in 0..count {
+            body = body.child(
+                PathRow {
+                    index,
+                    selected: index == selected,
+                    key: DiffKey::None,
+                }
+                // Keyed by position, and the row syncs both ways against the draft — see
+                // `PathRow`.
+                .key(index),
+            );
+        }
+
+        Table::new().column_widths(vec![Size::flex(1.)]).child(body)
     }
 }
 
-/// One row of the table: a bare field, on the row's own background when it is the selected one.
+/// One row of the table: a bare field in its only cell, filled when it is the selected row.
 #[derive(PartialEq)]
 struct PathRow {
     index: usize,
@@ -344,12 +335,11 @@ impl Component for PathRow {
         });
         let mut reported = use_state(move || initial);
 
-        // **Selection follows focus**, not a press on the row. Freya's `Input` registers
-        // `on_focus_press` — sugar over `on_pointer_down` — and stops propagation, so a press
-        // handler on the wrapper never fires over the field itself: clicking into a row to edit
-        // it left the toolbar pointing at whichever row was selected before, and Remove deleted
-        // that one instead. Focus is the thing the click actually causes, so it is what the
-        // selection reads.
+        // `TableRow::on_press` selects the row, and **focus does too**: Freya's `Input`
+        // registers `on_focus_press` — sugar over `on_pointer_down` — and stops propagation, so
+        // the row's press never fires over the field itself. Clicking into a row to edit it
+        // would otherwise leave the toolbar pointing at whichever row was selected before, and
+        // Remove would delete that one.
         let field = use_a11y();
         let focus = use_focus(field);
         let mut selected = ctx.selected_path;
@@ -385,18 +375,30 @@ impl Component for PathRow {
             text.set(outer);
         });
 
-        rect()
-            .width(Size::fill())
-            .height(Size::px(FIELD_HEIGHT))
-            .cross_align(Alignment::Center)
-            .maybe(self.selected, |el| {
-                el.background(win.row_selected_background)
+        let fill = match self.selected {
+            true => win.row_selected_background,
+            false => Color::TRANSPARENT,
+        };
+
+        TableRow::new()
+            .theme(TableThemePartial {
+                row_background: Some(fill.into()),
+                hover_row_background: Some(fill.into()),
+                ..Default::default()
             })
+            .on_press(move |_: Event<PressEventData>| selected.set(index))
             .child(
-                ValueField::new(text)
-                    .bare()
-                    .width(Size::fill())
-                    .a11y_id(field),
+                TableCell::new()
+                    .height(Size::px(FIELD_HEIGHT))
+                    .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
+                    .main_align(Alignment::Start)
+                    .child(
+                        ValueField::new(text)
+                            .bare()
+                            .width(Size::fill())
+                            .height(Size::px(FIELD_HEIGHT))
+                            .a11y_id(field),
+                    ),
             )
     }
 }

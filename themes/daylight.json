@@ -1496,9 +1496,6 @@
       "border_fill": {
         "reference": "border"
       },
-      "divider_fill": {
-        "reference": "line"
-      },
       "row_selected_background": {
         "reference": "accent_selection"
       },
