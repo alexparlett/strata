@@ -10,9 +10,21 @@ strata-model = { path = "../strata-model" }
 # The query engine family. `sql` uses datafusion's re-exported `sqlparser`; `engine`/
 # `profile`/`serialize` use datafusion + arrow proper.
 datafusion = "54"
+# Postgres-style JSON accessors (`json_get`, `->`, `->>`) over a Utf8 column holding JSON
+# text. Registered into every engine's context by `build_context`, which is all the wiring there
+# is: `functions::snapshot` reads the *live* registry, so these reach completion, signature help
+# and the docs panel with no per-function work. Its version tracks DataFusion's major (0.54.x =
+# DataFusion 54), so it moves in lockstep with the `datafusion` pin above.
+# (`?` is registered as well but does not parse under our default `GenericDialect` — use
+# `json_contains`; see the note in `engine::build_context`.)
+datafusion-functions-json = "0.54"
 # `engine` worker: dedicated thread + tokio runtime + mpsc command/event channels.
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
+# `engine::json_poly::format` implements DataFusion's `FileFormat`, which is an `#[async_trait]`
+# trait — the attribute has to be applied by the same crate version DataFusion used, and it is
+# already in the graph via DataFusion itself.
+async-trait = "0.1"
 # `config`/`theme`/`plan` persist + (de)serialize.
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }

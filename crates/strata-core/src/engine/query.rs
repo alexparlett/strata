@@ -1,6 +1,13 @@
 //! The pagination engine: run each query **once**, spool the full result to a temp
-//! parquet snapshot, then serve every page as a bounded `LIMIT/OFFSET` read — so RAM
+//! **Arrow IPC** snapshot, then serve every page as a bounded `LIMIT/OFFSET` read — so RAM
 //! only ever holds one page. Also the display-cell formatting (`CellFormat`).
+//!
+//! IPC rather than parquet because the snapshot is the boundary every result crosses, and
+//! parquet's type system is narrower than Arrow's: it cannot write a union at all
+//! (`arrow_to_parquet_schema` **panics**, ARROW-8817) nor a zero-field struct, so results had to
+//! be coerced on the way in and the record view and JSON/CSV export then read the coerced form.
+//! IPC round-trips anything the engine can emit. Compressed (see `snapshot_ipc_options`) it is
+//! the same size on disk as the parquet it replaced.
 //!
 //! Snapshots are keyed by [`SnapshotId`] — the Run's request id, unique per engine for
 //! the life of the process — so a snapshot is **immutable**: a re-run materializes a
@@ -21,13 +28,19 @@ use std::time::Instant;
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::ipc::writer::{FileWriter, IpcWriteOptions};
+use datafusion::arrow::ipc::CompressionType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::common::Column;
-use datafusion::parquet::arrow::ArrowWriter;
-use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
+use datafusion::execution::options::ArrowReadOptions;
+use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::prelude::*;
+use datafusion_functions_json::udfs::json_union_to_text_udf;
+use datafusion_functions_json::JSON_UNION_DATA_TYPE;
 use futures::StreamExt;
+use std::sync::Arc;
 
 use super::catalog::column_info;
 use super::config::effective;
@@ -75,7 +88,7 @@ pub fn snapshot_dir(engine_id: u64) -> String {
 
 pub fn snapshot_file(engine_id: u64, snapshot: SnapshotId) -> String {
     let mut d = PathBuf::from(snapshot_dir(engine_id));
-    d.push(format!("s_{snapshot}.parquet"));
+    d.push(format!("s_{snapshot}.arrow"));
     d.to_string_lossy().into_owned()
 }
 
@@ -294,24 +307,28 @@ fn remove_any(path: &Path) {
     }
 }
 
-/// How a snapshot's parquet is written.
+/// How a snapshot's Arrow IPC file is written.
 ///
-/// **Column statistics are explicit, not left to the default**, because something now depends
-/// on them: a partitioned export refuses to run when a partition column contains NULLs, and it
-/// answers that from the footer's `null_count` rather than by scanning
-/// (`export::partition_columns_have_no_nulls`). parquet-rs enables statistics by default today,
-/// so this changes nothing — it states the requirement so that turning them off has to be a
-/// decision, taken here, by someone who can see what it would break.
+/// **LZ4, not uncompressed.** Measured over 1M–20M-row results in three shapes, raw IPC is
+/// 1.4–4.4x the size of the parquet snapshots this replaced; with LZ4 it is **0.46–0.73x** — i.e.
+/// roughly half, and level with a compressed parquet file. That is the whole reason the format
+/// swap is affordable: uncompressed IPC would have traded a real amount of disk for the type
+/// fidelity, and compressed IPC trades none.
 ///
-/// `Chunk` rather than `Page`: per-column-chunk statistics carry the null count, and page-level
-/// indexes would cost bytes on every snapshot for something nothing reads.
-fn snapshot_writer_props() -> WriterProperties {
-    WriterProperties::builder()
-        .set_statistics_enabled(EnabledStatistics::Chunk)
-        .build()
+/// LZ4 rather than ZSTD because a snapshot is written on the query's critical path and read back
+/// immediately — LZ4 is fast in both directions, where ZSTD buys a smaller file at a cost paid
+/// again on every page read. The codec is a dial: it can change without touching the format, and
+/// nothing outside this function knows which one was used.
+///
+/// Both codecs are already available — `arrow-ipc`'s `lz4` and `zstd` features are enabled
+/// transitively by DataFusion — so this needs no dependency or feature change.
+fn snapshot_ipc_options() -> Result<IpcWriteOptions, String> {
+    IpcWriteOptions::default()
+        .try_with_compression(Some(CompressionType::LZ4_FRAME))
+        .map_err(|e| e.to_string())
 }
 
-/// Run the query **once**, streaming every batch straight to a fresh parquet snapshot
+/// Run the query **once**, streaming every batch straight to a fresh IPC snapshot
 /// on disk while counting the exact total and capturing the first page — no separate
 /// `COUNT`, no re-read, bounded memory. On failure the partial snapshot is cleaned up
 /// here (nothing was ever registered); the caller only ever sees a fully-materialized
@@ -323,7 +340,7 @@ pub async fn run_and_snapshot(
     sql: &str,
     page_size: usize,
     fmt: &CellFormat,
-) -> Result<(QueryOutput, RecordBatch), String> {
+) -> Result<(QueryOutput, RecordBatch, SnapshotStats), String> {
     let result = materialize(ctx, engine_id, snapshot, sql, page_size, fmt).await;
     if result.is_err() {
         // The stream may have died mid-spool — drop the partial file (no table was
@@ -333,6 +350,66 @@ pub async fn run_and_snapshot(
     result
 }
 
+/// What the write pass **observed**, so no later reader has to scan for it again.
+///
+/// Parquet's footer carried per-column statistics and `export::partition_columns_have_no_nulls`
+/// read the null counts from it. Arrow IPC carries none — `ArrowFormat::infer_stats` is
+/// `Statistics::new_unknown` — but nothing was ever gained by asking the *file*: `materialize`
+/// streams every batch already, and `Array::null_count` is a stored field on the null buffer, so
+/// the exact count is a running sum over data we are holding anyway. Free at write time, and a
+/// map lookup instead of a scan at export time.
+///
+/// Not persisted, and deliberately so: a snapshot never outlives its process (pid-scoped temp
+/// directory, retired on the next run of its workspace), so this has exactly the snapshot's
+/// lifetime and lives beside the rest of its bookkeeping in `Lifecycle`. A footer or a sidecar
+/// file would be a second thing to keep in step for no gain.
+#[derive(Debug, Clone, Default)]
+pub struct SnapshotStats {
+    /// Exact null count per column, in `QueryOutput::columns` order.
+    pub nulls: Vec<u64>,
+}
+
+/// Render a `json_get` result as its canonical JSON text.
+///
+/// This used to be a **storage** gate: parquet cannot write an Arrow union at all, so a bare
+/// `->` panicked the writer and every union had to be projected away or refused. The IPC
+/// snapshot stores unions natively, so none of that is needed — the refusal arms (nested unions,
+/// dictionary-wrapped unions, empty structs) are gone, and those results now round-trip as
+/// themselves.
+///
+/// What remains is **presentation**, and it is lossless. `json_get`'s sparse union is the crate's
+/// stand-in for Postgres `jsonb`; arrow renders it as `{str=x}` / `{int=7}`, which is not what
+/// someone who typed `content -> 'type'` expects to read. `json_union_to_text` gives back exactly
+/// the JSON the value came from, so this changes how the column reads and not what it holds.
+///
+/// Only a **top-level** union column is projected. One nested inside a struct or list is left
+/// alone: there is nothing to wrap it with, and unlike before that is now merely cosmetic rather
+/// than a crash.
+fn json_unions_as_text(df: DataFrame) -> Result<DataFrame, String> {
+    let schema = df.schema().clone();
+    let is_union = |f: &Arc<Field>| f.data_type() == &*JSON_UNION_DATA_TYPE;
+    if !schema.fields().iter().any(is_union) {
+        return Ok(df);
+    }
+    let exprs = schema
+        .columns()
+        .into_iter()
+        .zip(schema.fields())
+        .map(|(column, field)| {
+            if is_union(field) {
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    json_union_to_text_udf(),
+                    vec![Expr::Column(column)],
+                ))
+                .alias(field.name())
+            } else {
+                Expr::Column(column)
+            }
+        })
+        .collect::<Vec<Expr>>();
+    df.select(exprs).map_err(|e| e.to_string())
+}
+
 async fn materialize(
     ctx: &SessionContext,
     engine_id: u64,
@@ -340,7 +417,7 @@ async fn materialize(
     sql: &str,
     page_size: usize,
     fmt: &CellFormat,
-) -> Result<(QueryOutput, RecordBatch), String> {
+) -> Result<(QueryOutput, RecordBatch, SnapshotStats), String> {
     let start = Instant::now();
     let snap = snapshot_name(snapshot);
     let file = snapshot_file(engine_id, snapshot);
@@ -358,6 +435,7 @@ async fn materialize(
         .sql_with_options(sql, opts)
         .await
         .map_err(|e| e.to_string())?;
+    let df = json_unions_as_text(df)?;
     // capture columns before the DataFrame is consumed by the stream
     let columns: Vec<ColumnInfo> = df
         .schema()
@@ -370,8 +448,9 @@ async fn materialize(
     let arrow_schema = df.schema().inner().clone();
     let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
 
-    let mut writer: Option<ArrowWriter<File>> = None;
+    let mut writer: Option<FileWriter<File>> = None;
     let mut total = 0usize;
+    let mut nulls = vec![0u64; arrow_schema.fields().len()];
     let mut page1: Vec<Vec<Cell>> = Vec::new();
     let mut page1_batches: Vec<RecordBatch> = Vec::new();
     while let Some(batch) = stream.next().await {
@@ -380,12 +459,15 @@ async fn materialize(
         if writer.is_none() {
             let out = File::create(&file).map_err(|e| e.to_string())?;
             writer = Some(
-                ArrowWriter::try_new(out, batch.schema(), Some(snapshot_writer_props()))
+                FileWriter::try_new_with_options(out, &batch.schema(), snapshot_ipc_options()?)
                     .map_err(|e| e.to_string())?,
             );
         }
         if let Some(w) = writer.as_mut() {
             w.write(&batch).map_err(|e| e.to_string())?;
+        }
+        for (i, col) in batch.columns().iter().enumerate() {
+            nulls[i] += col.null_count() as u64;
         }
         append_batch_capped(&batch, &mut page1, &mut page1_batches, page_size, fmt)?;
     }
@@ -393,9 +475,9 @@ async fn materialize(
     // Only register a snapshot if the query produced rows; an empty result has
     // no pages to fetch (`QueryOutput::snapshot` stays `None`).
     let materialized = writer.is_some();
-    if let Some(w) = writer {
-        w.close().map_err(|e| e.to_string())?;
-        ctx.register_parquet(snap.as_str(), file.as_str(), ParquetReadOptions::default())
+    if let Some(mut w) = writer {
+        w.finish().map_err(|e| e.to_string())?;
+        ctx.register_arrow(snap.as_str(), file.as_str(), ArrowReadOptions::default())
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -412,6 +494,7 @@ async fn materialize(
             elapsed_ms: start.elapsed().as_millis(),
         },
         page1_batch,
+        SnapshotStats { nulls },
     ))
 }
 
@@ -588,7 +671,7 @@ mod tests {
     fn engine_dir(root: &Path, name: &str) -> PathBuf {
         let dir = root.join(name);
         fs::create_dir_all(&dir).expect("engine dir");
-        fs::write(dir.join("s_1.parquet"), b"snapshot").expect("snapshot file");
+        fs::write(dir.join("s_1.arrow"), b"snapshot").expect("snapshot file");
         dir
     }
 
@@ -627,7 +710,7 @@ mod tests {
         purge_root(&root);
 
         assert!(
-            live.join("s_1.parquet").exists(),
+            live.join("s_1.arrow").exists(),
             "a live engine's snapshots must survive another instance's startup purge"
         );
         assert!(lock_path(&root, "e_1_0").exists(), "…and so must its lock");
@@ -673,14 +756,14 @@ mod tests {
         let dir = PathBuf::from(snapshot_dir(engine_id));
         let claim = claim_snapshot_dir(engine_id).expect("first claim");
         assert!(dir.is_dir(), "the claim creates the directory it guards");
-        fs::write(dir.join("s_1.parquet"), b"snapshot").expect("snapshot file");
+        fs::write(dir.join("s_1.arrow"), b"snapshot").expect("snapshot file");
 
         assert!(
             claim_snapshot_dir(engine_id).is_err(),
             "a held claim is exclusive — and a refused claim must not touch the directory"
         );
         assert!(
-            dir.join("s_1.parquet").exists(),
+            dir.join("s_1.arrow").exists(),
             "the refused claim left the live directory alone"
         );
 

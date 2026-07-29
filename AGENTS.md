@@ -110,6 +110,36 @@ Things that must not regress. Each was fought for once already.
   that no user should ever read as a problem. Putting it in a cross-tab view costs either a copy
   on the store that outlives the run, or one freya-query subscription per tab in the drawer
   *and* in the rail badge. The results pane already renders it in full.
+- **JSON is read by our own `FileFormat`, and a replaced reader inherits the replaced reader's
+  diagnostics.** `engine::json_poly` is now the *only* JSON reader — arrow's `JsonFormat` is not
+  constructed anywhere. It exists because arrow's inference admits five type combinations and
+  errors on every other pair, so a type-discriminated union fails registration outright; ours
+  stringifies **only** the paths arrow would have rejected and infers everything else identically
+  (asserted against arrow's own inference, not argued). Three things generalise. A reader swap is
+  also a **diagnostics** swap: `catalog::json_shape_error` keys off arrow's `Json error: ` prefix
+  and its exact `Expected JSON record to be an object, found Array` wording, so ours speaks that
+  dialect deliberately — replacing a reader must not quietly replace the message the user reads.
+  A `FileSource` **must** handle its own projection: leaving `projection()` at its `None` default
+  does not mean "plan a projection above the scan", it means `FileScanConfigBuilder::build` fails
+  the plan with `does not support projection pushdown`. And each normalization rule was found by
+  running the real file, not by reading the spec — arrow can infer a schema its own decoder then
+  refuses to read (a scalar promoted into a list), which no amount of design review surfaced.
+- **The snapshot is Arrow IPC, so a result's type survives it.** Every run materializes to a
+  snapshot before the grid sees a row, which makes the snapshot's format a constraint on the whole
+  type system. Parquet was that format and is narrower than Arrow: it cannot write a union at all
+  (`arrow_to_parquet_schema` **panics**, ARROW-8817) nor a zero-field struct, so results were
+  coerced on the way in — and the record view, `cell_pretty_json` and JSON/CSV export all read the
+  *re-read* snapshot, so they read the coerced form, not what the query produced. Each new exotic
+  type meant another arm in a gate that was twice found incomplete. IPC round-trips anything the
+  engine emits, and **compressed it is the same size** (measured over 1M–20M rows in three shapes:
+  raw IPC is 1.4–4.4x parquet, LZ4 IPC is 0.46–0.73x — i.e. half of the *uncompressed* parquet it
+  replaced, which is what our snapshots were). The one thing parquet's footer gave us was exact
+  null counts for the partitioned-export gate; those are now counted during the write pass
+  (`query::SnapshotStats`) because `materialize` already streams every batch and
+  `Array::null_count` is a stored field — free to produce, and held in `Lifecycle` for exactly the
+  snapshot's lifetime rather than in a footer or a sidecar. What remains of the old gate is
+  `json_unions_as_text`, which is now **presentation, not storage**: `json_get`'s union renders as
+  `{str=x}` and nobody typing `content -> 'type'` wants to read that.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the
@@ -529,7 +559,8 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   dependency — so `--all` reformats the fork, whose `rustfmt.toml` our stable toolchain does not
   apply. Measured once: 344 files, 4006 deletions, none intended, and invisible in
   `git submodule status` because the gitlink never moves. Use `.claude/skills/fmt`, which names the
-  six members explicitly.
+  three it owns explicitly (and fails closed on a stale list — `cargo fmt -p` errors out entirely
+  on a non-member, so a wrong list formats *nothing*).
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify

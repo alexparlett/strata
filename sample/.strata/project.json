@@ -6,11 +6,11 @@
       "format": {
         "type": "json",
         "shape": "newline_delimited",
-        "infer_rows": 1000,
+        "infer_rows": null,
         "compression": "none"
       },
       "sources": [
-        "config.json"
+        "nba-config.json"
       ],
       "partition_cols": []
     },

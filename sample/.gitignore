@@ -1,0 +1,5 @@
+# `config.json` is a real, ~62MB commercial document that was used to develop the polymorphic
+# JSON reader. It is deliberately **not** committed — too large for the repo, and not ours to
+# publish. `nba-config.json` is the small synthetic stand-in with the same shape, and it is what
+# the project's `config` table reads.
+/config.json

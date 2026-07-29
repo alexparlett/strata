@@ -30,6 +30,7 @@ pub mod config;
 mod explain;
 pub mod export;
 mod functions;
+pub mod json_poly;
 pub mod plan;
 pub mod profile;
 mod query;
@@ -169,6 +170,14 @@ struct Lifecycle {
     /// Snapshots whose retire arrived while they were pinned. They are retired for real
     /// when the last pin releases — deferred, never skipped, so nothing leaks.
     deferred: HashSet<SnapshotId>,
+    /// What each live snapshot's write pass observed ([`query::SnapshotStats`]) — today the
+    /// exact per-column null counts a partitioned export has to check.
+    ///
+    /// Here rather than in the file because a snapshot never outlives its process, so this has
+    /// exactly its lifetime: inserted when it materializes, dropped when it retires. The Arrow
+    /// IPC snapshot carries no statistics of its own, and asking the file was never the point —
+    /// the write pass already streams every batch.
+    stats: HashMap<SnapshotId, query::SnapshotStats>,
 }
 
 /// A window's engine. Create once per project window (cheap to share as `Arc<Engine>`);
@@ -447,10 +456,11 @@ impl Engine {
         }
         self.publish_inflight(&lc);
         match joined {
-            Ok(Ok((output, batch))) => {
+            Ok(Ok((output, batch, stats))) => {
                 if latest {
                     if let Some(snap) = output.snapshot {
                         lc.current.insert(ws, snap);
+                        lc.stats.insert(snap, stats);
                     }
                     Ok((output, batch))
                 } else {
@@ -464,7 +474,7 @@ impl Engine {
             Err(join) if join.is_cancelled() => {
                 // Aborted. The aborter retired the partial too, but `abort()` only lands
                 // at the task's next await — so the task may have gone on to finish
-                // `register_parquet` *after* that retire, leaving a table registered over
+                // `register_arrow` *after* that retire, leaving a table registered over
                 // a deleted file. Awaiting the handle is what makes this definitive: the
                 // task is finished by the time we see `is_cancelled`, so retiring again
                 // (idempotent, best-effort) sweeps whatever it managed to create.
@@ -684,7 +694,7 @@ impl Engine {
             Some(_) => {
                 lc.pins.remove(&snapshot);
                 if lc.deferred.remove(&snapshot) {
-                    retire_snapshot(&self.ctx, self.engine_id, snapshot);
+                    self.retire_now(&mut lc, snapshot);
                 }
             }
             // Unbalanced release — a bug in a caller, and the kind that would otherwise show
@@ -707,8 +717,16 @@ impl Engine {
         if lc.pins.contains_key(&snapshot) {
             lc.deferred.insert(snapshot);
         } else {
-            retire_snapshot(&self.ctx, self.engine_id, snapshot);
+            self.retire_now(lc, snapshot);
         }
+    }
+
+    /// Retire a snapshot and forget what its write pass recorded. Every path that actually
+    /// deletes a live snapshot goes through here, so `Lifecycle::stats` cannot outlive the
+    /// snapshots it describes.
+    fn retire_now(&self, lc: &mut Lifecycle, snapshot: SnapshotId) {
+        lc.stats.remove(&snapshot);
+        retire_snapshot(&self.ctx, self.engine_id, snapshot);
     }
 
     // --- export -----------------------------------------------------------
@@ -742,10 +760,22 @@ impl Engine {
         // close would claim work was running) and the pin would never release, leaving a
         // snapshot that survives every re-run for the rest of the session.
         let _writing = ExportGuard::new(self, snapshot);
+        // Copied out under the lock: the partitioned-export gate reads what this snapshot's write
+        // pass counted, and the spawned task must not hold the lifecycle lock across an await.
+        // A snapshot with no recorded stats is one nothing counted, which the gate treats as
+        // "cannot vouch for" rather than as zero nulls.
+        let stats = self
+            .lifecycle
+            .lock()
+            .unwrap()
+            .stats
+            .get(&snapshot)
+            .cloned()
+            .unwrap_or_default();
         let task = {
             let ctx = self.ctx.clone();
             self.rt()
-                .spawn(async move { export::run_export(&ctx, snapshot, spec).await })
+                .spawn(async move { export::run_export(&ctx, snapshot, spec, &stats).await })
         };
 
         // Dropping this future does *not* stop the write: the spawned task detaches and the
@@ -899,6 +929,8 @@ impl Engine {
     fn abort_inflight(&self, f: InFlight) {
         f.abort.abort();
         if let Some(snap) = f.snapshot {
+            // No `stats` entry can exist for this one — it is only recorded on a settle the
+            // caller was handed — but the retire itself still has to happen.
             retire_snapshot(&self.ctx, self.engine_id, snap);
         }
     }
@@ -1094,14 +1126,31 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     // Source spans on planner errors power the validator's squiggles (P2-18) — owned,
     // like the catalog names, so an override can't silently degrade diagnostics.
     config.options_mut().sql_parser.collect_spans = true;
-    match build_runtime(overrides) {
+    let mut ctx = match build_runtime(overrides) {
         Ok(Some(rt)) => SessionContext::new_with_config_rt(config, rt),
         Ok(None) => SessionContext::new_with_config(config),
         Err(e) => {
             tracing::warn!("engine runtime config invalid ({e}); using defaults");
             SessionContext::new_with_config(config)
         }
+    };
+    // The Postgres-style JSON accessors (`json_get`, `->`, `->>`) over a Utf8 column of JSON
+    // text. They belong to the **engine**, not to a table: `json_get('{"a":1}', 'a')` is valid
+    // with nothing registered, so this sits beside the catalog naming rather than in `catalog`.
+    //
+    // The crate also registers `?` as an alias for `json_contains`, and it is **unreachable from
+    // SQL under our default dialect**: `GenericDialect` omits `Token::Question` from
+    // `get_next_precedence`, so `doc ? 'a'` fails to parse before the operator is ever consulted.
+    // `json_contains` is the spelling that works everywhere (WJ-04 is whether to move the
+    // default to postgres, which does parse it).
+    //
+    // Warned rather than fatal because the failure cannot be silent — a registration that did
+    // not happen surfaces as "Invalid function 'json_get'" on the first query that needs one,
+    // which names itself better than a panic during engine construction would.
+    if let Err(e) = datafusion_functions_json::register_all(&mut ctx) {
+        tracing::warn!("engine: JSON functions unavailable: {e}");
     }
+    ctx
 }
 
 /// The catalog + schema **we own** — see [`build_context`].
@@ -1267,6 +1316,142 @@ mod tests {
         // Rebuilding is what settles it — which is exactly what the window's remount does.
         let restarted = Engine::new(engine.overrides());
         assert!(!restarted.restart_owed());
+    }
+
+    /// The JSON accessors reach the **function catalogue**, not merely the context — and those
+    /// are the same fact, which is the whole reason registering them is the entire integration.
+    /// `functions::snapshot` walks the live registry, so a UDF registered in `build_context`
+    /// arrives in autocomplete, signature help and the docs panel with no per-function table to
+    /// maintain and no way for the completion pool and the engine to disagree about what exists.
+    /// Asserted through `functions()` rather than through `ctx.udfs()` for exactly that reason:
+    /// the registry is the easy half, and it is the *snapshot* that the surfaces read.
+    #[test]
+    fn json_accessors_reach_the_function_catalogue() {
+        let engine = Engine::new(BTreeMap::new());
+        let names: Vec<&str> = engine
+            .functions()
+            .scalar
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        for want in [
+            "json_get",
+            "json_get_str",
+            "json_get_int",
+            "json_as_text",
+            "json_contains",
+            "json_length",
+        ] {
+            assert!(
+                names.contains(&want),
+                "'{want}' is registered on the context but absent from the function catalogue"
+            );
+        }
+    }
+
+    /// A bare `->` **used to panic the query task**, and must not.
+    ///
+    /// `json_get` returns a sparse `Union` (the crate's stand-in for Postgres `jsonb`, which Arrow
+    /// has no equivalent of). Parquet has no union logical type and `arrow_to_parquet_schema`
+    /// panics rather than erroring, so the snapshot every run materializes took the task down with
+    /// `not implemented: See ARROW-8817`. `query::flatten_json_unions` projects the column to its
+    /// canonical JSON text before the writer sees it.
+    ///
+    /// The four cases below are one per union arm that survives to a result, which is what makes
+    /// this a test of the *flattening* rather than of one expression.
+    #[tokio::test]
+    async fn a_bare_json_arrow_yields_text_instead_of_panicking() {
+        let eng = Engine::new(Default::default());
+        let doc = r#"'{"s": "x", "n": 7, "b": true, "o": {"k": 1}, "a": [1,2], "z": null}'"#;
+
+        let (out, _) = eng
+            .query(
+                WsId(1),
+                RunTag(1),
+                format!(
+                    "SELECT {doc} -> 's' AS s, {doc} -> 'n' AS n, {doc} -> 'b' AS b, \
+                     {doc} -> 'o' AS o, {doc} -> 'a' AS a, {doc} -> 'z' AS z"
+                ),
+                10,
+            )
+            .await
+            .expect("a union column no longer reaches the parquet writer");
+
+        let row: Vec<String> = out.rows[0].iter().map(|c| c.text.clone()).collect();
+        assert_eq!(
+            row,
+            vec![
+                r#""x""#.to_string(), // a string arm is JSON-quoted
+                "7".to_string(),      // int
+                "true".to_string(),   // bool
+                // The object and array arms are the source's own text, passed through
+                // **verbatim** — note the space after `k:`, which is how it was written. They
+                // are already raw JSON inside the union, so nothing re-serializes them and the
+                // user gets back exactly what the document held.
+                r#"{"k": 1}"#.to_string(),
+                "[1,2]".to_string(),
+                "NULL".to_string(), // the JSON-null arm becomes a SQL null
+            ]
+        );
+        assert!(
+            out.rows[0][5].null,
+            "the JSON null arm is a real null, not the text"
+        );
+
+        // And the schema the grid is handed says text, not union — the projection is on the
+        // logical plan, so `ColumnInfo` and the snapshot cannot disagree.
+        assert!(
+            out.columns.iter().all(|c| !c.dtype.contains("Union")),
+            "{:?}",
+            out.columns.iter().map(|c| &c.dtype).collect::<Vec<_>>()
+        );
+    }
+
+    /// A union **nested** inside a struct now stores as itself.
+    ///
+    /// It used to be refused by name, because `json_union_to_text` takes the union directly so
+    /// there was nothing to wrap it with, and parquet would have panicked on it. The IPC snapshot
+    /// holds it, which is the fidelity the format change bought: the type that reaches the writer
+    /// is the type the query produced, and no coercion or refusal stands between them.
+    #[tokio::test]
+    async fn a_json_value_nested_in_a_struct_round_trips() {
+        let eng = Engine::new(Default::default());
+        let (out, _) = eng
+            .query(
+                WsId(1),
+                RunTag(1),
+                r#"SELECT struct('{"a":1}' -> 'a' AS v) AS wrapped"#.into(),
+                10,
+            )
+            .await
+            .expect("a nested union is storable under IPC");
+        assert_eq!(out.total, 1);
+        assert_eq!(out.columns.len(), 1);
+        assert_eq!(out.columns[0].name, "wrapped");
+    }
+
+    /// And they evaluate. A path accessor over a JSON *string* with nothing registered is the
+    /// case that says these belong to the engine rather than to a table — which is why they are
+    /// built in `build_context` beside the catalog naming and not in `catalog`.
+    #[tokio::test]
+    async fn a_json_accessor_needs_no_table() {
+        use datafusion::arrow::array::StringArray;
+
+        let ctx = build_context(&BTreeMap::new());
+        let batches = ctx
+            .sql(r#"SELECT json_get_str('{"a":{"b":"deep"}}', 'a', 'b') AS v"#)
+            .await
+            .expect("plan")
+            .collect()
+            .await
+            .expect("run");
+
+        let col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("json_get_str returns Utf8");
+        assert_eq!(col.value(0), "deep");
     }
 
     /// A catalogue entry is a promise that the key applies. Four `runtime.*` keys were
@@ -2125,6 +2310,205 @@ mod read_options_tests {
             .await
             .expect("register");
         assert_eq!(names(&meta), vec!["a", "b"]);
+    }
+
+    /// A **type-discriminated union** registers and queries, instead of failing schema inference.
+    ///
+    /// This is the acceptance for `engine::json_poly` at the level that actually matters — through
+    /// `Engine::register` and a real `SELECT`, not just the inference unit tests. Arrow's reader
+    /// fails this file outright with `Expected object json type, found: Array(…)`, naming neither
+    /// the key nor the source. The shape is `sample/config.json`'s, reduced: one key that is a
+    /// string, an object, an array and a bool across records.
+    #[tokio::test]
+    async fn a_polymorphic_json_field_registers_as_text_and_queries() {
+        let d = dir("json_poly");
+        let path = write(
+            &d,
+            "c.json",
+            concat!(
+                r#"{"id": 1, "content": "plain"}"#,
+                "\n",
+                r#"{"id": 2, "content": {"kind": "block"}}"#,
+                "\n",
+                r#"{"id": 3, "content": ["a", true]}"#,
+                "\n",
+                r#"{"id": 4, "content": false}"#,
+                "\n",
+            ),
+        );
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "poly",
+                vec![path],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect("a conflicted field registers");
+        assert_eq!(names(&meta), vec!["content", "id"]);
+        let content = meta
+            .columns
+            .iter()
+            .find(|c| c.name == "content")
+            .expect("content column");
+        assert_eq!(content.dtype, "Utf8", "the conflicted field is text");
+
+        // The values are each record's own JSON, which is what makes the column worth having —
+        // `json_get` reads straight into it.
+        let (out, _) = eng
+            .query(
+                WsId(1),
+                RunTag(1),
+                "SELECT content FROM poly ORDER BY id".into(),
+                10,
+            )
+            .await
+            .expect("query");
+        let cells: Vec<String> = out.rows.iter().map(|r| r[0].text.clone()).collect();
+        assert_eq!(
+            cells,
+            vec![
+                // Quoted: the column holds JSON, so every row of it parses — which is what lets
+                // `json_get` read all of them and stops a string containing JSON from reading
+                // back as the object it resembles.
+                r#""plain""#.to_string(),
+                r#"{"kind":"block"}"#.to_string(),
+                r#"["a",true]"#.to_string(),
+                "false".to_string(),
+            ]
+        );
+    }
+
+    /// An empty JSON object stays an empty struct, end to end.
+    ///
+    /// It was briefly coerced to text, because parquet cannot write a zero-field struct
+    /// (`Parquet does not support writing empty structs`) and `sample/config.json` has 19,159 of
+    /// them — a storage workaround wearing an inference rule's clothes. The snapshot is Arrow IPC
+    /// now, which stores one, so the reader can say what the source actually contains.
+    #[tokio::test]
+    async fn an_empty_json_object_stays_an_empty_struct() {
+        let d = dir("json_poly_empty_obj");
+        let path = write(&d, "t.json", "{\"id\": 1, \"tags\": {}}\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "t",
+                vec![path],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect("register");
+        let tags = meta
+            .columns
+            .iter()
+            .find(|c| c.name == "tags")
+            .expect("tags column");
+        assert!(
+            tags.dtype.starts_with("Struct"),
+            "an empty object is an empty struct, not text: {}",
+            tags.dtype
+        );
+
+        // And it survives the snapshot, which is the half parquet could not do.
+        let (out, _) = eng
+            .query(WsId(1), RunTag(1), "SELECT * FROM t".into(), 10)
+            .await
+            .expect("an empty struct reaches the grid");
+        assert_eq!(out.total, 1);
+    }
+
+    /// A conflict that spans **files** is the same conflict. It used to fail registration:
+    /// `infer` ran per file and the results were folded with arrow's `Schema::try_merge`, whose
+    /// `Field::try_merge` hard-errors on Struct-vs-Utf8 — so the feature worked inside one file
+    /// and not across two, and the single-file test above could not see it.
+    #[tokio::test]
+    async fn a_conflict_across_files_registers_too() {
+        let d = dir("json_poly_multifile");
+        write(&d, "a.json", "{\"id\": 1, \"content\": \"text\"}\n");
+        write(&d, "b.json", "{\"id\": 2, \"content\": {\"k\": 1}}\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "shards",
+                vec![format!("{}/", d.to_string_lossy())],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect("a conflict across files registers");
+        let content = meta
+            .columns
+            .iter()
+            .find(|c| c.name == "content")
+            .expect("content column");
+        assert_eq!(content.dtype, "Utf8");
+    }
+
+    /// `infer_rows` of 0 is not a sample size, it is a schema with no columns. Left to run it
+    /// registered the table **successfully** with zero columns — a green catalog row whose every
+    /// query fails with "No field named". The Configure window floors it at 1; a hand-edited
+    /// `project.json` reaches the engine directly.
+    #[tokio::test]
+    async fn zero_infer_rows_is_refused_rather_than_registering_no_columns() {
+        let d = dir("json_poly_zero_infer");
+        let path = write(&d, "t.json", "{\"a\": 1}\n");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "t",
+                vec![path],
+                SourceFormat::Json(JsonRead {
+                    infer_rows: Some(0),
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect_err("zero is not a sample size");
+        assert!(err.contains("at least 1"), "{err}");
+    }
+
+    /// A small `datafusion.execution.batch_size` must not lose rows.
+    ///
+    /// It did: the opener fed records into a decoder and discarded `Decoder::decode`'s returned
+    /// byte count, but arrow stops consuming once `batch_size` objects are buffered and expects
+    /// the tail to be re-fed. Measured before the fix — 50 rows in, **4 rows out**, no error.
+    /// `batch_size` is a catalogued, user-settable Engine key whose own description invites
+    /// lowering it.
+    #[tokio::test]
+    async fn a_small_batch_size_does_not_drop_rows() {
+        let d = dir("json_poly_batch");
+        let body: String = (0..50).map(|i| format!("{{\"i\": {i}}}\n")).collect();
+        let path = write(&d, "rows.json", &body);
+
+        for size in ["8192", "4"] {
+            let mut ov = BTreeMap::new();
+            ov.insert(
+                "datafusion.execution.batch_size".to_string(),
+                size.to_string(),
+            );
+            let eng = Engine::new(ov);
+            eng.register(spec(
+                "rows",
+                vec![path.clone()],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect("register");
+
+            let (out, _) = eng
+                .query(
+                    WsId(1),
+                    RunTag(1),
+                    "SELECT count(*) AS n FROM rows".into(),
+                    10,
+                )
+                .await
+                .expect("query");
+            assert_eq!(out.rows[0][0].text, "50", "batch_size={size} lost rows");
+        }
     }
 
     /// The option the canvas never had: a whole-document JSON array is readable, and the

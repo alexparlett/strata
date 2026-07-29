@@ -8,13 +8,13 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::stats::Precision;
 use datafusion::common::ScalarValue;
-use datafusion::functions::math::log;
 use datafusion::prelude::*;
 
 use strata_model::{
-    ColumnInfo, CsvRead, FileCompression, JsonRead, JsonShape, Kind, SourceFormat, Stat, StatKey,
+    ColumnInfo, CsvRead, FileCompression, JsonShape, Kind, SourceFormat, Stat, StatKey,
 };
 
+use crate::engine::json_poly::PolyJsonFormat;
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
@@ -90,7 +90,7 @@ pub async fn register_external(
     // nothing about it.
     let fmt: Arc<dyn FileFormat> = match &spec.format {
         SourceFormat::Csv(o) => Arc::new(csv_format(o)?),
-        SourceFormat::Json(o) => Arc::new(json_format(o)),
+        SourceFormat::Json(o) => Arc::new(PolyJsonFormat::new(o.clone())),
         SourceFormat::Arrow => Arc::new(ArrowFormat),
         SourceFormat::Parquet => Arc::new(ParquetFormat::default().with_skip_metadata(true)),
         SourceFormat::Unknown(name) => {
@@ -298,21 +298,20 @@ fn csv_format(o: &CsvRead) -> Result<datafusion::datasource::file_format::csv::C
     Ok(fmt)
 }
 
-/// Dress a `JsonFormat` in the def's options.
-fn json_format(o: &JsonRead) -> datafusion::datasource::file_format::json::JsonFormat {
-    use datafusion::datasource::file_format::json::JsonFormat;
-
-    let mut fmt = JsonFormat::default()
-        .with_newline_delimited(o.shape == JsonShape::NewlineDelimited)
-        .with_file_compression_type(compression(o.compression));
-    if let Some(rows) = o.infer_rows {
-        fmt = fmt.with_schema_infer_max_rec(rows);
-    }
-    fmt
-}
+// The JSON arm above is `json_poly::PolyJsonFormat`, not arrow's `JsonFormat`.
+//
+// Arrow's schema inference admits five type combinations and errors on every other pair, so a
+// field that is a string in one record and an object in the next fails the whole registration —
+// `Expected object json type, found: Array(Scalar({Utf8, Boolean}))`, naming neither the key nor
+// the file. Ours stringifies exactly those paths and infers everything else identically, so it is
+// a superset rather than a behaviour change (`json_poly::infer`, asserted against arrow's own
+// inference in that module's tests).
+//
+// The def's options are carried by the format itself, so there is no `json_format` dresser left:
+// `PolyJsonFormat::new` takes the whole `JsonRead`.
 
 /// Our compression vocabulary as DataFusion's.
-fn compression(
+pub(super) fn compression(
     c: FileCompression,
 ) -> datafusion::datasource::file_format::file_compression_type::FileCompressionType {
     use datafusion::datasource::file_format::file_compression_type::FileCompressionType as F;
@@ -427,22 +426,13 @@ fn json_shape_error(spec: &TableSpec, raw: &str) -> Option<String> {
         });
     }
 
-    // Schema inference gives up when one field holds different JSON shapes across records — an
-    // array of scalars in one, an object in another — so no single schema fits. The tail after
-    // `found:` is arrow's internal `InferredType` debug (`Array(Scalar({Utf8, Boolean}))`), not
-    // data the user typed and nothing they can act on, so it is dropped rather than shown. This
-    // is a conflict in the file itself, not the JSON shape, so the shape advice is omitted.
-    const CONFLICT: [&str; 3] = [
-        "Expected object json type, found:",
-        "Expected array json type, found:",
-        "Expected scalar or scalar array JSON type, found:",
-    ];
-    if CONFLICT.iter().any(|p| detail.starts_with(p)) {
-        return Some(format!(
-            "Cannot read '{name}' as JSON: a field has more than one type across records, \
-             so no single schema fits."
-        ));
-    }
+    // Note for anyone reading the history: main briefly translated arrow's
+    // `Expected object json type, found: …` family here, into "a field has more than one type
+    // across records". That message is unreachable on this branch — `engine::json_poly` replaced
+    // arrow's JSON inference outright and *handles* the conflict rather than failing on it, so
+    // nothing can produce the string. The arm was dropped in the merge rather than kept as a
+    // translation for an error that cannot occur (and a test over a hardcoded `raw` string that
+    // would pass forever regardless).
 
     let syntax = detail
         .strip_prefix("Not valid JSON: ")
@@ -768,6 +758,8 @@ fn parse_dtype(label: &str) -> DataType {
 
 #[cfg(test)]
 mod tests {
+    use strata_model::JsonRead;
+
     use super::*;
 
     /// Every `raw` below is a **measured** string: what `Engine::register` actually
@@ -924,23 +916,29 @@ mod tests {
         );
     }
 
+    /// The conflict main translated is now **read**, not reported. This is the replacement for
+    /// `a_field_with_conflicting_types_is_named_as_a_schema_conflict`: rather than asserting the
+    /// wording of an error, assert that the case producing it registers.
+    /// (`engine::tests::a_polymorphic_json_field_registers_as_text_and_queries` is the end-to-end
+    /// version, through `Engine::register` and a real `SELECT`.)
     #[test]
-    fn a_field_with_conflicting_types_is_named_as_a_schema_conflict() {
-        // The measured case for `config.json`: one record has a field as an array of scalars,
-        // another has the same field as an object, so inference can't settle on one schema.
-        // The `found:` tail is arrow's internal `InferredType` debug, never data, and must not
-        // reach the user; the fix is the file, so the shape advice is deliberately absent.
-        let raw = "Arrow error: Json error: Expected object json type, \
-                   found: Array(Scalar({Utf8, Boolean}))";
-        let msg = register_error(&spec("config", &[], "json"), ".json", raw);
+    fn a_field_with_conflicting_types_is_read_rather_than_refused() {
+        use serde_json::json;
+        let schema = crate::engine::json_poly::infer(
+            [
+                json!({"content": "plain"}),
+                json!({"content": {"kind": "block"}}),
+                json!({"content": ["a", true]}),
+            ]
+            .iter(),
+        )
+        .expect("a conflicted field no longer fails inference");
         assert_eq!(
-            msg,
-            "Cannot read 'config' as JSON: a field has more than one type across records, \
-             so no single schema fits."
-        );
-        assert!(
-            !msg.contains("Scalar("),
-            "arrow's internal inferred type never reaches the user"
+            schema
+                .field_with_name("content")
+                .expect("content")
+                .data_type(),
+            &DataType::Utf8
         );
     }
 

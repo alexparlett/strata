@@ -12,8 +12,10 @@ cargo fmt -p strata-freya -p strata-core -p strata-model
 That is the whole thing. Run it from the repo root (or any worktree root).
 
 (`strata-forms` / `strata-forms-macro` were named here until they were deleted in 812afbc, which
-made this command fail outright — `cargo fmt` errors on a `-p` it cannot resolve rather than
-skipping it. See "When the member list changes" below; that check catches this in one command.)
+made this command **fail outright** — `cargo fmt` errors on a `-p` it cannot resolve rather than
+skipping it, so the stale list did not merely miss those two, it formatted *nothing at all*,
+silently, for as long as it was wrong. If this command ever fails that way again, re-derive the
+list from "When the member list changes" below rather than dropping the failing name and hoping.)
 
 ## Never `cargo fmt --all`
 
@@ -73,7 +75,7 @@ cargo +nightly fmt -p strata-code-editor
 
 ## When the member list changes
 
-The command names the five it owns explicitly, which is the point — it cannot silently grow to
+The command names the three it owns explicitly, which is the point — it cannot silently grow to
 include a path dependency. If a crate is added to `members` in the root `Cargo.toml`, add it here
 too. To check the list matches:
 

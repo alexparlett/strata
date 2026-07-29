@@ -216,9 +216,13 @@ impl Default for CsvRead {
 #[serde(default)]
 pub struct JsonRead {
     pub shape: JsonShape,
-    /// Records scanned to infer the schema. `None` = the engine's default. Unlike CSV there is
-    /// no `0` meaning: `JsonFormat::infer_schema` breaks out before reading anything, leaving a
-    /// table with no columns at all — so the surface floors this at 1.
+    /// Records scanned to infer the schema. **`None` = scan every record**, which is the default
+    /// and is deliberate: the reader exists to notice a type conflict, and a capped scan that
+    /// misses one types the column wrong and then fails at *query* time on a table the catalog
+    /// called healthy (`engine::json_poly::format::infer_schema`).
+    ///
+    /// `Some(0)` is refused by the engine — it would infer a schema with no columns — so the
+    /// Configure pane spends 0 as its "scan everything" sentinel and writes `None` for it.
     pub infer_rows: Option<usize>,
     pub compression: FileCompression,
 }
