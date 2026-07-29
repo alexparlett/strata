@@ -331,10 +331,17 @@ impl ConfigureDraft {
     /// `TableDef.partition_cols` has always been format-agnostic. Gating the section would hide
     /// a def's own stored columns the moment its format changed.
     pub fn may_partition(&self, root: &Path) -> bool {
-        // A def that already carries partition columns always shows them, whatever its paths
-        // look like from here — they are the user's decision, and hiding the section would hide
-        // a value that is still being saved.
-        !self.partitions.is_empty()
+        // **Whatever is switched on stays reachable.** The section holds the only control that
+        // can switch it off, so hiding it while `hive_on` is true is a dead end: editing a
+        // partitioned table's path down to a single file clears the detected columns, the
+        // section disappears, and Save is blocked for ever by a switch the user can no longer
+        // see. A control the user can turn on is a control they can turn off.
+        //
+        // A def that already carries partition columns shows them for the same reason, whatever
+        // its paths look like from here — hiding the section would hide a value still being
+        // saved.
+        self.hive_on
+            || !self.partitions.is_empty()
             || self.resolved_sources(root).iter().any(|p| {
                 p.contains('*') || p.contains('?') || p.ends_with('/') || Path::new(p).is_dir()
             })
@@ -964,6 +971,23 @@ mod tests {
         // …replacing the row it was invoked on, not appending blindly.
         draft.set_paths(1, vec!["/x".into()]);
         assert_eq!(draft.sources, vec!["/a", "/x", "/c"]);
+    }
+
+    #[test]
+    fn the_hive_switch_stays_reachable_once_it_is_on() {
+        // Otherwise: a partitioned table whose path is edited down to a single file clears its
+        // columns, the section (which holds the only switch) disappears, and `blocker` refuses
+        // Save for ever.
+        let root = Path::new("/project");
+        let mut draft = ConfigureDraft {
+            sources: vec!["/data/one.parquet".into()],
+            hive_on: true,
+            ..csv_draft()
+        };
+        assert!(draft.may_partition(root), "the switch must stay on screen");
+        assert!(draft.blocker().is_some_and(|b| b.contains("key=value")));
+        draft.hive_on = false;
+        assert!(draft.blocker().is_none(), "and switching it off frees Save");
     }
 
     #[test]

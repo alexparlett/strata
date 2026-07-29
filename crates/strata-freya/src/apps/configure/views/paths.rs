@@ -82,8 +82,12 @@ impl Component for Toolbar {
                     .outlined()
                     .color(win.icon_color)
                     .on_press(move |_| {
+                        // Seeded from the current selection, like the two handlers below: an
+                        // edit refused while a registration is in flight leaves `at` untouched,
+                        // and moving the highlight to row 0 for a row that was never added
+                        // would be the one piece of window state that ignores that refusal.
                         let mut selected = ctx.selected_path;
-                        let mut at = 0;
+                        let mut at = *selected.peek();
                         ctx.edit(|draft| at = draft.add_path());
                         selected.set(at);
                     }),
