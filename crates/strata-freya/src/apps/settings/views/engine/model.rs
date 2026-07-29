@@ -364,7 +364,10 @@ mod tests {
         let mut rows = PropRows::from_map(&map(&[(BATCH, "4096")]));
         let blank = rows.add();
         assert_eq!(rows.to_map(), map(&[(BATCH, "4096")]));
-        assert!(rows.errors().is_empty(), "a row you just added is not a fault");
+        assert!(
+            rows.errors().is_empty(),
+            "a row you just added is not a fault"
+        );
 
         rows.set_value(blank, "8".into());
         assert_eq!(

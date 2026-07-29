@@ -83,9 +83,7 @@ impl Component for Inspector {
                     .spacing(PILL_GAP)
                     .child(Strong::new(row.key()).color(theme.item_active_color))
                     .maybe_child(restart.then(|| Badge::tag("RESTART", warning)))
-                    .maybe_child(
-                        badge.map(|(text, color)| Badge::tag(text, color).outlined()),
-                    ),
+                    .maybe_child(badge.map(|(text, color)| Badge::tag(text, color).outlined())),
             )
             .child(Prose::new(blurb).color(theme.hint_color).wrap())
             .maybe_child(status.def().map(|def| {

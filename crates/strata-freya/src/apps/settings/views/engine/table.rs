@@ -124,9 +124,7 @@ impl Component for HeadRow {
                                 rect()
                                     .width(Size::flex(1.))
                                     .padding(Gaps::new(0., 0., 0., HEAD_INSET))
-                                    .child(
-                                        Control::new("Name").color(theme.item_active_color),
-                                    ),
+                                    .child(Control::new("Name").color(theme.item_active_color)),
                             )
                             .child(Divider::vertical().color(rule)),
                     ),
@@ -287,17 +285,14 @@ impl Component for PropTableRow {
                                 Attached::new(
                                     // The tone is set on the wrapper: `Input` paints no colour of
                                     // its own, so its text takes the ambient one.
-                                    rect()
-                                        .width(Size::flex(1.))
-                                        .color(name_color)
-                                        .child(
-                                            ValueField::new(name)
-                                                .bare()
-                                                .placeholder("datafusion.")
-                                                .height(Size::px(ROW_HEIGHT))
-                                                .width(Size::fill())
-                                                .a11y_id(a11y_id),
-                                        ),
+                                    rect().width(Size::flex(1.)).color(name_color).child(
+                                        ValueField::new(name)
+                                            .bare()
+                                            .placeholder("datafusion.")
+                                            .height(Size::px(ROW_HEIGHT))
+                                            .width(Size::fill())
+                                            .a11y_id(a11y_id),
+                                    ),
                                 )
                                 .bottom()
                                 .align_start()
