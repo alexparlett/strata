@@ -1134,9 +1134,15 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
             SessionContext::new_with_config(config)
         }
     };
-    // The Postgres-style JSON accessors (`json_get`, `->`, `->>`, `?`) over a Utf8 column of JSON
+    // The Postgres-style JSON accessors (`json_get`, `->`, `->>`) over a Utf8 column of JSON
     // text. They belong to the **engine**, not to a table: `json_get('{"a":1}', 'a')` is valid
     // with nothing registered, so this sits beside the catalog naming rather than in `catalog`.
+    //
+    // The crate also registers `?` as an alias for `json_contains`, and it is **unreachable from
+    // SQL under our default dialect**: `GenericDialect` omits `Token::Question` from
+    // `get_next_precedence`, so `doc ? 'a'` fails to parse before the operator is ever consulted.
+    // `json_contains` is the spelling that works everywhere (WJ-04 is whether to move the
+    // default to postgres, which does parse it).
     //
     // Warned rather than fatal because the failure cannot be silent — a registration that did
     // not happen surfaces as "Invalid function 'json_get'" on the first query that needs one,
