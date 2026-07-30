@@ -147,12 +147,27 @@ src/platform/open.rs             **where** an open lands, vs windows.rs's *how*:
                                  acting is split off (`OpenTarget`) because the menubar handler
                                  has a RendererContext and no Platform
 src/platform/export.rs           where an Export window goes: a native child of the project
-                                 window that asked, gone when that window goes — and pointedly
-                                 **not** single-instance. Settings shows app-wide state so a
-                                 second ⌘, can only mean focus; an export window is opened *on a
-                                 result* and carries that run's snapshot, so focusing an open one
-                                 would show the wrong run. One per press of Download, each
-                                 closing itself when its write lands
+                                 window that asked — and pointedly **not** single-instance.
+                                 Settings shows app-wide state so a second ⌘, can only mean focus;
+                                 an export window is opened *on a result* and carries that run's
+                                 snapshot, so focusing an open one would show the wrong run. One
+                                 per press of Download, each closing itself when its write lands
+src/platform/configure.rs        where a Configure window goes: the same native child, keyed
+                                 **one per target** — it is opened on a *def*, which is shared
+                                 mutable state, so two windows on one def would both write it and
+                                 the second would revert the first. Between the other two rules:
+                                 Settings is app-wide (a second ask means focus), Export has no
+                                 rule at all
+src/platform/owner.rs            P4-16 — **how long a child window may live**: not as long as the
+                                 window it sits above, but as long as the *mount* of `ProjectRoot`
+                                 whose handles it borrowed. `Subtree` is that mount's own diff key
+                                 (folder + engine generation) plus the live `EngineRestart` to read
+                                 the generation back; `ProjectRoot` provides it, so no opener can
+                                 assemble a mismatched trio, and `use_owner_pin` is the one
+                                 predicate both Export and Configure close on. A re-root changes
+                                 the folder, a restart changes neither it nor the window id — and
+                                 an owner that has closed shows nothing, so it fails the same
+                                 comparison rather than needing a clause
 src/menu.rs                      the macOS menubar: App · **File** (Open… · Open Recent ·
                                  Close Project) · Edit. Not static — `app_menu` hands back
                                  `MenuHandles`, and the *focused* window keeps the File menu
@@ -642,6 +657,22 @@ this window**: `Row::anchor` names it, `components::form::reveal` carries the as
 slot, because it is written before the target's page has mounted, plus the page-lived scroll frame),
 and the row scrolls itself in and flashes once — the app's first use of `freya::animation` and of
 `ScrollController::scroll_to_item` outside the tab strip.
+
+**P4-16 (child-window lifetimes)** is ✅, and settles what a child window is actually pinned to:
+**not the window it sits above, but the mount of `ProjectRoot` whose handles it borrowed.** Export
+and Configure carry that subtree's store, log, catalog and scan counter as launch values — all
+`GenerationalBox`-backed — and both things that remount the subtree free them while leaving the
+owner window open under the same id. A re-root changes the folder, which the Configure pin happened
+to catch; an engine restart (P4-07) changes neither, and nothing caught that, so the next repaint
+panicked on a reclaimed box and a Save wrote into a store nothing was left to serve. The fix is one
+value and one predicate (`platform/owner.rs`): `Subtree` is the subtree's own diff key plus the live
+`EngineRestart`, **provided by `ProjectRoot`** so no opener can assemble a mismatched trio, and
+`use_owner_pin` replaces the two near-verbatim pins. Three things it settled. An owner that has
+closed *shows nothing*, so it fails the same comparison — one predicate, not three clauses. The
+generation is the one handle safe to hold across a remount, for exactly the reason it exists (owned
+by `ProjectApp`, above the subtree). And `WindowKind` now carries **less**: `Configure`'s `project`
+and `Export`'s `owner` were the old pins' inputs, so once the pin read its owner from the launch
+value they were unread second copies of a fact that could go stale.
 
 ---
 

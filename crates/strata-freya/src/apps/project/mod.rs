@@ -15,6 +15,11 @@ mod views;
 
 pub use close::{CloseGuard, CloseTarget};
 pub use project::ProjectApp;
+/// The window's engine generation — for [`platform::owner`](crate::platform::owner), which
+/// bounds a child window's life by the mount of this window's project subtree that it borrowed
+/// its handles from. Safe for a child to hold precisely because it is owned by the *window*
+/// rather than by that subtree, so it survives the remount it causes.
+pub use state::EngineRestart;
 /// The window's event log (P3-13), for the Export window: it is a separate OS window, so it
 /// carries the handle as a launch value and records its outcome into the project window's log
 /// — which is where the user is looking when the export window has closed itself.

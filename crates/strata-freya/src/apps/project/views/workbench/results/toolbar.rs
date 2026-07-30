@@ -6,7 +6,7 @@ use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::InputTypography;
 use crate::keymap::use_hint_title;
-use crate::platform;
+use crate::platform::open_export;
 use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -228,13 +228,7 @@ impl Component for ResultsToolbar {
                     .enabled(export.is_some())
                     .on_press(move |_| {
                         if let Some(launch) = export.clone() {
-                            platform::open_export(
-                                platform.clone(),
-                                launch.app,
-                                launch.engine,
-                                launch.target,
-                                launch.log,
-                            );
+                            open_export(platform.clone(), launch);
                         }
                     }),
             ));
