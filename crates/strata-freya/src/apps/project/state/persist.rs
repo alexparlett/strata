@@ -364,8 +364,6 @@ mod tests {
     }
 
     /// The session write P4-14 left reporting through `tracing` alone: a failure is now an
-    /// **event**, and answers `false` — which is what makes the autosave decline to record the
-    /// The session write P4-14 left reporting through `tracing` alone: a failure is now an
     /// **event** *and* a held condition, and answers `false` — which is what makes the autosave
     /// decline to record the snapshot as written, so the next change tries again instead of
     /// believing the file current.
