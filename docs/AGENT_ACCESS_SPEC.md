@@ -16,6 +16,11 @@ UI seam the MCP server does, so nothing built for the first frontend is discarde
 
 ## 1. Direction (decided)
 
+> **What is built vs. what is decided.** AA-03 shipped the seam and the vocabulary; AA-03b is
+> **decided and not yet built**, and it is what moves an agent's runs off the user's tabs. Where
+> the two differ, the bullets below say which is which, and §5's table is always the tools that
+> are actually being served today.
+
 - **Agent queries are ordinary runs** — same engine, same materialization, same
   supersede/retire, same snapshot the user can page, sort, export or take over. That half is
   settled and is what makes this better than a generic read-only-SQL MCP server (§2).
@@ -28,16 +33,16 @@ UI seam the MCP server does, so nothing built for the first frontend is discarde
   History drawer's gesture. The chat pane (§9) is the opposite case and keeps the tab gesture,
   because it is in the window and the user is looking at it. See
   `.claude/tasks/workstream-agent-access/AA-03b-agents-pane.md`.
-- **Agent-managed query sessions**, not one-per-query and not one reused. The vocabulary exposes
-  `open_query_session` / `run(query_session, sql)` / `read_page` / `close_query_session` /
-  `list_query_sessions`, so the agent works them like a person works tabs: scratch iterates in
-  one, findings get parked each in their own. A **query session** is deliberately not called a
-  "session" — MCP's own `Mcp-Session-Id` is an agent's *connection* and ours
-  (`SessionState` / `session.json`) is the window's tabs — nor a "tab", which it no longer is. It
-  maps onto the engine's `WsId`.
-- **The user's tabs are the user's.** An agent never opens, focuses or closes one. Anything of
-  the agent's the user wants, they promote — which is an ordinary press, with its own nonce and
-  its own cache entry.
+- **Agent-managed handles**, not one-per-query and not one reused: the agent opens them, runs in
+  them and closes them, so scratch iterates in one and findings get parked each in their own.
+  Today those handles are **tabs** (`open_tab` / `run(tab, sql)` / `close_tab` — §5). *AA-03b
+  renames them to* **query sessions**, deliberately not "sessions" — MCP's own `Mcp-Session-Id`
+  is an agent's *connection*, and ours (`SessionState` / `session.json`) is the window's tabs —
+  and not "tabs", which they will no longer be. A query session maps onto the engine's `WsId`.
+- **The user's tabs will be the user's** *(AA-03b)*: an agent will never open, focus or close
+  one, and anything of the agent's the user wants they promote — an ordinary press, with its own
+  nonce and its own cache entry. **Today an agent does open tabs**, though `open_background`
+  already keeps it from stealing focus.
 - **Read-only v1**, the editor's managed-DDL policy exactly: queries / `EXPLAIN` / `SHOW` /
   `DESCRIBE` pass; everything else is refused with the same message the editor shows. No table
   registration, no view creation, no export, and **no profiling** (§6). The vocabulary is shaped
@@ -209,11 +214,18 @@ MCP conventions; responses are structured JSON.
 | `describe_table(name)` | control | Schema (column name, type, nullable), row count when known, partition columns, source + format — **only real facts** (P3-08): what registration read, never derivations. |
 | `list_functions` | data | The engine's live `FunctionCatalog` — names, signatures, docs. What's registered is what exists (no second list). |
 | `validate(sql)` | data | `Engine::validate` — lexical lints + policy verdicts + dry-plan diagnostics, never executes. The cheap way for an agent to check SQL before burning a run. |
-| `open_query_session()` | control | Opens a query session — the agent's own place to run, shown in the Agents pane and **not** a tab in the user's window (§1, AA-03b). Returns its handle. |
-| `list_query_sessions()` | control | The agent's open query sessions: handle, and whether a run is settled/in flight. |
-| `run(query_session, sql, mode?, page_size?)` | control | The policy gate (§6), then a real run on that session's `WsId` — same engine, same materialization, same supersede/retire as a human press. Returns columns, page-1 rows, exact total, elapsed. `mode` = `run` (default) \| `explain` (returns the plan tree, materializes nothing). `page_size` bounded (default: the app's default row limit setting; capped at `MAX_PAGE_SIZE` = 10000, and the response reports the size actually used). |
-| `read_page(query_session, page, sort?)` | data | Pages that session's last settled snapshot via `Engine::fetch_page` — snapshot-scoped, side-effect free, at the page size that `run` settled with. A snapshot retired by a newer run in the same session fails cleanly: "result was replaced; re-run" (§7). |
-| `close_query_session(query_session)` | control | Ends it; a run still in flight is cancelled the ordinary way. |
+| `open_tab()` | control | Opens a real `QueryTab`; returns the tab handle (its `TabId`). |
+| `list_tabs()` | control | Open tabs: handle, title, whether a run is settled/in flight. |
+| `run(tab, sql, mode?, page_size?)` | control | The policy gate (§6), then an ordinary press: sets the tab's `QuerySpec` and awaits settle. Returns columns, page-1 rows, exact total, elapsed. `mode` = `run` (default) \| `explain` (returns the plan tree, materializes nothing). `page_size` bounded (default: the app's default row limit setting; capped at `MAX_PAGE_SIZE` = 10000, and the response reports the size actually used). |
+| `read_page(tab, page, sort?)` | data | Pages the tab's last settled snapshot via `Engine::fetch_page` — snapshot-scoped, side-effect free, at the page size that `run` settled with. A snapshot retired by a newer run in that tab fails cleanly: "result was replaced; re-run" (§7). |
+| `close_tab(tab)` | control | Closes the tab (through the same close funnel the UI uses — a running press is cancelled the ordinary way). |
+
+> **AA-03b renames the last five, and has not landed.** The table above is what
+> `crates/strata-agent/src/tools.rs` actually serves today — build against these names. Once
+> AA-03b moves an agent's runs off the user's tabs (§1), `open_tab` / `list_tabs` /
+> `close_tab` become `open_query_session` / `list_query_sessions` / `close_query_session`, and
+> the `tab` parameter on `run` and `read_page` becomes `query_session`. Only the names and the
+> surface change; the plane, the gate and the semantics below are the same either way.
 
 Notes that are rules, not details:
 
@@ -225,15 +237,18 @@ Notes that are rules, not details:
 - **`run` never rewrites SQL.** No injected `LIMIT`: the run materializes exactly what the user's
   own press would (same cost, same snapshot), and the *response* is bounded by `page_size` +
   paging. Totals are always exact (the snapshot knows).
-- **`run` reuses a query session the way a press reuses a tab**: dispatch supersedes whatever
-  that session had in flight and retires its previous snapshot. That is the point — agent
-  semantics *are* app semantics, on a surface of the agent's own.
-- **Nothing an agent does reaches disk.** `session.json` cannot hold it (an agent owns no tabs),
-  and `.strata/history.jsonl` deliberately does not: history is capped and deduped *before* the
-  cap, so exploratory agent queries would evict the runs the user actually made. The Agents
-  pane is the agent's record and is ephemeral, like the event log; history stays the user's. A
-  query the user **promotes** and runs enters history the ordinary way, which is the honest
-  rule — history records what the user ran.
+- **`run` reuses its handle the way a press reuses a tab**: dispatch supersedes whatever that
+  handle had in flight and retires its previous snapshot. That is the point — agent semantics
+  *are* app semantics. (Today the handle *is* a tab; after AA-03b it is a query session on a
+  surface of the agent's own. The supersede rule is unchanged either way.)
+- **After AA-03b, nothing an agent does reaches disk** — `session.json` cannot hold it (an agent
+  will own no tabs), and `.strata/history.jsonl` deliberately will not: history is capped and
+  deduped *before* the cap, so exploratory agent queries would evict the runs the user actually
+  made. The Agents pane is the agent's record and is ephemeral, like the event log; history
+  stays the user's. A query the user **promotes** and runs enters history the ordinary way,
+  which is the honest rule — history records what the user ran. **Today this is not yet true**:
+  an agent run rides a real tab, so it persists in `session.json` and its tab's request keeper
+  records it in history. That is one of the four costs AA-03b exists to remove (§1).
 - **`explain` goes over the wire as text.** `QueryPlan`'s structured `PlanNode` list exists to
   be *drawn* (it carries accent colours and time-share bars); off-screen it would be the same
   tree twice, one copy in a shape nothing can use. `run(mode: "explain")` answers with
@@ -322,7 +337,7 @@ What lives where — nothing here adds state to the session or project stores:
 | Agent keepers (settle observers) | the window, per parked ask | The `RequestKeepers` pattern, verbatim. |
 | Tabs, requests, snapshots, history, events | **unchanged** | Agent runs are ordinary presses; nothing new is stored anywhere. |
 | ~~`QueryTab::agent`~~ | — | AA-03's badge on an agent-driven tab, built and then removed: an agent opens no tabs, so there is no tab to mark (§11). |
-| The agent's run trail (what the Agents pane shows) | `state::agents`, a satellite | Ephemeral and capped, like `state::log` — **never** `SessionState`, so it cannot reach `session.json`, and **never** `history.jsonl`, which stays the user's. |
+| The agent's run trail (what the Agents pane shows) — **AA-03b, not built** | `state::agents`, a satellite | Ephemeral and capped, like `state::log` — **never** `SessionState`, so it cannot reach `session.json`, and **never** `history.jsonl`, which stays the user's. |
 | Whether a client is paired (the header dot) | rmcp's `LocalSessionManager`, **sampled** | The one polled thing in the app, because the fact is rmcp's and a session is created below our seam. `AgentServer::clients` is a non-blocking `try_read`; the dot mounts its timer only while the setting is on. Over-reports for at most `keep_alive` (5 min) after a client dies without its `DELETE`, and never under-reports. |
 | `agent_access` settings (enabled, port, token) | app config (`Settings`) | Via `settings_merge!` — a new field that isn't merged is a build error. |
 
@@ -371,7 +386,9 @@ For app-closed use (CI, scripts, a second machine): the same binary, a CLI branc
   cache entry. Deferred until wanted — the free tier may be enough.
 - ~~**Agent-tab marker.**~~ **Dissolved by AA-03b.** It was built (an `AGENT` badge on the editor
   toolbar, set by the bridge and retracted by the user's own press) and then removed with the
-  premise underneath it: an MCP agent opens no tabs, so there is no tab to mark. The question was
+  premise underneath it: once AA-03b lands an MCP agent opens no tabs, so there is no tab to
+  mark — and removing the badge ahead of that surface was the cheaper order, since 03b deletes
+  the tab landing it marked. The question was
   always a symptom — needing a badge to say "this tab isn't really yours" is the tell that the
   tab should not have been the user's in the first place.
 - **MCP resources** (schema-as-resources beside the tools) — revisit when a client benefits.
