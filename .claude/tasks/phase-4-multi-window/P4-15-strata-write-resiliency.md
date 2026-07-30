@@ -1,6 +1,6 @@
 # P4-15 · `.strata` write resiliency — one funnel, nothing silent
 
-**Phase:** 4 · **Status:** 🟡 **the funnel + every silent writer done (items 1·2·5·7); the standing condition and the destructive-case decision remain (items 3·4)** · **DEV_TASKS:** project lifecycle · **Depends on:** P4-13, P4-14, P3-13
+**Phase:** 4 · **Status:** ✅ *(item 8 — one wording pass shared with P4-01 item 5 — waits on that task)* · **DEV_TASKS:** project lifecycle · **Depends on:** P4-13, P4-14, P3-13
 
 > **🟡 Landed (2026-07-30): nothing is silent any more.** The funnel moved to
 > `state::persist` and grew to cover all three families; the four writers that reported through
@@ -129,25 +129,61 @@ What a silent failure costs, per mutation (worked through in the P3-13 session):
 2. ✅ **Make the config write reportable.** `strata_core::config::save` must return its `Result` and
    `write_config` must act on it. A sole-write-path funnel that cannot fail-report is a hole in
    the invariant, not a simplification.
-3. ⬜ **A standing condition, not just an event.** A failed write is a *state* (the file is behind and
-   stays behind), so a log row alone under-reports it: the row scrolls away while the condition
-   holds. Add one persistent indication, cleared by the next successful write — the status bar
-   already has the state dot this shape belongs on (`views/workbench/results/status_bar.rs`), and
-   the Events row stays as the record of when it happened. **Do not** stack a second message
-   restating the row (AGENTS.md §3).
+3. ✅ **A standing condition, not just an event.** A failed write is a *state* (the file is behind
+   and stays behind), so a log row alone under-reports it: the row scrolls away while the
+   condition holds. One persistent indication, cleared by the next successful write; the Events
+   row stays as the record of when it happened, and nothing stacks a second message restating it
+   (AGENTS.md §3).
 
-   Check what that dot currently *is* before reaching for it: it renders `ResultsState`
-   (`Running` → warning, `Grid`/`Chart` → success, `Error` → error), i.e. the state of the run
-   being displayed, and it lives in the results footer — which is per-window but reads as
-   per-*result*. A persist failure is neither. Decide whether it takes that dot over, sits beside
-   it, or belongs on a different piece of chrome entirely; the point of the item is the standing
-   condition, not that particular glyph.
-4. ⬜ **Decide the destructive case.** A drop whose write fails leaves the store and disk out of step
-   and reverts on reopen. Either snapshot the section and roll it back on failure, or state
-   plainly that we don't and let the log and the indicator carry it. Today it is the latter *by
-   default rather than by decision* — pick one and record the reasoning here. Note the constraint:
-   `save_defs` writes `self.defs()`, a **pure projection of the store**, so the store must change
-   before there is anything to write; "write first, then mutate" is not available.
+   **Built as the Problems drawer's `Project` scope, not the status bar.** The item nominated the
+   status-bar dot and then said the quiet part itself — *"the point of the item is the standing
+   condition, not that particular glyph"* — which is what settled it. That dot renders
+   `ResultsState` and lives in the results footer: per-window, but reading as per-*result*. A
+   persist failure is neither, so taking the glyph over would have made one surface answer two
+   unrelated questions.
+
+   What landed instead satisfies the requirement more completely than a dot would have:
+
+   - **`PersistFaults`** holds the condition — a row per file that is behind, retracted by the
+     next successful write to it, which is exactly "cleared by the next successful write".
+   - **The rail badge totals it** with the SQL errors, so the condition is visible *without
+     opening anything* — the property a drawer row alone would not have had.
+   - **The Events row is untouched**, still the record of when it started (and only the
+     transition, so a repeating writer cannot bury the log).
+
+   It also pays for itself twice, which the dot would not have: registration failures moved onto
+   the same surface, where before they were visible only as a triangle on one catalog row plus an
+   event that scrolled away.
+4. ✅ **The destructive case: a drop whose write fails is rolled back.**
+
+   A drop is the only mutation whose silent failure **resurrects** what the user destroyed — the
+   row leaves the catalog, `project.json` still lists it, and it is back at the next open. A
+   destructive action they deliberately confirmed, undone later with nothing said.
+
+   It is also the only one that *can* be rolled back, which is what decided it rather than taste.
+   `save_defs` writes `self.defs()`, a pure projection, so "write first, then mutate" is not
+   available — but that only fixes the *order*, not the outcome: at the moment the write fails
+   nothing else has happened yet. Every arm of `drop_row` mutates the store and persists inside
+   one guard, and the engine and session calls all come after. So the removal hands the row back
+   (`remove_table`/`remove_view`/`remove_saved_query` now return it and its slot) and a failed
+   write puts it exactly back **inside that same guard** — subscribers see one notification
+   carrying the original state, never a row that vanishes and returns.
+
+   Returning the row rather than cloning the section is the load-bearing detail: it keeps `Clone`
+   off `TableRow`/`ViewRow`/`Reg`, and it restores the **registration state** too. A row that came
+   back as `Reg::Loading` would spin in the catalog forever, because nothing is going to answer
+   for it.
+
+   **The policy is "roll back what can be rolled back", not "mutations are atomic"** — and the
+   asymmetry is deliberate rather than an oversight. `save_view` genuinely cannot: `CREATE OR
+   REPLACE VIEW` has already succeeded on the engine, so the view is live and queryable for the
+   rest of the session, and undoing it needs a second fallible engine call. The two situations
+   differ in what has already become true. Item 3's `Project` scope carries the other half either
+   way, naming the file that is behind for as long as it is.
+
+   Covered by `drop_confirm`'s `a_drop_whose_project_write_fails_is_rolled_back`,
+   `a_rolled_back_drop_keeps_the_catalogs_order` (the row returns to its slot, not the end) and
+   `a_dropped_query_whose_write_fails_stays_in_the_catalog` (the arm with no engine at all).
 5. ✅ **Settle the two writers that report *directly*** — the export (P4-10) and the history Clear
    (P3-14). Both call `log_event` themselves rather than going through the funnel, each because
    the funnel did not exist when they were written, and P4-10's own file said to route through
@@ -186,12 +222,13 @@ What a silent failure costs, per mutation (worked through in the P3-13 session):
 - [x] `strata_core::config::save` returns its `Result`; `write_config` handles it.
 - [x] With a read-only `.strata/`: a save, a drop, a rename, a session autosave and a history
       append each surface the failure, and no success is claimed for any of them.
-- [ ] The failure is visible for as long as it holds, not only in the moment it happened.
-      **(Item 3 — the one piece of the goal still missing.** Every writer now records an *event*;
-      none of them leaves a standing mark, so a failure that holds all session is still only as
-      visible as one row in a scrolling list. It is also what the final session save and the eight
-      bookkeeping config writes are waiting on — see the landed note.)
-- [ ] The destructive-case decision (build item 4) is implemented and its reasoning is in this file.
+- [x] The failure is visible for as long as it holds, not only in the moment it happened — the
+      Problems drawer's `Project` scope holds the condition and the rail badge totals it, so it
+      reads without opening anything and retracts on the next successful write (item 3).
+      **One case it cannot cover:** the *final* session save on close records into a log and a
+      store that are dropped with their window a moment later. That is not an indicator problem —
+      there is no "while it holds" for a window that is going away — and it is filed with P4-16.
+- [x] The destructive-case decision (build item 4) is implemented and its reasoning is in this file.
 - [x] Tests cover a write failure per family (defs · session · history) —
       `drop_confirm`'s `a_drop_whose_project_write_fails_is_logged_as_the_failure` (P3-13) is the
       pattern: chmod the directory `0o500`, act, assert; `state::persist::tests` follows it for

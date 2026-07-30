@@ -61,7 +61,7 @@ The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebu
 | P4-11 | Configure-table window (register / edit + import options) | ✅                                                                                                                          | U14/D7/D8 | — |
 | P4-13 | Open / create a project (`.strata/` load) | ✅ *(the "New Project UI" it was holding open isn't a thing the design has — Open creates if missing; see the file)* | lifecycle | P4-01 |
 | P4-14 | Session persistence + autosave | ✅ *(layout landed with P3-01 on `SessionState` rather than as its own store, so it rode the autosave already built)* | lifecycle | P4-13 |
-| P4-15 | `.strata` write resiliency (one funnel, nothing silent) | 🟡 funnel + every silent writer done; the standing condition (item 3) and the destructive-case decision (item 4) remain | lifecycle | P4-13, P4-14, P3-13 |
+| P4-15 | `.strata` write resiliency (one funnel, nothing silent) | ✅ *(item 8's shared wording pass waits on P4-01 item 5)* | lifecycle | P4-13, P4-14, P3-13 |
 | P4-16 | Child-window lifetimes across an engine restart | ⬜                                                                                                                          | — | P4-10, P4-11 |
 
 ## Legend

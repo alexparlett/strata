@@ -308,6 +308,26 @@ impl Component for DropConfirm {
 /// persist it first, then tell the engine. A table's dependent views turn invalid on the same
 /// write, because their validity is derived from the live table rows (P3-04) and the VIEWS
 /// section subscribes to [`ProjChan::Tables`] for exactly this.
+///
+/// ## A drop whose write fails is rolled back (P4-15 item 4)
+///
+/// Of every mutation that writes `project.json`, the drop is the only one whose silent failure
+/// **resurrects** what the user destroyed: the row leaves the catalog, the file still lists it,
+/// and it is back at the next open — a destructive action they deliberately confirmed, undone
+/// later with nothing said.
+///
+/// It is also the only one that *can* be rolled back, which is what decides it. At the moment
+/// the write fails nothing else has happened yet: every arm mutates the store and persists
+/// inside one guard, and the engine and session calls all come after. So the section is
+/// snapshotted, and a failed write puts it back **inside that same guard** — subscribers see one
+/// notification carrying the original state, never a row that vanishes and returns.
+///
+/// The policy is therefore "roll back what can be rolled back", not "mutations are atomic".
+/// `save_view` genuinely cannot: `CREATE OR REPLACE VIEW` has already succeeded on the engine, so
+/// the view is live and queryable for the rest of the session and undoing it needs a second
+/// fallible engine call. That asymmetry is deliberate — the two situations differ in what has
+/// already become true — and the Problems drawer's `Project` scope carries the other half either
+/// way, naming the file that is behind for as long as it is.
 fn drop_row(
     engine: &EngineCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
@@ -326,8 +346,14 @@ fn drop_row(
         DropTarget::Table(name) => {
             {
                 let mut p = project.write_channel(ProjChan::Tables);
-                p.remove_table(name);
+                let taken = p.remove_table(name);
                 dropped = persisted_defs(&p, report);
+                if let (false, Some((at, row))) = (dropped, taken) {
+                    p.restore_table(at, row);
+                }
+            }
+            if !dropped {
+                return;
             }
             // Synchronous and local: DataFusion just forgets the provider.
             engine.deregister(name);
@@ -337,8 +363,14 @@ fn drop_row(
         DropTarget::View(name) => {
             {
                 let mut p = project.write_channel(ProjChan::Views);
-                p.remove_view(name);
+                let taken = p.remove_view(name);
                 dropped = persisted_defs(&p, report);
+                if let (false, Some((at, row))) = (dropped, taken) {
+                    p.restore_view(at, row);
+                }
+            }
+            if !dropped {
+                return;
             }
             if session.peek().is_bound_to_view(name) {
                 session.write_channel(Chan::Tabs).unbind_view(name);
@@ -372,8 +404,14 @@ fn drop_row(
             // Never registered with the engine — a saved query is a stored string.
             {
                 let mut p = project.write_channel(ProjChan::Queries);
-                p.remove_saved_query(*id);
+                let taken = p.remove_saved_query(*id);
                 dropped = persisted_defs(&p, report);
+                if let (false, Some((at, query))) = (dropped, taken) {
+                    p.restore_saved_query(at, query);
+                }
+            }
+            if !dropped {
+                return;
             }
             if session.peek().is_bound_to_query(*id) {
                 session.write_channel(Chan::Tabs).unbind_saved_query(*id);
@@ -752,6 +790,107 @@ mod tests {
                 .as_str()
                 .starts_with("Could not write the project file: "),
             "unexpected message: {message}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **A drop whose write fails is rolled back** (P4-15 item 4): the row is still in the
+    /// catalog afterwards, so the store and `project.json` agree and the next open shows the same
+    /// thing this session does.
+    ///
+    /// Without it the drop is the one mutation whose silent failure *resurrects* what the user
+    /// destroyed — gone from the sidebar all session, back at the next open, with the only
+    /// evidence a log row. Rollback is available here and nowhere else because at the moment the
+    /// write fails nothing else has happened yet: the engine call comes after.
+    #[cfg(unix)]
+    #[test]
+    fn a_drop_whose_project_write_fails_is_rolled_back() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root("rollback");
+        let strata = project_io::strata_dir(&root);
+        std::fs::create_dir_all(&strata).unwrap();
+        let (mut runner, (mut slot, _, project, _)) = runner("rollback");
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
+        click_action(&mut runner, "Drop table");
+        std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let p = project.peek();
+        assert!(
+            p.tables.iter().any(|t| t.def.name == "orders"),
+            "the row should still be in the catalog: {:?}",
+            p.tables.iter().map(|t| &t.def.name).collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The rollback puts the row back **where it was**, not on the end — the catalog is ordered,
+    /// and a row that reappeared somewhere else would read as a different change.
+    #[cfg(unix)]
+    #[test]
+    fn a_rolled_back_drop_keeps_the_catalogs_order() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root("rollback-order");
+        let strata = project_io::strata_dir(&root);
+        std::fs::create_dir_all(&strata).unwrap();
+        let (mut runner, (mut slot, _, project, _)) = runner("rollback-order");
+        let before: Vec<String> = project
+            .peek()
+            .tables
+            .iter()
+            .map(|t| t.def.name.clone())
+            .collect();
+        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+
+        std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
+        click_action(&mut runner, "Drop table");
+        std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let after: Vec<String> = project
+            .peek()
+            .tables
+            .iter()
+            .map(|t| t.def.name.clone())
+            .collect();
+        assert_eq!(after, before, "the catalog should be exactly as it was");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A saved query rolls back the same way — no engine involved at all, so this is the arm that
+    /// isolates the store half of the rule.
+    #[cfg(unix)]
+    #[test]
+    fn a_dropped_query_whose_write_fails_stays_in_the_catalog() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root("rollback-query");
+        let strata = project_io::strata_dir(&root);
+        std::fs::create_dir_all(&strata).unwrap();
+        let (mut runner, (mut slot, _, project, _)) = runner("rollback-query");
+        let id = project.peek().saved_queries.first().map(|q| q.id);
+        let Some(id) = id else {
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        };
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::Query {
+                id,
+                name: "q".into(),
+            },
+        );
+
+        std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
+        click_action(&mut runner, "Delete query");
+        std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(
+            project.peek().saved_queries.iter().any(|q| q.id == id),
+            "the query should still be in the catalog"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

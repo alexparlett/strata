@@ -731,8 +731,21 @@ impl ProjectState {
 
     /// Drop the view named `name` — matched like [`upsert_view`](Self::upsert_view), so a
     /// drop names the same row a save would have replaced.
-    pub fn remove_view(&mut self, name: &str) {
-        self.views.retain(|v| !Self::same_name(&v.def.name, name));
+    /// Hands back the row it took, and where it sat — so a caller whose write then fails can put
+    /// it exactly back (P4-15 item 4). Returning it rather than cloning the section keeps `Clone`
+    /// off `ViewRow` and its `Reg`, and restores the registration state too: a view that comes
+    /// back as `Loading` would spin forever, because nothing is going to answer for it.
+    pub fn remove_view(&mut self, name: &str) -> Option<(usize, ViewRow)> {
+        let at = self
+            .views
+            .iter()
+            .position(|v| Self::same_name(&v.def.name, name))?;
+        Some((at, self.views.remove(at)))
+    }
+
+    /// Put a row back where [`remove_view`](Self::remove_view) took it from.
+    pub fn restore_view(&mut self, at: usize, row: ViewRow) {
+        self.views.insert(at.min(self.views.len()), row);
     }
 
     /// Insert-or-replace a saved query by its stable `id`, keeping the alphabetical
@@ -746,8 +759,16 @@ impl ProjectState {
     }
 
     /// Drop the saved query with this `id`.
-    pub fn remove_saved_query(&mut self, id: Uuid) {
-        self.saved_queries.retain(|q| q.id != id);
+    /// Hands back the query it took and its slot — see [`remove_view`](Self::remove_view).
+    pub fn remove_saved_query(&mut self, id: Uuid) -> Option<(usize, SavedQuery)> {
+        let at = self.saved_queries.iter().position(|q| q.id == id)?;
+        Some((at, self.saved_queries.remove(at)))
+    }
+
+    /// Put a saved query back where [`remove_saved_query`](Self::remove_saved_query) took it.
+    pub fn restore_saved_query(&mut self, at: usize, query: SavedQuery) {
+        self.saved_queries
+            .insert(at.min(self.saved_queries.len()), query);
     }
 
     /// Relabel the saved query `id`, moving it to the alphabetical slot of its new name
@@ -785,8 +806,18 @@ impl ProjectState {
     }
 
     /// Drop the table named `name` — matched like [`upsert_table`](Self::upsert_table).
-    pub fn remove_table(&mut self, name: &str) {
-        self.tables.retain(|t| !Self::same_name(&t.def.name, name));
+    /// Hands back the row it took and its slot — see [`remove_view`](Self::remove_view).
+    pub fn remove_table(&mut self, name: &str) -> Option<(usize, TableRow)> {
+        let at = self
+            .tables
+            .iter()
+            .position(|t| Self::same_name(&t.def.name, name))?;
+        Some((at, self.tables.remove(at)))
+    }
+
+    /// Put a row back where [`remove_table`](Self::remove_table) took it from.
+    pub fn restore_table(&mut self, at: usize, row: TableRow) {
+        self.tables.insert(at.min(self.tables.len()), row);
     }
 }
 
