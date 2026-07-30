@@ -21,6 +21,7 @@ use strata_core::util::folder_name;
 
 use crate::apps::project::close::CloseTarget;
 use crate::apps::project::state::EngineRestart;
+use crate::apps::project::views::WindowDragStrip;
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::IconName;
 use crate::components::typography::{Control, Prose, Title};
@@ -30,7 +31,8 @@ use crate::state::{use_claim_open, AppCtx};
 /// [`ProjectRoot`](crate::apps::project)'s fault arm: the whole subtree while the project
 /// could not load. Esc and the backdrop deliberately do nothing — there is no state behind
 /// the dialog to return to — so the ways out are Try again, the close (button, Enter, red
-/// button, ⇧⌘W), and ⌘O / File ▸ Open…, which re-roots this window to another project.
+/// button, ⇧⌘W), and ⌘O / File ▸ Open…, which re-roots this window to another project — or,
+/// pointed at this window's own project, retries it ([`OpenCtx::faulted`]).
 #[derive(PartialEq)]
 pub struct ProjectLoadFailed {
     /// The folder that failed to open — the dialog's subject line.
@@ -44,6 +46,9 @@ pub struct ProjectLoadFailed {
     /// alive until it settles — so the slot is drained below rather than left to no-op
     /// the red button and then pop a stale confirm on the next successful mount.
     pub confirm: State<Option<CloseTarget>>,
+    /// The window's fill mark, for the drag strip — the fault arm still owes the window
+    /// its chrome (the traffic lights sit in the same corner either way).
+    pub filled_by_app: State<bool>,
     pub app: AppCtx,
 }
 
@@ -87,11 +92,29 @@ impl Component for ProjectLoadFailed {
         // forget the window.
         use_claim_open(self.app.config, &self.root);
 
-        // Drain the close-confirm slot (see the field doc). A `Window` close was asked with
-        // nothing here to protect, so it just proceeds; a parked re-root is performed — the
-        // T2 question it was gated on is about work this window no longer shows. The other
-        // two variants have no writer on the fault arm; clearing keeps the slot from
-        // carrying them into the next mount.
+        // …and tells the open path so: while this is set, naming this window's own project
+        // (⌘O, Open Recent, the switcher) is a retry rather than the usual no-op — the one
+        // reading of "open the project I am already looking at" that makes sense when what
+        // the user is looking at is its load error. Mount/drop rather than a render read:
+        // the flag belongs to the window (`OpenCtx`), which outlives this arm.
+        {
+            let mut faulted = open.faulted;
+            use_hook(move || faulted.set(true));
+            use_drop(move || {
+                let mut faulted = faulted;
+                faulted.set(false);
+            });
+        }
+
+        // Drain the close-confirm slot (see the field doc), acting rather than re-asking.
+        // Not a silent abort: `guard.running` can only be true here for runs orphaned by
+        // the confirmed stop that put this arm up — the re-root or restart that replaced
+        // the subtree asked the T2 question and the user answered it (or their pref asked
+        // never to be asked, which also gates every writer of this slot). The engine's
+        // deferred `Drop` merely hasn't finished honouring that answer yet, so a second
+        // confirm would re-ask about work already condemned. AGENTS.md §2 records this.
+        // The other two variants have no writer on the fault arm; clearing keeps the slot
+        // from carrying them into the next mount.
         {
             let close = close.clone();
             use_side_effect(move || {
@@ -148,30 +171,45 @@ impl Component for ProjectLoadFailed {
         // `AppCtx` the launcher hand-off needs, so it isn't `Copy`).
         let close_enter = close.clone();
         let error = self.error.clone();
-        rect().maybe_child((!prompt_up).then(move || {
-            Dialog::new()
-                .modal(false)
-                // Enter is the keyboard close; every other chord stays the window's
-                // (⌘O, ⌘,, ⇧⌘W — see the module doc).
-                .on_confirm(move |_| close_enter())
-                .header(header)
-                .body(
-                    rect()
-                        .width(Size::fill())
-                        .child(Prose::new(error).color(c.text_secondary).wrap()),
-                )
-                .action(
-                    Button::new()
-                        .flat()
-                        .on_press(move |_| try_again())
-                        .child(Control::new("Try again")),
-                )
-                .action(
-                    Button::new()
-                        .filled()
-                        .on_press(move |_| close())
-                        .child(Control::new("Close window")),
-                )
-        }))
+        rect()
+            .maybe_child((!prompt_up).then(move || {
+                Dialog::new()
+                    .modal(false)
+                    // Enter is the keyboard close; every other chord stays the window's
+                    // (⌘O, ⌘,, ⇧⌘W — see the module doc).
+                    .on_confirm(move |_| close_enter())
+                    .header(header)
+                    .body(
+                        rect()
+                            .width(Size::fill())
+                            .child(Prose::new(error).color(c.text_secondary).wrap()),
+                    )
+                    .action(
+                        Button::new()
+                            .flat()
+                            .on_press(move |_| try_again())
+                            .child(Control::new("Try again")),
+                    )
+                    .action(
+                        Button::new()
+                            .filled()
+                            .on_press(move |_| close())
+                            .child(Control::new("Close window")),
+                    )
+            }))
+            // The window's drag strip: the fault arm replaces the whole subtree, HeaderBar
+            // included, but the OS traffic lights still sit in this corner and the window
+            // must stay movable (a fault window restored onto a detached monitor has no
+            // other way back). Mounted AFTER the dialog on purpose — an overlay node at the
+            // same depth, later in document order, paints and hit-tests above the dialog's
+            // backdrop, which would otherwise swallow the drag press.
+            .child(
+                rect()
+                    .layer(Layer::Overlay)
+                    .position(Position::new_global())
+                    .child(WindowDragStrip {
+                        filled_by_app: self.filled_by_app,
+                    }),
+            )
     }
 }

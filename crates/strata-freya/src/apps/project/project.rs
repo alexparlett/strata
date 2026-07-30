@@ -163,6 +163,11 @@ impl App for ProjectApp {
         });
         let mut confirm = use_provide_context(|| State::create(None::<CloseTarget>));
 
+        // The engine generation this window is on. A window fact (like the fill flag below):
+        // the thing it keys must survive the remount it causes. Stood up before the open
+        // path, which carries it as the retry mechanism for a faulted window.
+        let engine_restart = use_engine_restart();
+
         // This window's **open path**: the project it shows, the This/New question it is
         // asking, and the close-while-running gate a re-root has to pass — opening in place
         // aborts whatever is executing, exactly as closing the window would. Window-scoped
@@ -176,6 +181,8 @@ impl App for ProjectApp {
                 move || guard
             }),
             confirm,
+            faulted: use_state(|| false),
+            restart: engine_restart,
         };
         use_provide_context(move || open);
 
@@ -248,9 +255,6 @@ impl App for ProjectApp {
         // which does persist. Owned here rather than in the project subtree because it is a fact
         // about the *window*: re-rooting doesn't unfill it.
         let filled_by_app = use_state(|| false);
-        // The engine generation this window is on. A window fact for the same reason as the fill
-        // flag: the thing it keys must survive the remount it causes.
-        let engine_restart = use_engine_restart();
 
         let root = open.root.read().clone();
         // The autosave seed is the launch project's alone, on its **first** mount — the window
@@ -399,6 +403,7 @@ impl Component for ProjectRoot {
                 root: self.root.clone(),
                 error,
                 confirm: self.confirm,
+                filled_by_app: self.filled_by_app,
                 app: self.app.clone(),
             }
             .into_element(),
@@ -495,7 +500,7 @@ impl Component for ProjectLoaded {
         // This project's store, from the defs the load already read, and the engine
         // registration pass over them as a background task — rows flip Loading →
         // Ready/Failed as answers land, and each answer is recorded in the log.
-        let project = use_init_project(&engine, log, self.root.clone(), self.loaded.defs.clone());
+        let project = use_init_project(&engine, log, self.root.clone(), self.loaded.clone());
         // Register the project in the app-global config for as long as this subtree lives: it
         // heads the recents (so the launcher / project picker can offer it) and joins the
         // open-set (so they can tell open from merely recent) until the window closes — or
@@ -503,7 +508,7 @@ impl Component for ProjectLoaded {
         use_open_project(config, &project.peek().name, &self.root);
         // This project's Session store, from the snapshot the load already restored (tabs /
         // order / active / layout), else one blank tab.
-        use_init_session(self.loaded.session.clone());
+        use_init_session(self.loaded.clone());
         // Debounced autosave of that session back to `.strata/session.json`. Its subscription
         // is inside the effect's own scope, so it never re-renders this root; its `use_drop`
         // is what makes a close — or a re-root — keep the last few hundred milliseconds.

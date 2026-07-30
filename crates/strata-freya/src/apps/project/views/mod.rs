@@ -18,7 +18,7 @@ pub use dialogs::{
     ProfileConfirm, ProfileTarget, ProjectLoadFailed,
 };
 pub use drawer::DrawerThemePreference;
-pub use header::{HeaderBar, HeaderBarThemePreference};
+pub use header::{HeaderBar, HeaderBarThemePreference, WindowDragStrip};
 pub use inspector::InspectorThemePreference;
 pub use keeper::RequestKeepers;
 pub use shell::Shell;

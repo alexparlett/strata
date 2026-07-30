@@ -5,6 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Duration;
 
 use async_io::Timer;
@@ -31,12 +32,13 @@ use super::log::{log_event, LogCtx, LogLevel};
 use super::persist::{persisted_session, use_report};
 use super::{Chan, ProjChan, ProjectState, SessionState};
 
-/// Initialise this window's Session store and provide it via context. `seed` is the
-/// snapshot [`open_project`] already restored off disk (state-arch §5) — `None` opens one
-/// blank tab. Call once in the window root; returns the station for the root to read /
-/// drive.
-pub fn use_init_session(seed: Option<SessionSnapshot>) -> RadioStation<SessionState, Chan> {
-    use_init_radio_station::<SessionState, Chan>(move || build_session(seed))
+/// Initialise this window's Session store and provide it via context, from the snapshot
+/// [`open_project`] already restored off disk (state-arch §5) — `None` opens one blank tab.
+/// Takes the [`Loaded`] by `Rc` so the render-time cost is a pointer bump: the snapshot is
+/// cloned **inside** the initializer, which runs once at mount, never on a re-render. Call
+/// once in the window root; returns the station for the root to read / drive.
+pub fn use_init_session(loaded: Rc<Loaded>) -> RadioStation<SessionState, Chan> {
+    use_init_radio_station::<SessionState, Chan>(move || build_session(loaded.session.clone()))
 }
 
 /// Restore the persisted session for `root`. `Ok(None)` opens blank; `Err` means the window
@@ -152,10 +154,12 @@ pub fn use_init_project(
     engine: &EngineCtx,
     log: LogCtx,
     root: PathBuf,
-    defs: ProjectDefs,
+    loaded: Rc<Loaded>,
 ) -> RadioStation<ProjectState, ProjChan> {
+    // The defs are cloned inside the initializer — once, at mount — so a re-render of the
+    // caller costs an `Rc` bump, not a copy of the whole catalog.
     let station = use_init_radio_station::<ProjectState, ProjChan>(move || {
-        ProjectState::from_defs(defs, root)
+        ProjectState::from_defs(loaded.defs.clone(), root)
     });
     let catalog = use_init_catalog();
     let rescan = use_init_catalog_rescan();

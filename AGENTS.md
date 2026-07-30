@@ -40,9 +40,10 @@ that file when editing fork code, and §6 here for how the fork relates to the a
   - Expected absences get defaults (missing session file → one blank tab; missing `.strata/` →
     scaffold). Unrecoverable faults (unopenable project dir, unparseable defs, unreadable
     session) are **surfaced**, never a silent blank/rootless fallback: pre-launch resolution
-    reports and skips, and a fault at mount renders `ProjectLoadFailed` — the fault dialog whose
-    one action closes the window through `close_this_window` (P4-01 item 5; the fallible IO runs
-    once in `ProjectRoot` and decides which arm the subtree is, so no store is ever built from
+    reports and skips, and a fault at mount renders `ProjectLoadFailed` — the fault dialog
+    offering Try again (a generation bump that re-runs the load) and Close window through
+    `close_this_window` (P4-01 item 5; the fallible IO runs once in `ProjectRoot` and decides
+    which arm the subtree is — `ProjectLoaded` or the fault — so no store is ever built from
     anything but a successful load).
   - Never shape a production signature (or add an `Option`) to satisfy a test — build the test's
     store inline instead. Pull deps like the project root from context
@@ -235,8 +236,9 @@ Things that must not regress. Each was fought for once already.
   (`project::save_history`), because an append can add a line but not move one.
 - **A window's project subtree is keyed on the project folder; there is no reopen-in-place path.**
   `ProjectApp` is the *window* (theme, app-globals, close bridge, menubar, the `OpenCtx` open
-  path); `ProjectRoot` is the *open project* (engine, stores, autosave, catalog, views) and its
-  `render_key` is that folder. So "open in this window" (`OpenPref::This`) is a plain `State`
+  path); `ProjectRoot` is the *open project* — the once-per-mount load and its two arms,
+  `ProjectLoaded` (engine, stores, autosave, catalog, views) or the `ProjectLoadFailed` fault
+  dialog — and its `render_key` is that folder. So "open in this window" (`OpenPref::This`) is a plain `State`
   write: Freya drops the old subtree — flushing its session, dropping its engine, leaving the
   open-set — and mounts the new project through the very hooks that run at launch. Never add a
   second path that re-points a live store at another project: two ways to open one project drift,
@@ -256,7 +258,12 @@ Things that must not regress. Each was fought for once already.
   `CloseTarget` variant and routing through the one dialog, never a second confirm and never a
   silent abort. The predicate is always the engine's own answer (`guard.running` /
   `Engine::is_running`) plus `confirm_close_running` — never derived from mounted UI, which goes
-  false the moment the user switches tabs.
+  false the moment the user switches tabs. One boundary, settled by review: **a question already
+  answered is not re-asked.** The load-fault arm drains the confirm slot and acts
+  (`ProjectLoadFailed`), because `guard.running` can only be true there for runs orphaned by a
+  stop the user already confirmed — the re-root or restart that replaced the subtree asked this
+  very question, and the engine's deferred `Drop` merely hasn't finished honouring the answer —
+  or under a pref that asked never to be asked, which gates every writer of the slot alike.
 - **An engine's config is a launch value; a live change is `set_config`, and a runtime key is a
   restart — which is the remount, not a second path.** `Engine::new(overrides)` is the *only* place
   a `RuntimeEnv` is built, so an engine is only ever born with a full set;
@@ -415,8 +422,8 @@ Things that must not regress. Each was fought for once already.
   repaints first — a keystroke is enough — or a Save into a store nothing is left to serve. So the
   pin is over `platform::owner::Subtree`, which is `ProjectRoot`'s own diff key (folder +
   generation) plus the live `EngineRestart` to read the current generation back, **provided by
-  `ProjectRoot`** so no call site can assemble a mismatched trio, with `use_owner_pin` the one
-  predicate. Three things generalise. An owner that has closed *shows nothing*, so it fails the same
+  `ProjectLoaded`** (the loaded arm — the fault arm has no handles to lend) so no call site can
+  assemble a mismatched trio, with `use_owner_pin` the one predicate. Three things generalise. An owner that has closed *shows nothing*, so it fails the same
   comparison and "my owner closed" needs no clause of its own — one predicate, not three. The
   generation is the one handle here safe to hold across a remount, for precisely the reason it exists
   (owned by `ProjectApp`, above the subtree). And this is why `WindowKind` carries **less** than it

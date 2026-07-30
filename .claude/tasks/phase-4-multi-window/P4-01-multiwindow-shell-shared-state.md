@@ -67,20 +67,32 @@ the launcher is the surface that needs it — `crate::platform::windows`:
    (missing → blank; corrupt → kept aside, blank) are unchanged; only defs failures, an
    unreadable session, and a corrupt session whose rename-aside fails are faults.
 
-   Three review-settled details. The dialog is **non-modal** (`Dialog::modal(false)`) — it is the
+   Review-settled details. The dialog is **non-modal** (`Dialog::modal(false)`) — it is the
    window's whole content with no feature listeners behind it, and the menubar's Open…/Settings
    items arrive as synthesized key presses, so a modal barrier would kill ⌘O and ⌘,; it also
    stands down while the This/New prompt is up, which would otherwise paint *under* it while
-   answering Enter. The fault arm **drains the close-confirm slot**: `guard.running` can be true
-   there (a run in flight when the window re-rooted into the broken project keeps the old engine
-   alive until it settles), so a vetoed red-button close or a parked re-root is acted on rather
-   than written into a slot nothing renders. And the fault arm **claims the open-set**
+   answering Enter. The fault arm **drains the close-confirm slot**, acting rather than
+   re-asking: `guard.running` can only be true there for runs orphaned by a stop the user
+   already confirmed — the re-root or restart that replaced the subtree asked the T2 question
+   (or the pref that gates every writer of the slot asked never to ask) — so a vetoed red-button
+   close or a parked re-root completes an answered question rather than sitting in a slot
+   nothing renders (AGENTS.md §2 records the boundary). The fault arm **claims the open-set**
    (`use_claim_open`, the open-set half of `use_open_project` with no recents promotion): it is
    still a window on that project, so a quit reopens it — resurfacing the fault, which is honest —
    and a deliberate close drops it from reopen-on-startup (the acceptance below). The add half is
    load-bearing, not symmetry: a remove-on-drop alone is evicted by the remount a **failed** Try
    again performs, with nothing re-adding it — the quit after that failed retry would silently
-   forget the window (caught by the PR's review pass).
+   forget the window. It also sets **`OpenCtx::faulted`**, which turns the one open decision that
+   was a no-op — naming this window's own project — into a retry (`apply`'s `Nothing` arm bumps
+   the generation), so fix-the-file-then-⌘O works; a faulted window focused from *another* window
+   still only raises the dialog, whose Try again is the visible recovery. And it keeps the
+   window's chrome: `WindowDragStrip` (the header's drag + double-press-to-fill recipe, bare)
+   mounts as an overlay **after** the dialog in document order, so it hit-tests above the
+   backdrop and a fault window restored onto a detached monitor can still be moved.
+
+   Efficiency: the `Rc<Loaded>` is handed to `use_init_project` / `use_init_session` whole, and
+   the defs/session are cloned **inside** the run-once initializers — a re-render of
+   `ProjectLoaded` costs an `Rc` bump, never a copy of the catalog or the tabs' text.
 
    **Registration-race note:** the close is user-initiated (a dialog or red-button press), so
    this window's — and any doomed sibling's — `use_register_window` has long landed by the time
