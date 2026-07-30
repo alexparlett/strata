@@ -37,6 +37,18 @@ impl EngineCtx {
         }
     }
 
+    /// The engine itself, for a holder that is **not** on the render thread — the agent
+    /// server's data plane (`crate::agent`), which calls `fetch_page` / `validate` /
+    /// `functions` from its own runtime while the UI is busy.
+    ///
+    /// Handing out the `Arc` rather than the [`EngineCtx`] is the point: `EngineCtx` is this
+    /// window's *UI* handle, and everything it adds over the facade (`cleanup`, `captured`,
+    /// `pin_snapshot`) belongs to the render thread. A cross-thread holder wants the facade
+    /// and nothing else.
+    pub fn arc(&self) -> Arc<Engine> {
+        Arc::clone(&self.eng)
+    }
+
     /// Wrap this handle for a freya-query capability field — invisible to cache identity.
     /// (Consumed by the results pane's `use_query` wiring, P2-02.)
     #[allow(dead_code)]

@@ -32,6 +32,9 @@ history. Open one per window; the app reopens what you had at last quit.
   DataFusion's own configuration keys directly.
 - **Themes** — `Midnight` (dark) and `Daylight` (light) ship built in; user themes are JSON files in the themes
   directory. See [`docs/FREYA_THEME_SPEC.md`](docs/FREYA_THEME_SPEC.md).
+- **Agent access** — an opt-in MCP server so an AI agent (Claude Code, Cursor, Copilot…) can list your catalog,
+  inspect schemas and run read-only SQL. Every query it runs **lands as a real query tab**, so the investigation
+  trail is the tab strip. See [Agent access](#agent-access) below.
 - **Managed catalog DDL policy** — the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` **only**. Everything else is
   blocked with a message naming the surface that owns it: `CREATE TABLE` / `CREATE EXTERNAL TABLE` / `INSERT` → Table
   Config, `CREATE VIEW` → Save as view, `DROP` → the catalog, `COPY TO` → Export, `SET`/`RESET` → Settings.
@@ -102,6 +105,148 @@ signing rung the build took, and the `xattr -dr com.apple.quarantine` step teste
 
 ---
 
+## Agent access
+
+Strata can serve its own catalog and query engine to an AI agent over the
+[Model Context Protocol](https://modelcontextprotocol.io). The agent lists tables, inspects schemas and runs
+**read-only** SQL — the editor's policy exactly. Its queries are real runs against the same engine, materializing the
+same immutable snapshots your own do, so anything it finds you can page, sort, export or take over.
+
+Turn it on in **Settings ▸ Agent access**, which is also where the port and the bearer token live. It is **off by
+default**. The token is minted once and persisted, so a client stays configured across restarts — regenerating it
+invalidates every client you have set up.
+
+The header bar shows a dot to the left of the search button: **grey** while nothing is paired, **green** once an agent
+connects, **amber** if the setting is on but the server could not start — almost always a port already in use.
+
+Everything a client needs is three facts:
+
+| | |
+|---|---|
+| **URL** | `http://127.0.0.1:<port>/mcp` — `47821` by default |
+| **Header** | `Authorization: Bearer <token>` |
+| **Transport** | Streamable HTTP (some clients spell it `streamable-http`) |
+
+The server lives *inside* the running app, so there is no command for a client to spawn — Strata has to be open, with
+the project you want the agent to see open in a window. A client that only speaks stdio needs a proxy; see Claude
+Desktop below.
+
+### Claude Code
+
+```bash
+claude mcp add --transport http strata http://127.0.0.1:47821/mcp --header "Authorization: Bearer YOUR_TOKEN"
+```
+
+`--scope user` makes it available in every project; `claude mcp list` reports `✔ Connected` when it is working. The
+equivalent `.mcp.json` entry — `"type"` is required, since Claude Code reads a typeless entry as a stdio server:
+
+```json
+{
+  "mcpServers": {
+    "strata": {
+      "type": "http",
+      "url": "http://127.0.0.1:47821/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Desktop launches its servers itself and speaks stdio, which an in-app server cannot offer — so it needs a stdio↔HTTP
+proxy. In `claude_desktop_config.json` (Settings ▸ Developer ▸ Edit Config), with Node.js installed:
+
+```json
+{
+  "mcpServers": {
+    "strata": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:47821/mcp",
+               "--header", "Authorization: Bearer YOUR_TOKEN"]
+    }
+  }
+}
+```
+
+### VS Code (Copilot agent mode)
+
+`.vscode/mcp.json` for one project, or your profile's `mcp.json` for all of them. `${input:…}` prompts for the token
+rather than committing it:
+
+```json
+{
+  "servers": {
+    "strata": {
+      "type": "http",
+      "url": "http://127.0.0.1:47821/mcp",
+      "headers": { "Authorization": "Bearer ${input:strata-token}" }
+    }
+  }
+}
+```
+
+### Cursor
+
+`.cursor/mcp.json` for one project, `~/.cursor/mcp.json` globally:
+
+```json
+{
+  "mcpServers": {
+    "strata": {
+      "url": "http://127.0.0.1:47821/mcp",
+      "headers": { "Authorization": "Bearer ${env:STRATA_TOKEN}" }
+    }
+  }
+}
+```
+
+### Gemini CLI
+
+`~/.gemini/settings.json`, or `.gemini/settings.json` per project. The field is `httpUrl`, not `url`:
+
+```json
+{
+  "mcpServers": {
+    "strata": {
+      "httpUrl": "http://127.0.0.1:47821/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+    }
+  }
+}
+```
+
+### Codex CLI
+
+`~/.codex/config.toml`, or `.codex/config.toml` in a trusted project. Codex takes the **name of an environment
+variable**, not the token itself:
+
+```toml
+[mcp_servers.strata]
+url = "http://127.0.0.1:47821/mcp"
+bearer_token_env_var = "STRATA_TOKEN"
+```
+
+Older Codex versions only pick up stdio servers; add `[features]` with `experimental_use_rmcp_client = true` above it,
+or upgrade.
+
+### Anything else
+
+Point it at the URL as a Streamable HTTP server with that header. The token is checked before a request reaches a
+tool, so a missing or wrong one is a plain `401`; the scheme is matched case-insensitively, the secret is not.
+
+### What you are exposing
+
+The server binds loopback only and requires the token on every request, but within those bounds an agent can read
+**any data the open project can reach** — every registered table and anything a query can join to it. It cannot write:
+there is no table registration, no view creation and no export in the vocabulary, and blocked statements come back
+with the same message the editor shows. Turn it off when you are not using it, and treat the token as a credential.
+
+The design — the tool vocabulary, the policy gate, the error taxonomy and the Tokio↔Freya bridge — is
+[`docs/AGENT_ACCESS_SPEC.md`](docs/AGENT_ACCESS_SPEC.md).
+
+---
+
 ## Architecture
 
 A virtual Cargo workspace (no root package):
@@ -134,6 +279,7 @@ The full per-module map is in **[`CLAUDE.md`](CLAUDE.md)**, and the state design
 - [`docs/FREYA_PORT_PLAN.md`](docs/FREYA_PORT_PLAN.md) — why the migration, and the phased plan.
 - [`docs/FREYA_STATE_ARCHITECTURE.md`](docs/FREYA_STATE_ARCHITECTURE.md) — the per-window state design.
 - [`docs/SNAPSHOT_SPEC.md`](docs/SNAPSHOT_SPEC.md) — the result-snapshot read model.
+- [`docs/AGENT_ACCESS_SPEC.md`](docs/AGENT_ACCESS_SPEC.md) — the agent tool vocabulary, its policy gate, and the bridge.
 - [`docs/DEV_TASKS.md`](docs/DEV_TASKS.md) — the backlog. Task files live in `.claude/tasks/`.
 
 ---

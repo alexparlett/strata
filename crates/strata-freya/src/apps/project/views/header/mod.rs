@@ -30,6 +30,7 @@ use freya::prelude::*;
 use strata_core::config::Command;
 
 use self::project_menu::ProjectMenu;
+use crate::agent::AgentStatusDot;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Title;
@@ -198,6 +199,11 @@ impl Component for HeaderBar {
             .horizontal()
             .cross_align(Alignment::Center)
             .spacing(8.)
+            // Agent access (AA-03), left of the controls: a state, not a control, so it wears
+            // no button dress and is absent entirely while the setting is off.
+            .child(AgentStatusDot {
+                agent: app.agent.clone(),
+            })
             .child(tip(
                 search_title,
                 action(IconName::Search, 15.).on_press(move |_| {

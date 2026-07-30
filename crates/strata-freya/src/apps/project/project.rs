@@ -25,16 +25,17 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::agent::use_agent_server;
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    load_project, use_autosave, use_diagnostics, use_engine_config, use_engine_restart,
-    use_init_catalog_selection, use_init_faults, use_init_history, use_init_log, use_init_project,
-    use_init_session, Chan, EngineRestart, Loaded, SessionState,
+    load_project, use_agent_bridge, use_autosave, use_diagnostics, use_engine_config,
+    use_engine_restart, use_init_catalog_selection, use_init_faults, use_init_history,
+    use_init_log, use_init_project, use_init_session, Chan, EngineRestart, Loaded, SessionState,
 };
 use crate::apps::project::views::{
-    CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
+    AgentKeepers, CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
     ProfileConfirm, ProfileTarget, ProjectLoadFailed, ProjectLoading, RequestKeepers, Shell,
 };
 use crate::keymap::on_commands;
@@ -251,6 +252,11 @@ impl App for ProjectApp {
         // Project — which this window, unlike the launcher, has something to close — and the
         // open path Open Recent resolves through.
         use_file_menu(&self.app, Some(open));
+        // Keep the agent-access server in step with its setting. On the **window** layer, not
+        // the project subtree: a re-root or an engine restart must not stop a server the app
+        // is running, and this window is one of the two kinds that is always around to
+        // reconcile it (see `agent::server`).
+        use_agent_server(self.app.agent.clone(), config);
 
         // Mirror the confirm-close-running pref into the hook's atomic (subscribes to the
         // config's Settings channel, so a change reaches the next OS close immediately).
@@ -586,6 +592,16 @@ impl Component for ProjectLoaded {
         // This project's Session store, from the snapshot the load already restored (tabs /
         // order / active / layout), else one blank tab.
         use_init_session(self.loaded.clone());
+        // Lend this project to the agent-access service directory for as long as *this mount*
+        // lasts, and drive the asks that come back (AA-03). Here rather than on the window
+        // layer because everything it lends — the engine, the two stores, the log — belongs to
+        // the mount: a re-root or an engine restart has to deregister and re-register, and
+        // mounting it here is what makes that the same path an open and a close take.
+        use_agent_bridge(
+            self.app.agent.clone(),
+            self.root.clone(),
+            project.peek().name.clone(),
+        );
         // Debounced autosave of that session back to `.strata/session.json`. Its subscription
         // is inside the effect's own scope, so it never re-renders this root; its `use_drop`
         // is what makes a close — or a re-root — keep the last few hundred milliseconds.
@@ -679,6 +695,11 @@ impl Component for ProjectLoaded {
             // on purpose — the invariant is session-scoped, like the tab funnel above,
             // not a property of whichever layout shows the workbench (see `views::keeper`).
             .child(RequestKeepers)
+            // The same pin, asked a different question (AA-03): one subscriber per agent run
+            // whose reply is still owed, so a settle reaches the tool call that asked for it
+            // even after the tab has moved on to a newer press. Same cache identity as the
+            // keeper above, so still one execution.
+            .child(AgentKeepers)
             .child(HeaderBar::new(self.filled_by_app))
             .child(Shell::new())
     }

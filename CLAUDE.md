@@ -186,10 +186,32 @@ src/menu.rs                      the macOS menubar: App · **File** (Open… · 
                                  is capturing a chord (`suspend_accelerators`) — the OS resolves an
                                  accelerator before the window sees the key, so an armed menubar
                                  would copy on ⌘C instead of letting it be bound
-src/state/mod.rs                 `AppCtx` — the six app-globals `main` creates once (themes ·
+src/state/mod.rs                 `AppCtx` — the seven app-globals `main` creates once (themes ·
                                  config · window registry · theme preview · menubar handles · the
-                                 focused window's open path), handed to every window root as one
-                                 value rather than six parameters
+                                 focused window's open path · agent access), handed to every
+                                 window root as one value rather than seven parameters
+src/agent/                       AA-03 — agent access, the half that outlives any one window.
+                                 `AgentCtx` is the pair `main` creates: the **directory** (lives
+                                 for the process; windows join and leave it) and the **server
+                                 slot** (what is listening now, or nothing — dropping it *is*
+                                 stop). The window's half lives with the window, because that is
+                                 what it is made of (`apps/project/state/agent.rs` beside the
+                                 diagnostics driver, `views/agent_keeper.rs` beside the request
+                                 keepers)
+  directory.rs                   the cross-thread service registry **and** the app's `Host` impl:
+                                 each mount of `ProjectRoot` lends its `Arc<Engine>` (the data
+                                 plane — `fetch_page` / `validate` / `functions` straight from
+                                 the server's runtime, never queued behind a repaint) and one
+                                 ask-sender (the control plane). Keyed by a minted `RegId`, not
+                                 by the project root: a restart remounts at the *same* root
+  ask.rs                         `AgentAsk` — one variant per `Host` method that touches UI
+                                 state, each carrying its own reply channel
+  server.rs                      `use_agent_server`: start / stop / restart off the whole
+                                 `agent_access` setting, mounted by the two **workspace** windows
+                                 (there is always one alive) and idempotent, the theme
+                                 derivation's shape. Mints the token on first use and persists it
+  status.rs                      the header's dot — the app's one *polled* fact, and the module
+                                 doc says why: the count is rmcp's, created below our own seam
 src/state/theme_preview.rs       the Settings window's **live theme preview** — the one half of
                                  its uncommitted draft every other window reads, so a pick
                                  repaints them all before it is saved. A second, higher-priority
@@ -396,6 +418,15 @@ src/apps/project/                the project window (Valin-shaped)
                                  scan, keyed by `ProfileSpec { owner, scan }`, with `use_profile`
                                  the one place that Query is built)
   state/                         per-window state (Radio): channel, hooks, session
+                                 agent.rs = AA-03's **window driver**: one serial loop, `recv` →
+                                 Radio read/write → reply, with a *run's* reply parked against
+                                 the press nonce (`views::agent_keeper` completes it on settle,
+                                 the `RequestKeepers` pattern on a second question). A run is an
+                                 ordinary press — `actions::load_sql` then `set_request`, the
+                                 History drawer's double-press, so the tab holds the SQL the user
+                                 can read and take over. Holds the pure projections it answers
+                                 with too (catalog from the store, never introspection),
+                                 unit-tested with no renderer
                                  engine_config.rs = P4-07's driver: `Engine::set_config` off
                                  `ConfigChan::Settings`, and `EngineRestart` — a runtime key can
                                  only be applied by a new engine, so the restart is a bump of
@@ -577,7 +608,9 @@ or screenshot them unless asked.
 
 Feature specs: `AGENT_ACCESS_SPEC.md` (agent-driven access — the MCP host whose queries land as
 real query tabs, the verified Tokio↔Freya bridge, the chat-pane forward design; dataflow in
-`agent-access-dataflow.mermaid`; workstream `workstream-agent-access/`), `COMPLETION_SPEC.md`
+`agent-access-dataflow.mermaid`; workstream `workstream-agent-access/`; the **user-facing** half
+is the README's Agent access section, which is per-client setup and points at Settings for the
+switch rather than at the config file), `COMPLETION_SPEC.md`
 (the as-built P2-04 completion design — supersedes
 `SQL_LANGUAGE_SPEC.md` §4), `CONNECTIONS_SPEC.md`, `EXPLAIN_PLAN_SPEC.md`,
 `EXPORT_OPTIONS.md`, `IMPORT_OPTIONS.md`, `SQL_LANGUAGE_SPEC.md`, `EDITOR_LANG_SPIKE.md`,

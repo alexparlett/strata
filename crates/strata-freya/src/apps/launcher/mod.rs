@@ -20,6 +20,7 @@ use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use strata_core::config::Command;
 use strata_core::theme::os_is_dark;
 
+use crate::agent::use_agent_server;
 use crate::apps::launcher::views::{pick_and_open, LauncherRail, ProjectsPane, TitleBar};
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
@@ -107,6 +108,11 @@ impl App for LauncherApp {
         // close, and nothing to open *into*, so a recent opens a window and this one stands
         // down.
         use_file_menu(&self.app, None);
+        // The agent-access server's other reconciler. There is always at least one *workspace*
+        // window alive — the launcher takes the last project's place — so mounting it on both
+        // kinds is what makes the setting still live when every project is closed. Idempotent,
+        // so the second window to run it does nothing (see `agent::server`).
+        use_agent_server(self.app.agent.clone(), self.app.config);
 
         let theme = get_theme!(
             &None::<LauncherThemePartial>,
