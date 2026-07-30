@@ -39,8 +39,8 @@ use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{
-    refresh_table, use_catalog, use_catalog_rescan, Catalog, CatalogRescan, Chan, ProjChan,
-    ProjectState, Reg, SessionState,
+    persisted_defs, refresh_table, use_catalog, use_catalog_rescan, use_report, Catalog,
+    CatalogRescan, Chan, ProjChan, ProjectState, Reg, ReportCtx, SessionState,
 };
 use crate::apps::project::views::{
     use_profile_actions, ConfigureRequest, DropTarget, ProfileActions, ProfileTarget,
@@ -88,6 +88,11 @@ pub struct CatalogActions {
     /// The Configure-window request slot (P4-11). Setting it *is* the action — the root's
     /// `ConfigureLauncher` holds the handles a window needs, so a row does not have to.
     pub configure_target: ConfigureRequest,
+    /// Where a failed write reports (P4-15) — for the one action here that writes
+    /// `project.json` itself (`rename_saved_query`). Every other mutation this menu offers sets a
+    /// slot for a dialog or a window that carries its own; a rename commits inline, so it
+    /// reports here.
+    pub report: ReportCtx,
 }
 
 /// Gather this row's action handles from the window's stores + context.
@@ -102,6 +107,7 @@ pub fn use_catalog_actions() -> CatalogActions {
         profile: use_profile_actions(),
         danger: use_theme().read().colors().error,
         configure_target: use_consume::<ConfigureRequest>(),
+        report: use_report(),
     }
 }
 
@@ -398,11 +404,16 @@ pub fn open_saved_query(actions: &CatalogActions, id: Uuid) {
 
 /// Commit a saved-query rename: relabel the row and persist the defs, since a def mutation
 /// persists at the mutation point (like save-as-view and the drop).
+///
+/// The write goes through the same funnel every other def mutation uses (P4-15). It used to
+/// hold `persisted_defs`'s body **minus the reporting line** — the rename was written before the
+/// funnel existed and never switched to it — so a rename that failed to reach disk showed the new
+/// name in the sidebar all session and came back under the old one at the next open, with nothing
+/// said. Nothing to gate here: the row is already relabelled and there is no success event to
+/// withhold, so the answer is deliberately dropped.
 pub fn rename_saved_query(actions: &CatalogActions, id: Uuid, name: &str) {
     let mut project = actions.project;
     let mut p = project.write_channel(ProjChan::Queries);
     p.rename_saved_query(id, name);
-    if let Err(e) = p.save_defs() {
-        tracing::error!("save project defs: {e}");
-    }
+    persisted_defs(&p, actions.report);
 }

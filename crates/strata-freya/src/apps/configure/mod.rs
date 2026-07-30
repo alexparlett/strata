@@ -51,7 +51,7 @@ use strata_core::config::Command;
 
 use crate::apps::configure::views::{use_watch_registration, ConfigureBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::LogCtx;
+use crate::apps::project::ReportCtx;
 use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
 use crate::components::window::window_theme;
 use crate::keymap::on_commands;
@@ -91,15 +91,21 @@ pub struct ConfigureLaunch {
     /// engine is here for the one thing the driver cannot do, which is drop the table a
     /// **rename** left behind under its old name.
     pub engine: EngineCtx,
-    /// The **project window's** event log. A registration is a fact about that window's
-    /// catalog, and this window closes on success, so a line shown here would vanish with it.
-    pub log: LogCtx,
+    /// Where this window **reports a failed `.strata` write** — the project window's event log
+    /// and its write-fault satellite, together (P4-15). Both halves belong to *that* window for
+    /// the same reason: a registration is a fact about its catalog, and this window closes on
+    /// success, so anything shown here would vanish with it.
+    ///
+    /// Carried as a launch value because a separate OS window inherits no context. Forgetting
+    /// this is not a subtle bug — `use_report` consumes both halves and **panics** when one is
+    /// missing, which is how the first version of this crashed the moment Configure opened.
+    pub report: ReportCtx,
 }
 
 /// Compares on the **target** alone. Everything else is fixed for the window's life — one store,
-/// one counter, one log, and one `Subtree` that can only change by remounting the very subtree
-/// this is built in — so none of it carries information a diff could act on. The same reasoning
-/// as `ExportLaunch`.
+/// one counter, one report (P4-15: the project window's log *and* its write-fault satellite), and
+/// one `Subtree` that can only change by remounting the very subtree this is built in — so none
+/// of it carries information a diff could act on. The same reasoning as `ExportLaunch`.
 impl PartialEq for ConfigureLaunch {
     fn eq(&self, other: &Self) -> bool {
         self.target == other.target
@@ -178,7 +184,7 @@ pub struct ConfigureApp {
     pub catalog: Catalog,
     pub engine: EngineCtx,
     pub target: ConfigureTarget,
-    pub log: LogCtx,
+    pub report: ReportCtx,
     /// The window this one belongs to. Carried rather than looked up because the root's own
     /// `use_register_window` re-reports its kind, and an entry that forgot its owner would stop
     /// this window closing with the project window it configures.
@@ -194,7 +200,7 @@ impl ConfigureApp {
         catalog: Catalog,
         engine: EngineCtx,
         target: ConfigureTarget,
-        log: LogCtx,
+        report: ReportCtx,
         owner: WindowId,
     ) -> WindowConfig {
         // Match the theme's window body so a resize doesn't flash the default white — through
@@ -212,7 +218,7 @@ impl ConfigureApp {
             catalog,
             engine,
             target,
-            log,
+            report,
             owner,
         })
         .with_title("Table configuration")
@@ -257,8 +263,12 @@ impl App for ConfigureApp {
             let engine = self.engine.clone();
             move || engine
         });
-        let log = self.log;
-        use_provide_context(move || log);
+        // Both halves provided **individually**, because `use_report` consumes them that way —
+        // the pair travels as one value and is unpacked here, so a consumer in this window reads
+        // exactly what one in the project window does.
+        let report = self.report;
+        use_provide_context(move || report.log);
+        use_provide_context(move || report.faults);
 
         // Join the live window registry, so a second Configure on this table focuses this
         // window rather than opening another.

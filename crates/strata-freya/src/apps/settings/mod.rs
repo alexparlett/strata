@@ -167,6 +167,17 @@ pub struct SettingsCtx {
     preview: ThemePreview,
     /// The app-global config: Apply's target.
     config: ConfigStation,
+    /// Why the last Apply didn't stick (P4-15) — `None` until one fails.
+    ///
+    /// The app config is written by nine call sites and this is the only one that is a
+    /// **deliberate commit**: the user changed a setting and pressed a button that says Apply.
+    /// The rest are bookkeeping (a recent pushed, the open-set updated) that nobody asked for
+    /// and nothing can be done about, so they stay `tracing`-only rather than each announcing
+    /// the same failure of the same file — see `state::write_config`.
+    ///
+    /// Held on the window rather than the footer because it is what stops the window closing;
+    /// a message owned by a component that is about to be unmounted has nowhere to be read.
+    failed: State<Option<String>>,
 }
 
 impl SettingsCtx {
@@ -178,6 +189,7 @@ impl SettingsCtx {
             seed: State::create(settings),
             preview,
             config,
+            failed: State::create(None),
         }
     }
 
@@ -247,20 +259,56 @@ impl SettingsCtx {
     /// `confirm_close_running` from a window that never shows it). Writing the draft wholesale
     /// would carry its stale copy of that field back over the top. `Settings::merge_onto`
     /// commits only the fields this draft actually changed.
-    /// The seed advances to what was just committed, so the diff is always measured against
-    /// the last commit rather than against mount. Today the footer closes the window straight
-    /// after, but an Apply that *didn't* close would otherwise re-commit this same diff on the
-    /// next press — over whatever another window had written in between.
-    pub fn apply(&self) {
+    /// On a commit that lands, the seed advances to what was just committed, so the diff is
+    /// always measured against the last commit rather than against mount. Today the footer
+    /// closes the window straight after, but an Apply that *didn't* close would otherwise
+    /// re-commit this same diff on the next press — over whatever another window had written
+    /// in between.
+    ///
+    /// Returns whether it reached disk. `false` leaves the window **open** with
+    /// [`failed`](Self::failed) set, which is the whole reason this reports at all: the commit
+    /// still applied to every live window, so closing would look exactly like success and the
+    /// setting would be gone at the next launch with nothing having said so.
+    ///
+    /// The in-memory half is kept either way — the draft is published to every window — because
+    /// the settings *are* now what the user asked for everywhere except on disk. Rolling the
+    /// live windows back would be answering a durability failure by undoing a change that
+    /// worked.
+    ///
+    /// **The seed does not advance on a failure, and that is what makes the retry possible.**
+    /// `dirty()` is `draft != seed`, and the footer gates Apply on it — so advancing the seed
+    /// here would disable the button the moment the failure it reports appeared, leaving the
+    /// user looking at "could not be saved" with no way to try again once they had fixed the
+    /// disk. It would not even recover by reopening the window: `new` seeds both draft and seed
+    /// from the config store, which `write_config` has already merged into, so a fresh Settings
+    /// window would come up equally undirty and the setting could never reach disk again this
+    /// session. Holding the seed keeps the same diff pending, and re-applying it is harmless —
+    /// `merge_onto` writes the identical fields over values that already hold them.
+    pub fn apply(&self) -> bool {
         let draft = self.draft.peek().clone();
         let seed = self.seed.peek().clone();
-        write_config(self.config, &[ConfigChan::Settings], {
+        let landed = write_config(self.config, &[ConfigChan::Settings], {
             let draft = draft.clone();
             move |cfg| draft.merge_onto(&seed, &mut cfg.settings)
         });
+        let mut failed = self.failed;
+        failed.set((!landed).then(|| {
+            "The settings are in use, but could not be saved and will be lost when Strata \
+             restarts."
+                .to_string()
+        }));
+        if !landed {
+            return false;
+        }
         let mut reseed = self.seed;
         reseed.set(draft);
         self.discard();
+        true
+    }
+
+    /// Why the last Apply didn't stick, for the footer to state.
+    pub fn failure(&self) -> Option<String> {
+        self.failed.read().clone()
     }
 
     /// Drop the live preview, reverting every window to the committed theme. Called from the

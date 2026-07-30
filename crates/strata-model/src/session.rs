@@ -102,6 +102,27 @@ pub struct Layout {
     /// no separate flag to keep in step with the height.
     #[serde(default)]
     pub drawer_restore_h: Option<f32>,
+    /// Which of the Problems drawer's two scopes is showing. Layout, not a view-local flag, for
+    /// the reason every other field here is: it is part of the arrangement the user set up, so
+    /// it survives collapsing the drawer, switching to Events and back, and a restart.
+    #[serde(default)]
+    pub problems_tab: ProblemsTab,
+}
+
+/// The two scopes of the Problems drawer (P4-15 item 3).
+///
+/// A strip *inside* one drawer body rather than a fourth entry on the rail, because these are the
+/// same kind of thing — problems — at two scopes, where the rail chooses between different
+/// surfaces entirely. (JetBrains' Problems panel splits on exactly this axis.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProblemsTab {
+    /// Every open tab's SQL diagnostics — the drawer as it was, and still the default.
+    #[default]
+    Queries,
+    /// Conditions about the **project** rather than about a query's text: defs the engine
+    /// refused, and `.strata` files that are behind the screen because a write failed.
+    Project,
 }
 
 fn default_sidebar_w() -> f32 {
@@ -128,6 +149,7 @@ impl Default for Layout {
             inspector_w: default_inspector_w(),
             drawer_h: default_drawer_h(),
             drawer_restore_h: None,
+            problems_tab: ProblemsTab::Queries,
         }
     }
 }

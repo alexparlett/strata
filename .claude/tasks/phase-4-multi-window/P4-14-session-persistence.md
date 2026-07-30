@@ -1,9 +1,9 @@
 # P4-14 · Session persistence + autosave
 
-**Phase:** 4 · **Status:** 🟡 `[core ✓ IO]` **session tabs + history + window geometry done; layout awaits its store** · **DEV_TASKS:** project lifecycle · **Depends on:** P4-13
+**Phase:** 4 · **Status:** ✅ `[core ✓ IO]` · **DEV_TASKS:** project lifecycle · **Depends on:** P4-13
 
-> **🟡 Shipped:** `.strata/session.json` **load + debounced autosave** of the open tabs, **query
-> history**, and **window geometry**.
+> **✅ Shipped:** `.strata/session.json` **load + debounced autosave** of the open tabs, **query
+> history**, **window geometry** and the **panel layout**.
 >
 > **Layering (mirrors the project store).** The **serde vocabulary lives in `strata_model`**
 > (`session.rs`: `TabId` / `Origin` / `ResultsView` / `TabSnapshot` / `WindowGeom` / `SessionSnapshot`;
@@ -41,8 +41,19 @@
 > smoke test**: a seeded project restored its tabs + active tab + window size/position, and autosave
 > rewrote `session.json` with the live geometry + tabs.
 >
-> **Deferred:** persisting **layout** — that satellite store (state-arch §8) doesn't exist in the
-> Freya app yet; fold it into `SessionSnapshot` when it lands.
+> **Layout — landed with P3-01, and *not* as the satellite this task expected.** The deferral
+> above assumed panel layout would arrive as its own store (state-arch §8) to be folded in later.
+> It didn't: P3-01 put it on `SessionState` itself as a `Layout` field under two `Persist`-deriving
+> channels (`Chan::Layout` = structure, `Chan::LayoutSize` = sizes), so it rode the autosave this
+> task had already built and needed no fold at all. `SessionSnapshot.layout` carries it
+> (`strata-model::session`), `SessionState::{snapshot, from_snapshot}` convert it, and
+> `snapshot_round_trips_layout` / `snapshot_round_trips_an_expanded_drawer` cover it — including
+> the wrinkle that an *expanded* drawer restores its restore-height rather than its expanded one.
+>
+> The generalisation is worth keeping: the `Chan::Persist` fan-in is what made this free. A new
+> field on `SessionState` whose channel derives `Persist` is persisted the moment it exists, with
+> no new writer and nothing to remember — which is why the "await its store" plan was the more
+> expensive of the two and the cheaper one happened by itself.
 >
 > **⚠️ Fork note:** `crates/freya` (submodule) gained `Platform::window_position` +
 > `WindowEvent::Moved` handling (`freya-core/src/platform.rs`, `freya-winit/src/{window,renderer}.rs`,
@@ -52,9 +63,10 @@
 ## Goal
 Keep `.strata/session.json` (and the `project.json` defs) in sync as the user works.
 
-## Current state
+## Current state *(as this task was picked up)*
 Not built (`session.rs`: "Persistence — a serde snapshot — is a later slice"). `SessionState` holds
-live `QueryTab`s whose `CodeEditorData` **isn't serde**, so persistence goes through a snapshot.
+live `QueryTab`s whose `CodeEditorData` **isn't serde**, so persistence goes through a snapshot —
+which is why `SessionSnapshot` exists at all, and still the reason it does.
 
 > **Constraint (agreed 2026-07-23): history gets its own satellite store.** The Dioxus app
 > kept run history *on the Project store* but persisted it *in `session.json`* — don't copy
@@ -75,13 +87,20 @@ live `QueryTab`s whose `CodeEditorData` **isn't serde**, so persistence goes thr
 3. **project.json** — written on catalog/def changes (view create/drop, saved-query, register/
    deregister): the durable, shareable **defs**, separate from the ephemeral session.
 4. **Dirty tracking** — a tab is dirty via `Origin` + content hash (`is_dirty = editor.is_edited()`).
-5. ⚠️ **Known bug:** editing a view's SQL + ⌘S must **update the view** (route by `Origin`), not save
-   a new saved-query — pairs with P2-16.
+5. ✅ **Known bug fixed:** editing a view's SQL + ⌘S updates the view. `actions::save_tab` routes by
+   `Origin` — `Origin::View(name)` goes to `save_view` (re-issuing `CREATE OR REPLACE VIEW`),
+   `Origin::SavedQuery(uuid)` to `save_query` — so neither can produce the other's artifact.
 
 ## Acceptance
-- [x] Edits / tabs / history / window geometry persist (debounced) and restore on reopen. *(Layout
-      pending its satellite store — see the Shipped note.)*
+- [x] Edits / tabs / history / window geometry **and layout** persist (debounced) and restore on
+      reopen.
 - [x] Catalog def changes persist to `project.json`; dirty state tracks per tab. *(P4-13 / P2-16.)*
+
+> **One thing this task deliberately did not make resilient: the failure path.** Both session
+> writers (the debounced autosave and the final save on close / re-root) report a failed write
+> through `tracing` alone, so a `session.json` that can't be written loses the session silently —
+> the final save worst, since there is no later write to make up for it and the window is already
+> going away. That is **P4-15**'s, listed in its table; don't fix it here.
 
 ## Freya / references
 - state-arch §4 (durable client model), §5 (persistence). Core `.strata/` IO. Memory

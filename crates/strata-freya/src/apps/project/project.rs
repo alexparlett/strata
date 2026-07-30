@@ -22,8 +22,8 @@ use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTa
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
     use_autosave, use_diagnostics, use_engine_config, use_engine_restart,
-    use_init_catalog_selection, use_init_history, use_init_log, use_init_project, use_init_session,
-    Chan, EngineRestart, SessionState,
+    use_init_catalog_selection, use_init_faults, use_init_history, use_init_log, use_init_project,
+    use_init_session, Chan, EngineRestart, SessionState,
 };
 use crate::apps::project::views::{
     CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
@@ -404,6 +404,10 @@ impl Component for ProjectRoot {
         // below is its first entry: every later observer (Save, the drop confirm, a tab's request
         // keeper) reaches it from context.
         let log = use_init_log();
+        // And which of its `.strata` files are currently behind the screen (P4-15) — the standing
+        // half of the same report, behind the Problems drawer's Project tab. Stood up beside the
+        // log because every writer that appends to one records into the other.
+        use_init_faults();
         // This project's store: loads `.strata/project.json` (scaffolding one when the folder
         // has none) and registers its defs on the engine as a background task — rows flip
         // Loading → Ready/Failed as answers land, and each answer is recorded in the log.

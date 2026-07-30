@@ -23,6 +23,9 @@ mod events;
 mod frame;
 mod history;
 mod problems;
+/// The project-scope tally, for the rail badge: it must be the same function the drawer's own
+/// header totals, or the two numbers disagree.
+pub use problems::project_error_count;
 
 use freya::components::{define_theme, get_theme, Tooltip, TooltipContainer};
 use freya::prelude::*;
@@ -31,7 +34,7 @@ use strata_model::DrawerTab;
 
 use self::events::Events;
 use self::history::History;
-use self::problems::Problems;
+use self::problems::{Problems, ScopeStrip};
 use super::shell::set_drawer_panel_height;
 use crate::apps::project::state::{
     clear_history, Chan, HistoryCtx, LogCtx, ProjChan, ProjectState, SessionState,
@@ -138,7 +141,6 @@ impl Component for Drawer {
                 "Problems",
                 Problems {
                     theme: theme.clone(),
-                    count,
                 }
                 .into_element(),
             ),
@@ -224,8 +226,14 @@ impl Component for Drawer {
                             .cross_align(Alignment::Center)
                             .spacing(8.)
                             .child(Caption::new(title).color(theme.label_color))
+                            // Problems puts its **scopes** here instead of a number: each tab
+                            // carries its own count, so a total beside the title would be a third
+                            // copy of the same two figures (the IntelliJ arrangement — the panel
+                            // name and its scopes share one bar). The other two tabs have one
+                            // list and so one tally.
+                            .maybe_child((tab == DrawerTab::Problems).then_some(ScopeStrip))
                             .maybe_child(
-                                (shown > 0)
+                                (tab != DrawerTab::Problems && shown > 0)
                                     .then(|| Meta::new(shown.to_string()).color(theme.meta_color)),
                             ),
                     )

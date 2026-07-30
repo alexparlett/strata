@@ -20,9 +20,9 @@ use freya::radio::{use_radio_station, RadioStation};
 
 use crate::apps::configure::{ConfigureCtx, ConfigureTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::{log_event, LogCtx, LogLevel};
+use crate::apps::project::{log_event, use_report, LogLevel, ReportCtx};
 use crate::apps::project::{
-    persisted, refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState,
+    persisted_defs, refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState,
 };
 use crate::components::divider::Divider;
 use crate::components::typography::{Control, Path};
@@ -44,7 +44,7 @@ impl Component for Footer {
         let rescan = use_consume::<CatalogRescan>();
         let catalog = use_consume::<Catalog>();
         let engine = use_consume::<EngineCtx>();
-        let log = use_consume::<LogCtx>();
+        let report = use_report();
         let platform = use_hook(Platform::get);
 
         let registering = matches!(*ctx.status.read(), Status::Registering(_));
@@ -79,7 +79,7 @@ impl Component for Footer {
             .enabled(!registering && note.is_none())
             .on_press({
                 let engine = engine.clone();
-                move |_: Event<PressEventData>| save(ctx, project, rescan, engine.clone(), log)
+                move |_: Event<PressEventData>| save(ctx, project, rescan, engine.clone(), report)
             })
             .child(Control::new(match registering {
                 true => "Validating…",
@@ -188,7 +188,7 @@ fn save(
     mut project: RadioStation<ProjectState, ProjChan>,
     rescan: CatalogRescan,
     engine: EngineCtx,
-    log: LogCtx,
+    report: ReportCtx,
 ) {
     let root = project.peek().root.clone();
     let def = ctx.draft.peek().def(&root);
@@ -208,14 +208,14 @@ fn save(
             p.remove_table(old);
         }
         p.upsert_table(def);
-        persisted(&p, log)
+        persisted_defs(&p, report)
     };
     // The store write above has already happened, so the row exists either way and **must** be
     // registered either way: returning here would leave it in `Reg::Loading` with nothing left
     // to answer it — a permanent spinner in the catalog. So the pass is asked for below whatever
     // the persist said; what the failure changes is only what this window claims.
     //
-    // `persisted` has already logged the cause, in the project window where the user will look
+    // `persisted_defs` has already logged the cause, in the project window where the user will look
     // for it. Saying so here too would be the same failure twice; what this window owes them is
     // not to claim the save happened, and not to close as though it had.
     if !landed {
@@ -243,7 +243,7 @@ fn save(
     if let Some(old) = &renamed_from {
         engine.deregister(old);
         log_event(
-            log,
+            report.log,
             LogLevel::Info,
             format!("Renamed table '{old}' to '{name}'"),
         );

@@ -661,6 +661,12 @@
             "hover_background": {
               "$ref": "#/$defs/colorPref"
             },
+            "selected_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_color": {
+              "$ref": "#/$defs/colorPref"
+            },
             "color": {
               "$ref": "#/$defs/colorPref"
             },

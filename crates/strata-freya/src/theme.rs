@@ -647,7 +647,7 @@ theme_registry! {
     "popup"          => PopupThemePreference { background: color, color: color, padding: gaps, spacing: f32 },
     "tooltip"        => TooltipThemePreference { background: color, color: color, border_fill: color, font_family: font, font_size: f32, font_weight: i32 },
     // Tabs / segmented
-    "floating_tab"     => FloatingTabThemePreference { background: color, hover_background: color, color: color, padding: gaps, corner_radius: corner },
+    "floating_tab"     => FloatingTabThemePreference { background: color, hover_background: color, selected_background: color, selected_color: color, color: color, padding: gaps, corner_radius: corner },
     "segmented_button" => SegmentedButtonThemePreference { background: color, border_fill: color, corner_radius: corner },
     "button_segment"   => ButtonSegmentThemePreference { background: color, hover_background: color, disabled_background: color, selected_background: color, focus_background: color, padding: gaps, selected_padding: gaps, color: color, selected_icon_fill: color },
     // Chips / sidebar / accordion

@@ -13,13 +13,14 @@ theme preview (`state/theme_preview.rs`) — and one window path everything open
 **`State::create_global`**, **not** a per-window Radio station; native close uses **`winit
 CloseRequested`** (no objc), and the one place objc *is* reached for is the fork's
 `set_window_parent` (P4-03 pins Settings above the window that opened it). What's left in this
-phase is the settings **categories** (P4-08's Keymap, the other four having landed with
-P4-04 / P4-05 / P4-06 / P4-07) — plus P4-13's open/create UI. **P4-09** made the window
-searchable, and settled that a setting's *name* has one home: the index generates the `Anchor`
-enum the panes build their rows from, so the results list and the row over the pane cannot spell
-one setting two ways, and the compiler catches a jump that would land nowhere. It also gave the
-shared form row a **reveal** (scroll-into-view + a one-shot flash), and indexed the engine's
-properties off `ENGINE_KEYS` rather than a chosen few. **P4-11** shipped the
+phase is nothing: every settings **category** has landed (P4-04 / P4-05 / P4-06 / P4-07 /
+P4-08's Keymap), and **P4-13**'s remaining "open/create UI" turned out not to be a thing the
+design has — the canvas states Open is the only entry point, creating if missing. **P4-09** made
+the window searchable, and settled that a setting's *name* has one home: the index generates the
+`Anchor` enum the panes build their rows from, so the results list and the row over the pane
+cannot spell one setting two ways, and the compiler catches a jump that would land nowhere. It
+also gave the shared form row a **reveal** (scroll-into-view + a one-shot flash), and indexed the
+engine's properties off `ENGINE_KEYS` rather than a chosen few. **P4-11** shipped the
 Configure-table window as one task, not two (**P4-12 was folded into it**: the format dropdown is
 what selects the import-option set, the option set moves the file-extension filter, and both halves
 reach the engine through one `TableSpec`), and settled two things every later surface inherits —
@@ -38,14 +39,14 @@ to merge it. **P4-05 settled what every later pane is made of**: `components::fo
 them (the module composes `Form` > `Row` > control, the register being a `Variant` on the form).
 The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebuild.
 
-> **Pull P4-15 before the remaining writers.** `.strata` write failures are reported through
-> `tracing` and nowhere the user can see. **P4-11 added a new mutation site** and routed it
-> through P3-13's `actions::persisted`, gating its own success on the answer — so the funnel now
-> has three callers and one of them proves the shape works. P4-10 landed ahead of it and reports both
-> arms through P3-13's `log_event` directly — leaving P4-15 the question of whether an export,
-> which writes where the *user* chose rather than into `.strata`, belongs in that funnel at all. P3-13 fixed the three def-mutation paths
-> it touched (Save, Save-as-view, drop) and gave them one helper; P4-15 generalises it, covers the
-> session / history / app-config writers, and settles what the UI says while a write is failing.
+> **P4-15's silence is fixed; its *standing condition* isn't.** Every `.strata` and app-config
+> writer now reports a failed write as an event and answers whether it landed — one funnel
+> (`apps/project/state/persist.rs`), covering defs, session and history, plus
+> `strata_core::config::save` finally returning its `Result`. What remains is the half that makes
+> a failure visible for as long as it *holds* rather than only when it happened (item 3), and the
+> destructive-case decision (item 4). Both matter beyond their own task: the final session save on
+> the way down records into a log that dies with its window, and the eight bookkeeping config
+> writes deliberately report nowhere, and neither is answerable with another event row.
 > It is the *write*-side counterpart to **P4-01 item 5** (a file that won't load closes the
 > window) — and deliberately not a phase-5 item: P5 is design polish, not resiliency.
 
@@ -64,10 +65,10 @@ The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebu
 | P4-09 | Settings search | ✅                                                                                                                          | W3 | P4-03 |
 | P4-10 | Export window (rebuild to canvas) | ✅                                                                                                                          | D6/U13 | P4-01, P2-01 |
 | P4-11 | Configure-table window (register / edit + import options) | ✅                                                                                                                          | U14/D7/D8 | — |
-| P4-13 | Open / create a project (`.strata/` load) | 🟡 internals + the open path done (`OpenPref` honoured everywhere; This Window = keyed remount); **New Project** UI remains | lifecycle | P4-01 · *pull early* |
-| P4-14 | Session persistence + autosave | 🟡 tabs + history + window geometry done (load + autosave, incl. a final save on close/re-root); layout awaits its store    | lifecycle | P4-13 |
-| P4-15 | `.strata` write resiliency (one funnel, nothing silent) | ⬜                                                                                                                          | lifecycle | P4-13, P4-14, P3-13 |
-| P4-16 | Child-window lifetimes across an engine restart | ✅ one `Subtree` + `use_owner_pin`, replacing the two near-verbatim pins                                                     | — | P4-10, P4-11 |
+| P4-13 | Open / create a project (`.strata/` load) | ✅ *(the "New Project UI" it was holding open isn't a thing the design has — Open creates if missing; see the file)* | lifecycle | P4-01 |
+| P4-14 | Session persistence + autosave | ✅ *(layout landed with P3-01 on `SessionState` rather than as its own store, so it rode the autosave already built)* | lifecycle | P4-13 |
+| P4-15 | `.strata` write resiliency (one funnel, nothing silent) | ✅ *(item 8's shared wording pass waits on P4-01 item 5)* | lifecycle | P4-13, P4-14, P3-13 |
+| P4-16 | Child-window lifetimes across an engine restart | ✅ one `Subtree` + `use_owner_pin`, replacing the two near-verbatim pins | — | P4-10, P4-11 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

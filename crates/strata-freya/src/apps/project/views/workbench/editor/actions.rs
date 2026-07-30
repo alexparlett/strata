@@ -19,8 +19,8 @@ use uuid::Uuid;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, QuerySpec, RunId, DEFAULT_PAGE_SIZE};
 use crate::apps::project::state::{
-    catalog_settled, log_event, Catalog, Chan, LogCtx, LogLevel, ProjChan, ProjectState,
-    SessionState,
+    catalog_settled, log_event, persisted_defs, Catalog, Chan, LogCtx, LogLevel, ProjChan,
+    ProjectState, ReportCtx, SessionState,
 };
 
 /// A Run / Explain / Analyze press (P2-15 + ⌘↵): snapshot the tab's editor text *now*,
@@ -153,18 +153,18 @@ pub fn save(
     project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
     catalog: Catalog,
-    log: LogCtx,
+    report: ReportCtx,
     id: TabId,
 ) {
     let Some((sql, name, origin)) = read_tab(session, id) else {
         return;
     };
     match origin {
-        Origin::View(view) => {
-            save_view(session, project, engine, catalog, log, id, view, sql, false)
-        }
-        Origin::SavedQuery(qid) => save_query(session, project, log, id, qid, name, sql),
-        Origin::Scratch => save_query(session, project, log, id, Uuid::new_v4(), name, sql),
+        Origin::View(view) => save_view(
+            session, project, engine, catalog, report, id, view, sql, false,
+        ),
+        Origin::SavedQuery(qid) => save_query(session, project, report, id, qid, name, sql),
+        Origin::Scratch => save_query(session, project, report, id, Uuid::new_v4(), name, sql),
     }
 }
 
@@ -176,7 +176,7 @@ pub fn save_as_view(
     project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
     catalog: Catalog,
-    log: LogCtx,
+    report: ReportCtx,
     id: TabId,
 ) {
     let Some((sql, _, _)) = read_tab(session, id) else {
@@ -189,29 +189,9 @@ pub fn save_as_view(
             .find(|n| p.name_in_use(n).is_none())
             .unwrap()
     };
-    save_view(session, project, engine, catalog, log, id, name, sql, true);
-}
-
-/// Write the project file at a mutation point, and **record it if that fails**. `true` when the
-/// defs really reached disk.
-///
-/// Shared by both save paths and by the drop confirm (P3-13): `save_defs` failing used to be a
-/// `tracing::error!` and nothing more, which is invisible in the app — and the event log beside it
-/// would then claim the mutation stuck. One wording for all of them, and deliberately not naming
-/// the subject: the event that precedes or follows it already does.
-pub fn persisted(project: &ProjectState, log: LogCtx) -> bool {
-    match project.save_defs() {
-        Ok(()) => true,
-        Err(e) => {
-            tracing::error!("save project defs: {e}");
-            log_event(
-                log,
-                LogLevel::Error,
-                format!("Could not write the project file: {e}"),
-            );
-            false
-        }
-    }
+    save_view(
+        session, project, engine, catalog, report, id, name, sql, true,
+    );
 }
 
 /// The tab's savable state: `(sql, trimmed name, origin)`; `None` when the tab is
@@ -235,7 +215,7 @@ fn save_view(
     mut project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
     catalog: Catalog,
-    log: LogCtx,
+    report: ReportCtx,
     id: TabId,
     name: String,
     sql: String,
@@ -250,7 +230,7 @@ fn save_view(
             name: name.clone(),
             sql: sql.clone(),
         });
-        persisted(&p, log)
+        persisted_defs(&p, report)
     };
     session.write_channel(Chan::Tabs).bind_saved(
         id,
@@ -263,7 +243,7 @@ fn save_view(
                 // Only when it is really saved — the write failure above has already said so,
                 // and claiming both would be two rows arguing about one action.
                 if persisted {
-                    log_event(log, LogLevel::Ok, format!("Saved view '{name}'"));
+                    log_event(report.log, LogLevel::Ok, format!("Saved view '{name}'"));
                 }
                 project
                     .write_channel(ProjChan::Views)
@@ -272,7 +252,7 @@ fn save_view(
             Err(e) => {
                 tracing::error!("create view '{name}' failed: {e}");
                 log_event(
-                    log,
+                    report.log,
                     LogLevel::Error,
                     format!("View '{name}' failed to register: {e}"),
                 );
@@ -293,7 +273,7 @@ fn save_view(
 fn save_query(
     mut session: Radio<SessionState, Chan>,
     mut project: RadioStation<ProjectState, ProjChan>,
-    log: LogCtx,
+    report: ReportCtx,
     id: TabId,
     qid: Uuid,
     name: String,
@@ -319,10 +299,10 @@ fn save_query(
             sql,
             meta,
         });
-        persisted(&p, log)
+        persisted_defs(&p, report)
     };
     if saved {
-        log_event(log, LogLevel::Ok, format!("Saved query '{name}'"));
+        log_event(report.log, LogLevel::Ok, format!("Saved query '{name}'"));
     }
     session
         .write_channel(Chan::Tabs)

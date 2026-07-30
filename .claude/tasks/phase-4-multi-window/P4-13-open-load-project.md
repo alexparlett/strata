@@ -1,6 +1,6 @@
 # P4-13 · Open / create a project (`.strata/` load)
 
-**Phase:** 4 · **Status:** 🟡 `[core ✓ IO]` **internals + open routing done; new-project UI pending** · **DEV_TASKS:** project lifecycle · **Depends on:** P4-01 · **Feeds:** Phase 2/3 (the window needs a real project)
+**Phase:** 4 · **Status:** ✅ `[core ✓ IO]` · **DEV_TASKS:** project lifecycle · **Depends on:** P4-01 · **Feeds:** Phase 2/3 (the window needs a real project)
 
 > **🟡 Landed (internals, no UI):** `strata_core::project` (`.strata/project.json` defs IO:
 > load/save/scaffold + `resolve_source`/`relativize`), `Engine::create_view`/`drop_view` (consuming
@@ -11,9 +11,27 @@
 > `strata-core/tests/project_load.rs` against `sample/`.
 >
 > **✅ Landed (the open path + This/New prompt, 2026-07-25).** `OpenPref` is read at last.
-> Everything below is built; what remains of this task is the **new-project** UI (a *create*
-> flow — the picker only opens existing folders, scaffolding one silently if it has no
-> `.strata/`) and window title/switcher polish.
+> Everything below is built.
+>
+> **✅ Closed (2026-07-30): there is no New Project flow, by design.** What this file called the
+> remaining work — "a *create* flow, since the picker only opens existing folders, scaffolding one
+> silently if it has no `.strata/`" — reads that scaffold as a fallback covering for a missing
+> affordance. It is the design's actual answer. The handoff's `FEATURES.md` states it outright:
+> *"Open… is the only entry point — there is no separate 'New project'. Open points at a folder:
+> if a project dir exists there it's opened; if not, one is created from the folder name.
+> (Open-creates-if-missing.)"* — and `Launcher.dc.html` carries exactly one action, `OPEN`, with no
+> create button anywhere in the canvas set.
+>
+> That is what's built, and it needs no UI of its own because the OS picker already has the
+> missing half: `pick_project_folder` is `rfd`'s `pick_folder()`, whose own **New Folder** button
+> is how a user makes the folder, and `use_init_project` scaffolds `.strata/` into whatever comes
+> back. A "New Project…" item would be the same two steps behind a second name.
+>
+> **Window title / switcher** is likewise done, and split the way the design splits it: the
+> *switcher* names the project (`header::project_menu` reads `ProjectState` on `ProjChan::Meta`, so
+> a re-root relabels it), while the OS title stays a static `"Strata"` — the window sets
+> `with_title_hidden(true)` and draws its own bar, so the title string is what Mission Control and
+> the Window menu read, not anything the user sees in the app.
 >
 > - **`platform::open` — one routing, four surfaces.** `OpenCtx` (the window's current project
 >   root + its pending This/New question) is provided at the project window root, and ⌘O,
@@ -57,9 +75,9 @@ state-arch §5). `project.json` = shareable catalog **defs** (committed); `sessi
 session state (gitignored).
 
 The header switcher, ⌘O, File ▸ Open… and File ▸ Open Recent all open real projects through the
-one `platform::open` path, honouring `OpenPref` (see the landed note above). What is **not** built
-is *creating* a project deliberately: today a picked folder without a `.strata/` is scaffolded
-silently, which is the right fallback but not a New Project affordance.
+one `platform::open` path, honouring `OpenPref` (see the landed note above). A picked folder
+without a `.strata/` is scaffolded into one — which is the design's whole create story, not a
+fallback standing in for a missing affordance (see the closed note above).
 
 ## Build (state-arch §5)
 1. On open (launcher P4-02 / Open Recent / folder pick), read **`.strata/project.json`** — catalog
@@ -68,7 +86,8 @@ silently, which is the right fallback but not a New Project affordance.
 2. Read **`.strata/session.json`** (`SessionSnapshot`) → rebuild each `QueryTab`
    (`CodeEditorData::new(Rope::from(text), lang)`), the order / active / closed stack, history, layout,
    inspector selection, and window geometry.
-3. **New project:** scaffold a `.strata/` dir (`project.json` + `session.json`) for a chosen folder.
+3. ✅ **New project:** scaffold a `.strata/` dir (`project.json` + `session.json`) for a chosen
+   folder — reached through Open, which is the only entry point the design has (closed note above).
 4. Set `project_path` on the Project store; window title / switcher reflect it.
 5. ✅ **The re-open-in-place bug is designed out** (Known bugs): re-opening the already-open project
    is a no-op (`decide` returns `Nothing`), and opening a *different* project in place remounts
@@ -82,8 +101,8 @@ silently, which is the right fallback but not a New Project affordance.
 
 ## Acceptance
 - [x] Opening a `.strata/` project registers its tables/views and restores tabs + history + layout.
-- [ ] New-project scaffolds a `.strata/` dir; re-opening the same project doesn't corrupt paths.
-      (The re-open half holds — see build item 5. The **New Project** affordance is what's left.)
+- [x] New-project scaffolds a `.strata/` dir; re-opening the same project doesn't corrupt paths.
+      (Scaffolding is Open's, per the design; the re-open half holds by construction — build item 5.)
 - [x] An open from a window that already has a project honours `OpenPref`: This Window re-roots in
       place, New Window opens one, Ask raises the prompt, and "Remember" persists the answer.
 

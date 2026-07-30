@@ -19,7 +19,7 @@ use strata_model::{ColRef, ColumnInfo, Kind, Origin, SavedQuery, SourceFormat, T
 use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::project::state::CatalogState;
+use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
@@ -220,6 +220,11 @@ fn runner() -> (TestingRunner, Handles) {
             // the window is opened by the project root's launcher, which is not mounted here.
             r.provide_root_context(|| State::create(None::<ConfigureTarget>));
             let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
+            // Where the one action in these menus that writes `project.json` itself — the
+            // saved-query rename — reports a failed write (P4-15): the event log, and the
+            // write-fault satellite that holds the condition after it.
+            r.provide_root_context(|| State::create(Log::default()));
+            r.provide_root_context(|| State::create(PersistFaults::default()));
             (
                 filter,
                 selection,

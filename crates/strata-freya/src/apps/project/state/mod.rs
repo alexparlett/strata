@@ -10,6 +10,7 @@ mod engine_config;
 mod history;
 mod hooks;
 mod log;
+mod persist;
 mod project;
 mod session;
 
@@ -40,5 +41,15 @@ pub use hooks::{
 #[cfg(test)]
 pub use log::Log;
 pub use log::{log_event, use_init_log, use_run_logging, LogCtx, LogLevel};
+/// Only the Project scope's own tests name the file enum directly; production code reaches it
+/// through the funnel, which is the point — a writer names its store, not a path.
+#[cfg(test)]
+pub use persist::ProjectFile;
+/// The defs write is the only one that leaves `state/` — every catalog mutation site is a view
+/// (or, for Configure, another window's). The session and history writers live in here beside
+/// their stores, and reach `persist` directly.
+pub use persist::{
+    persisted_defs, use_init_faults, use_report, FaultsCtx, PersistFaults, ReportCtx,
+};
 pub use project::{ProjChan, ProjectState, Reg};
 pub use session::{ProblemGroup, SessionState, Stamp};

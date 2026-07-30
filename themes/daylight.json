@@ -611,7 +611,7 @@
         "reference": "disabled"
       },
       "value_color": {
-        "reference": "text_placeholder"
+        "reference": "text_muted"
       },
       "message_color": {
         "reference": "text_secondary"
@@ -829,6 +829,18 @@
       },
       "hover_background": {
         "reference": "surface_hover"
+      },
+      "selected_background": {
+        "reference": "active"
+      },
+      "selected_color": {
+        "reference": "text_primary"
+      },
+      "corner_radius": {
+        "specific": 4
+      },
+      "padding": {
+        "specific": [3, 8, 3, 8]
       },
       "color": {
         "reference": "text_secondary"

@@ -122,12 +122,25 @@ Things that must not regress. Each was fought for once already.
   starts_with("superseded")`) that happened to be right. Two copies, one already drifted; both now
   call the predicate. A surface showing a settled `Err` must map every one of them to something the
   user reads as "you stopped this", never as a fault — and none of them may reach Problems.
-- **Problems is the SQL-validation surface; a run failure is the results pane's.** A failure
-  belongs to a run, not to the text — it can describe SQL the buffer no longer holds, it can't
-  self-clear by typing, and `cancel`/supersede settle `Err("cancelled")`/`Err("superseded")`
-  that no user should ever read as a problem. Putting it in a cross-tab view costs either a copy
-  on the store that outlives the run, or one freya-query subscription per tab in the drawer
-  *and* in the rail badge. The results pane already renders it in full.
+- **Problems holds *conditions*, at two scopes; a run failure is the results pane's.** The test
+  for admission is not "is it about SQL" but **"is it true right now, and does it retract itself
+  when it stops being true"** — which is why the drawer's header carries a scope strip
+  (`Queries` · `Project`, P4-15) rather than one list. Queries holds the SQL diagnostics; Project
+  holds defs the engine refused and `.strata` files a failed write left behind. Three kinds of
+  state sort themselves on that test: a **reconciliation** is re-derived from live inputs (a
+  diagnostic, a `Reg::Failed` row), a **remembered condition** cannot be re-derived but still
+  retracts (a write fault — an observer records it, a later successful write clears it), and an
+  **event** describes something already finished and belongs in the log, not here.
+  A **run failure** fails that test and stays the results pane's: it describes SQL the buffer no
+  longer holds, it can't self-clear by typing, and `cancel`/supersede settle
+  `Err("cancelled")`/`Err("superseded")` that no user should ever read as a problem. Putting it
+  in a cross-tab view costs either a copy on the store that outlives the run, or one freya-query
+  subscription per tab in the drawer *and* in the rail badge. The results pane renders it in full.
+  Two corollaries the split makes load-bearing: the rail badge and the header must total **every**
+  scope from the same functions the scopes use, or the badge goes quiet while the project under it
+  is broken; and a repeating writer must record its **transition** as the event and hold the rest
+  as the condition — both in the log and in the store, since re-recording an identical fault wakes
+  every subscriber as surely as re-logging it buries every other row.
 - **JSON is read by our own `FileFormat`, and a replaced reader inherits the replaced reader's
   diagnostics.** `engine::json_poly` is now the *only* JSON reader — arrow's `JsonFormat` is not
   constructed anywhere. It exists because arrow's inference admits five type combinations and

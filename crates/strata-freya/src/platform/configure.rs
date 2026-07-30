@@ -76,7 +76,7 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             launch.catalog,
             launch.engine.clone(),
             launch.target.clone(),
-            launch.log,
+            launch.report,
             owner,
         ));
         // Registered here rather than left to the window's own `use_register_window`, which can
