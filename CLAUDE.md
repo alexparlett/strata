@@ -62,8 +62,9 @@ A virtual workspace (no root package). `cargo run` at the root targets the **Fre
 Members:
 
 - **`strata-freya`** — the Freya (Skia/native) frontend. **The port target** and the default build.
-- **`strata-core`** — engine logic: the DataFusion boundary (query/plan/profile/serialize), config,
-  theme, SQL language service. The only place DataFusion is touched.
+- **`strata-core`** — engine logic: the DataFusion boundary (query/plan/profile/serialize/value_tree),
+  config, theme, SQL language service. The only place DataFusion is touched — bar a **dev**-dependency
+  in `strata-freya`, so a test can build an Arrow fixture without bending a signature to be testable.
 - **`strata-model`** — leaf data vocabulary, serde-only (schema, results, catalog, form, history,
   session, query_error). No logic. (The event log is *not* here: it is ephemeral app state —
   `strata-freya::apps::project::state::log`.)
@@ -486,11 +487,15 @@ src/apps/project/                the project window (Valin-shaped)
                                  grid / explain / error) off the workbench's `request` slot
         datagrid/                mod, header, cell, model  (sticky typed header, virtualized cells,
                                  per-column resize + double-click autofit)
-        record_view.rs           the whole-row modal (P2-10) and the nested-value modal (P2-12).
-        cell_view.rs             Their JSON blocks are `cell_preview_json`'s **bounded** previews
-                                 (P2-24) — the record view computes the row's in one memo, the grid
-                                 one per double-click, and neither serializes a whole value on the
-                                 UI thread. The complete value is a Copy away (`copy.rs`)
+        record_view.rs           the whole-row modal (P2-10): its nested blocks are
+                                 `cell_preview_json`'s **bounded, sampled** text (P2-24), built once
+                                 per row through a synchronous `PreviewMemo` rather than per render
+        cell_view.rs             the nested-value modal (P2-12) — a **lazy tree** since P2-25, not
+        value_tree.rs            text. cell_view is the card; value_tree is its model (the
+                                 expanded-path set, the flat row projection Freya's `Tree` is
+                                 virtualized over, and `PAGE`-at-a-time widening with a `… N more`
+                                 tail). It carries the `RecordBatch`, which *keeps* P2-12's snapshot
+                                 rule: the arrays it reads are the ones it opened with
         copy.rs                  the shared results-copy path (P2-11) — the *unbounded*
                                  serializers, off the render thread, where the whole value is asked
                                  for

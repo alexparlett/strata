@@ -212,6 +212,41 @@ Things that must not regress. Each was fought for once already.
   all-null column infers as `DataType::Null`, whose nulls are *logical*, so `Array::is_null` says
   false for every index and `NullEncoder::encode` is `unreachable!()`. Found by running the real
   file, like every `json_poly` rule.
+- **An inspector reads the Arrow arrays; only a *document excerpt* goes through text.** The nested-cell
+  tree (P2-25, `engine::value_tree`) addresses a node by a path of **entry indices** — not names, so a
+  duplicate or reordered key cannot mis-resolve, and a list has none — and resolves it with O(1) Arrow
+  slices, so the last 30 of 19,311 siblings costs what the first 30 does (11µs vs 13µs). It emits no
+  JSON, and not as an optimisation: a tree already carries the structure braces exist to express, so
+  encoding to text is work done to be re-parsed by the eye, and it *loses* what the tree needs — a leaf
+  arrives quoted and a node's type lives in the schema rather than anywhere in the JSON. Leaves go
+  through the **same `ArrayFormatter` the grid formats a cell with** and the same `util::clip`, so one
+  value cannot be described two ways. The record view's sampled preview stays JSON because it is a
+  document *excerpt*, where the braces are the point. Two traps generalise. A window must carry
+  **absolute** indices, or a path built from a second page addresses the wrong entry. And clipping is
+  only a bound if it happens **before** materialization — `ArrayFormatter` renders through `Display`, so
+  asking it for a 30MB leaf and clipping afterwards is the unbounded copy this design exists to remove,
+  reintroduced one row at a time; read the `&str` off the array and clip the borrow.
+- **A virtualized list scrolls its cross axis already; a row that `fill`s is what stops it.**
+  `VirtualScrollView` offsets its content by the cross-axis scroll, measures that scrollbar from the
+  content size, and applies X wheel delta — `ScrollView` uses the identical structure, and its own
+  comment says the content box is *fill-sized to the viewport, its offset scrolls its children, not
+  itself*. So a row sized `Size::fill()` clamps itself to the visible width, nothing ever exceeds the
+  box, and there is nothing to overflow; a row that **hugs** is the whole fix. Three attempts to
+  "add" the capability were wrong and each is a general trap: sizing the content rect explicitly makes
+  `area == inner_sizes` so `is_scrollbar_visible` finds nothing — **you cannot widen the box whose
+  narrowness is what scrolls**; `min_width(Size::percent(100.))` does not floor a hugged width in
+  torin, it **adds** to it (a 900px row became 1400, a 50px row 550); and a `Fill` child resolves
+  against the space *available to its parent*, never a hugged parent's final width, so "content hugs,
+  rows fill it" is inexpressible. Verify a layout question with a `torin/tests` case before building
+  on the answer — all three of those took one small test to settle and a build each to guess wrong.
+  The accepted cost is that a hugging row's hover fill stops at its content, which is a **theme**
+  decision at the consumer (Strata's `tree` sets those fills transparent), not a component change.
+- **A recursive `Debug` is not a cheap way to get a type's name.** `catalog::short_type` was
+  `format!("{dt:?}")` with the first word taken off the front; `DataType`'s `Debug` recurses, so on a
+  19,311-key struct that one call rendered the entire subtree as text to discard nearly all of it —
+  18ms, and `column_info` makes it per field all the way down, i.e. quadratic in the schema. Matching
+  the composite variants by name took it to 3.8µs and ~19% off every query on that file. Leaf variants
+  keep the generic path because their `Debug` is a single term.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the
