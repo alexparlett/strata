@@ -30,7 +30,7 @@ use freya::prelude::*;
 use strata_core::config::Command;
 
 use self::project_menu::ProjectMenu;
-use crate::agent::AgentStatusDot;
+use crate::agent::{use_agent_enabled, AgentStatusDot};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Title;
@@ -162,6 +162,9 @@ impl Component for HeaderBar {
         // above this one) and the app-globals.
         let platform = use_hook(Platform::get);
         let app = use_consume::<AppCtx>();
+        // Whether agent access is on at all — read here so that when it is not, the cluster has
+        // no node for it rather than an empty one (see `agent::status`).
+        let agent_on = use_agent_enabled();
 
         // The brand: the app mark in a rounded, clipped tile (the SVG is square and paints its
         // own colours), then the wordmark in the scale's Title role — ui 600 14.5, the comp's.
@@ -200,9 +203,12 @@ impl Component for HeaderBar {
             .cross_align(Alignment::Center)
             .spacing(8.)
             // Agent access (AA-03), left of the controls: a state, not a control, so it wears
-            // no button dress and is absent entirely while the setting is off.
-            .child(AgentStatusDot {
-                agent: app.agent.clone(),
+            // no button dress. `maybe` rather than a component that renders nothing — this row
+            // spaces its children, so an empty node would still cost a gap.
+            .maybe(agent_on, |el| {
+                el.child(AgentStatusDot {
+                    agent: app.agent.clone(),
+                })
             })
             .child(tip(
                 search_title,

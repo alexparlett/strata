@@ -38,7 +38,7 @@ use freya::prelude::State;
 
 pub use directory::AgentDirectory;
 pub use server::use_agent_server;
-pub use status::AgentStatusDot;
+pub use status::{use_agent_enabled, AgentStatusDot};
 
 use server::Running;
 
@@ -53,8 +53,11 @@ use server::Running;
 /// no stop call to forget.
 #[derive(Clone)]
 pub struct AgentCtx {
-    pub directory: Arc<AgentDirectory>,
-    server: State<Option<Running>>,
+    /// `pub(crate)` like the slot beside it: the directory's one consumer is the window's
+    /// bridge, and the module doc above is the seam. A `pub` field would invite a second
+    /// consumer reaching past it.
+    pub(crate) directory: Arc<AgentDirectory>,
+    pub(crate) server: State<Option<Running>>,
 }
 
 /// Both fields are handles on process-wide singletons created before the first window, so two

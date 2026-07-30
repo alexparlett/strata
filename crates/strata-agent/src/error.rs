@@ -22,6 +22,7 @@ use rmcp::handler::server::tool::IntoCallToolResult;
 use rmcp::model::{CallToolResponse, CallToolResult, ContentBlock};
 use rmcp::ErrorData;
 use strata_core::engine::sql::PolicyRefusal;
+use strata_model::TabId;
 
 use crate::host::Project;
 
@@ -49,6 +50,18 @@ pub enum AgentError {
     NoProject,
     /// The bridge went while the ask was out — the window closed, or re-rooted.
     WindowGone,
+}
+
+impl AgentError {
+    /// The one wording for a tab handle nothing open answers to.
+    ///
+    /// Here rather than at each site because it was written four times across two crates — the
+    /// tool layer, the mock and the app's own driver — and `list_tabs` being *the* recovery from
+    /// this condition only works if every host states it the same way (AGENTS.md §3: merge
+    /// near-duplicate messages rather than stack them).
+    pub fn no_such_tab(tab: TabId) -> AgentError {
+        AgentError::NotFound(format!("No open tab '{}'.", tab.0))
+    }
 }
 
 impl fmt::Display for AgentError {

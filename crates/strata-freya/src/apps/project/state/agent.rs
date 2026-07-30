@@ -127,7 +127,7 @@ async fn drive(
             }
             AgentAsk::CloseTab { tab, reply } => {
                 let Some(named) = named(session, tab) else {
-                    let _ = reply.send(Err(no_such_tab(tab)));
+                    let _ = reply.send(Err(AgentError::no_such_tab(tab)));
                     continue;
                 };
                 // **The close funnel, not the gate in front of it.** `close_one` plus the
@@ -153,7 +153,7 @@ async fn drive(
                 reply,
             } => {
                 let Some(named) = named(session, tab) else {
-                    let _ = reply.send(Err(no_such_tab(tab)));
+                    let _ = reply.send(Err(AgentError::no_such_tab(tab)));
                     continue;
                 };
                 let spec = QuerySpec {
@@ -198,12 +198,6 @@ async fn drive(
 fn named(session: Radio<SessionState, Chan>, tab: TabId) -> Option<String> {
     let session = session.read();
     session.tabs.contains_key(&tab).then(|| session.name(tab))
-}
-
-/// What a tool says about a tab handle nothing open answers to. One wording, because
-/// `list_tabs` is the recovery from every one of them.
-fn no_such_tab(tab: TabId) -> AgentError {
-    AgentError::NotFound(format!("No open tab '{}'.", tab.0))
 }
 
 /// The vocabulary's mode as a press's.
@@ -497,6 +491,18 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// **An `explain` never asks for `ANALYZE`**, and the difference is not cosmetic: an
+    /// `EXPLAIN ANALYZE` *executes* the query, which is the opposite of what a caller asking
+    /// for a plan wants and costs exactly what they were avoiding.
+    #[test]
+    fn explain_plans_the_query_rather_than_running_it() {
+        assert_eq!(
+            query_mode(RunMode::Explain),
+            QueryMode::Explain { analyze: false }
+        );
+        assert_eq!(query_mode(RunMode::Run), QueryMode::Run);
     }
 
     /// Strip order, and the tri-state: a tab that has never run is `Empty`, one whose press

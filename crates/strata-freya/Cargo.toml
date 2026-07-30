@@ -23,8 +23,11 @@ strata-agent = { path = "../strata-agent" }
 
 # `tokio::sync` only, and only for the agent bridge's ask channel: mpsc + oneshot are
 # runtime-agnostic (they wake a waker, whoever polls it), which is the whole reason the
-# server's Tokio runtime can talk to Freya's UI executor at all. **Not** a runtime here —
-# there is still no Tokio in this crate, and `rt` is deliberately not among the features.
+# server's Tokio runtime can talk to Freya's UI executor at all. Naming just `sync` states
+# what this crate *uses*; it does not and cannot restrict what is compiled, because
+# `strata-core` depends on tokio with `full` and Cargo unifies features across the graph.
+# There is still no Tokio runtime **started** here — the engine owns one and the agent server
+# owns another, and this crate awaits their handles on Freya's own executor.
 tokio = { version = "1", default-features = false, features = ["sync"] }
 
 # Our owned code-editor surface (vendored from freya-code-editor; see the crate's lib.rs).

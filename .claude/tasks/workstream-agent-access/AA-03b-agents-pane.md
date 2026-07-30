@@ -20,6 +20,14 @@ than the agent:
 - **Contention.** Every open tab is validated by the window's one diagnostics driver, and each
   validation is a dry plan on the **same engine** the user's own press needs. Agent tabs make
   the user's queries slower.
+- **The user's own buffer is reachable**, which is the sharpest of the four and the one with no
+  patch. `list_tabs` hands an agent *every* open tab, the user's included, and a `run` on one
+  calls `actions::load_sql` — so an agent can replace SQL the user is in the middle of typing.
+  It is undoable and it is what "shared, last-writer-wins" literally licenses, but that rule was
+  written about a tab the agent opened, not about the one the user is working in. Fixing it
+  inside AA-03 means either re-introducing the ownership state that was just deleted, or making
+  `list_tabs` lie about what is open. Under AA-03b it cannot arise: the agent has no handle on a
+  user's tab to begin with. **This is the reason the redesign is a redesign and not a guard.**
 
 What was right about §1 is the half about *results*: an agent step is a real snapshot the user
 can page, sort, export and take over, which is what makes this better than a generic

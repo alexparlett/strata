@@ -13,11 +13,12 @@
 //! window must not depend on.
 //!
 //! So the dot samples. It costs a `peek` and an uncontended `try_read` every
-//! [`POLL`], and it costs it **only while a server is configured**: [`AgentStatusDot`] renders
-//! [`AgentDot`] — which is where the hooks live — only when the setting is on, so the default
-//! (off) app has no timer at all. `try_read` rather than a wait for the same reason: a status
-//! light is not worth a frame, and a sample that could not be taken leaves the last one
-//! standing rather than reporting a disconnection that did not happen.
+//! [`POLL`], and it costs it **only while a server is configured**: the header mounts
+//! [`AgentStatusDot`] — which is where the hooks live — only when [`use_agent_enabled`] says
+//! so, and a component that is not mounted runs no timer, so the default (off) app has none.
+//! `try_read` rather than a wait for the same reason: a status light is not worth a frame, and
+//! a sample that could not be taken leaves the last one standing rather than reporting a
+//! disconnection that did not happen.
 
 use std::time::Duration;
 
@@ -62,35 +63,30 @@ impl Presence {
     }
 }
 
-/// The dot, or nothing at all.
+/// Whether the header should show the dot at all — read by whoever hosts it, so that when the
+/// answer is no there is **no node**, not an empty one.
 ///
-/// Two components rather than one `maybe`, because the hooks belong to the half that is
-/// conditional: a component that is not mounted runs no timer, which is what makes the feature
-/// free for everyone who has not turned it on.
+/// The conditional has to live in the parent rather than inside a wrapper component: a
+/// container that renders an empty `rect()` still counts as a child, and the header cluster
+/// spaces its children — so a "hidden" dot left an 8px gap for everybody with the feature off,
+/// which is everybody by default.
+pub fn use_agent_enabled() -> bool {
+    use_config(ConfigChan::Settings)
+        .read()
+        .settings
+        .agent_access
+        .enabled
+}
+
+/// The dot. Mounted only when [`use_agent_enabled`] says so, which is what keeps the poll
+/// below from existing at all in the default app: the hooks are here, and a component that is
+/// not mounted runs no timer.
 #[derive(PartialEq)]
 pub struct AgentStatusDot {
     pub agent: AgentCtx,
 }
 
 impl Component for AgentStatusDot {
-    fn render(&self) -> impl IntoElement {
-        let enabled = use_config(ConfigChan::Settings)
-            .read()
-            .settings
-            .agent_access
-            .enabled;
-        rect().maybe_child(enabled.then(|| AgentDot {
-            agent: self.agent.clone(),
-        }))
-    }
-}
-
-#[derive(PartialEq)]
-struct AgentDot {
-    agent: AgentCtx,
-}
-
-impl Component for AgentDot {
     fn render(&self) -> impl IntoElement {
         let theme = use_theme();
         let (success, warning, idle) = {

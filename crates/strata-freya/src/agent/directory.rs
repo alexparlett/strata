@@ -46,6 +46,12 @@ const ASK_QUEUE: usize = 16;
 /// drop before the incoming mount, keying on the root would make that ordering load-bearing
 /// for correctness rather than merely for tidiness — and the failure if it ever changed is
 /// silent (the agent stops seeing a project that is right there).
+///
+/// **Lookup is the other half of that**, and it is why every `find` here walks in `rev()`:
+/// registrations are pushed, so the newest match is last, and two entries sharing a root can
+/// only ever be an outgoing mount and its replacement. Taking the first would hand the agent
+/// the dead engine's `Arc` and a sender whose driver is being torn down — the same
+/// ordering dependency this id exists to remove, left in place on the read path.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RegId(u64);
 
@@ -114,6 +120,7 @@ impl AgentDirectory {
             .lock()
             .unwrap()
             .iter()
+            .rev()
             .find(|w| w.root == project)
             .map(|w| w.asks.clone())
             .ok_or(AgentError::WindowGone)
@@ -162,6 +169,7 @@ impl Host for AgentDirectory {
             .lock()
             .unwrap()
             .iter()
+            .rev()
             .find(|w| w.root == project)
             .map(|w| Arc::clone(&w.engine))
             .ok_or(AgentError::WindowGone)

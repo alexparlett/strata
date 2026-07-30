@@ -167,7 +167,7 @@ impl Host for MockHost {
                     p.tabs.remove(at);
                     Ok(())
                 }
-                None => Err(AgentError::NotFound(format!("No open tab '{}'.", tab.0))),
+                None => Err(AgentError::no_such_tab(tab)),
             }
         })
     }
@@ -184,7 +184,7 @@ impl Host for MockHost {
         // questions and then waits on the engine, never the other way round.
         let (engine, settle) = self.with(project, |p| {
             if !p.tabs.iter().any(|t| t.tab == tab) {
-                return Err(AgentError::NotFound(format!("No open tab '{}'.", tab.0)));
+                return Err(AgentError::no_such_tab(tab));
             }
             Ok((Arc::clone(&p.engine), p.settle.clone()))
         })?;

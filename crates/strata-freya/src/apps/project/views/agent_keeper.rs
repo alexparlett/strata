@@ -81,12 +81,13 @@ impl Component for AgentKeeper {
             let Some(at) = parked.iter().position(|r| r.spec.run == run) else {
                 return;
             };
-            if let Some(reply) = parked[at].reply.take() {
+            // Removed *then* answered: taking the entry out hands over its `reply` owned, and
+            // dropping the entry is what unmounts this keeper — lifetime is mount, here as
+            // everywhere else, so there is no bookkeeping to get wrong. The effect can fire
+            // again before that unmount lands; the second pass finds no entry and returns.
+            if let Some(reply) = parked.remove(at).reply {
                 let _ = reply.send(Ok(settled));
             }
-            // Dropping the entry is what unmounts this keeper: lifetime is mount, here as
-            // everywhere else, so there is no bookkeeping to get wrong.
-            parked.remove(at);
         });
         rect()
     }
