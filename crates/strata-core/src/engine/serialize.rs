@@ -21,7 +21,6 @@
 //! commits via `freya::clipboard`, the same per-window provider its text inputs use), so callers
 //! hand `write_batch` / `write_selection` any `io::Write` sink — typically a `Vec<u8>`.
 
-use std::borrow::Cow;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -36,6 +35,8 @@ use datafusion::arrow::json::{ArrayWriter, LineDelimitedWriter};
 use datafusion::arrow::record_batch::RecordBatchWriter;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use serde_json::{from_slice, to_string, to_string_pretty, to_writer_pretty, Value};
+
+use crate::util::{clip, fmt_int, plural, plural_noun, DISPLAY_CHARS};
 
 /// Clipboard / text serialization format.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -144,10 +145,6 @@ fn drive<Wr: RecordBatchWriter>(mut wr: Wr, batch: &RecordBatch) -> Result<(), A
 /// read it — the record view's 190px field block and the nested-cell modal's card — with room
 /// to scroll, not for the value's true size.
 const PREVIEW_BYTES: usize = 16384;
-/// Longest string (or hex-encoded binary) kept whole in a preview, then clipped with the same
-/// `…` the grid's display cells use (`query::truncate_cell`) — the two branches of a record-view
-/// field row read alike.
-const PREVIEW_SCALAR_CHARS: usize = 400;
 /// Entries shown in a **top-level** container before the `… N more keys` tail; see [`items_at`],
 /// which halves it per level. A cap per *container* rather than only a budget for the whole
 /// render: without it one wide object consumes the entire budget, its level fails, and the
@@ -170,15 +167,6 @@ fn items_at(depth: usize) -> usize {
 /// wants the top of the shape, broadly, with what is below it counted. Three levels is
 /// "the value, its entries, and a glimpse inside each entry".
 const PREVIEW_DEPTH: usize = 3;
-
-/// `unit` pluralized for `n` — the elision markers are the only prose this module produces.
-fn plural(n: usize, unit: &str) -> String {
-    if n == 1 {
-        unit.to_string()
-    } else {
-        format!("{unit}s")
-    }
-}
 
 /// A **bounded** pretty-JSON view of one cell's value (column `col`, row `row` of `batch`) — the
 /// record view's nested (`struct`/`list`/`map`) blocks and the nested-cell modal.
@@ -299,7 +287,7 @@ impl Preview {
     /// form — what a fold line or a tree row shows for a child it has not opened.
     fn count(&mut self, open: char, n: usize, unit: &str, close: char) -> Result<(), Halt> {
         self.elided = true;
-        self.push(&format!("{open} … {n} {} … {close}", plural(n, unit)))
+        self.push(&format!("{open} … {} … {close}", plural(n, unit)))
     }
 
     /// The tail of a container whose entries were cut off at [`PREVIEW_ITEMS`]: `… 19291 more keys`.
@@ -312,7 +300,11 @@ impl Preview {
         self.elided = true;
         self.push(",")?;
         self.indent(depth)?;
-        self.push(&format!("… {left} more {}", plural(left, unit)))
+        self.push(&format!(
+            "… {} more {}",
+            fmt_int(left as u64),
+            plural_noun(left, unit)
+        ))
     }
 
     fn value(
@@ -451,7 +443,7 @@ impl Preview {
             return self.push(&json_string(text)?);
         }
         if let Some(bytes) = binary_value(array, idx) {
-            return self.push(&hex_string(bytes, PREVIEW_SCALAR_CHARS));
+            return self.push(&hex_string(bytes, DISPLAY_CHARS));
         }
         let options = EncoderOptions::default();
         let mut encoder = make_encoder(field, array, &options).map_err(|_| Halt::Unsupported)?;
@@ -471,10 +463,10 @@ impl Preview {
     }
 }
 
-/// A JSON string literal, clipped to [`PREVIEW_SCALAR_CHARS`] with a trailing `…` inside the
+/// A JSON string literal, clipped to [`DISPLAY_CHARS`] with a trailing `…` inside the
 /// quotes. Field names and map keys go through it too — a key that long is a value in disguise.
 fn json_string(s: &str) -> Result<String, Halt> {
-    to_string(clip(s, PREVIEW_SCALAR_CHARS).as_ref()).map_err(|_| Halt::Unsupported)
+    to_string(clip(s, DISPLAY_CHARS).as_ref()).map_err(|_| Halt::Unsupported)
 }
 
 /// Binary as arrow-json writes it — lowercase hex in a string — clipped to `max` characters.
@@ -490,15 +482,6 @@ fn hex_string(bytes: &[u8], max: usize) -> String {
     }
     out.push('"');
     out
-}
-
-/// `s` at most `max` characters, clipped on a char boundary with a trailing `…`.
-fn clip(s: &str, max: usize) -> Cow<'_, str> {
-    if s.chars().take(max + 1).count() <= max {
-        return Cow::Borrowed(s);
-    }
-    let end = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
-    Cow::Owned(format!("{}…", &s[..end]))
 }
 
 /// The value at `idx` as a `&str`, for the three UTF-8 array layouts. `None` for anything else.
@@ -836,7 +819,7 @@ mod tests {
             json.ends_with(&format!(
                 "    {},\n    … {} more items\n  ]\n}}",
                 shown - 1,
-                5171 - shown
+                fmt_int((5171 - shown) as u64)
             )),
             "{json}"
         );
@@ -881,7 +864,10 @@ mod tests {
             "the wide object's entries must be shown: {json}"
         );
         assert!(
-            json.contains(&format!("… {} more keys", 19_311 - items_at(1))),
+            json.contains(&format!(
+                "… {} more keys",
+                fmt_int((19_311 - items_at(1)) as u64)
+            )),
             "and the remainder counted: {json}"
         );
         assert!(
@@ -933,7 +919,7 @@ mod tests {
     /// same `…` the grid's display cells use, and still as a valid JSON string.
     #[test]
     fn a_long_string_leaf_is_clipped_inside_its_quotes() {
-        let long = "x".repeat(PREVIEW_SCALAR_CHARS + 50);
+        let long = "x".repeat(DISPLAY_CHARS + 50);
         let fields = Fields::from(vec![Field::new("blob", DataType::Utf8, true)]);
         let strct = StructArray::new(
             fields.clone(),
@@ -943,10 +929,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("attrs", DataType::Struct(fields), true)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(strct)]).unwrap();
         let json = cell_preview_json(&batch, 0, 0).expect("non-null cell");
-        let expected = format!(
-            "{{\n  \"blob\": \"{}…\"\n}}",
-            "x".repeat(PREVIEW_SCALAR_CHARS)
-        );
+        let expected = format!("{{\n  \"blob\": \"{}…\"\n}}", "x".repeat(DISPLAY_CHARS));
         assert_eq!(json, expected);
     }
 
@@ -972,13 +955,6 @@ mod tests {
             cell_preview_json(&batch, 0, 0).expect("non-null cell"),
             "{\n  \"gone\": null,\n  \"seats\": 12\n}"
         );
-    }
-
-    /// Clipping lands on a char boundary, not in the middle of a multi-byte character.
-    #[test]
-    fn clipping_counts_characters_not_bytes() {
-        assert_eq!(clip("héllo", 5), Cow::Borrowed("héllo"));
-        assert_eq!(clip("héllo", 3), Cow::Owned::<str>("hél…".into()));
     }
 
     /// A map renders as an object, and refuses non-UTF-8 keys exactly as arrow-json does — so a
