@@ -36,7 +36,7 @@ use crate::state::{use_config, use_config_station, ConfigChan};
 /// two things that can trigger a restart sit either side of the confirm — the driver below, and
 /// the dialog's confirmed answer.
 #[derive(Clone, Copy, PartialEq)]
-pub struct EngineRestart(State<u64>);
+pub struct EngineRestart(pub State<u64>);
 
 impl EngineRestart {
     /// Rebuild the engine now. The caller has already asked whatever needed asking.

@@ -40,6 +40,8 @@ pub mod sql;
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
 pub use query::purge_snapshot_root;
 
+use sql::PolicyRefusal;
+
 /// The Arrow batch type engine results carry (the type-aware source for Copy/Export),
 /// re-exported so frontends can name it without their own DataFusion dependency (this
 /// crate is the one DataFusion boundary).
@@ -384,6 +386,20 @@ impl Engine {
             .spawn(async move { sql::validate(&ctx, &functions, &sql).await })
             .await
             .unwrap_or_default()
+    }
+
+    /// The managed-DDL policy over `sql` as a pre-dispatch gate (AA-01): the same
+    /// classification [`validate`](Engine::validate) squiggles, parsed with this
+    /// session's own dialect on the engine runtime. `Ok(vec![])` is a clean pass;
+    /// `Ok(refusals)` names each blocked statement; `Err` means the input could not be
+    /// judged (it does not parse) — the caller refuses dispatch on either non-clean
+    /// answer, so the gate fails closed.
+    pub async fn policy_verdicts(&self, sql: String) -> Result<Vec<PolicyRefusal>, String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { sql::policy_verdicts(&ctx, &sql) })
+            .await
+            .map_err(|e| format!("policy task failed: {e}"))?
     }
 
     /// The engine's runtime (always present while the engine lives — see the field).

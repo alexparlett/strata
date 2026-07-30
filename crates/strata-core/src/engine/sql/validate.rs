@@ -33,8 +33,9 @@ use std::ops::Range;
 use datafusion::common::diagnostic::DiagnosticKind;
 use datafusion::common::{DataFusionError, SchemaError, TableReference};
 use datafusion::prelude::SessionContext;
-use datafusion::sql::parser::Statement as DFStatement;
+use datafusion::sql::parser::{DFParserBuilder, Statement as DFStatement};
 use datafusion::sql::sqlparser::ast::{ObjectType, Statement as SqlStatement};
+use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion::sql::sqlparser::parser::ParserError;
 
 use crate::engine::sql::lex::{
@@ -147,7 +148,7 @@ pub async fn validate(
         if let Some(policy) = policy_block(&stmt) {
             out.push(diag(
                 Severity::Error,
-                policy,
+                policy.editor_message(),
                 leading_keywords_span(&toks, &stmt_range),
                 sql,
             ));
@@ -268,27 +269,82 @@ fn trim_range(sql: &str, range: Range<usize>) -> Option<Range<usize>> {
 
 // ---- managed-DDL policy ----------------------------------------------------
 
-/// The managed-DDL policy verdict for one parsed statement: `None` = the editor may
-/// run (or Save may capture) it; `Some(message)` = blocked, with the message naming
-/// the surface that owns the capability. Matching the *parsed* statement keeps this a
-/// general classification, not a leading-keyword sniff.
-fn policy_block(stmt: &DFStatement) -> Option<String> {
-    let s = match stmt {
-        DFStatement::CreateExternalTable(_) => {
-            return Some(
+/// Why the managed-DDL policy refuses a statement — the **classification alone**, so
+/// each consumer names its own owning surface. The zero-copies rule only needs the
+/// predicate shared: the editor's rendering is [`editor_message`](Blocked::editor_message),
+/// and a headless consumer (the agent tool layer, AA-02) renders the same variant in
+/// its own words — over stdio there is no Table Config pane to be pointed at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blocked {
+    CreateExternalTable,
+    CopyTo,
+    Reset,
+    /// Views are Save's artifact, not the editor's: ⌘S / Save-as-view wraps the
+    /// *plain query* in `CREATE OR REPLACE VIEW` itself, so typed view DDL would
+    /// nest DDL inside the wrapper — blocked toward the real flow.
+    CreateView,
+    DropView,
+    /// `DROP` of anything that is not a view.
+    Drop,
+    CreateTable,
+    Insert,
+    /// `CREATE DATABASE` / `CREATE SCHEMA` — hard-blocked, no owning surface.
+    CreateDatabase,
+    Set,
+    /// Every other DDL/DML form.
+    Unsupported,
+}
+
+impl Blocked {
+    /// The editor's wording: IDE register, naming the surface that owns the
+    /// capability. The validator's policy diagnostics are this, verbatim.
+    pub fn editor_message(self) -> String {
+        match self {
+            Blocked::CreateExternalTable => {
                 "CREATE EXTERNAL TABLE is not supported in the editor. Register tables in \
                  Table Config"
-                    .into(),
-            );
+            }
+            Blocked::CopyTo => "COPY TO is not supported in the editor. Use Export",
+            Blocked::Reset => {
+                "RESET is not supported in the editor. Engine options are set in Settings"
+            }
+            Blocked::CreateView => {
+                "CREATE VIEW is not supported in the editor. Write the query and use Save as view"
+            }
+            Blocked::DropView => {
+                "DROP VIEW is not supported in the editor. Drop views from the catalog"
+            }
+            Blocked::Drop => {
+                "DROP is not supported in the editor. Deregister tables from the catalog"
+            }
+            Blocked::CreateTable => {
+                "CREATE TABLE is not supported in the editor. Register tables in Table Config"
+            }
+            Blocked::Insert => {
+                "INSERT is not supported in the editor. Load data through Table Config"
+            }
+            Blocked::CreateDatabase => "CREATE DATABASE and CREATE SCHEMA are not supported",
+            Blocked::Set => {
+                "SET is not supported in the editor. Engine options are set in Settings"
+            }
+            Blocked::Unsupported => {
+                "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and \
+                 DESCRIBE can run here"
+            }
         }
-        DFStatement::CopyTo(_) => {
-            return Some("COPY TO is not supported in the editor. Use Export".into());
-        }
-        DFStatement::Reset(_) => {
-            return Some(
-                "RESET is not supported in the editor. Engine options are set in Settings".into(),
-            );
-        }
+        .into()
+    }
+}
+
+/// The managed-DDL policy verdict for one parsed statement: `None` = the editor may
+/// run (or Save may capture) it; `Some(blocked)` = refused, with the classification
+/// each surface renders its own way. Matching the *parsed* statement keeps this a
+/// general classification, not a leading-keyword sniff.
+fn policy_block(stmt: &DFStatement) -> Option<Blocked> {
+    let s = match stmt {
+        DFStatement::CreateExternalTable(_) => return Some(Blocked::CreateExternalTable),
+        DFStatement::CopyTo(_) => return Some(Blocked::CopyTo),
+        DFStatement::Reset(_) => return Some(Blocked::Reset),
         DFStatement::Explain(_) => return None,
         DFStatement::Statement(s) => s.as_ref(),
     };
@@ -304,81 +360,72 @@ fn policy_block(stmt: &DFStatement) -> Option<String> {
         | SqlStatement::ShowVariables { .. }
         | SqlStatement::ShowDatabases { .. }
         | SqlStatement::ShowSchemas { .. } => None,
-        // Views are Save's artifact, not the editor's: ⌘S / Save-as-view wraps the
-        // *plain query* in `CREATE OR REPLACE VIEW` itself, so typed view DDL would
-        // nest DDL inside the wrapper — block it toward the real flow.
-        SqlStatement::CreateView(_) => Some(
-            "CREATE VIEW is not supported in the editor. Write the query and use Save as view"
-                .into(),
-        ),
+        SqlStatement::CreateView(_) => Some(Blocked::CreateView),
         SqlStatement::Drop { object_type, .. } => match object_type {
-            ObjectType::View => {
-                Some("DROP VIEW is not supported in the editor. Drop views from the catalog".into())
-            }
-            _ => Some(
-                "DROP is not supported in the editor. Deregister tables from the catalog".into(),
-            ),
+            ObjectType::View => Some(Blocked::DropView),
+            _ => Some(Blocked::Drop),
         },
-        SqlStatement::CreateTable(_) => Some(
-            "CREATE TABLE is not supported in the editor. Register tables in Table Config".into(),
-        ),
-        SqlStatement::Insert(_) => {
-            Some("INSERT is not supported in the editor. Load data through Table Config".into())
-        }
+        SqlStatement::CreateTable(_) => Some(Blocked::CreateTable),
+        SqlStatement::Insert(_) => Some(Blocked::Insert),
         SqlStatement::CreateDatabase { .. } | SqlStatement::CreateSchema { .. } => {
-            Some("CREATE DATABASE and CREATE SCHEMA are not supported".into())
+            Some(Blocked::CreateDatabase)
         }
-        SqlStatement::Set(_) => {
-            Some("SET is not supported in the editor. Engine options are set in Settings".into())
-        }
-        _ => Some(
-            "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and \
-             DESCRIBE can run here"
-                .into(),
-        ),
+        SqlStatement::Set(_) => Some(Blocked::Set),
+        _ => Some(Blocked::Unsupported),
     }
 }
 
 /// One statement the managed-DDL policy refuses — [`policy_verdicts`]' per-statement
-/// answer.
+/// answer. Carries the classification, never a rendered message: the consumer names
+/// its own owning surface ([`Blocked::editor_message`] is the editor's rendering).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PolicyRefusal {
-    /// Byte range of the refused statement in the input.
-    pub statement: Range<usize>,
-    /// The editor's own diagnostic text, naming the surface that owns the capability.
-    pub message: String,
+    /// Zero-based position of the refused statement in the input.
+    pub index: usize,
+    /// The refused statement as parsed — its canonical rendering, for naming it back
+    /// to the caller. Deliberately not a byte slice of the input: the gate never does
+    /// offset arithmetic over text it is judging (the editor's spans are approximate
+    /// over non-ASCII, which a squiggle tolerates and a gate must not).
+    pub statement: String,
+    /// Why it is refused.
+    pub blocked: Blocked,
 }
 
-/// The managed-DDL policy over `sql`, standing alone: parse each statement and return a
-/// [`PolicyRefusal`] for every one the policy blocks. This and [`validate`] consume the
-/// same [`policy_block`], so a pre-dispatch gate (the agent tool layer, AA-01) and the
-/// editor's diagnostics can never disagree — one predicate, two consumers, zero copies.
+/// The managed-DDL policy over `sql`, standing alone: parse the input with this
+/// session's own dialect and recursion limit (the same resolution
+/// `SessionState::sql_to_statement` performs) and return a [`PolicyRefusal`] for every
+/// statement the policy blocks. This and [`validate`] consume the same [`policy_block`],
+/// so a pre-dispatch gate (the agent tool layer, AA-01) and the editor's diagnostics can
+/// never disagree — one predicate, two consumers, zero copies.
 ///
-/// A statement that does not parse gets **no verdict**: unparseable SQL is not a policy
-/// pass, it simply cannot run — dispatching it fails in the engine with its own parse
-/// error, the same terminal the editor path reaches (validation reports the parse fault
-/// and Run never dispatches). Input the tokenizer rejects outright is the same case, one
-/// tier earlier. A refusal is therefore only ever about a statement that would otherwise
-/// run.
-pub fn policy_verdicts(ctx: &SessionContext, sql: &str) -> Vec<PolicyRefusal> {
-    let (toks, lex_err) = lex(sql);
-    if lex_err.is_some() {
-        return Vec::new();
-    }
+/// **`Err` means the input could not be judged, and the gate fails closed.** The input
+/// does not parse (or the configured dialect is unknown), so the caller refuses dispatch
+/// and surfaces the returned error — the engine's own parse wording, the same terminal a
+/// Run would reach. Unparseable input is never a policy pass, and one broken statement
+/// never silently approves its neighbours: `Ok(vec![])` is only ever said about input
+/// that parsed whole.
+pub fn policy_verdicts(ctx: &SessionContext, sql: &str) -> Result<Vec<PolicyRefusal>, String> {
     let state = ctx.state();
-    let dialect = state.config_options().sql_parser.dialect;
-    statement_ranges(sql, &toks)
+    let options = state.config_options();
+    let dialect = dialect_from_str(&options.sql_parser.dialect)
+        .ok_or_else(|| format!("Unsupported SQL dialect: {}", options.sql_parser.dialect))?;
+    let statements = DFParserBuilder::new(sql)
+        .with_dialect(dialect.as_ref())
+        .with_recursion_limit(options.sql_parser.recursion_limit)
+        .build()
+        .and_then(|mut parser| parser.parse_statements())
+        .map_err(|e| e.to_string())?;
+    Ok(statements
         .into_iter()
-        .filter_map(|stmt_range| {
-            let stmt = state
-                .sql_to_statement(&sql[stmt_range.clone()], &dialect)
-                .ok()?;
-            policy_block(&stmt).map(|message| PolicyRefusal {
-                statement: stmt_range,
-                message,
+        .enumerate()
+        .filter_map(|(index, stmt)| {
+            policy_block(&stmt).map(|blocked| PolicyRefusal {
+                index,
+                statement: stmt.to_string(),
+                blocked,
             })
         })
-        .collect()
+        .collect())
 }
 
 /// The span of a statement's leading keyword run (`CREATE EXTERNAL TABLE`,
@@ -1170,9 +1217,9 @@ mod tests {
 
     // ---- the standalone policy gate (AA-01) --------------------------------
 
-    /// The zero-copies claim, made executable: every blocked form refused through
-    /// [`policy_verdicts`] carries byte-for-byte the message the editor's diagnostic
-    /// shows for the same SQL.
+    /// The zero-copies claim, made executable: for every blocked form, the gate's
+    /// classification renders byte-for-byte the message the editor's diagnostic shows
+    /// for the same SQL — one `policy_block`, one `editor_message`, two consumers.
     #[test]
     fn the_gate_and_the_editor_refuse_with_the_same_words() {
         let ctx = ctx();
@@ -1186,10 +1233,14 @@ mod tests {
             "DROP VIEW IF EXISTS v",
             "CREATE DATABASE other",
         ] {
-            let verdicts = policy_verdicts(&ctx, sql);
+            let verdicts = policy_verdicts(&ctx, sql).expect("parses");
             assert_eq!(verdicts.len(), 1, "{sql}");
             let diags = block_on(validate(&ctx, &FunctionCatalog::default(), sql));
-            assert_eq!(verdicts[0].message, diags[0].message, "{sql}");
+            assert_eq!(
+                verdicts[0].blocked.editor_message(),
+                diags[0].message,
+                "{sql}"
+            );
         }
     }
 
@@ -1203,31 +1254,53 @@ mod tests {
             "SHOW COLUMNS FROM t",
             "DESCRIBE t",
         ] {
-            assert!(policy_verdicts(&ctx, sql).is_empty(), "{sql}");
+            assert!(
+                policy_verdicts(&ctx, sql).expect("parses").is_empty(),
+                "{sql}"
+            );
         }
     }
 
     #[test]
     fn a_multi_statement_input_is_judged_per_statement() {
         let sql = "SELECT 1; INSERT INTO t VALUES (1, 'a'); DROP VIEW v";
-        let out = policy_verdicts(&ctx(), sql);
+        let out = policy_verdicts(&ctx(), sql).expect("parses");
         assert_eq!(out.len(), 2, "{out:?}");
-        assert_eq!(
-            &sql[out[0].statement.clone()],
-            "INSERT INTO t VALUES (1, 'a')"
+        assert_eq!(out[0].index, 1);
+        assert_eq!(out[0].blocked, Blocked::Insert);
+        assert!(
+            out[0].statement.starts_with("INSERT"),
+            "{}",
+            out[0].statement
         );
-        assert_eq!(&sql[out[1].statement.clone()], "DROP VIEW v");
+        assert_eq!(out[1].index, 2);
+        assert_eq!(out[1].blocked, Blocked::DropView);
     }
 
-    /// Unparseable SQL yields no verdict — it cannot run either (dispatch fails with the
-    /// engine's own parse error) — and it never hides a neighbour's refusal.
+    /// The gate fails **closed**: input it cannot judge is `Err`, never an empty `Ok`
+    /// that reads as a clean pass — and one broken statement never silently approves
+    /// its neighbours (the pre-`Result` shape returned `[]` for exactly these).
     #[test]
-    fn an_unparseable_statement_yields_no_verdict() {
+    fn the_gate_fails_closed_on_input_it_cannot_judge() {
         let ctx = ctx();
-        assert!(policy_verdicts(&ctx, "SELEC * FRM t").is_empty());
-        let out = policy_verdicts(&ctx, "SELEC 1; INSERT INTO t VALUES (1, 'a')");
+        assert!(policy_verdicts(&ctx, "SELEC * FRM t").is_err());
+        // A refusal beside a statement that does not parse: still Err, not a pass.
+        assert!(policy_verdicts(&ctx, "SELEC 1; INSERT INTO t VALUES (1, 'a')").is_err());
+        // A tokenizer-level fault (unterminated string) beside a refusal — the case
+        // where the old lex-gated shape returned a clean-looking `[]`.
+        assert!(policy_verdicts(&ctx, "INSERT INTO t VALUES (1, 'a'); SELECT 'oops").is_err());
+    }
+
+    /// Non-ASCII text ahead of a refusal must not disturb it: the gate parses the
+    /// input whole rather than re-slicing it by computed offsets (which mis-split
+    /// exactly here — character columns added to byte positions).
+    #[test]
+    fn a_refusal_behind_multibyte_text_still_lands() {
+        let out = policy_verdicts(&ctx(), "SELECT 'caféé'; INSERT INTO t VALUES (1, 'a')")
+            .expect("parses");
         assert_eq!(out.len(), 1, "{out:?}");
-        assert!(out[0].message.contains("INSERT"), "{}", out[0].message);
+        assert_eq!(out[0].index, 1);
+        assert_eq!(out[0].blocked, Blocked::Insert);
     }
 
     #[test]

@@ -2,33 +2,53 @@
 
 **Workstream:** Agent access · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** —
 
-## As built (2026-07-30)
+## As built (2026-07-30, reshaped by the PR #78 review)
 
 1. **The policy gate** is `sql::policy_verdicts(ctx: &SessionContext, sql: &str) ->
-   Vec<PolicyRefusal>` (`engine/sql/validate.rs`, exported from `sql`), with
-   `PolicyRefusal { statement: Range<usize>, message: String }` — the *statement's* byte range,
-   not the leading-keyword span the editor squiggles, because the gate's consumer wants "which
-   statement", not an underline. It takes the `SessionContext` so the parse dialect is the
-   engine's own (a configurable `datafusion.sql_parser.dialect` must not make the gate and the
-   editor read one statement differently). Same `policy_block`, zero copies — and the test
-   `the_gate_and_the_editor_refuse_with_the_same_words` makes that executable by asserting the
-   gate's message equals `validate`'s diagnostic byte-for-byte per blocked form. **A parse
-   failure yields no verdict** (and never hides a neighbour statement's refusal): unparseable
-   SQL cannot run either — dispatch fails with the engine's own parse error, the same terminal
-   the editor path reaches.
+   Result<Vec<PolicyRefusal>, String>` (`engine/sql/validate.rs`, exported from `sql`), plus the
+   facade twin `Engine::policy_verdicts(sql)` — the reachable entry point, since `Engine.ctx` is
+   private and no consumer crate depends on DataFusion; it spawns onto the engine runtime like
+   `Engine::validate`. Review-settled shapes:
+   - **Classification, not prose.** `policy_block` returns `Blocked` (an enum of the refused
+     forms); the editor's wording is `Blocked::editor_message()`, used verbatim by `validate`'s
+     diagnostics. A headless consumer (AA-02) renders the same variant in its own words — over
+     stdio there is no Table Config pane to point at. The parity test pins
+     `editor_message() == validate`'s diagnostic per blocked form, so the predicate stays one
+     copy while the prose stays per-surface.
+   - **Fail closed.** `Err` means "could not judge" (the input does not parse under the
+     session's own dialect): the caller refuses dispatch and surfaces the parse error. Never an
+     empty `Ok` for unjudgeable input, and one broken statement never silently approves its
+     neighbours — the pre-review shape returned `[]` for a lex failure, byte-identical to a
+     clean pass.
+   - **No offset arithmetic.** The input is parsed whole (`DFParserBuilder` with the session's
+     dialect + recursion limit, the same resolution `sql_to_statement` performs); a
+     `PolicyRefusal` is `{ index, statement (canonical rendering), blocked }`. The editor's
+     char-column→byte-offset statement splitting stays where a squiggle tolerates it and a gate
+     would not (it mis-splits over non-ASCII).
 
-2. **The registration pass** is the new `strata_core::register` module:
-   `RegOutcome::{Table, View}` (name + `Result<TableMeta|ViewMeta, String>`),
-   `table_spec(root, &TableDef)` (the one copy of the def→spec projection, `resolve_source`
-   included), `register_pass(engine, tables, views, settled)` — tables in given order, then
-   views by the fixed-point rounds moved verbatim from the hook; a view settles **once**, on
-   its final answer — and `register_project(engine, root, &defs, settled)`, the whole-project
-   wrapper AA-05 replays. `settled: impl FnMut(&RegOutcome)` is called as each outcome lands
-   **and** the collected `Vec` is returned: the sink exists because the Freya hook folds
-   `Reg<T>` rows and log entries per answer (rows flip Loading → Ready one by one), which a
-   return-only shape would have batched to the end of the pass. The Freya `register_defs`
-   now keeps only the store's half: the work-list snapshot (names → defs, via `table_spec`)
-   and the per-outcome fold. Event-log wording unchanged.
+2. **The registration pass** is the `strata_core::register` module: `RegOutcome::{Table, View}`,
+   `table_spec(root, &TableDef)` (the one copy of the def→spec projection — and
+   `tests/project_load.rs` now drives `register_project`, so no second copy hides in a test),
+   `register_pass(engine, tables, views, settled)` and `register_project(engine, root, &defs,
+   settled)`. Review-settled shapes:
+   - **One output channel.** `settled: impl FnMut(RegOutcome)` takes each outcome **by value**
+     as it lands and nothing is returned: the app folds rows/log entries per answer with no
+     clone (moves `meta` straight into the store, as the pre-extraction loop did), and a caller
+     that wants the list writes `|o| out.push(o)`.
+   - **`register_project` is the cold pass only.** Against an engine already holding these
+     views, defs order silently inlines stale plans (`CREATE OR REPLACE` succeeds round one, so
+     the fixed-point retry orders nothing). The Kahn sort now lives in core as
+     `register::view_order` — `ProjectState::refresh_order` is its store projection — and a
+     re-running host orders views with it over the previous pass's answers before calling
+     `register_pass`.
+   - **Named caller responsibilities** (module doc): the pass is *additive* (removal stays the
+     caller's — the app's drop confirm; a replayer diffs shrunken defs and deregisters first),
+     and the *registration window* (`Engine::register` deregisters before re-inferring) means a
+     host serving validation/queries concurrently must gate them the way the app's
+     `CatalogState::Scanning` does, or it answers false transient 'not found'.
+
+   The Freya `register_defs` keeps only the store's half: the work-list snapshot (names → defs,
+   via `table_spec`) and the per-outcome fold. Event-log wording unchanged.
 
 ## Goal
 Two exports from `strata-core`, both extractions of logic that already exists and is already

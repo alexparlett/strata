@@ -31,6 +31,7 @@ use std::path::PathBuf;
 use freya::radio::RadioChannel;
 use strata_core::engine::{TableMeta, ViewMeta};
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
+use strata_core::register::view_order;
 use strata_model::{CatalogKind, ColumnInfo, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
 
@@ -670,45 +671,21 @@ impl ProjectState {
         self.refresh_order(views)
     }
 
-    /// Order `views` so that a view is re-created **after** every view it reads.
-    ///
-    /// `CREATE OR REPLACE VIEW` inlines the plan of any view it reads *at that moment*, so
-    /// re-creating an outer view before its inner one inlines the stale inner plan — and with
-    /// it the very provider the refresh is replacing. Alphabetical order (which is how the defs
-    /// are stored) gets this right only by luck.
-    ///
-    /// Kahn's algorithm over [`ViewInfo::view_deps`], restricted to the set being refreshed:
-    /// dependencies *outside* the set are already current, so they can't order anything. A view
-    /// with no landed answer carries no dependency information and simply sorts wherever it
-    /// falls — at project open that is every view, which is why the scan keeps its fixed-point
-    /// retry as well. A cycle is impossible (a view can't read itself, and DataFusion refuses
-    /// mutual recursion), but a residue is appended rather than dropped: a surprise can cost
-    /// ordering, never a re-create.
+    /// Order `views` so that a view is re-created **after** every view it reads — the
+    /// store's projection over [`view_order`] (`strata-core`, beside the pass it
+    /// orders): each view's known dependencies are its landed
+    /// [`ViewInfo::view_deps`], and a view with no landed answer carries none, so it
+    /// sorts wherever it falls — at project open that is every view, which is why the
+    /// scan keeps its fixed-point retry as well.
     pub fn refresh_order(&self, views: Vec<String>) -> Vec<String> {
-        let mut remaining = views;
-        let mut ordered = Vec::with_capacity(remaining.len());
-        while !remaining.is_empty() {
-            let (ready, blocked): (Vec<String>, Vec<String>) =
-                remaining.iter().cloned().partition(|name| {
-                    let deps = self
-                        .views
-                        .iter()
-                        .find(|v| Self::same_name(&v.def.name, name))
-                        .and_then(|v| v.reg.ready())
-                        .map(|info| info.view_deps.as_slice())
-                        .unwrap_or_default();
-                    !deps
-                        .iter()
-                        .any(|d| remaining.iter().any(|r| Self::same_name(r, d)))
-                });
-            if ready.is_empty() {
-                ordered.extend(blocked);
-                break;
-            }
-            ordered.extend(ready);
-            remaining = blocked;
-        }
-        ordered
+        view_order(views, |name| {
+            self.views
+                .iter()
+                .find(|v| Self::same_name(&v.def.name, name))
+                .and_then(|v| v.reg.ready())
+                .map(|info| info.view_deps.clone())
+                .unwrap_or_default()
+        })
     }
 
     // --- def mutations (the caller persists via `save_defs`) ------------------------

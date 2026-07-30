@@ -402,7 +402,7 @@ async fn register_defs(
                 );
                 station
                     .write_channel(ProjChan::Tables)
-                    .table_registered(name, meta.clone());
+                    .table_registered(&name, meta);
             }
             Err(e) => {
                 tracing::error!("register table '{name}' failed: {e}");
@@ -413,7 +413,7 @@ async fn register_defs(
                 );
                 station
                     .write_channel(ProjChan::Tables)
-                    .table_failed(name, e.clone());
+                    .table_failed(&name, e);
             }
         },
         RegOutcome::View { name, result } => match result {
@@ -428,7 +428,7 @@ async fn register_defs(
                 );
                 station
                     .write_channel(ProjChan::Views)
-                    .view_registered(name, meta.clone());
+                    .view_registered(&name, meta);
             }
             Err(e) => {
                 tracing::error!("create view '{name}' failed: {e}");
@@ -437,9 +437,7 @@ async fn register_defs(
                     LogLevel::Error,
                     format!("View '{name}' failed to register: {e}"),
                 );
-                station
-                    .write_channel(ProjChan::Views)
-                    .view_failed(name, e.clone());
+                station.write_channel(ProjChan::Views).view_failed(&name, e);
             }
         },
     })
