@@ -613,7 +613,7 @@ impl Component for SavedQueryRow {
             // Pressing the row opens it — the canvas's own `title="Open in a new tab"` — through
             // the same action the menu's item runs, not a second copy of it.
             .on_press(move |_| open_saved_query(&actions, id))
-            .on_context_menu(move |e: Event<PressEventData>| {
+            .on_context_menu(move |_: Event<PressEventData>| {
                 ContextMenu::open(menu_for_row());
             })
             .child(

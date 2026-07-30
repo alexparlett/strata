@@ -471,12 +471,6 @@ impl ConfigureDraft {
     }
 
     // --- import options ---
-
-    /// Whether this format has read options at all — parquet and Arrow have none worth showing.
-    pub fn has_options(&self) -> bool {
-        !self.options().is_empty()
-    }
-
     /// The label over the import block.
     pub fn options_label(&self) -> String {
         format!("{} OPTIONS", self.format.label())
@@ -750,7 +744,6 @@ mod tests {
                 ..csv_draft()
             };
             assert!(draft.options().is_empty());
-            assert!(!draft.has_options());
         }
     }
 

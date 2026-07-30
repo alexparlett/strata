@@ -135,12 +135,6 @@ impl TreeModel {
         self.shown.get(path).copied().unwrap_or(PAGE)
     }
 
-    /// The cell's own row — the tree's root, always present so an empty or scalar cell still shows
-    /// something rather than an empty box.
-    pub fn root(&self) -> Option<ValueNode> {
-        cell_root(&self.batch, self.col, self.row)
-    }
-
     /// Every visible row, in order. Walks only what is open.
     pub fn rows(&self) -> Vec<TreeRow> {
         let mut out = Vec::new();
