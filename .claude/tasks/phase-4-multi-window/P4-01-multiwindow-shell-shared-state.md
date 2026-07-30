@@ -1,6 +1,6 @@
 # P4-01 · Multi-window shell + shared state + native close
 
-**Phase:** 4 · **Status:** 🟡 · **DEV_TASKS:** W1 / A8 · **Depends on:** — · **Unblocks:** P4-03, P4-10
+**Phase:** 4 · **Status:** ✅ · **DEV_TASKS:** W1 / A8 · **Depends on:** — · **Unblocks:** P4-03, P4-10
 
 ## Goal
 The plumbing for more than one OS window: app-wide shared state, window spawn/focus, and native
@@ -46,20 +46,48 @@ the launcher is the surface that needs it — `crate::platform::windows`:
 2. ✅ **Window management** (`platform/windows.rs`, see Current state): spawn / focus-if-open /
    close, for the launcher and project windows. Settings and Export join it with P4-03 / P4-10 —
    settings needs the single-instance treatment `open_launcher` already models.
-3. 🟡 **Native close handling**: `winit CloseRequested` (no objc) routes through the window's
+3. ✅ **Native close handling**: `winit CloseRequested` (no objc) routes through the window's
    `on_close` hook, which now vetoes for both the T2 confirm and the last-window→launcher rule.
-   Remaining: the Dock-icon Quit still `terminate:`s un-vetoed (winit 0.30 exposes no
-   `applicationShouldTerminate` — see P6-02).
+   The Dock-icon Quit veto is **P6-02's** (the winit 0.31 `applicationShouldTerminate` delegate
+   migration, documented there in full — accepted platform behaviour until then), not this task's.
 4. ✅ Each window is a Freya `App` root under `apps/<window>/` (symmetric; no project-window
    special case): `apps/project/` and `apps/launcher/`.
-5. **Unrecoverable per-window error → graceful close.** When a window hits a fault it can't recover
-   from — today: a defs or session file that won't load (`open_project` / `use_init_session` in
-   `apps/project/state/hooks.rs`) — it should **close that window** through
-   `platform::close_this_window` (which already lands on the launcher if it was the last). Those
-   paths still **`panic!`** as a loud interim placeholder (deliberately *not* a silent fallback — a
-   project can't exist without a root). The *launch* half is handled: `main`'s `startup()` reports
-   and skips a folder that won't resolve, and the launcher reports rather than opening a doomed
-   window.
+5. ✅ **Unrecoverable per-window error → graceful close.** The interim `panic!`s are gone:
+   `ProjectRoot` runs the fallible IO (defs load/scaffold + session restore, one
+   `state::hooks::open_project` returning `Result<Loaded, String>`) once per mount, and what it
+   found decides the subtree — `ProjectLoaded` (the whole former body, stores built from the
+   pre-loaded serde values, the `Loaded` behind an `Rc` compared by pointer) or
+   `ProjectLoadFailed` (`views/dialogs/load_failed.rs`): a T2-family `Dialog` naming the folder
+   and the file-path-carrying error, with **Try again** (an `EngineRestart` bump — the remount
+   re-runs the load, so a fixed file or a transient failure recovers in place) and **Close
+   window** (also Enter), which runs `spawn_forever(close_this_window(…))` — launcher when it was
+   the last. Because `ProjectRoot` is keyed on (folder, generation), a re-root into a broken
+   project and an engine restart hit the same detection. The fault path mounts no engine,
+   provides no `Subtree`, and never touches recents / the open-set. The recoverable session arms
+   (missing → blank; corrupt → kept aside, blank) are unchanged; only defs failures, an
+   unreadable session, and a corrupt session whose rename-aside fails are faults.
+
+   Three review-settled details. The dialog is **non-modal** (`Dialog::modal(false)`) — it is the
+   window's whole content with no feature listeners behind it, and the menubar's Open…/Settings
+   items arrive as synthesized key presses, so a modal barrier would kill ⌘O and ⌘,; it also
+   stands down while the This/New prompt is up, which would otherwise paint *under* it while
+   answering Enter. The fault arm **drains the close-confirm slot**: `guard.running` can be true
+   there (a run in flight when the window re-rooted into the broken project keeps the old engine
+   alive until it settles), so a vetoed red-button close or a parked re-root is acted on rather
+   than written into a slot nothing renders. And leaving the fault arm other than by quit
+   **removes the project from the persisted open-set** — a broken project deliberately closed
+   must not re-spawn its fault window on every later launch (the acceptance below), while a quit
+   keeps it, like every window, so the reopen resurfaces the fault.
+
+   **Registration-race note:** the close is user-initiated (a dialog or red-button press), so
+   this window's — and any doomed sibling's — `use_register_window` has long landed by the time
+   `is_last()` is asked, and `open_launcher`'s focus-if-open absorbs the double-launcher
+   direction. That argument holds *because* the surfacing is a dialog: if it ever flips to
+   auto-close, the close must first await this window's own id (the same `post_callback` round
+   trip the registration uses).
+
+   The *launch* half was already handled: `main`'s `startup()` reports and skips a folder that
+   won't resolve, and the launcher reports rather than opening a doomed window.
 
    > **The write side is P4-15**, and the two should read as one policy. A file that won't *load*
    > means the window can't exist, so it closes; a file that won't be *written* leaves a perfectly
@@ -74,7 +102,7 @@ the launcher is the surface that needs it — `crate::platform::windows`:
 - [x] A change to shared settings/theme is seen by every open window at once.
 - [x] ⌘Q with N windows open restores those N on next launch; deliberately closing them all doesn't.
 - [x] Windows spawn/focus/close; native close (red button / ⌘Q / menu) routes through the confirm.
-- [ ] An unrecoverable defs/session restore error closes that window (→ launcher if it was the last),
+- [x] An unrecoverable defs/session restore error closes that window (→ launcher if it was the last),
       replacing the interim `panic!` in `apps/project/state/hooks.rs`.
 
 ## Freya / references

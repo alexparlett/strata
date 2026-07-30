@@ -88,10 +88,12 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
 /// last good file rather than a truncated one.
 pub fn save_defs(root: &Path, defs: &ProjectDefs) -> Result<(), String> {
     let dir = strata_dir(root);
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // Every arm names its path, like the loads: these strings reach the load-fault dialog
+    // (a scaffold that fails is a failed open), where a bare OS error names no file.
+    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     tidy_strata_dir(&dir);
-    let json = to_string_pretty(defs).map_err(|e| e.to_string())?;
     let path = dir.join(PROJECT_JSON);
+    let json = to_string_pretty(defs).map_err(|e| format!("{}: {e}", path.display()))?;
     write_atomic(&path, json.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 

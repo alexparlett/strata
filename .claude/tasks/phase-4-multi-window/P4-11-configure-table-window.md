@@ -301,6 +301,14 @@ legacy bare-`"format"` string and a legacy `avro`); 4 over partition detection; 
 (`apps::configure::model`). The whole workspace stays green, and `schema_in_sync` covers the one
 theme field this added (`form.required_color`).
 
+**Known interim panic** (same family as P4-01 item 5's, now-built read-side handling): a target
+table gone between the open and the first render panics in `ConfigureCtx`'s initializer
+(`apps/configure/mod.rs`, "no such table in this project"). P4-01's mechanism generalizes — the
+fallible resolve in one `use_hook` at the window root, an `Err` arm rendering the fault dialog —
+but the close differs: a Configure window is never the last workspace window, so it is a plain
+`platform.close_current_window()`, no launcher rule. Fold in whenever this surface is next
+touched.
+
 ## Freya / references
 - Design: `Configure.dc.html` (markup + the `cfg` VM), `strata-windows.js` `SW.importOptsVM` /
   `SW.cfgView` / `SW.makeCfgHandlers` for the option list and the draft's shape.

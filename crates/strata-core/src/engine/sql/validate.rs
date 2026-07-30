@@ -339,6 +339,48 @@ fn policy_block(stmt: &DFStatement) -> Option<String> {
     }
 }
 
+/// One statement the managed-DDL policy refuses — [`policy_verdicts`]' per-statement
+/// answer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolicyRefusal {
+    /// Byte range of the refused statement in the input.
+    pub statement: Range<usize>,
+    /// The editor's own diagnostic text, naming the surface that owns the capability.
+    pub message: String,
+}
+
+/// The managed-DDL policy over `sql`, standing alone: parse each statement and return a
+/// [`PolicyRefusal`] for every one the policy blocks. This and [`validate`] consume the
+/// same [`policy_block`], so a pre-dispatch gate (the agent tool layer, AA-01) and the
+/// editor's diagnostics can never disagree — one predicate, two consumers, zero copies.
+///
+/// A statement that does not parse gets **no verdict**: unparseable SQL is not a policy
+/// pass, it simply cannot run — dispatching it fails in the engine with its own parse
+/// error, the same terminal the editor path reaches (validation reports the parse fault
+/// and Run never dispatches). Input the tokenizer rejects outright is the same case, one
+/// tier earlier. A refusal is therefore only ever about a statement that would otherwise
+/// run.
+pub fn policy_verdicts(ctx: &SessionContext, sql: &str) -> Vec<PolicyRefusal> {
+    let (toks, lex_err) = lex(sql);
+    if lex_err.is_some() {
+        return Vec::new();
+    }
+    let state = ctx.state();
+    let dialect = state.config_options().sql_parser.dialect;
+    statement_ranges(sql, &toks)
+        .into_iter()
+        .filter_map(|stmt_range| {
+            let stmt = state
+                .sql_to_statement(&sql[stmt_range.clone()], &dialect)
+                .ok()?;
+            policy_block(&stmt).map(|message| PolicyRefusal {
+                statement: stmt_range,
+                message,
+            })
+        })
+        .collect()
+}
+
 /// The span of a statement's leading keyword run (`CREATE EXTERNAL TABLE`,
 /// `INSERT INTO`, …) — what a policy diagnostic underlines instead of the whole
 /// statement.
@@ -1124,6 +1166,68 @@ mod tests {
         let out = run("DROP VIEW IF EXISTS v");
         assert_eq!(out.len(), 1);
         assert!(out[0].message.contains("catalog"), "{}", out[0].message);
+    }
+
+    // ---- the standalone policy gate (AA-01) --------------------------------
+
+    /// The zero-copies claim, made executable: every blocked form refused through
+    /// [`policy_verdicts`] carries byte-for-byte the message the editor's diagnostic
+    /// shows for the same SQL.
+    #[test]
+    fn the_gate_and_the_editor_refuse_with_the_same_words() {
+        let ctx = ctx();
+        for sql in [
+            "CREATE EXTERNAL TABLE x STORED AS PARQUET LOCATION 'f.parquet'",
+            "CREATE TABLE copy_t AS SELECT * FROM t",
+            "INSERT INTO t VALUES (3, 'c')",
+            "COPY t TO 'out.parquet'",
+            "SET datafusion.execution.batch_size = 1024",
+            "CREATE VIEW v AS SELECT id FROM t",
+            "DROP VIEW IF EXISTS v",
+            "CREATE DATABASE other",
+        ] {
+            let verdicts = policy_verdicts(&ctx, sql);
+            assert_eq!(verdicts.len(), 1, "{sql}");
+            let diags = block_on(validate(&ctx, &FunctionCatalog::default(), sql));
+            assert_eq!(verdicts[0].message, diags[0].message, "{sql}");
+        }
+    }
+
+    #[test]
+    fn runnable_statements_get_no_verdict() {
+        let ctx = ctx();
+        for sql in [
+            "SELECT * FROM t",
+            "EXPLAIN SELECT * FROM t",
+            "SHOW TABLES",
+            "SHOW COLUMNS FROM t",
+            "DESCRIBE t",
+        ] {
+            assert!(policy_verdicts(&ctx, sql).is_empty(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_multi_statement_input_is_judged_per_statement() {
+        let sql = "SELECT 1; INSERT INTO t VALUES (1, 'a'); DROP VIEW v";
+        let out = policy_verdicts(&ctx(), sql);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(
+            &sql[out[0].statement.clone()],
+            "INSERT INTO t VALUES (1, 'a')"
+        );
+        assert_eq!(&sql[out[1].statement.clone()], "DROP VIEW v");
+    }
+
+    /// Unparseable SQL yields no verdict — it cannot run either (dispatch fails with the
+    /// engine's own parse error) — and it never hides a neighbour's refusal.
+    #[test]
+    fn an_unparseable_statement_yields_no_verdict() {
+        let ctx = ctx();
+        assert!(policy_verdicts(&ctx, "SELEC * FRM t").is_empty());
+        let out = policy_verdicts(&ctx, "SELEC 1; INSERT INTO t VALUES (1, 'a')");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].message.contains("INSERT"), "{}", out[0].message);
     }
 
     #[test]

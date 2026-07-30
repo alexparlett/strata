@@ -38,9 +38,12 @@ that file when editing fork code, and §6 here for how the fork relates to the a
     no `Default`, and is only built full from load/scaffold. Don't thread `Option`s or blank
     fallbacks to paper over failures.
   - Expected absences get defaults (missing session file → one blank tab; missing `.strata/` →
-    scaffold). Unrecoverable faults (unopenable project dir, unparseable defs/session) are
-    **surfaced** — interim `panic!` until P4-01's close-window handling — never a silent
-    blank/rootless fallback.
+    scaffold). Unrecoverable faults (unopenable project dir, unparseable defs, unreadable
+    session) are **surfaced**, never a silent blank/rootless fallback: pre-launch resolution
+    reports and skips, and a fault at mount renders `ProjectLoadFailed` — the fault dialog whose
+    one action closes the window through `close_this_window` (P4-01 item 5; the fallible IO runs
+    once in `ProjectRoot` and decides which arm the subtree is, so no store is ever built from
+    anything but a successful load).
   - Never shape a production signature (or add an `Option`) to satisfy a test — build the test's
     store inline instead. Pull deps like the project root from context
     (`use_radio_station::<ProjectState>`), not params-for-tests.

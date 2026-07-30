@@ -12,6 +12,8 @@
 //! - [`profile`] — the profiling scan logic (aggregate exprs + result decode).
 //! - [`engine`] — the DataFusion boundary: the direct-call async [`engine::Engine`] facade
 //!   (query / plan / profile / serialize) and its snapshot lifecycle.
+//! - [`register`] — the project registration pass: make the engine match a set of defs,
+//!   reporting per-def outcomes (shared by the app's catalog passes and headless hosts).
 
 use engine::profile;
 
@@ -19,5 +21,6 @@ pub mod config;
 pub mod engine;
 pub mod keymap;
 pub mod project;
+pub mod register;
 pub mod theme;
 pub mod util;

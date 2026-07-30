@@ -1,6 +1,34 @@
 # AA-01 · Core seams: policy verdict + project registration pass
 
-**Workstream:** Agent access · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** —
+**Workstream:** Agent access · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** —
+
+## As built (2026-07-30)
+
+1. **The policy gate** is `sql::policy_verdicts(ctx: &SessionContext, sql: &str) ->
+   Vec<PolicyRefusal>` (`engine/sql/validate.rs`, exported from `sql`), with
+   `PolicyRefusal { statement: Range<usize>, message: String }` — the *statement's* byte range,
+   not the leading-keyword span the editor squiggles, because the gate's consumer wants "which
+   statement", not an underline. It takes the `SessionContext` so the parse dialect is the
+   engine's own (a configurable `datafusion.sql_parser.dialect` must not make the gate and the
+   editor read one statement differently). Same `policy_block`, zero copies — and the test
+   `the_gate_and_the_editor_refuse_with_the_same_words` makes that executable by asserting the
+   gate's message equals `validate`'s diagnostic byte-for-byte per blocked form. **A parse
+   failure yields no verdict** (and never hides a neighbour statement's refusal): unparseable
+   SQL cannot run either — dispatch fails with the engine's own parse error, the same terminal
+   the editor path reaches.
+
+2. **The registration pass** is the new `strata_core::register` module:
+   `RegOutcome::{Table, View}` (name + `Result<TableMeta|ViewMeta, String>`),
+   `table_spec(root, &TableDef)` (the one copy of the def→spec projection, `resolve_source`
+   included), `register_pass(engine, tables, views, settled)` — tables in given order, then
+   views by the fixed-point rounds moved verbatim from the hook; a view settles **once**, on
+   its final answer — and `register_project(engine, root, &defs, settled)`, the whole-project
+   wrapper AA-05 replays. `settled: impl FnMut(&RegOutcome)` is called as each outcome lands
+   **and** the collected `Vec` is returned: the sink exists because the Freya hook folds
+   `Reg<T>` rows and log entries per answer (rows flip Loading → Ready one by one), which a
+   return-only shape would have batched to the end of the pass. The Freya `register_defs`
+   now keeps only the store's half: the work-list snapshot (names → defs, via `table_spec`)
+   and the per-outcome fold. Event-log wording unchanged.
 
 ## Goal
 Two exports from `strata-core`, both extractions of logic that already exists and is already

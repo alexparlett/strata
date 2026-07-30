@@ -168,6 +168,17 @@ pub fn human_bytes(n: u64) -> String {
     }
 }
 
+/// A path's last component for display — how every surface names a project folder (dialog
+/// subject lines, the header switcher's rows). Falls back to the whole path when there is
+/// no final component (`/`), so the subject is never blank. Display only: the
+/// SQL-identifier mangle is [`derive_table_name`]'s, and the scaffold's `"untitled"`
+/// fallback is deliberately its own.
+pub fn folder_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 /// Turn a file/dir name into a valid, unique lower_snake SQL identifier.
 pub fn derive_table_name(path: &Path, existing: &BTreeSet<String>) -> String {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("table");

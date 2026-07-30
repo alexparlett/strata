@@ -360,9 +360,13 @@ src/apps/configure/              the Configure-table window (P4-11 — `Configur
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     two layers: `ProjectApp` = the **window** (theme, app-globals,
                                  close bridge, menubar, OpenCtx) and `ProjectRoot` = the **open
-                                 project** (engine, stores, autosave, catalog, views), whose
-                                 `render_key` is the project folder — so "open in this window"
-                                 is a `State` write and the remount *is* the reopen path
+                                 project**, whose `render_key` is the project folder — so "open
+                                 in this window" is a `State` write and the remount *is* the
+                                 reopen path. `ProjectRoot` runs the fallible load (defs +
+                                 session) once per mount and is one of two arms: `ProjectLoaded`
+                                 (engine, stores, autosave, catalog, views — built from the
+                                 loaded values) or `ProjectLoadFailed` (P4-01: the fault dialog
+                                 that closes the window)
   contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context, built
                                  with the app's `datafusion.*` overrides — a launch value, since
                                  the RuntimeEnv is fixed when the SessionContext is
@@ -410,7 +414,10 @@ src/apps/project/                the project window (Valin-shaped)
                                  precedes every feature listener: close_confirm (T2) ·
                                  drop_confirm (P3-05) · open_prompt (the This/New question) ·
                                  profile_confirm (P3-10 — and `ProfileActions`, the one entry
-                                 point every "profile this" trigger calls)
+                                 point every "profile this" trigger calls) · load_failed
+                                 (P4-01 — not a barrier over features but the whole fault arm:
+                                 what `ProjectRoot` *is* when the project could not load, its
+                                 one action closing the window through `close_this_window`)
     header/
       mod.rs                     the header bar — and the window's macOS title bar: brand ·
                                  switcher · ⌘K/⌘, cluster, drag + double-press-to-fill

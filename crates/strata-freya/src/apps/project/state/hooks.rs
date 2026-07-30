@@ -14,7 +14,8 @@ use freya::prelude::{
 };
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
 use strata_core::engine::TableSpec;
-use strata_core::project::{self as project_io, SessionLoadError};
+use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
+use strata_core::register::{register_pass, table_spec, RegOutcome};
 use strata_core::util::{fmt_int, plural};
 use strata_model::{SessionSnapshot, WindowGeom};
 
@@ -30,22 +31,18 @@ use super::log::{log_event, LogCtx, LogLevel};
 use super::persist::{persisted_session, use_report};
 use super::{Chan, ProjChan, ProjectState, SessionState};
 
-/// Initialise this window's Session store and provide it via context. Pulls the open
-/// project's root from the [`ProjectState`] store already in context (`use_init_project`
-/// runs first in the window root) and restores its `.strata/session.json` (state-arch §5);
-/// with no project on disk, no session file, or an unparseable one, falls back to a single
-/// blank tab — a session file that can't be *read* is the one case that fails the open
-/// instead (see [`restore_or_new`]). Call once in the window root; returns the station for
-/// the root to read / drive.
-pub fn use_init_session() -> RadioStation<SessionState, Chan> {
-    let project = use_radio_station::<ProjectState, ProjChan>();
-    let root = project.peek().root.clone();
-    use_init_radio_station::<SessionState, Chan>(move || restore_or_new(root))
+/// Initialise this window's Session store and provide it via context. `seed` is the
+/// snapshot [`open_project`] already restored off disk (state-arch §5) — `None` opens one
+/// blank tab. Call once in the window root; returns the station for the root to read /
+/// drive.
+pub fn use_init_session(seed: Option<SessionSnapshot>) -> RadioStation<SessionState, Chan> {
+    use_init_radio_station::<SessionState, Chan>(move || build_session(seed))
 }
 
-/// Restore the persisted session for `root`, falling back to one blank tab. A **corrupt**
-/// session file is kept beside itself and yields a blank session rather than bricking the
-/// window; a session file that could not be **read** fails the open loud.
+/// Restore the persisted session for `root`. `Ok(None)` opens blank; `Err` means the window
+/// cannot exist — the caller surfaces the fault and closes the window
+/// ([`ProjectLoadFailed`](crate::apps::project::views::ProjectLoadFailed)), never opening a
+/// blank session whose autosave would destroy the real one.
 ///
 /// The two arms of [`SessionLoadError`] are the whole point of the type, and they are not
 /// interchangeable:
@@ -65,28 +62,25 @@ pub fn use_init_session() -> RadioStation<SessionState, Chan> {
 ///   takes the other half of that rule: **fail loud on unrecoverable**, like a project root
 ///   that won't canonicalize
 ///   ([`resolve_project_folder`](crate::platform::resolve_project_folder)) or defs that
-///   won't load
-///   ([`open_project`]). Interim shape, same as those two: the eventual handling is to close
-///   the window and surface the fault (P4-01/P4-02/P4-13); until that plumbing exists the
-///   panic keeps the fault loud instead of papering over it with a blank session that
-///   destroys the real one.
-fn restore_or_new(root: PathBuf) -> SessionState {
+///   won't load ([`open_project`]).
+fn restore_session(root: &Path) -> Result<Option<SessionSnapshot>, String> {
     // Missing is the expected case (`Ok(None)`): a fresh project with no session yet.
-    let restored = match project_io::load_session(&root) {
-        Ok(snapshot) => snapshot,
+    match project_io::load_session(root) {
+        Ok(snapshot) => Ok(snapshot),
         Err(e @ SessionLoadError::Corrupt(_)) => {
             tracing::error!("load session: {e}");
-            keep_corrupt_session(&root)
-                .unwrap_or_else(|e| panic!("open project `{}`: {e}", root.display()));
-            None
+            keep_corrupt_session(root)?;
+            Ok(None)
         }
-        Err(e @ SessionLoadError::Unreadable(_)) => {
-            panic!("open project `{}`: load session: {e}", root.display())
-        }
+        Err(e @ SessionLoadError::Unreadable(_)) => Err(format!("load session: {e}")),
     }
-    .and_then(SessionState::from_snapshot);
+}
 
-    restored.unwrap_or_else(new_session)
+/// Build the Session store from the restored snapshot, falling back to one blank tab (a
+/// fresh project, or a corrupt session kept aside).
+fn build_session(seed: Option<SessionSnapshot>) -> SessionState {
+    seed.and_then(SessionState::from_snapshot)
+        .unwrap_or_else(new_session)
 }
 
 /// Move an unparseable `session.json` aside to `session.json.corrupt`, so the autosave that
@@ -130,15 +124,13 @@ fn new_session() -> SessionState {
     s
 }
 
-/// Initialise this window's Project store — open the project folder (argv\[1\], default
-/// the repo's `sample/`), scaffolding a fresh `.strata/` when the folder has none — and
-/// drive engine registration of its defs (tables, then views). Also provides the window's
+/// Initialise this window's Project store from the `defs` [`open_project`] already loaded,
+/// and drive engine registration of them (tables, then views). Also provides the window's
 /// [`Catalog`](super::catalog::Catalog) state and [`CatalogRescan`] counter, since
 /// this is where the scans run. Call once in the window root, after the engine is in
 /// context.
 ///
-/// The open itself is synchronous (one small JSON read, needed before anything can
-/// render meaningfully); registration is IO-heavy (schema inference reads file footers)
+/// Registration is IO-heavy (schema inference reads file footers)
 /// and runs as a spawned task, landing results row by row through [`ProjChan::Tables`] /
 /// [`ProjChan::Views`] so rows flip `Loading → Ready/Failed` as answers arrive.
 ///
@@ -160,8 +152,11 @@ pub fn use_init_project(
     engine: &EngineCtx,
     log: LogCtx,
     root: PathBuf,
+    defs: ProjectDefs,
 ) -> RadioStation<ProjectState, ProjChan> {
-    let station = use_init_radio_station::<ProjectState, ProjChan>(move || open_project(root));
+    let station = use_init_radio_station::<ProjectState, ProjChan>(move || {
+        ProjectState::from_defs(defs, root)
+    });
     let catalog = use_init_catalog();
     let rescan = use_init_catalog_rescan();
     let engine = engine.clone();
@@ -310,34 +305,44 @@ async fn scan_catalog(
     register_defs(engine, station, log, tables, views).await;
 }
 
-/// Build the Project store for the resolved `root`: load its `project.json` defs, or
-/// scaffold a fresh `.strata/` when the folder has none. A defs file that won't load /
-/// scaffold is unrecoverable (fails fast) — the store is only ever built full, never a
-/// rootless default.
-fn open_project(root: PathBuf) -> ProjectState {
-    let defs = if project_io::exists_at(&root) {
-        project_io::load_defs(&root)
-    } else {
-        project_io::scaffold(&root)
-    }
-    .unwrap_or_else(|e| panic!("open project `{}`: {e}", root.display()));
-    ProjectState::from_defs(defs, root)
+/// What the project subtree needs off disk before it can mount: the defs and the persisted
+/// session, loaded together so a window either has everything or shows the fault. Serde
+/// values, not stores — the stores are built by the init hooks' initializers, so they are
+/// still only ever built full, never a rootless default. No derives: the window holds it
+/// behind an `Rc` whose pointer is its identity (built once per mount).
+pub struct Loaded {
+    pub defs: ProjectDefs,
+    pub session: Option<SessionSnapshot>,
 }
 
-/// Register the named defs on the engine: each table (relative sources resolved against the
-/// project folder), then each view. One pass, shared by project open, the sidebar's ↻ re-scan
-/// ([`refresh_catalog`]) and a row's Refresh ([`refresh_table`]) — a re-scan *is* a
-/// re-registration, so there is one implementation of "make the engine match the defs", not
-/// several that can drift. The three differ only in the work list they hand in.
+/// Open the project folder `root`: load its `project.json` defs (scaffolding a fresh
+/// `.strata/` when the folder has none), then restore its session ([`restore_session`]).
+/// `Err` means the window cannot exist — the caller renders the fault and closes
+/// ([`ProjectLoadFailed`](crate::apps::project::views::ProjectLoadFailed)); the error
+/// strings already name the file with its path.
+pub fn open_project(root: &Path) -> Result<Loaded, String> {
+    let defs = if project_io::exists_at(root) {
+        project_io::load_defs(root)
+    } else {
+        project_io::scaffold(root)
+    }?;
+    let session = restore_session(root)?;
+    Ok(Loaded { defs, session })
+}
+
+/// Register the named defs on the engine and fold what it answered into the store. One
+/// pass, shared by project open, the sidebar's ↻ re-scan ([`refresh_catalog`]) and a
+/// row's Refresh ([`refresh_table`]) — a re-scan *is* a re-registration, so there is one
+/// implementation of "make the engine match the defs", not several that can drift. The
+/// three differ only in the work list they hand in. The engine-facing half — tables
+/// first, then views by fixed-point rounds — is `strata-core`'s [`register_pass`]
+/// (AA-01, so a headless host runs the same sequence); this keeps what is genuinely the
+/// store's: `Reg<T>` rows and log entries, folded per outcome as each settles.
 ///
-/// `views` is taken **in order**, which the caller has already sorted so a view is re-created
-/// after everything it reads ([`ProjectState::refresh_order`]). That ordering is only knowable
-/// once the views have answered at least once; at project open none of them have, which is what
-/// the fixed-point retry below is for. DataFusion requires a view's dependencies to exist when
-/// its `CREATE VIEW` plans, so rather than parse SQL to topo-sort, each round creates what it
-/// can and a view whose dependency landed last round succeeds this round. No progress → the
-/// remainder are genuinely broken (bad SQL or a missing table) and their errors land on their
-/// rows.
+/// `views` is taken **in order**, which the caller has already sorted so a view is
+/// re-created after everything it reads ([`ProjectState::refresh_order`]). That ordering
+/// is only knowable once the views have answered at least once; at project open none of
+/// them have, which is what the pass's fixed-point retry is for.
 ///
 /// Every answer the engine gives is also **recorded in the event log** (P3-13) — one event per def,
 /// on either arm, for every width of pass. Not a synthesized "re-scanned N tables" summary: the
@@ -358,23 +363,11 @@ async fn register_defs(
     let (tables, views) = {
         let p = station.peek();
         let root = p.root.clone();
-        let tables: Vec<(String, TableSpec)> = tables
+        let tables: Vec<TableSpec> = tables
             .into_iter()
             .filter_map(|name| {
                 let def = &p.tables.iter().find(|t| t.def.name == name)?.def;
-                Some((
-                    name,
-                    TableSpec {
-                        name: def.name.clone(),
-                        paths: def
-                            .sources
-                            .iter()
-                            .map(|s| project_io::resolve_source(&root, s))
-                            .collect(),
-                        format: def.format.clone(),
-                        partitions: def.partition_cols.clone(),
-                    },
-                ))
+                Some(table_spec(&root, def))
             })
             .collect();
         let views: Vec<(String, String)> = views
@@ -387,8 +380,8 @@ async fn register_defs(
         (tables, views)
     };
 
-    for (name, spec) in tables {
-        match engine.register(spec).await {
+    register_pass(&engine, tables, views, |outcome| match outcome {
+        RegOutcome::Table { name, result } => match result {
             Ok(meta) => {
                 log_event(
                     log,
@@ -405,7 +398,7 @@ async fn register_defs(
                 );
                 station
                     .write_channel(ProjChan::Tables)
-                    .table_registered(&name, meta)
+                    .table_registered(name, meta.clone());
             }
             Err(e) => {
                 tracing::error!("register table '{name}' failed: {e}");
@@ -416,50 +409,37 @@ async fn register_defs(
                 );
                 station
                     .write_channel(ProjChan::Tables)
-                    .table_failed(&name, e);
+                    .table_failed(name, e.clone());
             }
-        }
-    }
-
-    let mut pending = views;
-    while !pending.is_empty() {
-        let before = pending.len();
-        let mut failed = Vec::new();
-        for (name, sql) in pending {
-            match engine.create_view(name.clone(), sql.clone()).await {
-                Ok(meta) => {
-                    log_event(
-                        log,
-                        LogLevel::Ok,
-                        format!(
-                            "Registered view '{name}' · {}",
-                            plural(meta.columns.len(), "column")
-                        ),
-                    );
-                    station
-                        .write_channel(ProjChan::Views)
-                        .view_registered(&name, meta)
-                }
-                // Not logged yet: a view whose dependency lands later succeeds on a following
-                // round, and an event per attempt would record failures that never happened.
-                Err(e) => failed.push((name, sql, e)),
+        },
+        RegOutcome::View { name, result } => match result {
+            Ok(meta) => {
+                log_event(
+                    log,
+                    LogLevel::Ok,
+                    format!(
+                        "Registered view '{name}' · {}",
+                        plural(meta.columns.len(), "column")
+                    ),
+                );
+                station
+                    .write_channel(ProjChan::Views)
+                    .view_registered(name, meta.clone());
             }
-        }
-        if failed.len() == before {
-            // A full round without progress — the rest are genuinely broken.
-            for (name, _, e) in failed {
+            Err(e) => {
                 tracing::error!("create view '{name}' failed: {e}");
                 log_event(
                     log,
                     LogLevel::Error,
                     format!("View '{name}' failed to register: {e}"),
                 );
-                station.write_channel(ProjChan::Views).view_failed(&name, e);
+                station
+                    .write_channel(ProjChan::Views)
+                    .view_failed(name, e.clone());
             }
-            break;
-        }
-        pending = failed.into_iter().map(|(n, s, _)| (n, s)).collect();
-    }
+        },
+    })
+    .await;
 }
 
 /// Initialise this window's query-history satellite: load `.strata/history.jsonl` and
@@ -643,7 +623,7 @@ mod tests {
     }
 
     /// A corrupt `session.json` opens a blank window **and** keeps the file. Both halves
-    /// matter: opening at all (the previous panic made a project killed mid-autosave
+    /// matter: opening at all (a failed open would make a project killed mid-autosave
     /// permanently unopenable — the case `SessionLoadError::Corrupt` exists for), and
     /// keeping the bytes, since the autosave that follows this open would otherwise
     /// overwrite the only copy of the user's tabs.
@@ -653,9 +633,12 @@ mod tests {
         let path = project_io::session_path(&root);
         fs::write(&path, "{ not json").unwrap();
 
-        let restored = restore_or_new(root.clone());
+        let restored = restore_session(&root);
 
-        assert_eq!(restored.order.len(), 1, "one blank scratch tab");
+        assert!(
+            matches!(restored, Ok(None)),
+            "opens blank rather than failing"
+        );
         assert!(!path.exists(), "the unparseable file is out of the way");
         let kept = fs::read_to_string(project_io::corrupt_session_path(&root))
             .expect("kept beside itself");
@@ -674,7 +657,7 @@ mod tests {
         fs::write(&kept, "the previous corruption").unwrap();
         fs::write(project_io::session_path(&root), "{ newer garbage").unwrap();
 
-        restore_or_new(root.clone());
+        restore_session(&root).unwrap();
 
         assert_eq!(fs::read_to_string(&kept).unwrap(), "{ newer garbage");
 
@@ -686,37 +669,46 @@ mod tests {
     /// user's SQL verbatim, and this open's first autosave would land right on top of it.
     /// (A directory at the destination is the portable way to make `rename` fail.)
     #[test]
-    #[should_panic(expected = "could not keep the unparseable session")]
     fn a_corrupt_session_that_cannot_be_kept_fails_the_open() {
         let root = scratch("corrupt-unkeepable");
         fs::write(project_io::session_path(&root), "{ not json").unwrap();
         let blocker = project_io::corrupt_session_path(&root);
         fs::create_dir_all(blocker.join("occupied")).unwrap();
 
-        restore_or_new(root);
+        let err = restore_session(&root).err().expect("fails the open");
+
+        assert!(
+            err.contains("could not keep the unparseable session"),
+            "{err}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// A session file that couldn't be **read** is the opposite case: its bytes are unknown
-    /// and probably fine, so the open fails loud instead of opening blank — the blank
-    /// session's own autosave is what would destroy it. Nothing is moved aside.
+    /// and probably fine, so the open fails instead of opening blank — the blank session's
+    /// own autosave is what would destroy it. Nothing is moved aside.
     /// (A directory at `session.json` is the portable way to make `read` fail.)
     #[test]
-    #[should_panic(expected = "unreadable")]
     fn an_unreadable_session_fails_the_open() {
         let root = scratch("unreadable");
         fs::create_dir_all(project_io::session_path(&root)).unwrap();
 
-        restore_or_new(root);
+        let err = restore_session(&root).err().expect("fails the open");
+
+        assert!(err.contains("unreadable"), "{err}");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
-    /// …and it really is left alone: the same setup, checked after the panic is caught.
+    /// …and it really is left alone: the same setup, with the file checked after the `Err`.
     #[test]
     fn an_unreadable_session_is_never_moved_aside() {
         let root = scratch("unreadable-untouched");
         let path = project_io::session_path(&root);
         fs::create_dir_all(&path).unwrap();
 
-        let opened = std::panic::catch_unwind(|| restore_or_new(root.clone()));
+        let opened = restore_session(&root);
 
         assert!(opened.is_err(), "the open fails rather than opening blank");
         assert!(path.is_dir(), "the unreadable path is untouched");
@@ -734,10 +726,83 @@ mod tests {
     fn a_missing_session_is_not_treated_as_corruption() {
         let root = scratch("fresh");
 
-        let restored = restore_or_new(root.clone());
+        let restored = restore_session(&root);
 
-        assert_eq!(restored.order.len(), 1);
+        assert!(matches!(restored, Ok(None)));
         assert!(!project_io::corrupt_session_path(&root).exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The blank fallback both `Ok(None)` arms share: one scratch tab, ready to type into.
+    #[test]
+    fn no_seed_opens_one_blank_tab() {
+        assert_eq!(build_session(None).order.len(), 1, "one blank scratch tab");
+    }
+
+    /// The defs half fails the open the same way the session half does, naming the file —
+    /// the coverage the old panic never had.
+    #[test]
+    fn unloadable_defs_fail_the_open() {
+        let root = scratch("defs-garbage");
+        fs::write(
+            project_io::strata_dir(&root).join("project.json"),
+            "{ not defs",
+        )
+        .unwrap();
+
+        let err = open_project(&root).err().expect("fails the open");
+
+        assert!(err.contains("project.json"), "{err}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A failed defs load leaves the session file exactly where it is: the composite
+    /// short-circuits before the session half runs, so a doubly-broken project keeps its
+    /// corrupt `session.json` in place — not renamed aside — for the open that eventually
+    /// succeeds. Pins the `?`-before-`restore_session` ordering, which nothing else does:
+    /// a reorder would mutate the disk on an open that fails anyway.
+    #[test]
+    fn a_defs_failure_leaves_the_session_untouched() {
+        let root = scratch("defs-first");
+        fs::write(
+            project_io::strata_dir(&root).join("project.json"),
+            "{ not defs",
+        )
+        .unwrap();
+        fs::write(project_io::session_path(&root), "{ not json").unwrap();
+
+        let err = open_project(&root).err().expect("fails the open");
+
+        assert!(err.contains("project.json"), "{err}");
+        assert_eq!(
+            fs::read_to_string(project_io::session_path(&root)).unwrap(),
+            "{ not json",
+            "the session file is untouched"
+        );
+        assert!(
+            !project_io::corrupt_session_path(&root).exists(),
+            "and nothing was set aside"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The composite's happy path: a folder with no project scaffolds one named after
+    /// itself and opens with no session to restore.
+    #[test]
+    fn a_fresh_folder_scaffolds_and_opens() {
+        let root = scratch("scaffold");
+
+        let loaded = open_project(&root).unwrap();
+
+        assert_eq!(
+            loaded.defs.name,
+            root.file_name().unwrap().to_string_lossy()
+        );
+        assert!(loaded.session.is_none(), "no session yet");
+        assert!(project_io::exists_at(&root), "the scaffold wrote the defs");
 
         let _ = fs::remove_dir_all(&root);
     }

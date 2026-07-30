@@ -4,16 +4,20 @@
 //! close bridge, the menubar it points at itself, and the open path that decides where the
 //! next project lands. None of that changes when the window changes project.
 //!
-//! [`ProjectRoot`] is the **open project**: the engine, the Project / Session / History
-//! stores, autosave, the catalog, and every feature view. It is **keyed on the project
-//! folder**, so "open in this window" ([`OpenPref::This`](strata_core::config::OpenPref)) is
-//! a plain `State` write — the key change unmounts this subtree (flushing the session,
-//! dropping the engine, leaving the open-set) and mounts the next project exactly as launch
-//! does. There is no reopen-in-place path to keep in step with the mount path, because they
-//! are the same path.
+//! [`ProjectRoot`] is the **open project**: it runs the fallible load once per mount and is
+//! one of two arms — [`ProjectLoaded`] (the engine, the Project / Session / History stores,
+//! autosave, the catalog, and every feature view, built from the loaded values) or
+//! [`ProjectLoadFailed`] (the fault dialog that closes the window). It is **keyed on the
+//! project folder**, so "open in this window"
+//! ([`OpenPref::This`](strata_core::config::OpenPref)) is a plain `State` write — the key
+//! change unmounts this subtree (flushing the session, dropping the engine, leaving the
+//! open-set) and mounts the next project exactly as launch does. There is no
+//! reopen-in-place path to keep in step with the mount path, because they are the same
+//! path.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -21,13 +25,13 @@ use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    use_autosave, use_diagnostics, use_engine_config, use_engine_restart,
+    open_project, use_autosave, use_diagnostics, use_engine_config, use_engine_restart,
     use_init_catalog_selection, use_init_faults, use_init_history, use_init_log, use_init_project,
-    use_init_session, Chan, EngineRestart, SessionState,
+    use_init_session, Chan, EngineRestart, Loaded, SessionState,
 };
 use crate::apps::project::views::{
     CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
-    ProfileConfirm, ProfileTarget, RequestKeepers, Shell,
+    ProfileConfirm, ProfileTarget, ProjectLoadFailed, RequestKeepers, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
@@ -336,8 +340,12 @@ impl App for ProjectApp {
     }
 }
 
-/// Everything that belongs to the **open project** rather than to the window: its engine,
-/// its stores, its autosave, its catalog and every feature view.
+/// Everything that belongs to the **open project** rather than to the window — in two
+/// arms. The fallible IO (defs + session) runs once per mount, and what it found decides
+/// what this subtree *is*: [`ProjectLoaded`] (the engine, the stores, autosave, the catalog
+/// and every feature view, built from the loaded values) or [`ProjectLoadFailed`] (the
+/// fault, surfaced and closed — a project that can't load has no window). Neither store is
+/// ever built from anything but a successful load.
 ///
 /// Keyed on [`root`](Self::root) — see the module doc. Nothing in here is written to
 /// re-open a project; it is only ever mounted at one.
@@ -363,6 +371,82 @@ struct ProjectRoot {
 }
 
 impl Component for ProjectRoot {
+    fn render(&self) -> impl IntoElement {
+        // Once per mount: the subtree is keyed on (folder, generation), so a re-root into a
+        // broken project — or an engine restart — re-runs the load in a fresh scope.
+        // Detection therefore lives at every way a project arrives in a window, not only at
+        // launch.
+        // `Rc`, because `use_hook` clones its stored value on every run of this scope and
+        // the runner keeps the child's props alive besides — behind the pointer, the one
+        // copy of the defs and every tab's text is shared rather than duplicated per copy.
+        let loaded = use_hook(|| {
+            open_project(&self.root)
+                .map(Rc::new)
+                .inspect_err(|e| tracing::error!("open project {}: {e}", self.root.display()))
+        });
+        match loaded {
+            Ok(loaded) => ProjectLoaded {
+                loaded,
+                root: self.root.clone(),
+                generation: self.generation,
+                geometry: self.geometry,
+                confirm: self.confirm,
+                filled_by_app: self.filled_by_app,
+                app: self.app.clone(),
+            }
+            .into_element(),
+            Err(error) => ProjectLoadFailed {
+                root: self.root.clone(),
+                error,
+                confirm: self.confirm,
+                app: self.app.clone(),
+            }
+            .into_element(),
+        }
+    }
+
+    /// **The re-root mechanism.** The subtree's identity is the project folder, so opening
+    /// another project in this window (`OpenPref::This`) diffs as a removal + an addition:
+    /// the old project's scope is dropped — flushing its session, cancelling its tasks,
+    /// dropping its engine and leaving the open-set — and the new one mounts through the very
+    /// same hooks that run at launch. Without the key, Freya would keep the scope and its
+    /// hooks, and every store would still hold the old project.
+    fn render_key(&self) -> DiffKey {
+        DiffKey::from(&(self.root.clone(), self.generation))
+    }
+}
+
+/// [`ProjectRoot`]'s loaded arm: the open project proper, mounted with everything it needs
+/// off disk already in hand. Its fields are the parent's, plus that [`Loaded`] value — the
+/// store initializers consume it, so no hook here can fail. No `render_key`: the parent's
+/// key is its identity.
+struct ProjectLoaded {
+    /// The defs and restored session the stores are built from.
+    loaded: Rc<Loaded>,
+    root: PathBuf,
+    generation: u64,
+    geometry: Option<WindowGeom>,
+    confirm: State<Option<CloseTarget>>,
+    filled_by_app: State<bool>,
+    app: AppCtx,
+}
+
+impl PartialEq for ProjectLoaded {
+    fn eq(&self, other: &Self) -> bool {
+        // `loaded` by pointer identity: it is built exactly once per (root, generation)
+        // mount, so two values are equal iff they are the same allocation — a deep compare
+        // of every def and tab buffer could only answer the same thing more slowly.
+        Rc::ptr_eq(&self.loaded, &other.loaded)
+            && self.root == other.root
+            && self.generation == other.generation
+            && self.geometry == other.geometry
+            && self.confirm == other.confirm
+            && self.filled_by_app == other.filled_by_app
+            && self.app == other.app
+    }
+}
+
+impl Component for ProjectLoaded {
     fn render(&self) -> impl IntoElement {
         let config = self.app.config;
         // Spawn this project's engine into context — the direct-call facade the query
@@ -408,18 +492,18 @@ impl Component for ProjectRoot {
         // half of the same report, behind the Problems drawer's Project tab. Stood up beside the
         // log because every writer that appends to one records into the other.
         use_init_faults();
-        // This project's store: loads `.strata/project.json` (scaffolding one when the folder
-        // has none) and registers its defs on the engine as a background task — rows flip
-        // Loading → Ready/Failed as answers land, and each answer is recorded in the log.
-        let project = use_init_project(&engine, log, self.root.clone());
+        // This project's store, from the defs the load already read, and the engine
+        // registration pass over them as a background task — rows flip Loading →
+        // Ready/Failed as answers land, and each answer is recorded in the log.
+        let project = use_init_project(&engine, log, self.root.clone(), self.loaded.defs.clone());
         // Register the project in the app-global config for as long as this subtree lives: it
         // heads the recents (so the launcher / project picker can offer it) and joins the
         // open-set (so they can tell open from merely recent) until the window closes — or
         // until it opens something else, which drops this entry and adds that one.
         use_open_project(config, &project.peek().name, &self.root);
-        // This project's Session store: restore its `.strata/session.json` (tabs / order /
-        // active / layout), else one blank tab. Pulls the root from the store above.
-        use_init_session();
+        // This project's Session store, from the snapshot the load already restored (tabs /
+        // order / active / layout), else one blank tab.
+        use_init_session(self.loaded.session.clone());
         // Debounced autosave of that session back to `.strata/session.json`. Its subscription
         // is inside the effect's own scope, so it never re-renders this root; its `use_drop`
         // is what makes a close — or a re-root — keep the last few hundred milliseconds.
@@ -505,16 +589,6 @@ impl Component for ProjectRoot {
             .child(RequestKeepers)
             .child(HeaderBar::new(self.filled_by_app))
             .child(Shell::new())
-    }
-
-    /// **The re-root mechanism.** The subtree's identity is the project folder, so opening
-    /// another project in this window (`OpenPref::This`) diffs as a removal + an addition:
-    /// the old project's scope is dropped — flushing its session, cancelling its tasks,
-    /// dropping its engine and leaving the open-set — and the new one mounts through the very
-    /// same hooks that run at launch. Without the key, Freya would keep the scope and its
-    /// hooks, and every store would still hold the old project.
-    fn render_key(&self) -> DiffKey {
-        DiffKey::from(&(self.root.clone(), self.generation))
     }
 }
 

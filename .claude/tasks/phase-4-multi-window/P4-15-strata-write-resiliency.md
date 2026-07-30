@@ -47,9 +47,9 @@ lasts, and the destructive case has a decided answer rather than an accidental o
 
 ## Why this is its own task, and why it is phase 4
 
-**P4-01 item 5 owns the read side**: a defs or session file that won't *load* closes the window
-(replacing today's interim `panic!`). This is the same problem from the other end, and nobody owns
-it:
+**P4-01 item 5 owns the read side**, and it is built: a defs or session file that won't *load*
+shows the fault dialog (`ProjectLoadFailed`) and closes the window. This is the same problem from
+the other end, and nobody owns it:
 
 | | Read failure (at open) | Write failure (mid-session) |
 |---|---|---|
