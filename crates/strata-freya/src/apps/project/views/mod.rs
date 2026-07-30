@@ -7,6 +7,7 @@ pub(super) mod drawer;
 mod header;
 mod inspector;
 mod keeper;
+mod loading;
 mod rail;
 mod shell;
 mod sidebar;
@@ -21,6 +22,7 @@ pub use drawer::DrawerThemePreference;
 pub use header::{HeaderBar, HeaderBarThemePreference, WindowDragStrip};
 pub use inspector::InspectorThemePreference;
 pub use keeper::RequestKeepers;
+pub use loading::ProjectLoading;
 pub use shell::Shell;
 pub use sidebar::CatalogThemePreference;
 pub use workbench::{

@@ -39,7 +39,8 @@ use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::platform;
-use crate::state::ConfigStation;
+use crate::platform::{close_this_window, OpenCtx};
+use crate::state::{AppCtx, ConfigStation};
 use strata_model::TabId;
 
 use crate::apps::project::state::{Chan, SessionState};
@@ -155,6 +156,77 @@ pub fn close_bridge(
         },
         hook,
     )
+}
+
+/// What closing means on a project subtree that has **no engine** — the two arms of
+/// `ProjectRoot` that are not an open project: the load still in flight
+/// ([`ProjectLoading`](crate::apps::project::views::ProjectLoading)) and the load that failed
+/// ([`ProjectLoadFailed`](crate::apps::project::views::ProjectLoadFailed)). Returns the window's
+/// close and whether it is already under way; call once in such an arm.
+///
+/// Two halves that always travel together, which is why they are one hook rather than a copy in
+/// each arm.
+///
+/// The close is **once-only**. It is several async hops — it may have to stand the launcher up
+/// before this window goes — and neither arm can dismiss itself in the gap, so without the flag
+/// a second press closes a second window. `spawn_forever`, not `spawn`: the close unmounts the
+/// very scope the handler belongs to, and scope teardown drops that scope's tasks before they
+/// are ever polled.
+///
+/// And the window's **close-confirm slot is drained rather than rendered**. Neither arm mounts
+/// [`CloseConfirm`](crate::apps::project::views::CloseConfirm) — there is no project to name in
+/// the question — yet the slot's writers still fire: `guard.running` can be true on either arm,
+/// because a run in flight when the window re-rooted or restarted keeps the *outgoing* engine
+/// alive until it settles. Left alone, a red-button close (vetoed into
+/// [`CloseTarget::Window`]) or a parked re-root would sit in a slot nothing renders, and read as
+/// a dead control.
+///
+/// Draining **acts** rather than re-asks, and that is a boundary review settled (AGENTS.md §2):
+/// `guard.running` can only be true here for runs orphaned by a stop the user already agreed to
+/// — the re-root or restart that replaced the subtree asked the T2 question and got its answer,
+/// or the pref that gates every writer of this slot asked never to ask — so a second confirm
+/// would re-ask about work already condemned. [`CloseTarget::Tab`] and [`CloseTarget::Restart`]
+/// have no writer on either arm; clearing them keeps the slot from carrying a stale question
+/// into the next mount.
+pub fn use_engineless_close(
+    app: AppCtx,
+    confirm: State<Option<CloseTarget>>,
+) -> (impl Fn() + Clone, State<bool>) {
+    // Taken in the render scope so the handlers can run from a task.
+    let platform = use_hook(Platform::get);
+    let open = use_consume::<OpenCtx>();
+    let closing = use_state(|| false);
+    let close = {
+        let app = app.clone();
+        let platform = platform.clone();
+        move || {
+            let mut closing = closing;
+            if *closing.peek() {
+                return;
+            }
+            closing.set(true);
+            spawn_forever(close_this_window(platform.clone(), app.clone()));
+        }
+    };
+    {
+        let close = close.clone();
+        use_side_effect(move || {
+            // Read into a value first — a match on the guard's temporary would hold the read
+            // borrow across the `set` on the same `State`.
+            let target = confirm.read().clone();
+            let Some(target) = target else {
+                return;
+            };
+            let mut confirm = confirm;
+            confirm.set(None);
+            match target {
+                CloseTarget::Window => close(),
+                CloseTarget::Reroot(root) => open.reroot_confirmed(root),
+                CloseTarget::Tab(_) | CloseTarget::Restart => {}
+            }
+        });
+    }
+    (close, closing)
 }
 
 /// Close one tab through the close-while-running confirm — the gate **every**

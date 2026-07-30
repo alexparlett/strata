@@ -32,7 +32,7 @@ pub use engine_config::{use_engine_config, use_engine_restart, EngineRestart};
 pub use history::History;
 pub use history::{clear_history, use_history_recording, HistoryCtx};
 pub use hooks::{
-    open_project, refresh_catalog, refresh_table, use_autosave, use_init_history, use_init_project,
+    load_project, refresh_catalog, refresh_table, use_autosave, use_init_history, use_init_project,
     use_init_session, Loaded,
 };
 /// Only tests name the log itself: they stand its context signal up by hand, where the window

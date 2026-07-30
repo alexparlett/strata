@@ -13,14 +13,14 @@
 //!
 //! - **Quit** (⌘Q · menu Quit · dock Quit) closes *every* window and leaves the persisted
 //!   open-set alone, so the next launch reopens exactly what was on screen. [`begin_quit`]
-//!   is what tells [`use_open_project`] to keep its entry on the way out.
+//!   is what tells [`use_claim_open`] to keep its entry on the way out.
 //! - **Close project** (red button · File ▸ Close Project · ⇧⌘W) closes *one* window and
 //!   drops it from the open-set — and when it was the app's last window the **launcher**
 //!   takes its place ([`close_this_window`]) rather than the app quitting. Closing every
 //!   window by hand therefore means "start me at the launcher next time", which is exactly
 //!   the distinction quitting must not make.
 //!
-//! [`use_open_project`]: crate::state::use_open_project
+//! [`use_claim_open`]: crate::state::use_claim_open
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -33,7 +33,7 @@ use strata_core::project::STRATA_DIR;
 
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::launcher::LauncherApp;
-use crate::apps::project::ProjectApp;
+use crate::apps::project::{window_geometry, ProjectApp};
 use crate::state::{write_config, AppCtx, ConfigChan, ConfigStation};
 
 /// What a window is showing. The project variant carries its folder (the
@@ -158,7 +158,7 @@ pub fn create_global_windows() -> WindowRegistry {
     State::create_global(Windows::default())
 }
 
-/// Set while a quit is in flight. Read on the UI thread (`use_open_project`'s drop) and
+/// Set while a quit is in flight. Read on the UI thread (`use_claim_open`'s drop) and
 /// written from both the UI and the renderer's menu handler — which are the same thread,
 /// but an atomic says "shared flag, not window state" and costs nothing.
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -250,14 +250,36 @@ pub(super) fn register(mut windows: WindowRegistry, id: WindowId, kind: WindowKi
 /// picker, where there is no longer a scope to read it from.
 pub async fn open_project(platform: Platform, app: AppCtx, root: PathBuf) {
     let path = root.to_string_lossy().into_owned();
-    if let Some(id) = app.windows.peek().project(&path) {
-        platform.focus_window(Some(id));
+    let windows = app.windows;
+    // **Asked twice, either side of the geometry read.** The read can park for up to
+    // `GEOMETRY_DEADLINE`, and until it answers there is nothing on screen — which is precisely
+    // when a user opens the same project again, from the switcher or Open Recent. Both calls
+    // would pass a check made only before the await, and two windows on one project would then
+    // autosave over the same `session.json`: the loss this rule outranks the open preference to
+    // prevent (AGENTS.md §2). `register` below closes the rest of the gap — the `launch_window`
+    // round trip — as it always has.
+    let focus_if_open = || match windows.peek().project(&path) {
+        Some(id) => {
+            platform.focus_window(Some(id));
+            true
+        }
+        None => false,
+    };
+    if focus_if_open() {
+        return;
+    }
+    // The window's geometry, read off the render thread before it exists — the one launch input
+    // besides the folder, since Freya can only place a window as it creates it. Awaited rather
+    // than read here: this runs on the thread that draws every other window, and the file is on
+    // whatever mount the project lives on.
+    let geometry = window_geometry(root.clone()).await;
+    if focus_if_open() {
         return;
     }
     let id = platform
-        .launch_window(ProjectApp::window(app.clone(), root))
+        .launch_window(ProjectApp::window(app.clone(), root, geometry))
         .await;
-    register(app.windows, id, WindowKind::Project(path));
+    register(windows, id, WindowKind::Project(path));
 }
 
 /// Open the launcher — or focus it if it is already up. Single-instance by construction:

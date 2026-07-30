@@ -14,7 +14,10 @@ mod state;
 mod views;
 
 pub use close::{CloseGuard, CloseTarget};
-pub use project::ProjectApp;
+/// [`window_geometry`](project::window_geometry) is `pub` for every path that opens a project
+/// window: a window's size and position can only be set as it is created, so they are a launch
+/// input the caller resolves — off the render thread, and with a deadline.
+pub use project::{window_geometry, window_geometry_blocking, ProjectApp};
 /// The window's engine generation — for [`platform::owner`](crate::platform::owner), which
 /// bounds a child window's life by the mount of this window's project subtree that it borrowed
 /// its handles from. Safe for a child to hold precisely because it is owned by the *window*

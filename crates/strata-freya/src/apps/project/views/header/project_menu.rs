@@ -49,9 +49,11 @@ struct ProjectRow {
 }
 
 impl ProjectRow {
-    /// The row for an **open** project, whose path is all the open-set carries. Every open
-    /// project was pushed to the recents when its window mounted (`use_open_project`), so the
-    /// name is normally there; a missing one degrades to the folder name.
+    /// The row for an **open** project, whose path is all the open-set carries. A project that
+    /// loaded was pushed to the recents then (`use_promote_recent`), so the name is normally
+    /// there; the fallback to the folder name is what covers the two windows that claim the
+    /// open-set without having earned a recent — one still loading, and one showing a load
+    /// fault.
     fn for_open(config: &AppConfig, path: &str) -> Self {
         let name = config
             .recent_projects

@@ -236,15 +236,37 @@ Things that must not regress. Each was fought for once already.
   (`project::save_history`), because an append can add a line but not move one.
 - **A window's project subtree is keyed on the project folder; there is no reopen-in-place path.**
   `ProjectApp` is the *window* (theme, app-globals, close bridge, menubar, the `OpenCtx` open
-  path); `ProjectRoot` is the *open project* — the once-per-mount load and its two arms,
-  `ProjectLoaded` (engine, stores, autosave, catalog, views) or the `ProjectLoadFailed` fault
-  dialog — and its `render_key` is that folder. So "open in this window" (`OpenPref::This`) is a plain `State`
+  path); `ProjectRoot` is the *open project* — the once-per-mount load and its three arms,
+  `ProjectLoading` while the read is off on its own thread, then `ProjectLoaded` (engine, stores,
+  autosave, catalog, views) or the `ProjectLoadFailed` fault dialog — and its `render_key` is that
+  folder. So "open in this window" (`OpenPref::This`) is a plain `State`
   write: Freya drops the old subtree — flushing its session, dropping its engine, leaving the
   open-set — and mounts the new project through the very hooks that run at launch. Never add a
   second path that re-points a live store at another project: two ways to open one project drift,
   and the mutating one is how relative sources and partition columns get mangled. Anything that
   must survive a re-root (window fill state, the close-confirm slot, the registry entry) belongs
   on the **window** layer, and anything reading "which project" must read it reactively.
+- **Nothing blocking runs on the render thread, and a read the user has to wait for is an *arm*,
+  not a freeze.** Freya is one event loop drawing every window and its `spawn` polls on that very
+  thread, so an `async` block around a synchronous call moves nothing: one blocking `std::fs` read
+  is not a slow frame, it is the whole app — every window, the menubar, the traffic lights. That
+  stops being theoretical the moment the path comes from the user, because a network mount that
+  went quiet blocks in the kernel with no timeout and cannot be interrupted. `task::offload` is
+  the one way across — **a thread per call**, since a pool or a single worker would let one wedged
+  mount hold up the next project's open, which is this failure moved one step along rather than
+  removed. And the wait has to live somewhere a window can *show* it: `ProjectRoot`'s load is
+  `use_future` over the offloaded read, so `Pending | Loading | Fulfilled` are the subtree's three
+  arms (P4-01) and the fault dialog's Try again can no longer re-enter a blocking call. Three
+  things generalise. **Cancelling is dropping the answer, never stopping the work** — the thread
+  runs on into a dropped receiver, which is why a deadline buys a window rather than a freed
+  thread, and why the parked-thread cost is named rather than designed away. A value needed
+  *before* a window exists cannot be reported by one, so it gets a **deadline** instead
+  (`window_geometry`, 250ms, because Freya places a window as it creates it or not at all) — and
+  then whatever consumes it must be safe against the empty answer, which is why the autosave seed
+  is taken from the session the project loaded and not from that read: seeding `None` would let
+  the first save overwrite a remembered size with the default the window opened at. And the
+  engine's private Tokio runtime is **not** the home for this, tempting as it looks: an engine
+  exists only after a successful load, and the loads are exactly what needs the hop.
 - **Which window an open lands in is one decision in one place** (`platform::open`). `decide` is
   pure over plain values and is the *whole* rule; acting on it is split off (`OpenTarget`) because
   a window holds a `Platform` and the menubar handler holds a `RendererContext`. Two rules outrank
@@ -259,8 +281,10 @@ Things that must not regress. Each was fought for once already.
   silent abort. The predicate is always the engine's own answer (`guard.running` /
   `Engine::is_running`) plus `confirm_close_running` — never derived from mounted UI, which goes
   false the moment the user switches tabs. One boundary, settled by review: **a question already
-  answered is not re-asked.** The load-fault arm drains the confirm slot and acts
-  (`ProjectLoadFailed`), because `guard.running` can only be true there for runs orphaned by a
+  answered is not re-asked.** The subtree's two **engineless** arms drain the confirm slot and act
+  (`use_engineless_close`, shared by `ProjectLoading` and `ProjectLoadFailed` — the once-only close
+  and the drain always travel together, so they are one hook rather than a copy per arm), because
+  `guard.running` can only be true there for runs orphaned by a
   stop the user already confirmed — the re-root or restart that replaced the subtree asked this
   very question, and the engine's deferred `Drop` merely hasn't finished honouring the answer —
   or under a pref that asked never to be asked, which gates every writer of the slot alike.
