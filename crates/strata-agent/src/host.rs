@@ -79,17 +79,6 @@ pub enum CatalogEntry {
     /// registration state to report, and `describe_table` does not answer for it.
     Query { id: Uuid, name: String, sql: String },
 }
-
-impl CatalogEntry {
-    pub fn name(&self) -> &str {
-        match self {
-            CatalogEntry::Table { name, .. }
-            | CatalogEntry::View { name, .. }
-            | CatalogEntry::Query { name, .. } => name,
-        }
-    }
-}
-
 /// What the catalog knows about one **table or view**, in the four states it can be in.
 ///
 /// Four variants rather than one struct of `Option`s because the states are genuinely
@@ -129,6 +118,9 @@ pub enum TabState {
     /// Nothing has been run in it.
     Empty,
     Running,
+    /// A run finished — with rows, a plan, an error, or a stop. All of those are settled;
+    /// only "in flight" is not, and a tab whose run failed has certainly not gone back to
+    /// [`Empty`](TabState::Empty).
     Settled,
 }
 
@@ -175,6 +167,14 @@ pub trait Host: Send + Sync + 'static {
     /// setting, read per call so a change in Settings lands without restarting the server.
     /// Sync, because it is a number the host already holds and never a question it has to
     /// ask a window.
+    ///
+    /// **`0` means no limit**, matching `strata_core::config::Settings::row_limit`, which
+    /// documents its own zero that way. A host returning that setting verbatim is therefore
+    /// correct, and the tool layer resolves the zero to
+    /// [`MAX_PAGE_SIZE`](crate::tools::MAX_PAGE_SIZE) — the largest page it will ever hand
+    /// back. Naming it here rather than leaving it to each host is the point: the obvious
+    /// wiring (`self.config.row_limit`) would otherwise ship one-row pages to every agent
+    /// whose user had turned the limit off.
     fn default_page_size(&self) -> usize;
 
     /// The **data plane**: the engine serving `project`. Reads that are engine-scoped and

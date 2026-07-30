@@ -15,6 +15,8 @@
 //! - **A tab handle is its `TabId` as text.** Not a parallel id scheme: it is the tab's own
 //!   `Uuid`, so a handle from `open_tab` and a handle from `list_tabs` are the same thing.
 
+use std::sync::Arc;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strata_core::engine::plan::QueryPlan;
@@ -22,6 +24,20 @@ use strata_core::engine::sql::{FunctionCatalog, FunctionSym};
 use strata_model::{Cell, ColumnInfo, Diagnostic, Kind, QueryOutput, Severity, Stat, StatKey};
 
 use crate::host::{CatalogEntry, Described, Project, RegState, RunMode, TabInfo, TabState};
+
+/// A result's columns, shared rather than copied.
+///
+/// One result is described by its `run` and by every `read_page` after it, and a schema here
+/// is not small — the app already has a file whose one column carries 19,311 nested fields.
+/// Converting `ColumnInfo` to [`ColumnWire`] is recursive work per field, so it happens once
+/// per result and each response holds a refcount. `Arc<T>` serializes and schematizes exactly
+/// as `T` does, so nothing about the wire format changes.
+pub type Columns = Arc<Vec<ColumnWire>>;
+
+/// Convert a result schema once, for sharing as [`Columns`].
+pub fn columns(info: &[ColumnInfo]) -> Columns {
+    Arc::new(info.iter().map(ColumnWire::from).collect())
+}
 
 // ---------------------------------------------------------------------------
 // Parameters
@@ -553,7 +569,7 @@ pub struct TabResult {
 pub enum RunResult {
     Ok {
         tab: String,
-        columns: Vec<ColumnWire>,
+        columns: Columns,
         /// Page 1. A cell is `null` or its formatted text.
         rows: Vec<Vec<Option<String>>>,
         /// Exact — the snapshot knows, and no `LIMIT` was injected to make it otherwise.
@@ -579,7 +595,7 @@ pub enum RunResult {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PageResult {
     pub tab: String,
-    pub columns: Vec<ColumnWire>,
+    pub columns: Columns,
     pub rows: Vec<Vec<Option<String>>>,
     pub total: usize,
     pub page: usize,
@@ -599,10 +615,12 @@ pub fn plan_result(tab: String, plan: QueryPlan) -> RunResult {
     }
 }
 
-pub fn rows_result(tab: String, output: QueryOutput) -> RunResult {
+/// `columns` is passed in rather than derived here, so the caller can hand the same
+/// [`Columns`] to the cache `read_page` will answer from — one conversion per result.
+pub fn rows_result(tab: String, columns: Columns, output: QueryOutput) -> RunResult {
     RunResult::Ok {
         tab,
-        columns: output.columns.iter().map(ColumnWire::from).collect(),
+        columns,
         rows: cells(&output.rows),
         total: output.total,
         page: output.page,
@@ -624,6 +642,8 @@ pub fn cells(rows: &[Vec<Cell>]) -> Vec<Vec<Option<String>>> {
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use super::*;
 
     #[test]
@@ -662,7 +682,7 @@ mod tests {
     #[test]
     fn a_saved_query_row_carries_no_registration_state() {
         let wire = EntryWire::from(CatalogEntry::Query {
-            id: uuid::Uuid::nil(),
+            id: Uuid::nil(),
             name: "top sellers".into(),
             sql: "SELECT 1".into(),
         });

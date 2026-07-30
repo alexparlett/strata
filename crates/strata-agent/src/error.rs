@@ -15,13 +15,19 @@
 //! these are conditions the agent should read and recover from (`list_tabs` / `list_tables`
 //! are the recovery), not malformed requests.
 
+use std::error::Error;
 use std::fmt;
 
 use rmcp::handler::server::tool::IntoCallToolResult;
 use rmcp::model::{CallToolResponse, CallToolResult, ContentBlock};
+use rmcp::ErrorData;
 use strata_core::engine::sql::PolicyRefusal;
 
 use crate::host::Project;
+
+/// What a [`AgentError::Policy`] with no refusals in it says. Not a state the tool layer can
+/// produce; a state the type permits, and a refusal with no reason is unactionable.
+const UNJUDGED: &str = "The statement was refused, but no reason was recorded.";
 
 /// One of §7's classes. The `Display` is what the agent reads.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,8 +55,12 @@ impl fmt::Display for AgentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             // One statement gets the editor's message verbatim; several get it per
-            // statement, indexed, because "which one" is otherwise unanswerable.
+            // statement, indexed, because "which one" is otherwise unanswerable. An empty
+            // list is not a refusal at all — the tool layer only builds this from a non-empty
+            // verdict — but the vector cannot say so, and the arm below would print *nothing*
+            // for it. A blank `isError` is the worst message there is, so it is spelled.
             AgentError::Policy(refusals) => match &refusals[..] {
+                [] => f.write_str(UNJUDGED),
                 [one] => f.write_str(&one.blocked.editor_message()),
                 many => {
                     let mut first = true;
@@ -87,10 +97,10 @@ impl fmt::Display for AgentError {
     }
 }
 
-impl std::error::Error for AgentError {}
+impl Error for AgentError {}
 
 impl IntoCallToolResult for AgentError {
-    fn into_call_tool_result(self) -> Result<CallToolResponse, rmcp::ErrorData> {
+    fn into_call_tool_result(self) -> Result<CallToolResponse, ErrorData> {
         Ok(CallToolResult::error(vec![ContentBlock::text(self.to_string())]).into())
     }
 }
@@ -133,6 +143,13 @@ mod tests {
                 Blocked::CreateDatabase.editor_message()
             )
         );
+    }
+
+    /// A refusal with nothing in it is unreachable through the tool layer and expressible in
+    /// the type, so it has to say *something* — a blank error is worse than a vague one.
+    #[test]
+    fn a_refusal_with_no_reason_still_reads_as_something() {
+        assert_eq!(AgentError::Policy(Vec::new()).to_string(), UNJUDGED);
     }
 
     #[test]

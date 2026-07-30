@@ -18,17 +18,21 @@
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
-use http::{header, HeaderMap, Request, Response, StatusCode};
+use http::header::{AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE};
+use http::{HeaderMap, HeaderValue, Request, Response, StatusCode};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
+use hyper::server::conn::http1::Builder as Http1;
+use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio::net::TcpListener;
-use tokio::runtime::{Builder, Runtime};
+use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio_util::sync::CancellationToken;
 
 use crate::host::Host;
@@ -37,6 +41,17 @@ use crate::tools::StrataTools;
 /// The path the MCP endpoint is served at — the one an `mcp add --transport http` URL ends
 /// with.
 pub const MCP_PATH: &str = "/mcp";
+
+/// The auth scheme, lowercased for the case-insensitive compare RFC 7235 asks for.
+const BEARER: &str = "bearer ";
+
+/// How long the accept loop waits after a failed `accept()` before trying again.
+///
+/// Not politeness — a fd exhaustion (`EMFILE`) makes `accept` fail *immediately and
+/// repeatedly*, so a bare `continue` pegs a core and floods the log for as long as the
+/// pressure lasts, which is precisely when the app can least afford either. Short enough that
+/// a genuinely transient refusal costs nothing.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
 type Body = BoxBody<Bytes, Infallible>;
 type Mcp<H> = StreamableHttpService<StrataTools<H>, LocalSessionManager>;
@@ -58,7 +73,15 @@ impl AgentServer {
     /// Binding happens before this returns, so a taken port is an error the caller can show
     /// rather than a server that silently never listens. `port` may be `0`, in which case
     /// [`addr`](AgentServer::addr) reports the one the OS chose.
+    ///
+    /// An **empty token is refused**, and loudly: the guard is a byte compare, so an empty
+    /// secret matches a bare `Authorization: Bearer ` and every local process is authorized.
+    /// A server nobody can reach is a bug the user reports; a server everybody can reach is
+    /// one nobody notices.
     pub fn start<H: Host>(port: u16, token: String, host: Arc<H>) -> Result<AgentServer, String> {
+        if token.is_empty() {
+            return Err("agent server needs a token: an empty one authorizes every request".into());
+        }
         // Bound with `std` and **before** the runtime exists, for two separate reasons that
         // both bite a caller who is already inside a runtime: `rt.block_on` panics there,
         // and so does dropping a `Runtime` — which is what an early `?` on a taken port
@@ -72,7 +95,7 @@ impl AgentServer {
         let addr = listener
             .local_addr()
             .map_err(|e| format!("agent server address: {e}"))?;
-        let rt = Builder::new_multi_thread()
+        let rt = RuntimeBuilder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .thread_name("strata-agent")
@@ -132,22 +155,27 @@ async fn accept<H: Host>(
             _ = cancel.cancelled() => break,
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => stream,
-                // One refused connection is not a reason to stop listening.
+                // One refused connection is not a reason to stop listening — but retrying
+                // with no pause is how a standing condition (no descriptors left) becomes a
+                // spinning core, so back off before going round again.
                 Err(e) => {
                     tracing::warn!("agent server accept failed: {e}");
-                    continue;
+                    tokio::select! {
+                        _ = cancel.cancelled() => break,
+                        _ = tokio::time::sleep(ACCEPT_BACKOFF) => continue,
+                    }
                 }
             },
         };
         let service = service.clone();
         let token = Arc::clone(&token);
         tokio::spawn(async move {
-            let handler = hyper::service::service_fn(move |req: Request<Incoming>| {
+            let handler = service_fn(move |req: Request<Incoming>| {
                 let service = service.clone();
                 let token = Arc::clone(&token);
                 async move { Ok::<_, Infallible>(serve(&service, &token, req).await) }
             });
-            if let Err(e) = hyper::server::conn::http1::Builder::new()
+            if let Err(e) = Http1::new()
                 .serve_connection(TokioIo::new(stream), handler)
                 .await
             {
@@ -170,21 +198,27 @@ async fn serve<H: Host>(service: &Mcp<H>, token: &str, req: Request<Incoming>) -
 
 /// Does the request carry `Authorization: Bearer <token>`?
 ///
-/// Compared in constant time. Overkill for a loopback socket, and free — a comparison that
-/// short-circuits on the first wrong byte is the kind of thing nobody revisits when the same
-/// code is later reachable from somewhere else.
+/// The **scheme** is matched case-insensitively, because RFC 7235 says it is a case-insensitive
+/// token and a client sending `bearer` is presenting a valid credential — 401-ing it would send
+/// the user off to re-mint a token that was right all along. The **secret** is compared in
+/// constant time: overkill for a loopback socket, and free, which is the point — a comparison
+/// that short-circuits on the first wrong byte is the kind of thing nobody revisits when the
+/// same code is later reachable from somewhere else.
+///
+/// An empty `token` cannot reach here: [`AgentServer::start`] refuses one, because this compare
+/// would accept a bare `Authorization: Bearer ` against it.
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
-    let Some(value) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-    else {
+    let Some(value) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) else {
         return false;
     };
-    let Some(presented) = value.strip_prefix("Bearer ") else {
+    let Some((scheme, presented)) = value.split_at_checked(BEARER.len()) else {
         return false;
     };
+    if !scheme.eq_ignore_ascii_case(BEARER) {
+        return false;
+    }
     let (a, b) = (presented.as_bytes(), token.as_bytes());
-    if a.len() != b.len() {
+    if a.len() != b.len() || b.is_empty() {
         return false;
     }
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
@@ -192,10 +226,9 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
 
 fn unauthorized() -> Response<Body> {
     let mut response = plain(StatusCode::UNAUTHORIZED, "Unauthorized");
-    response.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        header::HeaderValue::from_static("Bearer"),
-    );
+    response
+        .headers_mut()
+        .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
     response
 }
 
@@ -203,8 +236,8 @@ fn plain(status: StatusCode, message: &'static str) -> Response<Body> {
     let mut response = Response::new(Full::new(Bytes::from_static(message.as_bytes())).boxed());
     *response.status_mut() = status;
     response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("text/plain; charset=utf-8"),
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
     );
     response
 }
@@ -215,16 +248,32 @@ mod tests {
 
     fn bearer(value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            header::HeaderValue::from_str(value).unwrap(),
-        );
+        headers.insert(AUTHORIZATION, HeaderValue::from_str(value).unwrap());
         headers
     }
 
     #[test]
     fn the_right_token_is_authorized() {
         assert!(authorized(&bearer("Bearer s3cret"), "s3cret"));
+    }
+
+    /// RFC 7235's auth-scheme is a case-insensitive token, so `bearer` is a valid credential
+    /// and 401-ing it sends the user off to re-mint a token that was already right.
+    #[test]
+    fn the_scheme_is_case_insensitive_but_the_secret_is_not() {
+        assert!(authorized(&bearer("bearer s3cret"), "s3cret"));
+        assert!(authorized(&bearer("BEARER s3cret"), "s3cret"));
+        assert!(!authorized(&bearer("Bearer S3CRET"), "s3cret"));
+    }
+
+    /// The guard is a byte compare, so an empty secret would match a bare `Bearer `.
+    /// `AgentServer::start` refuses one; this is the second half of that rule, in the
+    /// comparison itself.
+    #[test]
+    fn an_empty_token_authorizes_nobody() {
+        assert!(!authorized(&bearer("Bearer "), ""));
+        assert!(!authorized(&bearer("Bearer"), ""));
+        assert!(!authorized(&HeaderMap::new(), ""));
     }
 
     #[test]

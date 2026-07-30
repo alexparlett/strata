@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use strata_core::engine::plan::as_explain;
@@ -74,7 +74,7 @@ impl MockProject {
 /// A [`Host`] over a fixed set of [`MockProject`]s.
 pub struct MockHost {
     projects: Mutex<Vec<MockProject>>,
-    page_size: usize,
+    page_size: AtomicUsize,
     runs: AtomicU64,
 }
 
@@ -82,9 +82,16 @@ impl MockHost {
     pub fn new(projects: Vec<MockProject>) -> Arc<MockHost> {
         Arc::new(MockHost {
             projects: Mutex::new(projects),
-            page_size: 100,
+            page_size: AtomicUsize::new(100),
             runs: AtomicU64::new(0),
         })
+    }
+
+    /// What [`Host::default_page_size`] answers. Settable because the real one tracks a live
+    /// setting, `0` among its legal values ("no limit"), and that zero is the reading a host
+    /// is most likely to get wrong.
+    pub fn set_default_page_size(&self, rows: usize) {
+        self.page_size.store(rows, Ordering::Relaxed);
     }
 
     /// Run one closure against a named project, or answer [`AgentError::WindowGone`] — which
@@ -116,7 +123,7 @@ impl Host for MockHost {
     }
 
     fn default_page_size(&self) -> usize {
-        self.page_size
+        self.page_size.load(Ordering::Relaxed)
     }
 
     async fn engine(&self, project: &Path) -> Result<Arc<Engine>, AgentError> {
@@ -199,14 +206,12 @@ impl Host for MockHost {
                 .await
                 .map(Settled::Plan),
         };
-        let state = if settled.is_ok() {
-            TabState::Settled
-        } else {
-            TabState::Empty
-        };
+        // Settled either way. A run that failed is still a run that finished — the dispatch
+        // happened, the previous snapshot went with it, and the tab shows an error. Reporting
+        // it as `Empty` would tell an agent nothing had ever run there.
         self.with(project, |p| {
             if let Some(t) = p.tabs.iter_mut().find(|t| t.tab == tab) {
-                t.state = state;
+                t.state = TabState::Settled;
             }
             Ok(())
         })?;

@@ -21,18 +21,19 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::{tool, tool_handler, tool_router};
+use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use strata_core::engine::{stopped_on_purpose, Engine};
-use strata_model::{ColumnInfo, SnapshotId, TabId};
+use strata_model::{SnapshotId, TabId};
 use uuid::Uuid;
 
 use crate::error::AgentError;
 use crate::host::{self, Host, Project, RunMode, Settled};
 use crate::wire::{
-    cells, plan_result, rows_result, ColumnWire, DescribeResult, DescribeTableParams,
+    cells, columns, plan_result, rows_result, Columns, DescribeResult, DescribeTableParams,
     DiagnosticWire, EntryWire, FunctionsResult, PageResult, ProjectParams, ProjectsResult,
     ReadPageParams, RunParams, RunResult, TabParams, TabResult, TablesResult, TabsResult,
     ValidateParams, ValidateResult,
@@ -40,8 +41,20 @@ use crate::wire::{
 
 /// The most rows one call will hand back, however large a `page_size` is asked for. A cap
 /// rather than an error: the response reports the `page_size` actually used, so the clamp is
-/// visible in the answer rather than a silent truncation.
+/// visible in the answer rather than a silent truncation. It is also what a
+/// [`Host::default_page_size`] of `0` ("no limit", the app's own reading of that setting)
+/// resolves to.
 pub const MAX_PAGE_SIZE: usize = 10_000;
+
+/// How many tabs' results stay readable at once, across every project.
+///
+/// The cache has no other bound: `close_tab` and a superseded read drop an entry, but a tab
+/// the **user** closes in the app is a thing the server never hears about, so its entry would
+/// sit there for the life of the process holding a whole result schema. The oldest is evicted
+/// once past this, which costs nothing an agent notices — a `read_page` on an evicted tab
+/// reports the same "run a query in it first" as one on a tab that never ran, and re-running
+/// is the recovery either way.
+const MAX_REMEMBERED_RUNS: usize = 64;
 
 /// What the server remembers about a tab's last settled run, so `read_page` can page it.
 ///
@@ -56,9 +69,16 @@ struct LastRun {
     /// `None` when the query returned no rows — nothing was materialized, so there is
     /// nothing to page, and the honest answer is an empty page rather than a fault.
     snapshot: Option<SnapshotId>,
-    columns: Vec<ColumnInfo>,
+    /// The wire columns, converted **once** and shared by every response that describes this
+    /// result. A schema can carry thousands of nested fields, so re-deriving it per page — or
+    /// keeping a second `Vec<ColumnInfo>` beside it to re-derive *from* — is per-field
+    /// recursive work paid for nothing.
+    columns: Columns,
     total: usize,
     page_size: usize,
+    /// Insertion order, for the eviction above. A counter rather than a timestamp: this has
+    /// to order two entries, not date them.
+    seq: u64,
 }
 
 /// The tool vocabulary over one [`Host`].
@@ -67,6 +87,9 @@ pub struct StrataTools<H: Host> {
     /// Keyed by `(project root, tab)` — a tab handle is unique per project, and a project's
     /// root is its identity.
     runs: Arc<Mutex<HashMap<(PathBuf, TabId), LastRun>>>,
+    /// Stamps each remembered run so the oldest can be found. Shared with every clone of the
+    /// service, like the map it orders.
+    seq: Arc<AtomicU64>,
 }
 
 // A manual `Clone`: the derive would demand `H: Clone`, and the whole point of the `Arc` is
@@ -76,6 +99,7 @@ impl<H: Host> Clone for StrataTools<H> {
         StrataTools {
             host: Arc::clone(&self.host),
             runs: Arc::clone(&self.runs),
+            seq: Arc::clone(&self.seq),
         }
     }
 }
@@ -85,6 +109,7 @@ impl<H: Host> StrataTools<H> {
         StrataTools {
             host,
             runs: Arc::new(Mutex::new(HashMap::new())),
+            seq: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -100,11 +125,36 @@ impl<H: Host> StrataTools<H> {
         Ok((project, engine))
     }
 
-    fn remember(&self, root: &Path, tab: TabId, run: LastRun) {
-        self.runs
-            .lock()
-            .unwrap()
-            .insert((root.to_path_buf(), tab), run);
+    fn remember(
+        &self,
+        root: &Path,
+        tab: TabId,
+        snapshot: Option<SnapshotId>,
+        columns: Columns,
+        total: usize,
+        page_size: usize,
+    ) {
+        let mut runs = self.runs.lock().unwrap();
+        runs.insert(
+            (root.to_path_buf(), tab),
+            LastRun {
+                snapshot,
+                columns,
+                total,
+                page_size,
+                seq: self.seq.fetch_add(1, Ordering::Relaxed),
+            },
+        );
+        while runs.len() > MAX_REMEMBERED_RUNS {
+            let Some(oldest) = runs
+                .iter()
+                .min_by_key(|(_, run)| run.seq)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            runs.remove(&oldest);
+        }
     }
 
     fn forget(&self, root: &Path, tab: TabId) {
@@ -248,10 +298,16 @@ impl<H: Host> StrataTools<H> {
         }
 
         let mode = RunMode::from(params.mode.unwrap_or_default());
-        let page_size = params
-            .page_size
-            .unwrap_or_else(|| self.host.default_page_size())
-            .clamp(1, MAX_PAGE_SIZE);
+        // A `0` from the host is the app's "no limit", not a request for empty pages — see
+        // `Host::default_page_size`. A `0` the *caller* asked for is nothing at all, and the
+        // clamp's floor answers it with one row.
+        let page_size = match params.page_size {
+            Some(asked) => asked.clamp(1, MAX_PAGE_SIZE),
+            None => match self.host.default_page_size() {
+                0 => MAX_PAGE_SIZE,
+                limit => limit.min(MAX_PAGE_SIZE),
+            },
+        };
 
         // Dispatching a run retires the tab's previous snapshot, so what we remembered about
         // it is already dead. An explain materializes nothing and leaves it alone.
@@ -266,17 +322,18 @@ impl<H: Host> StrataTools<H> {
         let handle = params.tab;
         match settled {
             Ok(Settled::Rows(output)) => {
+                // Converted once and shared: the response and every later page describe the
+                // same schema, so nothing re-walks it.
+                let cols = columns(&output.columns);
                 self.remember(
                     &project.root,
                     tab,
-                    LastRun {
-                        snapshot: output.snapshot,
-                        columns: output.columns.clone(),
-                        total: output.total,
-                        page_size: output.page_size,
-                    },
+                    output.snapshot,
+                    Columns::clone(&cols),
+                    output.total,
+                    output.page_size,
                 );
-                Ok(Json(rows_result(handle, output)))
+                Ok(Json(rows_result(handle, cols, output)))
             }
             Ok(Settled::Plan(plan)) => Ok(Json(plan_result(handle, plan))),
             // The one place stopped-vs-failed is judged.
@@ -311,7 +368,7 @@ impl<H: Host> StrataTools<H> {
             // the truth; a "not found" would read as a lost result.
             return Ok(Json(PageResult {
                 tab: params.tab,
-                columns: last.columns.iter().map(ColumnWire::from).collect(),
+                columns: last.columns,
                 rows: Vec::new(),
                 total: 0,
                 page,
@@ -326,7 +383,7 @@ impl<H: Host> StrataTools<H> {
         {
             Ok((rows, _)) => Ok(Json(PageResult {
                 tab: params.tab,
-                columns: last.columns.iter().map(ColumnWire::from).collect(),
+                columns: last.columns,
                 rows: cells(&rows),
                 total: last.total,
                 page,
@@ -369,7 +426,7 @@ Start with list_tables and describe_table to learn the catalog, validate to chec
 cheaply, then open_tab and run. Every run lands as a real query tab in the user's window, \
 so park findings in their own tabs and iterate in a scratch one."
 )]
-impl<H: Host> rmcp::ServerHandler for StrataTools<H> {}
+impl<H: Host> ServerHandler for StrataTools<H> {}
 
 #[cfg(test)]
 mod tests {
@@ -377,12 +434,12 @@ mod tests {
     use std::{env, process};
 
     use strata_core::engine::sql::Blocked;
-    use strata_core::engine::{TableSpec, WsId, CANCELLED};
+    use strata_core::engine::{RunTag, TableSpec, WsId, CANCELLED};
     use strata_model::SourceFormat;
 
     use crate::host::{CatalogEntry, Described, RegState};
     use crate::mock::{MockHost, MockProject};
-    use crate::wire::{Mode, Sort, StateWire};
+    use crate::wire::{Mode, Sort, StateWire, TabStateWire};
 
     use super::*;
 
@@ -628,7 +685,7 @@ mod tests {
             .tabs;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].tab, tab);
-        assert!(matches!(listed[0].state, crate::wire::TabStateWire::Empty));
+        assert!(matches!(listed[0].state, TabStateWire::Empty));
 
         tools
             .close_tab(Parameters(TabParams {
@@ -700,6 +757,69 @@ mod tests {
             rows[0],
             vec![Some("1".to_string()), Some("ana".to_string())]
         );
+    }
+
+    /// The app reads `row_limit: 0` as "no limit", so a host returning that setting verbatim
+    /// must not get one-row pages out of it — which a bare `clamp(1, MAX)` would give.
+    #[tokio::test]
+    async fn a_host_default_of_zero_means_no_limit_not_one_row() {
+        let (_root, tools) = one_project("no_limit").await;
+        tools.host.set_default_page_size(0);
+        let tab = open(&tools).await;
+
+        let RunResult::Ok {
+            rows, page_size, ..
+        } = tools
+            .run(Parameters(run_params(&tab, "SELECT id FROM people")))
+            .await
+            .unwrap()
+            .0
+        else {
+            panic!("expected rows");
+        };
+        assert_eq!(page_size, MAX_PAGE_SIZE);
+        assert_eq!(rows.len(), 5, "every row, not one");
+    }
+
+    /// A tab the *user* closes in the app is never reported to the server, so without a bound
+    /// the cache keeps a whole result schema per abandoned tab for the life of the process.
+    #[tokio::test]
+    async fn the_run_cache_evicts_its_oldest_entry() {
+        let (_root, tools) = one_project("evict").await;
+        let mut tabs = Vec::new();
+        for _ in 0..MAX_REMEMBERED_RUNS + 1 {
+            let tab = open(&tools).await;
+            tools
+                .run(Parameters(run_params(&tab, "SELECT id FROM people")))
+                .await
+                .unwrap();
+            tabs.push(tab);
+        }
+        assert_eq!(tools.runs.lock().unwrap().len(), MAX_REMEMBERED_RUNS);
+
+        // The first tab's result is gone, and reads exactly like a tab that never ran; the
+        // newest is still there.
+        let evicted = tools
+            .read_page(Parameters(ReadPageParams {
+                tab: tabs[0].clone(),
+                page: 1,
+                sort: None,
+                project: None,
+            }))
+            .await;
+        assert!(
+            matches!(evicted, Err(AgentError::NotFound(_))),
+            "the oldest is evicted"
+        );
+        assert!(tools
+            .read_page(Parameters(ReadPageParams {
+                tab: tabs.pop().unwrap(),
+                page: 1,
+                sort: None,
+                project: None,
+            }))
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -867,7 +987,7 @@ mod tests {
         engine
             .query(
                 WsId(Uuid::parse_str(&tab).unwrap().as_u128()),
-                strata_core::engine::RunTag(999),
+                RunTag(999),
                 "SELECT name FROM people".into(),
                 10,
             )

@@ -7,9 +7,10 @@
 //! content arrives as structured content, and that the bearer check answers **401 before any
 //! tool runs**.
 
-use std::fs;
-use std::{env, process};
+use std::time::Duration;
+use std::{env, fs, process};
 
+use reqwest::Client;
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -20,12 +21,20 @@ use strata_agent::mock::{MockHost, MockProject};
 use strata_agent::{AgentServer, MCP_PATH};
 use strata_core::engine::TableSpec;
 use strata_model::SourceFormat;
+use tokio::net::TcpStream;
+use tokio::time::sleep;
 
 const TOKEN: &str = "test-token-a1b2c3";
 
 /// A served mock project holding a real two-row `people` table.
-async fn serve() -> (AgentServer, String) {
-    let root = env::temp_dir().join(format!("strata_agent_http_{}", process::id()));
+///
+/// `tag` is per test, and it is load-bearing: these run concurrently in one process, each
+/// begins by removing its scratch directory, and DataFusion re-LISTs a table's sources at
+/// **scan** time rather than caching the file set at registration — so a shared directory
+/// would let one test delete `people.csv` out from under another test's in-flight query.
+/// (The same reason `strata-core`'s own `scratch(tag)` helper takes one.)
+async fn serve(tag: &str) -> (AgentServer, String) {
+    let root = env::temp_dir().join(format!("strata_agent_http_{}_{tag}", process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("people.csv"), "id,name\n1,ana\n2,ben\n").unwrap();
@@ -57,7 +66,7 @@ async fn serve() -> (AgentServer, String) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_lists_the_tools_and_calls_them() {
-    let (_server, url) = serve().await;
+    let (_server, url) = serve("client").await;
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url).auth_header(TOKEN),
     );
@@ -174,8 +183,8 @@ async fn a_client_lists_the_tools_and_calls_them() {
 /// tool — it is an HTTP 401, before any MCP framing is even read.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_request_without_the_token_is_401_before_any_tool_runs() {
-    let (_server, url) = serve().await;
-    let http = reqwest::Client::new();
+    let (_server, url) = serve("unauthorized").await;
+    let http = Client::new();
     let body = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -220,16 +229,16 @@ async fn a_request_without_the_token_is_401_before_any_tool_runs() {
 /// way AA-03 turns the setting off.
 #[tokio::test(flavor = "multi_thread")]
 async fn dropping_the_server_stops_listening() {
-    let (server, url) = serve().await;
+    let (server, url) = serve("drop").await;
     let addr = server.addr();
     drop(server);
 
     // The runtime shuts down in the background, so give the listener a moment to go.
     for _ in 0..50 {
-        if tokio::net::TcpStream::connect(addr).await.is_err() {
+        if TcpStream::connect(addr).await.is_err() {
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
     }
     panic!("{url} still accepts connections after the server was dropped");
 }

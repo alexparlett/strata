@@ -32,7 +32,10 @@ http = "1"
 http-body-util = "0.1"
 bytes = "1"
 # The wire shapes: serde for the JSON, schemars for the tool schemas rmcp advertises.
-serde = { version = "1", features = ["derive"] }
+# `rc` is what makes `Arc<Vec<ColumnWire>>` serializable (`wire::Columns` — one conversion of a
+# result schema, shared by its run and every page after it). rmcp happens to enable it too, and
+# naming it here is the point: a feature we depend on is not one to inherit by luck.
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 schemars = "1.0"
 # Saved queries are keyed by `Uuid`, and a tab handle is a `TabId` (a `Uuid`) on the wire.
