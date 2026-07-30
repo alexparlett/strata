@@ -52,7 +52,14 @@ MAKE_DMG=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch)
-      ARCH_MODE="${2:-}"
+      # Checked before the `shift 2`, not after: shifting two off one remaining argument returns
+      # non-zero, and under `set -e` that exits the script before any complaint can be printed - so
+      # `--arch` with no value used to fail with no output at all.
+      [[ -n "${2:-}" ]] || {
+        echo "error: --arch needs a value (universal, arm64 or x86_64)" >&2
+        exit 2
+      }
+      ARCH_MODE="$2"
       shift 2
       ;;
     --no-dmg)
@@ -94,10 +101,12 @@ fail() {
 # Version
 # ---------------------------------------------------------------------------------------------
 
-# The crate version is the single source of truth for what a build calls itself, so a release is
-# a version bump plus a tag and never a number typed into two places.
-VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' crates/strata-freya/Cargo.toml | head -1)"
-[[ -n "$VERSION" ]] || fail "could not read the version out of crates/strata-freya/Cargo.toml"
+# The crate version is the single source of truth for what a build calls itself, so a release is a
+# version bump plus a tag and never a number typed into two places. Read it through version.sh
+# rather than with a second copy of the same sed: that script is the one thing that knows where the
+# number lives, and it is also what the Release workflow bumps. It fails loud on its own, and the
+# assignment propagates that under `set -e`.
+VERSION="$("$REPO_ROOT/scripts/version.sh")"
 
 # CFBundleVersion has to increase for macOS to treat a build as newer, and the marketing version
 # stands still across the several builds one version produces. The commit count is monotonic and

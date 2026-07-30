@@ -59,6 +59,10 @@ impl Component for PropTable {
         let list = rows.read();
         let errors = list.errors();
         let error_color = use_theme().read().colors().error;
+        // The body's own scroll, driven so a row can reveal itself: a property added by the toolbar
+        // or named by the Settings search (P4-09) lands at the end of the list, which on a grid with
+        // a screenful of overrides is off the bottom — a selection nobody can see.
+        let controller = use_scroll_controller(ScrollConfig::default);
 
         let mut body = TableBody::new();
         for row in list.rows() {
@@ -71,6 +75,7 @@ impl Component for PropTable {
                         name: row.name.clone(),
                         value: row.value.clone(),
                         invalid: error.is_some(),
+                        controller,
                         key: DiffKey::None,
                     }
                     .key(row.id),
@@ -83,13 +88,15 @@ impl Component for PropTable {
             .column_widths(vec![Size::flex(1.), Size::flex(1.)])
             .child(TableHead::new().child(HeadRow))
             .child(
-                ScrollView::new().height(Size::flex(1.)).child(
-                    rect()
-                        .width(Size::fill())
-                        .vertical()
-                        .maybe_child(list.is_empty().then_some(EmptyGrid))
-                        .child(body),
-                ),
+                ScrollView::new_controlled(controller)
+                    .height(Size::flex(1.))
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .vertical()
+                            .maybe_child(list.is_empty().then_some(EmptyGrid))
+                            .child(body),
+                    ),
             )
     }
 }
@@ -165,6 +172,8 @@ struct PropTableRow {
     name: String,
     value: String,
     invalid: bool,
+    /// The body's scroll, so a row that becomes the selected one can reveal itself.
+    controller: ScrollController,
     key: DiffKey,
 }
 
@@ -248,10 +257,30 @@ impl Component for PropTableRow {
         // Deliberately **not** striped — this is a settings list, not a results grid, and the
         // canvas paints every unselected row the same. Banding here would compete with the one
         // row state the surface actually has.
-        let fill = match rows.read().selected == Some(id) {
+        let selected = rows.read().selected == Some(id);
+        let fill = match selected {
             true => theme.table_selection_background,
             false => Color::TRANSPARENT,
         };
+
+        // Reveal the selected row — the same shape the tab strip reveals its active tab with. A
+        // freshly added row's area lands a frame after it is selected, so the effect watches
+        // *whether* we have one (a `Memo<bool>` only notifies when that flips) and then peeks it:
+        // torin re-emits `Sized` for every row on scroll, and re-revealing then would drag the
+        // selection back under the pointer. `scroll_to_item` is a no-op once the row is visible.
+        let mut area = use_state(|| None::<Area>);
+        let has_area = use_memo(move || area.read().is_some());
+        let selected_now = use_reactive(&selected);
+        let controller = self.controller;
+        use_side_effect(move || {
+            if !*selected_now.read() || !has_area() {
+                return;
+            }
+            if let Some(area) = *area.peek() {
+                let mut controller = controller;
+                controller.scroll_to_item(area);
+            }
+        });
 
         TableRow::new()
             .theme(TableThemePartial {
@@ -272,6 +301,11 @@ impl Component for PropTableRow {
                             .content(Content::Flex)
                             .cross_align(Alignment::Center)
                             .spacing(CELL_INSET - ERROR_STRIPE)
+                            // What the reveal above scrolls to. Measured on the name cell's body
+                            // rather than on the row, which is a `TableRow` and takes no element
+                            // events: it spans the row's full height, and the grid scrolls
+                            // vertically only, so the axis that matters is the one it reports.
+                            .on_sized(move |e: Event<SizedEventData>| area.set(Some(e.area)))
                             // The invalid marker. A painted rect and not a border: torin draws a
                             // border inside bounds the box already fills (AGENTS.md §3), so it
                             // would be the one edge you could not see.

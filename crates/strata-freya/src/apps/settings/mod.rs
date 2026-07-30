@@ -27,6 +27,7 @@
 //! P4-08 the last ([`views::KeymapPane`]). The window is complete.
 
 mod model;
+mod search;
 mod views;
 
 use std::collections::BTreeMap;
@@ -39,6 +40,7 @@ use strata_core::config::{Command, Settings};
 use crate::apps::settings::views::{
     DataDisplayPane, EnginePane, KeymapPane, PropRows, SettingsChrome, SystemPane, ThemePane,
 };
+use crate::components::form::Reveal;
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
 use crate::platform::{self, WindowKind};
@@ -48,6 +50,7 @@ use crate::state::{
 use crate::theme::{peek_selection, use_strata_theme, window_background};
 
 pub use model::{category, Category, NavGroup, CATEGORIES};
+pub use search::{search, Anchor, Hit};
 
 // `%[no_ext]`: the window's dress is read by its sibling views (chrome · nav · footer · pane)
 // rather than by one `Settings` component, so there is no type for the generated
@@ -335,6 +338,10 @@ impl App for SettingsApp {
             let preview = self.app.preview;
             move || SettingsCtx::new(config, preview)
         });
+        // The search's pointer at one row of one pane (P4-09). Provided **above** the router,
+        // because the nav writes it before the page holding the row has mounted — see
+        // `components::form::reveal`.
+        use_provide_context(Reveal::empty);
         // Every edit to the draft's theme half previews across all windows…
         use_side_effect(move || ctx.sync_preview());
         // …and the preview never outlives this window, whichever way it goes.

@@ -486,7 +486,7 @@ strata_components! {
     },
     "form" => FormThemePreference {
         title_color, label_color, hint_color, required_color, divider_fill, note_background,
-        note_border_fill, note_color,
+        note_border_fill, note_color, reveal_background,
     },
     // The segmented toggle (results Table/Chart switcher, the plan tabs, a form's pill): the
     // container per variant (raised `background` / recessed `form_background`, border,

@@ -147,6 +147,20 @@ card list nor the new table), so none was invented: a third control in a 240px c
 decision, not an implementation one. Worth raising with the designer — the affordance for the
 resulting state already exists, so it would be one button.
 
+## Outstanding: the search index still has P4-09's placeholder
+
+P4-09 left this note for P4-08, and it is **not done** — `apps/settings/search.rs`'s `PAGES` still
+carries one "Keyboard shortcuts" entry pointing at this route, put there so a query for "shortcut"
+answered with something while the pane was a placeholder. Now that the pane holds real content, the
+index should carry what it actually holds — a command is findable by its own name, not by the page's
+— and the page entry should go.
+
+It was left out of this task deliberately rather than missed: a command row is not a
+`components::form::Row`, so it is probably a new `Hit` kind rather than an `Anchor`, and the
+flash/scroll half is `Row::anchor`'s and would have to be earned separately if a captured row wants
+it. That is a design decision inside P4-09's mechanism, not a loose end in this one. Pick it up as
+its own change, in either task's name.
+
 ## Acceptance
 - [x] Rebind with conflict resolution (Reassign steals + unbinds the other / Cancel).
 - [x] Reset one row and Reset all, both conflict-checked; no duplicate binding reachable.

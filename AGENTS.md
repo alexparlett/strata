@@ -268,6 +268,22 @@ Things that must not regress. Each was fought for once already.
   ⌘Q ⌘, are most of what anyone reaches for, so `suspend_accelerators` holds them off for the
   capture's lifetime. A held flag, not a `sync_chords(&Default)` call — otherwise the routine sync
   re-arms the menubar underneath the capture.
+- **A name two surfaces have to agree on is generated from one table, not typed twice — and
+  navigating to something is never editing it.** The Settings search (P4-09) indexes a setting by an
+  `Anchor` *variant*: one table generates the enum, the list of every anchor, and each setting's
+  route, label, subtext and keywords, and the pane builds its row from the same entry
+  (`Anchor::row()`). That is not tidiness — the failure it rules out is silent. An anchor spelled one
+  way in the index and another in the pane is a jump that routes and then singles nothing out, and
+  nothing but trying it would ever say so; the same goes for a label, which titles the hit *and*
+  heads the row. Two consequences. The **category** is not restated in the index at all (a hit
+  resolves its page through `model::category`, the tree the rail and the breadcrumb already read),
+  and the engine's properties are indexed off **`ENGINE_KEYS` entire** rather than a chosen few,
+  because a hand-picked subset of a catalogue is a second list to keep in step. And **following a
+  result only navigates**: it may single a setting out where there is something to single out, but it
+  must not write. Adding a pre-filled grid row for a property with no override (the canvas's "search
+  doubles as add a known property") was built and rejected — a named row with an empty value still
+  projects into the draft, so merely following a result left Apply live for a change nobody asked
+  for, and the grid claiming to list the overrides in force listed one that wasn't.
 - **A free-form list setting is edited as rows and committed as a map.** `Settings::engine` is a
   `BTreeMap`, which cannot hold the row you have not named yet or the duplicate you are halfway
   through fixing — so the Engine pane's model is an ordered list of rows under ids minted by a
@@ -472,6 +488,14 @@ Things that must not regress. Each was fought for once already.
   divergences" rather than averaging it**: a silent split-the-difference is how a surface stops
   matching the canvas it was drawn from, and a named one is a single constant to change when the
   design settles it.
+  A row can also be **addressed**: `Row::anchor` names it and `form::reveal` carries the ask, so
+  something outside the form (the Settings search) can have it scroll itself into view and flash
+  once. That lives on the row rather than in the window that needed it first, for the reason above —
+  a "jumpable settings row" would be a second row type — and it is two contexts because they have
+  two lifetimes: `Reveal` is window-lived (it is written *before* the page holding the target has
+  mounted, so a call into the row is impossible and a slot is the only shape that works) and
+  `RevealScroll` is page-lived, since the page owns the `ScrollView`. Both optional, so a form with
+  neither is a form of ordinary rows.
 - **A field backing a draft publishes on every keystroke, and normalizes its box when it is
   left.** Freya's `Input` has no blur prop and only fires `on_submit` on Enter, so the tempting
   shape is "parse and publish when the field is left". It loses the value: the thing that commits
@@ -624,6 +648,21 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   a tester's Mac while reading like success locally. And **the tag is created after the build, not
   before**: a published release's tag cannot be moved or deleted, so `gh release create --target`
   mints it only once there is a DMG to attach.
+- **The version lives in one file and is reached through one script; a bump rides the publish.**
+  `scripts/version.sh` is the only thing that knows the number is in
+  `crates/strata-freya/Cargo.toml` — the bundle script reads it through that, and the Release
+  workflow resolves *and writes* through it. Writing, not only reading, is the fix for a real bug: a
+  version passed to the workflow moved the tag and not the manifest, and the bundle script reads the
+  manifest, so `v0.4.0` shipped `Strata-0.2.0-universal.dmg`. Resolving is a separate entry point
+  (`--resolve` touches nothing and needs no cargo) so a typo or a taken tag is rejected before a
+  runner installs a toolchain, and writing updates `Cargo.lock` because the release build passes
+  `--locked`. Then the tag rule above, pointed at the commit: a bump is **refused without the
+  release box** rather than performed and discarded, so "just build me a DMG" cannot move the
+  repository's version; and the commit is **pushed after the build and never rebased**, because the
+  tag names that commit and a rebase would make a permanent tag point at a tree nothing ever built.
+  The release notes are the signing rule again — written by `claude-code-action`, `continue-on-error`,
+  falling back to GitHub's changelog with a warning that says so, because better notes are a better
+  release page and not a precondition for having one.
 - **The app bundle is self-contained, and that is a claim each new asset has to keep.** Themes are
   `include_str!`'d and the two families the themes name (`themes/*.json` `fonts`) are
   `include_bytes!`'d and registered through `LaunchConfig::with_font` in `main.rs` — because

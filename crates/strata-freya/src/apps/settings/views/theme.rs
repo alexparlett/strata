@@ -17,10 +17,10 @@ use freya::prelude::*;
 use strata_core::theme::{Source, StrataTheme};
 
 use crate::apps::settings::views::Pane;
-use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
+use crate::apps::settings::{Anchor, SettingsCtx, SettingsThemePartial, SettingsThemePreference};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
-use crate::components::form::{Form, Row};
+use crate::components::form::Form;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Body;
 use crate::state::ThemeSel;
@@ -60,8 +60,9 @@ impl Component for ThemePane {
 
         // Why the grid is inert rather than absent: it is still the answer to "which theme am
         // I using?", which Sync-with-OS doesn't tell you — so while syncing it keeps its place
-        // and gains the line saying whose choice it now is.
-        let mut grid = Row::new("Theme").child(ThemeGrid {
+        // and gains the line saying whose choice it now is. That line is the one row subtext in
+        // the window that is *conditional*, which is why it is set here rather than in the index.
+        let mut grid = Anchor::Theme.row().child(ThemeGrid {
             themes,
             selected,
             inert: sync_os,
@@ -76,8 +77,8 @@ impl Component for ThemePane {
         let body = Form::new()
             .preferences()
             .child(
-                Row::new("Sync with OS")
-                    .hint("Matches your system light/dark appearance automatically.")
+                Anchor::SyncOs
+                    .row()
                     .trailing()
                     .on_press(move |_: Event<PressEventData>| ctx.edit(|s| s.sync_os = !s.sync_os))
                     .child(

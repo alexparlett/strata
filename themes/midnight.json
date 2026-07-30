@@ -861,6 +861,9 @@
       },
       "note_color": {
         "reference": "text_muted"
+      },
+      "reveal_background": {
+        "reference": "accent_soft"
       }
     },
     "header_bar": {
