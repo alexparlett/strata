@@ -18,11 +18,14 @@
 //! ⌘S that freed up, then reset Save query), so resetting is a proposal like any other rather
 //! than a `retain` on the draft.
 //!
-//! **The menubar is disarmed while a row is listening.** The OS resolves a menu accelerator
-//! before the window sees the key, so with the menubar armed, pressing ⌘C to bind it would copy
-//! and the row would go on waiting. Half of what a user reaches for here is a menu accelerator
-//! (⌘Z ⌘X ⌘C ⌘V ⌘A ⌘O ⌘Q ⌘,), so [`MenuHandles::suspend_accelerators`] holds them off for
-//! exactly as long as the capture lasts.
+//! **The menubar is disarmed while a row is listening and this window has the keys.** The OS
+//! resolves a menu accelerator before the window sees the key, so with the menubar armed, pressing
+//! ⌘C to bind it would copy and the row would go on waiting. Half of what a user reaches for here
+//! is a menu accelerator (⌘Z ⌘X ⌘C ⌘V ⌘A ⌘O ⌘Q ⌘,), so
+//! [`MenuHandles::suspend_accelerators`] holds them off — but only while this window is focused,
+//! because the listener it is protecting is this window's and cannot fire otherwise. Settings is
+//! not modal, so an abandoned capture (click the project window, never press a key) would
+//! otherwise leave the whole app's menubar disarmed until the window closed.
 //!
 //! ## Divergences from the canvas
 //!
@@ -88,16 +91,27 @@ impl Component for KeymapPane {
             (rows(&draft), has_overrides(&draft))
         };
 
-        // Hold the menubar's accelerators off for as long as a row is listening (module doc), and
-        // put back exactly what the *committed* settings say when it stops — the same set the
-        // focused window's routine sync applies, so the two can't disagree.
+        // Hold the menubar's accelerators off for as long as a row is listening **in this
+        // window while it has the keys** (module doc), and put back exactly what the *committed*
+        // settings say the moment either stops being true — the same set the focused window's
+        // routine sync applies, so the two can't disagree.
+        //
+        // Focus is half the condition, not a detail. The suspension exists to stop the OS
+        // resolving an accelerator before the capture listener sees the key, and that listener is
+        // this window's: it cannot receive one while another window has focus, so there is nothing
+        // to protect and no reason to hold the menubar off. Settings is deliberately **not** modal
+        // (`platform::settings`), so clicking the project window behind it mid-capture is an
+        // ordinary thing to do — and without focus in the condition the accelerators would stay
+        // off app-wide until the capture was finished or the window closed, taking every Edit-menu
+        // item's chord *and* its enabled state with them.
         let committed = use_config(ConfigChan::Settings);
+        let focused = use_hook(Platform::get).is_app_focused;
         let mut menu = use_consume::<AppCtx>().menu;
-        // Both inputs are read **inside** the effect. `use_side_effect` builds its closure once,
-        // so a `listening` computed in the render above would freeze at its first value and the
-        // menubar would never be disarmed (AGENTS.md §3).
+        // Every input is read **inside** the effect. `use_side_effect` builds its closure once, so
+        // a value computed in the render above would freeze at its first reading and neither a
+        // capture nor a focus change would ever move it (AGENTS.md §3).
         use_side_effect(move || {
-            let listening = editing.read().capturing_command().is_some();
+            let listening = *focused.read() && editing.read().capturing_command().is_some();
             let chords = menu_chords(&committed.read().settings);
             if let Some(handles) = menu.write().as_mut() {
                 handles.sync_chords(&chords);
@@ -105,7 +119,8 @@ impl Component for KeymapPane {
             }
         });
         // A capture must not outlive the page it started on: leaving the category unmounts the
-        // listener below, so the menubar has to be re-armed on the way out too.
+        // listener below, so the menubar has to be re-armed on the way out too. The effect above
+        // covers a window that merely loses focus; this covers one that goes.
         use_drop(move || {
             if let Some(handles) = menu.write().as_mut() {
                 handles.suspend_accelerators(false);

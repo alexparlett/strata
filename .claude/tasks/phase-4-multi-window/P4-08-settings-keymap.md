@@ -61,6 +61,13 @@ what a user reaches for here. `MenuHandles::suspend_accelerators(bool)` holds th
 as long as the capture lasts, and it is a **held flag** rather than a `sync_chords(&Default)` call
 so the focused window's routine sync cannot re-arm the menubar underneath a capture.
 
+The condition is "a capture is in progress **and** this window is focused", and the second half was
+missing until review caught it. Settings is deliberately not modal, so clicking the project window
+behind it mid-capture is ordinary — and with focus out of the condition the flag stranded: every
+gated menu item lost its chord *and* its enabled state, app-wide, until the capture was finished or
+the window closed. Focus belongs there on its own terms rather than as a guard, since the listener
+being protected is this window's and cannot receive a key while another window has them.
+
 ### Live menubar accelerators (the thing menu.rs deferred to this task)
 
 `menu.rs` said out loud that accelerators were read at launch and "live menu updates can ride

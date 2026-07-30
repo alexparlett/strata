@@ -256,6 +256,13 @@ impl MenuHandles {
     /// sync — which fires on focus changes and on any settings write — cannot re-arm the menubar
     /// underneath a capture. While suspended a sync still records what the settings say; it just
     /// doesn't reach the items until the capture ends.
+    ///
+    /// **Whoever suspends owns putting it back, and must do so on losing focus as well as on
+    /// finishing.** This flag is app-wide while the thing it protects is one window's key
+    /// listener, and nothing else clears it: `sync_chords` deliberately cannot, and a menubar left
+    /// suspended takes every gated item's chord *and* its enabled state with it, in every window,
+    /// for as long as it is held. So the caller's condition is "a capture is in progress **and**
+    /// my window is focused", not just the first half (`views::keymap`).
     pub fn suspend_accelerators(&mut self, suspended: bool) {
         if self.suspended == suspended {
             return;

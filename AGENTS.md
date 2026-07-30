@@ -268,6 +268,18 @@ Things that must not regress. Each was fought for once already.
   ⌘Q ⌘, are most of what anyone reaches for, so `suspend_accelerators` holds them off for the
   capture's lifetime. A held flag, not a `sync_chords(&Default)` call — otherwise the routine sync
   re-arms the menubar underneath the capture.
+- **An app-wide flag held to protect one window's listener is released on losing focus, not only on
+  finishing.** The half of the rule above that was wrong first time: the Keymap pane suspended the
+  menubar on "a capture is in progress" alone, and Settings is deliberately *not* modal, so clicking
+  the project window behind it mid-capture left the flag stuck — every gated menu item lost its
+  chord *and* its enabled state, in every window, until that capture was finished or the window
+  closed. The condition has to name both halves ("a capture is in progress **and** my window is
+  focused"), which is not defensive bookkeeping but the actual invariant: the listener being
+  protected is that window's and cannot fire while another has the keys, so there is nothing to
+  protect. Generally — when a flag's *scope* is wider than the state that justifies it, its
+  condition must include whatever makes that state reachable, and the release path has to fire on
+  every way of leaving it (`use_drop` covers a window that goes; only focus covers one that stays
+  open behind another).
 - **A name two surfaces have to agree on is generated from one table, not typed twice — and
   navigating to something is never editing it.** The Settings search (P4-09) indexes a setting by an
   `Anchor` *variant*: one table generates the enum, the list of every anchor, and each setting's
