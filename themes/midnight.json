@@ -1459,6 +1459,32 @@
         "reference": "border_control"
       }
     },
+    "tree": {
+      "background": {
+        "reference": "transparent"
+      },
+      "color": {
+        "reference": "text_primary"
+      },
+      "arrow_fill": {
+        "reference": "text_muted"
+      },
+      "item_background": {
+        "reference": "transparent"
+      },
+      "hover_item_background": {
+        "reference": "transparent"
+      },
+      "selected_item_background": {
+        "reference": "transparent"
+      },
+      "selected_item_color": {
+        "reference": "text_primary"
+      },
+      "guide_fill": {
+        "reference": "line"
+      }
+    },
     "toggle_button": {
       "background": {
         "reference": "transparent"

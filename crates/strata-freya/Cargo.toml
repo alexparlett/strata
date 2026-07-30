@@ -54,3 +54,8 @@ rfd = "0.15"
 # Headless Skia renderer for the `#[ignore]`d preview harnesses (e.g. `plan_preview`):
 # mounts a real surface under the real theme and snapshots it to a PNG for eyeballing.
 freya-testing = { workspace = true }
+# Arrow, for **tests only** — the value tree's model is a projection of a `RecordBatch`, so its
+# tests have to build one. A dev-dependency rather than a real one on purpose: DataFusion is
+# touched only in `strata-core` (AGENTS.md §2), and this keeps that true of everything shipped
+# while letting a test build its own fixture inline rather than bending a signature to be testable.
+datafusion = "54"

@@ -156,12 +156,32 @@ fn value_of(cursor: &Cursor) -> NodeValue {
 
 /// A leaf as the grid would print it. `ArrayFormatter` is the grid's own formatter, so a number,
 /// decimal or timestamp reads here exactly as it reads in a cell.
+///
+/// A **string is clipped without being copied first**. `ArrayFormatter` renders through `Display`,
+/// so asking it for a 30MB text value materializes all 30MB only for `clip` to discard nearly all
+/// of it — which is the unbounded materialization this whole module exists to avoid, reintroduced
+/// one row at a time. Reading the `&str` straight off the array and clipping the borrow costs the
+/// characters kept. Every other leaf is bounded by its own type.
 fn leaf_text(cursor: &Cursor) -> String {
+    if let Some(text) = utf8_value(cursor.array.as_ref(), cursor.idx) {
+        return clip(text, DISPLAY_CHARS).into_owned();
+    }
     let options = FormatOptions::default();
     match ArrayFormatter::try_new(cursor.array.as_ref(), &options) {
         Ok(formatter) => clip(&formatter.value(cursor.idx).to_string(), DISPLAY_CHARS).into_owned(),
         // A type arrow cannot format at all. Naming it beats an empty row that looks like a bug.
         Err(_) => format!("<unprintable {}>", cursor.array.data_type()),
+    }
+}
+
+/// The value at `idx` as a `&str`, for the three UTF-8 array layouts — the one leaf whose size is
+/// unbounded, so the one that must be clipped from a borrow rather than from a copy.
+fn utf8_value(array: &dyn Array, idx: usize) -> Option<&str> {
+    match array.data_type() {
+        DataType::Utf8 => Some(array.as_string::<i32>().value(idx)),
+        DataType::LargeUtf8 => Some(array.as_string::<i64>().value(idx)),
+        DataType::Utf8View => Some(array.as_string_view().value(idx)),
+        _ => None,
     }
 }
 

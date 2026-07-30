@@ -147,9 +147,9 @@ fn drive<Wr: RecordBatchWriter>(mut wr: Wr, batch: &RecordBatch) -> Result<(), A
 const PREVIEW_BYTES: usize = 16384;
 /// Entries shown in a **top-level** container before the `… N more keys` tail; see [`items_at`],
 /// which halves it per level. A cap per *container* rather than only a budget for the whole
-/// render: without it one wide object consumes the entire budget, its level fails, and the
-/// deepening loop falls back to the level above — which is how a 19,311-key object rendered a
-/// 62MB document as two lines.
+/// render: without it one wide object consumes the entire budget on its own and the level is
+/// abandoned for a shallower one — which is how a 19,311-key object rendered a 62MB document as
+/// two lines.
 const PREVIEW_ITEMS: usize = 30;
 /// The floor that cap decays to. Never zero: **landing on content is the point.** A boundary that
 /// renders `{ … 20 keys … }` throws away the level a reader is looking for — IntelliJ collapses a
@@ -229,7 +229,6 @@ fn preview_json(field: &FieldRef, array: &dyn Array, idx: usize, budget: usize) 
             out: String::new(),
             budget: if max_depth == 0 { usize::MAX } else { budget },
             max_depth,
-            elided: false,
         };
         match p.value(field, array, idx, 0) {
             Ok(()) => return Some(p.out),
@@ -255,8 +254,6 @@ struct Preview {
     out: String,
     budget: usize,
     max_depth: usize,
-    /// Whether anything was rendered as a count rather than expanded.
-    elided: bool,
 }
 
 impl Preview {
@@ -286,18 +283,16 @@ impl Preview {
     /// A container rendered as its size: `{ … 12 keys … }` / `[ … 5171 items … ]`. The collapsed
     /// form — what a fold line or a tree row shows for a child it has not opened.
     fn count(&mut self, open: char, n: usize, unit: &str, close: char) -> Result<(), Halt> {
-        self.elided = true;
         self.push(&format!("{open} … {} … {close}", plural(n, unit)))
     }
 
-    /// The tail of a container whose entries were cut off at [`PREVIEW_ITEMS`]: `… 19291 more keys`.
+    /// The tail of a container whose entries were cut off at [`items_at`]: `… 19,296 more keys`.
     ///
     /// Rendering *some* entries and saying how many are left is the whole difference between a
-    /// preview and a dead end. Without the per-container cap, a single wide key blows the budget
-    /// on its own, the level fails, and the deepening loop falls back to the level above — so one
-    /// 19,311-key object collapsed a 62MB document to two useless lines.
+    /// preview and a dead end. Without the per-container cap a single wide key blows the budget on
+    /// its own, the level is abandoned for a shallower one, and a 19,311-key object collapses a
+    /// 62MB document to two useless lines.
     fn more(&mut self, left: usize, unit: &str, depth: usize) -> Result<(), Halt> {
-        self.elided = true;
         self.push(",")?;
         self.indent(depth)?;
         self.push(&format!(
@@ -826,8 +821,8 @@ mod tests {
     }
 
     /// The regression that prompted the per-container cap. One 19,311-key object under a single
-    /// top-level key: expanding it blew the budget, so the level failed and the deepening loop
-    /// fell back to the level above — rendering a 62MB document as
+    /// top-level key: expanding it blew the budget, so the level was abandoned for the shallower
+    /// one above it — rendering a 62MB document as
     /// `{ "contentBlocks": { … 19311 keys … } }`, two lines and no way in. The cap means the
     /// budget is spent on entries instead.
     #[test]
