@@ -6,15 +6,14 @@
 //! out would be a second copy of the nav tree, free to drift from the row that navigated to
 //! it.
 //!
-//! [`Pane::not_built`] is what a category renders until its own task lands (P4-04…P4-08). It
-//! is deliberately plain: the shell is what P4-03 delivers, and dressing an empty page up
-//! would misrepresent it.
+//! P4-03 shipped a `not_built` constructor for a category whose task had not landed; P4-08 was
+//! the last of the five, so it is gone rather than kept for a sixth that does not exist yet.
 
 use freya::prelude::*;
 use freya::router::*;
 
 use crate::apps::settings::{category, Route, SettingsThemePartial, SettingsThemePreference};
-use crate::components::typography::{Control, Prose};
+use crate::components::typography::Control;
 
 /// The pane's inset (canvas `padding: var(--sp-6)`).
 const PANE_PADDING: Gaps = Gaps::new(24., 24., 24., 24.);
@@ -48,12 +47,6 @@ impl Pane {
             trailing: None,
             filled: false,
         }
-    }
-
-    /// A category whose page belongs to a task that hasn't landed. `what` names the content,
-    /// `owner` the task that brings it.
-    pub fn not_built(what: &str, owner: &str) -> Self {
-        Self::new(Prose::new(format!("{what} is not built yet ({owner}).")))
     }
 
     /// Put an action at the end of the breadcrumb line.

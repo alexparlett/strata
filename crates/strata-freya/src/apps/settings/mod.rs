@@ -22,10 +22,9 @@
 //! the second ([`views::DataDisplayPane`]), and moved the row vocabulary every pane is built
 //! from into [`crate::components::form`] — a pane is a `Form::preferences` of `Row`s, and
 //! nothing about the rhythm between them lives here. P4-06 added the third
-//! ([`views::SystemPane`]), and P4-07 the fourth ([`views::EnginePane`]) — which is the one
-//! category that is a *surface* rather than a list of settings, so it is the only page to take
-//! [`views::Pane`]'s two opt-outs. Keymap belongs to P4-08 and renders a placeholder until it
-//! lands.
+//! ([`views::SystemPane`]), P4-07 the fourth ([`views::EnginePane`]) — which is the one category
+//! to take both of [`views::Pane`]'s opt-outs, being a surface that manages its own height — and
+//! P4-08 the last ([`views::KeymapPane`]). The window is complete.
 
 mod model;
 mod views;
@@ -38,7 +37,7 @@ use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use strata_core::config::{Command, Settings};
 
 use crate::apps::settings::views::{
-    DataDisplayPane, EnginePane, Pane, PropRows, SettingsChrome, SystemPane, ThemePane,
+    DataDisplayPane, EnginePane, KeymapPane, PropRows, SettingsChrome, SystemPane, ThemePane,
 };
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
@@ -105,6 +104,18 @@ define_theme!(
         /// landed too light, and daylight hid it because both resolve to white there.
         table_head_background: Color,
         table_selection_background: Color,
+        /// A **key cap** on the Keymap pane (P4-08) — the little raised `⌘` / `T` box: its fill,
+        /// its edge (drawn a shade heavier along the bottom, which is what makes it read as a
+        /// key) and the character on it. Three fields because a cap is a dressed object with a
+        /// surface, an outline and a label, and none of the three follows either of the others.
+        keycap_background: Color,
+        keycap_border_fill: Color,
+        keycap_color: Color,
+        /// The **dashed** edge of a slot with nothing in it yet — the Add-shortcut button on an
+        /// unbound row. Its own field rather than the table's `border_fill`, because it has to
+        /// stand a step out from the grid's own hairlines to read as an invitation at all; a
+        /// dashed line pitched for a box outline mostly disappears.
+        slot_border_fill: Color,
     }
 );
 
@@ -365,25 +376,7 @@ impl App for SettingsApp {
     }
 }
 
-/// The category pane's content — what [`SettingsChrome`] wraps in the scroll frame and the
-/// breadcrumb. One per [`Route`]; each is a placeholder until its own task lands. `ThemePane`
-/// (P4-04), `DataDisplayPane` (P4-05) and `SystemPane` (P4-06) have landed and live in
-/// [`views`], so they aren't in this list.
-macro_rules! panes {
-    ($( $Comp:ident => $owner:literal, $what:literal ),* $(,)?) => {
-        $(
-            #[derive(PartialEq)]
-            pub struct $Comp;
-
-            impl Component for $Comp {
-                fn render(&self) -> impl IntoElement {
-                    Pane::not_built($what, $owner)
-                }
-            }
-        )*
-    };
-}
-
-panes! {
-    KeymapPane => "P4-08", "Keyboard shortcuts",
-}
+// Every category now has its page, so the `panes!` macro that generated a `Pane::not_built`
+// placeholder per unbuilt category is gone, and so is that constructor (see `views::pane`). A
+// sixth route — Connections (W7) is the candidate — brings its own page rather than inheriting a
+// placeholder nobody is using.

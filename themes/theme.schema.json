@@ -1089,6 +1089,18 @@
             },
             "table_selection_background": {
               "$ref": "#/$defs/colorPref"
+            },
+            "keycap_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "keycap_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "keycap_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "slot_border_fill": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },

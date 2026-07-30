@@ -10,9 +10,11 @@
 //! ones) and flex content on `Table` itself (it accepts a `Size` for its height and could not
 //! then hand any of it to a scrolling body).
 //!
-//! What is composed *inside* the parts stays here: the column rule, the invalid-row stripe, and
-//! the error message — a full-width sibling between rows rather than a cell, because the fault
-//! belongs to the property rather than to its name or its value. The header is a `TableRow` too,
+//! What is composed *inside* the parts stays here: the column rule and the invalid-row stripe.
+//! The error message is a [`RowNote`] — a full-width sibling between rows rather than a cell,
+//! because the fault belongs to the property rather than to its name or its value, and because a
+//! cell stands at a fixed height so the columns line up. It moved out of this file with P4-08,
+//! whose grid needs the same thing to say a chord is taken. The header is a `TableRow` too,
 //! which is what gives it the strip's fill, the rule beneath it and the shared column widths for
 //! nothing.
 
@@ -20,6 +22,7 @@ use freya::prelude::*;
 use strata_core::engine::config::is_restart_key;
 
 use crate::apps::settings::views::engine::model::{KeyStatus, PropRows};
+use crate::apps::settings::views::RowNote;
 use crate::apps::settings::{SettingsTheme, SettingsThemePartial, SettingsThemePreference};
 use crate::components::divider::Divider;
 use crate::components::form::ValueField;
@@ -38,8 +41,7 @@ const HEAD_INSET: f32 = 16.;
 const MARKER_SIZE: f32 = 18.;
 /// The empty grid's own floor, so it still reads as a table (canvas `min-height: 132px`).
 const EMPTY_HEIGHT: f32 = 130.;
-/// Alpha of the wash behind an error message, and of the tint behind the restart marker.
-const ERROR_WASH_ALPHA: u8 = 20;
+/// Alpha of the tint behind the restart marker.
 const MARKER_TINT_ALPHA: u8 = 38;
 /// How wide the autocomplete panel stands. A property name is long and the box it hangs off is
 /// half a pane wide, so without a floor every suggestion would truncate to its namespace.
@@ -56,6 +58,7 @@ impl Component for PropTable {
         let rows = self.rows;
         let list = rows.read();
         let errors = list.errors();
+        let error_color = use_theme().read().colors().error;
 
         let mut body = TableBody::new();
         for row in list.rows() {
@@ -72,7 +75,7 @@ impl Component for PropTable {
                     }
                     .key(row.id),
                 )
-                .maybe_child(error.map(|message| ErrorStrip { message }));
+                .maybe_child(error.map(|message| RowNote::new(message, error_color)));
         }
 
         Table::new()
@@ -369,27 +372,6 @@ impl Component for RestartMarker {
             .center()
             .background(self.color.with_a(MARKER_TINT_ALPHA))
             .child(Icon::new(IconName::Reload).size(11.).color(self.color))
-    }
-}
-
-/// Why the row above cannot be applied.
-#[derive(PartialEq)]
-struct ErrorStrip {
-    message: String,
-}
-
-impl Component for ErrorStrip {
-    fn render(&self) -> impl IntoElement {
-        let error = use_theme().read().colors().error;
-
-        rect()
-            .width(Size::fill())
-            .horizontal()
-            .spacing(6.)
-            .padding(Gaps::new(6., HEAD_INSET, 6., HEAD_INSET))
-            .background(error.with_a(ERROR_WASH_ALPHA))
-            .child(Icon::new(IconName::Alert).size(12.).color(error))
-            .child(Caption::new(self.message.clone()).color(error).wrap())
     }
 }
 

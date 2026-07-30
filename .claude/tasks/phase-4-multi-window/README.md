@@ -55,7 +55,7 @@ The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebu
 | P4-05 | Settings ▸ Data-display | ✅                                                                                                                          | U12 | P4-03 |
 | P4-06 | Settings ▸ System (+ history limit) | ✅                                                                                                                          | W3/U12 | P4-03 |
 | P4-07 | Settings ▸ Engine (properties editor) |  ✅                                                                                                                            | W2 | P4-03 |
-| P4-08 | Settings ▸ Keymap (rebindable) | ⬜                                                                                                                          | W4 | P4-03, P2-20 |
+| P4-08 | Settings ▸ Keymap (rebindable) | ✅ (no direct unbind control — the canvas has none)                                                                                                                          | W4 | P4-03, P2-20 |
 | P4-09 | Settings search | ⬜                                                                                                                          | W3 | P4-03 |
 | P4-10 | Export window (rebuild to canvas) | ✅                                                                                                                          | D6/U13 | P4-01, P2-01 |
 | P4-11 | Configure-table window (register / edit + import options) | ✅                                                                                                                          | U14/D7/D8 | — |

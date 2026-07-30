@@ -156,7 +156,12 @@ src/menu.rs                      the macOS menubar: App · **File** (Open… · 
                                  `MenuHandles`, and the *focused* window keeps the File menu
                                  pointed at itself (`use_file_menu`): its recents, Close Project
                                  only when it has a project to close, and the `OpenCtx` Open
-                                 Recent resolves through (the one item carrying data, not a chord)
+                                 Recent resolves through (the one item carrying data, not a chord).
+                                 The **accelerators** follow the keymap live (P4-08,
+                                 `sync_chords`), and are held off entirely while Settings ▸ Keymap
+                                 is capturing a chord (`suspend_accelerators`) — the OS resolves an
+                                 accelerator before the window sees the key, so an armed menubar
+                                 would copy on ⌘C instead of letting it be bound
 src/state/mod.rs                 `AppCtx` — the six app-globals `main` creates once (themes ·
                                  config · window registry · theme preview · menubar handles · the
                                  focused window's open path), handed to every window root as one
@@ -218,19 +223,22 @@ src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
   views/                         title_bar · rail (SidebarRow) · projects · row · open (rfd pick)
 src/apps/settings/               the settings window (P4-03, `Settings.dc.html`) — one app-wide,
-                                 pinned above its opener
+                                 pinned above its opener. All five categories are built
   mod.rs                         root + window config + the `settings` component theme, the
-                                 **freya-router** `Route` per category, `SettingsCtx` (the draft ·
-                                 its **seed** · Apply · the live-theme mirror), and the category
-                                 panes still awaiting their task (P4-07 / P4-08). Apply commits a
-                                 per-field diff of draft-vs-seed (`Settings::merge_onto`), so a
-                                 setting another window wrote meanwhile survives it; `dirty()` is
-                                 the same comparison, which is why it reads no config state
+                                 **freya-router** `Route` per category, and `SettingsCtx` (the
+                                 draft · its **seed** · Apply · the live-theme mirror). Apply
+                                 commits a per-field diff of draft-vs-seed
+                                 (`Settings::merge_onto`), so a setting another window wrote
+                                 meanwhile survives it; `dirty()` is the same comparison, which
+                                 is why it reads no config state
   model.rs                       the nav tree: CATEGORIES + their groups + breadcrumbs
                                  (unit-tested — one category per route, groups contiguous)
   views/                         chrome (the router layout) · title_bar · nav · pane · footer
                                  (the panes' rows are `components::form` — P4-05 moved the row
-                                 vocabulary there rather than keeping a settings-only copy)
+                                 vocabulary there rather than keeping a settings-only copy) ·
+                                 row_note (the full-width note *between* two table rows, shared
+                                 by the window's two grids — one tone for wash, edge, glyph and
+                                 text, so it reads as one statement)
     theme.rs                     P4-04 — the Appearance pane: Sync-with-OS + the theme grid, both
                                  `Setting`s. Each card's thumbnail is painted from **that** theme's
                                  own sheet slots, so a user theme previews with nothing authored
@@ -261,7 +269,19 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
                                  rather than a lookalike — see the task file); inspector.rs the
                                  selected key's catalogue entry. Nothing here reaches an engine:
                                  Apply writes the config, and each project window picks it up
-src/apps/export/                 the export window (P4-10, `Export.dc.html` for the markup,
+    keymap/                      P4-08 — the Keymap pane: every command and the chord it answers
+                                 to, on the **same** builtin `Table` the engine grid uses (the
+                                 canvas was redrawn from a card list into an Action/Shortcut grid
+                                 after the last handoff). mod.rs is the frame + Reset all + the
+                                 capture listener + `ask`, the **one** funnel every change goes
+                                 through (`keymap::propose` then `apply`, so a reset is
+                                 conflict-checked exactly like a capture); model.rs the row
+                                 projection + `Editing` (one value, so listening and blocked
+                                 cannot both be true; unit-tested); table.rs the grid, the key
+                                 caps and the four states of the Shortcut column. The rebind
+                                 policy itself is `strata_core::keymap`'s, beside the resolution a
+                                 hand-edited config meets. While a row is listening the menubar's
+                                 accelerators are **suspended** — see src/menu.rs
                                  `Strata.exportGroups()` for the options) — opened from the
                                  results toolbar, pinned above the project window that asked
   mod.rs                         root + window config + the `export` component theme, and
@@ -546,6 +566,26 @@ engine was being built with `Default::default()` — and settled how an engine c
 catalogue default, not skipped), and a changed `datafusion.runtime.*` is a **restart**, which is a
 bump of `ProjectRoot`'s diff key through the one T2 confirm rather than a second way to configure
 a live engine. See its task file; AGENTS.md §2 carries the rules.
+
+**P4-08 (Settings ▸ Keymap)** is ✅, and completes the Settings window. It is the second use of
+that same builtin `Table` — the canvas was **redrawn** between the last handoff and the task, from
+a list of two-line cards into an Action/Shortcut grid with the description in a tooltip and a
+double-click to rebind, so the local handoff bundle's `Settings.dc.html` is stale for this pane
+(read the design project). Three things it settled. **One funnel**: capture, the per-row reset and
+Reassign all go through `keymap::propose` then `keymap::apply` over a `Rebind`, with the policy in
+**strata-core** beside the `validate_bind` a hand-edited config already meets — which is what makes
+a *reset* conflict-checked like a capture (a command's default chord can have been taken while it
+was away) and a *steal* two bindings rather than one write. **A menubar accelerator is state**: it
+now follows the keymap live (`sync_chords`, the list a destructure so a new menu command can't
+forget it), and — the load-bearing half — it is **suspended** for the life of a capture, because the
+OS resolves an accelerator before the window sees the key, so an armed menubar makes ⌘C copy instead
+of bind, and ⌘Z ⌘X ⌘C ⌘V ⌘A ⌘O ⌘Q ⌘, are most of what anyone reaches for. And **dashed borders are a
+fork addition** (`BorderStyle::Dashed`, `Button::border_style`): torin fills the region between two
+rounded rects and a fill cannot carry a pattern, so a dashed edge strokes the centreline instead —
+worth the addition because the dash is the message, distinguishing an open slot from a bound
+control. The one thing deliberately **not** built is a direct unbind control: the state is supported
+end to end and reachable via Reassign, but the canvas has no such affordance and inventing one is
+the designer's call. See its task file.
 
 **P4-10 (export window)** is ✅ — rebuilt from the canvas rather than ported, because the Dioxus
 modal had drifted from the design and reached its screen through hardcoded `match` arms per
