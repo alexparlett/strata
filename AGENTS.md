@@ -620,13 +620,16 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `git -C crates/freya fetch --no-tags /abs/path/to/main/repo/crates/freya <sha>` then
   `git merge --ff-only <sha>` (additive, and it keeps your own uncommitted fork edits as long as
   that commit touches different files — check with `git show --stat` first). Then push it.
-- **Worktree traps:** `git worktree add` does not update submodules — in any new worktree run
-  `git submodule update --checkout` before the first build, then `git submodule status` (no `+`
-  prefix). A `+` means the checkout is not the commit the superproject recorded; compare
+- **Worktree traps — use the `freya-submodule` skill** (`.claude/skills/freya-submodule`), which
+  owns the full sequence: `git worktree add` does not update submodules, so in any new worktree
+  run `git submodule update --init --checkout` before the first build, then `git submodule status`
+  (no `+` prefix). A `+` means the checkout is not the commit the superproject recorded; compare
   `git ls-files -s crates/freya` (the gitlink the index wants) against `git -C crates/freya log -1`
-  before concluding anything about a build error in fork API. And every worktree has its **own**
-  `crates/freya` checkout: when editing fork files by absolute path, confirm the path goes through
-  *your* worktree, not the main repo's copy.
+  before concluding anything about a build error in fork API. The skill also carries the recovery
+  for the unpushed-gitlink trap above (fetch the sha from the main repo's checkout by absolute
+  path, then update again). And every worktree has its **own** `crates/freya` checkout: when
+  editing fork files by absolute path, confirm the path goes through *your* worktree, not the main
+  repo's copy.
 
 ## 7. Git, worktrees, and verification
 
