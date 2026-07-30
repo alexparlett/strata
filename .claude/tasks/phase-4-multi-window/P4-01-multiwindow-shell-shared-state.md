@@ -63,7 +63,7 @@ the launcher is the surface that needs it — `crate::platform::windows`:
    window** (also Enter), which runs `spawn_forever(close_this_window(…))` — launcher when it was
    the last. Because `ProjectRoot` is keyed on (folder, generation), a re-root into a broken
    project and an engine restart hit the same detection. The fault path mounts no engine,
-   provides no `Subtree`, and never touches recents / the open-set. The recoverable session arms
+   provides no `Subtree`, and never promotes the project in the recents. The recoverable session arms
    (missing → blank; corrupt → kept aside, blank) are unchanged; only defs failures, an
    unreadable session, and a corrupt session whose rename-aside fails are faults.
 
@@ -74,10 +74,13 @@ the launcher is the surface that needs it — `crate::platform::windows`:
    answering Enter. The fault arm **drains the close-confirm slot**: `guard.running` can be true
    there (a run in flight when the window re-rooted into the broken project keeps the old engine
    alive until it settles), so a vetoed red-button close or a parked re-root is acted on rather
-   than written into a slot nothing renders. And leaving the fault arm other than by quit
-   **removes the project from the persisted open-set** — a broken project deliberately closed
-   must not re-spawn its fault window on every later launch (the acceptance below), while a quit
-   keeps it, like every window, so the reopen resurfaces the fault.
+   than written into a slot nothing renders. And the fault arm **claims the open-set**
+   (`use_claim_open`, the open-set half of `use_open_project` with no recents promotion): it is
+   still a window on that project, so a quit reopens it — resurfacing the fault, which is honest —
+   and a deliberate close drops it from reopen-on-startup (the acceptance below). The add half is
+   load-bearing, not symmetry: a remove-on-drop alone is evicted by the remount a **failed** Try
+   again performs, with nothing re-adding it — the quit after that failed retry would silently
+   forget the window (caught by the PR's review pass).
 
    **Registration-race note:** the close is user-initiated (a dialog or red-button press), so
    this window's — and any doomed sibling's — `use_register_window` has long landed by the time

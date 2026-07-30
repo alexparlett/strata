@@ -24,8 +24,8 @@ use crate::apps::project::state::EngineRestart;
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::IconName;
 use crate::components::typography::{Control, Prose, Title};
-use crate::platform::{close_this_window, is_quitting, OpenCtx};
-use crate::state::{write_config, AppCtx, ConfigChan};
+use crate::platform::{close_this_window, OpenCtx};
+use crate::state::{use_claim_open, AppCtx};
 
 /// [`ProjectRoot`](crate::apps::project)'s fault arm: the whole subtree while the project
 /// could not load. Esc and the backdrop deliberately do nothing — there is no state behind
@@ -77,24 +77,15 @@ impl Component for ProjectLoadFailed {
             }
         };
 
-        // A broken project must not come back on the next launch once this window is
-        // *deliberately* closed — the P4-01 rule every project window keeps. The fault arm
-        // never claimed the project (`use_open_project` is the loaded arm's), but a previous
-        // healthy session can have left it in the persisted open-set, so leaving removes it
-        // (idempotent) — except on a quit, which preserves the open-set for every window
-        // alike, so the reopen resurfaces the fault, which is honest. A re-root or Try again
-        // also lands here first; a load that then succeeds re-adds the project in the same
-        // breath.
-        {
-            let config = self.app.config;
-            let path = self.root.to_string_lossy().into_owned();
-            use_drop(move || {
-                if is_quitting() {
-                    return;
-                }
-                write_config(config, &[ConfigChan::Open], |cfg| cfg.remove_open(&path));
-            });
-        }
+        // The fault arm is still a window on this project, so it claims the open-set like
+        // any project window — a quit reopens it (resurfacing the fault, which is honest)
+        // and a deliberate close drops it from reopen-on-startup — while withholding the
+        // recents promotion that is `use_open_project`'s other half: a project that doesn't
+        // open must not head that list. The add half is load-bearing, not symmetry: a
+        // failed Try again remounts this arm, and a remove-on-drop alone would evict the
+        // entry with nothing re-adding it — the quit after that failed retry would silently
+        // forget the window.
+        use_claim_open(self.app.config, &self.root);
 
         // Drain the close-confirm slot (see the field doc). A `Window` close was asked with
         // nothing here to protect, so it just proceeds; a parked re-root is performed — the

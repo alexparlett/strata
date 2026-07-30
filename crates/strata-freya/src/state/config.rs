@@ -149,6 +149,29 @@ pub fn use_open_project(station: ConfigStation, name: &str, root: &Path) {
     });
 }
 
+/// [`use_open_project`]'s open-set half alone: the window joins it on mount and leaves it
+/// on close — but not on quit — with **no** recents promotion. For the project-load fault
+/// arm, which is still a *window on that project* (so a quit must reopen it, resurfacing
+/// the fault honestly, and a deliberate close must drop it from reopen-on-startup) but must
+/// not head the recents with a project that doesn't open. The pairing is the point: an
+/// unpaired remove-on-drop loses the entry whenever the arm remounts into a second fault —
+/// a failed Try again — because nothing re-adds what the drop took out.
+pub fn use_claim_open(station: ConfigStation, root: &Path) {
+    let path = root.to_string_lossy().into_owned();
+    use_hook({
+        let path = path.clone();
+        move || {
+            write_config(station, &[ConfigChan::Open], |cfg| cfg.add_open(&path));
+        }
+    });
+    use_drop(move || {
+        if is_quitting() {
+            return;
+        }
+        write_config(station, &[ConfigChan::Open], |cfg| cfg.remove_open(&path));
+    });
+}
+
 /// Every audience — the fallback [`write_config`] uses when a caller names none. Extend it
 /// when a [`ConfigChan`] is added.
 const ALL_AUDIENCES: [ConfigChan; 3] =
