@@ -195,7 +195,7 @@ impl Component for RecordView {
             |label: &'static str,
              title: &'static str,
              on_press: EventHandler<Event<PressEventData>>| {
-                TooltipContainer::new(Tooltip::new(title))
+                TooltipContainer::new(Tooltip::new_text(title))
                     .position(AttachedPosition::Bottom)
                     .child(
                         Button::new()
@@ -214,7 +214,7 @@ impl Component for RecordView {
         // Prev/next re-point the open slot within the page (clamped — the standard outline
         // button's disabled dress covers the canvas's faint/no-cursor edge states).
         let step = |icon: IconName, title: &'static str, target: Option<usize>| {
-            TooltipContainer::new(Tooltip::new(title))
+            TooltipContainer::new(Tooltip::new_text(title))
                 .position(AttachedPosition::Bottom)
                 .child(
                     Button::new()

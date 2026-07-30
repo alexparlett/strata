@@ -278,7 +278,7 @@ impl Component for ToggleSegment {
                 .child(Control::new(label.clone()).color(color)),
         };
         match &self.title {
-            Some(title) => TooltipContainer::new(Tooltip::new(title.clone()))
+            Some(title) => TooltipContainer::new(Tooltip::new_text(title.clone()))
                 .position(AttachedPosition::Bottom)
                 .child(segment)
                 .into_element(),

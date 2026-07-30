@@ -111,7 +111,7 @@ impl Component for RunButton {
             RunState::Disabled => "Enter a query to run".to_string(),
         };
 
-        TooltipContainer::new(Tooltip::new(title))
+        TooltipContainer::new(Tooltip::new_text(title))
             .position(AttachedPosition::Bottom)
             .child(
                 rect()

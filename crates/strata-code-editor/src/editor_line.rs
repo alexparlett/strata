@@ -4,17 +4,9 @@ use std::{
 };
 
 use freya_core::prelude::*;
-use freya_edit::{
-    EditableEvent,
-    EditorLine,
-    TextEditor,
-};
+use freya_edit::{EditableEvent, EditorLine, TextEditor};
 use smallvec::SmallVec;
-use torin::{
-    gaps::Gaps,
-    prelude::Alignment,
-    size::Size,
-};
+use torin::{gaps::Gaps, prelude::Alignment, size::Size};
 
 use crate::{
     editor_data::{CodeEditorData, Decoration, DecorationSeverity},
@@ -76,7 +68,6 @@ impl Component for EditorLineUI {
         } = self.clone();
 
         let holder = use_state(ParagraphHolder::default);
-        
 
         let editor_data = editor.read();
 
@@ -135,9 +126,7 @@ impl Component for EditorLineUI {
                         .position as usize;
                     (glyph, location.x as f32)
                 });
-                editor.write_if(|mut editor_editor| {
-                    editor_editor.update_hover(line_index, local)
-                });
+                editor.write_if(|mut editor_editor| editor_editor.update_hover(line_index, local));
             }
         };
 
@@ -292,7 +281,11 @@ mod tests {
     use super::*;
 
     fn deco(range: Range<usize>, severity: DecorationSeverity) -> Decoration {
-        Decoration { range, severity, message: String::new() }
+        Decoration {
+            range,
+            severity,
+            message: String::new(),
+        }
     }
 
     #[test]

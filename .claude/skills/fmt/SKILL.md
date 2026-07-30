@@ -6,7 +6,7 @@ description: Format the Strata crates without reformatting the Freya fork. Use w
 # Format Strata
 
 ```bash
-cargo fmt -p strata-freya -p strata-core -p strata-model
+cargo fmt -p strata-freya -p strata-core -p strata-model -p strata-code-editor
 ```
 
 That is the whole thing. Run it from the repo root (or any worktree root).
@@ -59,23 +59,37 @@ git -C crates/freya status --short && git submodule status
 The stash is recoverable with `git -C crates/freya stash pop` — check the diff is *only* import
 re-wrapping before dropping it, in case a real fork edit got swept in with it.
 
-## Not `strata-code-editor` either
+## `strata-code-editor` is ours now
 
-`crates/strata-code-editor` is **vendored** from Freya's own editor and carries that project's
-layout (vertical imports, `StdExternalCrate` grouping) even though it is a workspace member. Our
-stable rustfmt collapses all of it — measured once at ~190 lines across seven files, landing as
-pure noise in an unrelated PR and permanently diverging the vendored source from upstream. It is
-excluded here for the same reason `crates/freya` is: it is not ours to reformat.
+It was excluded here for a long time, and that exclusion is **no longer right** — it is in the
+list above, on purpose.
 
-Format it deliberately, with the layout it is written in, if you have actually changed it:
+The reasoning that kept it out: `crates/strata-code-editor` is **vendored** from Freya's own editor
+and was written in that project's layout (vertical imports, `StdExternalCrate` grouping), so our
+stable rustfmt collapsed all of it — ~190 lines across seven files of pure noise in an unrelated
+PR, and a permanent divergence from the upstream source a `diff -u` was meant to stay legible
+against.
 
-```bash
-cargo +nightly fmt -p strata-code-editor
-```
+What changed is the divergence itself. The vendored crate is now ~3500 lines against upstream's
+~1800, and every file differs structurally rather than incidentally: highlighting is
+theme-independent (`SyntaxKind` instead of a baked `Color`), diagnostics and an autocomplete popup
+are ours outright (`completion.rs` has no upstream counterpart at all), the type lives on the
+theme, and `CodeEditorData` grew half its public surface. A file-level `diff -u` against upstream
+stopped being the way anyone reads this crate somewhere around P2-04. What is left to track is the
+handful of upstream *changes* — two of them between the vendoring base and the 2026-07 fork
+update — and those are read as fork commits, not as a whole-file diff.
+
+So the crate is formatted like the rest of our code, with our stable toolchain and the repo's
+default config (we carry no `rustfmt.toml`; the fork's is inside `crates/freya`). Do **not** reach
+for `cargo +nightly fmt -p strata-code-editor` to "keep the upstream layout" — that was the old
+advice, it now produces the same output as the line above anyway (there is no config for nightly to
+apply), and running it separately just invites the whole crate to churn twice.
+
+`crates/freya` is still excluded, and that has not softened at all — see above.
 
 ## When the member list changes
 
-The command names the three it owns explicitly, which is the point — it cannot silently grow to
+The command names the four it owns explicitly, which is the point — it cannot silently grow to
 include a path dependency. If a crate is added to `members` in the root `Cargo.toml`, add it here
 too. To check the list matches:
 

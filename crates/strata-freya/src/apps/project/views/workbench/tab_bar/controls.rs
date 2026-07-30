@@ -27,7 +27,7 @@ fn cluster_button(icon: IconName, icon_size: f32) -> Button {
 /// A cluster button wearing its comp `title=` as a tooltip. The tooltip wraps just the trigger,
 /// so a menu-opening button stays the anchor its [`Attached`] dropdown measures.
 fn tip(title: &'static str, button: Button) -> TooltipContainer {
-    TooltipContainer::new(Tooltip::new(title))
+    TooltipContainer::new(Tooltip::new_text(title))
         .position(AttachedPosition::Bottom)
         .child(button)
 }

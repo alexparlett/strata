@@ -154,7 +154,7 @@ impl Component for ToggleButton {
             })
             .children(self.elements.clone());
         match &self.title {
-            Some(title) => TooltipContainer::new(Tooltip::new(title.clone()))
+            Some(title) => TooltipContainer::new(Tooltip::new_text(title.clone()))
                 .position(AttachedPosition::Bottom)
                 .child(button)
                 .into_element(),

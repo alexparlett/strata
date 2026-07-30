@@ -197,7 +197,7 @@ impl Component for KeyTableRow {
         // theme's `color`, which is already the canvas's `--c-text2`. Naming the settings theme's
         // `item_color` here (a nav row at rest, a step dimmer) is how the label ends up quieter
         // than the design, and it would be a second source for one surface's text tone.
-        let label = TooltipContainer::new(Tooltip::new(row.desc))
+        let label = TooltipContainer::new(Tooltip::new_text(row.desc))
             .position(AttachedPosition::Bottom)
             .child(Prose::new(row.label));
 

@@ -1,26 +1,16 @@
 use std::{
     borrow::Cow,
     fmt::Display,
-    ops::{
-        Mul,
-        Range,
-    },
+    ops::{Mul, Range},
     time::Duration,
 };
 
-use freya_core::{
-    elements::paragraph::ParagraphHolderInner,
-    prelude::*,
-};
+use freya_core::{elements::paragraph::ParagraphHolderInner, prelude::*};
 use freya_edit::*;
 use ropey::Rope;
 use tree_sitter::InputEdit;
 
-use crate::{
-    languages::EditorLanguage,
-    metrics::EditorMetrics,
-    syntax::InputEditExt,
-};
+use crate::{languages::EditorLanguage, metrics::EditorMetrics, syntax::InputEditExt};
 
 /// Severity of a diagnostic decoration — mapped to a squiggle colour by the
 /// [`EditorTheme`](crate::editor_theme::EditorTheme) at render time, so the buffer
@@ -224,7 +214,7 @@ impl CodeEditorData {
     /// unconditionally without spurious re-renders.
     pub fn set_decorations(
         &mut self,
-        spans: impl IntoIterator<Item=(Range<usize>, DecorationSeverity, String)>,
+        spans: impl IntoIterator<Item = (Range<usize>, DecorationSeverity, String)>,
     ) -> bool {
         let len_bytes = self.rope.len_bytes();
         let decorations: Vec<Decoration> = spans
@@ -242,7 +232,11 @@ impl CodeEditorData {
                     .byte_to_char(end)
                     .max(start + 1)
                     .min(self.rope.len_chars());
-                (start < end).then(|| Decoration { range: start..end, severity, message })
+                (start < end).then(|| Decoration {
+                    range: start..end,
+                    severity,
+                    message,
+                })
             })
             .collect();
         if self.decorations == decorations {
@@ -266,15 +260,21 @@ impl CodeEditorData {
             None
         } else {
             local.and_then(|(local_utf16, x)| {
-                let line_start = self.rope.char_to_utf16_cu(self.rope.line_to_char(
-                    line_index.min(self.rope.len_lines().saturating_sub(1)),
-                ));
+                let line_start = self.rope.char_to_utf16_cu(
+                    self.rope
+                        .line_to_char(line_index.min(self.rope.len_lines().saturating_sub(1))),
+                );
                 let at = (line_start + local_utf16).min(self.rope.len_utf16_cu());
                 let ch = self.rope.utf16_cu_to_char(at);
                 self.decorations
                     .iter()
                     .position(|d| d.range.contains(&ch))
-                    .map(|deco| Hover { char: ch, deco, line: line_index, x })
+                    .map(|deco| Hover {
+                        char: ch,
+                        deco,
+                        line: line_index,
+                        x,
+                    })
             })
         };
         match (&self.hover, &target) {
@@ -476,15 +476,18 @@ mod tests {
 
     #[test]
     fn set_decorations_maps_bytes_to_chars_and_clamps() {
-        let mut data =
-            CodeEditorData::new(Rope::from_str("sél x\nfrom t"), None::<EditorLanguage>);
+        let mut data = CodeEditorData::new(Rope::from_str("sél x\nfrom t"), None::<EditorLanguage>);
 
         let msg = || "boom".to_string();
         // "sél" is 4 bytes (é is 2) but 3 chars.
         assert!(data.set_decorations([(0..4, DecorationSeverity::Error, msg())]));
         assert_eq!(
             data.decorations,
-            vec![Decoration { range: 0..3, severity: DecorationSeverity::Error, message: msg() }]
+            vec![Decoration {
+                range: 0..3,
+                severity: DecorationSeverity::Error,
+                message: msg()
+            }]
         );
 
         // Re-applying the same spans reports no change (write_if-friendly).

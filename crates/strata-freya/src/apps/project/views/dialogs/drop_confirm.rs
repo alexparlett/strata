@@ -248,7 +248,7 @@ impl Component for DropConfirm {
                                         .children(
                                             dependents
                                                 .into_iter()
-                                                .map(|name| Badge::value(name, c.warning).into()),
+                                                .map(|name| Badge::value(name, c.warning)),
                                         ),
                                 ),
                         ),

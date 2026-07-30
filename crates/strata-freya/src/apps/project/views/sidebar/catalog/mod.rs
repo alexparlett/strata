@@ -166,7 +166,7 @@ impl Component for TablesSection {
         CatalogSection::new("TABLES", names.len(), self.theme.clone())
             .first()
             .action(
-                TooltipContainer::new(Tooltip::new("New table"))
+                TooltipContainer::new(Tooltip::new_text("New table"))
                     .position(AttachedPosition::Bottom)
                     .child(
                         Button::new()
@@ -193,7 +193,6 @@ impl Component for TablesSection {
                     self.expanded_cols,
                     self.theme.clone(),
                 )
-                .into()
             }))
     }
 }
@@ -243,7 +242,6 @@ impl Component for ViewsSection {
                     self.expanded_cols,
                     self.theme.clone(),
                 )
-                .into()
             }),
         )
     }
@@ -286,7 +284,7 @@ impl Component for QueriesSection {
             .children(
                 queries
                     .into_iter()
-                    .map(|(id, name)| SavedQueryRow::new(id, name, self.theme.clone()).into()),
+                    .map(|(id, name)| SavedQueryRow::new(id, name, self.theme.clone())),
             )
             .maybe_child(empty_note)
     }

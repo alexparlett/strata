@@ -1,13 +1,25 @@
 use std::borrow::Cow;
 
-use freya_components::{get_theme_or_default, scrollviews::{
-    ScrollConfig,
-    ScrollController,
-    ScrollEvent,
-    ScrollView,
-    use_scroll_controller,
-    VirtualScrollView,
-}};
+use crate::editor_theme::EditorSyntaxThemePreference;
+use crate::prelude::EditorSyntaxTheme;
+use crate::{
+    completion::{
+        CompletionItem, CompletionRequest, CompletionState, OpenCompletion, TriggerDecision,
+        flip_and_clamp, is_ident_char, trigger_after_edit,
+    },
+    editor_data::{CodeEditorData, DecorationSeverity},
+    editor_line::{EditorLineUI, gutter_offset},
+    editor_theme::{
+        EditorSyntaxThemePartial, EditorTheme, EditorThemePartial, EditorThemePreference,
+    },
+};
+use freya_components::{
+    get_theme_or_default,
+    scrollviews::{
+        ScrollConfig, ScrollController, ScrollEvent, ScrollView, VirtualScrollView,
+        use_scroll_controller,
+    },
+};
 use freya_core::prelude::*;
 use freya_edit::{EditableEvent, TextEditor};
 use torin::{
@@ -16,28 +28,6 @@ use torin::{
     prelude::{Alignment, Area, Content},
     size::Size as TorinSize,
 };
-use crate::{
-    completion::{
-        flip_and_clamp,
-        is_ident_char,
-        trigger_after_edit,
-        CompletionItem,
-        CompletionRequest,
-        CompletionState,
-        OpenCompletion,
-        TriggerDecision,
-    },
-    editor_data::{CodeEditorData, DecorationSeverity},
-    editor_line::{gutter_offset, EditorLineUI},
-    editor_theme::{
-        EditorTheme,
-        EditorThemePartial,
-        EditorThemePreference,
-        EditorSyntaxThemePartial,
-    },
-};
-use crate::editor_theme::EditorSyntaxThemePreference;
-use crate::prelude::EditorSyntaxTheme;
 
 #[derive(PartialEq, Clone)]
 pub struct CodeEditor {
@@ -196,15 +186,18 @@ impl Component for CodeEditor {
             EditorTheme::light().into()
         });
 
-        let syntax_theme = get_theme_or_default!(&syntax_theme, EditorSyntaxThemePreference, "code_editor_syntax", || {
-            EditorSyntaxTheme::light().into()
-        });
+        let syntax_theme = get_theme_or_default!(
+            &syntax_theme,
+            EditorSyntaxThemePreference,
+            "code_editor_syntax",
+            || { EditorSyntaxTheme::light().into() }
+        );
 
         // The effective type: the `code_editor` theme's, unless the builder overrode it.
         let font_size = font_size.unwrap_or(theme.font_size);
         let font_weight = font_weight.unwrap_or(theme.font_weight);
-        let font_family: Cow<'static, str> = font_family
-            .unwrap_or_else(|| Cow::Owned(theme.font_family.clone()));
+        let font_family: Cow<'static, str> =
+            font_family.unwrap_or_else(|| Cow::Owned(theme.font_family.clone()));
         let line_height = line_height.unwrap_or(theme.line_height);
 
         // Seed the metrics with the resolved type at mount — the editor owns its measurement
@@ -322,76 +315,76 @@ impl Component for CodeEditor {
         let diagnostics_panel: Option<Element> = hover
             .filter(|_| !hover_msgs.is_empty() && completion.read().open.is_none())
             .map(|h| {
-            const PANEL_MAX_W: f32 = 380.0;
-            const TEXT_SIZE: f32 = 12.0;
-            const ROW_H: f32 = 16.0;
-            let (viewport_w, viewport_h) = *viewport.read();
-            let panel_w_cap = if viewport_w > 0.0 {
-                PANEL_MAX_W.min((viewport_w - 16.0).max(160.0))
-            } else {
-                PANEL_MAX_W
-            };
-            let text_w_cap = panel_w_cap - 46.0; // dot + spacing + padding + border
-            // Estimated wrapped size (~6.5px per char at 12px UI type).
-            let (mut est_w, mut est_h) = (0.0f32, 14.0f32);
-            for (_, message) in &hover_msgs {
-                let text_w = message.chars().count() as f32 * 6.5;
-                est_w = est_w.max(text_w.min(text_w_cap) + 46.0);
-                est_h += (text_w / text_w_cap).ceil().max(1.0) * ROW_H + 4.0;
-            }
+                const PANEL_MAX_W: f32 = 380.0;
+                const TEXT_SIZE: f32 = 12.0;
+                const ROW_H: f32 = 16.0;
+                let (viewport_w, viewport_h) = *viewport.read();
+                let panel_w_cap = if viewport_w > 0.0 {
+                    PANEL_MAX_W.min((viewport_w - 16.0).max(160.0))
+                } else {
+                    PANEL_MAX_W
+                };
+                let text_w_cap = panel_w_cap - 46.0; // dot + spacing + padding + border
+                // Estimated wrapped size (~6.5px per char at 12px UI type).
+                let (mut est_w, mut est_h) = (0.0f32, 14.0f32);
+                for (_, message) in &hover_msgs {
+                    let text_w = message.chars().count() as f32 * 6.5;
+                    est_w = est_w.max(text_w.min(text_w_cap) + 46.0);
+                    est_h += (text_w / text_w_cap).ceil().max(1.0) * ROW_H + 4.0;
+                }
 
-            let gutter_offset = gutter_offset(font_size, gutter);
-            let pointer_x = editor_data.scrolls.0 as f32 + gutter_offset + h.x;
-            let scroll_y = editor_data.scrolls.1 as f32;
-            let line_top = h.line as f32 * line_height + scroll_y;
+                let gutter_offset = gutter_offset(font_size, gutter);
+                let pointer_x = editor_data.scrolls.0 as f32 + gutter_offset + h.x;
+                let scroll_y = editor_data.scrolls.1 as f32;
+                let line_top = h.line as f32 * line_height + scroll_y;
 
-            let below = line_top + line_height + 2.0;
-            let top = if viewport_h > 0.0
-                && below + est_h > viewport_h - 4.0
-                && line_top - est_h - 2.0 > 2.0
-            {
-                line_top - est_h - 2.0
-            } else {
-                below
-            };
-            let mut left = pointer_x + 6.0;
-            if viewport_w > 0.0 && left + est_w > viewport_w - 4.0 {
-                left = pointer_x - est_w - 6.0;
-            }
-            let left = left.max(4.0);
+                let below = line_top + line_height + 2.0;
+                let top = if viewport_h > 0.0
+                    && below + est_h > viewport_h - 4.0
+                    && line_top - est_h - 2.0 > 2.0
+                {
+                    line_top - est_h - 2.0
+                } else {
+                    below
+                };
+                let mut left = pointer_x + 6.0;
+                if viewport_w > 0.0 && left + est_w > viewport_w - 4.0 {
+                    left = pointer_x - est_w - 6.0;
+                }
+                let left = left.max(4.0);
 
-            rect()
-                .position(Position::new_absolute().top(top).left(left))
-                .background(theme.panel_background)
-                .border(Border::new().width(1.).fill(theme.panel_border))
-                .corner_radius(8.)
-                .padding(Gaps::new(6., 10., 6., 10.))
-                .spacing(4.)
-                .max_width(TorinSize::px(panel_w_cap))
-                .children(hover_msgs.into_iter().map(|(severity, message)| {
-                    rect()
-                        .horizontal()
-                        .cross_align(Alignment::Start)
-                        .spacing(8.)
-                        .child(
-                            rect()
-                                .width(TorinSize::px(8.))
-                                .height(TorinSize::px(8.))
-                                .corner_radius(99.)
-                                .margin(Gaps::new(4., 0., 0., 0.))
-                                .background(theme.diagnostic(severity)),
-                        )
-                        .child(
-                            label()
-                                .text(message)
-                                .color(theme.text)
-                                .font_size(TEXT_SIZE)
-                                .max_width(TorinSize::px(text_w_cap)),
-                        )
-                        .into_element()
-                }))
-                .into_element()
-        });
+                rect()
+                    .position(Position::new_absolute().top(top).left(left))
+                    .background(theme.panel_background)
+                    .border(Border::new().width(1.).fill(theme.panel_border))
+                    .corner_radius(8.)
+                    .padding(Gaps::new(6., 10., 6., 10.))
+                    .spacing(4.)
+                    .max_width(TorinSize::px(panel_w_cap))
+                    .children(hover_msgs.into_iter().map(|(severity, message)| {
+                        rect()
+                            .horizontal()
+                            .cross_align(Alignment::Start)
+                            .spacing(8.)
+                            .child(
+                                rect()
+                                    .width(TorinSize::px(8.))
+                                    .height(TorinSize::px(8.))
+                                    .corner_radius(99.)
+                                    .margin(Gaps::new(4., 0., 0., 0.))
+                                    .background(theme.diagnostic(severity)),
+                            )
+                            .child(
+                                label()
+                                    .text(message)
+                                    .color(theme.text)
+                                    .font_size(TEXT_SIZE)
+                                    .max_width(TorinSize::px(text_w_cap)),
+                            )
+                            .into_element()
+                    }))
+                    .into_element()
+            });
 
         // The completion popup — 300×≤224 with 30px rows (the committed design),
         // anchored at the **word start** so it never slides while the word's tail is
@@ -765,7 +758,12 @@ impl Component for CodeEditor {
                     }
                 }
                 editor.write_if(|mut editor_editor| {
-                    editor_editor.process(font_size, &font_family, font_weight, EditableEvent::Release)
+                    editor_editor.process(
+                        font_size,
+                        &font_family,
+                        font_weight,
+                        EditableEvent::Release,
+                    )
                 });
             }
         };
@@ -802,12 +800,12 @@ impl Component for CodeEditor {
                 }
             })
             .child(
-                VirtualScrollView::new(move |line_index, _| {
+                VirtualScrollView::new(move |item, _| {
                     EditorLineUI {
                         editor: editor.clone(),
                         font_size,
                         line_height,
-                        line_index,
+                        line_index: item.index,
                         read_only,
                         gutter,
                         show_whitespace,
@@ -873,7 +871,11 @@ fn recompute_completion(
             replace,
         }
     });
-    if fresh_only && open.as_ref().is_some_and(|o| o.replace.start != o.replace.end) {
+    if fresh_only
+        && open
+            .as_ref()
+            .is_some_and(|o| o.replace.start != o.replace.end)
+    {
         open = None;
     }
     {
@@ -932,9 +934,7 @@ fn caret_within_anchor(
         return false;
     };
     let d = editor.peek();
-    let caret_byte = d
-        .rope
-        .char_to_byte(d.rope.utf16_cu_to_char(d.cursor_pos()));
+    let caret_byte = d.rope.char_to_byte(d.rope.utf16_cu_to_char(d.cursor_pos()));
     if caret_byte < start_byte {
         return false;
     }

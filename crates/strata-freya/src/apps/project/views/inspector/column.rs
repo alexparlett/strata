@@ -240,7 +240,6 @@ impl ColumnPanel {
                             .maybe(i < last, |el| {
                                 el.border(Border::new().width(row_rule()).fill(t.divider_fill))
                             })
-                            .into()
                     })),
             )
             .into_element()
@@ -299,7 +298,7 @@ fn completeness_bar(facts: &ColumnFacts, t: &InspectorTheme) -> Option<Element> 
             // The bar carries no numbers, so the numbers are its tooltip: how many rows are
             // null, out of how many, and which side of the split is which.
             .child(
-                TooltipContainer::new(Tooltip::new(fill.detail()))
+                TooltipContainer::new(Tooltip::new_text(fill.detail()))
                     .position(AttachedPosition::Bottom)
                     .width(Size::fill())
                     .child(track),
@@ -688,7 +687,6 @@ fn zone(
                         .maybe(i < last, |el| {
                             el.border(Border::new().width(row_rule()).fill(t.divider_fill))
                         })
-                        .into()
                 })),
         )
         .maybe_child(completeness_bar(facts, t))
@@ -831,7 +829,7 @@ fn scan_controls(
         // same trade the completeness bar makes with its own numbers. ISO-8601, UTC, from the one
         // place that prints instants (`util::iso8601`).
         .child(
-            TooltipContainer::new(Tooltip::new(iso8601(profile.at)))
+            TooltipContainer::new(Tooltip::new_text(iso8601(profile.at)))
                 .position(AttachedPosition::Bottom)
                 .child(Meta::new(scan_age(profile.at)).color(t.meta_color)),
         )
@@ -866,8 +864,8 @@ fn control_button(
     icon: IconName,
     title: &'static str,
     on_press: impl Into<EventHandler<Event<PressEventData>>>,
-) -> Element {
-    TooltipContainer::new(Tooltip::new(title))
+) -> impl IntoElement {
+    TooltipContainer::new(Tooltip::new_text(title))
         .position(AttachedPosition::Bottom)
         .child(
             Button::new()
@@ -877,7 +875,6 @@ fn control_button(
                 .on_press(on_press)
                 .child(Icon::new(icon).size(13.)),
         )
-        .into_element()
 }
 
 /// The zone's one behavioural rule, as a state machine: **it never shows less than it did a moment

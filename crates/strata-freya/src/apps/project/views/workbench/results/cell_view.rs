@@ -99,7 +99,7 @@ impl Component for ValueTreeBody {
         let rows = Rc::new(self.model.rows());
 
         Tree::new_with_data(rows.clone(), move |index, rows: &Rc<Vec<TreeRow>>| {
-            let Some(row) = rows.get(index).cloned() else {
+            let Some(row) = rows.get(index.index).cloned() else {
                 return rect().into();
             };
             match row.kind {

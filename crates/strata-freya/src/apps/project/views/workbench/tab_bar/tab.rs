@@ -5,6 +5,7 @@ use strata_core::config::Command;
 
 use strata_model::TabId;
 
+use super::menu::tab_context_menu;
 use crate::apps::project::close::TabCloser;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::dot::Dot;
@@ -147,7 +148,7 @@ impl Component for Tab {
         // hover tint). `stop_propagation` so pressing it closes the tab without also bubbling up to
         // the tab-body switch. Closes through the shared gate — the T2 confirm when this
         // tab's query is in flight. Its tooltip is the comp's dirty-aware `closeTitle`.
-        let close_button = TooltipContainer::new(Tooltip::new(if self.dirty {
+        let close_button = TooltipContainer::new(Tooltip::new_text(if self.dirty {
             "Unsaved changes — click to close"
         } else {
             "Close tab"
@@ -214,10 +215,7 @@ impl Component for Tab {
             // Right-click → this tab's context menu at the cursor, scoped to this tab.
             .on_secondary_down(move |e: Event<PressEventData>| {
                 e.stop_propagation();
-                ContextMenu::open_from_event(
-                    &e,
-                    super::menu::tab_context_menu(id, radio, renaming, closer, config),
-                );
+                ContextMenu::open_from_down(tab_context_menu(id, radio, renaming, closer, config));
             })
             // While renaming: Escape cancels (consumed — an Esc that ends a rename must
             // not also cancel a running query further down the dismiss chain); a press

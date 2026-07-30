@@ -227,7 +227,7 @@ impl Component for HeaderCell {
                                     .max_lines(1),
                             )
                             .child(
-                                TooltipContainer::new(Tooltip::new("Sort by this column"))
+                                TooltipContainer::new(Tooltip::new_text("Sort by this column"))
                                     .position(AttachedPosition::Bottom)
                                     .child(
                                         Button::new()
