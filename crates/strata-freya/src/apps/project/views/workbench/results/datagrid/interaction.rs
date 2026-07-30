@@ -49,8 +49,8 @@ fn page() -> Rc<GridData> {
 fn app() -> impl IntoElement {
     use_init_theme(|| strata_theme(&load("midnight")));
     // The grid only needs a session with one open tab — build it directly rather than
-    // routing through `use_init_session` (which reads a project root from context and does
-    // disk IO, neither of which belongs in a datagrid interaction test).
+    // routing through `use_init_session` (the window's restore path, which wants the
+    // snapshot a real project open loaded off disk).
     freya::radio::use_init_radio_station::<SessionState, Chan>(|| {
         let mut s = SessionState::default();
         s.open_blank();

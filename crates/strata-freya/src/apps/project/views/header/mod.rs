@@ -97,6 +97,37 @@ fn title_bar_press(
     }
 }
 
+/// The header's **window chrome alone** — the drag + double-press-to-fill recipe over the
+/// bar's height, with none of the project content. For the load-fault arm, which replaces
+/// the whole subtree including [`HeaderBar`] but is still a window the user must be able to
+/// move (the OS traffic lights sit in the same corner either way). Transparent: it is a
+/// region, not a surface.
+#[derive(PartialEq)]
+pub struct WindowDragStrip {
+    /// The window's fill mark — the same flag [`HeaderBar`] writes, owned by the window
+    /// root, so a fill toggled from the fault arm is tracked like any other.
+    pub filled_by_app: State<bool>,
+}
+
+impl Component for WindowDragStrip {
+    fn render(&self) -> impl IntoElement {
+        // The unfill-clears-the-mark rule, same as the full bar's: leaving fill by any route
+        // makes a later user-side fill persistable again.
+        let is_filled = Platform::get().is_maximized;
+        let mut filled_by_app = self.filled_by_app;
+        use_side_effect(move || {
+            if !*is_filled.read() && *filled_by_app.peek() {
+                filled_by_app.set(false);
+            }
+        });
+
+        rect()
+            .width(Size::window_percent(100.))
+            .height(Size::px(48.))
+            .on_pointer_down(title_bar_press(is_filled, self.filled_by_app))
+    }
+}
+
 impl Component for HeaderBar {
     fn render(&self) -> impl IntoElement {
         // Only the bar's own surface is themed here. Its content — the switcher's accent glyph,

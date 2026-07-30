@@ -162,7 +162,7 @@ src/platform/owner.rs            P4-16 — **how long a child window may live**:
                                  window it sits above, but as long as the *mount* of `ProjectRoot`
                                  whose handles it borrowed. `Subtree` is that mount's own diff key
                                  (folder + engine generation) plus the live `EngineRestart` to read
-                                 the generation back; `ProjectRoot` provides it, so no opener can
+                                 the generation back; `ProjectLoaded` provides it, so no opener can
                                  assemble a mismatched trio, and `use_owner_pin` is the one
                                  predicate both Export and Configure close on. A re-root changes
                                  the folder, a restart changes neither it nor the window id — and
@@ -360,9 +360,13 @@ src/apps/configure/              the Configure-table window (P4-11 — `Configur
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     two layers: `ProjectApp` = the **window** (theme, app-globals,
                                  close bridge, menubar, OpenCtx) and `ProjectRoot` = the **open
-                                 project** (engine, stores, autosave, catalog, views), whose
-                                 `render_key` is the project folder — so "open in this window"
-                                 is a `State` write and the remount *is* the reopen path
+                                 project**, whose `render_key` is the project folder — so "open
+                                 in this window" is a `State` write and the remount *is* the
+                                 reopen path. `ProjectRoot` runs the fallible load (defs +
+                                 session) once per mount and is one of two arms: `ProjectLoaded`
+                                 (engine, stores, autosave, catalog, views — built from the
+                                 loaded values) or `ProjectLoadFailed` (P4-01: the fault dialog
+                                 that closes the window)
   contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context, built
                                  with the app's `datafusion.*` overrides — a launch value, since
                                  the RuntimeEnv is fixed when the SessionContext is
@@ -410,7 +414,12 @@ src/apps/project/                the project window (Valin-shaped)
                                  precedes every feature listener: close_confirm (T2) ·
                                  drop_confirm (P3-05) · open_prompt (the This/New question) ·
                                  profile_confirm (P3-10 — and `ProfileActions`, the one entry
-                                 point every "profile this" trigger calls)
+                                 point every "profile this" trigger calls) · load_failed
+                                 (P4-01 — not a barrier over features but the whole fault arm:
+                                 what `ProjectRoot` *is* when the project could not load. Try
+                                 again re-runs the load via a generation bump; Close window
+                                 goes through `close_this_window`; non-modal, so ⌘O and ⌘,
+                                 keep working)
     header/
       mod.rs                     the header bar — and the window's macOS title bar: brand ·
                                  switcher · ⌘K/⌘, cluster, drag + double-press-to-fill
@@ -699,7 +708,7 @@ owner window open under the same id. A re-root changes the folder, which the Con
 to catch; an engine restart (P4-07) changes neither, and nothing caught that, so the next repaint
 panicked on a reclaimed box and a Save wrote into a store nothing was left to serve. The fix is one
 value and one predicate (`platform/owner.rs`): `Subtree` is the subtree's own diff key plus the live
-`EngineRestart`, **provided by `ProjectRoot`** so no opener can assemble a mismatched trio, and
+`EngineRestart`, **provided by `ProjectLoaded`** so no opener can assemble a mismatched trio, and
 `use_owner_pin` replaces the two near-verbatim pins. Three things it settled. An owner that has
 closed *shows nothing*, so it fails the same comparison — one predicate, not three clauses. The
 generation is the one handle safe to hold across a remount, for exactly the reason it exists (owned

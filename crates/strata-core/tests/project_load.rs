@@ -10,8 +10,9 @@
 
 use std::path::Path;
 
-use strata_core::engine::{Engine, RunTag, TableSpec, WsId};
-use strata_core::project::{load_defs, resolve_source};
+use strata_core::engine::{Engine, RunTag, WsId};
+use strata_core::project::load_defs;
+use strata_core::register::{register_project, RegOutcome};
 
 /// The dedicated project-load fixture (see the module doc + its `README.md`).
 fn fixture_root() -> &'static Path {
@@ -32,20 +33,32 @@ async fn fixture_project_registers_and_queries() {
 
     let eng = Engine::new(Default::default());
 
+    // The registration pass itself — the same `register_project` a headless host
+    // replays, and the same `register_pass` the window root drives. A failed
+    // registration is a landed per-entry outcome, not an abort (a row flips to
+    // `Failed`, the rest of the project lives).
+    let mut outcomes = Vec::new();
+    register_project(&eng, root, &defs, |o| outcomes.push(o)).await;
+    assert_eq!(
+        outcomes.len(),
+        defs.tables.len() + defs.views.len(),
+        "one outcome per def: {outcomes:?}"
+    );
+
     // Tables first (views read them), relative sources resolved against the folder.
-    // A failed registration is a landed per-row answer, not an abort — exactly how the
-    // window root treats it (a row flips to `Failed`, the rest of the project lives).
     let mut failed = Vec::new();
-    for t in &defs.tables {
-        let spec = TableSpec {
-            name: t.name.clone(),
-            paths: t.sources.iter().map(|s| resolve_source(root, s)).collect(),
-            format: t.format.clone(),
-            partitions: t.partition_cols.clone(),
-        };
-        match eng.register(spec).await {
-            Ok(meta) => assert!(!meta.columns.is_empty(), "'{}' inferred a schema", t.name),
-            Err(_) => failed.push(t.name.clone()),
+    for (i, t) in defs.tables.iter().enumerate() {
+        match &outcomes[i] {
+            RegOutcome::Table { name, result } => {
+                assert_eq!(name, &t.name, "tables settle in defs order");
+                match result {
+                    Ok(meta) => {
+                        assert!(!meta.columns.is_empty(), "'{name}' inferred a schema")
+                    }
+                    Err(_) => failed.push(name.clone()),
+                }
+            }
+            other => panic!("expected every table before any view: {other:?}"),
         }
     }
     // The fixture's one deliberate dud: `signups.json` has a record missing its closing brace,
@@ -63,13 +76,15 @@ async fn fixture_project_registers_and_queries() {
     assert_eq!(events.partition_cols.len(), 2);
 
     // Views: created over the registered tables, deps resolved by the planner.
-    for v in &defs.views {
-        let meta = eng
-            .create_view(v.name.clone(), v.sql.clone())
-            .await
-            .unwrap_or_else(|e| panic!("create view '{}': {e}", v.name));
-        assert!(!meta.columns.is_empty(), "'{}' planned columns", v.name);
-        assert!(!meta.tables.is_empty(), "'{}' reads base tables", v.name);
+    for outcome in &outcomes[defs.tables.len()..] {
+        let RegOutcome::View { name, result } = outcome else {
+            panic!("a table settled after a view: {outcome:?}");
+        };
+        let meta = result
+            .as_ref()
+            .unwrap_or_else(|e| panic!("create view '{name}': {e}"));
+        assert!(!meta.columns.is_empty(), "'{name}' planned columns");
+        assert!(!meta.tables.is_empty(), "'{name}' reads base tables");
     }
 
     // The whole point: a query through a view over the registered catalog answers.

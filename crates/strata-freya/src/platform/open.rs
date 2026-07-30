@@ -39,7 +39,7 @@ use freya::prelude::*;
 use freya::winit::window::WindowId;
 use strata_core::config::OpenPref;
 
-use crate::apps::project::{CloseGuard, CloseTarget};
+use crate::apps::project::{CloseGuard, CloseTarget, EngineRestart};
 use crate::platform::windows;
 use crate::state::{write_config, AppCtx, ConfigChan};
 
@@ -64,6 +64,15 @@ pub struct OpenCtx {
     /// The window's confirm-dialog slot, so a re-root that would abort running queries raises
     /// the same T2 question closing the window does.
     pub confirm: State<Option<CloseTarget>>,
+    /// Whether the window currently shows the load-fault arm rather than an open project —
+    /// set and cleared by the fault arm itself. It changes what "already showing it" means:
+    /// naming this window's own project is normally a no-op, but on a faulted window the
+    /// user plainly means "load it again", so [`apply`](Self::apply) retries instead.
+    pub faulted: State<bool>,
+    /// The window's engine generation, which is how a retry re-runs the load: the bump
+    /// remounts the keyed project subtree — the same mechanism the fault dialog's own Try
+    /// again uses.
+    pub restart: EngineRestart,
 }
 
 /// Where an open lands, once [`OpenCtx::decide`] has applied the rules. Returned rather than
@@ -95,7 +104,14 @@ impl OpenCtx {
     /// Carry out a decision with a window's [`Platform`] handle — the in-window executor.
     pub fn apply(self, platform: Platform, app: AppCtx, target: OpenTarget) {
         match target {
-            OpenTarget::Nothing => {}
+            // Already showing it — except on the fault arm, where "open the project this
+            // window shows" is a retry: the user fixed the file and asked again, and a
+            // silent no-op reads as a broken menu item.
+            OpenTarget::Nothing => {
+                if *self.faulted.peek() {
+                    self.restart.restart();
+                }
+            }
             OpenTarget::Focus(id) => platform.focus_window(Some(id)),
             // `spawn_forever` rather than `spawn`: the surfaces that reach here unmount
             // themselves on the same press (the switcher closes its menu, the prompt closes

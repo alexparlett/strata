@@ -54,7 +54,7 @@ The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebu
 
 | # | Task | Status                                                                                                                      | DEV_TASKS | Depends on |
 |---|---|-----------------------------------------------------------------------------------------------------------------------------|---|---|
-| P4-01 | Multi-window shell + shared state (`create_global`) + native close | 🟡 shared state · window model · quit-vs-close done; per-window fault close + Dock quit remain                              | W1/A8 | — |
+| P4-01 | Multi-window shell + shared state (`create_global`) + native close | ✅ (Dock-icon Quit veto is P6-02's winit 0.31 migration)                                                                    | W1/A8 | — |
 | P4-02 | Launcher window | ✅                                                                                                                          | U1 | P4-01 |
 | P4-03 | Settings window shell (draft/save, live theme, single-instance) | ✅                                                                                                                          | W1/U12 | P4-01 |
 | P4-04 | Settings ▸ Appearance | ✅                                                                                                                          | U12 | P4-03 |

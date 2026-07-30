@@ -20,7 +20,7 @@ same UI seam the MCP server does.
 
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
-| 01 | Core seams: export the DDL-policy verdict · extract the project registration pass | ⬜ `[core ✓]`-adjacent | — | — |
+| 01 | Core seams: export the DDL-policy verdict · extract the project registration pass | ✅ | — | — |
 | 02 | `strata-agent` crate: vocabulary + `Host` trait + rmcp server | ⬜ | — | 01 |
 | 03 | In-app host: service directory · bridge · agent keepers · server lifecycle | ⬜ | — | 02 |
 | 04 | Settings ▸ Agent access (enable · port · token · status) | ⬜ | — | 03 |

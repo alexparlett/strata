@@ -15,10 +15,10 @@ mod workbench;
 pub use configure_launch::{ConfigureLauncher, ConfigureRequest};
 pub use dialogs::{
     use_profile_actions, CloseConfirm, DropConfirm, DropTarget, OpenPrompt, ProfileActions,
-    ProfileConfirm, ProfileTarget,
+    ProfileConfirm, ProfileTarget, ProjectLoadFailed,
 };
 pub use drawer::DrawerThemePreference;
-pub use header::{HeaderBar, HeaderBarThemePreference};
+pub use header::{HeaderBar, HeaderBarThemePreference, WindowDragStrip};
 pub use inspector::InspectorThemePreference;
 pub use keeper::RequestKeepers;
 pub use shell::Shell;

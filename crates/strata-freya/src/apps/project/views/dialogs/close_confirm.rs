@@ -11,6 +11,8 @@ use freya::components::{get_theme, use_theme};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
 
+use strata_core::util::folder_name;
+
 use crate::apps::project::close::CloseTarget;
 use crate::apps::project::state::{Chan, EngineRestart, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
@@ -170,10 +172,7 @@ impl Component for CloseConfirm {
                 .map(|t| t.name.clone())
                 .unwrap_or_default(),
             CloseTarget::Window => project.read().name.clone(),
-            CloseTarget::Reroot(root) => root
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| root.display().to_string()),
+            CloseTarget::Reroot(root) => folder_name(&root),
             // The engine belongs to the project, so naming it is what says *whose* engine.
             CloseTarget::Restart => project.read().name.clone(),
         };

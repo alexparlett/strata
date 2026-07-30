@@ -196,7 +196,7 @@ mod interaction {
     use strata_core::theme::load;
 
     use super::*;
-    use crate::apps::project::{CloseGuard, CloseTarget};
+    use crate::apps::project::{CloseGuard, CloseTarget, EngineRestart};
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
     use crate::state::{create_global_theme_preview, ConfigStation};
@@ -234,6 +234,10 @@ mod interaction {
                         last: AtomicBool::new(false),
                     })),
                     confirm: State::create(None),
+                    // A healthy window: the faulted-reload arm never fires here, and the
+                    // generation is a fresh counter nothing remounts on.
+                    faulted: State::create(false),
+                    restart: EngineRestart(State::create(0)),
                 });
                 // The app-globals the actions are handed. Fresh per test, so nothing here
                 // touches the real app's config store.

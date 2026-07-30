@@ -18,6 +18,7 @@
 use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_core::config::AppConfig;
+use strata_core::util::folder_name;
 
 use freya::components::use_theme;
 
@@ -57,12 +58,7 @@ impl ProjectRow {
             .iter()
             .find(|r| r.path == path)
             .map(|r| r.name.clone())
-            .unwrap_or_else(|| {
-                std::path::Path::new(path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.to_string())
-            });
+            .unwrap_or_else(|| folder_name(std::path::Path::new(path)));
         Self {
             name,
             path: path.to_string(),

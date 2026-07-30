@@ -112,6 +112,7 @@ pub struct Dialog {
     actions: Vec<Button>,
     on_dismiss: Option<EventHandler<()>>,
     on_confirm: Option<EventHandler<()>>,
+    modal: bool,
 }
 
 impl Default for Dialog {
@@ -128,7 +129,19 @@ impl Dialog {
             actions: Vec::new(),
             on_dismiss: None,
             on_confirm: None,
+            modal: true,
         }
+    }
+
+    /// Whether the dialog's key barrier consumes **every** key (the default, and right for
+    /// a confirm raised over live features — see the module doc). Pass `false` for a dialog
+    /// that *is* the window's whole content, with nothing behind it to protect: Esc and
+    /// Enter keep their dialog meaning, and every other chord stays the window's — which is
+    /// what keeps ⌘O and ⌘, alive on the project-load fault, whose menubar items arrive as
+    /// synthesized key presses a barrier would swallow.
+    pub fn modal(mut self, modal: bool) -> Self {
+        self.modal = modal;
+        self
     }
 
     /// The chip-and-title row above the body — normally a [`DialogHeader`].
@@ -240,22 +253,29 @@ impl Component for Dialog {
             // (the same wrapper `Popup` puts around `PopupBackground`).
             .layer(Layer::Overlay)
             .position(Position::new_global())
-            .on_global_key_down(move |e: Event<KeyboardEventData>| {
-                match &e.key {
-                    Key::Named(NamedKey::Escape) => {
-                        if let Some(dismiss) = &dismiss {
-                            dismiss.call(());
+            .on_global_key_down({
+                let modal = self.modal;
+                move |e: Event<KeyboardEventData>| {
+                    match &e.key {
+                        Key::Named(NamedKey::Escape) => {
+                            if let Some(dismiss) = &dismiss {
+                                dismiss.call(());
+                            }
                         }
-                    }
-                    Key::Named(NamedKey::Enter) => {
-                        if let Some(confirm) = &confirm {
-                            confirm.call(());
+                        Key::Named(NamedKey::Enter) => {
+                            if let Some(confirm) = &confirm {
+                                confirm.call(());
+                            }
                         }
+                        // A non-modal dialog owns only its two keys; the rest stay the
+                        // window's (see `modal`).
+                        _ if !modal => return,
+                        _ => {}
                     }
-                    _ => {}
+                    // Consumed either way — that is what makes a modal dialog modal, and
+                    // Esc/Enter the dialog's own in both modes.
+                    e.prevent_default();
                 }
-                // Consumed either way — that is what makes this modal.
-                e.prevent_default();
             })
             .child(PopupBackground::new(
                 card.into(),

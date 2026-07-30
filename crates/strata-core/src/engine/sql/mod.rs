@@ -31,7 +31,7 @@ pub mod validate;
 pub use complete::{complete, Completion, CompletionKind};
 pub use lex::is_word_char;
 pub use symbols::Catalog;
-pub use validate::validate;
+pub use validate::{policy_verdicts, validate, Blocked, PolicyRefusal};
 
 /// Which registry a function came from — the docs-panel header word, and (for the
 /// caller) a coarse category. `Default` is `Scalar` so a name-only [`FunctionSym`]
