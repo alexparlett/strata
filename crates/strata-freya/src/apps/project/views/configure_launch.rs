@@ -19,7 +19,7 @@ use freya::radio::use_radio_station;
 use crate::apps::configure::{ConfigureLaunch, ConfigureTarget};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{use_catalog, use_catalog_rescan, ProjChan, ProjectState};
-use crate::apps::project::LogCtx;
+use crate::apps::project::use_report;
 use crate::platform::open_configure;
 use crate::state::AppCtx;
 
@@ -35,7 +35,7 @@ impl Component for ConfigureLauncher {
         let mut slot = use_consume::<ConfigureRequest>();
         let app = use_consume::<AppCtx>();
         let engine = use_consume::<EngineCtx>();
-        let log = use_consume::<LogCtx>();
+        let report = use_report();
         let project = use_radio_station::<ProjectState, ProjChan>();
         let rescan = use_catalog_rescan();
         let catalog = use_catalog();
@@ -58,7 +58,7 @@ impl Component for ConfigureLauncher {
                     rescan,
                     catalog,
                     engine: engine.clone(),
-                    log,
+                    report,
                 },
             );
         });

@@ -166,11 +166,23 @@ const ALL_AUDIENCES: [ConfigChan; 3] =
 /// setting), not a keystroke stream, so there is no burst to coalesce and nothing in
 /// flight to lose on a crash. A control that streams values (a drag-slider) would need to
 /// commit on settle rather than per frame.
+/// Returns whether the edit reached disk (P4-15). The in-memory store is updated and every
+/// listed channel notified **either way** — the UI must show what the user just did, and a
+/// window whose config write failed is otherwise fine — so the `Err` is about the durable copy
+/// alone: the setting holds for this run of the app and reverts at the next launch.
+///
+/// Callers that represent a **deliberate commit** report it where the user is looking
+/// (`SettingsCtx::apply`). The bookkeeping writes — pushing a recent, adding to or leaving the
+/// open-project set, pruning a recent whose folder is gone — deliberately do not: the user did
+/// not ask for them, there is nothing to undo, and nine call sites each announcing the same
+/// failure of the same file is the stacked near-duplicate AGENTS.md §3 rules out. Making a
+/// bookkeeping failure visible wants **one standing condition**, not nine events; that is
+/// P4-15 build items 3 and 6, and it is not built.
 pub fn write_config(
     mut station: ConfigStation,
     channels: &[ConfigChan],
     edit: impl FnOnce(&mut AppConfig),
-) {
+) -> bool {
     // A `RadioStation` is only mutable *through* a channel guard, so an empty `channels`
     // has no write path of its own — and running the edit inside the per-channel loop ran
     // it zero times there, then persisted the untouched config: a silently dropped edit.
@@ -193,5 +205,11 @@ pub fn write_config(
         // guard holds the value borrow until it notifies).
         drop(station.write_channel(*chan));
     }
-    config::save(&station.peek());
+    match config::save(&station.peek()) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::error!("{e}");
+            false
+        }
+    }
 }

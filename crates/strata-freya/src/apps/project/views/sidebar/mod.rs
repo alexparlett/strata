@@ -169,7 +169,7 @@ impl Component for RefreshButton {
 /// was never "the button isn't in the tree" — it was there the whole time, just off-screen.
 #[cfg(test)]
 mod tests {
-    use crate::apps::project::state::CatalogState;
+    use crate::apps::project::state::{CatalogState, Log, PersistFaults};
     use std::path::PathBuf;
 
     use freya::radio::RadioStation;
@@ -239,6 +239,10 @@ mod tests {
                 // The Configure-window request slot (P4-11): the TABLES `+` and the row menus
                 // set it, and the project root's launcher — not mounted here — acts on it.
                 r.provide_root_context(|| State::create(None::<ConfigureTarget>));
+                // Where the catalog's row menus report the one action that writes
+                // `project.json` inline (the saved-query rename, P4-15).
+                r.provide_root_context(|| State::create(Log::default()));
+                r.provide_root_context(|| State::create(PersistFaults::default()));
                 r.provide_root_context(|| {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
                 });

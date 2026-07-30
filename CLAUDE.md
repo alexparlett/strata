@@ -289,6 +289,18 @@ src/apps/export/                 the export window (P4-10, `Export.dc.html` for 
                                  render is fixed) · partition (the Hive `key=value` transfer
                                  panes) · footer (the only thing here that writes: pick a
                                  destination, build the spec, call the engine, log both arms)
+src/apps/configure/              the Configure-table window (P4-11 — `Configure.dc.html`; P4-12
+                                 folded in, because the format dropdown is what selects the
+                                 import-option set and both halves reach the engine through one
+                                 `TableSpec`). Register a new table or edit an existing def:
+                                 mod.rs (root · window config · `ConfigureCtx` · `Status`),
+                                 model.rs (the draft + its option groups), views/ (title_bar ·
+                                 identity · paths · options · hive · status · footer). It is a
+                                 child of the project window that asked, so it writes that
+                                 window's store through the shared `persisted_defs` funnel and
+                                 asks *its* one scan driver for the registration pass — rather
+                                 than holding an engine or a second "make the engine match the
+                                 defs" of its own
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     two layers: `ProjectApp` = the **window** (theme, app-globals,
                                  close bridge, menubar, OpenCtx) and `ProjectRoot` = the **open
@@ -329,6 +341,13 @@ src/apps/project/                the project window (Valin-shaped)
                                  capped): the record behind the drawer's Events tab. No producer
                                  hook — whichever layer observed the fact appends it (the scan
                                  pass, Save, the drop confirm, the keeper's settle, `cancel_run`)
+                                 persist.rs = P4-15's **write funnel**: the one place a `.strata`
+                                 write failure is reported. `persisted(log, ProjectFile, write)`
+                                 → an event row + a `bool` the caller uses to decline claiming a
+                                 success; `ProjectFile` is the only copy of each file's wording.
+                                 Here rather than beside a caller because every writer that was
+                                 added *away* from the old home grew its own silent
+                                 `tracing::error!` instead of finding it
   model/                         window-local view models
   views/
     dialogs/                     the window's modal dialogs, mounted early so their key barrier
@@ -362,12 +381,23 @@ src/apps/project/                the project window (Valin-shaped)
                                  pattern); Clear is Events/History-only and parked until P3-13/14
       frame.rs                   the frame the three bodies share (P3-11 → P3-12): `DrawerBody`
                                  (scroll container) + `DrawerEmpty` (centred glyph + one line)
-      problems/                  P3-12 — **every** open tab's diagnostics, grouped by tab, rows
-                                 pressable to switch to the owning tab. A pure view over
-                                 `problem_groups()`; the header tally and the rail badge are both
-                                 `error_count()`. Run failures are deliberately NOT here — a
-                                 failure belongs to a run, and the results pane renders it in
-                                 full
+      problems/                  P3-12 + P4-15 — **two scopes under one header strip**, the
+                                 IntelliJ arrangement: the drawer's title bar carries the tabs,
+                                 each with its own count, so this is the one drawer tab whose
+                                 header shows no separate tally. mod.rs = the strip (`ScopeStrip`,
+                                 mounted by the drawer *header*) + the body that dispatches on
+                                 `Layout::problems_tab`, which rides the session file like every
+                                 other panel decision. queries.rs = P3-12's every-open-tab
+                                 diagnostics, grouped by tab, rows pressable to switch to the
+                                 owning tab — a pure view over `problem_groups()`. project.rs =
+                                 P4-15's conditions about the *project*: defs the engine refused
+                                 (re-derived from `Reg::Failed`) and `.strata` files a failed
+                                 write left behind (`PersistFaults`, which cannot be re-derived —
+                                 hence a **remembered condition**, the third kind of state beside
+                                 a reconciliation and an event). The rail badge totals both scopes
+                                 (`error_count()` + `project_error_count()`). Run failures are
+                                 deliberately NOT here — a failure belongs to a run, and the
+                                 results pane renders it in full
       events.rs                  P3-13 — the window's event log, newest first: flat dot · message
                                  · time rows over the shared frame. A view over `state::log`, and
                                  the tab that owns the drawer's first working **Clear**

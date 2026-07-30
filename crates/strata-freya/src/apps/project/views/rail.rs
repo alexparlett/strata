@@ -15,7 +15,8 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::{DrawerTab, SidebarPane};
 
-use crate::apps::project::state::{Chan, SessionState};
+use crate::apps::project::state::{Chan, FaultsCtx, ProjChan, ProjectState, SessionState};
+use crate::apps::project::views::drawer::project_error_count;
 use crate::components::icon::{Icon, IconName};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
 use crate::components::typography::Meta;
@@ -110,16 +111,26 @@ impl Component for ActivityRail {
 /// Its own leaf, not a read on [`ActivityRail`]: the rail renders five toggles, and a validation
 /// pass settling on any tab has no business re-rendering the other four.
 ///
-/// It counts the same `error_count()` the drawer header does, from the same function, so the
-/// badge and the header can never disagree. Errors only — a keyword-typo warning lists in the
-/// drawer without claiming the query is broken.
+/// It totals the **same two counts the drawer header does**, from the same two functions, so the
+/// badge and the header can never disagree — the SQL errors across every open tab
+/// (`error_count`) plus the project-scope conditions behind the Problems drawer's second tab
+/// (`project_error_count`: defs the engine refused, and `.strata` files a failed write left
+/// behind). A badge that counted only the first would go quiet while the project underneath was
+/// broken, which is the case P4-15 exists for.
+///
+/// Errors only — a keyword-typo warning lists in the drawer without claiming the query is broken.
 #[derive(PartialEq)]
 struct ProblemsBadge;
 
 impl Component for ProblemsBadge {
     fn render(&self) -> impl IntoElement {
         let session = use_radio::<SessionState, Chan>(Chan::Diagnostics);
-        let errors = session.read().error_count();
+        let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
+        let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
+        let faults = use_consume::<FaultsCtx>();
+        let _ = views.read();
+        let errors =
+            session.read().error_count() + project_error_count(&tables.read(), &faults.read());
         let theme = use_theme();
         let (background, color, ring) = {
             let t = theme.read();

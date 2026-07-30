@@ -42,6 +42,7 @@ use crate::apps::project::query::{QueryOutcome, RunId, RunQuery};
 use crate::state::{use_config_station, ConfigStation};
 
 use super::log::{log_event, LogCtx, LogLevel};
+use super::persist::{persisted_history, use_report, ReportCtx};
 use super::{ProjChan, ProjectState};
 
 /// How many recent runs are kept, in memory and on disk: the user's `max_history` setting
@@ -144,6 +145,9 @@ pub fn use_history_recording(query: UseQuery<RunQuery>, run: RunId, sql: String)
     // Peeked at record time, never subscribed: the cap decides how much to keep, and a
     // settings change has no business re-rendering a results pane.
     let config = use_config_station();
+    // A failed append is reported rather than only `tracing`d (P4-15): the row is on screen
+    // either way, so a silent failure is the drawer disagreeing with the file until the next open.
+    let report = use_report();
     let mut recorded = use_state(|| false);
     use_side_effect(move || {
         if *recorded.peek() {
@@ -172,6 +176,7 @@ pub fn use_history_recording(query: UseQuery<RunQuery>, run: RunId, sql: String)
                 run,
                 entry,
                 history_cap(config),
+                report,
             );
         }
     });
@@ -186,7 +191,14 @@ pub fn use_history_recording(query: UseQuery<RunQuery>, run: RunId, sql: String)
 /// and an append can't move one — it would leave the superseded line in the file, so the whole
 /// (already capped) list is rewritten instead. The file therefore never holds a duplicate, and
 /// the rewrite costs nothing on the path that doesn't need it.
-fn record_run(mut history: HistoryCtx, root: PathBuf, run: RunId, entry: HistoryEntry, cap: usize) {
+fn record_run(
+    mut history: HistoryCtx,
+    root: PathBuf,
+    run: RunId,
+    entry: HistoryEntry,
+    cap: usize,
+    report: ReportCtx,
+) {
     // Peek first: an already-seen run must not take a write lock (which would wake the
     // history subscribers for nothing).
     if history.peek().seen.contains(&run) {
@@ -197,13 +209,7 @@ fn record_run(mut history: HistoryCtx, root: PathBuf, run: RunId, entry: History
     // list that reaches disk is the one this run produced.
     let rewrite = replaced.then(|| history.peek().file_order());
     spawn(async move {
-        let written = match &rewrite {
-            Some(entries) => project_io::save_history(&root, entries),
-            None => project_io::append_history(&root, &entry),
-        };
-        if let Err(e) = written {
-            tracing::error!("record history: {e}");
-        }
+        persisted_history(&root, rewrite.as_deref(), &entry, report);
     });
 }
 
@@ -212,8 +218,13 @@ fn record_run(mut history: HistoryCtx, root: PathBuf, run: RunId, entry: History
 ///
 /// The disk half is spawned (like [`record_run`]'s append) and its failure is an **event**, not
 /// just a `tracing` line: the list on screen is already empty, so a silent failure would be a
-/// surface disagreeing with the file behind it until the next open — exactly what
-/// `actions::persisted` records for the project file.
+/// surface disagreeing with the file behind it until the next open — the same thing
+/// [`persisted`](super::persist::persisted) records for every other `.strata` write.
+///
+/// It reports **directly** rather than through that funnel, and deliberately (P4-15 item 5): this
+/// *removes* a file, so the funnel's "Could not write the …" would be less accurate rather than
+/// more consistent, and there is nothing to gate — the satellite is emptied before the file is
+/// touched.
 pub fn clear_history(
     mut history: HistoryCtx,
     project: RadioStation<ProjectState, ProjChan>,

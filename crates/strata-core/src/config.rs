@@ -474,13 +474,17 @@ pub fn load() -> AppConfig {
     cfg
 }
 
-/// Persist the app config (best-effort; logged on failure). The caller holds the whole
-/// [`AppConfig`], so this is a plain write — never a load-mutate-save round trip, which
-/// would race the in-memory store it is supposed to mirror.
-pub fn save(cfg: &AppConfig) {
-    if let Err(e) = cfg.save(&APP_INFO, KEY) {
-        tracing::error!("save config: {e}");
-    }
+/// Persist the app config. The caller holds the whole [`AppConfig`], so this is a plain
+/// write — never a load-mutate-save round trip, which would race the in-memory store it is
+/// supposed to mirror.
+///
+/// **Returns its `Result`** (P4-15). It used to swallow the error into a `tracing` line, which
+/// made the app's documented sole write path — `strata_freya::state::write_config` — structurally
+/// incapable of knowing it had failed: not a silence any caller could fix, but one no caller could
+/// even see. Reporting it is the caller's, because this crate has no user surface.
+pub fn save(cfg: &AppConfig) -> Result<(), String> {
+    cfg.save(&APP_INFO, KEY)
+        .map_err(|e| format!("save config: {e}"))
 }
 
 #[cfg(test)]

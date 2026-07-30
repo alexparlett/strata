@@ -25,10 +25,9 @@ use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    catalog_settled, log_event, use_catalog, Catalog, Chan, LogCtx, LogLevel, ProjChan,
-    ProjectState, SessionState,
+    catalog_settled, log_event, persisted_defs, use_catalog, use_report, Catalog, Chan, LogLevel,
+    ProjChan, ProjectState, ReportCtx, SessionState,
 };
-use crate::apps::project::views::workbench::editor::actions::persisted;
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::badge::Badge;
 use crate::components::dialog::{Dialog, DialogHeader};
@@ -161,7 +160,7 @@ impl Component for DropConfirm {
         // A drop is a catalog mutation, so it is recorded in the event log (P3-13) — including
         // the one failure mode the catalog itself cannot show: a `DROP VIEW` the engine refused
         // after the def was already gone.
-        let log = use_consume::<LogCtx>();
+        let report = use_report();
         let theme = use_theme();
         // The destructive action wears the shared `cancel_button` dress — the themes' authored
         // destructive tone (the running body's Cancel, the close confirm's Stop), not a
@@ -178,7 +177,7 @@ impl Component for DropConfirm {
         let confirm = move |engine: &EngineCtx| {
             let mut slot = slot;
             if let Some(target) = slot.peek().clone() {
-                drop_row(engine, project, session, catalog, log, &target);
+                drop_row(engine, project, session, catalog, report, &target);
             }
             slot.set(None);
         };
@@ -314,7 +313,7 @@ fn drop_row(
     mut project: RadioStation<ProjectState, ProjChan>,
     mut session: RadioStation<SessionState, Chan>,
     catalog: Catalog,
-    log: LogCtx,
+    report: ReportCtx,
     target: &DropTarget,
 ) {
     // A removal is recorded at `Info`, not `Ok`: it is a change to the catalog, not a piece of
@@ -328,7 +327,7 @@ fn drop_row(
             {
                 let mut p = project.write_channel(ProjChan::Tables);
                 p.remove_table(name);
-                dropped = persisted(&p, log);
+                dropped = persisted_defs(&p, report);
             }
             // Synchronous and local: DataFusion just forgets the provider.
             engine.deregister(name);
@@ -339,7 +338,7 @@ fn drop_row(
             {
                 let mut p = project.write_channel(ProjChan::Views);
                 p.remove_view(name);
-                dropped = persisted(&p, log);
+                dropped = persisted_defs(&p, report);
             }
             if session.peek().is_bound_to_view(name) {
                 session.write_channel(Chan::Tabs).unbind_view(name);
@@ -361,7 +360,7 @@ fn drop_row(
                     tracing::error!("drop view '{name}': {e}");
                     // Only the part the row above doesn't already say — it named the drop.
                     log_event(
-                        log,
+                        report.log,
                         LogLevel::Warning,
                         format!("The engine kept view '{name}' until the next re-scan: {e}"),
                     );
@@ -374,7 +373,7 @@ fn drop_row(
             {
                 let mut p = project.write_channel(ProjChan::Queries);
                 p.remove_saved_query(*id);
-                dropped = persisted(&p, log);
+                dropped = persisted_defs(&p, report);
             }
             if session.peek().is_bound_to_query(*id) {
                 session.write_channel(Chan::Tabs).unbind_saved_query(*id);
@@ -383,7 +382,7 @@ fn drop_row(
     }
     if dropped {
         log_event(
-            log,
+            report.log,
             LogLevel::Info,
             format!("{} '{}'", past(target), target.name()),
         );
@@ -401,7 +400,7 @@ fn drop_row(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::apps::project::state::{CatalogState, Log};
+    use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
     use freya_testing::TestingRunner;
     use strata_core::engine::{TableMeta, ViewMeta};
@@ -487,7 +486,7 @@ mod tests {
         State<Option<DropTarget>>,
         RadioStation<SessionState, Chan>,
         RadioStation<ProjectState, ProjChan>,
-        LogCtx,
+        crate::apps::project::state::LogCtx,
     );
 
     /// A scratch project folder for one test.
@@ -520,6 +519,9 @@ mod tests {
                 });
                 // The window's event log: a drop is a mutation, so it records one (P3-13).
                 let log = r.provide_root_context(|| State::create(Log::default()));
+                // And the write-fault satellite the same funnel holds the condition in (P4-15) —
+                // a failed drop write raises a Problems row as well as the event asserted below.
+                r.provide_root_context(|| State::create(PersistFaults::default()));
                 (target, session, project, log)
             },
             1.,
@@ -746,7 +748,9 @@ mod tests {
         let (level, message) = &recorded[0];
         assert_eq!(*level, LogLevel::Error);
         assert!(
-            message.starts_with("Could not write the project file: "),
+            message
+                .as_str()
+                .starts_with("Could not write the project file: "),
             "unexpected message: {message}"
         );
         let _ = std::fs::remove_dir_all(&root);

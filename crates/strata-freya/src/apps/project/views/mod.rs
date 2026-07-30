@@ -3,7 +3,7 @@
 
 mod configure_launch;
 mod dialogs;
-mod drawer;
+pub(super) mod drawer;
 mod header;
 mod inspector;
 mod keeper;
@@ -23,8 +23,6 @@ pub use inspector::InspectorThemePreference;
 pub use keeper::RequestKeepers;
 pub use shell::Shell;
 pub use sidebar::CatalogThemePreference;
-/// The `.strata` def-write funnel, re-exported for the Configure window (see `apps::project`).
-pub use workbench::editor::actions::persisted;
 pub use workbench::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
     DataGridThemePreference, ExplainPlanThemePreference, RecordViewThemePreference,

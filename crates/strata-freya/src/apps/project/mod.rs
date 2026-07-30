@@ -19,6 +19,10 @@ pub use project::ProjectApp;
 /// carries the handle as a launch value and records its outcome into the project window's log
 /// — which is where the user is looking when the export window has closed itself.
 pub use state::{log_event, LogCtx, LogLevel};
+/// The `.strata` write funnel and where it reports, for the same window: a def written by
+/// Configure is persisted the way every other def mutation is, its answer is checked rather than
+/// assumed, and a failed write raises the same Problems row it would from here.
+pub use state::{persisted_defs, use_report, ReportCtx};
 /// The catalog store, its scan request and the pass that serves it — `pub` for the **Configure**
 /// window, which is its own OS window and so carries the station as a launch value rather than
 /// inheriting this one's context. It writes the def and asks for the pass; the driver here runs
@@ -26,9 +30,6 @@ pub use state::{log_event, LogCtx, LogLevel};
 pub use state::{
     refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState, Reg,
 };
-/// The `.strata` write funnel, for the same window: a def written by Configure is persisted the
-/// way every other def mutation is, and its answer is checked rather than assumed.
-pub use views::persisted;
 pub use views::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
     DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,

@@ -175,7 +175,65 @@ pub struct ProjectState {
     pub saved_queries: Vec<SavedQuery>,
 }
 
+/// One def the engine refused — a row of the Problems drawer's **Project** tab.
+///
+/// Kept as a projection rather than a stored list, because a registration failure already *is*
+/// live state: `Reg::Failed` on the row. Re-deriving it is what makes the drawer retract the row
+/// the moment a re-scan fixes the def, with nothing to invalidate — the same property the SQL
+/// diagnostics have, reached a different way.
+#[derive(Clone, PartialEq, Debug)]
+pub struct RegistrationFault {
+    /// Which section it sits in — the row says "table" or "view" rather than making the user
+    /// infer it from the name.
+    pub kind: CatalogKind,
+    pub name: String,
+    /// What the engine said. P3-07's wording, the same text the catalog row's triangle carries.
+    pub why: String,
+}
+
 impl ProjectState {
+    /// Every def the engine refused, tables before views (the order they register in, so a view
+    /// broken *by* a broken table reads below its cause).
+    ///
+    /// Saved queries can't appear: they are stored strings that are never registered, so there is
+    /// no engine answer for them to have failed.
+    pub fn registration_faults(&self) -> Vec<RegistrationFault> {
+        let tables = self.tables.iter().filter_map(|r| {
+            r.reg.error().map(|why| RegistrationFault {
+                kind: CatalogKind::Table,
+                name: r.def.name.clone(),
+                why: why.to_string(),
+            })
+        });
+        let views = self.views.iter().filter_map(|r| {
+            r.reg.error().map(|why| RegistrationFault {
+                kind: CatalogKind::View,
+                name: r.def.name.clone(),
+                why: why.to_string(),
+            })
+        });
+        tables.chain(views).collect()
+    }
+
+    /// How many defs the engine refused — [`registration_faults`](Self::registration_faults)'s
+    /// length without building it.
+    ///
+    /// Separate because the count is read on **every** render of the rail badge and the drawer's
+    /// scope strip, where the list itself is built only when the Project scope is actually on
+    /// screen. Going through the list would clone two `String`s per failed def just to drop them
+    /// again a line later.
+    pub fn registration_fault_count(&self) -> usize {
+        self.tables
+            .iter()
+            .filter(|r| r.reg.error().is_some())
+            .count()
+            + self
+                .views
+                .iter()
+                .filter(|r| r.reg.error().is_some())
+                .count()
+    }
+
     /// The store for a project loaded (or scaffolded) from `root` — every row starts
     /// `Loading`, awaiting registration.
     pub fn from_defs(defs: ProjectDefs, root: PathBuf) -> Self {

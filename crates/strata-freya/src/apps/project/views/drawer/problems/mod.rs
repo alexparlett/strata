@@ -1,59 +1,71 @@
-//! The drawer's **Problems** tab: every open tab's live SQL diagnostics, grouped by the tab
-//! they belong to.
+//! The drawer's **Problems** body — a scope strip over one of two lists (P4-15 item 3).
 //!
-//! ## Live, not a log
+//! ## Why a strip inside one body, and not a fourth rail entry
 //!
-//! Diagnostics self-clear by construction, which is why there is no Clear button here and no
-//! dismissal state to build (DEV_TASKS U10). Each validation pass replaces a tab's slice
-//! **wholesale**, so fixing the SQL — or fixing the catalog the SQL reads — retracts the rows on
-//! the next pass, without the user opening the tab.
+//! The rail's bottom group chooses between *surfaces*: Problems, Events, History — three
+//! different kinds of record. These two are the same kind, **problems**, at two scopes: what is
+//! wrong with the SQL you have open, and what is wrong with the project underneath it. That is a
+//! different axis, and collapsing it onto the rail would say the two are as unrelated as
+//! Problems and History are. (JetBrains' own Problems panel splits on exactly this axis, with
+//! the tool-window selector doing what our rail does.)
 //!
-//! ## A pure view
+//! The selected scope rides [`Layout`](strata_model::Layout) like every other panel decision, so
+//! it survives collapsing the drawer, switching to Events and back, and a restart.
 //!
-//! Everything on screen comes from [`SessionState::problem_groups`]: the window's one driver
-//! (`state::diagnostics`) is the only thing that writes diagnostics, and this reads them. Two
-//! subscriptions, both cross-tab, which is exactly why `Chan::Diagnostics` is not per tab.
+//! ## Three kinds of state, two of which live here
 //!
-//! ## What is deliberately not here
+//! Worth naming, because it is what earns the split rather than decorating it:
 //!
-//! A failed **run**. Problems is the SQL-validation surface; a query failure belongs to a run,
-//! not to the text, and the results pane renders it in full — banner, code frame, caret, hint —
-//! from `QueryError`. Folding it in would mean either a copy of the error on the store that
-//! outlives the run it describes, or one freya-query subscription per tab in the drawer *and*
-//! in the rail badge.
+//! | | re-derivable? | who writes it | surface |
+//! |---|---|---|---|
+//! | A diagnostic | yes — buffer revision + catalog epoch | one driver, `state::diagnostics` | Queries |
+//! | A registration failure | yes — `Reg::Failed` on the row | the scan pass | Project |
+//! | A write fault | **no** — it describes a write that already happened | its observer, `persisted` | Project |
+//! | An event | no, and it is already finished | its observer | *Events, not here* |
+//!
+//! The first three are **conditions**: true now, retracted when they stop being true. The fourth
+//! is a moment. That line is the drawer's, not this strip's — but the third row is why the
+//! Project scope exists, because a write fault is a condition that no amount of re-derivation
+//! can produce and so had nowhere to be shown for as long as it held.
+
+mod project;
+mod queries;
 
 use freya::prelude::*;
 use freya::radio::use_radio;
-use strata_core::util::plural;
-use strata_model::{Diagnostic, Severity, TabId};
+use strata_model::ProblemsTab;
 
-use super::{DrawerBody, DrawerCount, DrawerEmpty, DrawerTheme};
-use crate::apps::project::state::{Chan, ProblemGroup, SessionState};
-use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{Body, Caption, Control, Path};
+use super::DrawerTheme;
+use crate::apps::project::state::{Chan, FaultsCtx, ProjChan, ProjectState, SessionState};
+use freya::components::{Activable, FloatingTab};
+
+use crate::components::badge::Badge;
+use crate::components::typography::Control;
+
+pub use project::project_error_count;
 
 /// One problem row, and the group header above it (canvas `--sp-2` / `--sp-3` verticals).
-const ROW_HEIGHT: f32 = 26.;
-const GROUP_HEIGHT: f32 = 32.;
+pub(super) const ROW_HEIGHT: f32 = 26.;
+pub(super) const GROUP_HEIGHT: f32 = 32.;
 /// A row's left indent — the canvas's `--sp-7`, so rows sit under their group's name.
-const ROW_INDENT: f32 = 32.;
+pub(super) const ROW_INDENT: f32 = 32.;
 /// The panel's horizontal padding (canvas `--sp-4`).
-const PAD: f32 = 12.;
+pub(super) const PAD: f32 = 12.;
 
-/// The semantic tones a diagnostic wears, plus the clean state's tick. Read straight off the
+/// The semantic tones a problem wears, plus the clean state's tick. Read straight off the
 /// **sheet** rather than restated on the drawer's own theme: `error` / `warning` / `info` /
 /// `success` must follow the app-wide ramp wherever they appear (AGENTS.md §3).
 #[derive(Clone, Copy, PartialEq)]
-struct Tones {
-    error: Color,
-    warning: Color,
-    info: Color,
-    ok: Color,
+pub(super) struct Tones {
+    pub error: Color,
+    pub warning: Color,
+    pub info: Color,
+    pub ok: Color,
 }
 
 /// Resolve [`Tones`] from the active theme. A **hook** (one theme read), so call it exactly once
 /// per render — like `type_palette`.
-fn tones() -> Tones {
+pub(super) fn tones() -> Tones {
     let theme = use_theme();
     let t = theme.read();
     let c = t.colors();
@@ -65,175 +77,325 @@ fn tones() -> Tones {
     }
 }
 
+/// The Problems body: whichever scope the header's strip has selected.
+///
+/// Deliberately thin — it holds no counts and writes no drawer tally, because the strip that
+/// labels the scopes is in the **header** (see [`ScopeStrip`]) and already has to know both
+/// numbers to label its tabs. A second tally here would be a second walk of the same two stores
+/// and a number that could disagree with the one two lines above it.
 #[derive(PartialEq)]
 pub struct Problems {
     pub theme: DrawerTheme,
-    pub count: DrawerCount,
 }
 
 impl Component for Problems {
     fn render(&self) -> impl IntoElement {
-        // The rows themselves…
-        let session = use_radio::<SessionState, Chan>(Chan::Diagnostics);
-        // …and the group labels: a tab's name is written on `Chan::Tabs`, so a rename relabels
-        // its group without anything re-validating.
-        let strip = use_radio::<SessionState, Chan>(Chan::Tabs);
+        let layout = use_radio::<SessionState, Chan>(Chan::Layout);
         let tones = tones();
+        let scope = layout.read().layout.problems_tab;
 
-        let _ = strip.read();
-        let groups = session.read().problem_groups();
-        // Counted off the groups in hand rather than walking the store a second time. The two
-        // agree by construction: `error_count` spans validated tabs, and a validated tab with
-        // no rows contributes none — so it can only ever be the errors among these rows.
-        let errors = groups
-            .iter()
-            .flat_map(|g| g.rows.iter())
-            .filter(|d| d.is_error())
-            .count();
-
-        // The header's tally, resolved by the mounted body (see `DrawerCount`).
-        let count = self.count;
-        use_side_effect_with_deps(&errors, move |errors| {
-            let mut count = count;
-            if *count.peek() != *errors {
-                count.set(*errors);
+        let el: Element = match scope {
+            ProblemsTab::Queries => queries::Queries {
+                theme: self.theme.clone(),
             }
-        });
-        use_drop(move || {
-            let mut count = count;
-            count.set(0);
-        });
-
-        let el: Element = match groups.is_empty() {
-            true => DrawerEmpty::new(IconName::Check, "No problems found")
-                .icon_color(tones.ok)
-                .color(self.theme.empty_color)
-                .into_element(),
-            false => DrawerBody::new()
-                .children(groups.into_iter().map(|group| {
-                    // Keyed by the tab, so a group appearing or clearing above another doesn't
-                    // shuffle the rest through each other's scopes.
-                    let tab = group.tab;
-                    Group {
-                        group,
-                        theme: self.theme.clone(),
-                        tones,
-                        key: DiffKey::None,
-                    }
-                    .key(tab)
-                    .into_element()
-                }))
-                .into_element(),
+            .into_element(),
+            ProblemsTab::Project => project::Project {
+                theme: self.theme.clone(),
+                tones,
+            }
+            .into_element(),
         };
         el
     }
 }
 
-/// One tab's block: a header naming it and tallying its rows, then the rows.
-#[derive(PartialEq)]
-struct Group {
-    group: ProblemGroup,
-    theme: DrawerTheme,
-    tones: Tones,
-    key: DiffKey,
-}
-
-impl KeyExt for Group {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
-
-impl Component for Group {
-    fn render(&self) -> impl IntoElement {
-        let tally = plural(self.group.rows.len(), "problem");
-
-        rect()
-            .width(Size::fill())
-            .vertical()
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::px(GROUP_HEIGHT))
-                    .horizontal()
-                    .cross_align(Alignment::Center)
-                    .spacing(8.)
-                    .padding((0., PAD))
-                    .child(
-                        Icon::new(IconName::File)
-                            .color(self.theme.group_icon_color)
-                            .size(14.),
-                    )
-                    .child(Control::new(self.group.name.clone()).color(self.theme.group_color))
-                    .child(Caption::new(tally).color(self.theme.meta_color)),
-            )
-            .children(self.group.rows.iter().map(|d| {
-                ProblemRow {
-                    tab: self.group.tab,
-                    diagnostic: d.clone(),
-                    theme: self.theme.clone(),
-                    tones: self.tones,
-                }
-                .into_element()
-            }))
-    }
-
-    fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
-    }
-}
-
-/// One problem: severity glyph · message · the `line L:C` it was reported at, and a press that
-/// takes you to the tab it belongs to (the canvas's `onProblemJump`).
+/// The scope strip, which lives in the **drawer header** beside the "Problems" title — the
+/// IntelliJ arrangement, where the panel's name and its scopes share one bar and each scope
+/// carries its own count (`Problems  File 6 | Project Errors | …`).
 ///
-/// No code chip — the canvas's row is those three, and a rule code was a fourth thing competing
-/// for one line (DEV_TASKS U10). The owning tab comes from the **group**, not from the
-/// diagnostic: a `Diagnostic` deliberately carries no `TabId`, so there is no second copy to
-/// disagree with the tab it is stored on.
+/// In the header rather than at the top of the body because that is where a *selector* belongs:
+/// the body is what the selection produced, and a strip inside it reads as part of the content it
+/// is choosing. It also puts the counts where the drawer's own tally used to be, which is why
+/// Problems is the one tab whose header shows no separate number — the tabs are the number.
+/// Carries no theme: its only children are [`ScopeTab`]s, and a tab dresses itself from the
+/// `floating_tab` component theme.
 #[derive(PartialEq)]
-struct ProblemRow {
-    tab: TabId,
-    diagnostic: Diagnostic,
-    theme: DrawerTheme,
-    tones: Tones,
-}
+pub struct ScopeStrip;
 
-impl Component for ProblemRow {
+impl Component for ScopeStrip {
     fn render(&self) -> impl IntoElement {
-        let mut session = use_radio::<SessionState, Chan>(Chan::Tabs);
-        let (glyph, tone) = match self.diagnostic.severity {
-            Severity::Error => (IconName::Alert, self.tones.error),
-            Severity::Warning => (IconName::Warning, self.tones.warning),
-            Severity::Info => (IconName::Info, self.tones.info),
-        };
-        let tab = self.tab;
+        let mut layout = use_radio::<SessionState, Chan>(Chan::Layout);
+        let session = use_radio::<SessionState, Chan>(Chan::Diagnostics);
+        let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
+        let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
+        let faults = use_consume::<FaultsCtx>();
+        let tones = tones();
+
+        let scope = layout.read().layout.problems_tab;
+        // Both counts every render, because the strip labels *both* tabs — the whole point of a
+        // scope strip is telling you there is something in the one you are not looking at.
+        let queries = session.read().error_count();
+        let _ = views.read();
+        let project = project_error_count(&tables.read(), &faults.read());
 
         rect()
-            .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT))
             .horizontal()
-            .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding(Gaps::new(0., PAD, 0., ROW_INDENT))
-            // Switching to the tab, not jumping to the span: the span is a byte range into the
-            // text the pass validated, and moving the caret is the editor's delicate half
-            // (AGENTS.md §8) — its own change.
-            .on_press(move |_| {
-                session.write_channel(Chan::Tabs).switch(tab);
-            })
-            .child(Icon::new(glyph).color(tone).size(15.))
+            .spacing(2.)
             .child(
-                Body::new(self.diagnostic.message.clone())
-                    .color(self.theme.message_color)
-                    .width(Size::flex(1.))
-                    .text_overflow(TextOverflow::Ellipsis),
+                ScopeTab {
+                    label: "Queries",
+                    count: queries,
+                    selected: scope == ProblemsTab::Queries,
+                    tones,
+                    on_press: EventHandler::new(move |_: Event<PressEventData>| {
+                        layout
+                            .write_channel(Chan::Layout)
+                            .show_problems_tab(ProblemsTab::Queries);
+                    }),
+                }
+                .into_element(),
             )
-            .maybe_child(
-                self.diagnostic
-                    .loc
-                    .clone()
-                    .map(|loc| Path::new(loc).color(self.theme.meta_color)),
+            .child(
+                ScopeTab {
+                    label: "Project",
+                    count: project,
+                    selected: scope == ProblemsTab::Project,
+                    tones,
+                    on_press: EventHandler::new(move |_: Event<PressEventData>| {
+                        layout
+                            .write_channel(Chan::Layout)
+                            .show_problems_tab(ProblemsTab::Project);
+                    }),
+                }
+                .into_element(),
             )
+    }
+}
+
+/// One scope in the strip: its name, and its own error count when it has any.
+///
+/// Freya's [`FloatingTab`] rather than a rect that looks like one (AGENTS.md §3). The three
+/// things it brings are the three a hand-rolled version silently goes without: the
+/// `AccessibilityRole::Tab` that tells a screen reader this *is* a tab, the focusability that
+/// lets the keyboard reach it, and the hover fill + pointer cursor that make it read as
+/// pressable before you press it.
+///
+/// Selection rides [`Activable`], exactly as `components::sidebar_row` does — the context it
+/// provides is what `FloatingTab` reads internally, so "which tab is on" stays the caller's and
+/// the component keeps no selection state of its own.
+///
+/// The count stays **composed** as a child rather than becoming a component field: a tab has no
+/// opinion about what is written on it, which is the same line the Engine pane's `Table` work
+/// drew. The children need a horizontal wrapper because `FloatingTab` centres them in the
+/// default (vertical) direction, so label and badge would otherwise stack.
+#[derive(PartialEq)]
+struct ScopeTab {
+    label: &'static str,
+    count: usize,
+    selected: bool,
+    tones: Tones,
+    on_press: EventHandler<Event<PressEventData>>,
+}
+
+impl Component for ScopeTab {
+    fn render(&self) -> impl IntoElement {
+        let on_press = self.on_press.clone();
+        Activable::new(
+            FloatingTab::new()
+                .on_press(move |e| on_press.call(e))
+                .child(
+                    rect()
+                        .horizontal()
+                        .cross_align(Alignment::Center)
+                        .spacing(6.)
+                        .child(Control::new(self.label))
+                        .maybe_child((self.count > 0).then(|| {
+                            Badge::value(self.count.to_string(), self.tones.error).outlined()
+                        })),
+                ),
+        )
+        .active(self.selected)
+    }
+}
+
+/// Strip + body tests — the rendered surface, over stores stood up by hand.
+///
+/// **These exist because of a runtime crash.** Every component here consumes `FaultsCtx` from
+/// context, and `use_consume` panics when it is absent; the first version of this shipped with the
+/// Configure window missing that provider, and the only thing that caught it was a person pressing
+/// the button. A test that *mounts* the tree fails on a missing provider at once, where the
+/// projection tests beside it (`project::tests`) never touch context at all.
+#[cfg(test)]
+mod tests {
+    use super::super::{DrawerThemePartial, DrawerThemePreference};
+    use super::*;
+    use crate::apps::project::state::{Log, PersistFaults, ProjectFile};
+    use crate::theme::strata_theme;
+    use freya::components::get_theme;
+    use freya::prelude::use_init_theme;
+    use freya::radio::RadioStation;
+    use freya_testing::TestingRunner;
+    use std::path::PathBuf;
+    use strata_core::project::ProjectDefs;
+    use strata_core::theme::load;
+    use strata_model::{SourceFormat, TableDef};
+
+    fn table(name: &str) -> TableDef {
+        TableDef {
+            name: name.into(),
+            format: SourceFormat::Parquet,
+            sources: vec![format!("{name}.parquet")],
+            partition_cols: vec![],
+        }
+    }
+
+    fn app() -> impl IntoElement {
+        use_init_theme(|| strata_theme(&load("midnight")));
+        let theme = get_theme!(&None::<DrawerThemePartial>, DrawerThemePreference, "drawer");
+        rect()
+            .expanded()
+            .child(ScopeStrip)
+            .child(Problems { theme })
+    }
+
+    /// The window's stores, plus the two handles a missing provider would panic on.
+    fn runner(
+        faults: PersistFaults,
+        failed: Option<&str>,
+    ) -> (TestingRunner, RadioStation<SessionState, Chan>) {
+        let mut store = {
+            let defs = ProjectDefs {
+                name: "p".into(),
+                tables: vec![table("orders")],
+                views: Vec::new(),
+                saved_queries: Vec::new(),
+            };
+            ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-problems-render"))
+        };
+        if let Some(why) = failed {
+            store.table_failed("orders", why.into());
+        }
+        TestingRunner::new(
+            app,
+            (600., 400.).into(),
+            move |r| {
+                let session = r.provide_root_context(|| {
+                    RadioStation::<SessionState, Chan>::create(SessionState::default())
+                });
+                r.provide_root_context(|| RadioStation::<ProjectState, ProjChan>::create(store));
+                r.provide_root_context(|| State::create(Log::default()));
+                r.provide_root_context(|| State::create(faults));
+                session
+            },
+            1.,
+        )
+    }
+
+    /// Every text run in the tree, top to bottom — the drawer's own test idiom.
+    fn texts(runner: &TestingRunner) -> Vec<String> {
+        runner.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
+    }
+
+    /// Settle the tree *and its effects* (see `events`'s note: a render and the effect it dirties
+    /// are several polls apart).
+    fn settle(runner: &mut TestingRunner) {
+        for _ in 0..4 {
+            runner.sync_and_update();
+        }
+    }
+
+    /// The strip mounts and names both scopes. Failing to construct the tree at all is the
+    /// missing-provider case this module exists to catch.
+    #[test]
+    fn the_strip_offers_both_scopes() {
+        let (mut runner, _) = runner(PersistFaults::default(), None);
+        settle(&mut runner);
+
+        let seen = texts(&runner);
+        assert!(
+            seen.iter().any(|t| t == "Queries"),
+            "no Queries tab: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|t| t == "Project"),
+            "no Project tab: {seen:?}"
+        );
+    }
+
+    /// A clean project shows the Queries scope by default, and its empty state — `Queries` is
+    /// `ProblemsTab`'s `Default`, so a session file predating the field lands here too.
+    #[test]
+    fn a_clean_project_opens_on_queries() {
+        let (mut runner, session) = runner(PersistFaults::default(), None);
+        settle(&mut runner);
+
+        assert_eq!(session.peek().layout.problems_tab, ProblemsTab::Queries);
+        assert!(
+            texts(&runner).iter().any(|t| t == "No problems found"),
+            "expected the Queries empty state: {:?}",
+            texts(&runner)
+        );
+    }
+
+    /// Selecting Project swaps the body — and the write fault and the refused def both list,
+    /// which is the pairing the scope exists for.
+    #[test]
+    fn the_project_scope_lists_both_families() {
+        let mut faults = PersistFaults::default();
+        faults.fault(ProjectFile::Defs, "Permission denied".into());
+        let (mut runner, session) = runner(faults, Some("No files found"));
+        session
+            .clone()
+            .write_channel(Chan::Layout)
+            .show_problems_tab(ProblemsTab::Project);
+        settle(&mut runner);
+
+        let seen = texts(&runner).join(" | ");
+        assert!(
+            seen.contains("project.json") && seen.contains("Permission denied"),
+            "no write fault: {seen}"
+        );
+        assert!(
+            seen.contains("orders") && seen.contains("No files found"),
+            "no registration fault: {seen}"
+        );
+        assert!(
+            seen.contains("not saved") && seen.contains("table"),
+            "no tags: {seen}"
+        );
+    }
+
+    /// The strip's counts are per scope, so the tab you are *not* on still says it has something.
+    #[test]
+    fn each_tab_carries_its_own_count() {
+        let mut faults = PersistFaults::default();
+        faults.fault(ProjectFile::Session, "Read-only file system".into());
+        let (mut runner, _) = runner(faults, Some("No files found"));
+        settle(&mut runner);
+
+        // One write fault + one refused def, while the Queries scope has none.
+        assert!(
+            texts(&runner).iter().any(|t| t == "2"),
+            "expected the Project tab to show 2: {:?}",
+            texts(&runner)
+        );
+    }
+
+    /// The Project scope retracts by itself: nothing behind, nothing refused, nothing listed.
+    #[test]
+    fn the_project_scope_is_empty_when_nothing_is_wrong() {
+        let (mut runner, session) = runner(PersistFaults::default(), None);
+        session
+            .clone()
+            .write_channel(Chan::Layout)
+            .show_problems_tab(ProblemsTab::Project);
+        settle(&mut runner);
+
+        assert!(
+            texts(&runner).iter().any(|t| t == "No project problems"),
+            "expected the Project empty state: {:?}",
+            texts(&runner)
+        );
     }
 }

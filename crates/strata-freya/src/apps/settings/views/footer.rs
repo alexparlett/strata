@@ -35,6 +35,14 @@ impl Component for Footer {
         // Why Apply is off while the draft *is* dirty. Said out loud, because a button that is
         // disabled for a reason the user cannot see reads as a broken button.
         let blocker = ctx.blocker();
+        // The same strip states a failed Apply (P4-15), and the blocker wins it — a blocker is a
+        // live reason the press won't run, where a failure describes one that already did.
+        //
+        // Deliberately a *second* binding rather than folding the failure into `blocker`: that
+        // value is also the enable gate below, so a failure folded into it would disable Apply
+        // the instant it was reported — the retry the open window exists to offer, taken away by
+        // the message offering it. Only a blocker may disable the button.
+        let message = blocker.clone().or_else(|| ctx.failure());
         let error = use_theme().read().colors().error;
 
         let cancel = {
@@ -49,8 +57,11 @@ impl Component for Footer {
             .height(Size::px(BUTTON_HEIGHT))
             .enabled(dirty && blocker.is_none())
             .on_press(move |_: Event<PressEventData>| {
-                ctx.apply();
-                platform.close_current_window();
+                // Closing on a failed write would look exactly like success — the settings are
+                // live in every window either way; only the durable copy is missing.
+                if ctx.apply() {
+                    platform.close_current_window();
+                }
             })
             .child(Control::new("Apply"));
 
@@ -73,13 +84,13 @@ impl Component for Footer {
                             .horizontal()
                             .cross_align(Alignment::Center)
                             .spacing(6.)
-                            .maybe_child(blocker.map(|blocker| {
+                            .maybe_child(message.map(|message| {
                                 rect()
                                     .horizontal()
                                     .cross_align(Alignment::Center)
                                     .spacing(6.)
                                     .child(Icon::new(IconName::Alert).size(14.).color(error))
-                                    .child(Control::new(blocker).color(error))
+                                    .child(Control::new(message).color(error))
                             })),
                     )
                     .child(cancel)

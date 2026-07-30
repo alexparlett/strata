@@ -27,6 +27,7 @@ use super::catalog::{
 };
 use super::history::{History, HistoryCtx};
 use super::log::{log_event, LogCtx, LogLevel};
+use super::persist::{persisted_session, use_report};
 use super::{Chan, ProjChan, ProjectState, SessionState};
 
 /// Initialise this window's Session store and provide it via context. Pulls the open
@@ -516,6 +517,10 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
     let subscribe = use_radio::<SessionState, Chan>(Chan::Persist);
     let session = use_radio_station::<SessionState, Chan>();
     let project = use_radio_station::<ProjectState, ProjChan>();
+    // Both writes below report a failure rather than only `tracing` it (P4-15): an event when it
+    // starts, and a Problems row for as long as it holds. See `persisted_session` for what the
+    // *final* save can and can't make visible on the way down.
+    let report = use_report();
     // The window's live geometry + window state (logical units). All `Copy` State signals —
     // reading them in the effect also makes a resize / move / fill trigger a save.
     let platform = Platform::get();
@@ -587,8 +592,7 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
             if written.peek().as_ref() == Some(&snapshot) {
                 return;
             }
-            if let Err(e) = project_io::save_session(&root, &snapshot) {
-                tracing::error!("autosave session: {e}");
+            if !persisted_session(&root, &snapshot, report) {
                 return;
             }
             written.set(Some(snapshot));
@@ -618,9 +622,7 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
         if written.peek().as_ref() == Some(&snapshot) {
             return;
         }
-        if let Err(e) = project_io::save_session(&root, &snapshot) {
-            tracing::error!("save session on close: {e}");
-        }
+        persisted_session(&root, &snapshot, report);
     });
 }
 

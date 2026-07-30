@@ -15,8 +15,8 @@ use std::mem;
 
 use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
 use strata_model::{
-    expanded_drawer_h, Diagnostic, DrawerTab, Layout, Origin, ResultsView, SessionSnapshot,
-    SidebarPane, TabId, TabSnapshot,
+    expanded_drawer_h, Diagnostic, DrawerTab, Layout, Origin, ProblemsTab, ResultsView,
+    SessionSnapshot, SidebarPane, TabId, TabSnapshot,
 };
 use uuid::Uuid;
 
@@ -330,6 +330,12 @@ impl SessionState {
     /// Collapse the drawer (its header ×).
     pub fn close_drawer(&mut self) {
         self.layout.drawer = None;
+    }
+
+    /// The Problems header's scope strip: show `tab`. Not a toggle like the rail's — a strip
+    /// always has one selected, and pressing the selected one is a no-op rather than a collapse.
+    pub fn show_problems_tab(&mut self, tab: ProblemsTab) {
+        self.layout.problems_tab = tab;
     }
 
     /// The drawer header's expand / restore toggle (design `onToggleLogHeight`): raise the
