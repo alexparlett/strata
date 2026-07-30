@@ -1280,6 +1280,18 @@
       },
       "table_selection_background": {
         "reference": "accent_selection"
+      },
+      "keycap_background": {
+        "reference": "surface_primary"
+      },
+      "keycap_border_fill": {
+        "reference": "border_overlay"
+      },
+      "keycap_color": {
+        "reference": "text_secondary"
+      },
+      "slot_border_fill": {
+        "reference": "border_hover"
       }
     },
     "sidebar_item": {

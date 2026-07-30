@@ -6,8 +6,15 @@
 //! otherwise — so dispatch, menu hints, the Settings ▸ Keymap UI, and hand-edited config
 //! JSON all agree. Dispatch itself is distributed (each feature listens for its own
 //! command); this module only answers *which* command a chord means.
+//!
+//! **Editing a binding is [`propose`] then [`apply`], and nothing else.** The Keymap pane
+//! (P4-08) has four ways to change a chord — capture a press, reset one row, take a chord off
+//! another command, reset every row — and they are all the same two steps over a [`Rebind`]:
+//! ask what the change would cost, then commit it. The policy and the sentence that explains a
+//! refusal live here beside `validate_bind` rather than in the pane, because a hand-edited
+//! config reaches the same rules through [`effective_chord`] and the two must not drift.
 
-use crate::config::{Command, KeyChord, Settings};
+use crate::config::{Command, KeyBind, KeyChord, Settings};
 
 /// Metadata for one command: display strings + the built-in default chord.
 pub struct CommandMeta {
@@ -180,6 +187,166 @@ pub fn resolve(settings: &Settings, chord: &KeyChord) -> Option<Command> {
         .iter()
         .find(|m| effective_chord(settings, m.command).as_ref() == Some(chord))
         .map(|m| m.command)
+}
+
+/// A change the user asked for on one command's binding.
+///
+/// Three variants because there are three things a keymap UI can ask for, and every path
+/// through it is one of them: capture ([`To`](Rebind::To)), the per-row reset
+/// ([`Default`](Rebind::Default)), and the unbind a reassignment performs on the command it
+/// takes a chord *from* ([`Off`](Rebind::Off)).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Rebind {
+    /// Take this chord.
+    To(KeyChord),
+    /// Go back to the built-in default — i.e. drop the override entirely.
+    Default,
+    /// Have no shortcut at all (an explicit unbind).
+    Off,
+}
+
+impl Rebind {
+    /// The chord this rebind would leave the command holding, `None` for an unbind.
+    pub fn chord(&self, cmd: Command) -> Option<KeyChord> {
+        match self {
+            Self::To(chord) => Some(chord.clone()),
+            Self::Default => Some(default_chord(cmd)),
+            Self::Off => None,
+        }
+    }
+}
+
+/// What a [`Rebind`] would cost — the answer [`propose`] gives, and the only gate in front of
+/// [`apply`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Bind {
+    /// Nothing is in the way: commit it.
+    Ready,
+    /// Rebindable commands hold the chord. Committing means taking it off **all** of them, so
+    /// this is the one outcome the UI can offer to push through (its Reassign) — with `message`
+    /// as the question it asks. `holders` is in [`COMMANDS`] order and never empty; it holds more
+    /// than one only for a chord a hand-edited config already duplicated.
+    Clash {
+        holders: Vec<Command>,
+        message: String,
+    },
+    /// Refused outright, with why. Nothing to offer: either the chord can't be bound at all or
+    /// a fixed command holds it, and a fixed command cannot give one up.
+    Refused { message: String },
+}
+
+/// What `rebind` would do to `cmd`'s binding, given the settings as they stand.
+///
+/// The **whole** conflict policy for the UI, in one call: [`validate_bind`]'s chord rules, then
+/// the duplicate search over every other command's effective chord. `cmd` itself is never a
+/// holder, so re-pressing a command's current chord is [`Ready`](Bind::Ready) rather than a
+/// clash with itself, and the per-row reset is checked by the same code as a capture — which it
+/// has to be, since a default chord can have been taken by another command in the meantime.
+pub fn propose(settings: &Settings, cmd: Command, rebind: &Rebind) -> Bind {
+    let Some(chord) = rebind.chord(cmd) else {
+        // Nothing can conflict with having no shortcut. A fixed command is the one thing that
+        // can't be unbound, and `validate_bind` says so.
+        return match validate_bind(cmd, &default_chord(cmd)) {
+            Ok(()) => Bind::Ready,
+            Err(err) => Bind::Refused {
+                message: err.to_string(),
+            },
+        };
+    };
+    // A reset restores what the table itself declares, so it is exempt from the chord rules —
+    // which is what lets Esc (bare, no primary modifier) be reset like any other row.
+    if !matches!(rebind, Rebind::Default) {
+        if let Err(err) = validate_bind(cmd, &chord) {
+            return Bind::Refused {
+                message: err.to_string(),
+            };
+        }
+    }
+    let holders = holders(settings, cmd, &chord);
+    let Some(&first) = holders.first() else {
+        return Bind::Ready;
+    };
+    let caps = chord_caps(&chord).concat();
+    // A fixed command among the holders settles it outright: the chord cannot be taken from one,
+    // so offering to steal it would be offering something that cannot be delivered.
+    if let Some(&fixed) = holders.iter().find(|held| is_fixed(**held)) {
+        return Bind::Refused {
+            message: format!("{caps} is reserved for '{}'", describe(fixed).0),
+        };
+    }
+    Bind::Clash {
+        holders,
+        message: format!("{caps} is already assigned to '{}'", describe(first).0),
+    }
+}
+
+/// Every command other than `cmd` whose effective chord is `chord`, in [`COMMANDS`] order.
+///
+/// A `Vec` and not the first match, because a hand-edited config can put two commands on one
+/// chord (`duplicate_chords_resolve_in_table_order` is that state) — and a reassignment that
+/// freed only the first would hand the asker a chord `resolve` still gives to the second.
+fn holders(settings: &Settings, cmd: Command, chord: &KeyChord) -> Vec<Command> {
+    COMMANDS
+        .iter()
+        .map(|m| m.command)
+        .filter(|other| *other != cmd)
+        .filter(|other| effective_chord(settings, *other).as_ref() == Some(chord))
+        .collect()
+}
+
+/// Commit `rebind` onto `cmd` — unconditionally. Call [`propose`] first; a
+/// [`Clash`](Bind::Clash) the user pushed through is `apply(.., holder, &Rebind::Off)` for every
+/// holder and then this, so taking a chord is expressed as the bindings it actually changes.
+///
+/// [`Rebind::Default`] **removes** the override rather than writing the default chord into it:
+/// a row that is back to its default must stop reading as custom, and a stored copy of the
+/// default would also freeze it against a later change to [`COMMANDS`].
+///
+/// A [`To`](Rebind::To) of the command's *own* default is that same removal, not a stored copy of
+/// it. An override equal to the default is indistinguishable from no override as far as
+/// [`effective_chord`] is concerned, so keeping one would mark a row Custom — and offer to reset
+/// it — for a chord nobody changed. Pressing a command's existing shortcut is a no-op, which is
+/// what it looks like.
+pub fn apply(settings: &mut Settings, cmd: Command, rebind: &Rebind) {
+    match rebind {
+        Rebind::Default => clear_bind(settings, cmd),
+        Rebind::To(chord) if *chord == default_chord(cmd) => clear_bind(settings, cmd),
+        Rebind::To(chord) => set_bind(settings, cmd, Some(chord.clone())),
+        Rebind::Off => set_bind(settings, cmd, None),
+    }
+}
+
+/// Drop `cmd`'s override, whatever it was — back to the chord [`COMMANDS`] gives it.
+fn clear_bind(settings: &mut Settings, cmd: Command) {
+    settings.keybinds.retain(|bind| bind.command != cmd);
+}
+
+/// Write `cmd`'s override, replacing any it already had (`None` = an explicit unbind).
+fn set_bind(settings: &mut Settings, cmd: Command, chord: Option<KeyChord>) {
+    clear_bind(settings, cmd);
+    settings.keybinds.push(KeyBind {
+        command: cmd,
+        chord,
+    });
+}
+
+/// Drop every override — every command back to the chord [`COMMANDS`] gives it. The defaults
+/// are distinct by construction (pinned by a test), so this can never leave a duplicate behind
+/// and needs no [`propose`] in front of it.
+pub fn reset_all(settings: &mut Settings) {
+    settings.keybinds.clear();
+}
+
+/// Whether `cmd` carries an override **that takes effect** — what the Keymap row's **Custom**
+/// badge and its reset control both answer to.
+///
+/// A command bound to no chord at all is still custom: the override is what the user did to it,
+/// not what it ended up holding. A **fixed** command is never custom, however many entries a
+/// hand-edited config gives it, because [`effective_chord`] ignores every one of them and hands
+/// back the default — a badge saying otherwise would sit beside the built-in chord, on a row
+/// with no reset control to clear it.
+pub fn is_custom(settings: &Settings, cmd: Command) -> bool {
+    !is_fixed(cmd) && settings.keybinds.iter().any(|bind| bind.command == cmd)
 }
 
 /// The chord as display key caps, canvas modifier order (⇧ ⌥ ⌘) then the key:
@@ -444,6 +611,239 @@ mod test {
             chord: Some(chord(true, false, "t")),
         }]);
         assert_eq!(resolve(&s, &chord(true, false, "t")), Some(Command::NewTab));
+    }
+
+    #[test]
+    fn every_default_chord_is_distinct() {
+        // `reset_all` relies on this: with no overrides at all, no two commands may hold the
+        // same chord, or clearing them would leave a duplicate the UI could not have created
+        // and cannot see.
+        let mut seen = Vec::new();
+        for meta in COMMANDS {
+            let chord = meta.default_chord();
+            assert!(
+                !seen.contains(&chord),
+                "{:?} repeats a default chord",
+                meta.command
+            );
+            seen.push(chord);
+        }
+    }
+
+    #[test]
+    fn propose_answers_the_four_outcomes() {
+        let s = Settings::default();
+        // Free: nothing holds ⌘G.
+        assert_eq!(
+            propose(&s, Command::Find, &Rebind::To(chord(true, false, "g"))),
+            Bind::Ready
+        );
+        // A command's own chord is not a clash with itself.
+        assert_eq!(
+            propose(&s, Command::Find, &Rebind::To(chord(true, false, "f"))),
+            Bind::Ready
+        );
+        // Held by a rebindable command: offered, and the sentence names it.
+        let Bind::Clash { holders, message } =
+            propose(&s, Command::Find, &Rebind::To(chord(true, false, "t")))
+        else {
+            panic!("⌘T is New query tab's");
+        };
+        assert_eq!(holders, vec![Command::NewTab]);
+        assert_eq!(message, "⌘T is already assigned to 'New query tab'");
+        // No primary modifier: refused, with the policy's own words.
+        assert_eq!(
+            propose(&s, Command::Find, &Rebind::To(chord(false, false, "g"))),
+            Bind::Refused {
+                message: BindError::MissingPrimary.to_string()
+            }
+        );
+        // A fixed command can neither be rebound nor unbound.
+        assert_eq!(
+            propose(&s, Command::Cancel, &Rebind::To(chord(true, false, "g"))),
+            Bind::Refused {
+                message: BindError::FixedCommand.to_string()
+            }
+        );
+        assert_eq!(
+            propose(&s, Command::Cancel, &Rebind::Off),
+            Bind::Refused {
+                message: BindError::FixedCommand.to_string()
+            }
+        );
+        // …but resetting it to the chord the table already gives it is a no-op, not a refusal.
+        assert_eq!(propose(&s, Command::Cancel, &Rebind::Default), Bind::Ready);
+        // Unbinding a rebindable command can't conflict with anything.
+        assert_eq!(propose(&s, Command::Find, &Rebind::Off), Bind::Ready);
+    }
+
+    #[test]
+    fn a_chord_a_fixed_command_holds_is_reserved_not_offered() {
+        // Reachable only by hand-editing Esc onto a primary chord, which `effective_chord`
+        // ignores — so build the case the predicate has to answer directly.
+        let s = Settings::default();
+        let Bind::Refused { message } = propose(
+            &s,
+            Command::Find,
+            &Rebind::To(chord(false, false, "Escape")),
+        ) else {
+            panic!("Esc is Dismiss's, and Dismiss can't give it up");
+        };
+        // The chord rules refuse it first (no primary modifier), which is the same answer.
+        assert_eq!(message, BindError::MissingPrimary.to_string());
+
+        // The reserved arm itself: Dismiss reset to its default, proposed for another command.
+        assert_eq!(
+            holders(&s, Command::Find, &default_chord(Command::Cancel)),
+            vec![Command::Cancel]
+        );
+    }
+
+    #[test]
+    fn apply_commits_the_three_rebinds() {
+        let mut s = Settings::default();
+        apply(&mut s, Command::Find, &Rebind::To(chord(true, false, "g")));
+        assert_eq!(hint(&s, Command::Find), "⌘G");
+        assert!(is_custom(&s, Command::Find));
+
+        // Rebinding again replaces the override rather than stacking a second entry.
+        apply(&mut s, Command::Find, &Rebind::To(chord(true, true, "g")));
+        assert_eq!(s.keybinds.len(), 1);
+        assert_eq!(hint(&s, Command::Find), "⇧⌘G");
+
+        // Off is an explicit unbind — still custom, and now with no chord.
+        apply(&mut s, Command::Find, &Rebind::Off);
+        assert_eq!(effective_chord(&s, Command::Find), None);
+        assert!(is_custom(&s, Command::Find));
+
+        // Default removes the entry, so the row stops reading as custom.
+        apply(&mut s, Command::Find, &Rebind::Default);
+        assert!(s.keybinds.is_empty());
+        assert!(!is_custom(&s, Command::Find));
+        assert_eq!(hint(&s, Command::Find), "⌘F");
+    }
+
+    #[test]
+    fn a_reassignment_is_an_unbind_and_a_bind() {
+        // The Keymap pane's Reassign, in the two calls it is made of: take ⌘T from New query
+        // tab, give it to Find. Nothing else moves, and ⌘T resolves to Find alone.
+        let mut s = Settings::default();
+        let want = chord(true, false, "t");
+        let Bind::Clash { holders, .. } = propose(&s, Command::Find, &Rebind::To(want.clone()))
+        else {
+            panic!("⌘T is taken");
+        };
+        for holder in holders {
+            apply(&mut s, holder, &Rebind::Off);
+        }
+        apply(&mut s, Command::Find, &Rebind::To(want.clone()));
+
+        assert_eq!(resolve(&s, &want), Some(Command::Find));
+        assert_eq!(effective_chord(&s, Command::NewTab), None);
+        // The chord Find used to hold is free again.
+        assert_eq!(resolve(&s, &chord(true, false, "f")), None);
+    }
+
+    #[test]
+    fn a_reset_is_conflict_checked_like_a_capture() {
+        // The case a reset that skipped the check would create: Save query moved off ⌘S, then
+        // Find bound to the ⌘S that freed up. Resetting Save query now wants a chord Find has.
+        let mut s = Settings::default();
+        apply(
+            &mut s,
+            Command::SaveQuery,
+            &Rebind::To(chord(true, false, "g")),
+        );
+        apply(&mut s, Command::Find, &Rebind::To(chord(true, false, "s")));
+
+        let Bind::Clash { holders, .. } = propose(&s, Command::SaveQuery, &Rebind::Default) else {
+            panic!("resetting Save query wants Find's ⌘S back");
+        };
+        assert_eq!(holders, vec![Command::Find]);
+    }
+
+    #[test]
+    fn a_fixed_command_is_never_custom() {
+        // A hand-edited override of Esc is ignored by `effective_chord`, so the row shows the
+        // built-in chord — and must not also claim the user changed it, on a row whose reset
+        // control is gated off for the same reason.
+        let s = settings_with(vec![KeyBind {
+            command: Command::Cancel,
+            chord: Some(chord(true, false, "d")),
+        }]);
+        assert_eq!(hint(&s, Command::Cancel), "Esc");
+        assert!(!is_custom(&s, Command::Cancel));
+        // An ordinary command with the identical shape of entry *is* custom.
+        let s = settings_with(vec![KeyBind {
+            command: Command::Find,
+            chord: Some(chord(true, false, "d")),
+        }]);
+        assert!(is_custom(&s, Command::Find));
+    }
+
+    #[test]
+    fn binding_a_command_to_its_own_default_is_not_an_override() {
+        // Double-click Find's ⌘F and press ⌘F: nothing changed, so the row must not start
+        // reading as custom and offering to reset itself.
+        let mut s = Settings::default();
+        apply(
+            &mut s,
+            Command::Find,
+            &Rebind::To(default_chord(Command::Find)),
+        );
+        assert!(s.keybinds.is_empty());
+        assert!(!is_custom(&s, Command::Find));
+        assert_eq!(hint(&s, Command::Find), "⌘F");
+
+        // And it *clears* a real override rather than replacing it with a copy of the default.
+        apply(&mut s, Command::Find, &Rebind::To(chord(true, false, "g")));
+        assert!(is_custom(&s, Command::Find));
+        apply(
+            &mut s,
+            Command::Find,
+            &Rebind::To(default_chord(Command::Find)),
+        );
+        assert!(!is_custom(&s, Command::Find));
+    }
+
+    #[test]
+    fn a_clash_names_every_holder_so_reassign_frees_them_all() {
+        // The state a hand-edited config can reach: two commands on ⌘T. A reassignment that
+        // freed only the first would hand Find a chord `resolve` still gives to Close tab, which
+        // sits earlier in COMMANDS than Find.
+        let mut s = settings_with(vec![KeyBind {
+            command: Command::CloseActiveTab,
+            chord: Some(chord(true, false, "t")),
+        }]);
+        let want = chord(true, false, "t");
+        assert_eq!(
+            effective_chord(&s, Command::NewTab).as_ref(),
+            Some(&want),
+            "NewTab still holds its default"
+        );
+
+        let Bind::Clash { holders, .. } = propose(&s, Command::Find, &Rebind::To(want.clone()))
+        else {
+            panic!("⌘T is doubly taken");
+        };
+        assert_eq!(holders, vec![Command::NewTab, Command::CloseActiveTab]);
+
+        for holder in holders {
+            apply(&mut s, holder, &Rebind::Off);
+        }
+        apply(&mut s, Command::Find, &Rebind::To(want.clone()));
+        assert_eq!(resolve(&s, &want), Some(Command::Find));
+    }
+
+    #[test]
+    fn reset_all_clears_every_override() {
+        let mut s = Settings::default();
+        apply(&mut s, Command::Find, &Rebind::To(chord(true, false, "g")));
+        apply(&mut s, Command::NewTab, &Rebind::Off);
+        reset_all(&mut s);
+        assert!(s.keybinds.is_empty());
+        assert_eq!(hint(&s, Command::Find), "⌘F");
+        assert_eq!(hint(&s, Command::NewTab), "⌘T");
     }
 
     #[test]

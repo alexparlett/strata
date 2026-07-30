@@ -238,6 +238,48 @@ Things that must not regress. Each was fought for once already.
   re-root mechanism already drops the engine and re-registers the project through the launch hooks
   — a `restart()` that rebuilt a live store in place would be the second way to configure an engine
   that the rule above exists to prevent.
+- **A setting the user edits through more than one gesture gets one funnel, and the policy lives
+  next to the resolution it has to agree with.** Settings ▸ Keymap (P4-08) changes a binding four
+  ways — capture a press, reset a row, take a chord off another command, reset every row — and all
+  of them are `keymap::propose` then `keymap::apply` over a `Rebind`. The check is in
+  **strata-core**, beside `validate_bind`, because a hand-edited `config.json` reaches the same
+  rules through `effective_chord`, and a second copy in the pane would be the copy that drifts. Two
+  consequences worth keeping. **A reset is a proposal like any other**: a command's default chord can
+  have been taken while it was away (move Save query off ⌘S, bind Find to the ⌘S that freed up, then
+  reset Save query), so a reset that just dropped the override would create the duplicate the whole
+  policy exists to prevent. And a *steal* is expressed as the bindings it actually changes — unbind
+  **every** holder, bind the asker — rather than as one write, because a write that only recorded the
+  winner would leave two commands claiming one chord for `resolve` to settle silently by table order,
+  and freeing only the *first* holder does the same for a chord a hand-edited config had already
+  duplicated. The same rule reaches the display: an override is only "custom" if it **takes effect**,
+  so an override of a fixed command is not (`effective_chord` ignores it, and a badge saying
+  otherwise would sit on a row whose reset control is gated off), and a bind to a command's own
+  default clears the entry instead of storing a copy of it. One predicate behind the badge and the
+  control, or a row wears a mark it has no way to remove.
+- **A menubar accelerator is state, not decoration — and it must be disarmed while a chord is being
+  captured.** The OS resolves an accelerator *before* the window sees the key, which makes both
+  halves of this sharper than they look. A stale accelerator does not merely show the wrong text: it
+  keeps firing on a chord the user rebound away, and swallows the new one. So `MenuHandles` keeps
+  every accelerator-carrying item and `sync_chords` re-applies all of them off
+  `ConfigChan::Settings` from the focused window (the same effect that points the File menu at it) —
+  and the list is a **destructure** of `MenuChords`, so a new menu command that forgets it is a build
+  error, for the reason `settings_merge!` is a macro. The capture case is the same fact pointed the
+  other way: with the menubar armed, pressing ⌘C to *bind* it copies instead, and ⌘Z ⌘X ⌘C ⌘V ⌘A ⌘O
+  ⌘Q ⌘, are most of what anyone reaches for, so `suspend_accelerators` holds them off for the
+  capture's lifetime. A held flag, not a `sync_chords(&Default)` call — otherwise the routine sync
+  re-arms the menubar underneath the capture.
+- **An app-wide flag held to protect one window's listener is released on losing focus, not only on
+  finishing.** The half of the rule above that was wrong first time: the Keymap pane suspended the
+  menubar on "a capture is in progress" alone, and Settings is deliberately *not* modal, so clicking
+  the project window behind it mid-capture left the flag stuck — every gated menu item lost its
+  chord *and* its enabled state, in every window, until that capture was finished or the window
+  closed. The condition has to name both halves ("a capture is in progress **and** my window is
+  focused"), which is not defensive bookkeeping but the actual invariant: the listener being
+  protected is that window's and cannot fire while another has the keys, so there is nothing to
+  protect. Generally — when a flag's *scope* is wider than the state that justifies it, its
+  condition must include whatever makes that state reachable, and the release path has to fire on
+  every way of leaving it (`use_drop` covers a window that goes; only focus covers one that stays
+  open behind another).
 - **A name two surfaces have to agree on is generated from one table, not typed twice — and
   navigating to something is never editing it.** The Settings search (P4-09) indexes a setting by an
   `Anchor` *variant*: one table generates the enum, the list of every anchor, and each setting's
@@ -364,7 +406,17 @@ Things that must not regress. Each was fought for once already.
   but the test is whether the gap is in the *component*: what a table has no opinion about (which
   row is selected, what goes between two rows) stays composed in the app. And the other way round —
   a settings list is **not** a results grid, so it gets no zebra: banding is a reading aid for
-  dense data, and on a form it only competes with the one row state the surface has. And don't restate at a call site what a variant already
+  dense data, and on a form it only competes with the one row state the surface has. The Keymap
+  grid (P4-08) is the second table in that window and takes the same answer to every one of these
+  questions, down to the row height — one table dress per window, not one per pane.
+  A **dashed** edge was the one thing neither table could get from anywhere: torin fills the region
+  between an outer and an inner rounded rect, and a filled region cannot carry a pattern, so
+  `BorderStyle::Dashed` strokes the outline's centreline with a Skia dash effect instead
+  (`Border::dashed`, `Button::border_style` — the style only, so a dashed button keeps its variant's
+  state-driven fill). Two named costs, because a stroke has one width and no squircle: a dashed
+  border uses `width.top` for all four sides and ignores `CornerRadius::smoothing`. It is a fork
+  addition rather than a solid approximation because the dash is the whole message — it says the
+  slot is *open*, which is exactly what distinguishes "Add shortcut" from a bound control. And don't restate at a call site what a variant already
   resolves: `Button::new().filled()` *is* accent-over-inverse-text, so a `theme_colors` override
   naming those same two slots is a second copy of them. Override only for a genuinely different
   tone (the destructive action reading `cancel_button`).

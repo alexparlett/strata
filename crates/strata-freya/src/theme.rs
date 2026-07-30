@@ -415,13 +415,15 @@ strata_components! {
     // window's, so they aren't tokens here. The `table_*` pair is the Engine pane's properties
     // grid (P4-07): its surface, box border, row rule and radius are Freya's builtin `table`
     // theme below, and these two are what a table cannot have an opinion about, because *which*
-    // row is selected is the caller's answer.
+    // row is selected is the caller's answer. The `keycap_*` trio and `slot_border_fill` are the
+    // Keymap pane's (P4-08): a chord's key caps, and the dashed edge of a row with no chord.
     "settings" => SettingsThemePreference {
         background, nav_background, border_fill, icon_color, icon_background, group_color,
         chevron_color, item_color, item_active_background, item_active_color, hint_color,
         card_background, card_border_fill, card_hover_border_fill, card_divider_fill,
         selected_color, badge_builtin_color, badge_user_color,
         table_head_background, table_selection_background,
+        keycap_background, keycap_border_fill, keycap_color, slot_border_fill,
     },
     // The Export window: its body, the raised surface its inset blocks sit on (format cards,
     // text fields, the preview, the two transfer panes), the rules and control edges, the
