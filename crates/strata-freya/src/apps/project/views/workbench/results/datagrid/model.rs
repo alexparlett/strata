@@ -38,7 +38,7 @@ impl KindColors for Kind {
 pub struct GridData {
     pub columns: Vec<ColumnInfo>,
     pub rows: Vec<Vec<Cell>>,
-    /// The page's typed source — `cell_pretty_json` for the nested-cell view (P2-12); Copy /
+    /// The page's typed source — `cell_preview_json` for the nested-cell view (P2-12); Copy /
     /// Export later. A find-filtered page keeps the **unfiltered** page batch: map a filtered
     /// row index back through `row_nums` (see `cell_view::page_batch_row`).
     pub batch: RecordBatch,

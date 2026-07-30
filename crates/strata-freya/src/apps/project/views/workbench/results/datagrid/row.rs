@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use freya::prelude::*;
 
-use strata_core::engine::serialize::cell_pretty_json;
+use strata_core::engine::serialize::cell_preview_json;
 use strata_model::Kind;
 
 use super::cell::Cell;
@@ -130,9 +130,11 @@ impl Component for Row {
             let w = self.widths.read().get(ci).copied().unwrap_or(self.seed_w);
             let cell = &self.data.rows[index][ci];
             // Nested non-null value → double-click opens the cell view (P2-12). The
-            // handler snapshots the pretty JSON **at press time** (the canvas semantics —
-            // a later filter/page shift can't retarget an open modal), reading the typed
-            // value from the page batch (a filtered page maps back through `row_nums`).
+            // handler snapshots the JSON **at press time** (the canvas semantics — a later
+            // filter/page shift can't retarget an open modal), reading the typed value from
+            // the page batch (a filtered page maps back through `row_nums`). The read is a
+            // bounded preview (P2-24): a press is on the UI thread like a render, so a
+            // whole-value serialization here froze the window just the same.
             let nested = matches!(col.kind, Kind::Struct | Kind::List | Kind::Map) && !cell.null;
             let on_nested = nested.then(|| {
                 let data = self.data.clone();
@@ -143,7 +145,7 @@ impl Component for Row {
                 EventHandler::new(move |_: Event<PointerEventData>| {
                     let row =
                         page_batch_row(row_nums.as_ref().map(|n| n.as_slice()), row_base, index);
-                    let json = cell_pretty_json(&data.batch, ci, row)
+                    let json = cell_preview_json(&data.batch, ci, row)
                         .unwrap_or_else(|| data.rows[index][ci].text.clone());
                     cell_view.set(Some(CellValue {
                         name: name.clone(),

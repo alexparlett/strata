@@ -163,7 +163,7 @@ Things that must not regress. Each was fought for once already.
   snapshot before the grid sees a row, which makes the snapshot's format a constraint on the whole
   type system. Parquet was that format and is narrower than Arrow: it cannot write a union at all
   (`arrow_to_parquet_schema` **panics**, ARROW-8817) nor a zero-field struct, so results were
-  coerced on the way in — and the record view, `cell_pretty_json` and JSON/CSV export all read the
+  coerced on the way in — and the record view, `cell_preview_json` and JSON/CSV export all read the
   *re-read* snapshot, so they read the coerced form, not what the query produced. Each new exotic
   type meant another arm in a gate that was twice found incomplete. IPC round-trips anything the
   engine emits, and **compressed it is the same size** (measured over 1M–20M rows in three shapes:
@@ -175,6 +175,43 @@ Things that must not regress. Each was fought for once already.
   snapshot's lifetime rather than in a footer or a sidecar. What remains of the old gate is
   `json_unions_as_text`, which is now **presentation, not storage**: `json_get`'s union renders as
   `{str=x}` and nobody typing `content -> 'type'` wants to read that.
+- **A view of a value is bounded where the value is *encoded*, never afterwards — and it expands
+  breadth-first.** The record view opened on a `config.json` row (19 struct columns, 241,425 nested
+  fields) froze the window for a second or two, and the freeze was the **materialization**, not the
+  formatting: bounding the output of a whole-value serializer changes what is displayed and none of
+  what is paid, so `cell_preview_json` (P2-24) walks the Arrow arrays and never builds the value at
+  all. Narrowing a list to one index is an O(1) slice, so a container can be **measured without
+  being read** — which is what makes a count (`[ … 5171 items … ]`) cheaper than a truncation.
+  Four things generalise, and the first two were each got wrong once. **Collapse the value, not its
+  parent** — a boundary that renders `"contentBlocks": { … 19311 keys … }` throws away the one level
+  the reader is looking at, where IntelliJ shows every key at that level with each *value* collapsed
+  (`"0004d823-…": { 2 keys },`). So a container's entries are **sampled** — the first N, then
+  `… 19296 more keys` — and only what hangs below them is counted. **The depth is fixed and the
+  budget is a backstop, never a target to fill**: searching for the deepest level that fits sounds
+  thrifty and is exactly wrong, because on a wide document the deepest *uniform* level that fits is
+  a narrow one, so the preview walks five levels down one branch and never shows the second key.
+  Sample width decays with depth (wide at the top, `PREVIEW_ITEMS_MIN` at the bottom) so the budget
+  buys breadth where a reader scans. And an **empty container is its own summary** — `{ … 0 keys … }`
+  is a count of nothing standing where `{}` belongs, so the emptiness test comes before the depth
+  test.
+  **Reuse the encoder library's own per-index primitive for the leaves** (arrow-json's public
+  `make_encoder` + `NullableEncoder::encode`) instead of re-rendering scalars by hand, or a preview
+  and a copy of the same decimal eventually disagree. **Clip the one unbounded leaf before encoding
+  it** — a 30MB string measured by encoding it costs exactly what the budget exists to avoid.
+  And the shallowest render is a **floor that ignores the budget**, because a budget too small for
+  the count marker should still leave something to read. Measured on the file that prompted it: all
+  19 columns bounded is 1.6ms/22KB, the same row unbounded is 1.29s/128MB — the JSON of one row is
+  twice the file, which is why bounding it *afterwards* was never going to work. The corollary on
+  the UI side is the plain version of the same rule: a `render` body (or a press handler, which is
+  the same thread) never serializes a whole value — it reads a cache keyed on what the value depends
+  on, and **that cache is synchronous, not `use_memo`** (`Runner::handle_events` returns the moment
+  a scope is dirty and only polls tasks once none is, so a `use_memo` paints its *previous* value
+  for a frame — `record_view.rs`'s `PreviewMemo` and `find.rs`'s `PageMemo` are the same answer to
+  the same question). And the leaf-nullity trap generalises past arrow: **a library's "is this
+  null?" is the one the library's own writer asks**, not the one the data structure exposes — an
+  all-null column infers as `DataType::Null`, whose nulls are *logical*, so `Array::is_null` says
+  false for every index and `NullEncoder::encode` is `unreachable!()`. Found by running the real
+  file, like every `json_poly` rule.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the

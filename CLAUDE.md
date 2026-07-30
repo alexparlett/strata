@@ -486,6 +486,14 @@ src/apps/project/                the project window (Valin-shaped)
                                  grid / explain / error) off the workbench's `request` slot
         datagrid/                mod, header, cell, model  (sticky typed header, virtualized cells,
                                  per-column resize + double-click autofit)
+        record_view.rs           the whole-row modal (P2-10) and the nested-value modal (P2-12).
+        cell_view.rs             Their JSON blocks are `cell_preview_json`'s **bounded** previews
+                                 (P2-24) — the record view computes the row's in one memo, the grid
+                                 one per double-click, and neither serializes a whole value on the
+                                 UI thread. The complete value is a Copy away (`copy.rs`)
+        copy.rs                  the shared results-copy path (P2-11) — the *unbounded*
+                                 serializers, off the render thread, where the whole value is asked
+                                 for
         selection.rs             cell/row/column selection model + SelCtl controller
         find.rs                  find-in-results (P2-09): FindState + the page-local filter
         toolbar.rs, status_bar.rs, running.rs, explain_plan.rs, empty.rs, error.rs

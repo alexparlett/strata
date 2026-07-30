@@ -9,18 +9,25 @@
 //! prev/next re-point the index within the page (clamped at its edges, per the task), and the
 //! body always renders the current page's row — the canvas's `rowAt(gi)` semantics.
 //!
+//! A nested field's JSON block is a **bounded preview** (`cell_preview_json`, P2-24), built once
+//! per row through this module's [`PreviewMemo`] rather than on every render: a document-shaped
+//! row holds hundreds of thousands of nested fields, and serializing every column of one on the
+//! render thread is what used to freeze the window for a second or two on open. The complete
+//! value stays a copy away.
+//!
 //! Header per the canvas: `Row n of total` + **Copy row as JSON** / **Copy row as CSV** +
 //! divider + prev / next + ghost close. The copy buttons route through the shared
 //! results-copy path (P2-11, the sibling `copy` module → core serializers → the window's
 //! Freya clipboard): CSV is the header + this batch row through `write_selection`, JSON the
 //! bare `{column: value}` row object (`row_pretty_json`) — no local clipboard wiring here.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use freya::components::{define_theme, get_theme, use_theme, Button, ScrollView};
 use freya::prelude::*;
 
-use strata_core::engine::serialize::cell_pretty_json;
+use strata_core::engine::serialize::cell_preview_json;
 use strata_model::Kind;
 
 use super::cell_view::page_batch_row;
@@ -93,6 +100,62 @@ impl RecordView {
     }
 }
 
+/// The row's nested-column previews, cached on the row they describe (P2-24). One entry: a
+/// prev/next costs one pass over the row's nested columns, and every other reason this component
+/// re-renders (hover, theme, a clamp at the page edge) costs nothing.
+///
+/// Why not Freya's `use_memo`, as `find.rs`'s `PageMemo` asks the same question: it settles
+/// **asynchronously**. `Runner::handle_events` returns the moment a scope is dirty and only polls
+/// tasks once none is, so the render that follows a prev/next would paint the *previous* row's
+/// JSON for a frame. A value derived during render needs a synchronous cache.
+///
+/// The entry holds the `Rc<GridData>` it read, so the identity test is `Rc::ptr_eq` — exact, and
+/// with no address to be reused while the cache is the one holding it alive.
+#[derive(Clone)]
+struct PreviewMemo(Rc<RefCell<Option<Previews>>>);
+
+struct Previews {
+    data: Rc<GridData>,
+    row: usize,
+    /// One slot per column, in schema order: the preview for a nested column, `None` for a
+    /// scalar one or a value that could not be rendered (the caller falls back to its cell text).
+    json: Rc<Vec<Option<String>>>,
+}
+
+/// Hook: this record view's preview cache. One per mount, so opening the modal starts empty.
+fn use_preview_memo() -> PreviewMemo {
+    use_hook(|| PreviewMemo(Rc::new(RefCell::new(None))))
+}
+
+impl PreviewMemo {
+    fn row(&self, data: &Rc<GridData>, row: usize) -> Rc<Vec<Option<String>>> {
+        let mut slot = self.0.borrow_mut();
+        if let Some(hit) = slot
+            .as_ref()
+            .filter(|p| p.row == row && Rc::ptr_eq(&p.data, data))
+        {
+            return hit.json.clone();
+        }
+        let json = Rc::new(
+            data.columns
+                .iter()
+                .enumerate()
+                .map(|(ci, col)| {
+                    matches!(col.kind, Kind::Struct | Kind::List | Kind::Map)
+                        .then(|| cell_preview_json(&data.batch, ci, row))
+                        .flatten()
+                })
+                .collect::<Vec<_>>(),
+        );
+        *slot = Some(Previews {
+            data: data.clone(),
+            row,
+            json: json.clone(),
+        });
+        json
+    }
+}
+
 impl Component for RecordView {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, RecordViewThemePreference, "record_view");
@@ -120,6 +183,10 @@ impl Component for RecordView {
             self.row_base,
             row,
         );
+
+        // Every nested column's JSON preview for *this* row — built when the row changes, not on
+        // every render (P2-24).
+        let previews = use_preview_memo().row(&self.data, batch_row);
 
         // ── header: label · copy JSON/CSV · divider · prev/next · ghost close ────────────
         // A copy button: outline dress (the theme's ghost-button recipe), copy glyph + label,
@@ -235,7 +302,10 @@ impl Component for RecordView {
             // (capped at 190px, per the canvas); a scalar renders as one wrapped mono run —
             // nulls in the dimmed tone, everything else in the value colour.
             let value: Element = if nested {
-                let json = cell_pretty_json(&self.data.batch, ci, batch_row)
+                let json = previews
+                    .get(ci)
+                    .cloned()
+                    .flatten()
                     .unwrap_or_else(|| cell.text.clone());
                 rect()
                     .width(Size::flex(1.))
