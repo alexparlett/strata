@@ -114,7 +114,7 @@ impl Component for EditorToolbar {
         // Every tool wears its comp `title=` as a tooltip; Save's carries the effective
         // save chord (reactive — a rebind repaints it).
         let tip = |title: String, button: Button| {
-            TooltipContainer::new(Tooltip::new(title))
+            TooltipContainer::new(Tooltip::new_text(title))
                 .position(AttachedPosition::Bottom)
                 .child(button)
         };

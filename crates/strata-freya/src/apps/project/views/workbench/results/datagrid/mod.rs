@@ -326,10 +326,10 @@ impl Component for DataGrid {
         let row_base = self.row_base;
         let theme_b = theme.clone();
         let body_data = (data.clone(), self.row_nums.clone(), zebra, cell_pad);
-        let body = VirtualScrollView::new_with_data(body_data, move |index, page| {
+        let body = VirtualScrollView::new_with_data(body_data, move |item, page| {
             let (data, row_nums, zebra, cell_pad) = page;
             Row {
-                index,
+                index: item.index,
                 data: data.clone(),
                 row_nums: row_nums.clone(),
                 row_base,

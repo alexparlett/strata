@@ -796,8 +796,12 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   dependency — so `--all` reformats the fork, whose `rustfmt.toml` our stable toolchain does not
   apply. Measured once: 344 files, 4006 deletions, none intended, and invisible in
   `git submodule status` because the gitlink never moves. Use `.claude/skills/fmt`, which names the
-  three it owns explicitly (and fails closed on a stale list — `cargo fmt -p` errors out entirely
-  on a non-member, so a wrong list formats *nothing*).
+  four it owns explicitly (and fails closed on a stale list — `cargo fmt -p` errors out entirely
+  on a non-member, so a wrong list formats *nothing*). `strata-code-editor` is one of the four as of
+  the 2026-07 freya update: it was held out to keep a `diff -u` against upstream legible, and that
+  stopped being how anyone reads the crate once it grew to ~2x upstream's size with `completion.rs`
+  having no upstream counterpart at all. What is still tracked is upstream's *changes*, read as fork
+  commits. `crates/freya` stays out, unchanged.
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify

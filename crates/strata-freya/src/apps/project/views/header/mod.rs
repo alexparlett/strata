@@ -189,7 +189,7 @@ impl Component for HeaderBar {
                 .child(Icon::new(icon).size(size))
         };
         let tip = |title: String, button: Button| {
-            TooltipContainer::new(Tooltip::new(title))
+            TooltipContainer::new(Tooltip::new_text(title))
                 .position(AttachedPosition::Bottom)
                 .child(button)
         };

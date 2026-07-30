@@ -171,7 +171,7 @@ impl Component for RowAction {
         let mut hovered = use_state(|| false);
         let on_press = self.on_press.clone();
 
-        TooltipContainer::new(Tooltip::new(self.title.clone()))
+        TooltipContainer::new(Tooltip::new_text(self.title.clone()))
             .position(AttachedPosition::Bottom)
             .child(
                 rect()

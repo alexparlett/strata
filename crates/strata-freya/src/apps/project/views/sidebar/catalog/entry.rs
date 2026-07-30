@@ -69,7 +69,7 @@ const PROFILING: &str = "Profiling…";
 /// A status glyph wearing its message as a tooltip. Dropped below, like the rest of the app's
 /// overlays, so it can't cover the row above it in a dense list.
 fn tip(message: impl Into<std::borrow::Cow<'static, str>>) -> TooltipContainer {
-    TooltipContainer::new(Tooltip::new(message)).position(AttachedPosition::Bottom)
+    TooltipContainer::new(Tooltip::new_text(message)).position(AttachedPosition::Bottom)
 }
 
 /// The row's **⋮ trigger** — the canvas's own affordance, and the menu's discoverable half: the
@@ -81,7 +81,7 @@ fn tip(message: impl Into<std::borrow::Cow<'static, str>>) -> TooltipContainer {
 /// The menu is built lazily, per press: its labels are a snapshot of the moment it opens (see
 /// `menu.rs`), so building one per render would be both wasteful and wrong.
 fn actions_button(menu: impl Fn() -> Menu + 'static) -> impl IntoElement {
-    TooltipContainer::new(Tooltip::new("Actions"))
+    TooltipContainer::new(Tooltip::new_text("Actions"))
         .position(AttachedPosition::Bottom)
         .child(
             Button::new()
@@ -90,7 +90,7 @@ fn actions_button(menu: impl Fn() -> Menu + 'static) -> impl IntoElement {
                 .height(Size::px(ACTIONS_SIZE))
                 .on_press(move |e: Event<PressEventData>| {
                     e.stop_propagation();
-                    ContextMenu::open_from_event(&e, menu());
+                    ContextMenu::open(menu());
                 })
                 .child(Icon::new(IconName::Dots).size(15.)),
         )
@@ -318,8 +318,8 @@ impl Component for EntryRow {
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
-            .on_context_menu(move |e: Event<PressEventData>| {
-                ContextMenu::open_from_event(&e, menu_for_row());
+            .on_context_menu(move |_: Event<PressEventData>| {
+                ContextMenu::open(menu_for_row());
             })
             // Its own slot, before the registration status: a scan is asked for from *here* (the
             // row's menu) and can run for minutes with the inspector closed, so the row is the
@@ -386,7 +386,6 @@ impl Component for EntryRow {
                                             self.expanded_cols,
                                             self.theme.clone(),
                                         )
-                                        .into()
                                     })),
                             )
                             .into_element(),
@@ -615,7 +614,7 @@ impl Component for SavedQueryRow {
             // the same action the menu's item runs, not a second copy of it.
             .on_press(move |_| open_saved_query(&actions, id))
             .on_context_menu(move |e: Event<PressEventData>| {
-                ContextMenu::open_from_event(&e, menu_for_row());
+                ContextMenu::open(menu_for_row());
             })
             .child(
                 Icon::new(IconName::Brackets)

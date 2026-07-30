@@ -86,7 +86,7 @@ impl Component for EmptyState {
             );
 
         let reopen_btn = last_closed.map(|name| {
-            TooltipContainer::new(Tooltip::new(format!("Reopen {name}")))
+            TooltipContainer::new(Tooltip::new_text(format!("Reopen {name}")))
                 .position(AttachedPosition::Top)
                 .child(
                     Button::new()

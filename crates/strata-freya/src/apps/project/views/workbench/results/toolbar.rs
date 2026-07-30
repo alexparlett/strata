@@ -83,7 +83,7 @@ impl Component for ResultsToolbar {
         // Every tool wears its comp `title=` as a tooltip; Find's carries the effective find
         // chord (reactive — a rebind repaints it), the popover's ✕ the effective Esc.
         let tip = |title: String, button: Button| {
-            TooltipContainer::new(Tooltip::new(title))
+            TooltipContainer::new(Tooltip::new_text(title))
                 .position(AttachedPosition::Bottom)
                 .child(button)
         };

@@ -195,7 +195,7 @@ impl Component for Row {
                 .child(Eyebrow::new(self.label.clone()).color(theme.label_color))
                 .maybe_child(required)
                 .maybe_child(self.hint.clone().map(|hint| {
-                    TooltipContainer::new(Tooltip::new(hint))
+                    TooltipContainer::new(Tooltip::new_text(hint))
                         .position(AttachedPosition::Top)
                         .child(
                             Icon::new(IconName::Info)

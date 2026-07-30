@@ -46,7 +46,6 @@ impl Component for RequestKeepers {
                 key: DiffKey::None,
             }
             .key(id)
-            .into()
         }))
     }
 }

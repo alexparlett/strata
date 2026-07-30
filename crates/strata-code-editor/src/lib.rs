@@ -25,43 +25,21 @@ pub mod prelude {
     pub use ropey::Rope;
 
     pub use crate::{
-        completion::{
-            CompletionItem,
-            CompletionItemKind,
-            CompletionRequest,
-        },
-        constants::{
-            BASE_FONT_SIZE,
-            MAX_FONT_SIZE,
-        },
-        editor_data::{
-            CodeEditorData,
-            Decoration,
-            DecorationSeverity,
-        },
+        completion::{CompletionItem, CompletionItemKind, CompletionRequest},
+        constants::{BASE_FONT_SIZE, MAX_FONT_SIZE},
+        editor_data::{CodeEditorData, Decoration, DecorationSeverity},
         editor_line::EditorLineUI,
         editor_theme::{
-            CodeEditorThemeExt,
-            EditorSyntaxTheme,
-            EditorSyntaxThemePartial,
-            EditorSyntaxThemePartialExt,
-            EditorSyntaxThemePreference,
-            EditorTheme,
-            EditorThemePartial,
-            EditorThemePartialExt,
-            EditorThemePreference,
+            CodeEditorThemeExt, EditorSyntaxTheme, EditorSyntaxThemePartial,
+            EditorSyntaxThemePartialExt, EditorSyntaxThemePreference, EditorTheme,
+            EditorThemePartial, EditorThemePartialExt, EditorThemePreference,
         },
         editor_ui::CodeEditor,
         languages::EditorLanguage,
         metrics::EditorMetrics,
         syntax::{
-            InputEditExt,
-            RopeChunkIter,
-            RopeTextProvider,
-            SyntaxBlocks,
-            SyntaxHighlighter,
-            SyntaxLine,
-            TextNode,
+            InputEditExt, RopeChunkIter, RopeTextProvider, SyntaxBlocks, SyntaxHighlighter,
+            SyntaxLine, TextNode,
         },
     };
 }

@@ -244,7 +244,7 @@ impl Component for Drawer {
                             .spacing(2.)
                             .maybe_child(clear)
                             .child(
-                                TooltipContainer::new(Tooltip::new(if expanded {
+                                TooltipContainer::new(Tooltip::new_text(if expanded {
                                     "Restore"
                                 } else {
                                     "Expand"

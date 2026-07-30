@@ -96,7 +96,7 @@ impl Component for ToolButton {
         // extension and `Button` is a component, so naming it belongs on `Button` in the fork
         // (AGENTS.md §6) rather than on a wrapper rect here, whose name would not necessarily
         // reach the focusable node.
-        TooltipContainer::new(Tooltip::new(self.label))
+        TooltipContainer::new(Tooltip::new_text(self.label))
             .position(AttachedPosition::Top)
             .child(button)
     }

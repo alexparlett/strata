@@ -286,7 +286,7 @@ impl Component for SnapshotChip {
         });
         let ago = ago_label(now().saturating_duration_since(self.settled));
 
-        TooltipContainer::new(Tooltip::new(
+        TooltipContainer::new(Tooltip::new_text(
             "Results are a snapshot taken when the query last ran — not live files. Refresh to re-run.",
         ))
         .position(AttachedPosition::Top)
@@ -469,7 +469,6 @@ impl Component for PagerCluster {
                             label
                         }
                     })
-                    .into()
             }));
 
         // ── nav buttons + page input ──────────────────────────────────────────────────────
@@ -478,7 +477,7 @@ impl Component for PagerCluster {
         // `disabled_*` at-a-bound tint included. Each wears its comp `title=` as a tooltip,
         // opening upward — the bar sits on the window's bottom edge.
         let nav = move |title: &'static str, icon: IconName, enabled: bool, target: usize| {
-            TooltipContainer::new(Tooltip::new(title))
+            TooltipContainer::new(Tooltip::new_text(title))
                 .position(AttachedPosition::Top)
                 .child(
                     Button::new()

@@ -202,7 +202,7 @@ impl Component for ProjectMenu {
             );
 
         Attached::new(
-            TooltipContainer::new(Tooltip::new("Switch project"))
+            TooltipContainer::new(Tooltip::new_text("Switch project"))
                 .position(AttachedPosition::Bottom)
                 .child(trigger),
         )
