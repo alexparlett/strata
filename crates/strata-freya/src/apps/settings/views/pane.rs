@@ -10,10 +10,12 @@
 //! is deliberately plain: the shell is what P4-03 delivers, and dressing an empty page up
 //! would misrepresent it.
 
+use freya::components::{use_scroll_controller, ScrollConfig};
 use freya::prelude::*;
 use freya::router::*;
 
 use crate::apps::settings::{category, Route, SettingsThemePartial, SettingsThemePreference};
+use crate::components::form::RevealScroll;
 use crate::components::typography::{Control, Prose};
 
 /// The pane's inset (canvas `padding: var(--sp-6)`).
@@ -74,6 +76,11 @@ impl Pane {
 impl Component for Pane {
     fn render(&self) -> impl IntoElement {
         let route = use_route::<Route>();
+        // The frame a searched-for row scrolls itself into (P4-09). Created and provided whichever
+        // shape this pane takes — a hook cannot be conditional, and an unattached controller has no
+        // viewport, so on a `filled` pane a reveal is the flash and nothing else.
+        let controller = use_scroll_controller(ScrollConfig::default);
+        use_provide_context(move || RevealScroll::new(controller));
 
         let body = rect()
             .width(Size::fill())
@@ -100,7 +107,7 @@ impl Component for Pane {
                 .height(Size::fill())
                 .child(body)
                 .into_element(),
-            false => ScrollView::new()
+            false => ScrollView::new_controlled(controller)
                 .width(Size::flex(1.))
                 .height(Size::fill())
                 .child(body)

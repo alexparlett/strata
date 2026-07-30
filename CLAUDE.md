@@ -206,8 +206,15 @@ src/components/                  shared component library
                                  the form's `Variant`: `Fields` (eyebrow label + ⓘ tooltip + gaps
                                  — export, config modal) or `Preferences` (title + inline subtext
                                  + rules — the Settings panes). `.trailing()` puts the control at
-                                 the row's end, `.on_press()` makes the label activate it. Plus
-                                 `Note`, a statement where a control would go
+                                 the row's end, `.on_press()` makes the label activate it,
+                                 `.anchor()` names it so a `Reveal` can jump to it. Plus `Note`,
+                                 a statement where a control would go
+    reveal.rs                    P4-09 — **a row you can jump to**: `Reveal`, the one-anchor slot
+                                 a surface asks through (window-lived: it is written before the
+                                 page holding the row exists), and `RevealScroll`, the frame the
+                                 row scrolls itself into (page-lived — whatever owns the
+                                 `ScrollView` provides it). Both optional; a form with neither is
+                                 a form of ordinary rows
     field.rs                     `ValueField` (the mono box: stated height, length cap enforced
                                  on the state, the caller's width on the *wrapper* so a relative
                                  one is a flex child of the row) + `NumberField` (bounded,
@@ -224,15 +231,29 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
   mod.rs                         root + window config + the `settings` component theme, the
                                  **freya-router** `Route` per category, `SettingsCtx` (the draft ·
                                  its **seed** · Apply · the live-theme mirror), and the category
-                                 panes still awaiting their task (P4-07 / P4-08). Apply commits a
+                                 pane still awaiting its task (P4-08). Apply commits a
                                  per-field diff of draft-vs-seed (`Settings::merge_onto`), so a
                                  setting another window wrote meanwhile survives it; `dirty()` is
                                  the same comparison, which is why it reads no config state
   model.rs                       the nav tree: CATEGORIES + their groups + breadcrumbs
                                  (unit-tested — one category per route, groups contiguous)
+  search.rs                      P4-09 — **the settings index**: what the nav's search box filters.
+                                 One table generates the `Anchor` enum, every anchor, and each
+                                 setting's route/label/subtext/keywords — and the panes build their
+                                 rows from it (`Anchor::row()`), so a setting has one name and a
+                                 typo in an anchor is a build error rather than a jump that lands
+                                 nowhere. A category is never spelled out here (it resolves through
+                                 `model`'s `category`), and the engine's properties are indexed off
+                                 `ENGINE_KEYS` entire rather than a chosen few. Unit-tested
   views/                         chrome (the router layout) · title_bar · nav · pane · footer
                                  (the panes' rows are `components::form` — P4-05 moved the row
-                                 vocabulary there rather than keeping a settings-only copy)
+                                 vocabulary there rather than keeping a settings-only copy; P4-09
+                                 gave `Pane` the scroll controller a revealed row reveals into)
+    nav.rs                       the category rail — and P4-09's **search box** above it, which
+                                 *replaces* the tree while it has a query (a hit can be a property
+                                 on a page the tree only names). `follow` is the one place a jump
+                                 happens, for the pressed row and for Enter, and it only ever
+                                 navigates: a property with no override gets no row made for it
     theme.rs                     P4-04 — the Appearance pane: Sync-with-OS + the theme grid, both
                                  `Setting`s. Each card's thumbnail is painted from **that** theme's
                                  own sheet slots, so a user theme previews with nothing authored
@@ -564,6 +585,23 @@ retire the table mid-`COPY`. **NULL partition values are refused, not warned abo
 `snapshot_writer_props` sets `EnabledStatistics::Chunk` explicitly. And the form vocabulary it
 grew — the labelled row, the mono value box, the bounded number — went to
 `components::form` with P4-05 rather than staying the export's own.
+
+**P4-09 (Settings search)** is ✅, and settles that **a setting's name has one home**. The index
+(`apps/settings/search.rs`) is one table generating the `Anchor` enum, the list of every anchor, and
+each setting's route / label / subtext / keywords — and the panes build their rows from it
+(`Anchor::row()`), because the failure it rules out is invisible: an anchor spelled one way in the
+index and another in the pane is a jump that navigates and then singles nothing out, and only a
+person trying it would ever know. The category is never restated either — a hit resolves its page
+through `model`'s `category`. Three more things it settled. The engine's properties are indexed off
+**`ENGINE_KEYS` entire** rather than the canvas's hand-picked eleven, so a subset can't drift from
+the catalogue. **Following a hit is navigation and never an edit** — the first cut added a pre-filled
+row for a property with no override (the canvas's "search doubles as add a known property") and was
+rejected: a named row with an empty value still projects into the draft, so merely following a result
+left Apply live for an override nobody asked for. And a **revealed row belongs to the form, not to
+this window**: `Row::anchor` names it, `components::form::reveal` carries the ask (a window-lived
+slot, because it is written before the target's page has mounted, plus the page-lived scroll frame),
+and the row scrolls itself in and flashes once — the app's first use of `freya::animation` and of
+`ScrollController::scroll_to_item` outside the tab strip.
 
 ---
 

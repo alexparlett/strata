@@ -26,6 +26,14 @@ once, for the whole struct — so a page must never persist a field itself. The 
 scroll frame are the shell's; the pane renders content only, and reads its colours from the
 `settings` component theme (`hint_color` is a setting's subtext).
 
+**And the search index has a placeholder for you** (P4-09). `apps/settings/search.rs`'s `PAGES`
+carries one "Keyboard shortcuts" entry pointing at this route, purely so a query for "shortcut"
+answers with something while the search box is hiding the category rail. When this pane lands, index
+what it actually holds — a command is findable by its own name, not by the page's — and drop the page
+entry. A command row is not a `components::form::Row`, so it is probably a new `Hit` kind rather than
+an `Anchor`; the flash/scroll half is `Row::anchor`'s and would have to be earned separately if a
+captured row wants it.
+
 ## Build (DEV_TASKS W4)
 - Interactive rows from the real command table (the P2-20 set): **click-to-capture**, a **conflict box**
   (Reassign steals + unbinds the other / Cancel), a **Custom** badge, per-row **reset ↺**, **Add
