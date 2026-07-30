@@ -526,6 +526,24 @@ impl Engine {
             .map_err(|e| format!("page task failed: {e}"))?
     }
 
+    /// Does `snapshot` still exist to be read?
+    ///
+    /// The one honest way to tell "your result was replaced" from a real read failure. A
+    /// retired snapshot's table is deregistered, so [`fetch_page`](Engine::fetch_page)
+    /// answers with DataFusion's own "table not found" prose — and matching that prose at a
+    /// call site is exactly the copy-of-a-rule this crate keeps refusing to hand out
+    /// (`stopped_on_purpose` is the same lesson). A reader that outlived its snapshot asks
+    /// **after** its read fails, so the answer cannot race the dispatch that retired it.
+    ///
+    /// [`Lifecycle::stats`] is the register consulted because it has exactly a snapshot's
+    /// lifetime by construction — inserted when the write pass settles, removed by
+    /// [`retire_now`](Engine::retire_now), which every retire of a handed-out snapshot goes
+    /// through. A snapshot whose retire is **deferred** behind a pin is still there to read,
+    /// and still answers `true`, which is the same fact from the reader's side.
+    pub fn snapshot_live(&self, snapshot: SnapshotId) -> bool {
+        self.lifecycle.lock().unwrap().stats.contains_key(&snapshot)
+    }
+
     /// Run an `EXPLAIN [ANALYZE]` statement for `ws` — a parsed plan tree, no snapshot.
     /// Supersedes the workspace's in-flight run (mutually exclusive, like a re-run) but
     /// leaves its settled snapshot alone (spec §4: explains materialize nothing).

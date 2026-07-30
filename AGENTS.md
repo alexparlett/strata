@@ -247,6 +247,26 @@ Things that must not regress. Each was fought for once already.
   18ms, and `column_info` makes it per field all the way down, i.e. quadratic in the schema. Matching
   the composite variants by name took it to 3.8µs and ~19% off every query on that file. Leaf variants
   keep the generic path because their `Debug` is a single term.
+- **An agent's tools are the app's own semantics, and the gate in front of them runs before
+  dispatch.** `strata-agent` (AA-02) is the read-only vocabulary, frontend-agnostic by
+  construction — no Freya crate in its graph, which is what lets one surface serve the MCP
+  server, the headless host and, later, the chat pane rather than each re-implementing it.
+  Four rules it holds, each the reason something above is not duplicated. **The policy gate
+  is the editor's predicate, asked before the press**: `Engine::query` does not enforce the
+  managed-DDL policy — the editor simply never dispatches what validation flagged, and an
+  agent cannot be trusted with that discipline — so `run` asks `Engine::policy_verdicts` and
+  refuses on any non-clean answer, *including* an unjudgeable one, so the gate fails closed.
+  **`run` never rewrites SQL**: no injected `LIMIT`, because the press must materialize
+  exactly what a person's would (same cost, same snapshot); the *response* is bounded by
+  `page_size` and `read_page`, and the total stays exact. **A stop is a status, not an
+  error** — `stopped_on_purpose` is asked in exactly one place, the `run` tool, and its three
+  strings become an outcome the agent reads as "you stopped this". And **"your result was
+  replaced" is asked of the engine, never of its prose**: a retired snapshot answers
+  `fetch_page` with DataFusion's own "table not found", so `Engine::snapshot_live` exists to
+  be asked *after* the read fails (which is also what keeps it from racing the dispatch that
+  retired it). The one thing `read_page` deliberately does **not** do is pin: a pin is right
+  for an export window, which owes the user the rows it was opened on, and wrong for a
+  long-lived server, where the honest answer is that the tab has moved on.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the

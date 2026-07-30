@@ -6,7 +6,7 @@ description: Format the Strata crates without reformatting the Freya fork. Use w
 # Format Strata
 
 ```bash
-cargo fmt -p strata-freya -p strata-core -p strata-model -p strata-code-editor
+cargo fmt -p strata-freya -p strata-core -p strata-model -p strata-code-editor -p strata-agent
 ```
 
 That is the whole thing. Run it from the repo root (or any worktree root).
@@ -89,7 +89,7 @@ apply), and running it separately just invites the whole crate to churn twice.
 
 ## When the member list changes
 
-The command names the four it owns explicitly, which is the point — it cannot silently grow to
+The command names the five it owns explicitly, which is the point — it cannot silently grow to
 include a path dependency. If a crate is added to `members` in the root `Cargo.toml`, add it here
 too. To check the list matches:
 

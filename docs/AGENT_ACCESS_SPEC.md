@@ -193,8 +193,8 @@ MCP conventions; responses are structured JSON.
 | `validate(sql)` | data | `Engine::validate` — lexical lints + policy verdicts + dry-plan diagnostics, never executes. The cheap way for an agent to check SQL before burning a run. |
 | `open_tab()` | control | Opens a real `QueryTab`; returns the tab handle (its `TabId`). |
 | `list_tabs()` | control | Open tabs: handle, title, whether a run is settled/in flight. |
-| `run(tab, sql, mode?, page_size?)` | control | The policy gate (§6), then an ordinary press: sets the tab's `QuerySpec` and awaits settle. Returns columns, page-1 rows, exact total, elapsed. `mode` = `run` (default) \| `explain` (returns the plan tree, materializes nothing). `page_size` bounded (default: the app's default row limit setting). |
-| `read_page(tab, page, sort?)` | data | Pages the tab's last settled snapshot via `Engine::fetch_page` — snapshot-scoped, side-effect free. A snapshot retired by a newer run in that tab fails cleanly: "result was replaced; re-run" (§7). |
+| `run(tab, sql, mode?, page_size?)` | control | The policy gate (§6), then an ordinary press: sets the tab's `QuerySpec` and awaits settle. Returns columns, page-1 rows, exact total, elapsed. `mode` = `run` (default) \| `explain` (returns the plan tree, materializes nothing). `page_size` bounded (default: the app's default row limit setting; capped at `MAX_PAGE_SIZE` = 10000, and the response reports the size actually used). |
+| `read_page(tab, page, sort?)` | data | Pages the tab's last settled snapshot via `Engine::fetch_page` — snapshot-scoped, side-effect free, at the page size that `run` settled with. A snapshot retired by a newer run in that tab fails cleanly: "result was replaced; re-run" (§7). |
 | `close_tab(tab)` | control | Closes the tab (through the same close funnel the UI uses — a running press is cancelled the ordinary way). |
 
 Notes that are rules, not details:
@@ -209,6 +209,12 @@ Notes that are rules, not details:
   paging. Totals are always exact (the snapshot knows).
 - **`run` reuses a tab the way a press does**: dispatch supersedes the tab's in-flight run and
   retires its previous snapshot. That is the point — agent semantics *are* app semantics.
+- **`explain` goes over the wire as text.** `QueryPlan`'s structured `PlanNode` list exists to
+  be *drawn* (it carries accent colours and time-share bars); off-screen it would be the same
+  tree twice, one copy in a shape nothing can use. `run(mode: "explain")` answers with
+  `logical` / `physical` — what `EXPLAIN` prints — plus `analyze`. The host wraps the
+  statement with `plan::as_explain`, exactly as the app's own Run capability does, so
+  `mode: "explain"` means "plan this", not "I already typed EXPLAIN".
 - **No MCP resources in v1** — tools only. Resources (schema-as-resource) are an open question
   (§11); every current client consumes tools, and one surface is one thing to keep honest.
 
@@ -256,9 +262,21 @@ Every error an agent can see is one of these, and stopped-on-purpose is never a 
 | Stopped on purpose | User cancel / user or agent re-run superseding | A distinct non-fault outcome: "the run was cancelled in the app" / "replaced by a newer run". |
 | Result moved | `read_page` on a retired snapshot | "The tab's result was replaced; re-run to read it." |
 | Not found | Unknown tab handle / table name | Plain statement; `list_tabs` / `list_tables` are the recovery. |
-| Ambiguous project | >1 window open, no `project` | Lists the open projects. |
+| Ambiguous project | >1 window open, no `project` (or a `project` name two windows share) | Lists the open projects. |
+| No project | Nothing open to address | "No project is open." Added by AA-02: an "ambiguous" error listing nothing reads as a bug, and a project-scoped tool has to say something. |
 | Window gone | Bridge dropped mid-ask (close / re-root) | "The project window closed." |
 | Unauthorized | Bad/missing token | HTTP 401 before any tool runs. |
+
+Everything above **but the last** is an MCP tool result with `isError: true`, not a JSON-RPC
+protocol error: these are conditions an agent should read and recover from, and the listing
+tools are the recovery. Protocol errors stay for what they are for — a malformed request.
+`Unauthorized` is answered by the transport, in front of the router, so it never reaches a
+tool at all.
+
+Two things a project is resolved by, in this order: its **root** (the identity — a window is
+keyed on its project folder, so a root names at most one) and then its **name**, which is
+allowed to collide (`/a/data` and `/b/data` are both "data") and reports ambiguity rather
+than guessing.
 
 ## 8. State ownership
 
@@ -268,7 +286,7 @@ What lives where — nothing here adds state to the session or project stores:
 |---|---|---|
 | Server socket, token check, tool router | `strata-agent` server | Own Tokio runtime; the Engine pattern. |
 | Service directory (root, name, engine, ask-sender per window) | server, `Mutex` | Windows register on mount, deregister on `use_drop`. |
-| Last settled snapshot per agent run (for `read_page`) | server | A cache of a fact the settle reply carried; a retired snapshot fails cleanly, so staleness is honest. |
+| Last settled snapshot per agent run (for `read_page`) | server | A cache of a fact the settle reply carried, keyed `(project root, tab)`. **Never a `SnapshotPin`** — a pin is right for an export window, which owes the user the rows it was opened on, and wrong for a long-lived server, which would keep dead results alive; a retired snapshot fails cleanly, so staleness is honest. "Retired vs a real read failure" is `Engine::snapshot_live` (AA-02, `strata-core`), asked *after* the read fails so it cannot race the dispatch — never a match on DataFusion's prose. Dropped at the next `run` in that tab (an `explain` materializes nothing, so it leaves the entry) and on `close_tab`. |
 | Ask channel + driver loop + parked run replies | the window (`use_agent_bridge`) | Dies with the window/re-root — no cleanup path to drift. |
 | Agent keepers (settle observers) | the window, per parked ask | The `RequestKeepers` pattern, verbatim. |
 | Tabs, requests, snapshots, history, events | **unchanged** | Agent runs are ordinary presses; nothing new is stored anywhere. |

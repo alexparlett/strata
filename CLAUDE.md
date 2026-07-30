@@ -70,6 +70,12 @@ Members:
   `strata-freya::apps::project::state::log`.)
 - **`strata-code-editor`** — vendored Skia code editor (Rope buffer + tree-sitter highlighting) used
   by the Freya SQL editor.
+- **`strata-agent`** — agent access (AA-02): the read-only tool vocabulary, the `Host` seam
+  that answers it, the error taxonomy, and the MCP server (Streamable HTTP + bearer, stop on
+  drop). A member but **not** a default one, and deliberately **Freya-free** — that is what
+  lets the same `StrataTools` be served over HTTP by the app (AA-03), over stdio headless
+  (AA-05) and called in-process by the chat pane (AA-06). Testable against `mock::MockHost`,
+  whose engine is real. Spec: `docs/AGENT_ACCESS_SPEC.md`.
 - **`strata-forms` / `strata-forms-macro`** — headless forms layer + `#[derive(Form)]`.
 
 Excluded from the workspace (deliberately):
