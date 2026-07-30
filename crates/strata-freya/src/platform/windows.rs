@@ -45,30 +45,27 @@ pub enum WindowKind {
     /// The Settings window — one app-wide, pinned above whichever window last asked for it
     /// ([`Windows::settings_owner`]). See [`crate::platform::settings`].
     Settings,
-    /// An Export window, pinned above the project window that opened it — which it names, so
-    /// it can close when that window does.
+    /// An Export window, pinned above the project window that opened it.
     ///
-    /// Unlike Settings there is **no single-instance rule**: an export window is opened *on a
-    /// result* and carries that result's facts, so "already open" can't mean "focus it" — the
-    /// open one is showing something else. Two exports of two different results at once is a
-    /// reasonable thing to want, and each closes itself when its write lands.
-    Export {
-        owner: WindowId,
-    },
-    /// A Configure window, pinned above the project window that opened it — which it names, so
-    /// it can close when that window does.
+    /// It names nothing, unlike the two below. Unlike Settings there is **no single-instance
+    /// rule** — an export window is opened *on a result* and carries that result's facts, so
+    /// "already open" can't mean "focus it": the open one is showing something else. Two exports
+    /// of two different results at once is a reasonable thing to want, and each closes itself
+    /// when its write lands. So the registry needs to know only that this window is not one the
+    /// user *works* in ([`WindowKind::is_workspace`]); which window it belongs to is a launch
+    /// value, held where it is read ([`crate::platform::owner`]) rather than copied here to go
+    /// stale.
+    Export,
+    /// A Configure window, pinned above the project window that opened it.
     ///
     /// **One per target**, unlike Export: it is opened on a *def*, which is shared mutable
     /// state, so two windows on one def would both write it and the second would revert the
-    /// first. Two different tables at once is fine — see [`crate::platform::configure`].
+    /// first. Two different tables at once is fine, and so is one table in each of two
+    /// projects — hence the owner beside the target, since one owner window shows one project
+    /// (see [`crate::platform::configure`]).
     Configure {
         owner: WindowId,
         target: ConfigureTarget,
-        /// The project folder this window was opened on. A project window keeps its id across a
-        /// re-root (`OpenPref::This` is a keyed remount, not a new window), which drops the very
-        /// stores this window holds — so "is my owner still open?" is not enough to tell whether
-        /// what it is configuring is still there.
-        project: String,
     },
 }
 
@@ -78,10 +75,7 @@ impl WindowKind {
     /// neither be the app's last window nor keep the launcher from taking a closing project's
     /// place.
     fn is_workspace(&self) -> bool {
-        !matches!(
-            self,
-            Self::Settings | Self::Export { .. } | Self::Configure { .. }
-        )
+        !matches!(self, Self::Settings | Self::Export | Self::Configure { .. })
     }
 }
 
@@ -141,8 +135,9 @@ impl Windows {
         self.by_id.contains_key(&id)
     }
 
-    /// Every live window by id — for the questions the named accessors above don't cover,
-    /// like an Export window reading back the owner recorded in its own entry.
+    /// Every live window by id — for the questions the named accessors above don't cover: which
+    /// project a child window's owner is showing now ([`crate::platform::owner`]), and whether a
+    /// Configure window is already open on a given owner's table.
     pub fn by_id(&self) -> &HashMap<WindowId, WindowKind> {
         &self.by_id
     }

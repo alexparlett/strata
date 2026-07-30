@@ -21,9 +21,13 @@
 //! Accelerators derive from the keymap (`effective_chord`), keeping it the single
 //! source of truth; the OS handles an accelerator before the window sees the key, so
 //! the corresponding in-window listener simply never fires while the menu carries it —
-//! same command either way. Accelerators are read at launch (a rebind updates the menu
-//! on next start — live menu updates can ride P4-08), but *dispatch* resolves the live
-//! settings, so a rebound chord acts correctly even before restart.
+//! same command either way. They are resolved at launch and then **kept in step with the
+//! settings** (P4-08): [`MenuHandles::sync_chords`] re-applies every one off
+//! `ConfigChan::Settings`, so a rebind reaches the menubar as it reaches every tooltip. It has
+//! to, and for a sharper reason than tidiness — a stale accelerator is not merely wrong text,
+//! it is the OS *consuming* the old chord before the window can see it, so the item would keep
+//! firing on a shortcut the user rebound away, and the new one would do nothing for the items
+//! whose command is only reachable through the pipeline.
 //!
 //! **Deliberately not ported from the Dioxus app**: its `global-hotkey` OS-hotkey layer
 //! (`strata-dioxus` `use_shortcuts`) and its `PredefinedMenuItem` Edit set. Both were
@@ -177,23 +181,39 @@ fn synthetic_key(chord: &KeyChord) -> Option<(Key, Modifiers)> {
 /// whole remainder, so a folder containing the separator can't split wrong.
 const RECENT_ID_PREFIX: &str = "strata.file.recent:";
 
-/// The mutable half of the menubar: the File menu's parts, kept after construction so it
-/// can follow the app.
+/// The mutable half of the menubar: the File menu's parts and every item that carries an
+/// accelerator, kept after construction so the menu can follow the app.
 ///
-/// Two things make it dynamic. **Open Recent** mirrors the config store's recents, which
+/// Three things make it dynamic. **Open Recent** mirrors the config store's recents, which
 /// move on every open, pin and remove. **Close Project** applies only to a window that has
 /// one, so it (and the separator above it) is pulled from the menu while the launcher is
 /// the focused window rather than sitting there greyed — a menubar is app-global, but this
-/// half of it is about the focused window.
+/// half of it is about the focused window. And the **accelerators** follow the keymap, which
+/// Settings ▸ Keymap can rebind at any moment ([`sync_chords`](Self::sync_chords)).
 pub struct MenuHandles {
     file: Submenu,
     recent: Submenu,
     separator: PredefinedMenuItem,
+    /// Every item that carries an accelerator, in the order [`MenuChords`] names them.
+    quit: MenuItem,
+    settings: MenuItem,
+    open_project: MenuItem,
     close_project: MenuItem,
+    undo: MenuItem,
+    redo: MenuItem,
+    cut: MenuItem,
+    copy: MenuItem,
+    paste: MenuItem,
+    select_all: MenuItem,
     /// Whether the separator + Close Project pair is currently in the File menu.
     closable: bool,
     /// The recents the submenu currently renders, so an unchanged sync rebuilds nothing.
     recents: Vec<RecentProject>,
+    /// The chords the settings resolve to, for the same reason.
+    chords: MenuChords,
+    /// Whether the items are carrying **no** accelerator while a chord is being captured — see
+    /// [`suspend_accelerators`](Self::suspend_accelerators).
+    suspended: bool,
 }
 
 impl MenuHandles {
@@ -203,6 +223,96 @@ impl MenuHandles {
     pub fn sync(&mut self, recents: &[RecentProject], closable: bool) {
         self.sync_recents(recents);
         self.sync_closable(closable);
+    }
+
+    /// Re-point every accelerator at the chords the settings resolve to **now**.
+    ///
+    /// Called with the File-menu sync, off the same effect, because a rebind is app-global and
+    /// only a window has a reactive scope to notice one in — the focused window drives this for
+    /// the same reason it drives the File half, and a window that isn't focused never fights it.
+    ///
+    /// An item whose command reaches the app through the keyboard pipeline is **disabled while
+    /// that command is unbound**, exactly as it ships at launch: there is no chord to synthesize,
+    /// so the item would look live and do nothing. Quit and Close Project keep their accelerator
+    /// treatment but never their enabled state, because they route through the close veto
+    /// directly and work with no chord at all.
+    pub fn sync_chords(&mut self, chords: &MenuChords) {
+        if self.chords == *chords {
+            return;
+        }
+        self.chords = chords.clone();
+        self.apply_chords();
+    }
+
+    /// Take every accelerator **off** the menubar, or put them back.
+    ///
+    /// Settings ▸ Keymap captures a rebind by listening for the next key press, and the OS
+    /// resolves a menu accelerator *before* the window sees the key — so with the menubar armed,
+    /// pressing ⌘C to bind it would copy instead, and the row would still be listening. Half the
+    /// chords a user is likely to reach for are menu accelerators, so this is the difference
+    /// between a capture that works and one that works for the keys nobody wants.
+    ///
+    /// A held flag rather than a `sync_chords(&Default)` call, so the focused window's routine
+    /// sync — which fires on focus changes and on any settings write — cannot re-arm the menubar
+    /// underneath a capture. While suspended a sync still records what the settings say; it just
+    /// doesn't reach the items until the capture ends.
+    ///
+    /// **Whoever suspends owns putting it back, and must do so on losing focus as well as on
+    /// finishing.** This flag is app-wide while the thing it protects is one window's key
+    /// listener, and nothing else clears it: `sync_chords` deliberately cannot, and a menubar left
+    /// suspended takes every gated item's chord *and* its enabled state with it, in every window,
+    /// for as long as it is held. So the caller's condition is "a capture is in progress **and**
+    /// my window is focused", not just the first half (`views::keymap`).
+    pub fn suspend_accelerators(&mut self, suspended: bool) {
+        if self.suspended == suspended {
+            return;
+        }
+        self.suspended = suspended;
+        self.apply_chords();
+    }
+
+    /// Push the chords the menubar should be carrying onto the items — the settings' own, or
+    /// nothing at all while a capture is in progress.
+    ///
+    /// The chords are **destructured** rather than read field by field, for the reason
+    /// `settings_merge!` is a macro: the pattern names every field, so a command that grows a
+    /// menu item and forgets this list is a build error rather than an accelerator that silently
+    /// never updates.
+    fn apply_chords(&self) {
+        let none = MenuChords::default();
+        let MenuChords {
+            quit,
+            open_settings,
+            open_project,
+            close_project,
+            undo,
+            redo,
+            cut,
+            copy,
+            paste,
+            select_all,
+        } = match self.suspended {
+            true => &none,
+            false => &self.chords,
+        };
+        let set = |item: &MenuItem, chord: &Option<KeyChord>, gated: bool| {
+            if let Err(err) = item.set_accelerator(chord.as_ref().and_then(accelerator)) {
+                tracing::error!("menubar: updating an accelerator failed: {err}");
+            }
+            if gated {
+                item.set_enabled(chord.is_some());
+            }
+        };
+        set(&self.quit, quit, false);
+        set(&self.settings, open_settings, true);
+        set(&self.open_project, open_project, true);
+        set(&self.close_project, close_project, false);
+        set(&self.undo, undo, true);
+        set(&self.redo, redo, true);
+        set(&self.cut, cut, true);
+        set(&self.copy, copy, true);
+        set(&self.paste, paste, true);
+        set(&self.select_all, select_all, true);
     }
 
     /// Rebuild **Open Recent** when the list has actually moved. muda has no way to edit an
@@ -265,21 +375,28 @@ pub fn create_global_menu() -> MenuState {
     State::create_global(None)
 }
 
-/// Keep the File menu pointed at this window for as long as it is focused: its recents,
-/// whether it has a project to close, and where Open Recent opens. Call once in a window
-/// root, passing this window's [`OpenCtx`] — `Some` for a project window, `None` for the
-/// launcher.
+/// Keep the menubar pointed at this window for as long as it is focused: the File menu's
+/// recents, whether it has a project to close, where Open Recent opens — and every item's
+/// accelerator, against the live keymap. Call once in a window root, passing this window's
+/// [`OpenCtx`] — `Some` for a project window, `None` for the launcher.
 ///
-/// One parameter for both halves because they are the same fact: a window with a project has
-/// something to close **and** somewhere to open into, and a window without has neither.
+/// One parameter for both File halves because they are the same fact: a window with a project
+/// has something to close **and** somewhere to open into, and a window without has neither.
 ///
 /// Focus is the gate because the menubar is app-global but its File half is about *one*
 /// window — so exactly one window drives it at a time, and a window that isn't focused
 /// never fights the one that is. (Freya's `Platform` is per-window, so despite its name
 /// `is_app_focused` is this window's focus.)
+///
+/// The accelerators ride the same gate for a different reason: they are not about this window
+/// at all, but a `State` change only wakes a window's scope, so somebody has to be the one to
+/// notice — and "the focused window" is a rule already in force here. The Settings window is
+/// itself focused while Apply is pressed, so the rebind lands from there; and if it closes in
+/// the same breath, the window that takes focus re-runs this effect and syncs anyway.
 pub fn use_file_menu(app: &AppCtx, open: Option<OpenCtx>) {
     let focused = use_hook(Platform::get).is_app_focused;
     let config = use_config(ConfigChan::Recents);
+    let settings = use_config(ConfigChan::Settings);
     let mut menu = app.menu;
     let mut focused_open = app.open;
     use_side_effect(move || {
@@ -291,8 +408,10 @@ pub fn use_file_menu(app: &AppCtx, open: Option<OpenCtx>) {
         // would notify the slot's audience for a value that never changed.
         focused_open.set_if_modified(open);
         let recents = config.read();
+        let chords = menu_chords(&settings.read().settings);
         if let Some(handles) = menu.write().as_mut() {
             handles.sync(&recents.recent_projects, open.is_some());
+            handles.sync_chords(&chords);
         }
     });
     // A window that goes must not leave its open path parked: those are its own `State`s, and
@@ -309,9 +428,13 @@ pub fn use_file_menu(app: &AppCtx, open: Option<OpenCtx>) {
     });
 }
 
-/// The launch-time accelerator chords, resolved from settings before the menu builder
-/// runs, so the builder captures plain data rather than the settings handle.
-#[derive(Clone)]
+/// The accelerator chords, resolved from settings before the menu builder runs, so the builder
+/// captures plain data rather than the settings handle — and re-resolved on every settings
+/// change, which is what [`MenuHandles::sync_chords`] compares against what the items carry.
+///
+/// [`Default`] is the **no accelerators at all** set, which is what the menubar carries while a
+/// chord is being captured ([`MenuHandles::suspend_accelerators`]).
+#[derive(Clone, PartialEq, Default)]
 pub struct MenuChords {
     pub quit: Option<KeyChord>,
     pub open_settings: Option<KeyChord>,
@@ -425,16 +548,22 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
             chord.as_ref().and_then(accelerator),
         )
     };
+    let undo = edit_item(MenuCmd::Undo, "Undo", &chords.undo);
+    let redo = edit_item(MenuCmd::Redo, "Redo", &chords.redo);
+    let cut = edit_item(MenuCmd::Cut, "Cut", &chords.cut);
+    let copy = edit_item(MenuCmd::Copy, "Copy", &chords.copy);
+    let paste = edit_item(MenuCmd::Paste, "Paste", &chords.paste);
+    let select_all = edit_item(MenuCmd::SelectAll, "Select All", &chords.select_all);
     let edit = Submenu::new("Edit", true);
     let items: &[&dyn IsMenuItem] = &[
-        &edit_item(MenuCmd::Undo, "Undo", &chords.undo),
-        &edit_item(MenuCmd::Redo, "Redo", &chords.redo),
+        &undo,
+        &redo,
         &PredefinedMenuItem::separator(),
-        &edit_item(MenuCmd::Cut, "Cut", &chords.cut),
-        &edit_item(MenuCmd::Copy, "Copy", &chords.copy),
-        &edit_item(MenuCmd::Paste, "Paste", &chords.paste),
+        &cut,
+        &copy,
+        &paste,
         &PredefinedMenuItem::separator(),
-        &edit_item(MenuCmd::SelectAll, "Select All", &chords.select_all),
+        &select_all,
     ];
     if let Err(err) = edit.append_items(items) {
         tracing::error!("menubar: appending Edit menu items failed: {err}");
@@ -452,9 +581,20 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
             file,
             recent,
             separator,
+            quit,
+            settings,
+            open_project,
             close_project,
+            undo,
+            redo,
+            cut,
+            copy,
+            paste,
+            select_all,
             closable: false,
             recents: Vec::new(),
+            chords,
+            suspended: false,
         },
     )
 }

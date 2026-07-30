@@ -46,6 +46,24 @@ that file when editing fork code, and §6 here for how the fork relates to the a
     (`use_radio_station::<ProjectState>`), not params-for-tests.
 - **No over-engineering.** Private/internal app: use `pub` freely, don't hand-annotate visibility
   per field on struct-literal-built components (the linter widens them back anyway).
+- **A path is qualified in the `use` and nowhere else.** Import the **item** and refer to it by its
+  bare name; a qualified path in a signature, a body or a match arm is the smell, and so is
+  importing a *module* to qualify through — `use crate::platform::{self, WindowKind}` plus
+  `platform::open_export(…)` is the same rule broken, one step shorter. Not tidiness: the import
+  block is the one place a reader checks what a file actually depends on, and a path spelled inline
+  is a dependency that isn't listed there — which is how one item ends up reached three different
+  ways in a single file (`crate::components::form::form_theme()` beside a `use` of the same module
+  elsewhere). It also removes a class of bad call site outright: `platform::open_export(platform
+  .clone(), launch)` reads as one name meaning two things, because the module and the local
+  `Platform` are both spelled `platform`; `open_export(platform.clone(), launch)` cannot. The
+  anchor is unchanged and unlegislated — `use super::` for a sibling, `use crate::` across the tree,
+  both are in use here. Three things are **not** covered, because they are not shortenable code:
+  a visibility modifier (`pub(in crate::apps::project::views::workbench)`), a rustdoc intra-doc link
+  (`[`Subtree`](crate::platform::owner::Subtree)` — the full path *is* the link target), and the
+  handful of `std` aliases whose module segment is what disambiguates them (`io::Result`,
+  `fmt::Result`, `fs::write`; a bare `use std::io::Result` shadows the prelude). On a genuine
+  collision between two of our own names, alias with `as` — never fall back to a reach through the
+  crate root.
 - **Valin-shaped.** Follow [`marc2332/valin`](https://github.com/marc2332/valin) (the Freya
   author's own IDE) for module layout, per-window data scoping, and stateful tabs.
 
@@ -251,6 +269,64 @@ Things that must not regress. Each was fought for once already.
   re-root mechanism already drops the engine and re-registers the project through the launch hooks
   — a `restart()` that rebuilt a live store in place would be the second way to configure an engine
   that the rule above exists to prevent.
+- **A setting the user edits through more than one gesture gets one funnel, and the policy lives
+  next to the resolution it has to agree with.** Settings ▸ Keymap (P4-08) changes a binding four
+  ways — capture a press, reset a row, take a chord off another command, reset every row — and all
+  of them are `keymap::propose` then `keymap::apply` over a `Rebind`. The check is in
+  **strata-core**, beside `validate_bind`, because a hand-edited `config.json` reaches the same
+  rules through `effective_chord`, and a second copy in the pane would be the copy that drifts. Two
+  consequences worth keeping. **A reset is a proposal like any other**: a command's default chord can
+  have been taken while it was away (move Save query off ⌘S, bind Find to the ⌘S that freed up, then
+  reset Save query), so a reset that just dropped the override would create the duplicate the whole
+  policy exists to prevent. And a *steal* is expressed as the bindings it actually changes — unbind
+  **every** holder, bind the asker — rather than as one write, because a write that only recorded the
+  winner would leave two commands claiming one chord for `resolve` to settle silently by table order,
+  and freeing only the *first* holder does the same for a chord a hand-edited config had already
+  duplicated. The same rule reaches the display: an override is only "custom" if it **takes effect**,
+  so an override of a fixed command is not (`effective_chord` ignores it, and a badge saying
+  otherwise would sit on a row whose reset control is gated off), and a bind to a command's own
+  default clears the entry instead of storing a copy of it. One predicate behind the badge and the
+  control, or a row wears a mark it has no way to remove.
+- **A menubar accelerator is state, not decoration — and it must be disarmed while a chord is being
+  captured.** The OS resolves an accelerator *before* the window sees the key, which makes both
+  halves of this sharper than they look. A stale accelerator does not merely show the wrong text: it
+  keeps firing on a chord the user rebound away, and swallows the new one. So `MenuHandles` keeps
+  every accelerator-carrying item and `sync_chords` re-applies all of them off
+  `ConfigChan::Settings` from the focused window (the same effect that points the File menu at it) —
+  and the list is a **destructure** of `MenuChords`, so a new menu command that forgets it is a build
+  error, for the reason `settings_merge!` is a macro. The capture case is the same fact pointed the
+  other way: with the menubar armed, pressing ⌘C to *bind* it copies instead, and ⌘Z ⌘X ⌘C ⌘V ⌘A ⌘O
+  ⌘Q ⌘, are most of what anyone reaches for, so `suspend_accelerators` holds them off for the
+  capture's lifetime. A held flag, not a `sync_chords(&Default)` call — otherwise the routine sync
+  re-arms the menubar underneath the capture.
+- **An app-wide flag held to protect one window's listener is released on losing focus, not only on
+  finishing.** The half of the rule above that was wrong first time: the Keymap pane suspended the
+  menubar on "a capture is in progress" alone, and Settings is deliberately *not* modal, so clicking
+  the project window behind it mid-capture left the flag stuck — every gated menu item lost its
+  chord *and* its enabled state, in every window, until that capture was finished or the window
+  closed. The condition has to name both halves ("a capture is in progress **and** my window is
+  focused"), which is not defensive bookkeeping but the actual invariant: the listener being
+  protected is that window's and cannot fire while another has the keys, so there is nothing to
+  protect. Generally — when a flag's *scope* is wider than the state that justifies it, its
+  condition must include whatever makes that state reachable, and the release path has to fire on
+  every way of leaving it (`use_drop` covers a window that goes; only focus covers one that stays
+  open behind another).
+- **A name two surfaces have to agree on is generated from one table, not typed twice — and
+  navigating to something is never editing it.** The Settings search (P4-09) indexes a setting by an
+  `Anchor` *variant*: one table generates the enum, the list of every anchor, and each setting's
+  route, label, subtext and keywords, and the pane builds its row from the same entry
+  (`Anchor::row()`). That is not tidiness — the failure it rules out is silent. An anchor spelled one
+  way in the index and another in the pane is a jump that routes and then singles nothing out, and
+  nothing but trying it would ever say so; the same goes for a label, which titles the hit *and*
+  heads the row. Two consequences. The **category** is not restated in the index at all (a hit
+  resolves its page through `model::category`, the tree the rail and the breadcrumb already read),
+  and the engine's properties are indexed off **`ENGINE_KEYS` entire** rather than a chosen few,
+  because a hand-picked subset of a catalogue is a second list to keep in step. And **following a
+  result only navigates**: it may single a setting out where there is something to single out, but it
+  must not write. Adding a pre-filled grid row for a property with no override (the canvas's "search
+  doubles as add a known property") was built and rejected — a named row with an empty value still
+  projects into the draft, so merely following a result left Apply live for a change nobody asked
+  for, and the grid claiming to list the overrides in force listed one that wasn't.
 - **A free-form list setting is edited as rows and committed as a map.** `Settings::engine` is a
   `BTreeMap`, which cannot hold the row you have not named yet or the duplicate you are halfway
   through fixing — so the Engine pane's model is an ordered list of rows under ids minted by a
@@ -326,6 +402,27 @@ Things that must not regress. Each was fought for once already.
   window that is no longer on screen. Express it in the registry's terms — the owner leaving closes
   the child through Freya's own path — which also covers the platforms where the child relationship
   is a no-op.
+- **A window's lifetime must be at least as short as the shortest-lived thing it holds — and for a
+  child window that is a *mount* of the project subtree, not a window id.** Export and Configure are
+  their own OS windows, so they cannot inherit the project window's context and carry its store, log,
+  catalog and scan counter as launch values — all created inside `ProjectRoot` and all
+  `GenerationalBox`-backed. Both things that remount that subtree free them while leaving the owner
+  window open under the same id: a re-root changes the folder, an engine restart changes neither. A
+  child left open across one holds dangling handles, and the failure is a panic on whichever read
+  repaints first — a keystroke is enough — or a Save into a store nothing is left to serve. So the
+  pin is over `platform::owner::Subtree`, which is `ProjectRoot`'s own diff key (folder +
+  generation) plus the live `EngineRestart` to read the current generation back, **provided by
+  `ProjectRoot`** so no call site can assemble a mismatched trio, with `use_owner_pin` the one
+  predicate. Three things generalise. An owner that has closed *shows nothing*, so it fails the same
+  comparison and "my owner closed" needs no clause of its own — one predicate, not three. The
+  generation is the one handle here safe to hold across a remount, for precisely the reason it exists
+  (owned by `ProjectApp`, above the subtree). And this is why `WindowKind` carries **less** than it
+  used to: `Configure`'s `project` and `Export`'s `owner` were the old pins' inputs, so once the pin
+  reads its owner from the launch value they were unread copies of a fact that could go stale — the
+  registry keeps only what it is *asked*, which is `is_workspace()` and Configure's focus-if-open
+  keying (`owner` + `target`, since one owner window shows one project). Anything that later hands a
+  child window a subtree handle takes a `Subtree` and calls that hook rather than growing a third
+  copy of the rule.
 - **Window geometry** is read via `Platform::root_size` and the fork-added
   `Platform::window_position` (both logical); never reach for the raw winit handle. There is no
   runtime resize/move from the app — restore geometry only at window **creation**
@@ -361,7 +458,17 @@ Things that must not regress. Each was fought for once already.
   but the test is whether the gap is in the *component*: what a table has no opinion about (which
   row is selected, what goes between two rows) stays composed in the app. And the other way round —
   a settings list is **not** a results grid, so it gets no zebra: banding is a reading aid for
-  dense data, and on a form it only competes with the one row state the surface has. And don't restate at a call site what a variant already
+  dense data, and on a form it only competes with the one row state the surface has. The Keymap
+  grid (P4-08) is the second table in that window and takes the same answer to every one of these
+  questions, down to the row height — one table dress per window, not one per pane.
+  A **dashed** edge was the one thing neither table could get from anywhere: torin fills the region
+  between an outer and an inner rounded rect, and a filled region cannot carry a pattern, so
+  `BorderStyle::Dashed` strokes the outline's centreline with a Skia dash effect instead
+  (`Border::dashed`, `Button::border_style` — the style only, so a dashed button keeps its variant's
+  state-driven fill). Two named costs, because a stroke has one width and no squircle: a dashed
+  border uses `width.top` for all four sides and ignores `CornerRadius::smoothing`. It is a fork
+  addition rather than a solid approximation because the dash is the whole message — it says the
+  slot is *open*, which is exactly what distinguishes "Add shortcut" from a bound control. And don't restate at a call site what a variant already
   resolves: `Button::new().filled()` *is* accent-over-inverse-text, so a `theme_colors` override
   naming those same two slots is a second copy of them. Override only for a genuinely different
   tone (the destructive action reading `cancel_button`).
@@ -445,6 +552,14 @@ Things that must not regress. Each was fought for once already.
   divergences" rather than averaging it**: a silent split-the-difference is how a surface stops
   matching the canvas it was drawn from, and a named one is a single constant to change when the
   design settles it.
+  A row can also be **addressed**: `Row::anchor` names it and `form::reveal` carries the ask, so
+  something outside the form (the Settings search) can have it scroll itself into view and flash
+  once. That lives on the row rather than in the window that needed it first, for the reason above —
+  a "jumpable settings row" would be a second row type — and it is two contexts because they have
+  two lifetimes: `Reveal` is window-lived (it is written *before* the page holding the target has
+  mounted, so a call into the row is impossible and a slot is the only shape that works) and
+  `RevealScroll` is page-lived, since the page owns the `ScrollView`. Both optional, so a form with
+  neither is a form of ordinary rows.
 - **A field backing a draft publishes on every keystroke, and normalizes its box when it is
   left.** Freya's `Input` has no blur prop and only fires `on_submit` on Enter, so the tempting
   shape is "parse and publish when the field is left". It loses the value: the thing that commits
@@ -557,13 +672,16 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `git -C crates/freya fetch --no-tags /abs/path/to/main/repo/crates/freya <sha>` then
   `git merge --ff-only <sha>` (additive, and it keeps your own uncommitted fork edits as long as
   that commit touches different files — check with `git show --stat` first). Then push it.
-- **Worktree traps:** `git worktree add` does not update submodules — in any new worktree run
-  `git submodule update --checkout` before the first build, then `git submodule status` (no `+`
-  prefix). A `+` means the checkout is not the commit the superproject recorded; compare
+- **Worktree traps — use the `freya-submodule` skill** (`.claude/skills/freya-submodule`), which
+  owns the full sequence: `git worktree add` does not update submodules, so in any new worktree
+  run `git submodule update --init --checkout` before the first build, then `git submodule status`
+  (no `+` prefix). A `+` means the checkout is not the commit the superproject recorded; compare
   `git ls-files -s crates/freya` (the gitlink the index wants) against `git -C crates/freya log -1`
-  before concluding anything about a build error in fork API. And every worktree has its **own**
-  `crates/freya` checkout: when editing fork files by absolute path, confirm the path goes through
-  *your* worktree, not the main repo's copy.
+  before concluding anything about a build error in fork API. The skill also carries the recovery
+  for the unpushed-gitlink trap above (fetch the sha from the main repo's checkout by absolute
+  path, then update again). And every worktree has its **own** `crates/freya` checkout: when
+  editing fork files by absolute path, confirm the path goes through *your* worktree, not the main
+  repo's copy.
 
 ## 7. Git, worktrees, and verification
 

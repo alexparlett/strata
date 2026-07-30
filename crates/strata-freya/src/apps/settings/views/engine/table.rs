@@ -10,9 +10,11 @@
 //! ones) and flex content on `Table` itself (it accepts a `Size` for its height and could not
 //! then hand any of it to a scrolling body).
 //!
-//! What is composed *inside* the parts stays here: the column rule, the invalid-row stripe, and
-//! the error message — a full-width sibling between rows rather than a cell, because the fault
-//! belongs to the property rather than to its name or its value. The header is a `TableRow` too,
+//! What is composed *inside* the parts stays here: the column rule and the invalid-row stripe.
+//! The error message is a [`RowNote`] — a full-width sibling between rows rather than a cell,
+//! because the fault belongs to the property rather than to its name or its value, and because a
+//! cell stands at a fixed height so the columns line up. It moved out of this file with P4-08,
+//! whose grid needs the same thing to say a chord is taken. The header is a `TableRow` too,
 //! which is what gives it the strip's fill, the rule beneath it and the shared column widths for
 //! nothing.
 
@@ -20,6 +22,7 @@ use freya::prelude::*;
 use strata_core::engine::config::is_restart_key;
 
 use crate::apps::settings::views::engine::model::{KeyStatus, PropRows};
+use crate::apps::settings::views::RowNote;
 use crate::apps::settings::{SettingsTheme, SettingsThemePartial, SettingsThemePreference};
 use crate::components::divider::Divider;
 use crate::components::form::ValueField;
@@ -38,8 +41,7 @@ const HEAD_INSET: f32 = 16.;
 const MARKER_SIZE: f32 = 18.;
 /// The empty grid's own floor, so it still reads as a table (canvas `min-height: 132px`).
 const EMPTY_HEIGHT: f32 = 130.;
-/// Alpha of the wash behind an error message, and of the tint behind the restart marker.
-const ERROR_WASH_ALPHA: u8 = 20;
+/// Alpha of the tint behind the restart marker.
 const MARKER_TINT_ALPHA: u8 = 38;
 /// How wide the autocomplete panel stands. A property name is long and the box it hangs off is
 /// half a pane wide, so without a floor every suggestion would truncate to its namespace.
@@ -56,6 +58,11 @@ impl Component for PropTable {
         let rows = self.rows;
         let list = rows.read();
         let errors = list.errors();
+        let error_color = use_theme().read().colors().error;
+        // The body's own scroll, driven so a row can reveal itself: a property added by the toolbar
+        // or named by the Settings search (P4-09) lands at the end of the list, which on a grid with
+        // a screenful of overrides is off the bottom — a selection nobody can see.
+        let controller = use_scroll_controller(ScrollConfig::default);
 
         let mut body = TableBody::new();
         for row in list.rows() {
@@ -68,11 +75,12 @@ impl Component for PropTable {
                         name: row.name.clone(),
                         value: row.value.clone(),
                         invalid: error.is_some(),
+                        controller,
                         key: DiffKey::None,
                     }
                     .key(row.id),
                 )
-                .maybe_child(error.map(|message| ErrorStrip { message }));
+                .maybe_child(error.map(|message| RowNote::new(message, error_color)));
         }
 
         Table::new()
@@ -80,13 +88,15 @@ impl Component for PropTable {
             .column_widths(vec![Size::flex(1.), Size::flex(1.)])
             .child(TableHead::new().child(HeadRow))
             .child(
-                ScrollView::new().height(Size::flex(1.)).child(
-                    rect()
-                        .width(Size::fill())
-                        .vertical()
-                        .maybe_child(list.is_empty().then_some(EmptyGrid))
-                        .child(body),
-                ),
+                ScrollView::new_controlled(controller)
+                    .height(Size::flex(1.))
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .vertical()
+                            .maybe_child(list.is_empty().then_some(EmptyGrid))
+                            .child(body),
+                    ),
             )
     }
 }
@@ -162,6 +172,8 @@ struct PropTableRow {
     name: String,
     value: String,
     invalid: bool,
+    /// The body's scroll, so a row that becomes the selected one can reveal itself.
+    controller: ScrollController,
     key: DiffKey,
 }
 
@@ -245,10 +257,30 @@ impl Component for PropTableRow {
         // Deliberately **not** striped — this is a settings list, not a results grid, and the
         // canvas paints every unselected row the same. Banding here would compete with the one
         // row state the surface actually has.
-        let fill = match rows.read().selected == Some(id) {
+        let selected = rows.read().selected == Some(id);
+        let fill = match selected {
             true => theme.table_selection_background,
             false => Color::TRANSPARENT,
         };
+
+        // Reveal the selected row — the same shape the tab strip reveals its active tab with. A
+        // freshly added row's area lands a frame after it is selected, so the effect watches
+        // *whether* we have one (a `Memo<bool>` only notifies when that flips) and then peeks it:
+        // torin re-emits `Sized` for every row on scroll, and re-revealing then would drag the
+        // selection back under the pointer. `scroll_to_item` is a no-op once the row is visible.
+        let mut area = use_state(|| None::<Area>);
+        let has_area = use_memo(move || area.read().is_some());
+        let selected_now = use_reactive(&selected);
+        let controller = self.controller;
+        use_side_effect(move || {
+            if !*selected_now.read() || !has_area() {
+                return;
+            }
+            if let Some(area) = *area.peek() {
+                let mut controller = controller;
+                controller.scroll_to_item(area);
+            }
+        });
 
         TableRow::new()
             .theme(TableThemePartial {
@@ -269,6 +301,11 @@ impl Component for PropTableRow {
                             .content(Content::Flex)
                             .cross_align(Alignment::Center)
                             .spacing(CELL_INSET - ERROR_STRIPE)
+                            // What the reveal above scrolls to. Measured on the name cell's body
+                            // rather than on the row, which is a `TableRow` and takes no element
+                            // events: it spans the row's full height, and the grid scrolls
+                            // vertically only, so the axis that matters is the one it reports.
+                            .on_sized(move |e: Event<SizedEventData>| area.set(Some(e.area)))
                             // The invalid marker. A painted rect and not a border: torin draws a
                             // border inside bounds the box already fills (AGENTS.md §3), so it
                             // would be the one edge you could not see.
@@ -369,27 +406,6 @@ impl Component for RestartMarker {
             .center()
             .background(self.color.with_a(MARKER_TINT_ALPHA))
             .child(Icon::new(IconName::Reload).size(11.).color(self.color))
-    }
-}
-
-/// Why the row above cannot be applied.
-#[derive(PartialEq)]
-struct ErrorStrip {
-    message: String,
-}
-
-impl Component for ErrorStrip {
-    fn render(&self) -> impl IntoElement {
-        let error = use_theme().read().colors().error;
-
-        rect()
-            .width(Size::fill())
-            .horizontal()
-            .spacing(6.)
-            .padding(Gaps::new(6., HEAD_INSET, 6., HEAD_INSET))
-            .background(error.with_a(ERROR_WASH_ALPHA))
-            .child(Icon::new(IconName::Alert).size(12.).color(error))
-            .child(Caption::new(self.message.clone()).color(error).wrap())
     }
 }
 

@@ -18,13 +18,15 @@
 //! The history limit's floor is `strata_core::config`'s [`HISTORY_MIN`], which is the floor
 //! `history_cap` already applies — the field offers exactly the range its consumer honours,
 //! for the same reason the column-width field does.
+//!
+//! Each row is built from its [`Anchor`] (P4-09), which is where its title and subtext live.
 
 use freya::prelude::*;
 use strata_core::config::{OpenPref, HISTORY_MIN};
 
 use crate::apps::settings::views::Pane;
-use crate::apps::settings::SettingsCtx;
-use crate::components::form::{DirectoryField, Form, NumberField, Row};
+use crate::apps::settings::{Anchor, SettingsCtx};
+use crate::components::form::{DirectoryField, Form, NumberField};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 
 /// The canvas's numeric field (`width: 130px`) — the same box the data-display pane's are.
@@ -57,8 +59,8 @@ impl Component for SystemPane {
         let body = Form::new()
             .preferences()
             .child(
-                Row::new("Reopen projects on startup")
-                    .hint("Reopens the projects that had a window when you last quit.")
+                Anchor::Reopen
+                    .row()
                     .trailing()
                     .on_press(move |_: Event<PressEventData>| {
                         ctx.edit(|s| s.reopen_on_startup = !s.reopen_on_startup)
@@ -68,11 +70,8 @@ impl Component for SystemPane {
                     })),
             )
             .child(
-                Row::new("Default project directory")
-                    .hint(
-                        "Where the folder picker starts when you open a project. \
-                         Leave blank to use the last location.",
-                    )
+                Anchor::DefaultDir
+                    .row()
                     // A plain folder box, and deliberately not one that resolves what it is
                     // given the way `platform::pick_project_folder` does: this is where the
                     // picker *starts*, which need not hold a project at all — it is usually
@@ -93,13 +92,13 @@ impl Component for SystemPane {
                     ),
             )
             .child(
-                Row::new("Opening a project")
-                    .hint("Where a project opens when the window you open it from already has one.")
+                Anchor::OpenPref
+                    .row()
                     .child(OpenPrefControl { pref: open_pref }),
             )
             .child(
-                Row::new("Confirm before closing a tab or window with a running query")
-                    .hint("Asks only while a query is still running; closing is silent otherwise.")
+                Anchor::ConfirmClose
+                    .row()
                     .trailing()
                     .on_press(move |_: Event<PressEventData>| {
                         ctx.edit(|s| s.confirm_close_running = !s.confirm_close_running)
@@ -109,23 +108,18 @@ impl Component for SystemPane {
                     })),
             )
             .child(
-                Row::new("Query history limit")
-                    .hint(
-                        "How many past runs the History drawer keeps, newest first. Lowering it \
-                         drops the older runs from a project's saved history.",
+                // Saturating, not `as`: a hand-edited config holding more than a u32 should show
+                // the biggest number the field can offer, not wrap round to a small one.
+                Anchor::HistoryLimit.row().child(
+                    NumberField::new(
+                        max_history.try_into().unwrap_or(NO_HISTORY_CAP),
+                        HISTORY_MIN as u32,
+                        NO_HISTORY_CAP,
                     )
-                    // Saturating, not `as`: a hand-edited config holding more than a u32 should
-                    // show the biggest number the field can offer, not wrap round to a small one.
-                    .child(
-                        NumberField::new(
-                            max_history.try_into().unwrap_or(NO_HISTORY_CAP),
-                            HISTORY_MIN as u32,
-                            NO_HISTORY_CAP,
-                        )
-                        .width(Size::px(FIELD_WIDTH))
-                        .unit("runs")
-                        .on_change(move |runs: u32| ctx.edit(|s| s.max_history = runs as usize)),
-                    ),
+                    .width(Size::px(FIELD_WIDTH))
+                    .unit("runs")
+                    .on_change(move |runs: u32| ctx.edit(|s| s.max_history = runs as usize)),
+                ),
             );
 
         Pane::new(body)

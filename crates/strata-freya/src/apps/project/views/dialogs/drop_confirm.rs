@@ -341,18 +341,18 @@ fn drop_row(
     // is written, and only if that write landed — `persisted` says so, and says so itself when it
     // did not. A drop the project file never heard about comes back on the next open, so logging
     // it first would leave the log contradicting the catalog.
-    let mut dropped = false;
     match target {
         DropTarget::Table(name) => {
-            {
+            let landed = {
                 let mut p = project.write_channel(ProjChan::Tables);
                 let taken = p.remove_table(name);
-                dropped = persisted_defs(&p, report);
-                if let (false, Some((at, row))) = (dropped, taken) {
+                let landed = persisted_defs(&p, report);
+                if let (false, Some((at, row))) = (landed, taken) {
                     p.restore_table(at, row);
                 }
-            }
-            if !dropped {
+                landed
+            };
+            if !landed {
                 return;
             }
             // Synchronous and local: DataFusion just forgets the provider.
@@ -361,15 +361,16 @@ fn drop_row(
             catalog_settled(catalog);
         }
         DropTarget::View(name) => {
-            {
+            let landed = {
                 let mut p = project.write_channel(ProjChan::Views);
                 let taken = p.remove_view(name);
-                dropped = persisted_defs(&p, report);
-                if let (false, Some((at, row))) = (dropped, taken) {
+                let landed = persisted_defs(&p, report);
+                if let (false, Some((at, row))) = (landed, taken) {
                     p.restore_view(at, row);
                 }
-            }
-            if !dropped {
+                landed
+            };
+            if !landed {
                 return;
             }
             if session.peek().is_bound_to_view(name) {
@@ -402,15 +403,16 @@ fn drop_row(
         }
         DropTarget::Query { id, .. } => {
             // Never registered with the engine — a saved query is a stored string.
-            {
+            let landed = {
                 let mut p = project.write_channel(ProjChan::Queries);
                 let taken = p.remove_saved_query(*id);
-                dropped = persisted_defs(&p, report);
-                if let (false, Some((at, query))) = (dropped, taken) {
+                let landed = persisted_defs(&p, report);
+                if let (false, Some((at, query))) = (landed, taken) {
                     p.restore_saved_query(at, query);
                 }
-            }
-            if !dropped {
+                landed
+            };
+            if !landed {
                 return;
             }
             if session.peek().is_bound_to_query(*id) {
@@ -418,13 +420,13 @@ fn drop_row(
             }
         }
     }
-    if dropped {
-        log_event(
-            report.log,
-            LogLevel::Info,
-            format!("{} '{}'", past(target), target.name()),
-        );
-    }
+    // Unconditional: every arm above returns early when its write did not land, so reaching here
+    // means the def is gone *and* `project.json` says so.
+    log_event(
+        report.log,
+        LogLevel::Info,
+        format!("{} '{}'", past(target), target.name()),
+    );
 }
 
 /// Drop-confirm tests — the dialog driven the way the user drives it, over a catalog whose

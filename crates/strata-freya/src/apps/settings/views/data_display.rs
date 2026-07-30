@@ -11,13 +11,17 @@
 //! The column-width bounds are `strata_core::config`'s, which are the same numbers the grid
 //! clamps to — a field offering a width the grid then silently corrects would be a field that
 //! lies about what it sets.
+//!
+//! Each row is built from its [`Anchor`] (P4-09), which is where its title and subtext live — so
+//! the search index and the pane cannot name the same setting differently, and a hit can flash the
+//! row it points at.
 
 use freya::prelude::*;
 use strata_core::config::{COL_WIDTH_MAX, COL_WIDTH_MIN};
 
 use crate::apps::settings::views::Pane;
-use crate::apps::settings::SettingsCtx;
-use crate::components::form::{Form, NumberField, Row};
+use crate::apps::settings::{Anchor, SettingsCtx};
+use crate::components::form::{Form, NumberField};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 
 /// The canvas's numeric field (`width: 130px`).
@@ -47,14 +51,10 @@ impl Component for DataDisplayPane {
 
         let body = Form::new()
             .preferences()
+            .child(Anchor::Density.row().child(Density { compact }))
             .child(
-                Row::new("Row density")
-                    .hint("Controls row height in the results grid and catalog.")
-                    .child(Density { compact }),
-            )
-            .child(
-                Row::new("Alternating row colors")
-                    .hint("Shades every other row in the results grid for easier scanning.")
+                Anchor::Zebra
+                    .row()
                     .trailing()
                     .on_press(move |_: Event<PressEventData>| ctx.edit(|s| s.zebra = !s.zebra))
                     .child(
@@ -64,39 +64,24 @@ impl Component for DataDisplayPane {
                     ),
             )
             .child(
-                Row::new("Default column width")
-                    .hint(
-                        "Starting width for result-grid columns before you resize them. \
-                         Drag a column's edge to override it for that column, or double-click \
-                         the edge to auto-fit.",
-                    )
-                    .child(
-                        NumberField::new(
-                            col_width as u32,
-                            COL_WIDTH_MIN as u32,
-                            COL_WIDTH_MAX as u32,
-                        )
+                Anchor::ColumnWidth.row().child(
+                    NumberField::new(col_width as u32, COL_WIDTH_MIN as u32, COL_WIDTH_MAX as u32)
                         .width(Size::px(FIELD_WIDTH))
                         .unit("px")
                         .on_change(move |px: u32| {
                             ctx.edit(|s| s.default_col_width = f64::from(px))
                         }),
-                    ),
+                ),
             )
             .child(
-                Row::new("Default row limit")
-                    .hint(
-                        "New queries are generated with this LIMIT so a stray SELECT * cannot \
-                         pull a whole file into memory. Set to 0 for no limit.",
-                    )
-                    // Saturating, not `as`: a hand-edited config holding more than a u32 should
-                    // show the biggest number the field can offer, not wrap round to a small one.
-                    .child(
-                        NumberField::new(row_limit.try_into().unwrap_or(NO_ROW_CAP), 0, NO_ROW_CAP)
-                            .width(Size::px(FIELD_WIDTH))
-                            .unit("rows")
-                            .on_change(move |rows: u32| ctx.edit(|s| s.row_limit = rows as usize)),
-                    ),
+                // Saturating, not `as`: a hand-edited config holding more than a u32 should show
+                // the biggest number the field can offer, not wrap round to a small one.
+                Anchor::RowLimit.row().child(
+                    NumberField::new(row_limit.try_into().unwrap_or(NO_ROW_CAP), 0, NO_ROW_CAP)
+                        .width(Size::px(FIELD_WIDTH))
+                        .unit("rows")
+                        .on_change(move |rows: u32| ctx.edit(|s| s.row_limit = rows as usize)),
+                ),
             );
 
         Pane::new(body)

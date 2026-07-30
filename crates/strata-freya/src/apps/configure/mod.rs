@@ -4,7 +4,10 @@
 //!
 //! **A window, not a modal.** The canvas is a 620 × 640 frame with traffic lights, a drag bar
 //! and its own footer, so this is a child window of the project window that asked, pinned above
-//! it and closing with it — the export window's shape ([`crate::platform::configure`]).
+//! it ([`crate::platform::configure`]) — the export window's shape. What it closes *with* is not
+//! that window but the **project subtree** whose store, log, catalog and scan counter it borrows,
+//! since a re-root or an engine restart frees those while leaving the window open
+//! ([`crate::platform::owner`]).
 //!
 //! Where it differs from Export is **single-instance per target**. Export deliberately has no
 //! such rule because each of its windows carries a different run. A Configure window carries a
@@ -52,7 +55,7 @@ use crate::apps::project::ReportCtx;
 use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
 use crate::components::window::window_theme;
 use crate::keymap::on_commands;
-use crate::platform::{self, WindowKind};
+use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowKind};
 use crate::state::{use_share_config, AppCtx};
 use crate::theme::{peek_selection, use_strata_theme, window_background};
 
@@ -73,9 +76,10 @@ pub struct ConfigureLaunch {
     /// config store shareable too (`state::config`) — this is the same move, scoped to one
     /// project.
     pub project: RadioStation<ProjectState, ProjChan>,
-    /// The project folder this window is configuring — what ties its lifetime to the *project*
-    /// rather than to the window id (see [`crate::platform::configure`]).
-    pub project_root: String,
+    /// The **open project** every handle here belongs to — what ties the window's lifetime to
+    /// that subtree rather than to the owner's window id, which outlives it both across a re-root
+    /// and across an engine restart (see [`crate::platform::owner`]).
+    pub subtree: Subtree,
     /// The project window's re-scan request. Save bumps it; the driver over there runs the pass.
     pub rescan: CatalogRescan,
     /// …and that driver's gate. A request raised while a pass is already in flight is **dropped**
@@ -98,9 +102,10 @@ pub struct ConfigureLaunch {
     pub report: ReportCtx,
 }
 
-/// Compares on the **target** alone. The rest are handles — one store, one counter, one report,
-/// fixed for the window's life — so they carry no information a diff could act on. The same
-/// reasoning as `ExportLaunch`.
+/// Compares on the **target** alone. Everything else is fixed for the window's life — one store,
+/// one counter, one report (P4-15: the project window's log *and* its write-fault satellite), and
+/// one `Subtree` that can only change by remounting the very subtree this is built in — so none
+/// of it carries information a diff could act on. The same reasoning as `ExportLaunch`.
 impl PartialEq for ConfigureLaunch {
     fn eq(&self, other: &Self) -> bool {
         self.target == other.target
@@ -174,7 +179,7 @@ impl ConfigureCtx {
 pub struct ConfigureApp {
     pub app: AppCtx,
     pub project: RadioStation<ProjectState, ProjChan>,
-    pub project_root: String,
+    pub subtree: Subtree,
     pub rescan: CatalogRescan,
     pub catalog: Catalog,
     pub engine: EngineCtx,
@@ -190,7 +195,7 @@ impl ConfigureApp {
     pub fn window(
         app: AppCtx,
         project: RadioStation<ProjectState, ProjChan>,
-        project_root: String,
+        subtree: Subtree,
         rescan: CatalogRescan,
         catalog: Catalog,
         engine: EngineCtx,
@@ -208,7 +213,7 @@ impl ConfigureApp {
         WindowConfig::new_app(ConfigureApp {
             app,
             project,
-            project_root,
+            subtree,
             rescan,
             catalog,
             engine,
@@ -266,19 +271,20 @@ impl App for ConfigureApp {
         use_provide_context(move || report.faults);
 
         // Join the live window registry, so a second Configure on this table focuses this
-        // window rather than opening another, and so it closes with its project window.
+        // window rather than opening another.
         let owner = self.owner;
         let target = self.target.clone();
-        platform::use_register_window(self.app.windows, {
+        use_register_window(self.app.windows, {
             let target = target.clone();
-            let project_root = self.project_root.clone();
             move || WindowKind::Configure {
                 owner,
                 target: target.clone(),
-                project: project_root.clone(),
             }
         });
-        platform::use_configure_pin(self.app.clone());
+        // …and close with the *subtree* the four handles above belong to, not merely with the
+        // window that owns it: a re-root and an engine restart both drop them while leaving that
+        // window open under the same id.
+        use_owner_pin(self.app.clone(), owner, self.subtree.clone());
 
         let ctx = use_provide_context({
             let target = self.target.clone();
@@ -348,7 +354,7 @@ impl App for ConfigureApp {
                         true
                     }
                     Command::Quit => {
-                        platform::quit();
+                        quit();
                         true
                     }
                     _ => false,

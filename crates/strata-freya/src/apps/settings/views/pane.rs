@@ -6,15 +6,16 @@
 //! out would be a second copy of the nav tree, free to drift from the row that navigated to
 //! it.
 //!
-//! [`Pane::not_built`] is what a category renders until its own task lands (P4-04…P4-08). It
-//! is deliberately plain: the shell is what P4-03 delivers, and dressing an empty page up
-//! would misrepresent it.
+//! P4-03 shipped a `not_built` constructor for a category whose task had not landed; P4-08 was
+//! the last of the five, so it is gone rather than kept for a sixth that does not exist yet.
 
+use freya::components::{use_scroll_controller, ScrollConfig};
 use freya::prelude::*;
 use freya::router::*;
 
 use crate::apps::settings::{category, Route, SettingsThemePartial, SettingsThemePreference};
-use crate::components::typography::{Control, Prose};
+use crate::components::form::RevealScroll;
+use crate::components::typography::Control;
 
 /// The pane's inset (canvas `padding: var(--sp-6)`).
 const PANE_PADDING: Gaps = Gaps::new(24., 24., 24., 24.);
@@ -50,12 +51,6 @@ impl Pane {
         }
     }
 
-    /// A category whose page belongs to a task that hasn't landed. `what` names the content,
-    /// `owner` the task that brings it.
-    pub fn not_built(what: &str, owner: &str) -> Self {
-        Self::new(Prose::new(format!("{what} is not built yet ({owner}).")))
-    }
-
     /// Put an action at the end of the breadcrumb line.
     pub fn maybe_trailing(mut self, trailing: Option<impl IntoElement>) -> Self {
         self.trailing = trailing.map(IntoElement::into_element);
@@ -74,6 +69,11 @@ impl Pane {
 impl Component for Pane {
     fn render(&self) -> impl IntoElement {
         let route = use_route::<Route>();
+        // The frame a searched-for row scrolls itself into (P4-09). Created and provided whichever
+        // shape this pane takes — a hook cannot be conditional, and an unattached controller has no
+        // viewport, so on a `filled` pane a reveal is the flash and nothing else.
+        let controller = use_scroll_controller(ScrollConfig::default);
+        use_provide_context(move || RevealScroll::new(controller));
 
         let body = rect()
             .width(Size::fill())
@@ -100,7 +100,7 @@ impl Component for Pane {
                 .height(Size::fill())
                 .child(body)
                 .into_element(),
-            false => ScrollView::new()
+            false => ScrollView::new_controlled(controller)
                 .width(Size::flex(1.))
                 .height(Size::fill())
                 .child(body)

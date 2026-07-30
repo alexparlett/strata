@@ -12,9 +12,12 @@
 //!   def would both `upsert_table` and both persist, so the second would silently revert the
 //!   first — the same reason two windows cannot share a project. So "already open" means focus,
 //!   *keyed by the target*: two different tables at once is fine, one table twice is not.
+//!
+//! How long it lives is not here: this window holds four `ProjectRoot`-scoped handles, so it is
+//! pinned to that **subtree** rather than to a window id, by the rule Export shares
+//! ([`crate::platform::owner`]).
 
 use freya::prelude::*;
-use freya::winit::window::WindowId;
 
 use crate::apps::configure::{ConfigureApp, ConfigureLaunch};
 use crate::platform::windows::{register, WindowKind};
@@ -45,9 +48,15 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             // **Keyed by owner *and* target.** A target names a def, and a def belongs to one
             // project — two windows on different projects can both hold a table called `events`,
             // and matching on the name alone hands the second one the first project's def and
-            // then writes to its store.
+            // then writes to its store. One owner window shows one project, so the owner is what
+            // says which — the project itself is not matched here, and does not need to be: a
+            // window whose owner has since re-rooted has already had its close *requested* by its
+            // pin ([`crate::platform::owner`]), a cycle before any press can arrive, so it is
+            // never a candidate by the time this runs. Note that is event ordering and **not** the
+            // dangling-entry filter below, which tests the renderer's live window map and so still
+            // contains a window whose close is merely queued.
             .find(|(_, kind)| {
-                matches!(kind, WindowKind::Configure { owner: o, target, .. }
+                matches!(kind, WindowKind::Configure { owner: o, target }
                     if *o == owner && *target == launch.target)
             })
             .map(|(id, _)| *id)
@@ -62,7 +71,7 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
         let id = ctx.launch_window(ConfigureApp::window(
             launch.app.clone(),
             launch.project,
-            launch.project_root.clone(),
+            launch.subtree.clone(),
             launch.rescan,
             launch.catalog,
             launch.engine.clone(),
@@ -79,53 +88,8 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             WindowKind::Configure {
                 owner,
                 target: launch.target.clone(),
-                project: launch.project_root.clone(),
             },
         );
         ctx.set_window_parent(id, Some(owner));
     }));
-}
-
-/// Tie this Configure window to its owner for as long as it lives: close when the owner closes.
-/// Call once in the Configure window root.
-///
-/// **Closing with the owner is ours, not AppKit's** — the same reason Settings and Export need
-/// this. A child window is closed by its parent, but AppKit does that behind winit's back: the
-/// `NSWindow` goes and Freya, which only removes a window on a close it was asked for, keeps a
-/// live scope for a window that is no longer on screen. Expressing it in the registry's terms
-/// also covers the platforms where the child relationship is a no-op.
-pub fn use_configure_pin(app: crate::state::AppCtx) {
-    let platform = use_hook(Platform::get);
-    let windows = app.windows;
-    let mut me = use_state(|| None::<WindowId>);
-    use_hook(move || {
-        let platform = Platform::get();
-        spawn(async move {
-            if let Ok(id) = platform.post_callback(|id, _| id).await {
-                me.set(Some(id));
-            }
-        });
-    });
-    use_side_effect(move || {
-        let registry = windows.read();
-        // Before this window's own id lands there is nothing to look up — that is the frame
-        // between mounting and the renderer answering, not a closed owner.
-        let Some(id) = *me.read() else {
-            return;
-        };
-        let Some(WindowKind::Configure { owner, project, .. }) = registry.by_id().get(&id) else {
-            return;
-        };
-        // Gone with its owner — **or with its owner's project**. A re-root keeps the window id
-        // and remounts `ProjectRoot`, dropping the store, the log, the catalog and the scan
-        // counter this window holds; staying open would mean reading dropped values on the next
-        // repaint and writing a def into a project nobody is looking at.
-        let owner_project = registry.by_id().get(owner).and_then(|kind| match kind {
-            WindowKind::Project(path) => Some(path.clone()),
-            _ => None,
-        });
-        if !registry.is_open(*owner) || owner_project.as_ref() != Some(project) {
-            platform.close_current_window();
-        }
-    });
 }

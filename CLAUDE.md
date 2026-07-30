@@ -147,18 +147,38 @@ src/platform/open.rs             **where** an open lands, vs windows.rs's *how*:
                                  acting is split off (`OpenTarget`) because the menubar handler
                                  has a RendererContext and no Platform
 src/platform/export.rs           where an Export window goes: a native child of the project
-                                 window that asked, gone when that window goes — and pointedly
-                                 **not** single-instance. Settings shows app-wide state so a
-                                 second ⌘, can only mean focus; an export window is opened *on a
-                                 result* and carries that run's snapshot, so focusing an open one
-                                 would show the wrong run. One per press of Download, each
-                                 closing itself when its write lands
+                                 window that asked — and pointedly **not** single-instance.
+                                 Settings shows app-wide state so a second ⌘, can only mean focus;
+                                 an export window is opened *on a result* and carries that run's
+                                 snapshot, so focusing an open one would show the wrong run. One
+                                 per press of Download, each closing itself when its write lands
+src/platform/configure.rs        where a Configure window goes: the same native child, keyed
+                                 **one per target** — it is opened on a *def*, which is shared
+                                 mutable state, so two windows on one def would both write it and
+                                 the second would revert the first. Between the other two rules:
+                                 Settings is app-wide (a second ask means focus), Export has no
+                                 rule at all
+src/platform/owner.rs            P4-16 — **how long a child window may live**: not as long as the
+                                 window it sits above, but as long as the *mount* of `ProjectRoot`
+                                 whose handles it borrowed. `Subtree` is that mount's own diff key
+                                 (folder + engine generation) plus the live `EngineRestart` to read
+                                 the generation back; `ProjectRoot` provides it, so no opener can
+                                 assemble a mismatched trio, and `use_owner_pin` is the one
+                                 predicate both Export and Configure close on. A re-root changes
+                                 the folder, a restart changes neither it nor the window id — and
+                                 an owner that has closed shows nothing, so it fails the same
+                                 comparison rather than needing a clause
 src/menu.rs                      the macOS menubar: App · **File** (Open… · Open Recent ·
                                  Close Project) · Edit. Not static — `app_menu` hands back
                                  `MenuHandles`, and the *focused* window keeps the File menu
                                  pointed at itself (`use_file_menu`): its recents, Close Project
                                  only when it has a project to close, and the `OpenCtx` Open
-                                 Recent resolves through (the one item carrying data, not a chord)
+                                 Recent resolves through (the one item carrying data, not a chord).
+                                 The **accelerators** follow the keymap live (P4-08,
+                                 `sync_chords`), and are held off entirely while Settings ▸ Keymap
+                                 is capturing a chord (`suspend_accelerators`) — the OS resolves an
+                                 accelerator before the window sees the key, so an armed menubar
+                                 would copy on ⌘C instead of letting it be bound
 src/state/mod.rs                 `AppCtx` — the six app-globals `main` creates once (themes ·
                                  config · window registry · theme preview · menubar handles · the
                                  focused window's open path), handed to every window root as one
@@ -206,8 +226,15 @@ src/components/                  shared component library
                                  the form's `Variant`: `Fields` (eyebrow label + ⓘ tooltip + gaps
                                  — export, config modal) or `Preferences` (title + inline subtext
                                  + rules — the Settings panes). `.trailing()` puts the control at
-                                 the row's end, `.on_press()` makes the label activate it. Plus
-                                 `Note`, a statement where a control would go
+                                 the row's end, `.on_press()` makes the label activate it,
+                                 `.anchor()` names it so a `Reveal` can jump to it. Plus `Note`,
+                                 a statement where a control would go
+    reveal.rs                    P4-09 — **a row you can jump to**: `Reveal`, the one-anchor slot
+                                 a surface asks through (window-lived: it is written before the
+                                 page holding the row exists), and `RevealScroll`, the frame the
+                                 row scrolls itself into (page-lived — whatever owns the
+                                 `ScrollView` provides it). Both optional; a form with neither is
+                                 a form of ordinary rows
     field.rs                     `ValueField` (the mono box: stated height, length cap enforced
                                  on the state, the caller's width on the *wrapper* so a relative
                                  one is a flex child of the row) + `NumberField` (bounded,
@@ -220,19 +247,36 @@ src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
   views/                         title_bar · rail (SidebarRow) · projects · row · open (rfd pick)
 src/apps/settings/               the settings window (P4-03, `Settings.dc.html`) — one app-wide,
-                                 pinned above its opener
+                                 pinned above its opener. All five categories are built
   mod.rs                         root + window config + the `settings` component theme, the
-                                 **freya-router** `Route` per category, `SettingsCtx` (the draft ·
-                                 its **seed** · Apply · the live-theme mirror), and the category
-                                 panes still awaiting their task (P4-07 / P4-08). Apply commits a
-                                 per-field diff of draft-vs-seed (`Settings::merge_onto`), so a
-                                 setting another window wrote meanwhile survives it; `dirty()` is
-                                 the same comparison, which is why it reads no config state
+                                 **freya-router** `Route` per category, and `SettingsCtx` (the
+                                 draft · its **seed** · Apply · the live-theme mirror). Apply
+                                 commits a per-field diff of draft-vs-seed
+                                 (`Settings::merge_onto`), so a setting another window wrote
+                                 meanwhile survives it; `dirty()` is the same comparison, which
+                                 is why it reads no config state
   model.rs                       the nav tree: CATEGORIES + their groups + breadcrumbs
                                  (unit-tested — one category per route, groups contiguous)
+  search.rs                      P4-09 — **the settings index**: what the nav's search box filters.
+                                 One table generates the `Anchor` enum, every anchor, and each
+                                 setting's route/label/subtext/keywords — and the panes build their
+                                 rows from it (`Anchor::row()`), so a setting has one name and a
+                                 typo in an anchor is a build error rather than a jump that lands
+                                 nowhere. A category is never spelled out here (it resolves through
+                                 `model`'s `category`), and the engine's properties are indexed off
+                                 `ENGINE_KEYS` entire rather than a chosen few. Unit-tested
   views/                         chrome (the router layout) · title_bar · nav · pane · footer
                                  (the panes' rows are `components::form` — P4-05 moved the row
-                                 vocabulary there rather than keeping a settings-only copy)
+                                 vocabulary there rather than keeping a settings-only copy; P4-09
+                                 gave `Pane` the scroll controller a revealed row reveals into) ·
+                                 row_note (the full-width note *between* two table rows, shared
+                                 by the window's two grids — one tone for wash, edge, glyph and
+                                 text, so it reads as one statement)
+    nav.rs                       the category rail — and P4-09's **search box** above it, which
+                                 *replaces* the tree while it has a query (a hit can be a property
+                                 on a page the tree only names). `follow` is the one place a jump
+                                 happens, for the pressed row and for Enter, and it only ever
+                                 navigates: a property with no override gets no row made for it
     theme.rs                     P4-04 — the Appearance pane: Sync-with-OS + the theme grid, both
                                  `Setting`s. Each card's thumbnail is painted from **that** theme's
                                  own sheet slots, so a user theme previews with nothing authored
@@ -263,7 +307,19 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
                                  rather than a lookalike — see the task file); inspector.rs the
                                  selected key's catalogue entry. Nothing here reaches an engine:
                                  Apply writes the config, and each project window picks it up
-src/apps/export/                 the export window (P4-10, `Export.dc.html` for the markup,
+    keymap/                      P4-08 — the Keymap pane: every command and the chord it answers
+                                 to, on the **same** builtin `Table` the engine grid uses (the
+                                 canvas was redrawn from a card list into an Action/Shortcut grid
+                                 after the last handoff). mod.rs is the frame + Reset all + the
+                                 capture listener + `ask`, the **one** funnel every change goes
+                                 through (`keymap::propose` then `apply`, so a reset is
+                                 conflict-checked exactly like a capture); model.rs the row
+                                 projection + `Editing` (one value, so listening and blocked
+                                 cannot both be true; unit-tested); table.rs the grid, the key
+                                 caps and the four states of the Shortcut column. The rebind
+                                 policy itself is `strata_core::keymap`'s, beside the resolution a
+                                 hand-edited config meets. While a row is listening the menubar's
+                                 accelerators are **suspended** — see src/menu.rs
                                  `Strata.exportGroups()` for the options) — opened from the
                                  results toolbar, pinned above the project window that asked
   mod.rs                         root + window config + the `export` component theme, and
@@ -470,7 +526,10 @@ a per-bundle README. The DEV_TASKS Part-1 audit and `DESIGN_SPEC.md` are derived
 Read the `.dc.html` source directly (dimensions/colours/layout are spelled out there); don't render
 or screenshot them unless asked.
 
-Feature specs: `COMPLETION_SPEC.md` (the as-built P2-04 completion design — supersedes
+Feature specs: `AGENT_ACCESS_SPEC.md` (agent-driven access — the MCP host whose queries land as
+real query tabs, the verified Tokio↔Freya bridge, the chat-pane forward design; dataflow in
+`agent-access-dataflow.mermaid`; workstream `workstream-agent-access/`), `COMPLETION_SPEC.md`
+(the as-built P2-04 completion design — supersedes
 `SQL_LANGUAGE_SPEC.md` §4), `CONNECTIONS_SPEC.md`, `EXPLAIN_PLAN_SPEC.md`,
 `EXPORT_OPTIONS.md`, `IMPORT_OPTIONS.md`, `SQL_LANGUAGE_SPEC.md`, `EDITOR_LANG_SPIKE.md`,
 `F7-shared-state.md`.
@@ -581,6 +640,26 @@ catalogue default, not skipped), and a changed `datafusion.runtime.*` is a **res
 bump of `ProjectRoot`'s diff key through the one T2 confirm rather than a second way to configure
 a live engine. See its task file; AGENTS.md §2 carries the rules.
 
+**P4-08 (Settings ▸ Keymap)** is ✅, and completes the Settings window. It is the second use of
+that same builtin `Table` — the canvas was **redrawn** between the last handoff and the task, from
+a list of two-line cards into an Action/Shortcut grid with the description in a tooltip and a
+double-click to rebind, so the local handoff bundle's `Settings.dc.html` is stale for this pane
+(read the design project). Three things it settled. **One funnel**: capture, the per-row reset and
+Reassign all go through `keymap::propose` then `keymap::apply` over a `Rebind`, with the policy in
+**strata-core** beside the `validate_bind` a hand-edited config already meets — which is what makes
+a *reset* conflict-checked like a capture (a command's default chord can have been taken while it
+was away) and a *steal* two bindings rather than one write. **A menubar accelerator is state**: it
+now follows the keymap live (`sync_chords`, the list a destructure so a new menu command can't
+forget it), and — the load-bearing half — it is **suspended** for the life of a capture, because the
+OS resolves an accelerator before the window sees the key, so an armed menubar makes ⌘C copy instead
+of bind, and ⌘Z ⌘X ⌘C ⌘V ⌘A ⌘O ⌘Q ⌘, are most of what anyone reaches for. And **dashed borders are a
+fork addition** (`BorderStyle::Dashed`, `Button::border_style`): torin fills the region between two
+rounded rects and a fill cannot carry a pattern, so a dashed edge strokes the centreline instead —
+worth the addition because the dash is the message, distinguishing an open slot from a bound
+control. The one thing deliberately **not** built is a direct unbind control: the state is supported
+end to end and reachable via Reassign, but the canvas has no such affordance and inventing one is
+the designer's call. See its task file.
+
 **P4-10 (export window)** is ✅ — rebuilt from the canvas rather than ported, because the Dioxus
 modal had drifted from the design and reached its screen through hardcoded `match` arms per
 format. Four things it settled. **Options are data**: `ExportDraft::groups` hands the view a
@@ -594,6 +673,39 @@ retire the table mid-`COPY`. **NULL partition values are refused, not warned abo
 `snapshot_writer_props` sets `EnabledStatistics::Chunk` explicitly. And the form vocabulary it
 grew — the labelled row, the mono value box, the bounded number — went to
 `components::form` with P4-05 rather than staying the export's own.
+
+**P4-09 (Settings search)** is ✅, and settles that **a setting's name has one home**. The index
+(`apps/settings/search.rs`) is one table generating the `Anchor` enum, the list of every anchor, and
+each setting's route / label / subtext / keywords — and the panes build their rows from it
+(`Anchor::row()`), because the failure it rules out is invisible: an anchor spelled one way in the
+index and another in the pane is a jump that navigates and then singles nothing out, and only a
+person trying it would ever know. The category is never restated either — a hit resolves its page
+through `model`'s `category`. Three more things it settled. The engine's properties are indexed off
+**`ENGINE_KEYS` entire** rather than the canvas's hand-picked eleven, so a subset can't drift from
+the catalogue. **Following a hit is navigation and never an edit** — the first cut added a pre-filled
+row for a property with no override (the canvas's "search doubles as add a known property") and was
+rejected: a named row with an empty value still projects into the draft, so merely following a result
+left Apply live for an override nobody asked for. And a **revealed row belongs to the form, not to
+this window**: `Row::anchor` names it, `components::form::reveal` carries the ask (a window-lived
+slot, because it is written before the target's page has mounted, plus the page-lived scroll frame),
+and the row scrolls itself in and flashes once — the app's first use of `freya::animation` and of
+`ScrollController::scroll_to_item` outside the tab strip.
+
+**P4-16 (child-window lifetimes)** is ✅, and settles what a child window is actually pinned to:
+**not the window it sits above, but the mount of `ProjectRoot` whose handles it borrowed.** Export
+and Configure carry that subtree's store, log, catalog and scan counter as launch values — all
+`GenerationalBox`-backed — and both things that remount the subtree free them while leaving the
+owner window open under the same id. A re-root changes the folder, which the Configure pin happened
+to catch; an engine restart (P4-07) changes neither, and nothing caught that, so the next repaint
+panicked on a reclaimed box and a Save wrote into a store nothing was left to serve. The fix is one
+value and one predicate (`platform/owner.rs`): `Subtree` is the subtree's own diff key plus the live
+`EngineRestart`, **provided by `ProjectRoot`** so no opener can assemble a mismatched trio, and
+`use_owner_pin` replaces the two near-verbatim pins. Three things it settled. An owner that has
+closed *shows nothing*, so it fails the same comparison — one predicate, not three clauses. The
+generation is the one handle safe to hold across a remount, for exactly the reason it exists (owned
+by `ProjectApp`, above the subtree). And `WindowKind` now carries **less**: `Configure`'s `project`
+and `Export`'s `owner` were the old pins' inputs, so once the pin read its owner from the launch
+value they were unread second copies of a fact that could go stale.
 
 ---
 
