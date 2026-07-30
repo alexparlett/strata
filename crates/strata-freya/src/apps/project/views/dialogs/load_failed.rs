@@ -5,7 +5,10 @@
 //! the subtree and re-runs the load — the file may have been fixed, or the failure was
 //! transient) and **Close window**, through the shared close path (the launcher takes its
 //! place when it was the app's last). The load itself, and what counts as unrecoverable, is
-//! `state::hooks::open_project`'s.
+//! `state::hooks::open_project`'s; running it off the render thread is
+//! [`load_project`](crate::apps::project::state::load_project)'s, which is why Try again can no
+//! longer re-enter a blocking read — the arm it remounts into is
+//! [`ProjectLoading`](crate::apps::project::views::ProjectLoading).
 //!
 //! Unlike its siblings this dialog is **not modal** (`Dialog::modal(false)`): it *is* the
 //! window's whole content, with no feature listeners behind it to protect, and the window
@@ -19,14 +22,14 @@ use freya::components::use_theme;
 use freya::prelude::*;
 use strata_core::util::folder_name;
 
-use crate::apps::project::close::CloseTarget;
+use crate::apps::project::close::{use_engineless_close, CloseTarget};
 use crate::apps::project::state::EngineRestart;
 use crate::apps::project::views::WindowDragStrip;
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::IconName;
 use crate::components::typography::{Control, Prose, Title};
-use crate::platform::{close_this_window, OpenCtx};
-use crate::state::{use_claim_open, AppCtx};
+use crate::platform::OpenCtx;
+use crate::state::AppCtx;
 
 /// [`ProjectRoot`](crate::apps::project)'s fault arm: the whole subtree while the project
 /// could not load. Esc and the backdrop deliberately do nothing — there is no state behind
@@ -40,11 +43,8 @@ pub struct ProjectLoadFailed {
     /// The load error, verbatim: `open_project`'s strings already name the file with its
     /// full path.
     pub error: String,
-    /// The window's close-confirm slot. The fault arm mounts no `CloseConfirm`, but the
-    /// slot's writers still fire — `guard.running` can be true here, because a run in
-    /// flight when the window re-rooted into this broken project keeps the old engine
-    /// alive until it settles — so the slot is drained below rather than left to no-op
-    /// the red button and then pop a stale confirm on the next successful mount.
+    /// The window's close-confirm slot, drained rather than rendered — the reasoning, and the
+    /// other arm that needs the same, are [`use_engineless_close`]'s.
     pub confirm: State<Option<CloseTarget>>,
     /// The window's fill mark, for the drag strip — the fault arm still owes the window
     /// its chrome (the traffic lights sit in the same corner either way).
@@ -54,45 +54,16 @@ pub struct ProjectLoadFailed {
 
 impl Component for ProjectLoadFailed {
     fn render(&self) -> impl IntoElement {
-        // Taken in the render scope so the handlers can run from a task (the close_confirm
-        // pattern).
-        let platform = use_hook(Platform::get);
         let theme = use_theme();
         let open = use_consume::<OpenCtx>();
         let restart = use_consume::<EngineRestart>();
-        let confirm = self.confirm;
-        // Pressed once: the close is several async hops (it may stand the launcher up
-        // before this window goes), and a dialog that cannot dismiss itself can be pressed
-        // again in that gap — a second press must not close a second window.
-        let closing = use_state(|| false);
-        let close = {
-            let app = self.app.clone();
-            let platform = platform.clone();
-            move || {
-                let mut closing = closing;
-                if *closing.peek() {
-                    return;
-                }
-                closing.set(true);
-                // `spawn_forever`, not `spawn`: the close unmounts the very scope this
-                // handler belongs to — the whole window goes — and scope teardown drops
-                // that scope's tasks before they are ever polled. See the same note in
-                // `close_confirm`.
-                spawn_forever(close_this_window(platform.clone(), app.clone()));
-            }
-        };
+        // The close this arm can offer, and the drain of the confirm slot it mounts no dialog
+        // for — both shared with the loading arm, which needs the identical pair for the
+        // identical reasons (see `use_engineless_close`). `closing` is read by Try again, so a
+        // press after Close doesn't remount the subtree behind a window already on its way out.
+        let (close, closing) = use_engineless_close(self.app.clone(), self.confirm);
 
-        // The fault arm is still a window on this project, so it claims the open-set like
-        // any project window — a quit reopens it (resurfacing the fault, which is honest)
-        // and a deliberate close drops it from reopen-on-startup — while withholding the
-        // recents promotion that is `use_open_project`'s other half: a project that doesn't
-        // open must not head that list. The add half is load-bearing, not symmetry: a
-        // failed Try again remounts this arm, and a remove-on-drop alone would evict the
-        // entry with nothing re-adding it — the quit after that failed retry would silently
-        // forget the window.
-        use_claim_open(self.app.config, &self.root);
-
-        // …and tells the open path so: while this is set, naming this window's own project
+        // The fault arm tells the open path what it is showing: while this is set, naming this window's own project
         // (⌘O, Open Recent, the switcher) is a retry rather than the usual no-op — the one
         // reading of "open the project I am already looking at" that makes sense when what
         // the user is looking at is its load error. Mount/drop rather than a render read:
@@ -103,34 +74,6 @@ impl Component for ProjectLoadFailed {
             use_drop(move || {
                 let mut faulted = faulted;
                 faulted.set(false);
-            });
-        }
-
-        // Drain the close-confirm slot (see the field doc), acting rather than re-asking.
-        // Not a silent abort: `guard.running` can only be true here for runs orphaned by
-        // the confirmed stop that put this arm up — the re-root or restart that replaced
-        // the subtree asked the T2 question and the user answered it (or their pref asked
-        // never to be asked, which also gates every writer of this slot). The engine's
-        // deferred `Drop` merely hasn't finished honouring that answer yet, so a second
-        // confirm would re-ask about work already condemned. AGENTS.md §2 records this.
-        // The other two variants have no writer on the fault arm; clearing keeps the slot
-        // from carrying them into the next mount.
-        {
-            let close = close.clone();
-            use_side_effect(move || {
-                // Read into a value first — the close_confirm borrow rule: a match on the
-                // guard's temporary would hold the read borrow across the `set`.
-                let target = confirm.read().clone();
-                let Some(target) = target else {
-                    return;
-                };
-                let mut confirm = confirm;
-                confirm.set(None);
-                match target {
-                    CloseTarget::Window => close(),
-                    CloseTarget::Reroot(root) => open.reroot_confirmed(root),
-                    CloseTarget::Tab(_) | CloseTarget::Restart => {}
-                }
             });
         }
 

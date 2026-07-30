@@ -4,11 +4,13 @@
 //! close bridge, the menubar it points at itself, and the open path that decides where the
 //! next project lands. None of that changes when the window changes project.
 //!
-//! [`ProjectRoot`] is the **open project**: it runs the fallible load once per mount and is
-//! one of two arms — [`ProjectLoaded`] (the engine, the Project / Session / History stores,
-//! autosave, the catalog, and every feature view, built from the loaded values) or
-//! [`ProjectLoadFailed`] (the fault dialog that closes the window). It is **keyed on the
-//! project folder**, so "open in this window"
+//! [`ProjectRoot`] is the **open project**: it runs the fallible load once per mount and is one
+//! of three arms — [`ProjectLoading`] while the read is out, then [`ProjectLoaded`] (the engine,
+//! the Project / Session / History stores, autosave, the catalog, and every feature view, built
+//! from the loaded values) or [`ProjectLoadFailed`] (the fault dialog that closes the window).
+//! The read is `std::fs` on files the user named, and Freya draws every window from one thread,
+//! so it runs **off** that thread ([`load_project`]) and the loading arm is what the subtree is
+//! while it is out there. It is **keyed on the project folder**, so "open in this window"
 //! ([`OpenPref::This`](strata_core::config::OpenPref)) is a plain `State` write — the key
 //! change unmounts this subtree (flushing the session, dropping the engine, leaving the
 //! open-set) and mounts the next project exactly as launch does. There is no
@@ -17,33 +19,41 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::pin::pin;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTarget, Veto};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    open_project, use_autosave, use_diagnostics, use_engine_config, use_engine_restart,
+    load_project, use_autosave, use_diagnostics, use_engine_config, use_engine_restart,
     use_init_catalog_selection, use_init_faults, use_init_history, use_init_log, use_init_project,
     use_init_session, Chan, EngineRestart, Loaded, SessionState,
 };
 use crate::apps::project::views::{
     CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
-    ProfileConfirm, ProfileTarget, ProjectLoadFailed, RequestKeepers, Shell,
+    ProfileConfirm, ProfileTarget, ProjectLoadFailed, ProjectLoading, RequestKeepers, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
 use crate::platform::{
     close_this_window, open_settings, quit, use_register_window, OpenCtx, Subtree, WindowKind,
 };
-use crate::state::{use_config, use_open_project, use_share_config, AppCtx, ConfigChan};
+use crate::state::{
+    use_claim_open, use_config, use_promote_recent, use_share_config, AppCtx, ConfigChan,
+};
+use crate::task::offload;
 use crate::theme::{peek_selection, use_strata_theme, window_background};
+use async_io::Timer;
 use freya::prelude::*;
 use freya::radio::use_radio;
 use freya::winit::dpi::LogicalPosition;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
+use futures::executor::block_on;
+use futures::future::{select, Either};
 use futures::StreamExt;
 use strata_core::config::Command;
 use strata_core::project as project_io;
@@ -64,20 +74,20 @@ pub struct ProjectApp {
     /// + the veto receiver the root drains into the confirm dialog / the launcher hand-off.
     pub close: CloseBridge,
     /// The project folder the window **opens at** — decided by the caller (`main`'s startup
-    /// routing, or whoever opened this window) before the window exists, so its saved
-    /// geometry can seed the window. The project the window *shows* is [`OpenCtx::root`]
-    /// from here on, which starts as this and moves with an open-in-this-window.
+    /// routing, or whoever opened this window) before the window exists. The project the
+    /// window *shows* is [`OpenCtx::root`] from here on, which starts as this and moves with
+    /// an open-in-this-window.
     pub root: PathBuf,
-    /// The geometry the window was created with (`None` for a project that has never been
-    /// saved). Handed to `use_autosave` as the seed for the last *normal* geometry, so a
-    /// window filled before it is ever resized still persists a real size.
-    pub geometry: Option<WindowGeom>,
 }
 
 impl ProjectApp {
     /// This window's config for `root` — the project folder, already chosen by the caller
-    /// ([`crate::platform::open_project`] or `main`'s startup routing).
-    pub fn window(app: AppCtx, root: PathBuf) -> WindowConfig {
+    /// ([`crate::platform::open_project`] or `main`'s startup routing) — opened at `geometry`,
+    /// which the caller resolved with [`window_geometry`] for the same reason it resolved the
+    /// folder: a window's size and position can only be set as it is created, so both are
+    /// launch inputs and neither may be read from here (this runs on the thread that draws
+    /// every window).
+    pub fn window(app: AppCtx, root: PathBuf, geometry: Option<WindowGeom>) -> WindowConfig {
         // Match the theme's window body so a resize doesn't flash the default white.
         // Pre-launch there's no `Platform`, so the one-shot OS probe stands in for
         // Sync-with-OS.
@@ -89,44 +99,87 @@ impl ProjectApp {
         // the confirm pref is on), or while this is the last window and the launcher has
         // to come up first, and pings the UI either way.
         let (close, on_close) = close_bridge(app.config.peek().settings.confirm_close_running);
-        // The project's saved geometry seeds the window — Freya has no runtime resize/move
-        // from the app, so restore must happen at creation. A fresh / never-saved project
-        // has no geometry yet → the built-in default size, OS-placed.
-        let geom = project_io::load_session(&root)
-            .ok()
-            .flatten()
-            .and_then(|snapshot| snapshot.window);
         // First-run default is roomy enough to show the whole rail · sidebar · workbench ·
         // inspector · drawer frame without cramping the workbench; a saved geometry (once the
-        // window has been sized) wins, and `min_size` still honours the small-window story.
-        let (width, height) = geom.map_or((1200., 780.), |g| (g.width as f64, g.height as f64));
-        WindowConfig::new_app(ProjectApp {
-            app,
-            close,
-            root,
-            geometry: geom,
-        })
-        .with_title("Strata")
-        .with_size(width, height)
-        .with_min_size(880., 600.)
-        .with_background(background)
-        .with_on_close(on_close)
-        // Offset from AppKit's default (≈7, 6): close button lands at (13, 16) —
-        // x matches the Dioxus app's placement, y centers the 16px buttons in the
-        // 48px header bar.
-        .with_traffic_light_inset(6., 10.)
-        .with_window_attributes(move |attrs, _| {
-            let attrs = attrs
-                .with_titlebar_transparent(true)
-                .with_fullsize_content_view(true)
-                .with_title_hidden(true);
-            // Reopen where it was last left; a fresh project lets the OS place it.
-            match geom {
-                Some(g) => attrs.with_position(LogicalPosition::new(g.x as f64, g.y as f64)),
-                None => attrs,
-            }
-        })
+        // window has been sized) wins, and `min_size` still honours the small-window story. A
+        // project that has never been saved — or whose geometry could not be read in time —
+        // opens here, OS-placed.
+        let (width, height) = geometry.map_or((1200., 780.), |g| (g.width as f64, g.height as f64));
+        WindowConfig::new_app(ProjectApp { app, close, root })
+            .with_title("Strata")
+            .with_size(width, height)
+            .with_min_size(880., 600.)
+            .with_background(background)
+            .with_on_close(on_close)
+            // Offset from AppKit's default (≈7, 6): close button lands at (13, 16) —
+            // x matches the Dioxus app's placement, y centers the 16px buttons in the
+            // 48px header bar.
+            .with_traffic_light_inset(6., 10.)
+            .with_window_attributes(move |attrs, _| {
+                let attrs = attrs
+                    .with_titlebar_transparent(true)
+                    .with_fullsize_content_view(true)
+                    .with_title_hidden(true);
+                // Reopen where it was last left; a fresh project lets the OS place it.
+                match geometry {
+                    Some(g) => attrs.with_position(LogicalPosition::new(g.x as f64, g.y as f64)),
+                    None => attrs,
+                }
+            })
     }
+}
+
+/// How long a window waits for its remembered geometry before opening at the default size.
+///
+/// A deadline because the read is `std::fs` on a folder the user named, and the reason for it is
+/// the reason the load itself moved off the render thread: a mount that stopped answering blocks
+/// in the kernel with no timeout. Every other blocking read on this path became something a
+/// window can *report* ([`ProjectLoading`]), but geometry cannot — Freya has no runtime
+/// resize/move, so a window is placed as it is created or not at all, and a read that is still
+/// out has to be given up on for the window to exist at all. That trade is the right way round:
+/// a remembered size is a nicety, a window is not, and a window is where every other truth about
+/// this project gets told.
+///
+/// 250ms is far beyond a small local read and short enough to be imperceptible against opening a
+/// window at all.
+const GEOMETRY_DEADLINE: Duration = Duration::from_millis(250);
+
+/// The geometry a project window should open at: what its session remembers, read **off the
+/// render thread** and given up on after [`GEOMETRY_DEADLINE`].
+///
+/// A launch input, like the project folder beside it — resolved before the window exists because
+/// that is the only moment Freya can act on it (AGENTS.md §2). Giving up yields `None`, which is
+/// the same answer a project that has never been saved gives, and it costs nothing durable: the
+/// autosave seed is taken from the session the project actually loads
+/// ([`use_autosave`]), not from this, so a window that opened at the default size still keeps the
+/// size the user chose.
+pub async fn window_geometry(root: PathBuf) -> Option<WindowGeom> {
+    let named = root.display().to_string();
+    let read = pin!(offload(move || project_io::load_session(&root)
+        .ok()
+        .flatten()
+        .and_then(|snapshot| snapshot.window)));
+    let deadline = pin!(Timer::after(GEOMETRY_DEADLINE));
+    match select(read, deadline).await {
+        Either::Left((geometry, _)) => geometry.flatten(),
+        Either::Right(_) => {
+            tracing::warn!(
+                "{named}: could not read the window geometry in time, opening at the default size"
+            );
+            None
+        }
+    }
+}
+
+/// [`window_geometry`] for a caller with no executor to await it on: `main`'s startup routing,
+/// which runs before `launch`, and the menubar's Open Recent, which runs on the renderer thread
+/// inside a muda event handler and has a `RendererContext` rather than a `Platform`.
+///
+/// This is the one place a project folder is still read on a thread that matters — and what makes
+/// that acceptable is [`GEOMETRY_DEADLINE`]: the wait is bounded and brief where it used to be
+/// unbounded. Prefer the async form wherever there is somewhere to await it.
+pub fn window_geometry_blocking(root: PathBuf) -> Option<WindowGeom> {
+    block_on(window_geometry(root))
 }
 
 impl App for ProjectApp {
@@ -257,15 +310,15 @@ impl App for ProjectApp {
         let filled_by_app = use_state(|| false);
 
         let root = open.root.read().clone();
-        // The autosave seed is the launch project's alone, on its **first** mount — the window
-        // was *created* at that geometry. A re-root leaves the window exactly where it is, so the
-        // project that arrives simply records the geometry it finds itself at on its first save;
-        // an engine restart is the same case even though the folder has not changed, because by
-        // then the window may have been moved or resized and the launch geometry is stale. Re-
-        // seeding it would resurrect that stale value the next time the window saves while filled
-        // (the pass that keeps the last *non*-transient geometry rather than reading the screen).
+        // Whether this is the project the window was *created* for, on its first mount — which is
+        // the only case with an autosave seed to offer (`ProjectLoaded` takes it from the session
+        // it loaded). A re-root leaves the window exactly where it is, so the project that
+        // arrives simply records the geometry it finds itself at on its first save; an engine
+        // restart is the same case even though the folder has not changed, because by then the
+        // window may have been moved or resized. Seeding either would resurrect a geometry this
+        // window was never at, the next time it saves while filled (the pass that keeps the last
+        // *non*-transient geometry rather than reading the screen).
         let first_mount = root == self.root && engine_restart.generation() == 0;
-        let geometry = first_mount.then_some(self.geometry).flatten();
 
         rect()
             .expanded()
@@ -285,7 +338,7 @@ impl App for ProjectApp {
             .child(ProjectRoot {
                 root,
                 generation: engine_restart.generation(),
-                geometry,
+                first_mount,
                 confirm,
                 filled_by_app,
                 app: self.app.clone(),
@@ -344,12 +397,13 @@ impl App for ProjectApp {
     }
 }
 
-/// Everything that belongs to the **open project** rather than to the window — in two
-/// arms. The fallible IO (defs + session) runs once per mount, and what it found decides
-/// what this subtree *is*: [`ProjectLoaded`] (the engine, the stores, autosave, the catalog
-/// and every feature view, built from the loaded values) or [`ProjectLoadFailed`] (the
-/// fault, surfaced and closed — a project that can't load has no window). Neither store is
-/// ever built from anything but a successful load.
+/// Everything that belongs to the **open project** rather than to the window — in three
+/// arms. The fallible IO (defs + session) runs once per mount, off the render thread, and what
+/// it finds decides what this subtree *is*: [`ProjectLoading`] while the answer is out, then
+/// [`ProjectLoaded`] (the engine, the stores, autosave, the catalog and every feature view,
+/// built from the loaded values) or [`ProjectLoadFailed`] (the fault, surfaced and closed — a
+/// project that can't load has no window). No store is ever built from anything but a successful
+/// load.
 ///
 /// Keyed on [`root`](Self::root) — see the module doc. Nothing in here is written to
 /// re-open a project; it is only ever mounted at one.
@@ -362,9 +416,9 @@ struct ProjectRoot {
     /// is a remount of this same project, which is the only way to apply a changed
     /// `datafusion.runtime.*` property: the `RuntimeEnv` is fixed when the engine is built.
     generation: u64,
-    /// The geometry the window was created at, when this is the project it was created for
-    /// — the autosave seed. `None` for a project opened into an existing window.
-    geometry: Option<WindowGeom>,
+    /// Whether this is the project the window was created for, on its first mount — the one case
+    /// with an autosave geometry seed to offer. See `ProjectApp::render`.
+    first_mount: bool,
     /// The window's close-confirm slot: this subtree owns the dialog (it needs the project
     /// and session stores to name what it is closing), the window owns the slot.
     confirm: State<Option<CloseTarget>>,
@@ -376,32 +430,55 @@ struct ProjectRoot {
 
 impl Component for ProjectRoot {
     fn render(&self) -> impl IntoElement {
+        // **The window's claim on this project, whatever the load turns out to say.** Here rather
+        // than in an arm because it is true of the mount and not of the outcome: a window
+        // loading a project, showing one, or reporting that it could not be loaded is in every
+        // case a window on that project, which is what makes a quit reopen it and a deliberate
+        // close drop it from reopen-on-startup. Hoisting it also settles the question an arm
+        // could not: two arms with an add-on-mount / remove-on-drop pair apiece would depend on
+        // which way the diff orders the swap between them. The recents promotion stays in the
+        // loaded arm, because that half is earned rather than claimed.
+        use_claim_open(self.app.config, &self.root);
+
         // Once per mount: the subtree is keyed on (folder, generation), so a re-root into a
-        // broken project — or an engine restart — re-runs the load in a fresh scope.
-        // Detection therefore lives at every way a project arrives in a window, not only at
-        // launch.
-        // `Rc`, because `use_hook` clones its stored value on every run of this scope and
-        // the runner keeps the child's props alive besides — behind the pointer, the one
-        // copy of the defs and every tab's text is shared rather than duplicated per copy.
-        let loaded = use_hook(|| {
-            open_project(&self.root)
-                .map(Rc::new)
-                .inspect_err(|e| tracing::error!("open project {}: {e}", self.root.display()))
+        // broken project — or an engine restart, or the fault dialog's Try again — re-runs the
+        // load in a fresh scope. Detection therefore lives at every way a project arrives in a
+        // window, not only at launch.
+        //
+        // `use_future` rather than a hand-rolled state + `spawn`: `FutureState`'s three cases
+        // *are* the three arms, the task is scope-bound (a remount abandons the read in flight
+        // rather than letting it write into a subtree that has gone), and the read itself sits
+        // on a thread of its own — see `load_project`.
+        let load = use_future({
+            let root = self.root.clone();
+            move || load_project(root.clone())
         });
-        match loaded {
-            Ok(loaded) => ProjectLoaded {
-                loaded,
+        match &*load.state() {
+            // Pending is the first render, before the task has been polled; Loading is the read
+            // out on its thread. Nothing distinguishes them to a user, and neither has anything
+            // loaded, so they are one arm.
+            FutureState::Pending | FutureState::Loading => ProjectLoading {
                 root: self.root.clone(),
-                generation: self.generation,
-                geometry: self.geometry,
                 confirm: self.confirm,
                 filled_by_app: self.filled_by_app,
                 app: self.app.clone(),
             }
             .into_element(),
-            Err(error) => ProjectLoadFailed {
+            // The `Rc` is cloned per render, not the catalog behind it — and it is minted once
+            // per mount, which is what lets `ProjectLoaded` compare by pointer.
+            FutureState::Fulfilled(Ok(loaded)) => ProjectLoaded {
+                loaded: loaded.clone(),
                 root: self.root.clone(),
-                error,
+                generation: self.generation,
+                first_mount: self.first_mount,
+                confirm: self.confirm,
+                filled_by_app: self.filled_by_app,
+                app: self.app.clone(),
+            }
+            .into_element(),
+            FutureState::Fulfilled(Err(error)) => ProjectLoadFailed {
+                root: self.root.clone(),
+                error: error.clone(),
                 confirm: self.confirm,
                 filled_by_app: self.filled_by_app,
                 app: self.app.clone(),
@@ -430,7 +507,7 @@ struct ProjectLoaded {
     loaded: Rc<Loaded>,
     root: PathBuf,
     generation: u64,
-    geometry: Option<WindowGeom>,
+    first_mount: bool,
     confirm: State<Option<CloseTarget>>,
     filled_by_app: State<bool>,
     app: AppCtx,
@@ -444,7 +521,7 @@ impl PartialEq for ProjectLoaded {
         Rc::ptr_eq(&self.loaded, &other.loaded)
             && self.root == other.root
             && self.generation == other.generation
-            && self.geometry == other.geometry
+            && self.first_mount == other.first_mount
             && self.confirm == other.confirm
             && self.filled_by_app == other.filled_by_app
             && self.app == other.app
@@ -501,18 +578,28 @@ impl Component for ProjectLoaded {
         // registration pass over them as a background task — rows flip Loading →
         // Ready/Failed as answers land, and each answer is recorded in the log.
         let project = use_init_project(&engine, log, self.root.clone(), self.loaded.clone());
-        // Register the project in the app-global config for as long as this subtree lives: it
-        // heads the recents (so the launcher / project picker can offer it) and joins the
-        // open-set (so they can tell open from merely recent) until the window closes — or
-        // until it opens something else, which drops this entry and adds that one.
-        use_open_project(config, &project.peek().name, &self.root);
+        // Now that it has actually opened, the project heads the recents — the half of the config
+        // claim a project earns by loading, as against the open-set claim every arm of the
+        // subtree makes (`ProjectRoot`). It stays there after the window goes, which is the whole
+        // point of a recent.
+        use_promote_recent(config, &project.peek().name, &self.root);
         // This project's Session store, from the snapshot the load already restored (tabs /
         // order / active / layout), else one blank tab.
         use_init_session(self.loaded.clone());
         // Debounced autosave of that session back to `.strata/session.json`. Its subscription
         // is inside the effect's own scope, so it never re-renders this root; its `use_drop`
         // is what makes a close — or a re-root — keep the last few hundred milliseconds.
-        use_autosave(self.geometry, self.filled_by_app);
+        //
+        // The geometry seed is **this session's own**, and only on the window's first mount (see
+        // `ProjectApp::render`): the same field `window_geometry` read to place the window, but
+        // taken from the load rather than from that read, which has a deadline and may have come
+        // back empty. Seeding `None` there would let the first save replace a perfectly good
+        // remembered size with whatever default the window opened at.
+        let restored = self
+            .first_mount
+            .then(|| self.loaded.session.as_ref().and_then(|s| s.window))
+            .flatten();
+        use_autosave(restored, self.filled_by_app);
         // The project's query-history satellite: loads `.strata/history.jsonl` and holds
         // recent runs (capped by `Settings::max_history`, hence the config); the results pane
         // appends to it as runs complete.
@@ -599,9 +686,47 @@ impl Component for ProjectLoaded {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::process;
+
     use freya_testing::TestingRunner;
+    use strata_model::SessionSnapshot;
 
     use super::*;
+
+    /// **The offloaded geometry read actually comes back** — the half a deadline can swallow in
+    /// silence. A `select` that always resolved to its timer would lose every project's
+    /// remembered window size and nothing in the app would look wrong, because a window opening
+    /// at the default size is exactly what a fresh project does. Worth a test for that reason
+    /// alone: the failure has no symptom other than the feature quietly not working.
+    #[test]
+    fn a_saved_geometry_survives_the_offloaded_read() {
+        let root = std::env::temp_dir().join(format!("strata-geometry-{}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(project_io::strata_dir(&root)).unwrap();
+        project_io::save_session(
+            &root,
+            &SessionSnapshot {
+                window: Some(WindowGeom {
+                    x: 120.,
+                    y: 64.,
+                    width: 1440.,
+                    height: 900.,
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let read = block_on(window_geometry(root.clone())).expect("the read answered in time");
+
+        assert_eq!(
+            (read.x, read.y, read.width, read.height),
+            (120., 64., 1440., 900.)
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     /// [`ProjectRoot`]'s keying and nothing else — the mechanism the whole re-root rests on,
     /// with the stores and the engine replaced by a log of what mounted and what went.

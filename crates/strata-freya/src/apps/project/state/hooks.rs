@@ -22,6 +22,7 @@ use strata_model::{SessionSnapshot, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::state::ConfigStation;
+use crate::task::offload;
 
 use super::catalog::{
     claim_scan, request_scan, use_init_catalog, use_init_catalog_rescan, CatalogRescan, ScanGuard,
@@ -334,6 +335,41 @@ pub fn open_project(root: &Path) -> Result<Loaded, String> {
     Ok(Loaded { defs, session })
 }
 
+/// [`open_project`] **off the render thread** — what `ProjectRoot`'s loading arm awaits, and
+/// the only way the subtree runs it.
+///
+/// What it reads is unchanged; where it runs is the point. Every step of `open_project` is
+/// synchronous `std::fs` (and one `fs::rename`, for a corrupt session), and Freya polls its
+/// futures on the thread that draws every window — so run in the render pass, a project on a
+/// mount that stopped answering froze the whole app, and the fault dialog's Try again was a
+/// button that re-entered the freeze on demand. See [`offload`] for why a thread rather than a
+/// pool, and for what "cancel" can and cannot mean here.
+///
+/// The `Rc` is taken on this side of the hop: [`Loaded`] crosses the thread as the plain serde
+/// values it is, and the pointer whose identity `ProjectLoaded` compares is minted once the
+/// answer is home.
+pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
+    let named = root.clone();
+    match offload(move || open_project(&root)).await {
+        Some(Ok(loaded)) => Ok(Rc::new(loaded)),
+        Some(Err(e)) => {
+            tracing::error!("open project {}: {e}", named.display());
+            Err(e)
+        }
+        // The worker never answered (see [`offload`]). Nothing here knows anything about the
+        // project, so the message says only what is true — and it is still a fault, because the
+        // one thing we do know is that this window has no session to mount.
+        None => {
+            let e = format!(
+                "open project {}: the load did not complete",
+                named.display()
+            );
+            tracing::error!("{e}");
+            Err(e)
+        }
+    }
+}
+
 /// Register the named defs on the engine and fold what it answered into the store. One
 /// pass, shared by project open, the sidebar's ↻ re-scan ([`refresh_catalog`]) and a
 /// row's Refresh ([`refresh_table`]) — a re-scan *is* a re-registration, so there is one
@@ -471,9 +507,12 @@ const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 /// (+ geometry) and writes it. The mount pass is skipped (the just-loaded session already
 /// matches disk).
 ///
-/// `restored` is the geometry the window was *created* with (`ProjectApp::window` read it off
-/// the same session file) — the seed for the "last normal geometry" the save persists, see
-/// below.
+/// `restored` is the geometry **the loaded session remembers** — the seed for the "last normal
+/// geometry" the save persists, see below. It comes from the session this project actually
+/// loaded rather than from the read that placed the window
+/// ([`window_geometry`](crate::apps::project::window_geometry)), because that read has a
+/// deadline and may have come back empty: seeding `None` there would let the first save replace
+/// a perfectly good remembered size with the default the window opened at.
 ///
 /// **Our fill, and fullscreen, are not remembered.** A window we filled (the header's
 /// double-press) or that is in native fullscreen has the *screen's* geometry, not a size the user

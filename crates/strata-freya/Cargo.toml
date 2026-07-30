@@ -38,12 +38,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Stable per-tab identity (TabId) + serde for the future session snapshot.
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# Executor-agnostic timer for the running state's elapsed ticker — the same primitive
-# freya-sdk's `use_timeout` rides (Freya's UI executor has no timer of its own).
+# Executor-agnostic timer — the same primitive freya-sdk's `use_timeout` rides (Freya's UI
+# executor has no timer of its own): the running state's elapsed ticker, the session autosave's
+# debounce, the deadline on a window's geometry read and the delay before a slow project load
+# admits to being slow.
 async-io = "2.5"
 
-# The T2 close bridge's veto channel (winit `on_close` hook → UI executor wake-up), and
-# `block_on` in the freya-query unit tests.
+# Three jobs, all of them the boundary between a thread and the UI executor: the T2 close
+# bridge's veto channel (winit `on_close` hook → UI executor wake-up), the `oneshot` that carries
+# a `task::offload`ed answer home, and `select`/`block_on` for the callers that must bound or
+# block on one.
 futures = "0.3"
 
 # Native folder / file pickers (the launcher's OPEN, later Export + Configure). The *async*

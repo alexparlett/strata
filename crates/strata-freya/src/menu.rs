@@ -48,7 +48,7 @@ use freya::prelude::{
 use strata_core::config::{Command, KeyChord, RecentProject, Settings};
 use strata_core::keymap::effective_chord;
 
-use crate::apps::project::ProjectApp;
+use crate::apps::project::{window_geometry_blocking, ProjectApp};
 use crate::platform::{self, OpenCtx, OpenTarget};
 use crate::state::{use_config, AppCtx, ConfigChan};
 
@@ -679,7 +679,12 @@ fn open_recent(ctx: &mut RendererContext, app: AppCtx, path: &str) {
             }
         }
         OpenTarget::NewWindow(root) => {
-            ctx.launch_window(ProjectApp::window(app, root));
+            // The renderer thread, inside a muda event handler: there is no executor here to
+            // await the geometry on, so this is the one open path that still waits for a read of
+            // the project folder. Bounded and brief (`GEOMETRY_DEADLINE`) rather than the
+            // unbounded block it used to be.
+            let geometry = window_geometry_blocking(root.clone());
+            ctx.launch_window(ProjectApp::window(app, root, geometry));
         }
         // Both of these are the focused window's own state, so they need no window handle —
         // and `focused` is `Some` by construction, since only its `decide` returns them.

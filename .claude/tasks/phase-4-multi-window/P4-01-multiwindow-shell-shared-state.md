@@ -10,8 +10,9 @@ close handling.
 **Shared state is done** (build item 1): `crate::state::config` holds the app-global `AppConfig`
 store — a global `RadioStation<AppConfig, ConfigChan>` (settings · recents · open-set) created in
 `main` and shared into each window root by `use_share_config`; `write_config` is the single
-mutate-and-persist path; `use_open_project` keeps a window's project in recents + the open-set for
-its lifetime. Theme is pure derived state off the `Settings` channel (`use_strata_theme`).
+mutate-and-persist path; `use_claim_open` keeps a window's project in the open-set for the life of
+its subtree mount and `use_promote_recent` heads the recents with it once it has actually loaded
+(item 5). Theme is pure derived state off the `Settings` channel (`use_strata_theme`).
 
 **The window model is done** (items 2 · 4 · 6, and item 3's close routing), built with P4-02 because
 the launcher is the surface that needs it — `crate::platform::windows`:
@@ -22,7 +23,7 @@ the launcher is the surface that needs it — `crate::platform::windows`:
 - `open_project` / `open_launcher` — focus-if-open, else `launch_window`. The launcher is
   single-instance by construction.
 - `quit` / `quit_windows` — ⌘Q (`Command::Quit`, new) and menu Quit close **every** window and set
-  a `QUITTING` flag that suppresses `use_open_project`'s open-set removal, so the next launch
+  a `QUITTING` flag that suppresses `use_claim_open`'s open-set removal, so the next launch
   reopens exactly what was on screen.
 - `close_this_window` — ⇧⌘W (`Command::CloseProject`, rebound off ⌘Q), File ▸ Close Project and the
   red button close **one** window, drop it from the open-set, and put the **launcher** up when it
@@ -67,6 +68,78 @@ the launcher is the surface that needs it — `crate::platform::windows`:
    (missing → blank; corrupt → kept aside, blank) are unchanged; only defs failures, an
    unreadable session, and a corrupt session whose rename-aside fails are faults.
 
+   **The load is asynchronous, and that is a third arm** (built after two review passes flagged
+   the residual risk and it was deferred). Every step of `open_project` is synchronous
+   `std::fs` — and Freya is one event loop drawing every window, so run in the render pass a
+   project on a mount that stopped answering (an SMB/NFS mount that went quiet: blocking in the
+   kernel, no timeout, uninterruptible — exactly the `SessionLoadError::Unreadable` case the
+   fault dialog exists for) froze the entire app, and Try again was a button that re-entered the
+   freeze on demand. Freya's `spawn` polls on that same thread, so an `async` block moves
+   nothing; the engine's private Tokio runtime cannot help either, since an engine is only built
+   *after* a successful load. So:
+
+   - **`task::offload`** (`src/task.rs`) is the one way across: the work runs on a thread of its
+     own and the caller awaits a `oneshot`, which reaches the UI executor through the same
+     cross-thread wake `async_io::Timer` already uses for the autosave debounce (task waker →
+     the runner's channel → the winit `EventLoopProxy` the receiver is parked on). A thread
+     **per call**, not a pool or one worker: shared, one wedged mount would hold up the next
+     project's open, which is this failure moved one step along rather than removed. Cancelling
+     is dropping the answer, never stopping the work — a blocking syscall cannot be interrupted,
+     so the honest cost is one parked thread per attempt against a dead mount, named in the
+     module doc.
+   - **`state::hooks::load_project`** wraps `open_project` in it and mints the `Rc` on the near
+     side (`Loaded` crosses the thread as the plain serde values it is).
+   - **`ProjectRoot` drives it with `use_future`**, not a hand-rolled `use_state` + `spawn`:
+     `FutureState`'s `Pending | Loading | Fulfilled(Ok | Err)` *are* the three arms, and the task
+     is scope-bound, so a remount abandons a read in flight rather than letting it write into a
+     subtree that has gone. `FutureTask::start` is deliberately unused — a retry stays the
+     generation bump, because that is the one mechanism reachable from outside the subtree
+     (`OpenCtx::faulted`), and a remount re-runs the future anyway.
+   - **`ProjectLoading`** (`views/loading.rs`) is the new arm: the window background alone until
+     `SLOW_LOAD` (600ms) has passed, then a `CircularLoader`, "Opening '<name>'" and **Close
+     window**. Nothing is drawn for a load nobody could perceive — a spinner that flashes on
+     every open is worse than none — and the button says *Close window* rather than Cancel
+     because there is no honest way to stop the read. It holds no engine, no store and no
+     `Subtree`, so no child window can be opened from it or handed a handle that would outlive
+     the mount. Retry storms are ruled out by construction: Try again is only reachable once the
+     load has settled.
+   - **`use_engineless_close`** (`close.rs`) is the once-only close + confirm-slot drain, now
+     shared by both engineless arms rather than copied: the loading arm needs the identical pair
+     for the identical reason (`guard.running` can be true there for runs orphaned by whatever
+     replaced the last subtree, so a red-button close would otherwise land in a slot nothing
+     renders and read as a dead control).
+   - **`use_claim_open` moved up to `ProjectRoot`**, and `use_open_project` split into it plus
+     `use_promote_recent`. The open-set claim is true of the *mount* and not of the outcome —
+     loading, loaded and faulted are all a window on that project — while the recents promotion
+     is earned by loading (and needs the name only the defs carry). Hoisting also settles what
+     an arm could not: two arms each with an add-on-mount / remove-on-drop pair would depend on
+     which way the diff orders the swap between them.
+
+   **The blocking read that actually hangs first was the geometry pre-read**, so it is part of
+   the same fix rather than scope beside it: `ProjectApp::window` read `.strata/session.json`
+   itself, on the render thread, before the window existed — the *same* `load_session` call, so
+   without this the loading arm would never get a chance and the app would freeze one step
+   earlier. Geometry is now a **launch input like the folder** (`ProjectApp::window(app, root,
+   geometry)`), resolved by the caller through `window_geometry` — `offload` raced against a
+   250ms `GEOMETRY_DEADLINE`, because Freya has no runtime resize/move and a window is placed as
+   it is created or not at all. Giving up is the right trade (a remembered size is a nicety, a
+   window is not, and the window is where every other truth about the project gets told) and it
+   costs nothing durable, because **the autosave seed now comes from the session the project
+   actually loaded** rather than from that read: seeding `None` would have let the first save
+   replace a perfectly good remembered size with the default the window opened at. Two of the
+   three callers await it (`platform::open_project`, and `main`'s startup where blocking is free
+   — no event loop yet); the menubar's Open Recent runs inside a muda handler with a
+   `RendererContext` and no executor, so it uses `window_geometry_blocking` — the one remaining
+   wait on a project folder from a thread that matters, now bounded and brief where it was
+   unbounded.
+
+   > **Still synchronous, deliberately named:** `platform::resolve_project_folder`'s
+   > `fs::canonicalize`. It runs on the UI thread from the picker, the recents surfaces and
+   > startup routing, and on a dead mount it blocks like anything else. It is a different
+   > question from this one (*does this path name a project* vs *load this project*) with four
+   > call sites and no window yet to report into, so it wants its own change — `offload` is
+   > already the primitive it would use.
+
    Review-settled details. The dialog is **non-modal** (`Dialog::modal(false)`) — it is the
    window's whole content with no feature listeners behind it, and the menubar's Open…/Settings
    items arrive as synthesized key presses, so a modal barrier would kill ⌘O and ⌘,; it also
@@ -77,12 +150,14 @@ the launcher is the surface that needs it — `crate::platform::windows`:
    (or the pref that gates every writer of the slot asked never to ask) — so a vetoed red-button
    close or a parked re-root completes an answered question rather than sitting in a slot
    nothing renders (AGENTS.md §2 records the boundary). The fault arm **claims the open-set**
-   (`use_claim_open`, the open-set half of `use_open_project` with no recents promotion): it is
-   still a window on that project, so a quit reopens it — resurfacing the fault, which is honest —
-   and a deliberate close drops it from reopen-on-startup (the acceptance below). The add half is
-   load-bearing, not symmetry: a remove-on-drop alone is evicted by the remount a **failed** Try
-   again performs, with nothing re-adding it — the quit after that failed retry would silently
-   forget the window. It also sets **`OpenCtx::faulted`**, which turns the one open decision that
+   without promoting the recent: it is still a window on that project, so a quit reopens it —
+   resurfacing the fault, which is honest — and a deliberate close drops it from reopen-on-startup
+   (the acceptance below). The add half is load-bearing, not symmetry: a remove-on-drop alone is
+   evicted by the remount a **failed** Try again performs, with nothing re-adding it — the quit
+   after that failed retry would silently forget the window. (That started as a fault-arm special
+   case, `use_claim_open` beside the recents-promoting `use_open_project`. The async arm made it the
+   general rule instead — the claim moved up to `ProjectRoot` and the promotion became
+   `use_promote_recent`; see the async section above.) It also sets **`OpenCtx::faulted`**, which turns the one open decision that
    was a no-op — naming this window's own project — into a retry (`apply`'s `Nothing` arm bumps
    the generation), so fix-the-file-then-⌘O works; a faulted window focused from *another* window
    still only raises the dialog, whose Try again is the visible recovery. And it keeps the
@@ -119,6 +194,20 @@ the launcher is the surface that needs it — `crate::platform::windows`:
 - [x] Windows spawn/focus/close; native close (red button / ⌘Q / menu) routes through the confirm.
 - [x] An unrecoverable defs/session restore error closes that window (→ launcher if it was the last),
       replacing the interim `panic!` in `apps/project/state/hooks.rs`.
+- [x] A project whose read never answers leaves the **app** responsive. Verified against a scratch
+      project with `.strata/session.json` replaced by a **FIFO with no writer** — which blocks in
+      `open` with no timeout, exactly as a dead SMB/NFS mount does, and needs no network to
+      reproduce. `sample` on the running app showed two `strata-offload` threads parked in
+      `open` (the geometry read the deadline gave up on, and the project load) while the **main
+      thread sat in `freya_winit::launch`'s event loop** — before this change that thread was the
+      one in `open`. The geometry deadline logged its warning and the window opened at the default
+      size rather than the app blocking before any window existed.
+- [x] The arm that is up while a load is out is the **loading** one, asserted without pixels: with
+      a wiped config, `open_projects` held the project and `recent_projects` was **empty** — so
+      `ProjectRoot` had mounted and claimed, and `ProjectLoaded` had not. Writing to the FIFO then
+      handed the same window over in place (recents became `['sales']`, same pid, no remount), and
+      the partial read the FIFO delivered was classified `Corrupt` and moved aside — the
+      recoverable path, unchanged.
 
 ## Freya / references
 - Plan §4 (client/server split; `create_global` for singletons), §6 (multi-window), §8 (native menu

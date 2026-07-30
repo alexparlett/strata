@@ -35,8 +35,9 @@ use crate::platform::is_quitting;
 /// the open-set are split because the window switcher only tracks what's open, while the
 /// launcher's list is mostly about recents.
 ///
-/// The split that matters is `Settings` vs. the project lists: `use_open_project` writes
-/// `Recents`/`Open` on every window mount and close (and the launcher will, on every pin),
+/// The split that matters is `Settings` vs. the project lists: [`use_claim_open`] and
+/// [`use_promote_recent`] write `Open`/`Recents` on every window mount and close (and the
+/// launcher will, on every pin),
 /// and waking the `Settings` subscribers for that would sweep every mounted `use_hint` —
 /// one per menu row and tooltip. Going *finer* inside `Settings` (Theme / Keymap / Grid)
 /// would only optimize Settings-window toggles: human-speed, once-per-click, and the theme
@@ -80,7 +81,7 @@ pub type ConfigRadio = Radio<AppConfig, ConfigChan>;
 /// **live** state they are stale by definition: no window exists yet in this process, so
 /// nothing here could ever remove them and they would accumulate forever, telling the
 /// launcher a project is open when it isn't. Windows re-add themselves through
-/// [`use_open_project`] as they open, which also means a crash leaves a usable restore
+/// [`use_claim_open`] as they open, which also means a crash leaves a usable restore
 /// list rather than a growing one.
 pub fn create_global_config() -> (ConfigStation, Vec<String>) {
     let mut cfg = config::load();
@@ -116,46 +117,28 @@ pub fn use_config_channel(station: ConfigStation, chan: ConfigChan) -> ConfigRad
     use_hook(move || Radio::new(State::create(RadioAntenna::new(chan, station))))
 }
 
-/// Tie a window's open project to the app-global config for as long as the window lives:
-/// on mount the project is promoted to the top of the recents and joins the open-set; when
-/// the window closes it leaves the open-set. The *recent* stays — outliving the window is
-/// the whole point of a recent.
+/// **The window's claim on a project**: it joins the persisted open-set on mount and leaves it
+/// on close — but not on quit.
+///
+/// Called by `ProjectRoot`, so every arm of the project subtree claims alike: a window loading
+/// a project, showing one, or reporting that it could not be loaded is in every case *a window
+/// on that project*. That is what makes a quit reopen it — resurfacing a fault honestly — and a
+/// deliberate close drop it from reopen-on-startup. Deliberately **not** paired with the
+/// recents promotion below, which a project has to earn by loading.
 ///
 /// `root` is the project folder ([`RecentProject::path`](strata_core::config::RecentProject::path)),
 /// already canonicalized by whoever opened the window.
+///
+/// The add half is load-bearing rather than symmetry: an unpaired remove-on-drop loses the
+/// entry on every remount of the subtree — a failed Try again, an engine restart — because
+/// nothing re-adds what the drop took out, and the quit after that would silently forget the
+/// window.
 ///
 /// Quitting closes windows too, so this drop runs then as well — and must **not** remove
 /// anything, or the persisted open-set would end up empty and "Reopen projects on startup"
 /// would restore nothing. [`is_quitting`] is what tells the two apart, and that difference
 /// is the whole feature: quitting with three projects open reopens those three, while
 /// closing all three by hand means "start me at the launcher".
-pub fn use_open_project(station: ConfigStation, name: &str, root: &Path) {
-    let path = root.to_string_lossy().into_owned();
-    let name = name.to_string();
-    use_hook({
-        let path = path.clone();
-        move || {
-            write_config(station, &[ConfigChan::Recents, ConfigChan::Open], |cfg| {
-                cfg.push_recent(&name, &path);
-                cfg.add_open(&path);
-            });
-        }
-    });
-    use_drop(move || {
-        if is_quitting() {
-            return;
-        }
-        write_config(station, &[ConfigChan::Open], |cfg| cfg.remove_open(&path));
-    });
-}
-
-/// [`use_open_project`]'s open-set half alone: the window joins it on mount and leaves it
-/// on close — but not on quit — with **no** recents promotion. For the project-load fault
-/// arm, which is still a *window on that project* (so a quit must reopen it, resurfacing
-/// the fault honestly, and a deliberate close must drop it from reopen-on-startup) but must
-/// not head the recents with a project that doesn't open. The pairing is the point: an
-/// unpaired remove-on-drop loses the entry whenever the arm remounts into a second fault —
-/// a failed Try again — because nothing re-adds what the drop took out.
 pub fn use_claim_open(station: ConfigStation, root: &Path) {
     let path = root.to_string_lossy().into_owned();
     use_hook({
@@ -169,6 +152,25 @@ pub fn use_claim_open(station: ConfigStation, root: &Path) {
             return;
         }
         write_config(station, &[ConfigChan::Open], |cfg| cfg.remove_open(&path));
+    });
+}
+
+/// **A project earns its place in the recents by opening**: head the list with `root` once, on
+/// mount. Called by `ProjectLoaded` — the arm that exists only because the load succeeded — so
+/// neither a project still loading nor one that faulted can head a list of places worth
+/// returning to.
+///
+/// Mount-only, with no drop half: outliving the window is the whole point of a recent.
+///
+/// `name` is the project's own name from the defs it just loaded, which is the other reason this
+/// half waits for the load — before it there is nothing to call the entry.
+pub fn use_promote_recent(station: ConfigStation, name: &str, root: &Path) {
+    let path = root.to_string_lossy().into_owned();
+    let name = name.to_string();
+    use_hook(move || {
+        write_config(station, &[ConfigChan::Recents], |cfg| {
+            cfg.push_recent(&name, &path)
+        });
     });
 }
 

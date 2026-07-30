@@ -16,7 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use apps::launcher::LauncherApp;
-use apps::project::ProjectApp;
+use apps::project::{window_geometry_blocking, ProjectApp};
 use freya::prelude::*;
 use strata_core::config::AppConfig;
 use strata_core::engine::purge_snapshot_root;
@@ -32,6 +32,7 @@ mod keymap;
 mod menu;
 mod platform;
 mod state;
+mod task;
 mod theme;
 
 fn main() {
@@ -107,7 +108,12 @@ fn main() {
     // first-window-spawns-the-rest dance.
     let launch_config = match startup(&config.peek(), reopen) {
         Startup::Projects(roots) => roots.into_iter().fold(launch_config, |cfg, root| {
-            cfg.with_window(ProjectApp::window(app.clone(), root))
+            // Geometry is a launch input, resolved before the window exists. Blocking for it is
+            // free here — there is no event loop yet to hold up — and it is bounded either way
+            // (`GEOMETRY_DEADLINE`), so a project on a mount that stopped answering no longer
+            // keeps the app from starting at all.
+            let geometry = window_geometry_blocking(root.clone());
+            cfg.with_window(ProjectApp::window(app.clone(), root, geometry))
         }),
         Startup::Launcher => launch_config.with_window(LauncherApp::window(app)),
     };

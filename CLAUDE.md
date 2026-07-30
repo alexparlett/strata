@@ -192,8 +192,14 @@ src/state/config.rs              THE app-global store: one `RadioStation<AppConf
                                  shared into every window (`use_share_config`). Channels keep a
                                  project open from waking theme readers; `write_config` is the only
                                  write path (mutate + notify + persist — nothing re-reads the file).
-                                 `use_open_project` ties a window's project to recents + the
-                                 open-set for its lifetime
+                                 `use_claim_open` ties a window to the open-set for its lifetime;
+                                 `use_promote_recent` is the half a project earns by loading
+src/task.rs                      `offload` — **the** way blocking work leaves the render thread.
+                                 Freya is one event loop drawing every window and `spawn` polls on
+                                 it, so an `async` block around a `std::fs` read moves nothing and
+                                 a quiet network mount freezes the app. A thread per call (a pool
+                                 would let one wedged mount hold up the next open), and cancelling
+                                 means dropping the answer — a blocking syscall cannot be stopped
 src/theme.rs                     Freya theme application: `theme_registry!` / `strata_components!`
                                  macros, Pref→Preference coercion, ThemesCtx (the shared
                                  ThemeRegistry handle, discovered once in main; every window root
@@ -363,10 +369,18 @@ src/apps/project/                the project window (Valin-shaped)
                                  project**, whose `render_key` is the project folder — so "open
                                  in this window" is a `State` write and the remount *is* the
                                  reopen path. `ProjectRoot` runs the fallible load (defs +
-                                 session) once per mount and is one of two arms: `ProjectLoaded`
-                                 (engine, stores, autosave, catalog, views — built from the
-                                 loaded values) or `ProjectLoadFailed` (P4-01: the fault dialog
-                                 that closes the window)
+                                 session) once per mount — **off the render thread**, driven by
+                                 `use_future` — and is one of three arms: `ProjectLoading` while
+                                 the read is out, then `ProjectLoaded` (engine, stores, autosave,
+                                 catalog, views — built from the loaded values) or
+                                 `ProjectLoadFailed` (P4-01: the fault dialog that closes the
+                                 window). It also claims the open-set for every arm alike
+                                 (`use_claim_open`), since all three are a window on that project;
+                                 only the loaded arm promotes the recent. `window_geometry` lives
+                                 here too: a window's size and position can only be set as it is
+                                 created, so they are a launch input the *caller* resolves —
+                                 offloaded, and given up on after 250ms, because that read is on
+                                 the same folder and used to be what froze the app first
   contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context, built
                                  with the app's `datafusion.*` overrides — a launch value, since
                                  the RuntimeEnv is fixed when the SessionContext is
@@ -420,6 +434,13 @@ src/apps/project/                the project window (Valin-shaped)
                                  again re-runs the load via a generation bump; Close window
                                  goes through `close_this_window`; non-modal, so ⌘O and ⌘,
                                  keep working)
+    loading.rs                     the load's **third** arm: what `ProjectRoot` is while the read
+                                 is off on its own thread. Silent for the first 600ms — a spinner
+                                 that flashes on every open is worse than none — then a loader,
+                                 "Opening '<name>'" and **Close window**, which is the honest
+                                 wording because a blocking syscall cannot be cancelled. No
+                                 engine, no store, no `Subtree`. Shares the fault arm's
+                                 once-only close + confirm-slot drain (`use_engineless_close`)
     header/
       mod.rs                     the header bar — and the window's macOS title bar: brand ·
                                  switcher · ⌘K/⌘, cluster, drag + double-press-to-fill
