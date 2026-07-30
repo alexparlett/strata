@@ -44,10 +44,8 @@ use std::sync::Arc;
 
 use super::catalog::column_info;
 use super::config::effective;
+use crate::util::{clip, DISPLAY_CHARS};
 use strata_model::{Cell, ColumnInfo, QueryOutput, SnapshotId};
-
-/// Max characters kept per display cell (the grid truncates with an ellipsis).
-const MAX_CELL_LEN: usize = 400;
 
 // ---- query → snapshot → page ----
 
@@ -643,14 +641,7 @@ fn batches_to_rows(batches: &[RecordBatch], fmt: &CellFormat) -> Result<Vec<Vec<
 }
 
 fn truncate_cell(s: &str) -> String {
-    if s.len() <= MAX_CELL_LEN {
-        return s.to_string();
-    }
-    let mut end = MAX_CELL_LEN;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
+    clip(s, DISPLAY_CHARS).into_owned()
 }
 
 #[cfg(test)]

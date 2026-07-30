@@ -36,6 +36,7 @@ pub mod profile;
 mod query;
 pub mod serialize;
 pub mod sql;
+pub mod value_tree;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
 pub use query::purge_snapshot_root;

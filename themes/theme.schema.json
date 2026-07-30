@@ -960,6 +960,48 @@
             }
           }
         },
+        "tree": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "arrow_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "item_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "hover_item_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_item_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "selected_item_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "guide_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "indent": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "item_height": {
+              "$ref": "#/$defs/numberPref"
+            },
+            "item_padding": {
+              "$ref": "#/$defs/gapsPref"
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/numberPref"
+            }
+          }
+        },
         "type_palette": {
           "type": "object",
           "additionalProperties": false,

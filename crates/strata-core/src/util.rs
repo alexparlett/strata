@@ -3,6 +3,7 @@
 //! ([`write_atomic`]). (Domain vocabulary like `Kind` lives in `crate::model`.)
 
 use chrono::Timelike;
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -105,6 +106,27 @@ pub fn collapse_sql(sql: &str) -> String {
     sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Characters a **displayed** value keeps before it is clipped — a grid cell, a value-tree leaf, a
+/// string inside a record-view preview. One number, because those surfaces sit next to each other:
+/// a field row whose scalar branch clipped at a different length from its nested branch would read
+/// as two different rules.
+pub const DISPLAY_CHARS: usize = 400;
+
+/// `s` capped at `max` **characters**, clipped on a char boundary with a trailing `…`.
+///
+/// Characters, not bytes: a byte cap silently shortens a CJK or emoji string to a third of the
+/// length it promises, and the cap exists to bound what is *read*. Like [`fmt_int`], one path to one
+/// function — the grid's cells, the value tree's leaves and the preview's strings all clip here, so
+/// no two of them can disagree about where a value stops.
+pub fn clip(s: &str, max: usize) -> Cow<'_, str> {
+    // `take(max + 1)` distinguishes "exactly max" from "longer" without walking the whole string.
+    if s.chars().take(max + 1).count() <= max {
+        return Cow::Borrowed(s);
+    }
+    let end = s.char_indices().nth(max).map_or(s.len(), |(i, _)| i);
+    Cow::Owned(format!("{}…", &s[..end]))
+}
+
 /// Group a non-negative integer with thousands separators (`48213` → `48,213`).
 ///
 /// Every surface that prints a count imports it from here — the EXPLAIN plan's metrics, the
@@ -129,9 +151,16 @@ pub fn fmt_int(n: u64) -> String {
 /// tables, views, files, events. A count that needs an irregular plural needs its own sentence
 /// anyway.
 pub fn plural(n: usize, noun: &str) -> String {
+    format!("{} {}", fmt_int(n as u64), plural_noun(n, noun))
+}
+
+/// `noun` agreeing with `n`, **without** the count — for a phrase that puts something between the
+/// two (`… 19,296 more keys`). [`plural`] is this plus the number, and shares it so the two cannot
+/// disagree about a plural.
+pub fn plural_noun(n: usize, noun: &str) -> Cow<'_, str> {
     match n {
-        1 => format!("1 {noun}"),
-        n => format!("{} {noun}s", fmt_int(n as u64)),
+        1 => Cow::Borrowed(noun),
+        _ => Cow::Owned(format!("{noun}s")),
     }
 }
 
@@ -657,5 +686,23 @@ mod tests {
         assert_eq!(parse_duration("-5m"), None);
         assert_eq!(parse_duration("inf"), None);
         assert_eq!(parse_duration("NaN"), None);
+    }
+
+    /// Clipping counts **characters**, and lands on a boundary rather than inside one. The grid's
+    /// cells clipped by bytes until this became shared, which cut a CJK string to a third of the
+    /// 400 it promised.
+    #[test]
+    fn clip_counts_characters_not_bytes() {
+        assert_eq!(clip("h\u{e9}llo", 5), Cow::Borrowed("h\u{e9}llo"));
+        assert_eq!(
+            clip("h\u{e9}llo", 3),
+            Cow::Owned::<str>("h\u{e9}l\u{2026}".into())
+        );
+        // Five multi-byte chars is ten bytes: a byte cap would have clipped this, chars do not.
+        assert_eq!(
+            clip("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}", 5),
+            Cow::Borrowed("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}")
+        );
+        assert_eq!(clip("", 3), Cow::Borrowed(""));
     }
 }

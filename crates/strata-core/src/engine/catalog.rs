@@ -733,13 +733,30 @@ fn nested_children(dt: &DataType) -> Vec<ColumnInfo> {
     }
 }
 
-fn short_type(dt: &DataType) -> String {
-    let full = format!("{dt:?}");
-    let base: String = full.split(['(', '<']).next().unwrap_or(&full).to_string();
-    match base.as_str() {
-        "LargeUtf8" => "Utf8".into(),
-        "LargeList" | "FixedSizeList" => "List".into(),
-        other => other.to_string(),
+/// The type spelling every surface shows — the grid's header, the inspector, and the value tree's
+/// rows (`value_tree::cell_children`). One function, so a node and its column cannot disagree.
+///
+/// The composite types are matched **by variant, not by their `Debug` text**, which matters more
+/// than it looks: `DataType`'s `Debug` is *recursive*, so `format!("{dt:?}")` on a struct renders
+/// its entire subtree just to have the first word taken off the front. On `config.json`'s
+/// `contentBlocks` (19,311 keys, each a struct) that one call cost **18ms** — and `column_info`
+/// makes it per field, all the way down. Every remaining variant's `Debug` is a single term, so
+/// those still take the parameters off the front generically rather than being enumerated here.
+pub(super) fn short_type(dt: &DataType) -> String {
+    match dt {
+        DataType::Struct(_) => "Struct".into(),
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(..) => "List".into(),
+        DataType::ListView(_) => "ListView".into(),
+        DataType::LargeListView(_) => "LargeListView".into(),
+        DataType::Map(..) => "Map".into(),
+        DataType::Union(..) => "Union".into(),
+        DataType::Dictionary(..) => "Dictionary".into(),
+        DataType::RunEndEncoded(..) => "RunEndEncoded".into(),
+        DataType::LargeUtf8 => "Utf8".into(),
+        leaf => {
+            let full = format!("{leaf:?}");
+            full.split(['(', '<']).next().unwrap_or(&full).to_string()
+        }
     }
 }
 

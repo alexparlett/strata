@@ -1,22 +1,33 @@
 //! The nested-cell value view (P2-12 / Dioxus U5): double-clicking a **nested**
-//! (`struct` / `list` / `map`) grid cell opens its value as pretty JSON in a centred
-//! backdrop modal — the canvas `cellViewOpen` comp. One of the grid's two double-click
-//! targets: **cell → nested value** (here), **gutter → whole row** (P2-10).
+//! (`struct` / `list` / `map`) grid cell opens it in a centred backdrop modal — the canvas
+//! `cellViewOpen` comp. One of the grid's two double-click targets: **cell → nested value**
+//! (here), **gutter → whole row** (P2-10).
 //!
-//! The open state ([`State<Option<CellValue>>`]) lives on the `DataGrid` (it survives
-//! page flips like the column widths, and its `Command::Cancel` arm dismisses on Esc);
-//! the value is **snapshotted at press time** — the canvas does the same, so a later
-//! filter / page shift can't retarget an open modal. Every colour is a `cell_view`
-//! component token; the card follows the `CloseConfirm` overlay idiom (overlay layer +
-//! global position + backdrop press), plus the canvas's 3px backdrop blur.
+//! The body is a **lazy tree** (P2-25), not text. It was pretty JSON, which is a dead end at the
+//! size this surface exists for: `config.json`'s `contentBlocks` is 19,311 keys under one
+//! top-level key, and any bounded rendering of that names the shape and gives you no way into it.
+//! The tree opens what you ask for and nothing else — see `super::value_tree` for the model and
+//! `strata_core::engine::value_tree` for the Arrow reads.
+//!
+//! The open state ([`State<Option<CellValue>>`]) lives on the `DataGrid` (it survives page flips
+//! like the column widths, and its `Command::Cancel` arm dismisses on Esc), and now carries the
+//! **batch** rather than rendered text — which keeps the snapshot rule rather than breaking it,
+//! since the arrays the modal reads are the ones it opened with, so a later filter or page shift
+//! still cannot retarget it. Every colour is a `cell_view` component token; the card follows the
+//! `CloseConfirm` overlay idiom (overlay layer + global position + backdrop press), plus the
+//! canvas's 3px backdrop blur.
 
-use freya::components::{define_theme, get_theme, use_theme, ScrollView};
+use std::rc::Rc;
+
+use freya::components::{define_theme, get_theme, use_theme, Disclosure, Tree, TreeItem};
 use freya::prelude::*;
 
+use super::value_tree::{leaf_text, RowKind, TreeModel, TreeRow};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
-use crate::components::typography::{MonoValue, Readout};
+use crate::components::type_palette::{kind_color, type_palette};
+use crate::components::typography::{Meta, MonoValue};
 
 define_theme!(
     %[component]
@@ -37,13 +48,18 @@ define_theme!(
     }
 );
 
-/// What the modal shows — the cell's column name, its dtype (the header badge), and the
-/// value pretty-printed as JSON. Snapshotted when the double-click opens the view.
+/// What the modal shows — the cell's column name, its dtype (the header badge), and the model the
+/// tree reads.
+///
+/// The **batch** rides here rather than the rendered text, which is P2-25's change and keeps
+/// P2-12's rule rather than breaking it: the modal is still a snapshot, because the arrays it reads
+/// are the ones it was opened with, so a later filter or page flip cannot retarget it. A
+/// `RecordBatch` clone is an `Arc` bump per column.
 #[derive(Clone, PartialEq)]
 pub struct CellValue {
     pub name: String,
     pub dtype: String,
-    pub json: String,
+    pub tree: TreeModel,
 }
 
 /// Map a (possibly find-filtered) page row index back to its row in the **page batch**:
@@ -55,9 +71,105 @@ pub fn page_batch_row(row_nums: Option<&[usize]>, row_base: usize, index: usize)
         .unwrap_or(index)
 }
 
-/// The centred backdrop modal: 460px card (name + dtype badge + ghost close over a
-/// scrollable mono JSON block). Backdrop press and the ✕ dismiss; Esc is arbitrated by
-/// the grid root's `Command::Cancel` chain (the modal's ancestor in document order).
+/// The tree itself: the model's visible rows over Freya's `Tree`.
+///
+/// **Expansion is written back through the open slot** rather than kept in a state of its own.
+/// The slot already holds the model, so a second copy would be a second answer to "what is open" —
+/// and this way closing the modal disposes of it, which is what closing it means.
+#[derive(PartialEq)]
+struct ValueTreeBody {
+    model: TreeModel,
+    open: State<Option<CellValue>>,
+}
+
+impl Component for ValueTreeBody {
+    fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(
+            &None::<CellViewThemePartial>,
+            CellViewThemePreference,
+            "cell_view"
+        );
+        let palette = type_palette();
+        let mut open = self.open;
+        // Derived on every render rather than memoized. `use_memo` settles *asynchronously*, so a
+        // toggle would paint the previous rows for a frame — the trap `record_view`'s `PreviewMemo`
+        // and `find`'s `PageMemo` both exist to avoid. The walk visits only what is open, so it is
+        // proportional to what is on screen; a synchronous cache is the way to trim it if the
+        // re-walk on an unrelated render (the ✕'s hover lives on `CellView`) ever shows up.
+        let rows = Rc::new(self.model.rows());
+
+        Tree::new_with_data(rows.clone(), move |index, rows: &Rc<Vec<TreeRow>>| {
+            let Some(row) = rows.get(index).cloned() else {
+                return rect().into();
+            };
+            match row.kind {
+                RowKind::Node { node, disclosure } => {
+                    let path = row.path.clone();
+                    TreeItem::new()
+                        .depth(row.depth)
+                        .disclosure(disclosure)
+                        .on_toggle(move |_| {
+                            if let Some(value) = open.write().as_mut() {
+                                value.tree.toggle(&path);
+                            }
+                        })
+                        .child(
+                            rect()
+                                .horizontal()
+                                .cross_align(Alignment::Center)
+                                .spacing(8.)
+                                // A list item has no name, so it is titled by its index — the
+                                // subscript a reader would write to reach it.
+                                .child(MonoValue::new(match &node.key {
+                                    Some(key) => key.clone(),
+                                    None => format!("[{}]", node.index),
+                                }))
+                                .child(
+                                    Meta::new(node.dtype.clone())
+                                        .color(kind_color(node.kind, &palette)),
+                                )
+                                .maybe_child(leaf_text(&node.value).map(|(text, null)| {
+                                    MonoValue::new(text.to_string())
+                                        .color(if null {
+                                            theme.name_color
+                                        } else {
+                                            theme.body_color
+                                        })
+                                        .into_element()
+                                })),
+                        )
+                        .into()
+                }
+                // The tail of a paged container. A leaf as far as the tree is concerned — it opens
+                // nothing, it reveals more of its owner.
+                RowKind::More { label, .. } => {
+                    // The tail sits at its container's path, so that is what widens.
+                    let owner = row.path.clone();
+                    TreeItem::new()
+                        .depth(row.depth)
+                        .disclosure(Disclosure::Leaf)
+                        .on_press(move |_| {
+                            if let Some(value) = open.write().as_mut() {
+                                value.tree.reveal_more(&owner);
+                            }
+                        })
+                        .child(Meta::new(label.clone()).color(theme.name_color))
+                        .into()
+                }
+            }
+        })
+        .length(rows.len())
+        .height(Size::fill())
+    }
+}
+
+/// The card's size. Wider than the 460px the canvas drew for a JSON blob, because a tree row
+/// carries a key, a type and a value side by side.
+const CARD_SIZE: (f32, f32) = (720., 520.);
+
+/// The centred backdrop modal: the card (name + dtype badge + ghost close over the value tree).
+/// Backdrop press and the ✕ dismiss; Esc is arbitrated by the grid root's `Command::Cancel` chain
+/// (the modal's ancestor in document order).
 #[derive(PartialEq)]
 pub struct CellView {
     value: CellValue,
@@ -122,34 +234,32 @@ impl Component for CellView {
                     ),
             );
 
-        // Body: the sunken mono JSON block. Hugs short values; long ones cap at ~2/3 of
-        // the window (the canvas's 80vh card minus the header) and scroll. Wrapped rather
-        // than panned sideways — the `explain_plan` raw-text idiom (a long string value
-        // wraps instead of clipping).
-        let body = ScrollView::new()
-            .height(Size::auto())
-            .max_height(Size::window_percent(66.))
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .background(theme.body_background)
-                    .padding((12., 16.))
-                    .child(
-                        Readout::new(self.value.json.clone())
-                            .color(theme.body_color)
-                            .wrap(),
-                    ),
-            );
+        // Body: the value tree. Its height is stated rather than hugged — a `VirtualScrollView`
+        // needs a viewport to virtualize against, and this is the surface that has to stay cheap
+        // with 19,311 siblings in one node.
+        let (card_w, card_h) = CARD_SIZE;
+        let body = rect()
+            .width(Size::fill())
+            .height(Size::flex(1.))
+            .background(theme.body_background)
+            .padding((8., 8.))
+            .child(ValueTreeBody {
+                model: self.value.tree.clone(),
+                open: self.open,
+            });
 
         let card = rect()
-            .width(Size::px(460.))
-            .max_width(Size::window_percent(92.))
+            .width(Size::px(card_w))
+            .height(Size::px(card_h))
+            .max_width(Size::window_percent(96.))
+            .max_height(Size::window_percent(92.))
             .corner_radius(14.)
             .background(theme.background)
             .border(Border::new().width(1.).fill(theme.border_fill))
             .shadow(Shadow::new().y(30.).blur(70.).color(shadow))
             .overflow(Overflow::Clip)
             .vertical()
+            .content(Content::Flex)
             .child(header)
             .child(Divider::horizontal().color(theme.divider_fill))
             .child(body);
@@ -183,19 +293,43 @@ impl Component for CellView {
 
 #[cfg(test)]
 mod interaction {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray, StructArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Fields};
     use freya_testing::TestingRunner;
+    use strata_core::engine::{RecordBatch, Schema};
     use strata_core::theme::load;
 
     use super::*;
     use crate::theme::strata_theme;
 
+    /// `attrs: { plan: "pro", seats: 12 }` — a real batch, since the modal now reads Arrow rather
+    /// than a rendered string.
     fn value() -> CellValue {
+        let fields = Fields::from(vec![
+            Field::new("plan", DataType::Utf8, true),
+            Field::new("seats", DataType::Int32, true),
+        ]);
+        let attrs = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["pro"])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![12])) as ArrayRef,
+            ],
+            None,
+        );
+        let schema = Schema::new(vec![Field::new("attrs", DataType::Struct(fields), true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(attrs)]).unwrap();
         CellValue {
             name: "attrs".into(),
-            dtype: "Struct<plan, seats, regions, trial>".into(),
-            json: "{\n  \"plan\": \"pro\",\n  \"seats\": 12,\n  \"regions\": [\n    \"us-east-1\",\n    \"eu-west-1\"\n  ],\n  \"trial\": false\n}".into(),
+            dtype: "Struct".into(),
+            tree: TreeModel::new(batch, 0, 0),
         }
     }
+
+    /// The harness window. Named so the coordinates below can be derived from it.
+    const WINDOW: (f32, f32) = (900., 700.);
 
     fn app() -> impl IntoElement {
         use_init_theme(|| strata_theme(&load("midnight")));
@@ -212,7 +346,7 @@ mod interaction {
     fn backdrop_dismisses_and_the_card_does_not() {
         let (mut runner, open) = TestingRunner::new(
             app,
-            (900., 700.).into(),
+            WINDOW.into(),
             |r| r.provide_root_context(|| State::create(Some(value()))),
             1.,
         );
@@ -230,7 +364,12 @@ mod interaction {
         let mut open = open;
         open.set(Some(value()));
         runner.sync_and_update();
-        runner.click_cursor((650., 252.));
+        // The ✕, top-right of the header — derived from the card's size rather than written down,
+        // because the card is resizable now and a hardcoded corner has broken twice already.
+        // Header: 12px padding over a 28px button, so its middle is 26px below the card's top.
+        let (w, h) = CARD_SIZE;
+        let (left, top) = ((WINDOW.0 - w) / 2., (WINDOW.1 - h) / 2.);
+        runner.click_cursor(((left + w - 16. - 14.) as f64, (top + 26.) as f64));
         runner.sync_and_update();
         assert!(open.peek().is_none(), "the close button dismisses");
     }
@@ -243,7 +382,7 @@ mod interaction {
     fn cell_view_preview() {
         let (mut runner, _) = TestingRunner::new(
             app,
-            (900., 700.).into(),
+            WINDOW.into(),
             |r| r.provide_root_context(|| State::create(Some(value()))),
             1.,
         );

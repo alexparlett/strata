@@ -13,7 +13,6 @@ use std::rc::Rc;
 
 use freya::prelude::*;
 
-use strata_core::engine::serialize::cell_pretty_json;
 use strata_model::Kind;
 
 use super::cell::Cell;
@@ -22,6 +21,7 @@ use super::{DataGridTheme, GridData, GUTTER_W, TRAIL_W};
 use crate::apps::project::views::workbench::results::cell_view::{page_batch_row, CellValue};
 use crate::apps::project::views::workbench::results::copy;
 use crate::apps::project::views::workbench::results::selection::{CellRole, SelCtl};
+use crate::apps::project::views::workbench::results::value_tree::TreeModel;
 use crate::components::divider::Divider;
 use crate::components::type_palette::type_palette;
 
@@ -130,9 +130,11 @@ impl Component for Row {
             let w = self.widths.read().get(ci).copied().unwrap_or(self.seed_w);
             let cell = &self.data.rows[index][ci];
             // Nested non-null value → double-click opens the cell view (P2-12). The
-            // handler snapshots the pretty JSON **at press time** (the canvas semantics —
-            // a later filter/page shift can't retarget an open modal), reading the typed
-            // value from the page batch (a filtered page maps back through `row_nums`).
+            // handler snapshots the **batch** at press time (the canvas semantics — a later
+            // filter/page shift can't retarget an open modal, because the arrays the modal reads
+            // are the ones it opened with), mapping a filtered page back through `row_nums`.
+            // Nothing is rendered here: the modal's tree reads what it opens (P2-25), so a press
+            // costs an `Arc` bump per column rather than serializing the value.
             let nested = matches!(col.kind, Kind::Struct | Kind::List | Kind::Map) && !cell.null;
             let on_nested = nested.then(|| {
                 let data = self.data.clone();
@@ -143,12 +145,10 @@ impl Component for Row {
                 EventHandler::new(move |_: Event<PointerEventData>| {
                     let row =
                         page_batch_row(row_nums.as_ref().map(|n| n.as_slice()), row_base, index);
-                    let json = cell_pretty_json(&data.batch, ci, row)
-                        .unwrap_or_else(|| data.rows[index][ci].text.clone());
                     cell_view.set(Some(CellValue {
                         name: name.clone(),
                         dtype: dtype.clone(),
-                        json,
+                        tree: TreeModel::new(data.batch.clone(), ci, row),
                     }));
                 })
             });

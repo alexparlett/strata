@@ -663,6 +663,7 @@ theme_registry! {
     "slider"           => SliderThemePreference { background: color, thumb_background: color, thumb_inner_background: color, border_fill: color },
     "color_picker"     => ColorPickerThemePreference { background: color, border_fill: color, color: color },
     "table"            => TableThemePreference { background: color, arrow_fill: color, row_background: color, hover_row_background: color, divider_fill: color, border_fill: color, corner_radius: corner, color: color },
+    "tree"             => TreeThemePreference { background: color, color: color, arrow_fill: color, item_background: color, hover_item_background: color, selected_item_background: color, selected_item_color: color, guide_fill: color, indent: f32, item_height: f32, item_padding: gaps, corner_radius: corner },
     // NB: Freya's built-in `typography` component (title/subtitle/body/caption/overline) is
     // intentionally NOT registered — Strata's type scale is the richer role-based top-level
     // `typography` section (see `generate_schema` + `crate::components::typography`), not a

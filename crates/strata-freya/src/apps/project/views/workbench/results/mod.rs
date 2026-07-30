@@ -27,6 +27,7 @@ mod selection;
 mod sort;
 mod status_bar;
 mod toolbar;
+mod value_tree;
 
 use chart::ChartView;
 use datagrid::{DataGrid, GridData, PageRead};
