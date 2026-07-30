@@ -15,8 +15,6 @@ parity sweep before deleting `crates/strata-dioxus`.
 |---|---|---|---|---|
 | P6-01 | Command palette (⌘K) + depth | ⬜ | U11 / T3 | P2-20 |
 | P6-02 | Native menu bar (decision + menu-follows-opener) | ⬜ | F8 | P4-01 |
-| P6-03 | Platform seam for OS shims | ⬜ | F5 | — |
-| P6-04 | Side-by-side parity + delete the Dioxus app | ⬜ | — | all |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo.
