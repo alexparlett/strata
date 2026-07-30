@@ -75,6 +75,12 @@ Read this index first, then open only the phase/workstream file you're working i
   Postgres-style JSON accessors (`json_get` / `->` / `->>`), and **WJ-02** a union-tolerant
   `FileFormat` that stringifies a conflicted field to `Utf8` instead of failing schema inference.
   Entirely `strata-core`; no UI surface of its own.
+- **Agent access** (`workstream-agent-access/`, AA) — agent-driven access to a project's data:
+  one read-only tool vocabulary over a verified Tokio↔Freya bridge, with thin swappable
+  frontends — an in-app MCP server first (agent queries land as **real query tabs** on the
+  ordinary press → snapshot machinery), a native chat pane as the flagship follow-on, a headless
+  `strata mcp <project>` stdio host third. Spec: `docs/AGENT_ACCESS_SPEC.md` (+
+  `docs/agent-access-dataflow.mermaid`).
 
 ## Known bugs (carried from DEV_TASKS; re-verify under Freya)
 

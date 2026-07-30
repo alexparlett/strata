@@ -1,0 +1,32 @@
+%% Agent access dataflow (docs/AGENT_ACCESS_SPEC.md §4) — the run round trip and the two planes.
+%% Control plane = anything touching UI state (asks over tokio mpsc, replies over oneshot).
+%% Data plane   = engine-scoped, side-effect-free reads (Arc<Engine> direct; no UI hop).
+sequenceDiagram
+    participant C as MCP client (Claude Code)
+    participant S as strata-agent server<br/>(own Tokio runtime)
+    participant D as use_agent_bridge driver<br/>(UI executor, per window)
+    participant T as SessionState tab<br/>(Radio)
+    participant K as AgentKeeper<br/>(use_query on the press)
+    participant E as Engine<br/>(private Tokio runtime)
+
+    Note over S: token checked, project resolved<br/>(default single; error lists when >1)
+
+    C->>S: run(tab, sql)
+    S->>S: policy gate (exported strata-core verdict)<br/>refuse blocked DDL/DML before dispatch
+    S->>D: AgentAsk{Run, reply oneshot} via tokio mpsc
+    Note over D: send invokes the receiver's waker →<br/>FuturesWaker → EventLoopProxy(PollFutures)
+    D->>T: set QueryTab::request (ordinary press,<br/>Chan::Request(id)); park reply by press nonce
+    T->>E: QuerySpec press → dispatch<br/>(supersede + retire-on-dispatch, per WsId)
+    D->>K: mount keeper for the parked ask
+    K->>E: use_query(spec.query(&engine))<br/>same cache identity — attaches, never re-runs
+    E-->>K: settle (QueryOutput | Err)
+    K-->>S: complete parked oneshot (wakes server task)
+    Note over K: the tab's own RequestKeeper still holds the entry,<br/>records history + event log — unchanged
+    S-->>C: columns, page-1 rows, exact total, elapsed<br/>(stopped-on-purpose mapped to non-fault)
+
+    C->>S: read_page(tab, page, sort)
+    S->>E: fetch_page(snapshot, …) — data plane,<br/>Arc<Engine> direct, no UI hop
+    E-->>S: page rows (retired snapshot → "result moved; re-run")
+    S-->>C: page
+
+    Note over D,T: window close / re-root drops bridge + registration (use_drop);<br/>parked oneshots drop → server answers "project window closed"
