@@ -4,15 +4,31 @@
 //! [`ValueField`](super::ValueField), a `Switch`, a `SegmentedToggle`, a `Select` or a [`Note`]
 //! without changing shape. How the label and its explanation are *set* comes from the form's
 //! [`Variant`], read from context; see the module doc.
+//!
+//! A row with an [`anchor`](Row::anchor) can also be **revealed** — brought into view and flashed
+//! once, when something outside the form asks for it by name (see [`reveal`](super::reveal)).
 
+use freya::animation::{use_animation_with_dependencies, AnimColor, AnimDirection, Ease, OnChange};
 use freya::prelude::*;
 
-use crate::components::form::{form_theme, Variant, CONTROL_GAP, HINT_GAP, LABEL_GAP};
+use crate::components::form::{
+    form_theme, Reveal, RevealScroll, Variant, CONTROL_GAP, HINT_GAP, LABEL_GAP,
+};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Caption, Eyebrow, Meta, Prose, Strong};
 
 /// The ⓘ that carries a fields row's explanation.
 const HINT_SIZE: f32 = 12.;
+
+/// How long a revealed row's flash takes to fade out (canvas `ps-setting-flash`, `1.5s ease-out`).
+const FLASH_MS: u64 = 1500;
+
+/// The flash's corner (canvas `border-radius: 8px`).
+///
+/// The canvas bleeds the wash 10px past either edge of the row (a spread box-shadow); ours stops at
+/// the row's own box, because a torin child cannot paint outside the bounds its parent laid out for
+/// it and inset-then-negative-margin would move every row on the surface to buy it.
+const FLASH_RADIUS: f32 = 8.;
 
 #[derive(PartialEq)]
 pub struct Row {
@@ -20,6 +36,7 @@ pub struct Row {
     hint: Option<String>,
     required: bool,
     trailing: bool,
+    anchor: Option<&'static str>,
     on_press: Option<EventHandler<Event<PressEventData>>>,
     children: Vec<Element>,
 }
@@ -31,9 +48,21 @@ impl Row {
             hint: None,
             required: false,
             trailing: false,
+            anchor: None,
             on_press: None,
             children: Vec::new(),
         }
+    }
+
+    /// Name this row, so something outside the form can ask for it: a [`Reveal`] carrying this
+    /// anchor scrolls the row into view and flashes it once.
+    ///
+    /// `&'static str` and not a `String`, because an anchor is a name in the *code* — the Settings
+    /// search hands over one its own index minted (`apps::settings::search::Anchor`), never
+    /// anything a user typed.
+    pub fn anchor(mut self, anchor: &'static str) -> Self {
+        self.anchor = Some(anchor);
+        self
     }
 
     /// Mark this row's value as **required** — the `REQUIRED` marker on the label line.
@@ -89,6 +118,58 @@ impl Component for Row {
         // Set once on the form (see the module doc); a bare row outside one is set in the
         // register the app's window forms use.
         let variant = use_try_consume::<Variant>().unwrap_or_default();
+
+        // Being revealed: the ask (window-lived), the frame to scroll within (page-lived), our own
+        // measured box, and the flash. All four hooks run whether or not this row has an anchor —
+        // hook order is positional, so a row cannot pay for them conditionally.
+        let anchor = self.anchor;
+        let reveal = use_try_consume::<Reveal>();
+        let scroll = use_try_consume::<RevealScroll>();
+        let mut area = use_state(|| None::<Area>);
+        // Dependent on the tint, so a theme change while this row is mounted re-arms the flash on
+        // the new accent rather than freezing the one captured at mount.
+        //
+        // Two things that look like detail and are not. `OnChange::Finish`, because the default is
+        // `Reset` — which sets `has_run_yet` *and* puts the value back to the animation's **origin**,
+        // i.e. the tint, so switching theme on the Appearance pane left every row on it wearing a
+        // permanent accent wash. Finishing lands on the destination instead, which is the invisible
+        // end of the fade. And the destination is the tint at **zero alpha**, not `TRANSPARENT`:
+        // `AnimColor` interpolates r, g, b and a independently, so fading to (0,0,0,0) drags the
+        // wash's hue toward black on the way out instead of fading the accent out.
+        let flash = use_animation_with_dependencies(&theme.reveal_background, |conf, tint| {
+            conf.on_change(OnChange::Finish);
+            AnimColor::new(*tint, tint.with_a(0))
+                .time(FLASH_MS)
+                .ease(Ease::Out)
+        });
+
+        use_side_effect(move || {
+            let (Some(anchor), Some(reveal)) = (anchor, reveal) else {
+                return;
+            };
+            if !reveal.wanted(anchor) {
+                return;
+            }
+            // Our area lands a frame after the page mounts, so the first pass through here only
+            // subscribes to it. Reading it *after* the ask is what keeps the later passes cheap:
+            // torin re-emits `Sized` for every row on scroll, and by then the ask is cleared, so
+            // this returns above without taking a subscription on the area at all.
+            let Some(area) = *area.read() else {
+                return;
+            };
+            if let Some(scroll) = scroll {
+                scroll.reveal(area);
+            }
+            flash.run(AnimDirection::Forward);
+            reveal.taken();
+        });
+
+        // Transparent until the flash has actually run: `AnimColor` sits at its origin — the tint —
+        // before it is started, so an unflashed row would wear the wash permanently.
+        let wash = match *flash.has_run_yet().read() {
+            true => flash.get().value(),
+            false => Color::TRANSPARENT,
+        };
 
         // The label block. In the fields register the explanation hangs off a ⓘ beside the
         // label; in preferences it is a line of subtext under it, wrapped — those are full
@@ -155,7 +236,7 @@ impl Component for Row {
             Variant::Preferences => CONTROL_GAP,
         };
 
-        if self.trailing {
+        let row = if self.trailing {
             // Label block and control side by side. `Content::Flex` is what makes the label's
             // `flex(1.)` divide the row rather than take its natural width — without it the
             // control is pushed off the surface.
@@ -180,7 +261,15 @@ impl Component for Row {
                 row = row.child(child.clone());
             }
             row
-        }
+        };
+
+        // The flash paints on the row itself rather than a wrapper, so it is the row's own box that
+        // lights up and nothing about the form's rhythm changes. An anchorless row measures nothing.
+        row.background(wash)
+            .corner_radius(FLASH_RADIUS)
+            .maybe(anchor.is_some(), |el| {
+                el.on_sized(move |e: Event<SizedEventData>| area.set(Some(e.area)))
+            })
     }
 }
 

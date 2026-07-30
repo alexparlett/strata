@@ -13,8 +13,13 @@ theme preview (`state/theme_preview.rs`) — and one window path everything open
 **`State::create_global`**, **not** a per-window Radio station; native close uses **`winit
 CloseRequested`** (no objc), and the one place objc *is* reached for is the fork's
 `set_window_parent` (P4-03 pins Settings above the window that opened it). What's left in this
-phase is the settings **categories** (P4-07…P4-09, Appearance, Data-display and System having
-landed with P4-04 / P4-05 / P4-06) — plus P4-13's open/create UI. **P4-11** shipped the
+phase is the settings **categories** (P4-08's Keymap, the other four having landed with
+P4-04 / P4-05 / P4-06 / P4-07) — plus P4-13's open/create UI. **P4-09** made the window
+searchable, and settled that a setting's *name* has one home: the index generates the `Anchor`
+enum the panes build their rows from, so the results list and the row over the pane cannot spell
+one setting two ways, and the compiler catches a jump that would land nowhere. It also gave the
+shared form row a **reveal** (scroll-into-view + a one-shot flash), and indexed the engine's
+properties off `ENGINE_KEYS` rather than a chosen few. **P4-11** shipped the
 Configure-table window as one task, not two (**P4-12 was folded into it**: the format dropdown is
 what selects the import-option set, the option set moves the file-extension filter, and both halves
 reach the engine through one `TableSpec`), and settled two things every later surface inherits —
@@ -56,7 +61,7 @@ The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebu
 | P4-06 | Settings ▸ System (+ history limit) | ✅                                                                                                                          | W3/U12 | P4-03 |
 | P4-07 | Settings ▸ Engine (properties editor) |  ✅                                                                                                                            | W2 | P4-03 |
 | P4-08 | Settings ▸ Keymap (rebindable) | ⬜                                                                                                                          | W4 | P4-03, P2-20 |
-| P4-09 | Settings search | ⬜                                                                                                                          | W3 | P4-03 |
+| P4-09 | Settings search | ✅                                                                                                                          | W3 | P4-03 |
 | P4-10 | Export window (rebuild to canvas) | ✅                                                                                                                          | D6/U13 | P4-01, P2-01 |
 | P4-11 | Configure-table window (register / edit + import options) | ✅                                                                                                                          | U14/D7/D8 | — |
 | P4-13 | Open / create a project (`.strata/` load) | 🟡 internals + the open path done (`OpenPref` honoured everywhere; This Window = keyed remount); **New Project** UI remains | lifecycle | P4-01 · *pull early* |

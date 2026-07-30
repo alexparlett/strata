@@ -1470,6 +1470,9 @@
             },
             "note_color": {
               "$ref": "#/$defs/colorPref"
+            },
+            "reveal_background": {
+              "$ref": "#/$defs/colorPref"
             }
           }
         },

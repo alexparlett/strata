@@ -238,6 +238,22 @@ Things that must not regress. Each was fought for once already.
   re-root mechanism already drops the engine and re-registers the project through the launch hooks
   — a `restart()` that rebuilt a live store in place would be the second way to configure an engine
   that the rule above exists to prevent.
+- **A name two surfaces have to agree on is generated from one table, not typed twice — and
+  navigating to something is never editing it.** The Settings search (P4-09) indexes a setting by an
+  `Anchor` *variant*: one table generates the enum, the list of every anchor, and each setting's
+  route, label, subtext and keywords, and the pane builds its row from the same entry
+  (`Anchor::row()`). That is not tidiness — the failure it rules out is silent. An anchor spelled one
+  way in the index and another in the pane is a jump that routes and then singles nothing out, and
+  nothing but trying it would ever say so; the same goes for a label, which titles the hit *and*
+  heads the row. Two consequences. The **category** is not restated in the index at all (a hit
+  resolves its page through `model::category`, the tree the rail and the breadcrumb already read),
+  and the engine's properties are indexed off **`ENGINE_KEYS` entire** rather than a chosen few,
+  because a hand-picked subset of a catalogue is a second list to keep in step. And **following a
+  result only navigates**: it may single a setting out where there is something to single out, but it
+  must not write. Adding a pre-filled grid row for a property with no override (the canvas's "search
+  doubles as add a known property") was built and rejected — a named row with an empty value still
+  projects into the draft, so merely following a result left Apply live for a change nobody asked
+  for, and the grid claiming to list the overrides in force listed one that wasn't.
 - **A free-form list setting is edited as rows and committed as a map.** `Settings::engine` is a
   `BTreeMap`, which cannot hold the row you have not named yet or the duplicate you are halfway
   through fixing — so the Engine pane's model is an ordered list of rows under ids minted by a
@@ -432,6 +448,14 @@ Things that must not regress. Each was fought for once already.
   divergences" rather than averaging it**: a silent split-the-difference is how a surface stops
   matching the canvas it was drawn from, and a named one is a single constant to change when the
   design settles it.
+  A row can also be **addressed**: `Row::anchor` names it and `form::reveal` carries the ask, so
+  something outside the form (the Settings search) can have it scroll itself into view and flash
+  once. That lives on the row rather than in the window that needed it first, for the reason above —
+  a "jumpable settings row" would be a second row type — and it is two contexts because they have
+  two lifetimes: `Reveal` is window-lived (it is written *before* the page holding the target has
+  mounted, so a call into the row is impossible and a slot is the only shape that works) and
+  `RevealScroll` is page-lived, since the page owns the `ScrollView`. Both optional, so a form with
+  neither is a form of ordinary rows.
 - **A field backing a draft publishes on every keystroke, and normalizes its box when it is
   left.** Freya's `Input` has no blur prop and only fires `on_submit` on Enter, so the tempting
   shape is "parse and publish when the field is left". It loses the value: the thing that commits

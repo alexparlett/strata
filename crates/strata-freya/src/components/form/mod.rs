@@ -19,6 +19,10 @@
 //! - [`Form::preferences`] — the **preferences** register: a sentence-case title, its
 //!   explanation as inline subtext, rows separated by rules. The Settings window's panes.
 //!
+//! A row can also be **addressed**: [`Row::anchor`] names it, and something outside the form —
+//! the Settings window's search (P4-09) — asks for it by that name through [`Reveal`], which is
+//! the row scrolling itself into view and flashing once. See [`reveal`].
+//!
 //! The registers exist because the design settled them separately: it swept every inline
 //! explainer in the app into a hover tip, and then its **"Settings consistency pass"** swept
 //! that window's four back out — "settling on subtext everywhere, since every non-toggle
@@ -45,6 +49,7 @@
 
 mod field;
 mod options;
+mod reveal;
 mod row;
 
 use freya::prelude::*;
@@ -53,6 +58,7 @@ use crate::components::divider::Divider;
 
 pub use field::{DirectoryField, NumberField, ValueField, FIELD_HEIGHT};
 pub use options::{Choice, Control, Group, Make, OptionList, TextField};
+pub use reveal::{Reveal, RevealScroll};
 pub use row::{Note, Row};
 
 // `%[no_ext]`: the form's dress is read by its pieces (the form, its rows, its fields) rather
@@ -85,6 +91,10 @@ define_theme!(
         /// under a control, and a sentence set in it on the note's raised box has too little
         /// contrast to read. The canvas gives a note `--c-muted`, a step brighter.
         note_color: Color,
+        /// The wash a row flashes when something [reveals](Reveal) it — the accent tint the flash
+        /// starts at, fading to nothing. Named for the role and not for the Settings search that
+        /// asks for it first: any form that can be jumped into wants the same mark.
+        reveal_background: Color,
     }
 );
 

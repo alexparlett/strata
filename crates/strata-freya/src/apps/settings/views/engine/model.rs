@@ -162,6 +162,24 @@ impl PropRows {
         self.push(String::new(), String::new())
     }
 
+    /// Select the row for `key` if the property is overridden, and report whether there was one.
+    ///
+    /// What the Settings search does with a `datafusion.*` hit (P4-09) once it has routed to this
+    /// pane. It deliberately **does not add** a row for a property nobody has set: following a
+    /// search result is navigation, and this list is an edit. A named row with no value still
+    /// projects into the draft (`to_map` only drops the *unnamed* ones), so an auto-added row would
+    /// leave Apply live for an override the user never asked for — and the grid, whose whole claim
+    /// is that it lists the overrides in force, showing one that isn't.
+    pub fn reveal(&mut self, key: &str) -> Option<u64> {
+        let id = self
+            .rows
+            .iter()
+            .find(|row| row.key() == key)
+            .map(|r| r.id)?;
+        self.selected = Some(id);
+        Some(id)
+    }
+
     /// Remove the selected row, selecting the one that takes its place (or the new last row,
     /// when the removed one was last). A no-op with nothing selected.
     pub fn remove_selected(&mut self) {
@@ -402,6 +420,30 @@ mod tests {
             !errors.contains_key(&custom),
             "an uncatalogued key has no shape to check against"
         );
+    }
+
+    /// Revealing a property (the Settings search's engine hits, P4-09) selects the row it has, and
+    /// adds **nothing** when it has none: following a search result is navigation, and a row here is
+    /// an override.
+    #[test]
+    fn revealing_a_property_selects_its_row_and_never_adds_one() {
+        let mut rows = PropRows::from_map(&map(&[(BATCH, "4096")]));
+        let before = rows.to_map();
+
+        let existing = rows.reveal(BATCH);
+        assert_eq!(existing, Some(rows.rows()[0].id));
+        assert_eq!(rows.selected, existing);
+
+        assert_eq!(rows.reveal(RUNTIME), None, "not overridden, so no row");
+        assert_eq!(rows.rows().len(), 1, "and none was made for it");
+        assert_eq!(rows.to_map(), before, "the draft is untouched");
+
+        // A name typed with space around it is the same property, so the reveal finds it.
+        let padded = rows.push(
+            format!("  {}  ", "datafusion.explain.format"),
+            String::new(),
+        );
+        assert_eq!(rows.reveal("datafusion.explain.format"), Some(padded));
     }
 
     #[test]
