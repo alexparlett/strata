@@ -23,7 +23,7 @@ use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
     use_autosave, use_diagnostics, use_engine_config, use_engine_restart,
     use_init_catalog_selection, use_init_history, use_init_log, use_init_project, use_init_session,
-    Chan, SessionState,
+    Chan, EngineRestart, SessionState,
 };
 use crate::apps::project::views::{
     CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
@@ -31,7 +31,9 @@ use crate::apps::project::views::{
 };
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
-use crate::platform::{self, OpenCtx, WindowKind};
+use crate::platform::{
+    close_this_window, open_settings, quit, use_register_window, OpenCtx, Subtree, WindowKind,
+};
 use crate::state::{use_config, use_open_project, use_share_config, AppCtx, ConfigChan};
 use crate::theme::{peek_selection, use_strata_theme, window_background};
 use freya::prelude::*;
@@ -178,7 +180,7 @@ impl App for ProjectApp {
         // this window whether it is the last one. Reactive on the open project, so a
         // re-rooted window is listed under what it actually shows.
         let windows = self.app.windows;
-        platform::use_register_window(windows, move || {
+        use_register_window(windows, move || {
             WindowKind::Project(open.root.read().to_string_lossy().into_owned())
         });
         // While this window is focused the File menu is *its* File menu: the recents, Close
@@ -220,7 +222,7 @@ impl App for ProjectApp {
         let close_window = {
             let app = self.app.clone();
             let platform = platform.clone();
-            move || platform::close_this_window(platform.clone(), app.clone())
+            move || close_this_window(platform.clone(), app.clone())
         };
         use_hook({
             let close_window = close_window.clone();
@@ -315,13 +317,13 @@ impl App for ProjectApp {
                     // the projects in the persisted open-set so the next launch reopens
                     // them. Each window's own close guard still gets its say.
                     Command::Quit => {
-                        platform::quit();
+                        quit();
                         true
                     }
                     // ⌘, — the same window the header's gear opens, pinned above this one
                     // (or re-pinned here, if another window has it).
                     Command::OpenSettings => {
-                        platform::open_settings(platform.clone(), app.clone());
+                        open_settings(platform.clone(), app.clone());
                         true
                     }
                     Command::CommandPalette | Command::CycleWindow | Command::Find => {
@@ -381,6 +383,21 @@ impl Component for ProjectRoot {
                 let engine = EngineCtx::new(overrides);
                 engine.watch_inflight(running);
                 engine
+            }
+        });
+        // **What this subtree is, for the windows that borrow from it.** Its two halves are the
+        // diff key above, so a value built here is only ever true of the mount that built it —
+        // which is exactly what a child window holding these handles has to be able to check
+        // (`platform::owner`). Provided before the handles themselves, so nothing can be handed
+        // out without it.
+        let restart = use_consume::<EngineRestart>();
+        use_provide_context({
+            let project = self.root.to_string_lossy().into_owned();
+            let generation = self.generation;
+            move || Subtree {
+                project,
+                generation,
+                restart,
             }
         });
         // This project's event log (P3-13) — the drawer's Events tab. First, because the open

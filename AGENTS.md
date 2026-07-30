@@ -46,6 +46,24 @@ that file when editing fork code, and §6 here for how the fork relates to the a
     (`use_radio_station::<ProjectState>`), not params-for-tests.
 - **No over-engineering.** Private/internal app: use `pub` freely, don't hand-annotate visibility
   per field on struct-literal-built components (the linter widens them back anyway).
+- **A path is qualified in the `use` and nowhere else.** Import the **item** and refer to it by its
+  bare name; a qualified path in a signature, a body or a match arm is the smell, and so is
+  importing a *module* to qualify through — `use crate::platform::{self, WindowKind}` plus
+  `platform::open_export(…)` is the same rule broken, one step shorter. Not tidiness: the import
+  block is the one place a reader checks what a file actually depends on, and a path spelled inline
+  is a dependency that isn't listed there — which is how one item ends up reached three different
+  ways in a single file (`crate::components::form::form_theme()` beside a `use` of the same module
+  elsewhere). It also removes a class of bad call site outright: `platform::open_export(platform
+  .clone(), launch)` reads as one name meaning two things, because the module and the local
+  `Platform` are both spelled `platform`; `open_export(platform.clone(), launch)` cannot. The
+  anchor is unchanged and unlegislated — `use super::` for a sibling, `use crate::` across the tree,
+  both are in use here. Three things are **not** covered, because they are not shortenable code:
+  a visibility modifier (`pub(in crate::apps::project::views::workbench)`), a rustdoc intra-doc link
+  (`[`Subtree`](crate::platform::owner::Subtree)` — the full path *is* the link target), and the
+  handful of `std` aliases whose module segment is what disambiguates them (`io::Result`,
+  `fmt::Result`, `fs::write`; a bare `use std::io::Result` shadows the prelude). On a genuine
+  collision between two of our own names, alias with `as` — never fall back to a reach through the
+  crate root.
 - **Valin-shaped.** Follow [`marc2332/valin`](https://github.com/marc2332/valin) (the Freya
   author's own IDE) for module layout, per-window data scoping, and stateful tabs.
 
@@ -329,6 +347,27 @@ Things that must not regress. Each was fought for once already.
   window that is no longer on screen. Express it in the registry's terms — the owner leaving closes
   the child through Freya's own path — which also covers the platforms where the child relationship
   is a no-op.
+- **A window's lifetime must be at least as short as the shortest-lived thing it holds — and for a
+  child window that is a *mount* of the project subtree, not a window id.** Export and Configure are
+  their own OS windows, so they cannot inherit the project window's context and carry its store, log,
+  catalog and scan counter as launch values — all created inside `ProjectRoot` and all
+  `GenerationalBox`-backed. Both things that remount that subtree free them while leaving the owner
+  window open under the same id: a re-root changes the folder, an engine restart changes neither. A
+  child left open across one holds dangling handles, and the failure is a panic on whichever read
+  repaints first — a keystroke is enough — or a Save into a store nothing is left to serve. So the
+  pin is over `platform::owner::Subtree`, which is `ProjectRoot`'s own diff key (folder +
+  generation) plus the live `EngineRestart` to read the current generation back, **provided by
+  `ProjectRoot`** so no call site can assemble a mismatched trio, with `use_owner_pin` the one
+  predicate. Three things generalise. An owner that has closed *shows nothing*, so it fails the same
+  comparison and "my owner closed" needs no clause of its own — one predicate, not three. The
+  generation is the one handle here safe to hold across a remount, for precisely the reason it exists
+  (owned by `ProjectApp`, above the subtree). And this is why `WindowKind` carries **less** than it
+  used to: `Configure`'s `project` and `Export`'s `owner` were the old pins' inputs, so once the pin
+  reads its owner from the launch value they were unread copies of a fact that could go stale — the
+  registry keeps only what it is *asked*, which is `is_workspace()` and Configure's focus-if-open
+  keying (`owner` + `target`, since one owner window shows one project). Anything that later hands a
+  child window a subtree handle takes a `Subtree` and calls that hook rather than growing a third
+  copy of the rule.
 - **Window geometry** is read via `Platform::root_size` and the fork-added
   `Platform::window_position` (both logical); never reach for the raw winit handle. There is no
   runtime resize/move from the app — restore geometry only at window **creation**

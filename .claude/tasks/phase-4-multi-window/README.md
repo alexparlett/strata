@@ -67,7 +67,7 @@ The Dioxus app shipped all of this (W1–W4, D6–D8) — this is the Freya rebu
 | P4-13 | Open / create a project (`.strata/` load) | 🟡 internals + the open path done (`OpenPref` honoured everywhere; This Window = keyed remount); **New Project** UI remains | lifecycle | P4-01 · *pull early* |
 | P4-14 | Session persistence + autosave | 🟡 tabs + history + window geometry done (load + autosave, incl. a final save on close/re-root); layout awaits its store    | lifecycle | P4-13 |
 | P4-15 | `.strata` write resiliency (one funnel, nothing silent) | ⬜                                                                                                                          | lifecycle | P4-13, P4-14, P3-13 |
-| P4-16 | Child-window lifetimes across an engine restart | ⬜                                                                                                                          | — | P4-10, P4-11 |
+| P4-16 | Child-window lifetimes across an engine restart | ✅ one `Subtree` + `use_owner_pin`, replacing the two near-verbatim pins                                                     | — | P4-10, P4-11 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

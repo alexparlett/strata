@@ -20,7 +20,7 @@ use crate::apps::configure::{ConfigureLaunch, ConfigureTarget};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{use_catalog, use_catalog_rescan, ProjChan, ProjectState};
 use crate::apps::project::LogCtx;
-use crate::platform::open_configure;
+use crate::platform::{open_configure, Subtree};
 use crate::state::AppCtx;
 
 /// The slot a trigger sets to ask for the Configure window. Provided at the project root.
@@ -39,6 +39,9 @@ impl Component for ConfigureLauncher {
         let project = use_radio_station::<ProjectState, ProjChan>();
         let rescan = use_catalog_rescan();
         let catalog = use_catalog();
+        // What all of the above belong to, so the window it opens closes with them rather than
+        // with the window that owns them (`platform::owner`).
+        let subtree = use_consume::<Subtree>();
         let platform = use_hook(Platform::get);
 
         use_side_effect(move || {
@@ -54,7 +57,7 @@ impl Component for ConfigureLauncher {
                     target,
                     app: app.clone(),
                     project,
-                    project_root: project.peek().root.to_string_lossy().into_owned(),
+                    subtree: subtree.clone(),
                     rescan,
                     catalog,
                     engine: engine.clone(),

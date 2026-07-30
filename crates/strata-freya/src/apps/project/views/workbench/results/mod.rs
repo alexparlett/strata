@@ -44,6 +44,7 @@ use crate::apps::project::state::{Chan, LogCtx, SessionState};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
+use crate::platform::Subtree;
 use crate::state::AppCtx;
 pub use cell_view::CellViewThemePreference;
 pub use datagrid::DataGridThemePreference;
@@ -302,6 +303,9 @@ impl Component for ResultsBody {
         let export_app = use_consume::<AppCtx>();
         let export_log = use_consume::<LogCtx>();
         let export_engine = engine.clone();
+        // What that log belongs to, so the window it opens closes with it rather than with the
+        // window that owns it (`platform::owner`).
+        let export_subtree = use_consume::<Subtree>();
         let export_target = |rows: &QueryPage| -> Option<ExportLaunch> {
             rows.output.snapshot.map(|snapshot| ExportLaunch {
                 target: ExportTarget {
@@ -317,6 +321,7 @@ impl Component for ResultsBody {
                 engine: export_engine.clone(),
                 app: export_app.clone(),
                 log: export_log,
+                subtree: export_subtree.clone(),
             })
         };
 

@@ -37,7 +37,7 @@ use crate::apps::export::views::{ExportBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::LogCtx;
 use crate::keymap::on_commands;
-use crate::platform::{self, WindowKind};
+use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowKind};
 use crate::state::{use_share_config, AppCtx};
 use crate::theme::{peek_selection, use_strata_theme, window_background};
 
@@ -109,12 +109,17 @@ pub struct ExportLaunch {
     /// both arms are recorded there — and it has to be the opener's log, because this window
     /// closes itself on success and the user is looking at that one.
     pub log: LogCtx,
+    /// The **open project** that log belongs to — what ties the window's lifetime to that
+    /// subtree rather than to the owner's window id, which outlives it both across a re-root and
+    /// across an engine restart (see [`crate::platform::owner`]).
+    pub subtree: Subtree,
 }
 
-/// Compares on the **target** alone. The other two are the window's own handles — one engine,
-/// one set of app-globals, fixed for the window's whole life — so they carry no information a
-/// diff could act on. The same reasoning as freya-query's `Captured`, which is invisible to
-/// cache identity for exactly this reason.
+/// Compares on the **target** alone. Everything else is fixed for the window's whole life — one
+/// engine, one set of app-globals, one log, and one `Subtree` that can only change by remounting
+/// the very subtree this is built in — so none of it carries information a diff could act on. The
+/// same reasoning as freya-query's `Captured`, which is invisible to cache identity for exactly
+/// this reason.
 impl PartialEq for ExportLaunch {
     fn eq(&self, other: &Self) -> bool {
         self.target == other.target
@@ -183,12 +188,16 @@ pub struct ExportApp {
     /// The project window's engine. An `Arc` clone, so this window can export (and pin) without
     /// reaching back across the window boundary.
     pub engine: EngineCtx,
+    /// The **open project** the log below belongs to — what bounds this window's lifetime
+    /// ([`crate::platform::owner`]).
+    pub subtree: Subtree,
     pub target: ExportTarget,
     /// Where this export's outcome is recorded — the opener's log, not this window's.
     pub log: LogCtx,
-    /// The window this one belongs to. Carried rather than looked up because the root's own
-    /// `use_register_window` re-reports its kind, and an entry that forgot its owner would stop
-    /// this window closing with the project window it is exporting from.
+    /// The window this one belongs to — what it is pinned above, and what
+    /// [`platform::use_owner_pin`](crate::platform::use_owner_pin) resolves the live subtree
+    /// through. A launch value rather than a field on the registry entry, because the pin is its
+    /// only reader and a second copy in the registry is one that can go stale.
     pub owner: WindowId,
 }
 
@@ -196,6 +205,7 @@ impl ExportApp {
     pub fn window(
         app: AppCtx,
         engine: EngineCtx,
+        subtree: Subtree,
         target: ExportTarget,
         log: LogCtx,
         owner: WindowId,
@@ -210,6 +220,7 @@ impl ExportApp {
         WindowConfig::new_app(ExportApp {
             app,
             engine,
+            subtree,
             target,
             log,
             owner,
@@ -250,11 +261,13 @@ impl App for ExportApp {
         });
         let log = self.log;
         use_provide_context(move || log);
-        // Join the live window registry, so a second press of Download focuses this window
-        // rather than opening another, and so it closes with the project window that owns it.
+        // Join the live window registry, so the app knows which window this panel belongs to…
         let owner = self.owner;
-        platform::use_register_window(self.app.windows, move || WindowKind::Export { owner });
-        platform::use_export_pin(self.app.clone());
+        use_register_window(self.app.windows, || WindowKind::Export);
+        // …and close with the *subtree* the log above belongs to, not merely with the window that
+        // owns it: a re-root and an engine restart both drop it while leaving that window open
+        // under the same id.
+        use_owner_pin(self.app.clone(), owner, self.subtree.clone());
 
         // **Hold the snapshot open for this window's life.** This is what makes the target's
         // facts stay true: a re-run in the tab behind defers its retire until this drops
@@ -302,7 +315,7 @@ impl App for ExportApp {
                         true
                     }
                     Command::Quit => {
-                        platform::quit();
+                        quit();
                         true
                     }
                     _ => false,
