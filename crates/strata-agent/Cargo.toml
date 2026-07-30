@@ -1,0 +1,57 @@
+[package]
+name = "strata-agent"
+version = "0.2.0"
+edition = "2021"
+description = "Strata's agent-access core: the read-only tool vocabulary, the `Host` seam that answers it, and the MCP server that serves it. Frontend-agnostic — no Freya, no window, no renderer."
+license = "MIT"
+
+[dependencies]
+strata-core = { path = "../strata-core" }
+strata-model = { path = "../strata-model" }
+# The MCP SDK. `server` + `macros` give the tool router and its schema generation;
+# `transport-streamable-http-server` gives `StreamableHttpService`, the tower service the
+# in-app host is served through. `transport-io` is the stdio transport the headless host
+# (AA-05) serves the same vocabulary over — declared here so both hosts share one pin.
+rmcp = { version = "3.0.1", features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-streamable-http-server",
+    "transport-io",
+] }
+# The server's own runtime (the Engine pattern) + its listener.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
+# `CancellationToken`: what stops the accept loop and every live MCP session on drop.
+# rmcp's own config field takes one, so this names a type already in the graph.
+tokio-util = "0.7"
+# `StreamableHttpService` is a tower service over `http` types with no listener of its own;
+# hyper is the listener, and the auth check sits in front of it (401 before any tool runs).
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+# The wire shapes: serde for the JSON, schemars for the tool schemas rmcp advertises.
+# `rc` is what makes `Arc<Vec<ColumnWire>>` serializable (`wire::Columns` — one conversion of a
+# result schema, shared by its run and every page after it). rmcp happens to enable it too, and
+# naming it here is the point: a feature we depend on is not one to inherit by luck.
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+schemars = "1.0"
+# Saved queries are keyed by `Uuid`, and a tab handle is a `TabId` (a `Uuid`) on the wire.
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+
+[dev-dependencies]
+# The integration test speaks real MCP over the real transport, so it needs the client half
+# of the same SDK. Enabling it here also enables it for the lib's own test build, which is
+# what lets `tests/` dial the server this crate starts.
+rmcp = { version = "3.0.1", features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+] }
+tokio = { version = "1", features = ["full"] }
+# The 401 assertions dial the endpoint directly, below MCP — the point being that the guard
+# answers before any framing is read. Already in the graph via rmcp's reqwest transport.
+reqwest = { version = "0.13", features = ["json"] }
+serde_json = "1"

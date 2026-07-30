@@ -11,6 +11,7 @@ members = [
     "crates/strata-model",
     "crates/strata-core",
     "crates/strata-code-editor",
+    "crates/strata-agent",
 ]
 # `strata-dioxus` is its own workspace (tree-sitter link conflict). `crates/freya` is our Freya fork
 # checkout — kept only for convenient source editing; the build resolves it from git (see
