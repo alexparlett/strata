@@ -481,7 +481,10 @@ a per-bundle README. The DEV_TASKS Part-1 audit and `DESIGN_SPEC.md` are derived
 Read the `.dc.html` source directly (dimensions/colours/layout are spelled out there); don't render
 or screenshot them unless asked.
 
-Feature specs: `COMPLETION_SPEC.md` (the as-built P2-04 completion design — supersedes
+Feature specs: `AGENT_ACCESS_SPEC.md` (agent-driven access — the MCP host whose queries land as
+real query tabs, the verified Tokio↔Freya bridge, the chat-pane forward design; dataflow in
+`agent-access-dataflow.mermaid`; workstream `workstream-agent-access/`), `COMPLETION_SPEC.md`
+(the as-built P2-04 completion design — supersedes
 `SQL_LANGUAGE_SPEC.md` §4), `CONNECTIONS_SPEC.md`, `EXPLAIN_PLAN_SPEC.md`,
 `EXPORT_OPTIONS.md`, `IMPORT_OPTIONS.md`, `SQL_LANGUAGE_SPEC.md`, `EDITOR_LANG_SPIKE.md`,
 `F7-shared-state.md`.
