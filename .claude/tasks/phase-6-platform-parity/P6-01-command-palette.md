@@ -80,8 +80,13 @@ the chord.
 - **Top-level columns only.** `ColumnInfo::children` is a tree, and a real `config.json` measured
   241,425 nested fields in 19 columns (AGENTS.md §2) — indexing it would be that unbounded
   materialization in a new place, paid on every open. Views' columns are indexed as well as tables'.
-- **The cap is per group**, not overall: a global cap lets a common substring fill the list with
-  columns and push the table you were after off the bottom.
+- **The cap is per group**, not overall — and **only the catalog groups have one**. A global cap
+  lets a common substring fill the list with columns and push the table you were after off the
+  bottom; but ACTIONS is a fixed, code-defined list rather than an unbounded project-scoped one,
+  and capping it meant the palette *hid a command*. Review caught it: the registry grew to nine
+  against a cap of eight, so Settings… (the last declared) silently stopped being offered on a
+  cold palette. `Group::cap` is the distinction, and a test asserts ACTIONS against `Action::ALL`
+  rather than a figure that would need updating as the registry grows.
 - **An empty query hides COLUMNS** (the canvas's `buildCmdk`) — every other group is bounded by the
   project and worth offering cold.
 - **A table row and a view row open the data**, which is what pressing that row in the sidebar

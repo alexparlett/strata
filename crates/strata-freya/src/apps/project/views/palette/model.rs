@@ -19,10 +19,16 @@
 //! holds ([`crate::apps::settings::search`]), because a user who has learned one of this app's
 //! search boxes has learned the other.
 //!
-//! And the one the canvas leaves open: **the cap is per group, not overall**. A global cap lets a
-//! common substring fill the whole list with columns and push the table you were after off the
-//! bottom — which is the failure the settings index avoids from the other side by indexing its
-//! named settings first. Per group, every section keeps a hearing.
+//! And the one the canvas leaves open: **the cap is per group, not overall — and only the catalog
+//! groups have one**. A global cap lets a common substring fill the whole list with columns and
+//! push the table you were after off the bottom, which is the failure the settings index avoids
+//! from the other side by indexing its named settings first. Per group, every section keeps a
+//! hearing.
+//!
+//! ACTIONS is uncapped because it is not the same kind of list: the catalog groups are unbounded
+//! and project-scoped, while the commands are a fixed set defined in code. Capping them meant the
+//! palette **hid a command** — the registry grew to nine against a cap of eight and Settings…
+//! silently stopped being offered ([`Group::cap`]).
 //!
 //! ## Only top-level columns
 //!
@@ -37,8 +43,10 @@ use uuid::Uuid;
 use crate::apps::project::commands::Action;
 use crate::apps::project::state::{ProjectState, Reg};
 
-/// How many rows one group offers at once. A section longer than a glance is a section that has
-/// not narrowed anything — and the whole point of typing more is to shorten it.
+/// How many rows a **catalog** group offers at once. A section longer than a glance is a section
+/// that has not narrowed anything — and the whole point of typing more is to shorten it.
+///
+/// [`Group::Actions`] is exempt; see [`Group::cap`].
 pub const MAX_PER_GROUP: usize = 8;
 
 /// The palette's sections, in the order it offers them.
@@ -60,6 +68,22 @@ impl Group {
         Group::SavedQueries,
         Group::Columns,
     ];
+
+    /// How many rows this group may offer, or `None` for "all of them".
+    ///
+    /// **Only the catalog groups are capped.** The cap exists because a project's tables, views,
+    /// saved queries and especially columns are unbounded — a common substring would otherwise
+    /// fill the list with columns and push the table you were after off the bottom.
+    /// [`Actions`](Self::Actions) is none of that: it is the command registry, a fixed list
+    /// defined in code, and capping it means the palette silently *hides a command* — which is
+    /// the exact opposite of what the surface is for. It hid the ninth one (Settings…, the last
+    /// declared) for as long as the cap applied here.
+    pub fn cap(self) -> Option<usize> {
+        match self {
+            Group::Actions => None,
+            _ => Some(MAX_PER_GROUP),
+        }
+    }
 
     /// The section heading.
     pub fn title(self) -> &'static str {
@@ -267,8 +291,8 @@ impl Index {
         Self { entries, haystacks }
     }
 
-    /// What `query` narrows the index to: sections in [`Group::ALL`] order, each capped at
-    /// [`MAX_PER_GROUP`], empty ones dropped, flattened into one list of rows.
+    /// What `query` narrows the index to: sections in [`Group::ALL`] order, each capped by its
+    /// own [`Group::cap`], empty ones dropped, flattened into one list of rows.
     ///
     /// An empty query is not a search — it offers everything except [`Group::Columns`] (see the
     /// module doc). A non-empty one matches every one of its words somewhere in the entry.
@@ -296,7 +320,7 @@ impl Index {
                     .iter()
                     .enumerate()
                     .filter(|(i, entry)| entry.group() == *group && matches(*i, entry))
-                    .take(MAX_PER_GROUP)
+                    .take(group.cap().unwrap_or(usize::MAX))
                     .map(|(_, entry)| entry.clone()),
             );
             if results.rows.len() > start {
@@ -431,6 +455,28 @@ mod tests {
             ]
         );
         assert_eq!(labels(&groups, Group::Tables), ["orders", "broken"]);
+    }
+
+    /// **Every** command is offered, not the first [`MAX_PER_GROUP`] of them.
+    ///
+    /// The regression this pins is one the test above could not see, because it asserted which
+    /// groups were present and never how many rows ACTIONS held: the registry grew to nine
+    /// commands against a cap of eight, so the ninth — Settings…, the last declared — was
+    /// silently dropped from a cold palette and only reappeared once a query narrowed ACTIONS
+    /// below the cap. A palette that hides a command is worse than no palette, and the number of
+    /// commands is expected to keep growing, so this asserts against `Action::ALL` rather than
+    /// against a figure that would need updating with it.
+    #[test]
+    fn every_command_is_offered_however_many_there_are() {
+        let groups = Index::new(&store()).search("");
+        let offered = labels(&groups, Group::Actions);
+        let declared: Vec<String> = Action::ALL.iter().map(|a| a.label().to_string()).collect();
+        assert_eq!(offered, declared);
+        assert!(
+            declared.len() > MAX_PER_GROUP,
+            "the registry has shrunk below the catalog cap, so this no longer proves anything — \
+             the ACTIONS group must stay uncapped regardless"
+        );
     }
 
     /// …and typing brings them in.
