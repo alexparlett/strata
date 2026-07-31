@@ -196,6 +196,7 @@ mod interaction {
     use strata_core::theme::load;
 
     use super::*;
+    use crate::agent::create_global_agent;
     use crate::apps::project::{CloseGuard, CloseTarget, EngineRestart};
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
@@ -248,6 +249,7 @@ mod interaction {
                     preview: create_global_theme_preview(),
                     menu: create_global_menu(),
                     open: create_global_open(),
+                    agent: create_global_agent(),
                 });
                 open
             },

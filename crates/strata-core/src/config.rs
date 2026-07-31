@@ -193,6 +193,55 @@ pub struct Settings {
     /// [`crate::engine::config`].
     #[serde(default)]
     pub engine: BTreeMap<String, String>,
+    /// Agent access (AA-03): whether the in-app MCP server listens, and on what. Off by
+    /// default — the capability ships dark until the user turns it on.
+    #[serde(default)]
+    pub agent_access: AgentAccess,
+}
+
+/// The agent-access server's settings (`docs/AGENT_ACCESS_SPEC.md` §6): one app-wide
+/// Streamable-HTTP server on loopback, opt-in, bearer-authenticated.
+///
+/// One nested struct rather than three flat fields because they are read and written as a
+/// unit — the running server is started from exactly this triple, so "does the live server
+/// match the settings?" is one comparison rather than three (`agent::use_agent_server`).
+///
+/// The **token is empty by default and minted on first use**, not by this `Default`. A serde
+/// default that minted one would mint a *fresh* one on every load of a config file that
+/// lacks the field, and nothing would ever write it back — so every launch would invalidate
+/// the client configuration the user had just pasted. Minting is a deliberate, persisted act;
+/// see `strata_agent::server::mint_token`.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct AgentAccess {
+    /// Whether the server listens at all. Off by default (spec §6).
+    #[serde(default)]
+    pub enabled: bool,
+    /// The loopback port to bind. Fixed rather than ephemeral so a client configuration
+    /// (`claude mcp add --transport http strata http://127.0.0.1:<port>/mcp`) keeps working
+    /// across launches.
+    #[serde(default = "default_agent_port")]
+    pub port: u16,
+    /// The bearer token every request must present. Empty means "not minted yet" — the
+    /// server refuses an empty token outright, because the guard is a byte compare and an
+    /// empty secret would match a bare `Authorization: Bearer `.
+    #[serde(default)]
+    pub token: String,
+}
+
+impl Default for AgentAccess {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_agent_port(),
+            token: String::new(),
+        }
+    }
+}
+
+/// The default loopback port for agent access. Above the registered range and not a port
+/// anything common claims; changeable in Settings ▸ Agent access (AA-04).
+fn default_agent_port() -> u16 {
+    47821
 }
 
 /// Generates [`Settings::merge_onto`] from one list of the struct's fields.
@@ -244,6 +293,7 @@ settings_merge!(
     confirm_close_running,
     keybinds,
     engine,
+    agent_access,
 );
 
 /// The legal range for [`Settings::default_col_width`], in px — the bounds the results grid
@@ -300,6 +350,7 @@ impl Default for Settings {
             confirm_close_running: true,
             keybinds: Vec::new(),
             engine: BTreeMap::new(),
+            agent_access: AgentAccess::default(),
         }
     }
 }

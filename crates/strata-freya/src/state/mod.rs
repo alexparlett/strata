@@ -24,6 +24,7 @@ mod theme_preview;
 pub use config::*;
 pub use theme_preview::*;
 
+use crate::agent::AgentCtx;
 use crate::menu::MenuState;
 use crate::platform::{FocusedOpen, WindowRegistry};
 use crate::theme::ThemesCtx;
@@ -50,6 +51,10 @@ pub struct AppCtx {
     /// but its contents belong to one window, and Open Recent is the item that carries data
     /// rather than a chord.
     pub open: FocusedOpen,
+    /// Agent access (AA-03): the cross-thread service directory every project window joins,
+    /// and the slot holding whatever MCP server is listening. Here rather than in a static of
+    /// its own for the reason the rest are — a window is handed one value, not eight.
+    pub agent: AgentCtx,
 }
 
 /// Every field is a handle on a process-wide singleton created before the first window, so

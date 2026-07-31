@@ -564,8 +564,19 @@ pub struct TabResult {
 /// What a `run` settled as. **A stop is a status, not an error**: a cancel in the app or a
 /// supersede by a newer press is news the user already has, and the only thing that knows a
 /// stop from a fault is `strata_core::engine::stopped_on_purpose`.
+///
+/// **`extend` is load-bearing, not decoration.** This is the vocabulary's one `outputSchema`
+/// that is a sum rather than a struct, and schemars emits an internally-tagged enum as a bare
+/// `oneOf` with no `"type"` at the top. MCP says an output schema describes the *object* a tool
+/// returns in `structuredContent`, and a client that checks so rejects this tool — and, because
+/// it validates the `tools/list` response as a whole, **every other tool with it**. The
+/// symptom is the worst kind: the server connects, reports healthy, answers `tools/list` with
+/// all ten, and the client shows none, with nothing anywhere saying why. Adding `type` beside
+/// `oneOf` is plain JSON Schema (an instance must satisfy both) and describes exactly what
+/// every variant already is — the three of them are objects; only the tag differs.
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[schemars(extend("type" = "object"))]
 pub enum RunResult {
     Ok {
         tab: String,
@@ -689,5 +700,37 @@ mod tests {
         let json = serde_json::to_value(&wire).unwrap();
         assert_eq!(json["kind"], "saved_query");
         assert!(json.get("state").is_none(), "{json}");
+    }
+
+    /// **Every `outputSchema` says `"type": "object"`.**
+    ///
+    /// MCP's output schema describes the object a tool returns in `structuredContent`, and a
+    /// client that checks so drops a tool that does not say it — then, validating the
+    /// `tools/list` response as a whole, drops *every* tool with it. That is how this was
+    /// found: the server connected, reported healthy, answered `tools/list` with all ten, and
+    /// a fresh Claude Code session showed none, with nothing anywhere naming the cause.
+    ///
+    /// [`RunResult`] is the one that can fail it, because it is the one sum type — schemars
+    /// emits an internally-tagged enum as a bare `oneOf`. The test covers every result shape
+    /// rather than that one, since the next sum added would fail identically and silently.
+    #[test]
+    fn every_result_schema_describes_an_object() {
+        fn object_schema<T: schemars::JsonSchema>(named: &str) {
+            let schema = serde_json::to_value(schemars::schema_for!(T)).unwrap();
+            assert_eq!(
+                schema.get("type").and_then(|t| t.as_str()),
+                Some("object"),
+                "{named}'s output schema must say it is an object: {schema}"
+            );
+        }
+        object_schema::<ProjectsResult>("ProjectsResult");
+        object_schema::<TablesResult>("TablesResult");
+        object_schema::<DescribeResult>("DescribeResult");
+        object_schema::<FunctionsResult>("FunctionsResult");
+        object_schema::<ValidateResult>("ValidateResult");
+        object_schema::<TabResult>("TabResult");
+        object_schema::<TabsResult>("TabsResult");
+        object_schema::<RunResult>("RunResult");
+        object_schema::<PageResult>("PageResult");
     }
 }
