@@ -34,5 +34,5 @@ pub use host::{
     CatalogEntry, Described, Host, Project, RegState, RunMode, RunSettle, Settled, TabInfo,
     TabState,
 };
-pub use server::{AgentServer, MCP_PATH};
+pub use server::{mint_token, AgentServer, MCP_PATH};
 pub use tools::{StrataTools, MAX_PAGE_SIZE};

@@ -16,6 +16,20 @@ freya = { workspace = true, features = ["radio", "query", "menu", "router"] }
 strata-core = { path = "../strata-core" }
 strata-model = { path = "../strata-model" }
 
+# Agent access (AA-03): the read-only tool vocabulary + the `Host` seam this app implements,
+# and the MCP server that serves it. Frontend-agnostic on purpose — the dependency runs one
+# way only, so the same vocabulary can be served headless and, later, called by the chat pane.
+strata-agent = { path = "../strata-agent" }
+
+# `tokio::sync` only, and only for the agent bridge's ask channel: mpsc + oneshot are
+# runtime-agnostic (they wake a waker, whoever polls it), which is the whole reason the
+# server's Tokio runtime can talk to Freya's UI executor at all. Naming just `sync` states
+# what this crate *uses*; it does not and cannot restrict what is compiled, because
+# `strata-core` depends on tokio with `full` and Cargo unifies features across the graph.
+# There is still no Tokio runtime **started** here — the engine owns one and the agent server
+# owns another, and this crate awaits their handles on Freya's own executor.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
 # Our owned code-editor surface (vendored from freya-code-editor; see the crate's lib.rs).
 strata-code-editor = { path = "../strata-code-editor" }
 

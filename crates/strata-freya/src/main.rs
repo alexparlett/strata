@@ -22,10 +22,12 @@ use strata_core::config::AppConfig;
 use strata_core::engine::purge_snapshot_root;
 use strata_core::project as project_io;
 
+use crate::agent::create_global_agent;
 use crate::platform::{create_global_open, create_global_windows};
 use crate::state::{create_global_config, create_global_theme_preview, AppCtx};
 use crate::theme::ThemesCtx;
 
+mod agent;
 mod apps;
 pub mod components;
 mod keymap;
@@ -76,6 +78,11 @@ fn main() {
     // a new one / ask) instead of always launching a window. Open… needs no slot: it reaches
     // the focused window as a synthesized chord, like every other menu command.
     let focused_open = create_global_open();
+    // Agent access (AA-03): the cross-thread service directory a project window lends its
+    // engine and its ask channel to, plus the slot holding whatever MCP server is listening.
+    // Nothing listens yet — a workspace window's `use_agent_server` starts one only if the
+    // `agent_access` setting is on, which it is not by default (spec §6).
+    let agent = create_global_agent();
     // Everything a window — or the menubar handler — is handed, in one value.
     let app = AppCtx {
         themes,
@@ -84,6 +91,7 @@ fn main() {
         preview,
         menu: menu_state,
         open: focused_open,
+        agent,
     };
     let menu_app = app.clone();
     let launch_config = with_embedded_fonts(LaunchConfig::new())

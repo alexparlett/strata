@@ -175,6 +175,8 @@ impl<H: Host> StrataTools<H> {
 fn tab_handle(text: &str) -> Result<TabId, AgentError> {
     Uuid::parse_str(text)
         .map(TabId)
+        // The wording is `AgentError::no_such_tab`'s, but the handle never parsed, so there is
+        // no `TabId` to hand it — the text the caller sent is what has to be echoed back.
         .map_err(|_| AgentError::NotFound(format!("No open tab '{text}'.")))
 }
 
@@ -287,6 +289,15 @@ impl<H: Host> StrataTools<H> {
     ) -> Result<Json<RunResult>, AgentError> {
         let tab = tab_handle(&params.tab)?;
         let (project, engine) = self.engine(params.project.as_deref()).await?;
+
+        // Nothing to run is refused before anything else, because the gate below cannot catch
+        // it: a blank statement parses to *zero* statements, so it draws zero refusals and
+        // reads as clean. Dispatching it would leave the user a failed run they did not make.
+        // The editor's own funnel says the same thing (`actions::press_query`: a blank buffer
+        // never runs); this is that rule where the agent path can reach it.
+        if params.sql.trim().is_empty() {
+            return Err(AgentError::Query("The query is empty.".into()));
+        }
 
         // The gate, before dispatch. `Err` is "could not judge" — unparseable input is never
         // a policy pass, so it is refused here with the engine's own parse wording rather

@@ -16,18 +16,33 @@ UI seam the MCP server does, so nothing built for the first frontend is discarde
 
 ## 1. Direction (decided)
 
-- **Agent queries are ordinary runs.** A tool call sets a real `QueryTab`'s
-  `QuerySpec` request — the same press a human makes — so freya-query caching, snapshot
-  materialization, supersede/retire, the request keeper, history and the event log all apply
-  with **zero new lifecycle semantics**. The investigation trail *is* the tab strip: each step
-  the agent parks is an immutable snapshot the user can page, sort, export, or take over.
-- **Agent-managed tab handles**, not one-tab-per-query and not one reused tab. The vocabulary
-  exposes `open_tab` / `run(tab, sql)` / `read_page` / `close_tab` / `list_tabs`, so the agent
-  works tabs like a person: scratch iterates in one tab, findings get parked each in their own.
-  Tab tidiness is promptable, not hard-coded.
-- **Tabs are shared, last-writer-wins.** No ownership state is modeled at all — a tab the agent
-  opened is just a tab. The user typing into it, re-running it, or closing it needs no rule
-  beyond what tabs already do; the agent's next write to a closed handle gets "tab not found".
+> **What is built vs. what is decided.** AA-03 shipped the seam and the vocabulary; AA-03b is
+> **decided and not yet built**, and it is what moves an agent's runs off the user's tabs. Where
+> the two differ, the bullets below say which is which, and §5's table is always the tools that
+> are actually being served today.
+
+- **Agent queries are ordinary runs** — same engine, same materialization, same
+  supersede/retire, same snapshot the user can page, sort, export or take over. That half is
+  settled and is what makes this better than a generic read-only-SQL MCP server (§2).
+- **~~The investigation trail *is* the tab strip.~~ Reversed for MCP by AA-03b.** Landing agent
+  runs in the user's own `QueryTab`s was built, used, and found wrong for a frontend that is not
+  *in* the window: a Claude Code session in a terminal opened tabs the user was not watching,
+  moved the editor out from under them, and cost a diagnostics pass per tab on the very engine
+  the user's own press needed. An agent that is not in the window gets **its own surface** — the
+  Agents pane — and a press promotes its SQL into a real tab through `actions::load_sql`, the
+  History drawer's gesture. The chat pane (§9) is the opposite case and keeps the tab gesture,
+  because it is in the window and the user is looking at it. See
+  `.claude/tasks/workstream-agent-access/AA-03b-agents-pane.md`.
+- **Agent-managed handles**, not one-per-query and not one reused: the agent opens them, runs in
+  them and closes them, so scratch iterates in one and findings get parked each in their own.
+  Today those handles are **tabs** (`open_tab` / `run(tab, sql)` / `close_tab` — §5). *AA-03b
+  renames them to* **query sessions**, deliberately not "sessions" — MCP's own `Mcp-Session-Id`
+  is an agent's *connection*, and ours (`SessionState` / `session.json`) is the window's tabs —
+  and not "tabs", which they will no longer be. A query session maps onto the engine's `WsId`.
+- **The user's tabs will be the user's** *(AA-03b)*: an agent will never open, focus or close
+  one, and anything of the agent's the user wants they promote — an ordinary press, with its own
+  nonce and its own cache entry. **Today an agent does open tabs**, though `open_background`
+  already keeps it from stealing focus.
 - **Read-only v1**, the editor's managed-DDL policy exactly: queries / `EXPLAIN` / `SHOW` /
   `DESCRIBE` pass; everything else is refused with the same message the editor shows. No table
   registration, no view creation, no export, and **no profiling** (§6). The vocabulary is shaped
@@ -148,6 +163,14 @@ driver loop: `rx.recv().await` → perform the Radio write (open/close tab, set
 `QueryTab::request` — an ordinary press on `Chan::Request(id)`) or read (catalog projection) →
 reply, except for runs, whose oneshot is **parked** keyed by the press nonce.
 
+**A run loads the buffer before it presses it** (AA-03). A human press reads the tab's editor
+text, so the SQL is in the buffer by construction; an agent's sets the request directly, and the
+first cut left the tab showing results over an *empty* editor. That is the whole premise of
+landing agent queries in real tabs undone — the trail is only a trail if the user can read what
+ran and take it over — so the driver calls the editor's own `actions::load_sql` first, which
+makes an agent run the History drawer's double-press exactly: load, then press. A plain
+`set_text`, so it is undoable like any other buffer change.
+
 **Agent keepers** — one invisible component per parked run-ask, mounted like `RequestKeepers`:
 `use_query(spec.query(&engine))` on the *same* spec the press set (same cache entry; freya-query
 attaches to the in-flight execution), and on settle completes the parked oneshot — waking the
@@ -197,6 +220,13 @@ MCP conventions; responses are structured JSON.
 | `read_page(tab, page, sort?)` | data | Pages the tab's last settled snapshot via `Engine::fetch_page` — snapshot-scoped, side-effect free, at the page size that `run` settled with. A snapshot retired by a newer run in that tab fails cleanly: "result was replaced; re-run" (§7). |
 | `close_tab(tab)` | control | Closes the tab (through the same close funnel the UI uses — a running press is cancelled the ordinary way). |
 
+> **AA-03b renames the last five, and has not landed.** The table above is what
+> `crates/strata-agent/src/tools.rs` actually serves today — build against these names. Once
+> AA-03b moves an agent's runs off the user's tabs (§1), `open_tab` / `list_tabs` /
+> `close_tab` become `open_query_session` / `list_query_sessions` / `close_query_session`, and
+> the `tab` parameter on `run` and `read_page` becomes `query_session`. Only the names and the
+> surface change; the plane, the gate and the semantics below are the same either way.
+
 Notes that are rules, not details:
 
 - **`list_tables` answers from the store, never DataFusion introspection.** Introspection would
@@ -207,8 +237,18 @@ Notes that are rules, not details:
 - **`run` never rewrites SQL.** No injected `LIMIT`: the run materializes exactly what the user's
   own press would (same cost, same snapshot), and the *response* is bounded by `page_size` +
   paging. Totals are always exact (the snapshot knows).
-- **`run` reuses a tab the way a press does**: dispatch supersedes the tab's in-flight run and
-  retires its previous snapshot. That is the point — agent semantics *are* app semantics.
+- **`run` reuses its handle the way a press reuses a tab**: dispatch supersedes whatever that
+  handle had in flight and retires its previous snapshot. That is the point — agent semantics
+  *are* app semantics. (Today the handle *is* a tab; after AA-03b it is a query session on a
+  surface of the agent's own. The supersede rule is unchanged either way.)
+- **After AA-03b, nothing an agent does reaches disk** — `session.json` cannot hold it (an agent
+  will own no tabs), and `.strata/history.jsonl` deliberately will not: history is capped and
+  deduped *before* the cap, so exploratory agent queries would evict the runs the user actually
+  made. The Agents pane is the agent's record and is ephemeral, like the event log; history
+  stays the user's. A query the user **promotes** and runs enters history the ordinary way,
+  which is the honest rule — history records what the user ran. **Today this is not yet true**:
+  an agent run rides a real tab, so it persists in `session.json` and its tab's request keeper
+  records it in history. That is one of the four costs AA-03b exists to remove (§1).
 - **`explain` goes over the wire as text.** `QueryPlan`'s structured `PlanNode` list exists to
   be *drawn* (it carries accent colours and time-share bars); off-screen it would be the same
   tree twice, one copy in a shape nothing can use. `run(mode: "explain")` answers with
@@ -250,6 +290,12 @@ Client configuration (the whole of it):
 claude mcp add --transport http strata http://127.0.0.1:<port>/mcp --header "Authorization: Bearer <token>"
 ```
 
+The **README's Agent access section** is the same thing for every other client — Claude Desktop
+(which speaks stdio only, so it needs an `mcp-remote` proxy), VS Code, Cursor, Gemini CLI, Codex
+CLI — plus what the header's status dot is telling you. It is the user-facing half and points at
+Settings ▸ Agent access for the switch and the token; nothing user-facing documents the config
+file, which is the app's to write.
+
 ## 7. Error taxonomy
 
 Every error an agent can see is one of these, and stopped-on-purpose is never a fault
@@ -290,6 +336,9 @@ What lives where — nothing here adds state to the session or project stores:
 | Ask channel + driver loop + parked run replies | the window (`use_agent_bridge`) | Dies with the window/re-root — no cleanup path to drift. |
 | Agent keepers (settle observers) | the window, per parked ask | The `RequestKeepers` pattern, verbatim. |
 | Tabs, requests, snapshots, history, events | **unchanged** | Agent runs are ordinary presses; nothing new is stored anywhere. |
+| ~~`QueryTab::agent`~~ | — | AA-03's badge on an agent-driven tab, built and then removed: an agent opens no tabs, so there is no tab to mark (§11). |
+| The agent's run trail (what the Agents pane shows) — **AA-03b, not built** | `state::agents`, a satellite | Ephemeral and capped, like `state::log` — **never** `SessionState`, so it cannot reach `session.json`, and **never** `history.jsonl`, which stays the user's. |
+| Whether a client is paired (the header dot) | rmcp's `LocalSessionManager`, **sampled** | The one polled thing in the app, because the fact is rmcp's and a session is created below our seam. `AgentServer::clients` is a non-blocking `try_read`; the dot mounts its timer only while the setting is on. Over-reports for at most `keep_alive` (5 min) after a client dies without its `DELETE`, and never under-reports. |
 | `agent_access` settings (enabled, port, token) | app config (`Settings`) | Via `settings_merge!` — a new field that isn't merged is a build error. |
 
 ## 9. Chat pane (flagship follow-on — forward design)
@@ -335,9 +384,13 @@ For app-closed use (CI, scripts, a second machine): the same binary, a CLI branc
 - **Settled-profile exposure.** Profile numbers live in the freya-query cache keyed by the scan
   request; surfacing them through `describe_table` means the bridge reading another surface's
   cache entry. Deferred until wanted — the free tier may be enough.
-- **Agent-tab marker.** Last-writer-wins means no ownership state, so a visual "opened by
-  agent" marker would be a transient decoration, not state. Whether the tab strip shows one is
-  a design call — parked for the designer, not built speculatively.
+- ~~**Agent-tab marker.**~~ **Dissolved by AA-03b.** It was built (an `AGENT` badge on the editor
+  toolbar, set by the bridge and retracted by the user's own press) and then removed with the
+  premise underneath it: once AA-03b lands an MCP agent opens no tabs, so there is no tab to
+  mark — and removing the badge ahead of that surface was the cheaper order, since 03b deletes
+  the tab landing it marked. The question was
+  always a symptom — needing a badge to say "this tab isn't really yours" is the tell that the
+  tab should not have been the user's in the first place.
 - **MCP resources** (schema-as-resources beside the tools) — revisit when a client benefits.
 - **Curated writes** (register table, save view, export) — the vocabulary grows new, separately
   permissioned tools if ever; `run` never loosens.

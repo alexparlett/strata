@@ -34,6 +34,7 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::host::Host;
 use crate::tools::StrataTools;
@@ -44,6 +45,20 @@ pub const MCP_PATH: &str = "/mcp";
 
 /// The auth scheme, lowercased for the case-insensitive compare RFC 7235 asks for.
 const BEARER: &str = "bearer ";
+
+/// Mint a bearer token for [`AgentServer::start`].
+///
+/// Here rather than beside the setting it is stored in, because the rule it has to satisfy is
+/// this file's: [`authorized`] is a byte compare, so the one token that must never be produced
+/// is the empty one, and the refusal that enforces that is ten lines up. A `Uuid::new_v4`
+/// hyphenless is 122 bits of randomness in 32 URL-safe characters — long enough that guessing
+/// it is not a threat model, short enough to paste into a shell command.
+///
+/// Minting is deliberate and its result is **persisted**: a token regenerated per launch would
+/// invalidate the client configuration the user pasted last time.
+pub fn mint_token() -> String {
+    Uuid::new_v4().simple().to_string()
+}
 
 /// How long the accept loop waits after a failed `accept()` before trying again.
 ///
@@ -65,6 +80,9 @@ pub struct AgentServer {
     rt: Option<Runtime>,
     cancel: CancellationToken,
     addr: SocketAddr,
+    /// The same manager the service routes through, kept so the app can ask how many clients
+    /// are paired right now — see [`clients`](AgentServer::clients).
+    sessions: Arc<LocalSessionManager>,
 }
 
 impl AgentServer {
@@ -104,9 +122,10 @@ impl AgentServer {
 
         let cancel = CancellationToken::new();
         let tools = StrataTools::new(host);
+        let sessions = Arc::new(LocalSessionManager::default());
         let service = StreamableHttpService::new(
             move || Ok(tools.clone()),
-            Arc::new(LocalSessionManager::default()),
+            Arc::clone(&sessions),
             // Defaults throughout but the token: the DNS-rebinding host allow-list already
             // names loopback, and session mode is left as rmcp ships it so clients that
             // negotiate an older protocol version still pair.
@@ -119,12 +138,36 @@ impl AgentServer {
             rt: Some(rt),
             cancel,
             addr,
+            sessions,
         })
     }
 
     /// Where it is listening — the address a client configuration names.
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// How many MCP clients are paired right now, or `None` if the answer could not be
+    /// sampled without waiting.
+    ///
+    /// A **session**, not a request: a Streamable-HTTP client is paired from the `initialize`
+    /// that mints its `Mcp-Session-Id` until the `DELETE` that ends it, which is exactly what
+    /// "an agent is connected" means to someone looking at a status dot — a client sitting
+    /// idle between tool calls is still connected.
+    ///
+    /// **Never blocks**, and that is the whole shape of it: the caller is the render thread,
+    /// the lock is held by whichever request is being routed, and a status light is not worth
+    /// a frame. `None` means "ask again"; the caller keeps what it last saw rather than
+    /// reporting a drop that did not happen.
+    ///
+    /// One honest limit, and it is rmcp's rather than ours: a client that goes away *without*
+    /// sending its `DELETE` — killed, crashed, its connection reset — leaves a session behind
+    /// until `SessionConfig::keep_alive` reaps it, five minutes of inactivity by default. So
+    /// this over-reports for at most that long after an abrupt disconnection, and never
+    /// under-reports. The alternative (call a paired client gone the moment it goes quiet)
+    /// would flap on every agent that sits thinking between tool calls, which is most of them.
+    pub fn clients(&self) -> Option<usize> {
+        self.sessions.sessions.try_read().ok().map(|s| s.len())
     }
 }
 
