@@ -14,6 +14,8 @@ use strata_model::SidebarPane;
 
 use self::catalog::Catalog;
 pub use self::catalog::CatalogThemePreference;
+/// The catalog's actions, on through to the command palette — see the catalog's own module.
+pub use self::catalog::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
 use crate::apps::project::state::{
     refresh_catalog, use_catalog, use_catalog_rescan, Chan, SessionState,
 };

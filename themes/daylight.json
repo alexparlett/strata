@@ -626,6 +626,41 @@
         "reference": "text_muted"
       }
     },
+    "command_palette": {
+      "background": {
+        "reference": "surface_overlay"
+      },
+      "border_fill": {
+        "reference": "border_overlay"
+      },
+      "backdrop": {
+        "reference": "overlay"
+      },
+      "label_color": {
+        "reference": "text_label"
+      },
+      "row_active_background": {
+        "reference": "accent_selection"
+      },
+      "row_active_color": {
+        "reference": "text_primary"
+      },
+      "row_color": {
+        "reference": "text_secondary"
+      },
+      "icon_color": {
+        "reference": "disabled"
+      },
+      "sub_color": {
+        "reference": "disabled"
+      },
+      "esc_color": {
+        "reference": "disabled"
+      },
+      "shadow": {
+        "reference": "shadow"
+      }
+    },
     "explain_plan": {
       "background": {
         "specific": "#eceef2"
@@ -1293,17 +1328,19 @@
       "table_selection_background": {
         "reference": "accent_selection"
       },
-      "keycap_background": {
-        "reference": "surface_primary"
-      },
-      "keycap_border_fill": {
-        "reference": "border_overlay"
-      },
-      "keycap_color": {
-        "reference": "text_secondary"
-      },
       "slot_border_fill": {
         "reference": "border_hover"
+      }
+    },
+    "keycap": {
+      "background": {
+        "reference": "surface_primary"
+      },
+      "border_fill": {
+        "reference": "border_overlay"
+      },
+      "color": {
+        "reference": "text_secondary"
       }
     },
     "sidebar_item": {

@@ -30,6 +30,7 @@ use freya::prelude::*;
 use strata_core::config::Command;
 
 use self::project_menu::ProjectMenu;
+use crate::apps::project::views::PaletteOpen;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Title;
@@ -151,11 +152,12 @@ impl Component for HeaderBar {
             }
         });
 
-        // The command palette is P6-01, so that button exists (with its live chord in the
-        // tooltip) and logs until it lands — the same stub `project.rs`'s catch-all holds for
-        // the chord, reachable by mouse. The gear opens the real Settings window.
+        // The two window buttons, each titled with its command's *live* chord — so a rebind
+        // repaints the tooltip. The search button raises the command palette (P6-01) through the
+        // slot the project root provides, exactly as ⌘K does; the gear opens Settings.
         let search_title = use_hint_title("Search", Command::CommandPalette);
         let settings_title = use_hint_title("Settings", Command::OpenSettings);
+        let mut palette = use_consume::<PaletteOpen>();
         // The Settings window is opened through the shared path, which needs this window's
         // platform handle (that is how it learns *which* window asked, so it can pin itself
         // above this one) and the app-globals.
@@ -200,9 +202,7 @@ impl Component for HeaderBar {
             .spacing(8.)
             .child(tip(
                 search_title,
-                action(IconName::Search, 15.).on_press(move |_| {
-                    tracing::debug!("header: command palette not built yet (P6-01)");
-                }),
+                action(IconName::Search, 15.).on_press(move |_| palette.set(true)),
             ))
             .child(tip(
                 settings_title,

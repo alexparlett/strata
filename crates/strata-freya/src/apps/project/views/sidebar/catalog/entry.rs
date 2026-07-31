@@ -243,10 +243,13 @@ impl Component for EntryRow {
         let mut open_entries = self.open_entries;
         let toggle_key = entry_key.clone();
 
-        let (icon, icon_color) = match self.kind {
-            CatalogKind::View => (IconName::Eye, self.theme.view_color),
-            CatalogKind::Query => (IconName::Brackets, self.theme.query_color),
-            CatalogKind::Table => (IconName::Database, self.theme.table_color),
+        // The glyph is the shared mapping (the palette lists the same things); the tint is this
+        // surface's own.
+        let icon = IconName::for_catalog(self.kind);
+        let icon_color = match self.kind {
+            CatalogKind::View => self.theme.view_color,
+            CatalogKind::Query => self.theme.query_color,
+            CatalogKind::Table => self.theme.table_color,
         };
 
         // One trailing **status slot** and at most one glyph in it, with the words only on hover. A

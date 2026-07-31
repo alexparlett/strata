@@ -1,9 +1,11 @@
-//! The main **project** window: root shell + (coming, 1b onward) its per-window Radio
-//! station (`state/`), feature `views/` (workbench · sidebar · inspector · drawer), and
-//! the palette command registry (`commands.rs`). `mod.rs` is wiring only — private
-//! submodules, re-exported.
+//! The main **project** window: root shell + its per-window Radio station (`state/`), feature
+//! `views/` (workbench · sidebar · inspector · drawer · palette), and the palette command
+//! registry (`commands.rs` — an attribute-macro'd impl block in rmcp's shape, generating an
+//! enum so dispatch is total; the port plan's "trait-object, valin-style" note is overturned,
+//! see that module). `mod.rs` is wiring only — private submodules, re-exported.
 
 mod close;
+mod commands;
 /// `pub` for the Export window: it is its own OS window, so it can't inherit this window's
 /// context and instead carries an [`EngineCtx`](contexts::EngineCtx) clone as a launch value.
 pub mod contexts;
@@ -40,7 +42,7 @@ pub use state::{
 };
 pub use views::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
-    DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,
-    HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
-    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    CommandPaletteThemePreference, DataGridThemePreference, DrawerThemePreference,
+    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
+    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };

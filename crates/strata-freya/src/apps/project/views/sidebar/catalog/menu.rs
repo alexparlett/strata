@@ -349,7 +349,11 @@ pub fn query_menu(
 ///
 /// The `LIMIT` is the row-limit setting, as in the Dioxus app; `0` means no limit, so the clause
 /// is dropped rather than written as `LIMIT 0`.
-fn view_row(actions: &CatalogActions, name: &str) {
+///
+/// `pub` because the command palette's TABLES and VIEWS rows are the same gesture as this menu
+/// item — that is what makes the two agree on the generated SQL and its `LIMIT` rather than
+/// happening to.
+pub fn view_row(actions: &CatalogActions, name: &str) {
     let limit = actions.config.peek().settings.row_limit;
     let sql = if limit > 0 {
         format!("SELECT *\nFROM {name}\nLIMIT {limit};")

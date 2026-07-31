@@ -560,6 +560,25 @@ Things that must not regress. Each was fought for once already.
   consuming listener. Never a root-level handler registry — registries/buses are god-objects that
   centralize what the tree already expresses, and when a design reaches for one to work around a
   Freya limitation, fix the limitation in the fork instead (§6).
+- **The command palette is a *registry of offers*, not a dispatch layer — and it is not a function
+  of the keymap.** The rule above is about *shortcut dispatch*, and the palette does not do any:
+  it is a list the user picks from, so it holds no chords and intercepts nothing. Two things keep
+  it from becoming the bus that rule forbids. **Every command's body is one call into a funnel that
+  already exists** (`actions::run_query`, `close::close_project`, the catalog's `view_row`), so a
+  palette row is a second way to *ask* and never a second implementation — and where that logic was
+  inline somewhere the palette can't reach, it **moves to the funnel** rather than being copied,
+  which is how the ⌘↵ in-flight gate and the close-while-running predicate came to live beside
+  their neighbours. And a command's chord (`CommandRoute::key`) renders its hint and nothing else:
+  synthesizing it — the trick `menu.rs` uses correctly, because a muda handler has no stores —
+  would make a command the user unbound unreachable from the one surface that exists so you needn't
+  know the chord. Registration is `strata-command-macro`'s `#[command_router]`, rmcp's declaration
+  shape (id from the method name, subtext from the doc comment, nothing typed twice) with the
+  `HashMap<name, Arc<dyn Fn>>` deliberately left behind: string dispatch exists because an MCP
+  client names a tool over a wire, and a palette already *holds* the row that was picked. The macro
+  generates the **enum** instead, one variant per method, so dispatch is total by construction —
+  "registered but unrunnable" is not expressible — and a route is a plain `fn` pointer in a `const`
+  slice, with no router to rebuild per keystroke. Adding a command is one method; if it needs a
+  funnel that doesn't exist yet, build the funnel.
 
 ## 3. Freya component & UI conventions
 
@@ -654,6 +673,18 @@ Things that must not regress. Each was fought for once already.
   field. So a component whose render adds a wrapper takes the caller's width on the **outer** node
   and fills the inner one. The tell is that a fixed width works and a relative one doesn't — that
   is the wrapper hugging, not a layout engine bug.
+- **A focused `Input` owns the keyboard, so a surface built around one handles its keys in
+  `on_pre_key_down`.** Freya's `Input` `stop_propagation`s **and** `prevent_default`s every key but
+  Enter/Escape/Tab, and `prevent_default` on `KeyDown` cancels the derived `GlobalKeyDown`
+  (`events/name.rs`) — so with the field focused, a global listener sees *nothing*. That is not an
+  obstacle to route around: it is what makes a search-field surface a genuine modal barrier, which
+  `Dialog`'s own docs note it is not (nothing moves focus into a dialog's card). What it costs is
+  that every key the surface itself needs — ↑↓, Enter, Esc, and the chord that closes it — must be
+  taken in the field's pre-handler, before the field processes them, and the chord must be resolved
+  through `keymap::resolve` rather than matched literally. Returning `false` there means "the field
+  does nothing further"; `true` lets the keystroke through as text. Keep the surface's own
+  `GlobalKeyDown` barrier as well, for when focus is elsewhere, and put it on a **different node**
+  from the one carrying the open chord — an element holds one handler per event name.
 - **A disabled control gates its handlers; it does not go `interactive(false)`.** Wrap only the
   action handlers in `.maybe(enabled, …)` and leave `on_pointer_enter` / `on_pointer_leave`
   registered unconditionally, then decline to *dress* the hover while disabled — that is what
