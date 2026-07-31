@@ -953,8 +953,11 @@ mod tests {
         let mut s = SessionState::default();
         // Defaults: sidebar open on Catalog, inspector open, drawer collapsed.
         assert_eq!(s.layout.sidebar, Some(SidebarPane::Catalog));
-        assert!(s.layout.inspector_open);
+        assert!(!s.layout.inspector_open);
         assert_eq!(s.layout.drawer, None);
+
+        s.open_inspector();
+        assert!(s.layout.inspector_open);
 
         // Toggling the *active* pane collapses the sidebar; toggling while collapsed reopens
         // it on that pane; toggling a *different* pane switches without collapsing.
