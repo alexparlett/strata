@@ -143,7 +143,7 @@ impl Default for Layout {
     fn default() -> Self {
         Self {
             sidebar: Some(SidebarPane::Catalog),
-            inspector_open: true,
+            inspector_open: false,
             drawer: None,
             sidebar_w: default_sidebar_w(),
             inspector_w: default_inspector_w(),
