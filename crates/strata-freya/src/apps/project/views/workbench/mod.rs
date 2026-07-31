@@ -13,7 +13,7 @@
 
 use crate::apps::project::close::{CloseTarget, TabCloser};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{QueryMode, RunId};
+use crate::apps::project::query::RunId;
 use crate::apps::project::state::{
     use_catalog, use_report, Chan, ProjChan, ProjectState, SessionState,
 };
@@ -56,8 +56,8 @@ impl Component for Workbench {
 
         // The in-flight press's nonce, mirrored out of the results body's query lifecycle
         // (see `ResultsBody`) so the toolbar can wear Run→Cancel. One resolver, one slot,
-        // read by props — the toolbar and ⌘↵ below both ask the same question and neither
-        // has to know what a query is.
+        // read by props, so neither the toolbar nor the Running body has to know what a
+        // query is.
         //
         // It used to be a *correctness* requirement: freya-query re-ran an entry a mounting
         // subscriber found stale, and an in-flight entry read as stale, so a second enabled
@@ -70,10 +70,11 @@ impl Component for Workbench {
         // of a lifecycle it only wants one bit of.
         // (The Run trigger itself lives on each tab — `QueryTab::request`, state-arch §6.)
         //
-        // It answers for the **active tab only**, which is all the toolbar and ⌘↵ need
-        // since both only ever address that tab. The close-while-running guard (T2) does
-        // *not* use it — that question spans every tab, so it goes to the engine (see
-        // `close::CloseGuard` / `TabCloser`).
+        // It answers for the **active tab only**, which is all the toolbar needs since it
+        // only ever addresses that tab. Nothing else asks it: the close-while-running
+        // guard (T2) spans every tab, and ⌘↵'s "already running" gate has to answer for a
+        // caller with no results pane at all (the command palette), so both go to the
+        // engine instead (`close::CloseGuard` / `TabCloser`, `actions::run_query`).
         let running = use_state(|| None::<RunId>);
 
         let confirm = use_consume::<State<Option<CloseTarget>>>();
@@ -125,15 +126,11 @@ impl Component for Workbench {
                 }
                 Command::RunQuery => {
                     let Some(id) = active else { return false };
-                    // In flight → consume but do nothing: Esc is the cancel, and a
-                    // second press must not double-run.
-                    let in_flight = cmd_radio
-                        .read()
-                        .request(id)
-                        .is_some_and(|s| *running.peek() == Some(s.run));
-                    if !in_flight {
-                        actions::press_query(cmd_radio, id, QueryMode::Run);
-                    }
+                    // In flight → consume but do nothing: Esc is the cancel, and a second
+                    // press must not double-run. The gate is `actions::run_query`'s, not
+                    // this handler's, because the command palette asks for the same Run
+                    // from a scope that cannot see the `running` mirror below.
+                    actions::run_query(&engine, cmd_radio, id);
                     true
                 }
                 Command::SaveQuery => {

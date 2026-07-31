@@ -107,13 +107,10 @@ define_theme!(
         /// landed too light, and daylight hid it because both resolve to white there.
         table_head_background: Color,
         table_selection_background: Color,
-        /// A **key cap** on the Keymap pane (P4-08) — the little raised `⌘` / `T` box: its fill,
-        /// its edge (drawn a shade heavier along the bottom, which is what makes it read as a
-        /// key) and the character on it. Three fields because a cap is a dressed object with a
-        /// surface, an outline and a label, and none of the three follows either of the others.
-        keycap_background: Color,
-        keycap_border_fill: Color,
-        keycap_color: Color,
+        // A key cap's own three colours used to sit here, when the Keymap pane was the only
+        // surface drawing one. The command palette draws them too, so they moved to the shared
+        // `keycap` token group — a component's dress is the component's
+        // (`components::keycap`).
         /// The **dashed** edge of a slot with nothing in it yet — the Add-shortcut button on an
         /// unbound row. Its own field rather than the table's `border_fill`, because it has to
         /// stand a step out from the grid's own hairlines to read as an invitation at all; a

@@ -106,7 +106,8 @@ strata-freya/src/
 │   │   │                per-tab view-state / layout / inspector selection / logs + channels
 │   │   ├── views/       workbench/ (editor/ · grid/) · sidebar/ · inspector/ · drawer/ ·
 │   │   │                command_palette/
-│   │   └── commands.rs  palette command registry (trait-object, valin-style)
+│   │   └── commands.rs  palette command registry (attribute-macro'd impl block, rmcp-shaped —
+│   │                    NOT the trait-object sketched below; see P6-01)
 │   ├── launcher/
 │   ├── settings/      root + views/ (appearance · data · system · keymap)
 │   ├── export/        root + views/ (format · options · hive · preview)
@@ -160,7 +161,11 @@ that isn't request/reply (profile progress, a catalog-changed signal) uses a Tok
 
 **Write side (client model).** Strata's `Action`/`dispatch` funnel ports to Radio: direct
 `radio.write()` mutator fns (mirrors today's store mutators + read-accessor convention) or a `DataReducer` if we want
-the enum-dispatch shape verbatim. Palette **commands** are a separate trait-object registry (valin's `EditorCommand`),
+the enum-dispatch shape verbatim. Palette **commands** are a separate registry — but **not** the
+trait-object one sketched here (valin's `EditorCommand`). P6-01 built it as an attribute-macro'd
+impl block in rmcp's shape, generating an enum so dispatch is total by construction and a route is
+a plain function pointer in a `const` slice; see `apps/project/commands.rs`. What survives of this
+note is that it is separate from state mutation,
 distinct from state mutation.
 
 **Per-window vs global.** Each project window is a *different* project, so the Radio station is **per-window** (init'd

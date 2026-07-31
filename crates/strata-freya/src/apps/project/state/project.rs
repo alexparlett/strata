@@ -106,9 +106,9 @@ impl TableRow {
         }
     }
 
-    /// The row's summary label ("6 cols · 2 partitions") — derived, never stored.
-    /// Feature reservoir: rendered by the sidebar rows (Phase 3).
-    #[allow(dead_code)]
+    /// The row's summary label ("6 cols · 2 partitions") — derived, never stored. Read by the
+    /// sidebar rows and by the command palette's TABLES rows, so both say the same thing about
+    /// a table.
     pub fn meta_label(&self) -> String {
         match &self.reg {
             Reg::Ready(m) if self.def.partition_cols.is_empty() => {

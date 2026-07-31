@@ -27,7 +27,9 @@ use std::time::Duration;
 
 use crate::agent::use_agent_server;
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTarget, Veto};
+use crate::apps::project::close::{
+    close_bridge, close_project, CloseBridge, CloseGuard, CloseTarget, Veto,
+};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
     load_project, use_agent_bridge, use_autosave, use_diagnostics, use_engine_config,
@@ -35,8 +37,9 @@ use crate::apps::project::state::{
     use_init_log, use_init_project, use_init_session, Chan, EngineRestart, Loaded, SessionState,
 };
 use crate::apps::project::views::{
-    AgentKeepers, CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
-    ProfileConfirm, ProfileTarget, ProjectLoadFailed, ProjectLoading, RequestKeepers, Shell,
+    AgentKeepers, CloseConfirm, CommandPalette, ConfigureLauncher, DropConfirm, DropTarget,
+    HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProfileTarget, ProjectLoadFailed,
+    ProjectLoading, RequestKeepers, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::use_file_menu;
@@ -368,16 +371,11 @@ impl App for ProjectApp {
                     }
                     Command::CloseProject => {
                         // The same predicate as the on_close hook: red button, menu Close
-                        // Project and ⇧⌘W share one dialog. Otherwise close now, bypassing
-                        // the veto (this *is* the deliberate close) — through the shared
-                        // path, so the launcher takes over if this was the last window.
-                        if guard.running.load(Ordering::Relaxed)
-                            && config.peek().settings.confirm_close_running
-                        {
-                            confirm.set(Some(CloseTarget::Window));
-                        } else {
-                            spawn(close_window());
-                        }
+                        // Project, ⇧⌘W and the palette's Close project share one dialog and
+                        // one gate (`close::close_project`). Otherwise it closes now,
+                        // bypassing the veto — this *is* the deliberate close — through the
+                        // shared path, so the launcher takes over if this was the last window.
+                        close_project(&guard, config, confirm, platform.clone(), app.clone());
                         true
                     }
                     // Quit closes every window — and, unlike closing them by hand, leaves
@@ -393,7 +391,10 @@ impl App for ProjectApp {
                         open_settings(platform.clone(), app.clone());
                         true
                     }
-                    Command::CommandPalette | Command::CycleWindow | Command::Find => {
+                    // ⌘K is gone from here: the palette owns it, from a node inside the project
+                    // subtree that fires first. The two engineless arms have nothing to search,
+                    // so it does nothing there — which is the honest answer, not a stub.
+                    Command::CycleWindow | Command::Find => {
                         tracing::debug!("shortcut {cmd:?}: target not built yet (stub)");
                         true
                     }
@@ -645,6 +646,10 @@ impl Component for ProjectLoaded {
         // Configure, the TABLES section's `+`) set it and stop; `ConfigureLauncher` below holds
         // the app-globals and the engine a window needs, so no row has to.
         use_provide_context(|| State::create(None::<ConfigureTarget>));
+        // Whether the command palette is up (P6-01). A slot on the same terms as the three
+        // above: the surface is mounted at this root, where every store it acts through
+        // actually lives, and its other trigger is elsewhere — the header's ⌘K button.
+        let palette_open: PaletteOpen = use_provide_context(|| State::create(false));
 
         // Tab-close cleanup (SNAPSHOT_SPEC §4): diff the open tab set on every
         // structural change and retire the engine state of tabs that are gone. One
@@ -685,6 +690,11 @@ impl Component for ProjectLoaded {
             .child(ProfileConfirm {
                 target: profile_target,
             })
+            // The command palette (P6-01). Under the three confirms, because a question about
+            // work in flight outranks a search box, and above every feature, so while it is up
+            // its barrier precedes their listeners in document order. It draws only its ⌘K
+            // listener until it is opened.
+            .child(CommandPalette { open: palette_open })
             // Not a dialog and not a barrier: it draws nothing and only watches the request
             // slot. Mounted here because this is where the handles opening a window needs
             // actually live.

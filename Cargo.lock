@@ -6871,6 +6871,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-command-macro"
+version = "0.2.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "strata-core"
 version = "0.2.0"
 dependencies = [
@@ -6904,6 +6913,7 @@ dependencies = [
  "sqlformat",
  "strata-agent",
  "strata-code-editor",
+ "strata-command-macro",
  "strata-core",
  "strata-model",
  "tokio",

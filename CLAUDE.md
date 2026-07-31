@@ -76,7 +76,16 @@ Members:
   lets the same `StrataTools` be served over HTTP by the app (AA-03), over stdio headless
   (AA-05) and called in-process by the chat pane (AA-06). Testable against `mock::MockHost`,
   whose engine is real. Spec: `docs/AGENT_ACCESS_SPEC.md`.
-- **`strata-forms` / `strata-forms-macro`** — headless forms layer + `#[derive(Form)]`.
+- **`strata-command-macro`** — the workspace's one proc macro: `#[command_router]` / `#[command]`,
+  the command palette's registration mechanism (P6-01). Modelled on rmcp's `#[tool_router]` — id
+  from the method name, subtext from the doc comment — but it generates an **enum**, one variant
+  per method, so dispatch is total by construction and a route is a plain `fn` pointer in a `const`
+  slice rather than an `Arc<dyn Fn>` in a map. It knows nothing about Strata's types (it names
+  `CommandRoute`'s fields and never their types), which is what keeps it a registration mechanism
+  rather than a second copy of the vocabulary.
+
+(The **forms** layer is `strata-freya::components::form`, not a crate — an earlier draft of this
+file listed `strata-forms` / `strata-forms-macro` as members and no such crates exist.)
 
 Excluded from the workspace (deliberately):
 
@@ -240,8 +249,15 @@ src/theme.rs                     Freya theme application: `theme_registry!` / `s
                                  `strata-core::theme`; the theme files themselves in root `themes/`
 src/components/                  shared component library
   divider, dot, icon, run_button, segmented_toggle, toggle_button, typography
-  badge.rs                       tinted label pill (PART · HOTSPOT · ANALYZE · dtype · keycap).
+  badge.rs                       tinted label pill (PART · HOTSPOT · ANALYZE · dtype).
                                  NOT Freya's `Chip` — that's a selectable, focusable control
+  keycap.rs                      a **key cap** (`"keycap"` token group): Settings ▸ Keymap's
+                                 chords and the palette's shortcut hints have to look like the
+                                 same kind of object, and the colours were the `settings` theme's
+                                 own until P6-01. Two *named* shapes rather than an average —
+                                 `key` (raised, heavier bottom edge: the row is about the chord)
+                                 and `chip` (flat: the chord is a hint). One cap per call; a
+                                 chord is composed by the caller
   sidebar_row.rs                 the left pane's row shell: a preset over Freya's `SideBarItem`
                                  (+ `Activable` for selection), so hover/selected dress and a11y
                                  are shared by the catalog and, later, connections (W7)
@@ -410,6 +426,21 @@ src/apps/project/                the project window (Valin-shaped)
                                  created, so they are a launch input the *caller* resolves —
                                  offloaded, and given up on after 250ms, because that read is on
                                  the same folder and used to be what froze the app first
+  commands.rs                    P6-01 — the **command registry** the palette's ACTIONS group
+                                 offers: nine methods, each carrying its own metadata, over
+                                 `strata-command-macro`'s `#[command_router]`. rmcp's declaration
+                                 shape (id from the method name, subtext from the doc comment)
+                                 without its `HashMap<name, Arc<dyn Fn>>` — the macro generates
+                                 the `Action` enum, so every variant came from a body and there
+                                 is no unrunnable command to test for. **Every body is one call
+                                 into a funnel that already exists** (`actions::run_query`,
+                                 `close::close_project`, the catalog's `view_row`…); a palette row
+                                 is a second way to ask, never a second implementation. `key` is
+                                 the chord a command *also* answers to, used for the row's hint
+                                 and never to run it — synthesizing it (menu.rs's trick, right
+                                 there because a muda handler has no stores) would make an
+                                 unbound command unreachable from the surface that exists so you
+                                 needn't know the chord
   contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context, built
                                  with the app's `datafusion.*` overrides — a launch value, since
                                  the RuntimeEnv is fixed when the SessionContext is
@@ -532,6 +563,19 @@ src/apps/project/                the project window (Valin-shaped)
                                  `actions`, so a re-run is an ordinary press. Its **Clear**
                                  unwrites `history.jsonl` as well as emptying the satellite. No
                                  status dot: only successful data runs are ever recorded
+    palette/                     P6-01 — the **command palette** (⌘K), the window's one discovery
+                                 surface. mod.rs is the `command_palette` theme, the
+                                 always-mounted node (drawing nothing but its ⌘K listener) and
+                                 the overlay card; model.rs the index — five groups in fixed
+                                 order, all-words matching, a per-group cap, and COLUMNS hidden
+                                 until you type (unit-tested off a store built inline); row.rs
+                                 the 42px row and its heading. Its **keyboard lives in
+                                 `Input::on_pre_key_down`**: the field consumes and
+                                 `prevent_default`s every key, which cancels the derived
+                                 `GlobalKeyDown` — that is what makes the palette a real modal
+                                 barrier, and why ↑↓ / ↵ / Esc / ⌘K are handled before the field
+                                 sees them. The overlay's own barrier sits on a *different* node
+                                 from the ⌘K listener (one handler per event name)
     keeper.rs                    request keepers, mounted by ProjectRoot: one invisible
                                  query subscriber per open tab's current press, so a
                                  backgrounded run keeps its cache entry (lifetime =

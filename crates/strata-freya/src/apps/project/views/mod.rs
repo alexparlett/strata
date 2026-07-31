@@ -9,6 +9,7 @@ mod header;
 mod inspector;
 mod keeper;
 mod loading;
+mod palette;
 mod rail;
 mod shell;
 mod sidebar;
@@ -28,8 +29,19 @@ pub use header::{HeaderBar, HeaderBarThemePreference, WindowDragStrip};
 pub use inspector::InspectorThemePreference;
 pub use keeper::RequestKeepers;
 pub use loading::ProjectLoading;
+pub use palette::{CommandPalette, CommandPaletteThemePreference, PaletteOpen};
 pub use shell::Shell;
 pub use sidebar::CatalogThemePreference;
+/// The catalog's actions, for the window's command registry ([`commands`](super::commands)): a
+/// palette row that opens a table, a view or a saved query performs the catalog's own gesture,
+/// so the two cannot generate different SQL or bind a tab to a different [`Origin`].
+///
+/// [`Origin`]: strata_model::Origin
+pub use sidebar::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
+/// The editor's shared actions, for the window's command registry
+/// ([`commands`](super::commands)): the palette's Run and Save-as-view rows are the same
+/// presses ⌘↵ and the Eye button make, gate included.
+pub use workbench::editor::actions;
 pub use workbench::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
     DataGridThemePreference, ExplainPlanThemePreference, RecordViewThemePreference,

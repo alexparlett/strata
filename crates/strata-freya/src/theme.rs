@@ -21,13 +21,14 @@ use crate::apps::export::ExportThemePreference;
 use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
-    DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,
-    HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
-    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    CommandPaletteThemePreference, DataGridThemePreference, DrawerThemePreference,
+    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
+    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
 use crate::components::form::FormThemePreference;
+use crate::components::keycap::KeyCapColorsThemePreference;
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
@@ -392,6 +393,11 @@ strata_components! {
     "type_palette" => TypePaletteThemePreference {
         str_color, num_color, bool_color, ts_color, struct_color, list_color, map_color,
     },
+    // A **key cap**'s three colours, on the same terms as the ramp above: two surfaces draw one
+    // (Settings ▸ Keymap's chords, the palette's shortcut hints and its ESC) and a cap has to
+    // look like a cap in both. It was `settings`' own `keycap_*` trio, which no other window
+    // could name — see `components::keycap`.
+    "keycap" => KeyCapColorsThemePreference { background, border_fill, color },
     // The header bar's own surface: background, text, and the rule under it. Its switcher paints
     // with root palette colours and the shared `avatar` / `menu` divider — no header-only dress.
     "header_bar" => HeaderBarThemePreference { background, color, border_fill },
@@ -415,15 +421,15 @@ strata_components! {
     // window's, so they aren't tokens here. The `table_*` pair is the Engine pane's properties
     // grid (P4-07): its surface, box border, row rule and radius are Freya's builtin `table`
     // theme below, and these two are what a table cannot have an opinion about, because *which*
-    // row is selected is the caller's answer. The `keycap_*` trio and `slot_border_fill` are the
-    // Keymap pane's (P4-08): a chord's key caps, and the dashed edge of a row with no chord.
+    // row is selected is the caller's answer. `slot_border_fill` is the Keymap pane's (P4-08):
+    // the dashed edge of a row with no chord. The `keycap_*` trio that sat beside it is gone —
+    // a cap is drawn on two windows now, so its colours are the shared `keycap` group above.
     "settings" => SettingsThemePreference {
         background, nav_background, border_fill, icon_color, icon_background, group_color,
         chevron_color, item_color, item_active_background, item_active_color, hint_color,
         card_background, card_border_fill, card_hover_border_fill, card_divider_fill,
         selected_color, badge_builtin_color, badge_user_color,
-        table_head_background, table_selection_background,
-        keycap_background, keycap_border_fill, keycap_color, slot_border_fill,
+        table_head_background, table_selection_background, slot_border_fill,
     },
     // The Export window: its body, the raised surface its inset blocks sit on (format cards,
     // text fields, the preview, the two transfer panes), the rules and control edges, the
@@ -564,6 +570,15 @@ strata_components! {
     "drawer" => DrawerThemePreference {
         background, border_fill, label_color, group_icon_color, group_color,
         meta_color, value_color, message_color, row_hover_fill, divider_fill, empty_color,
+    },
+    // The command palette (P6-01): the raised card over its scrim, the group headings and the
+    // footer legend, a row's two text tones either side of its active fill, a resting row's glyph
+    // and its mono detail, and the ESC chip's own label tone. Its **key caps** are not here —
+    // those are the shared `keycap` group, because Settings ▸ Keymap draws them too. The active
+    // row's accent glyph and its `↵` take the root palette's accent, like every other surface's.
+    "command_palette" => CommandPaletteThemePreference {
+        background, border_fill, backdrop, label_color, row_active_background, row_active_color,
+        row_color, icon_color, sub_color, esc_color, shadow,
     },
     // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
     // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and

@@ -145,10 +145,13 @@ impl App for LauncherApp {
                         app: self.app.clone(),
                     }),
             )
-            // ⌘Q quits the app; the shortcuts whose targets aren't built yet are consumed
-            // with a note so a press can't fall through to something else once they land.
-            // Deliberately the LAST child — same-name global listeners fire in document
-            // order, so every real consumer above outranks this catch-all.
+            // The launcher's three window-level chords: ⌘O, ⌘, and ⌘Q. Deliberately the LAST
+            // child — same-name global listeners fire in document order, so every real consumer
+            // above outranks this catch-all.
+            //
+            // Nothing is consumed as a stub here. ⌘K and cycle-windows used to be, which was
+            // dead code for targets this window will never have: it has no catalog and no
+            // command set to search, and no project windows of its own to cycle.
             .child(rect().on_global_key_down(on_commands(config, {
                 let app = self.app.clone();
                 move |cmd| match cmd {
@@ -166,10 +169,6 @@ impl App for LauncherApp {
                     }
                     Command::Quit => {
                         platform::quit();
-                        true
-                    }
-                    Command::CommandPalette | Command::CycleWindow => {
-                        tracing::debug!("launcher: shortcut {cmd:?} target not built yet (stub)");
                         true
                     }
                     _ => false,

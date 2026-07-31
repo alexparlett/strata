@@ -29,13 +29,17 @@ mod interaction;
 mod menu;
 mod section;
 
+/// The catalog's own **actions**, for the command palette: its TABLES / VIEWS / SAVED QUERIES
+/// rows are the same gestures as these menu items, so they call them rather than reimplementing
+/// the SQL they generate and the `Origin` they bind a tab to.
+pub use self::menu::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
+
 use std::collections::HashSet;
 
 use freya::components::{define_theme, get_theme, ScrollView};
 use freya::prelude::*;
 
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::project::views::sidebar::catalog::menu::use_catalog_actions;
 use crate::components::icon::{Icon, IconName};
 use freya::radio::use_radio;
 use strata_model::CatalogKind;
