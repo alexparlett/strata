@@ -44,7 +44,8 @@ impl Category {
 }
 
 /// Every category, in the order the nav lists them (design `Settings.dc.html`): the three
-/// appearance-and-behaviour pages, then Keymap on its own, then the engine's.
+/// appearance-and-behaviour pages, then Keymap and Agent access on their own, then the
+/// engine's.
 pub const CATEGORIES: &[Category] = &[
     Category {
         route: Route::Theme,
@@ -64,6 +65,13 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         route: Route::Keymap,
         label: "Keymap",
+        group: None,
+    },
+    // Ungrouped like Keymap, and for the same reason: a group of one is a heading that only
+    // ever hides one page. The canvas lists it here, between Keymap and the engine's.
+    Category {
+        route: Route::AgentAccess,
+        label: "Agent access",
         group: None,
     },
     Category {
@@ -93,6 +101,7 @@ mod tests {
             Route::System,
             Route::DataDisplay,
             Route::Keymap,
+            Route::AgentAccess,
             Route::Engine,
         ] {
             let hits = CATEGORIES.iter().filter(|c| c.route == route).count();

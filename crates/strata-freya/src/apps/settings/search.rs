@@ -151,6 +151,24 @@ settings_index! {
         "New queries are generated with this LIMIT so a stray SELECT * cannot pull a whole file \
          into memory. Set to 0 for no limit.",
         "cap rows";
+
+    AgentEnabled => Route::AgentAccess,
+        "Enable agent access",
+        "Runs a local MCP server on 127.0.0.1 so agents can query the projects you have open. \
+         Off by default, and never reachable from outside this machine.",
+        "mcp claude ai assistant server";
+
+    AgentPort => Route::AgentAccess,
+        "Port",
+        "The loopback port the server listens on. Changing it restarts the server when you \
+         apply, and clients pointed at the old port stop resolving.",
+        "mcp agent localhost 127.0.0.1 loopback address";
+
+    AgentToken => Route::AgentAccess,
+        "Token",
+        "The bearer token every client has to present. Regenerating replaces it when you apply, \
+         and clients still using the old one stop working.",
+        "mcp agent secret bearer authorization credential regenerate";
 }
 
 impl Anchor {
@@ -370,6 +388,22 @@ mod tests {
     fn a_setting_is_found_by_what_it_says_about_itself() {
         assert!(finds("zebra", Hit::Setting(Anchor::Zebra)));
         assert!(finds("scanning", Hit::Setting(Anchor::Zebra)));
+    }
+
+    /// The agent-access rows are found by the vocabulary a reader arrives with, which is the whole
+    /// reason they carry keywords: nothing on the page is *called* "MCP", and two of the three
+    /// rows are named after things every other page also has ("Port", "Token" — well, would).
+    #[test]
+    fn the_agent_rows_are_found_by_what_the_feature_is_called() {
+        let hits = search("mcp");
+        assert!(hits.contains(&Hit::Setting(Anchor::AgentEnabled)));
+        assert!(hits.contains(&Hit::Setting(Anchor::AgentPort)));
+        assert!(hits.contains(&Hit::Setting(Anchor::AgentToken)));
+        // …and by the page they are on, like every other pane's settings.
+        assert!(finds(
+            "agent access token",
+            Hit::Setting(Anchor::AgentToken)
+        ));
     }
 
     /// A page's own name finds every setting on it, because the breadcrumb is part of the haystack.
