@@ -20,10 +20,11 @@ use std::sync::Arc;
 use crate::apps::export::ExportThemePreference;
 use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
-    CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
-    CommandPaletteThemePreference, DataGridThemePreference, DrawerThemePreference,
-    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
-    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
+    CellViewThemePreference, CommandPaletteThemePreference, DataGridThemePreference,
+    DrawerThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
+    InspectorThemePreference, RecordViewThemePreference, StatusBarThemePreference,
+    TabBarThemePreference, TabThemePreference,
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
@@ -549,6 +550,17 @@ strata_components! {
     "catalog" => CatalogThemePreference {
         label_color, chevron_color, name_color, column_color, meta_color, rail_fill,
         table_color, view_color, query_color, part_color, part_background, warn_color,
+    },
+    // The Agents sidebar pane (AA-03b): an agent's name, a session row's label, the two
+    // chevrons and the header's ⓘ, the two recessive text
+    // tones a run card needs at once (its *figures*, and the tallies and age around them), the
+    // SQL preview, the hover fill a promotable card takes, and the empty state's tile. The
+    // *outcome* tones deliberately are not fields: ok / stopped / failed take the sheet's
+    // semantic ramp and running takes the accent, both of which must follow the app wherever
+    // they appear.
+    "agents" => AgentsThemePreference {
+        name_color, session_color, chevron_color, meta_color, figures_color,
+        sql_color, card_hover_fill, empty_background, empty_border_fill, empty_color,
     },
     // The column inspector (P3-08): the section eyebrows + the facts box's keys, the title's
     // text ramp, the two box surfaces (facts rows / nested-field rows) with their border and

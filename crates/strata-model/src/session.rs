@@ -65,6 +65,10 @@ pub struct SessionSnapshot {
 pub enum SidebarPane {
     Catalog,
     Connections,
+    /// What each connected agent is doing (AA-03b). A *tool pane* rather than a drawer tab
+    /// because an agent's work is a live thing you look at while you work, like the catalog,
+    /// not a log of what already finished.
+    Agents,
 }
 
 /// Which tab the bottom drawer shows. The rail's bottom group selects it; `None` on

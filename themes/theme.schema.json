@@ -1809,6 +1809,42 @@
             }
           }
         },
+        "agents": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "session_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "chevron_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "meta_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "figures_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "sql_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "card_hover_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "empty_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "empty_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "empty_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "inspector": {
           "type": "object",
           "additionalProperties": false,

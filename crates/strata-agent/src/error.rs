@@ -12,8 +12,8 @@
 //!   [`crate::server`], *before* any tool runs, so it never reaches a tool result.
 //!
 //! Everything here becomes an `isError` tool result rather than a JSON-RPC protocol error:
-//! these are conditions the agent should read and recover from (`list_tabs` / `list_tables`
-//! are the recovery), not malformed requests.
+//! these are conditions the agent should read and recover from (`list_query_sessions` /
+//! `list_tables` are the recovery), not malformed requests.
 
 use std::error::Error;
 use std::fmt;
@@ -22,9 +22,8 @@ use rmcp::handler::server::tool::IntoCallToolResult;
 use rmcp::model::{CallToolResponse, CallToolResult, ContentBlock};
 use rmcp::ErrorData;
 use strata_core::engine::sql::PolicyRefusal;
-use strata_model::TabId;
 
-use crate::host::Project;
+use crate::host::{Project, QuerySessionId};
 
 /// What a [`AgentError::Policy`] with no refusals in it says. Not a state the tool layer can
 /// produce; a state the type permits, and a refusal with no reason is unactionable.
@@ -42,7 +41,8 @@ pub enum AgentError {
     Query(String),
     /// `read_page` against a snapshot a newer run retired.
     ResultMoved,
-    /// Unknown tab handle or table name. A plain statement; the listing tool is the recovery.
+    /// Unknown query-session handle or table name. A plain statement; the listing tool is
+    /// the recovery.
     NotFound(String),
     /// More than one project is open and the call named none (or named a colliding name).
     Ambiguous(Vec<Project>),
@@ -53,14 +53,18 @@ pub enum AgentError {
 }
 
 impl AgentError {
-    /// The one wording for a tab handle nothing open answers to.
+    /// The one wording for a query-session handle this agent has nothing open under.
     ///
     /// Here rather than at each site because it was written four times across two crates — the
-    /// tool layer, the mock and the app's own driver — and `list_tabs` being *the* recovery from
-    /// this condition only works if every host states it the same way (AGENTS.md §3: merge
-    /// near-duplicate messages rather than stack them).
-    pub fn no_such_tab(tab: TabId) -> AgentError {
-        AgentError::NotFound(format!("No open tab '{}'.", tab.0))
+    /// tool layer, the mock and the app's own driver — and `list_query_sessions` being *the*
+    /// recovery from this condition only works if every host states it the same way
+    /// (AGENTS.md §3: merge near-duplicate messages rather than stack them).
+    ///
+    /// It is also the answer to a handle belonging to a *different* agent, deliberately: a
+    /// distinct "that is not yours" would confirm the session exists, which is a fact an
+    /// agent has no business learning and no way to act on.
+    pub fn no_such_query_session(session: QuerySessionId) -> AgentError {
+        AgentError::NotFound(format!("No open query session '{}'.", session.0))
     }
 }
 
@@ -94,7 +98,7 @@ impl fmt::Display for AgentError {
             },
             AgentError::Query(message) => f.write_str(message),
             AgentError::ResultMoved => {
-                f.write_str("The tab's result was replaced; re-run to read it.")
+                f.write_str("The query session's result was replaced; re-run to read it.")
             }
             AgentError::NotFound(message) => f.write_str(message),
             AgentError::Ambiguous(projects) => {

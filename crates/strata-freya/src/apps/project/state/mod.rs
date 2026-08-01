@@ -1,9 +1,11 @@
 //! The per-window stores (Radio): the **Session** (open tabs + arrangement) and the
 //! **Project** (the open project's catalog defs — the save targets), plus the two satellites that
-//! need no channels of their own — query [`history`] and the [`log`] behind the drawer's Events
-//! tab. See `docs/FREYA_STATE_ARCHITECTURE.md` §2–§4 (the stores) and §8 (the satellites).
+//! need no channels of their own — query [`history`], the [`log`] behind the drawer's Events
+//! tab, and the [`agents`] satellite behind the sidebar's Agents pane. See
+//! `docs/FREYA_STATE_ARCHITECTURE.md` §2–§4 (the stores) and §8 (the satellites).
 
 mod agent;
+mod agents;
 mod catalog;
 mod channel;
 mod diagnostics;
@@ -15,9 +17,10 @@ mod persist;
 mod project;
 mod session;
 
-/// The window's half of agent access (AA-03): the ask driver, and the parked run replies its
-/// keepers drain (`views::agent_keeper`).
-pub use agent::{use_agent_bridge, AgentRuns};
+/// The window's half of agent access: the ask/notice driver (AA-03, re-pointed by AA-03b),
+/// and the satellite it records into.
+pub use agent::use_agent_bridge;
+pub use agents::{use_init_agents, AgentRun, Agents, AgentsCtx, ConnectedAgent};
 pub use catalog::{
     catalog_settled, use_catalog, use_catalog_rescan, use_catalog_selection,
     use_init_catalog_selection, Catalog, CatalogRescan, CatalogSelection,

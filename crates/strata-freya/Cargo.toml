@@ -21,14 +21,17 @@ strata-model = { path = "../strata-model" }
 # way only, so the same vocabulary can be served headless and, later, called by the chat pane.
 strata-agent = { path = "../strata-agent" }
 
-# `tokio::sync` only, and only for the agent bridge's ask channel: mpsc + oneshot are
-# runtime-agnostic (they wake a waker, whoever polls it), which is the whole reason the
-# server's Tokio runtime can talk to Freya's UI executor at all. Naming just `sync` states
-# what this crate *uses*; it does not and cannot restrict what is compiled, because
-# `strata-core` depends on tokio with `full` and Cargo unifies features across the graph.
-# There is still no Tokio runtime **started** here — the engine owns one and the agent server
-# owns another, and this crate awaits their handles on Freya's own executor.
-tokio = { version = "1", default-features = false, features = ["sync"] }
+# `tokio::sync` and `tokio::select!`, and only for the agent bridge's two channels: mpsc +
+# oneshot are runtime-agnostic (they wake a waker, whoever polls it), which is the whole
+# reason the server's Tokio runtime can talk to Freya's UI executor at all, and `select!` is
+# how the bridge's one serial loop drains asks ahead of notices. `macros` is declared rather
+# than inherited: `strata-core` depends on tokio with `full` and Cargo unifies features across
+# the graph, so it would compile either way — and a build that only works because of what
+# another crate happens to ask for is one manifest edit away from not. Naming a feature states
+# what this crate *uses*. There is still no Tokio runtime **started** here — the engine owns
+# one and the agent server owns another, and this crate awaits their handles on Freya's own
+# executor.
+tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
 
 # Our owned code-editor surface (vendored from freya-code-editor; see the crate's lib.rs).
 strata-code-editor = { path = "../strata-code-editor" }

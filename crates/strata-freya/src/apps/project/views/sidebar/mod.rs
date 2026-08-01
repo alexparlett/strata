@@ -1,10 +1,12 @@
-//! The left **sidebar**: the frame (P3-01) plus the catalog pane that fills it (P3-02).
+//! The left **sidebar**: the frame (P3-01), the catalog pane that fills it (P3-02) and the
+//! Agents pane beside it (AA-03b).
 //!
 //! The shell owns the header row and the collapse (×); what sits to the left of the × is the
 //! active pane's, per the design canvas — the catalog puts its **filter + refresh** there (there
-//! is no "CATALOG" label; the filter field is the header), while Connections (W7) keeps a plain
-//! section label. The body below the divider is the pane itself.
+//! is no "CATALOG" label; the filter field is the header), while Connections (W7) and Agents
+//! keep a plain section label. The body below the divider is the pane itself.
 
+mod agents;
 mod catalog;
 
 use freya::components::{use_theme, CircularLoader, Input};
@@ -12,6 +14,8 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::SidebarPane;
 
+pub use self::agents::AgentsThemePreference;
+use self::agents::{Agents, AgentsHint};
 use self::catalog::Catalog;
 pub use self::catalog::CatalogThemePreference;
 /// The catalog's actions, on through to the command palette — see the catalog's own module.
@@ -22,6 +26,17 @@ use crate::apps::project::state::{
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Eyebrow, InputTypography};
+
+/// A pane header that is just its name — every pane but the catalog, whose filter field *is*
+/// its header. `Size::flex` for the shell's reason: the row distributes, so a `fill` label
+/// would push the collapse × off the panel.
+fn label(text: &'static str, color: Color) -> Rect {
+    rect()
+        .width(Size::flex(1.))
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .child(Eyebrow::new(text).color(color))
+}
 
 #[derive(PartialEq)]
 pub struct Sidebar;
@@ -74,11 +89,13 @@ impl Component for Sidebar {
                 )
                 .child(RefreshButton)
                 .into_element(),
-            SidebarPane::Connections => rect()
-                .width(Size::flex(1.))
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .child(Eyebrow::new("CONNECTIONS").color(label_color))
+            SidebarPane::Connections => label("CONNECTIONS", label_color).into_element(),
+            // The one pane header with something beside its name: the query-session model is
+            // the single concept here a user has no other way to learn, so the canvas puts it
+            // behind an ⓘ rather than in a line of pane copy nobody reads twice.
+            SidebarPane::Agents => label("AGENTS", label_color)
+                .spacing(6.)
+                .child(AgentsHint)
                 .into_element(),
         };
 
@@ -87,6 +104,7 @@ impl Component for Sidebar {
             // The connections pane is W7's; the frame is here so the rail's toggle has somewhere
             // to land.
             SidebarPane::Connections => rect().expanded().into_element(),
+            SidebarPane::Agents => Agents::new().into_element(),
         };
 
         rect()

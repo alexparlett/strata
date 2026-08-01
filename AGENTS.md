@@ -115,11 +115,17 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   dispatch.** `run` asks `Engine::policy_verdicts` and fails closed, never rewrites SQL, reports a
   stop as a status, and asks `Engine::snapshot_live` rather than reading prose. `read_page` does
   **not** pin.
-- **An agent drives the app through the app's own funnels; only a *gate* may be skipped, and only
-  when the gate is a question for the user** (the T2 confirm). A run's reply is parked, not awaited;
-  registration is per **mount**, keyed by a minted id.
+- **An agent drives the app through the app's own funnels, and works in a surface of its own; only
+  a *gate* may be skipped, and only when the gate is a question for the user** (the T2 confirm). The
+  run is dispatched straight at the engine on the query session's own `WsId`, bracketed by the
+  window (ownership check + record, then the outcome); registration is per **mount**, keyed by a
+  minted id; a settle **names its run** by a sequence number the dispatch minted, never "the
+  newest"; and the channels are **two**, because a connection ending is sent from a `Drop`.
 - **An agent that is not *in* the window does not write the window's state; it gets a surface of its
-  own.** A surface's state belongs to whoever is looking at it.
+  own — and the scoping is a type, not a check.** `StrataTools` *is* one agent, minted per client
+  connection and retracted on drop, so a handle it does not own answers exactly as one that never
+  existed. A surface's state belongs to whoever is looking at it: "shared, last-writer-wins" is a
+  fine rule for *content* and a bad one for *attention*. Promotion is a press, into a **new** tab.
 - **Poll only what nothing on our side can observe, and name the reason where the poll is.**
   `try_read` never a wait; the timer exists only while the feature is on; staleness bounded and stated.
 

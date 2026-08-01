@@ -2,8 +2,11 @@
 //! `ActivityRail.dc.html` / `Strata.dc.html` `data-rg="rail"`, RustRover-style).
 //!
 //! Two groups of icon toggles over the panel `surface_primary`: the top group selects the
-//! sidebar's tool pane (Catalog · Connections), the bottom group the drawer's tab (Problems ·
-//! Events · History). Each button is a standard [`ToggleButton`] (reusing the `toggle_button`
+//! sidebar's tool pane (Catalog · Agents · Connections), the bottom group the drawer's tab
+//! (Problems · Events · History). **Agents is a tool pane, not a drawer tab** (AA-03b, and the
+//! canvas says why): a drawer is an ephemeral log you consult, while Agents is a live,
+//! navigable tree of connected things you press into — which is the catalog's job description.
+//! Each button is a standard [`ToggleButton`] (reusing the `toggle_button`
 //! theme, whose transparent-rest / accent-soft-active dress already matches the rail), sized to
 //! the rail's 40×38. Its `on` state is *derived* from the layout — the single source of truth —
 //! and a press routes through the layout store's toggle (`onRailPane` / `onOpen*` semantics):
@@ -15,7 +18,9 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::{DrawerTab, SidebarPane};
 
-use crate::apps::project::state::{Chan, FaultsCtx, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{
+    AgentsCtx, Chan, FaultsCtx, ProjChan, ProjectState, SessionState,
+};
 use crate::apps::project::views::drawer::project_error_count;
 use crate::components::icon::{Icon, IconName};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
@@ -69,6 +74,18 @@ impl Component for ActivityRail {
                 layout.sidebar == Some(SidebarPane::Catalog),
                 |s| s.toggle_pane(SidebarPane::Catalog),
             ))
+            .child(
+                rect()
+                    .width(Size::px(40.))
+                    .height(Size::px(38.))
+                    .child(button(
+                        IconName::Agent,
+                        "Agents",
+                        layout.sidebar == Some(SidebarPane::Agents),
+                        |s| s.toggle_pane(SidebarPane::Agents),
+                    ))
+                    .child(AgentsBadge),
+            )
             .child(button(
                 IconName::Connections,
                 "Connections",
@@ -167,5 +184,47 @@ impl Component for ProblemsBadge {
                 })
                 .color(color),
             )
+    }
+}
+
+/// The Agents button's **live-agent count** (canvas `agentLiveCount`): how many MCP clients are
+/// working in this project right now, hidden at zero.
+///
+/// Its own leaf for [`ProblemsBadge`]'s reason — an agent connecting has no business re-rendering
+/// the other five toggles — and it wears the **accent**, not the error tone: this is a count of
+/// things happening, not of things wrong. It also needs no `99+` clamp, because the number is
+/// bounded by how many MCP clients a person has open, which is one or two.
+///
+/// The pane shows **only connected agents**, so this count and that list are the same fact: an
+/// agent that disconnects takes its query sessions with it.
+#[derive(PartialEq)]
+struct AgentsBadge;
+
+impl Component for AgentsBadge {
+    fn render(&self) -> impl IntoElement {
+        let agents = use_consume::<AgentsCtx>();
+        let live = agents.read().len();
+        let theme = use_theme();
+        let (background, color) = {
+            let t = theme.read();
+            let c = t.colors();
+            (c.primary, c.text_inverse)
+        };
+
+        if live == 0 {
+            return rect();
+        }
+        rect()
+            // The canvas's own offset, and deliberately without the Problems badge's 2px ring:
+            // that ring exists to lift a red pill off the glyph beneath it, and the accent pill
+            // reads clear without one.
+            .position(Position::new_absolute().top(3.).right(3.))
+            .min_width(Size::px(14.))
+            .height(Size::px(14.))
+            .corner_radius(7.)
+            .background(background)
+            .center()
+            .padding((0., 3.))
+            .child(Meta::new(live.to_string()).color(color))
     }
 }

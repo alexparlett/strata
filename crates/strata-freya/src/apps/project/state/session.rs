@@ -411,36 +411,6 @@ impl SessionState {
         self.push_active(QueryTab::scratch(name))
     }
 
-    /// Append a new blank scratch tab **without** taking focus — what an agent's `open_tab`
-    /// does (AA-03).
-    ///
-    /// The distinction is the one place agent and human tab-opening should differ, and it is
-    /// about *attention* rather than content. A tab's text is shared, last-writer-wins: an
-    /// agent writing into one is a write like any other, and the user takes it back by pressing
-    /// Run. Which tab is on screen is not shared — it is where the user is looking and, while
-    /// they are typing, where their keystrokes are going. An investigation that opens five tabs
-    /// would otherwise yank the editor out from under them five times.
-    ///
-    /// Nothing is lost by not focusing: the whole point of landing agent queries in real tabs is
-    /// that the results are *there* to page, sort, export and take over, and the app already
-    /// assumes a run can settle off-screen (that is what the request keepers are for). The strip
-    /// shows the new tab, the toolbar badges it, and the event log records it.
-    ///
-    /// **Unless there is nothing to steal from**: an empty session has no attention to protect,
-    /// and leaving `active` at `None` would show the no-query empty state next to a tab strip
-    /// that has a tab in it.
-    pub fn open_background(&mut self) -> TabId {
-        let name = self.next_query_name();
-        let tab = QueryTab::scratch(name);
-        let id = tab.id;
-        self.tabs.insert(id, tab);
-        self.order.push(id);
-        if self.active.is_none() {
-            self.active = Some(id);
-        }
-        id
-    }
-
     /// Append `sql` bound to `origin`, uniquely named, and focus it.
     pub fn open_named(&mut self, name: &str, sql: String, origin: Origin) -> TabId {
         let name = self.unique_name(name);
@@ -1252,37 +1222,5 @@ mod tests {
             "and it reads as unchecked, not clean"
         );
         assert_eq!(s.stale_tabs(1), vec![a], "so the driver re-validates it");
-    }
-
-    /// **An agent appends a tab; it does not take the editor.** The content of a tab is shared
-    /// and last-writer-wins, but which tab is on screen is where the user is looking and where
-    /// their keystrokes are going — an investigation opening five tabs must not move it five
-    /// times. The strip still shows the tab; only `active` is left alone.
-    #[test]
-    fn a_background_open_appends_without_stealing_focus() {
-        let mut s = SessionState::default();
-        let mine = s.open_blank();
-        let agents = s.open_background();
-
-        assert_eq!(s.active, Some(mine), "the user keeps the tab they were in");
-        assert_eq!(
-            s.order,
-            vec![mine, agents],
-            "and the new tab is in the strip"
-        );
-        assert!(s.tabs.contains_key(&agents));
-
-        // …whereas ⌘T's own open is a deliberate act by the user, and still focuses.
-        let next = s.open_blank();
-        assert_eq!(s.active, Some(next));
-    }
-
-    /// The one exception: an empty session has no attention to protect, and leaving `active`
-    /// at `None` would show the no-query empty state beside a strip that has a tab in it.
-    #[test]
-    fn a_background_open_into_an_empty_session_does_focus() {
-        let mut s = SessionState::default();
-        let only = s.open_background();
-        assert_eq!(s.active, Some(only));
     }
 }

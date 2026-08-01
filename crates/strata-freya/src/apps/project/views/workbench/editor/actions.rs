@@ -105,6 +105,23 @@ pub fn load_sql(mut session: Radio<SessionState, Chan>, id: TabId, sql: &str) {
     }
 }
 
+/// Open a **new** tab holding `sql`, focused, and hand back its id — the Agents pane's
+/// promotion (AA-03b).
+///
+/// A new tab rather than the active one is the whole point: the History drawer loads into the
+/// tab you are in because you asked for that by being there, but an agent's run is somebody
+/// else's work arriving in a surface you were only looking at, and overwriting your buffer with
+/// it is the precise harm the Agents pane exists to prevent.
+///
+/// Composed from the two funnels that already exist ([`SessionState::open_blank`] then
+/// [`load_sql`]) rather than a store method of its own, so a promoted query is an ordinary
+/// scratch tab in every respect — named `query N`, undoable, saveable, and bound to no artifact.
+pub fn open_sql(mut session: Radio<SessionState, Chan>, sql: &str) -> TabId {
+    let id = session.write_channel(Chan::Tabs).open_blank();
+    load_sql(session, id, sql);
+    id
+}
+
 /// Cancel the in-flight request — the toolbar's Run→Cancel flip, the Running body's control, and
 /// the Esc that body binds to the same handler (`results::running`'s `on_esc`) all land here:
 /// tag-guarded engine-side abort (S14 — a stale press can't kill a newer run) + drop *this tab's*

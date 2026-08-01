@@ -576,7 +576,11 @@ pub async fn fetch_page(
     fmt: &CellFormat,
 ) -> Result<Page, String> {
     let snap = snapshot_name(snapshot);
-    let offset = page.saturating_sub(1) * page_size;
+    // Saturating, not plain: `page` reaches here straight off an agent's JSON with no upper
+    // bound (`read_page` floors it at 1 and never caps it), so a huge page overflows the
+    // multiply — a panic in debug, and in release a wrap to some arbitrary small offset that
+    // returns real rows under the page number the caller asked for.
+    let offset = page.saturating_sub(1).saturating_mul(page_size);
     read_page(ctx, &snap, offset, page_size, sort, fmt).await
 }
 

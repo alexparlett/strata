@@ -66,22 +66,30 @@ src/state/mod.rs                 `AppCtx` — the seven app-globals `main` creat
                                  config · window registry · theme preview · menubar handles · the
                                  focused window's open path · agent access), handed to every
                                  window root as one value rather than seven parameters
-src/agent/                       AA-03 — agent access, the half that outlives any one window.
-                                 `AgentCtx` is the pair `main` creates: the **directory** (lives
-                                 for the process; windows join and leave it) and the **server
-                                 slot** (what is listening now, or nothing — dropping it *is*
-                                 stop). The window's half lives with the window, because that is
-                                 what it is made of (`apps/project/state/agent.rs` beside the
-                                 diagnostics driver, `views/agent_keeper.rs` beside the request
-                                 keepers)
+src/agent/                       AA-03 / AA-03b — agent access, the half that outlives any one
+                                 window. `AgentCtx` is the pair `main` creates: the **directory**
+                                 (lives for the process; windows join and leave it) and the
+                                 **server slot** (what is listening now, or nothing — dropping it
+                                 *is* stop). The window's half lives with the window, because that
+                                 is what it is made of (`apps/project/state/agent.rs` beside the
+                                 diagnostics driver, `state/agents.rs` beside the log satellite,
+                                 `views/sidebar/agents/` beside the catalog pane)
   directory.rs                   the cross-thread service registry **and** the app's `Host` impl:
                                  each mount of `ProjectRoot` lends its `Arc<Engine>` (the data
-                                 plane — `fetch_page` / `validate` / `functions` straight from
-                                 the server's runtime, never queued behind a repaint) and one
-                                 ask-sender (the control plane). Keyed by a minted `RegId`, not
-                                 by the project root: a restart remounts at the *same* root
-  ask.rs                         `AgentAsk` — one variant per `Host` method that touches UI
-                                 state, each carrying its own reply channel
+                                 plane) and two senders (asks, bounded and answered; notices,
+                                 unbounded and one-way). Keyed by a minted `RegId`, not by the
+                                 project root: a restart remounts at the *same* root. **AA-03b
+                                 dispatches an agent's run here**, straight at the engine on the
+                                 query session's own `WsId` — so no tab is opened, nothing steals
+                                 focus and the diagnostics driver has nothing extra to validate;
+                                 the window only brackets it (ownership check + record, then the
+                                 outcome)
+  ask.rs                         `AgentAsk` — one variant per `Host` method that touches window
+                                 state, each carrying its own reply channel — plus `AgentNotice`,
+                                 the facts that carry none. Two channels because one producer
+                                 cannot wait: a connection ending is sent from a `Drop`, with
+                                 nothing to await on. `RunOutcome` lives here too, since it is
+                                 what a notice carries and what the satellite stores
   server.rs                      `use_agent_server`: start / stop / restart off the whole
                                  `agent_access` setting, mounted by the two **workspace** windows
                                  (there is always one alive) and idempotent, the theme
@@ -316,15 +324,18 @@ src/apps/project/                the project window (Valin-shaped)
                                  scan, keyed by `ProfileSpec { owner, scan }`, with `use_profile`
                                  the one place that Query is built)
   state/                         per-window state (Radio): channel, hooks, session
-                                 agent.rs = AA-03's **window driver**: one serial loop, `recv` →
-                                 Radio read/write → reply, with a *run's* reply parked against
-                                 the press nonce (`views::agent_keeper` completes it on settle,
-                                 the `RequestKeepers` pattern on a second question). A run is an
-                                 ordinary press — `actions::load_sql` then `set_request`, the
-                                 History drawer's double-press, so the tab holds the SQL the user
-                                 can read and take over. Holds the pure projections it answers
-                                 with too (catalog from the store, never introspection),
-                                 unit-tested with no renderer
+                                 agent.rs = the **window driver** (AA-03, re-pointed by AA-03b):
+                                 one serial loop over both channels. It never waits for a query —
+                                 the run is the directory's, on the engine — so all it does is
+                                 check the agent holds the session, record what ran, and record
+                                 what it came to. Holds the pure projections it answers with too
+                                 (catalog from the store, never introspection), unit-tested with
+                                 no renderer
+                                 agents.rs = AA-03b's satellite: per connected agent, its query
+                                 sessions and each one's run trail. Ephemeral and capped both
+                                 ways — **never** `SessionState` (so nothing reaches
+                                 `session.json`) and **never** history (which stays the user's).
+                                 Unit-tested with no renderer
                                  engine_config.rs = P4-07's driver: `Engine::set_config` off
                                  `ConfigChan::Settings`, and `EngineRestart` — a runtime key can
                                  only be applied by a new engine, so the restart is a bump of
@@ -386,6 +397,16 @@ src/apps/project/                the project window (Valin-shaped)
     sidebar/
       mod.rs                     sidebar shell — pane-specific header (the catalog's filter +
                                  refresh row) over the active pane
+      agents/                    AA-03b — what each connected agent is doing: mod (pane + theme +
+                                 the header's ⓘ, agent group over session group), run (the run
+                                 card). Built to the canvas out of vocabulary the app already
+                                 has (Freya's `TreeItem` with our own chevrons, the History
+                                 drawer's card). **Only connected agents appear**, so no row
+                                 wears a connected mark. A press opens a run's SQL in a **new**
+                                 tab (`actions::open_sql`) — never the active one, which is the
+                                 harm the pane exists to prevent — and there is no double-press
+                                 to run. That press is the *only* way an agent's work reaches the
+                                 tab strip
       catalog/                   P3-02: mod (pane + sections), section, entry (entry/column/
                                  saved-query rows), columns (flatten + tests), interaction (tests)
     inspector/                   P3-08/P3-09 — the selected column, and **only what was actually

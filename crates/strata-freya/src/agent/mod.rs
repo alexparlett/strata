@@ -11,21 +11,24 @@
 //!
 //! **The window's half lives with the window**, because that is what it is made of: the driver
 //! is one of the project subtree's reconcilers
-//! ([`state::agent`](crate::apps::project::state::agent), beside the diagnostics driver) and the
-//! settle observers are invisible pins at its root
-//! ([`views::agent_keeper`](crate::apps::project::views), beside the request keepers). Only the
-//! four things that outlive any one window are here:
+//! ([`state::agent`](crate::apps::project::state::agent), beside the diagnostics driver), the
+//! record it writes is a satellite beside the event log
+//! ([`state::agents`](crate::apps::project::state::agents)), and the surface reading it is a
+//! sidebar pane beside the catalog. Only the four things that outlive any one window are here:
 //!
 //! - [`directory`] — the cross-thread service registry **and** the app's `Host` impl over it.
 //! - [`ask`] — what travels the control plane.
 //! - [`server`] — start / stop, off the `agent_access` setting.
 //! - [`status`] — the header's dot: listening, and whether anything is paired with it.
 //!
-//! **Nothing in AA-03 is a second results pipeline.** An agent `run` is an ordinary press: it
-//! sets the tab's `QuerySpec` on `Chan::Request(id)` and everything downstream — freya-query
-//! cache identity, snapshot materialization, supersede and retire, the tab's own request
-//! keeper, history, the event log, the T2 close confirm — happens because it is the same press
-//! a person makes. The bridge adds *observers*, never a path of its own.
+//! **Nothing here is a second results pipeline.** An agent's `run` is dispatched by the
+//! directory straight at the engine, on its query session's own `WsId` — a real execution with
+//! the same snapshot materialization, supersede, retire and cancel a person's press gets, and
+//! counted by the same engine-wide flag the T2 close confirm reads. What it deliberately does
+//! **not** touch is anything of the user's: no tab, no `QuerySpec`, no diagnostics pass, and
+//! neither `history.jsonl` nor `session.json` (AA-03b — `state::agents` says why). The window
+//! only brackets the run; bringing one of its queries into the editor is the user's own press
+//! on a row.
 
 pub mod ask;
 mod directory;
@@ -36,6 +39,7 @@ use std::sync::Arc;
 
 use freya::prelude::State;
 
+pub use ask::RunOutcome;
 pub use directory::AgentDirectory;
 pub use server::use_agent_server;
 pub use status::{use_agent_enabled, AgentStatusDot};

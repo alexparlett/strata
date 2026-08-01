@@ -18,6 +18,18 @@
 //!   here, and its three strings become [`RunResult::Stopped`] rather than an error.
 //! - **`run` never rewrites SQL.** No injected `LIMIT`: the press materializes exactly what
 //!   a person's would, and the *response* is bounded by `page_size` plus `read_page`.
+//!
+//! ## One value per client connection (AA-03b)
+//!
+//! A [`StrataTools`] *is* one agent: it carries a [`Connection`], which mints the
+//! [`AgentId`] every session-scoped call is made under and retracts it on drop. The
+//! transport asks for one per client ([`StrataTools::connection`]) and every session-scoped
+//! answer is then scoped by construction rather than by a check somebody has to remember —
+//! which is the AA-03 hole restated as a type: an agent has no handle on another agent's
+//! work, nor on the user's tabs, because it never receives one.
+//!
+//! `Clone` deliberately *shares* the connection (the transport clones one service across a
+//! session's requests); `connection()` is the only thing that starts a new agent.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,18 +37,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::{tool, tool_handler, tool_router, ServerHandler};
+use rmcp::service::Peer;
+use rmcp::{tool, tool_handler, tool_router, RoleServer, ServerHandler};
 use strata_core::engine::{stopped_on_purpose, Engine};
-use strata_model::{SnapshotId, TabId};
+use strata_model::SnapshotId;
 use uuid::Uuid;
 
 use crate::error::AgentError;
-use crate::host::{self, Host, Project, RunMode, Settled};
+use crate::host::{
+    self, Agent, AgentId, AgentIdentity, Host, Project, QuerySessionId, RunMode, Settled,
+};
 use crate::wire::{
     cells, columns, plan_result, rows_result, Columns, DescribeResult, DescribeTableParams,
     DiagnosticWire, EntryWire, FunctionsResult, PageResult, ProjectParams, ProjectsResult,
-    ReadPageParams, RunParams, RunResult, TabParams, TabResult, TablesResult, TabsResult,
-    ValidateParams, ValidateResult,
+    QuerySessionParams, QuerySessionResult, QuerySessionsResult, ReadPageParams, RunParams,
+    RunResult, TablesResult, ValidateParams, ValidateResult,
 };
 
 /// The most rows one call will hand back, however large a `page_size` is asked for. A cap
@@ -46,29 +61,36 @@ use crate::wire::{
 /// resolves to.
 pub const MAX_PAGE_SIZE: usize = 10_000;
 
-/// How many tabs' results stay readable at once, across every project.
+/// How many query sessions' results stay readable at once, **per agent**, across projects.
 ///
-/// The cache has no other bound: `close_tab` and a superseded read drop an entry, but a tab
-/// the **user** closes in the app is a thing the server never hears about, so its entry would
-/// sit there for the life of the process holding a whole result schema. The oldest is evicted
-/// once past this, which costs nothing an agent notices — a `read_page` on an evicted tab
-/// reports the same "run a query in it first" as one on a tab that never ran, and re-running
-/// is the recovery either way.
+/// The cache has no other bound: `close_query_session` and a superseded read drop an entry,
+/// but an agent that simply stops calling — or a window that closes under it — is a thing
+/// this layer never hears about, so the entry would sit there for the life of the process
+/// holding a whole result schema. The oldest is evicted once past this, which costs nothing
+/// an agent notices: a `read_page` on an evicted session reports the same "run a query in it
+/// first" as one on a session that never ran, and re-running is the recovery either way. Per
+/// agent rather than global, so one client's chatter cannot discard another's live result.
 const MAX_REMEMBERED_RUNS: usize = 64;
 
-/// What the server remembers about a tab's last settled run, so `read_page` can page it.
+/// What the server remembers about a query session's last settled run, so `read_page` can
+/// page it.
 ///
-/// A cache of a fact the settle reply carried, not a second source of truth: the snapshot it
-/// names may be retired by the next press in that tab (the user's or the agent's), and then
-/// the read fails cleanly with "the result was replaced". Deliberately **not** a
-/// `SnapshotPin` — pinning would keep a result alive past the run that owns it, which is
-/// right for an export window and wrong here, where the honest answer is that the tab has
-/// moved on.
+/// A cache of a fact the settle carried, not a second source of truth: the snapshot it names
+/// is retired by the next run in that session, and then the read fails cleanly with "the
+/// result was replaced". Deliberately **not** a `SnapshotPin` — pinning would keep a result
+/// alive past the run that owns it, which is right for an export window and wrong here,
+/// where the honest answer is that the session has moved on.
 #[derive(Clone, Debug)]
 struct LastRun {
     /// `None` when the query returned no rows — nothing was materialized, so there is
     /// nothing to page, and the honest answer is an empty page rather than a fault.
     snapshot: Option<SnapshotId>,
+    /// **Which engine minted that snapshot.** Ids are a per-engine counter that restarts at
+    /// 1, and an engine restart remounts the project at the same root — so without this a
+    /// remembered `SnapshotId(1)` would silently resolve against the *new* engine's first
+    /// snapshot, handing the agent whatever the user has since run under its own stale
+    /// columns and total.
+    engine: u64,
     /// The wire columns, converted **once** and shared by every response that describes this
     /// result. A schema can carry thousands of nested fields, so re-deriving it per page — or
     /// keeping a second `Vec<ColumnInfo>` beside it to re-derive *from* — is per-field
@@ -81,36 +103,116 @@ struct LastRun {
     seq: u64,
 }
 
-/// The tool vocabulary over one [`Host`].
+/// One client connection: the agent it is, and the retraction that ends it.
+///
+/// **RAII, for the same reason `SnapshotPin` and `AgentServer` are** — a connection ending
+/// is not an event anything on our side gets told about, so the only honest place to notice
+/// is the drop of the value the transport owns for that session's whole life. There is no
+/// `disconnect()` to forget to call and no path that can skip it.
+///
+/// A connection that never opened a query session retracts an [`AgentId`] no host has heard
+/// of, which removes nothing — so a probe instance (the transport builds one to read a tool
+/// schema) costs a no-op rather than needing a flag to suppress it.
+struct Connection<H: Host> {
+    host: Arc<H>,
+    agent: AgentId,
+}
+
+impl<H: Host> Drop for Connection<H> {
+    fn drop(&mut self) {
+        self.host.agent_gone(self.agent);
+    }
+}
+
+/// The tool vocabulary over one [`Host`], **as one agent**.
 pub struct StrataTools<H: Host> {
     host: Arc<H>,
-    /// Keyed by `(project root, tab)` — a tab handle is unique per project, and a project's
-    /// root is its identity.
-    runs: Arc<Mutex<HashMap<(PathBuf, TabId), LastRun>>>,
+    /// Keyed by `(agent, project root, query session)`. The agent is in the key rather than
+    /// checked against it: a cache shared by every connection would otherwise let a handle
+    /// that leaked between two agents read the other's rows, and a key is a check that
+    /// cannot be forgotten.
+    runs: Arc<Mutex<HashMap<(AgentId, PathBuf, QuerySessionId), LastRun>>>,
     /// Stamps each remembered run so the oldest can be found. Shared with every clone of the
     /// service, like the map it orders.
     seq: Arc<AtomicU64>,
+    connection: Arc<Connection<H>>,
 }
 
 // A manual `Clone`: the derive would demand `H: Clone`, and the whole point of the `Arc` is
-// that the host is shared, never copied. The service is cloned per MCP session.
+// that the host is shared, never copied. A clone is the **same** agent — see the module
+// note; `connection()` is what starts a new one.
 impl<H: Host> Clone for StrataTools<H> {
     fn clone(&self) -> Self {
         StrataTools {
             host: Arc::clone(&self.host),
             runs: Arc::clone(&self.runs),
             seq: Arc::clone(&self.seq),
+            connection: Arc::clone(&self.connection),
         }
     }
 }
 
 impl<H: Host> StrataTools<H> {
+    /// The vocabulary over `host`, as one agent — what an in-process caller (the chat pane,
+    /// AA-06) holds directly, and what a transport clones connections from.
     pub fn new(host: Arc<H>) -> Self {
         StrataTools {
+            connection: Arc::new(Connection {
+                host: Arc::clone(&host),
+                agent: AgentId::new(),
+            }),
             host,
             runs: Arc::new(Mutex::new(HashMap::new())),
             seq: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// The same vocabulary for a **new** client: a fresh [`AgentId`], the shared host and
+    /// the shared run cache. This is what a transport's per-session service factory calls.
+    pub fn connection(&self) -> Self {
+        StrataTools {
+            host: Arc::clone(&self.host),
+            runs: Arc::clone(&self.runs),
+            seq: Arc::clone(&self.seq),
+            connection: Arc::new(Connection {
+                host: Arc::clone(&self.host),
+                agent: AgentId::new(),
+            }),
+        }
+    }
+
+    /// **Open a query session** — the semantic call, with no MCP peer in it.
+    ///
+    /// The `#[tool]` wrapper below does one thing this does not: read the client's
+    /// `clientInfo` off the peer. Everything else about opening a session is here, so the
+    /// in-process caller AA-06 will be — a chat pane with a name of its own and no MCP
+    /// connection anywhere — introduces itself by calling this, rather than needing a
+    /// transport it has no use for.
+    pub async fn open_session(
+        &self,
+        identity: AgentIdentity,
+        project: Option<&str>,
+    ) -> Result<QuerySessionId, AgentError> {
+        let project = self.project(project).await?;
+        let agent = Agent {
+            id: self.connection.agent,
+            identity,
+        };
+        self.host.open_query_session(&project.root, &agent).await
+    }
+
+    /// What a client said it was at `initialize`, or a blank identity if it has not said.
+    ///
+    /// A blank is rendered honestly by the surface that shows it rather than refused here: a
+    /// client is not obliged to introduce itself well, and losing its whole session over a
+    /// missing name would be the app punishing the user for the client's manners.
+    fn identity(peer: &Peer<RoleServer>) -> AgentIdentity {
+        peer.peer_info()
+            .map(|info| AgentIdentity {
+                name: info.client_info.name.clone(),
+                version: info.client_info.version.clone(),
+            })
+            .unwrap_or_default()
     }
 
     /// The one resolution path every project-scoped tool takes.
@@ -125,29 +227,42 @@ impl<H: Host> StrataTools<H> {
         Ok((project, engine))
     }
 
+    fn key(&self, root: &Path, session: QuerySessionId) -> (AgentId, PathBuf, QuerySessionId) {
+        (self.connection.agent, root.to_path_buf(), session)
+    }
+
     fn remember(
         &self,
         root: &Path,
-        tab: TabId,
+        session: QuerySessionId,
         snapshot: Option<SnapshotId>,
+        engine: u64,
         columns: Columns,
         total: usize,
         page_size: usize,
     ) {
+        let agent = self.connection.agent;
         let mut runs = self.runs.lock().unwrap();
         runs.insert(
-            (root.to_path_buf(), tab),
+            self.key(root, session),
             LastRun {
                 snapshot,
+                engine,
                 columns,
                 total,
                 page_size,
                 seq: self.seq.fetch_add(1, Ordering::Relaxed),
             },
         );
-        while runs.len() > MAX_REMEMBERED_RUNS {
+        // **Bounded per agent, not globally.** The map is shared by every connection, so a
+        // global cap would let one chatty client evict a peer's still-readable result — a
+        // cross-agent effect in a vocabulary whose whole point is that an agent cannot reach
+        // another's work, and one that reports itself as "run a query in it first" for a
+        // query that *was* run.
+        while runs.keys().filter(|(a, _, _)| *a == agent).count() > MAX_REMEMBERED_RUNS {
             let Some(oldest) = runs
                 .iter()
+                .filter(|((a, _, _), _)| *a == agent)
                 .min_by_key(|(_, run)| run.seq)
                 .map(|(key, _)| key.clone())
             else {
@@ -157,27 +272,28 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
-    fn forget(&self, root: &Path, tab: TabId) {
-        self.runs.lock().unwrap().remove(&(root.to_path_buf(), tab));
+    fn forget(&self, root: &Path, session: QuerySessionId) {
+        self.runs.lock().unwrap().remove(&self.key(root, session));
     }
 
-    fn recall(&self, root: &Path, tab: TabId) -> Option<LastRun> {
+    fn recall(&self, root: &Path, session: QuerySessionId) -> Option<LastRun> {
         self.runs
             .lock()
             .unwrap()
-            .get(&(root.to_path_buf(), tab))
+            .get(&self.key(root, session))
             .cloned()
     }
 }
 
-/// A tab handle is a `TabId`'s `Uuid` as text. Anything else never named a tab, so it gets
-/// the same answer an expired handle does — `list_tabs` is the recovery either way.
-fn tab_handle(text: &str) -> Result<TabId, AgentError> {
+/// A handle is a [`QuerySessionId`]'s `Uuid` as text. Anything else never named a session, so
+/// it gets the same answer an expired handle does — `list_query_sessions` is the recovery
+/// either way.
+fn session_handle(text: &str) -> Result<QuerySessionId, AgentError> {
     Uuid::parse_str(text)
-        .map(TabId)
-        // The wording is `AgentError::no_such_tab`'s, but the handle never parsed, so there is
-        // no `TabId` to hand it — the text the caller sent is what has to be echoed back.
-        .map_err(|_| AgentError::NotFound(format!("No open tab '{text}'.")))
+        .map(QuerySessionId)
+        // The wording is `AgentError::no_such_query_session`'s, but the handle never parsed,
+        // so there is no id to hand it — the text the caller sent is what has to be echoed.
+        .map_err(|_| AgentError::NotFound(format!("No open query session '{text}'.")))
 }
 
 #[tool_router]
@@ -250,44 +366,52 @@ impl<H: Host> StrataTools<H> {
         }))
     }
 
-    /// Open a new query tab in the project window and return its handle. Tabs are shared
-    /// with the user: they can read, edit, re-run or close one at any time.
+    /// Open a query session and return its handle: a place your queries run in sequence,
+    /// each replacing the last. It is yours, not one of the user's editor tabs — nothing you
+    /// do here disturbs what they are working on. The user watches your sessions in the
+    /// Agents pane and can promote any query you ran into their own editor.
     #[tool]
-    async fn open_tab(
+    async fn open_query_session(
         &self,
+        peer: Peer<RoleServer>,
         Parameters(params): Parameters<ProjectParams>,
-    ) -> Result<Json<TabResult>, AgentError> {
-        let project = self.project(params.project.as_deref()).await?;
-        let tab = self.host.open_tab(&project.root).await?;
-        Ok(Json(TabResult {
-            tab: tab.0.to_string(),
+    ) -> Result<Json<QuerySessionResult>, AgentError> {
+        let session = self
+            .open_session(Self::identity(&peer), params.project.as_deref())
+            .await?;
+        Ok(Json(QuerySessionResult {
+            query_session: session.0.to_string(),
         }))
     }
 
-    /// List the project's open tabs: handle, title, and whether a run is in flight, settled,
-    /// or has never happened.
+    /// List your own query sessions in this project: handle, and whether a run is in flight,
+    /// settled, or has never happened.
     #[tool(annotations(read_only_hint = true))]
-    async fn list_tabs(
+    async fn list_query_sessions(
         &self,
         Parameters(params): Parameters<ProjectParams>,
-    ) -> Result<Json<TabsResult>, AgentError> {
+    ) -> Result<Json<QuerySessionsResult>, AgentError> {
         let project = self.project(params.project.as_deref()).await?;
-        let tabs = self.host.tabs(&project.root).await?;
-        Ok(Json(TabsResult {
-            tabs: tabs.into_iter().map(Into::into).collect(),
+        let sessions = self
+            .host
+            .query_sessions(&project.root, self.connection.agent)
+            .await?;
+        Ok(Json(QuerySessionsResult {
+            query_sessions: sessions.into_iter().map(Into::into).collect(),
         }))
     }
 
-    /// Run read-only SQL in a tab and wait for it to settle. This is an ordinary press: it
-    /// replaces whatever that tab was showing, appears in history and the event log, and can
-    /// be cancelled or superseded by the user. Returns page 1 plus the exact total; use
-    /// read_page for the rest. Set mode to 'explain' for the query plan without executing.
+    /// Run read-only SQL in one of your query sessions and wait for it to settle. It runs on
+    /// the project's real engine, so it costs and behaves exactly like a query the user
+    /// presses Run on, and it replaces whatever that session last produced. Returns page 1
+    /// plus the exact total; use read_page for the rest. Set mode to 'explain' for the query
+    /// plan without executing.
     #[tool]
     async fn run(
         &self,
         Parameters(params): Parameters<RunParams>,
     ) -> Result<Json<RunResult>, AgentError> {
-        let tab = tab_handle(&params.tab)?;
+        let session = session_handle(&params.query_session)?;
         let (project, engine) = self.engine(params.project.as_deref()).await?;
 
         // Nothing to run is refused before anything else, because the gate below cannot catch
@@ -320,17 +444,25 @@ impl<H: Host> StrataTools<H> {
             },
         };
 
-        // Dispatching a run retires the tab's previous snapshot, so what we remembered about
-        // it is already dead. An explain materializes nothing and leaves it alone.
-        if mode == RunMode::Run {
-            self.forget(&project.root, tab);
-        }
-
         let settled = self
             .host
-            .run(&project.root, tab, params.sql, mode, page_size)
+            .run(
+                &project.root,
+                self.connection.agent,
+                session,
+                params.sql,
+                mode,
+                page_size,
+            )
             .await?;
-        let handle = params.tab;
+        // **After** the dispatch, never before: a run refused at the ownership gate (or lost
+        // to a window that went) never retired anything, so forgetting first would throw away
+        // the page of a result that is still there to read. An explain materializes nothing
+        // and leaves the previous result alone either way.
+        if mode == RunMode::Run {
+            self.forget(&project.root, session);
+        }
+        let handle = params.query_session;
         match settled {
             Ok(Settled::Rows(output)) => {
                 // Converted once and shared: the response and every later page describe the
@@ -338,8 +470,9 @@ impl<H: Host> StrataTools<H> {
                 let cols = columns(&output.columns);
                 self.remember(
                     &project.root,
-                    tab,
+                    session,
                     output.snapshot,
+                    engine.id(),
                     Columns::clone(&cols),
                     output.total,
                     output.page_size,
@@ -349,36 +482,46 @@ impl<H: Host> StrataTools<H> {
             Ok(Settled::Plan(plan)) => Ok(Json(plan_result(handle, plan))),
             // The one place stopped-vs-failed is judged.
             Err(e) if stopped_on_purpose(&e) => Ok(Json(RunResult::Stopped {
-                tab: handle,
+                query_session: handle,
                 reason: e,
             })),
             Err(e) => Err(AgentError::Query(e)),
         }
     }
 
-    /// Read another page of a tab's last settled result. Pages are 1-based and use the page
-    /// size that run used. The result is an immutable snapshot, so paging never re-runs the
-    /// query — but a newer run in that tab replaces it, and then this reports that.
+    /// Read another page of a query session's last settled result. Pages are 1-based and use
+    /// the page size that run used. The result is an immutable snapshot, so paging never
+    /// re-runs the query — but a newer run in that session replaces it, and then this reports
+    /// that.
     #[tool(annotations(read_only_hint = true))]
     async fn read_page(
         &self,
         Parameters(params): Parameters<ReadPageParams>,
     ) -> Result<Json<PageResult>, AgentError> {
-        let tab = tab_handle(&params.tab)?;
+        let session = session_handle(&params.query_session)?;
         let (project, engine) = self.engine(params.project.as_deref()).await?;
-        let Some(last) = self.recall(&project.root, tab) else {
+        let Some(last) = self.recall(&project.root, session) else {
             return Err(AgentError::NotFound(format!(
-                "No result to read in tab '{}'. Run a query in it first.",
-                params.tab
+                "No result to read in query session '{}'. Run a query in it first.",
+                params.query_session
             )));
         };
+        // A snapshot id only means anything alongside the engine that minted it: the counter
+        // restarts at 1 on an engine restart, and the project remounts at the same root, so an
+        // id remembered across one would otherwise resolve against a *different* result — in
+        // practice whatever the user has run since. Checked before the empty-page arm too, so
+        // nothing is answered out of an entry the current engine never made.
+        if last.engine != engine.id() {
+            self.forget(&project.root, session);
+            return Err(AgentError::ResultMoved);
+        }
         let page = params.page.max(1);
 
         let Some(snapshot) = last.snapshot else {
             // A run that produced no rows materialized nothing. Reporting an empty page is
             // the truth; a "not found" would read as a lost result.
             return Ok(Json(PageResult {
-                tab: params.tab,
+                query_session: params.query_session,
                 columns: last.columns,
                 rows: Vec::new(),
                 total: 0,
@@ -393,7 +536,7 @@ impl<H: Host> StrataTools<H> {
             .await
         {
             Ok((rows, _)) => Ok(Json(PageResult {
-                tab: params.tab,
+                query_session: params.query_session,
                 columns: last.columns,
                 rows: cells(&rows),
                 total: last.total,
@@ -407,25 +550,29 @@ impl<H: Host> StrataTools<H> {
                 if engine.snapshot_live(snapshot) {
                     Err(AgentError::Query(e))
                 } else {
-                    self.forget(&project.root, tab);
+                    self.forget(&project.root, session);
                     Err(AgentError::ResultMoved)
                 }
             }
         }
     }
 
-    /// Close a tab. A run still in flight in it is cancelled, the same way closing the tab in
-    /// the app would.
+    /// Close one of your query sessions. A run still in flight in it is cancelled. Closing is
+    /// tidy rather than required — every session you hold goes when you disconnect.
     #[tool(annotations(destructive_hint = false))]
-    async fn close_tab(
+    async fn close_query_session(
         &self,
-        Parameters(params): Parameters<TabParams>,
-    ) -> Result<Json<TabResult>, AgentError> {
-        let tab = tab_handle(&params.tab)?;
+        Parameters(params): Parameters<QuerySessionParams>,
+    ) -> Result<Json<QuerySessionResult>, AgentError> {
+        let session = session_handle(&params.query_session)?;
         let project = self.project(params.project.as_deref()).await?;
-        self.host.close_tab(&project.root, tab).await?;
-        self.forget(&project.root, tab);
-        Ok(Json(TabResult { tab: params.tab }))
+        self.host
+            .close_query_session(&project.root, self.connection.agent, session)
+            .await?;
+        self.forget(&project.root, session);
+        Ok(Json(QuerySessionResult {
+            query_session: params.query_session,
+        }))
     }
 }
 
@@ -434,8 +581,10 @@ impl<H: Host> StrataTools<H> {
     instructions = "Strata is a local parquet/CSV/JSON query workspace over Apache DataFusion. \
 Read-only: SELECT, EXPLAIN, SHOW and DESCRIBE run; everything else is refused. \
 Start with list_tables and describe_table to learn the catalog, validate to check SQL \
-cheaply, then open_tab and run. Every run lands as a real query tab in the user's window, \
-so park findings in their own tabs and iterate in a scratch one."
+cheaply, then open_query_session and run. Your work lives in query sessions of your own, \
+which the user watches in the Agents pane and can promote into their editor — so it never \
+disturbs the tabs they are working in. Open a session per line of investigation; each run \
+in a session replaces the last one's result."
 )]
 impl<H: Host> ServerHandler for StrataTools<H> {}
 
@@ -448,9 +597,9 @@ mod tests {
     use strata_core::engine::{RunTag, TableSpec, WsId, CANCELLED};
     use strata_model::SourceFormat;
 
-    use crate::host::{CatalogEntry, Described, RegState};
+    use crate::host::{CatalogEntry, Described, QuerySessionState, RegState};
     use crate::mock::{MockHost, MockProject};
-    use crate::wire::{Mode, Sort, StateWire, TabStateWire};
+    use crate::wire::{Mode, QuerySessionStateWire, Sort, StateWire};
 
     use super::*;
 
@@ -513,18 +662,28 @@ mod tests {
         ProjectParams { project: None }
     }
 
+    /// What a client that introduced itself looks like. The tools' own `#[tool]` wrapper
+    /// reads this off the MCP peer; every test drives the semantic call underneath it, which
+    /// is the same thing the in-process caller will do.
+    fn claude() -> AgentIdentity {
+        AgentIdentity {
+            name: "claude-code".into(),
+            version: "2.1.4".into(),
+        }
+    }
+
     async fn open(tools: &StrataTools<MockHost>) -> String {
         tools
-            .open_tab(Parameters(no_project()))
+            .open_session(claude(), None)
             .await
             .unwrap()
             .0
-            .tab
+            .to_string()
     }
 
-    fn run_params(tab: &str, sql: &str) -> RunParams {
+    fn run_params(session: &str, sql: &str) -> RunParams {
         RunParams {
-            tab: tab.into(),
+            query_session: session.into(),
             sql: sql.into(),
             mode: None,
             page_size: None,
@@ -681,50 +840,140 @@ mod tests {
         );
     }
 
-    // --- tabs -------------------------------------------------------------
+    // --- query sessions ---------------------------------------------------
 
     #[tokio::test]
-    async fn tabs_open_list_and_close() {
-        let (_root, tools) = one_project("tabs").await;
-        let tab = open(&tools).await;
+    async fn query_sessions_open_list_and_close() {
+        let (_root, tools) = one_project("sessions").await;
+        let session = open(&tools).await;
 
         let listed = tools
-            .list_tabs(Parameters(no_project()))
+            .list_query_sessions(Parameters(no_project()))
             .await
             .unwrap()
             .0
-            .tabs;
+            .query_sessions;
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].tab, tab);
-        assert!(matches!(listed[0].state, TabStateWire::Empty));
+        assert_eq!(listed[0].query_session, session);
+        assert!(matches!(listed[0].state, QuerySessionStateWire::Empty));
 
         tools
-            .close_tab(Parameters(TabParams {
-                tab: tab.clone(),
+            .close_query_session(Parameters(QuerySessionParams {
+                query_session: session.clone(),
                 project: None,
             }))
             .await
             .unwrap();
         assert!(tools
-            .list_tabs(Parameters(no_project()))
+            .list_query_sessions(Parameters(no_project()))
             .await
             .unwrap()
             .0
-            .tabs
+            .query_sessions
             .is_empty());
 
-        // The handle is now stale, and the answer is the plain statement `list_tabs` recovers
-        // from — the same one a handle that never existed gets.
+        // The handle is now stale, and the answer is the plain statement
+        // `list_query_sessions` recovers from — the same one a handle that never existed gets.
         let Err(AgentError::NotFound(_)) = tools
-            .close_tab(Parameters(TabParams { tab, project: None }))
+            .close_query_session(Parameters(QuerySessionParams {
+                query_session: session,
+                project: None,
+            }))
             .await
         else {
             panic!("expected a not-found error");
         };
     }
 
+    /// **An agent sees its own sessions and nothing else** — the rule AA-03b exists for,
+    /// where AA-03's `list_tabs` handed over every open tab including the user's.
+    ///
+    /// Two connections over one host and one run cache, which is the arrangement that could
+    /// leak: the second lists nothing, and a handle it should never have had answers exactly
+    /// as a made-up one does — no "that belongs to someone else", which would confirm the
+    /// session exists.
     #[tokio::test]
-    async fn a_malformed_tab_handle_is_not_found_rather_than_a_parse_error() {
+    async fn an_agent_sees_only_its_own_query_sessions() {
+        let (_root, first) = one_project("scoping").await;
+        let second = first.connection();
+        let borrowed = open(&first).await;
+        open(&second).await;
+
+        let mine = first
+            .list_query_sessions(Parameters(no_project()))
+            .await
+            .unwrap()
+            .0
+            .query_sessions;
+        let theirs = second
+            .list_query_sessions(Parameters(no_project()))
+            .await
+            .unwrap()
+            .0
+            .query_sessions;
+        assert_eq!(mine.len(), 1);
+        assert_eq!(theirs.len(), 1);
+        assert_ne!(mine[0].query_session, theirs[0].query_session);
+
+        for reached in [
+            second
+                .run(Parameters(run_params(&borrowed, "SELECT 1")))
+                .await
+                .err(),
+            second
+                .close_query_session(Parameters(QuerySessionParams {
+                    query_session: borrowed.clone(),
+                    project: None,
+                }))
+                .await
+                .err(),
+        ] {
+            assert!(
+                matches!(reached, Some(AgentError::NotFound(_))),
+                "another agent's session is simply not there: {reached:?}"
+            );
+        }
+    }
+
+    /// A connection ending takes its query sessions with it — the RAII half of the same
+    /// rule, and the only signal there is that a client has gone.
+    #[tokio::test]
+    async fn dropping_a_connection_retracts_its_query_sessions() {
+        let (root, tools) = one_project("disconnect").await;
+        let gone = tools.connection();
+        open(&gone).await;
+        open(&tools).await;
+        assert_eq!(
+            tools
+                .host
+                .query_sessions(&root, gone.connection.agent)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        drop(gone);
+
+        assert!(
+            tools
+                .host
+                .query_sessions(&root, tools.connection.agent)
+                .await
+                .unwrap()
+                .len()
+                == 1,
+            "the surviving agent keeps its own"
+        );
+        assert_eq!(
+            tools.host.projects().await.len(),
+            1,
+            "and the project is untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_handle_is_not_found_rather_than_a_parse_error() {
         let (_root, tools) = one_project("bad_handle").await;
         let Err(AgentError::NotFound(message)) = tools
             .run(Parameters(run_params("not-a-uuid", "SELECT 1")))
@@ -740,8 +989,8 @@ mod tests {
     #[tokio::test]
     async fn run_returns_page_one_and_the_exact_total() {
         let (_root, tools) = one_project("run").await;
-        let tab = open(&tools).await;
-        let mut params = run_params(&tab, "SELECT id, name FROM people ORDER BY id");
+        let session = open(&tools).await;
+        let mut params = run_params(&session, "SELECT id, name FROM people ORDER BY id");
         params.page_size = Some(2);
 
         let result = tools.run(Parameters(params)).await.unwrap().0;
@@ -770,18 +1019,61 @@ mod tests {
         );
     }
 
+    /// The run lands on the **query session's own engine workspace**, which is what keeps an
+    /// agent's work off the user's tabs while staying a real execution: the snapshot is
+    /// retired by the next run in that session and by nothing else.
+    #[tokio::test]
+    async fn a_run_executes_against_the_query_sessions_workspace() {
+        let (root, tools) = one_project("workspace").await;
+        let session = open(&tools).await;
+        let RunResult::Ok { .. } = tools
+            .run(Parameters(run_params(&session, "SELECT id FROM people")))
+            .await
+            .unwrap()
+            .0
+        else {
+            panic!("expected rows");
+        };
+
+        let engine = tools.host.engine(&root).await.unwrap();
+        let ws = WsId::from(QuerySessionId(Uuid::parse_str(&session).unwrap()));
+
+        // **The claim under test**: the run landed on the *session's* workspace, not somewhere
+        // else. Proved by retiring that workspace's snapshot the way only its owner can — a
+        // newer dispatch on the same `WsId` — and watching the agent's page go with it. A run
+        // dispatched anywhere else would leave this readable.
+        engine
+            .query(ws, RunTag(4242), "SELECT name FROM people".into(), 10)
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                tools
+                    .read_page(Parameters(ReadPageParams {
+                        query_session: session,
+                        page: 1,
+                        sort: None,
+                        project: None,
+                    }))
+                    .await,
+                Err(AgentError::ResultMoved)
+            ),
+            "the session's own workspace owned that snapshot"
+        );
+    }
+
     /// The app reads `row_limit: 0` as "no limit", so a host returning that setting verbatim
     /// must not get one-row pages out of it — which a bare `clamp(1, MAX)` would give.
     #[tokio::test]
     async fn a_host_default_of_zero_means_no_limit_not_one_row() {
         let (_root, tools) = one_project("no_limit").await;
         tools.host.set_default_page_size(0);
-        let tab = open(&tools).await;
+        let session = open(&tools).await;
 
         let RunResult::Ok {
             rows, page_size, ..
         } = tools
-            .run(Parameters(run_params(&tab, "SELECT id FROM people")))
+            .run(Parameters(run_params(&session, "SELECT id FROM people")))
             .await
             .unwrap()
             .0
@@ -792,27 +1084,28 @@ mod tests {
         assert_eq!(rows.len(), 5, "every row, not one");
     }
 
-    /// A tab the *user* closes in the app is never reported to the server, so without a bound
-    /// the cache keeps a whole result schema per abandoned tab for the life of the process.
+    /// An agent that stops calling is a thing this layer never hears about, so without a
+    /// bound the cache keeps a whole result schema per abandoned session for the life of the
+    /// process.
     #[tokio::test]
     async fn the_run_cache_evicts_its_oldest_entry() {
         let (_root, tools) = one_project("evict").await;
-        let mut tabs = Vec::new();
+        let mut sessions = Vec::new();
         for _ in 0..MAX_REMEMBERED_RUNS + 1 {
-            let tab = open(&tools).await;
+            let session = open(&tools).await;
             tools
-                .run(Parameters(run_params(&tab, "SELECT id FROM people")))
+                .run(Parameters(run_params(&session, "SELECT id FROM people")))
                 .await
                 .unwrap();
-            tabs.push(tab);
+            sessions.push(session);
         }
         assert_eq!(tools.runs.lock().unwrap().len(), MAX_REMEMBERED_RUNS);
 
-        // The first tab's result is gone, and reads exactly like a tab that never ran; the
-        // newest is still there.
+        // The first session's result is gone, and reads exactly like a session that never
+        // ran; the newest is still there.
         let evicted = tools
             .read_page(Parameters(ReadPageParams {
-                tab: tabs[0].clone(),
+                query_session: sessions[0].clone(),
                 page: 1,
                 sort: None,
                 project: None,
@@ -824,7 +1117,7 @@ mod tests {
         );
         assert!(tools
             .read_page(Parameters(ReadPageParams {
-                tab: tabs.pop().unwrap(),
+                query_session: sessions.pop().unwrap(),
                 page: 1,
                 sort: None,
                 project: None,
@@ -833,11 +1126,103 @@ mod tests {
             .is_ok());
     }
 
+    /// **Eviction is per agent.** The cache is one map shared by every connection, so a global
+    /// bound would let a chatty client discard a peer's still-readable result — a cross-agent
+    /// effect in a vocabulary whose whole point is that an agent cannot reach another's work,
+    /// and one that reports itself as "run a query in it first" for a query that *was* run.
+    #[tokio::test]
+    async fn one_agent_cannot_evict_anothers_result() {
+        let (_root, mine) = one_project("evict_scoping").await;
+        let theirs = mine.connection();
+
+        let kept = open(&mine).await;
+        mine.run(Parameters(run_params(&kept, "SELECT id FROM people")))
+            .await
+            .unwrap();
+
+        // The other agent fills its own quota and then some.
+        for _ in 0..MAX_REMEMBERED_RUNS + 4 {
+            let session = open(&theirs).await;
+            theirs
+                .run(Parameters(run_params(&session, "SELECT id FROM people")))
+                .await
+                .unwrap();
+        }
+
+        assert!(
+            mine.read_page(Parameters(ReadPageParams {
+                query_session: kept,
+                page: 1,
+                sort: None,
+                project: None,
+            }))
+            .await
+            .is_ok(),
+            "another agent's chatter must not discard my page"
+        );
+    }
+
+    /// **A snapshot id only means anything beside the engine that minted it.** Ids are a
+    /// per-engine counter that restarts at 1, and an engine restart remounts the project at
+    /// the same root — so a remembered id would otherwise resolve against a *different*
+    /// result, in practice whatever the user has run since.
+    #[tokio::test]
+    async fn a_remembered_page_does_not_survive_the_engine_that_made_it() {
+        let root = scratch("engine_swap");
+        fs::write(root.join("people.csv"), "id,name\n1,ana\n2,ben\n").unwrap();
+        async fn register(engine: &Engine, root: &Path) {
+            engine
+                .register(TableSpec {
+                    name: "people".into(),
+                    paths: vec![root.join("people.csv").display().to_string()],
+                    format: SourceFormat::from_name("csv"),
+                    partitions: Vec::new(),
+                })
+                .await
+                .unwrap();
+        }
+        let project = MockProject::new("sales", &root);
+        register(&project.engine, &root).await;
+        let tools = StrataTools::new(MockHost::new(vec![project]));
+
+        let session = open(&tools).await;
+        tools
+            .run(Parameters(run_params(&session, "SELECT id FROM people")))
+            .await
+            .unwrap();
+
+        // The restart: the project keeps its root and gets a fresh engine, whose snapshot
+        // counter starts over at 1 — the very id the agent is holding.
+        let replacement = MockProject::new("sales", &root);
+        register(&replacement.engine, &root).await;
+        tools.host.replace_engine(&root, replacement.engine.clone());
+        replacement
+            .engine
+            .query(WsId(9), RunTag(1), "SELECT name FROM people".into(), 10)
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(
+                tools
+                    .read_page(Parameters(ReadPageParams {
+                        query_session: session,
+                        page: 1,
+                        sort: None,
+                        project: None,
+                    }))
+                    .await,
+                Err(AgentError::ResultMoved)
+            ),
+            "an id from a retired engine must never resolve against the new one"
+        );
+    }
+
     #[tokio::test]
     async fn an_oversized_page_is_clamped_and_says_so() {
         let (_root, tools) = one_project("clamp").await;
-        let tab = open(&tools).await;
-        let mut params = run_params(&tab, "SELECT id FROM people");
+        let session = open(&tools).await;
+        let mut params = run_params(&session, "SELECT id FROM people");
         params.page_size = Some(MAX_PAGE_SIZE * 10);
 
         let RunResult::Ok { page_size, .. } = tools.run(Parameters(params)).await.unwrap().0 else {
@@ -850,10 +1235,10 @@ mod tests {
     #[tokio::test]
     async fn run_refuses_blocked_ddl_with_the_editors_message() {
         let (_root, tools) = one_project("policy").await;
-        let tab = open(&tools).await;
+        let session = open(&tools).await;
         let Err(e) = tools
             .run(Parameters(run_params(
-                &tab,
+                &session,
                 "CREATE TABLE copy AS SELECT * FROM people",
             )))
             .await
@@ -867,10 +1252,10 @@ mod tests {
     #[tokio::test]
     async fn run_refuses_input_it_cannot_parse() {
         let (_root, tools) = one_project("unparseable").await;
-        let tab = open(&tools).await;
+        let session = open(&tools).await;
         assert!(matches!(
             tools
-                .run(Parameters(run_params(&tab, "SELECT FROM WHERE )")))
+                .run(Parameters(run_params(&session, "SELECT FROM WHERE )")))
                 .await,
             Err(AgentError::Query(_))
         ));
@@ -879,8 +1264,8 @@ mod tests {
     #[tokio::test]
     async fn run_in_explain_mode_returns_the_plan_and_materializes_nothing() {
         let (_root, tools) = one_project("explain").await;
-        let tab = open(&tools).await;
-        let mut params = run_params(&tab, "SELECT id FROM people");
+        let session = open(&tools).await;
+        let mut params = run_params(&session, "SELECT id FROM people");
         params.mode = Some(Mode::Explain);
 
         let RunResult::Plan {
@@ -899,7 +1284,7 @@ mod tests {
         // Nothing was materialized, so there is nothing to page.
         let Err(AgentError::NotFound(_)) = tools
             .read_page(Parameters(ReadPageParams {
-                tab,
+                query_session: session,
                 page: 1,
                 sort: None,
                 project: None,
@@ -918,9 +1303,9 @@ mod tests {
         let tools = StrataTools::new(MockHost::new(vec![
             MockProject::new("sales", &root).settling(CANCELLED)
         ]));
-        let tab = open(&tools).await;
+        let session = open(&tools).await;
         let result = tools
-            .run(Parameters(run_params(&tab, "SELECT 1")))
+            .run(Parameters(run_params(&session, "SELECT 1")))
             .await
             .expect("a stop is not an error")
             .0;
@@ -931,9 +1316,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_against_an_unknown_tab_is_not_found() {
-        let (_root, tools) = one_project("run_unknown_tab").await;
-        let stray = TabId::new().0.to_string();
+    async fn run_against_an_unknown_query_session_is_not_found() {
+        let (_root, tools) = one_project("run_unknown").await;
+        let stray = QuerySessionId::new().0.to_string();
         assert!(matches!(
             tools.run(Parameters(run_params(&stray, "SELECT 1"))).await,
             Err(AgentError::NotFound(_))
@@ -945,14 +1330,14 @@ mod tests {
     #[tokio::test]
     async fn read_page_walks_the_settled_snapshot() {
         let (_root, tools) = one_project("read_page").await;
-        let tab = open(&tools).await;
-        let mut params = run_params(&tab, "SELECT id FROM people ORDER BY id");
+        let session = open(&tools).await;
+        let mut params = run_params(&session, "SELECT id FROM people ORDER BY id");
         params.page_size = Some(2);
         tools.run(Parameters(params)).await.unwrap();
 
         let page = tools
             .read_page(Parameters(ReadPageParams {
-                tab: tab.clone(),
+                query_session: session.clone(),
                 page: 3,
                 sort: None,
                 project: None,
@@ -967,7 +1352,7 @@ mod tests {
 
         let sorted = tools
             .read_page(Parameters(ReadPageParams {
-                tab,
+                query_session: session,
                 page: 1,
                 sort: Some(Sort {
                     column: "id".into(),
@@ -981,23 +1366,22 @@ mod tests {
         assert_eq!(sorted.rows[0], vec![Some("5".to_string())]);
     }
 
-    /// A run in the tab behind retires the snapshot. The read must say so — and say it from
-    /// the engine's answer to "is this still there?", never from its prose.
+    /// A newer run in that session retires the snapshot. The read must say so — and say it
+    /// from the engine's answer to "is this still there?", never from its prose.
     #[tokio::test]
     async fn read_page_reports_a_result_a_newer_run_replaced() {
         let (root, tools) = one_project("moved").await;
-        let tab = open(&tools).await;
+        let session = open(&tools).await;
         tools
-            .run(Parameters(run_params(&tab, "SELECT id FROM people")))
+            .run(Parameters(run_params(&session, "SELECT id FROM people")))
             .await
             .unwrap();
 
-        // The user presses Run again in that very tab — straight at the engine, which is
-        // what the app's own press reaches.
+        // Straight at the engine, on the session's own workspace — what the next run reaches.
         let engine = tools.host.engine(&root).await.unwrap();
         engine
             .query(
-                WsId(Uuid::parse_str(&tab).unwrap().as_u128()),
+                WsId(Uuid::parse_str(&session).unwrap().as_u128()),
                 RunTag(999),
                 "SELECT name FROM people".into(),
                 10,
@@ -1008,7 +1392,7 @@ mod tests {
         assert!(matches!(
             tools
                 .read_page(Parameters(ReadPageParams {
-                    tab: tab.clone(),
+                    query_session: session.clone(),
                     page: 1,
                     sort: None,
                     project: None,
@@ -1023,10 +1407,10 @@ mod tests {
     #[tokio::test]
     async fn read_page_of_an_empty_result_is_an_empty_page() {
         let (_root, tools) = one_project("empty").await;
-        let tab = open(&tools).await;
+        let session = open(&tools).await;
         tools
             .run(Parameters(run_params(
-                &tab,
+                &session,
                 "SELECT id FROM people WHERE id > 99",
             )))
             .await
@@ -1034,7 +1418,7 @@ mod tests {
 
         let page = tools
             .read_page(Parameters(ReadPageParams {
-                tab,
+                query_session: session,
                 page: 1,
                 sort: None,
                 project: None,
@@ -1044,5 +1428,16 @@ mod tests {
             .0;
         assert_eq!(page.total, 0);
         assert!(page.rows.is_empty());
+    }
+
+    /// The mock's `QuerySessionState` reaches the wire verbatim — pinned because the enum is
+    /// the one shape a well-meaning "unknown" arm could be added to.
+    #[test]
+    fn a_session_state_crosses_the_wire_unchanged() {
+        let wire = crate::wire::QuerySessionWire::from(crate::host::QuerySessionInfo {
+            session: QuerySessionId::new(),
+            state: QuerySessionState::Running,
+        });
+        assert!(matches!(wire.state, QuerySessionStateWire::Running));
     }
 }

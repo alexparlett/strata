@@ -14,19 +14,28 @@
 //!   `Send` — which an `async fn` in a trait does not promise. Implementors still write
 //!   plain `async fn`.
 //! - [`Host::run`] returns a `Result` inside a `Result` ([`RunSettle`]), and the nesting is
-//!   the point: the outer arm is "the run never dispatched" (no such tab, the window went),
-//!   the inner one is the engine's own settle. Only the inner one may be a *stop* rather
-//!   than a fault, and the tool layer is the single place that judges which
+//!   the point: the outer arm is "the run never dispatched" (no such query session, the
+//!   window went), the inner one is the engine's own settle. Only the inner one may be a
+//!   *stop* rather than a fault, and the tool layer is the single place that judges which
 //!   (`strata_core::engine::stopped_on_purpose`) — a host that folded the two would be a
 //!   second copy of that rule.
+//!
+//! ## Every session-scoped question names the agent asking it (AA-03b)
+//!
+//! An agent addresses **its own** query sessions and nothing else. That is not defensive
+//! bookkeeping: AA-03 landed agent runs in the user's own tabs, which meant `list_tabs`
+//! handed an agent every open tab — the one the user was typing in included — and a `run`
+//! on it replaced their buffer. Passing an [`Agent`] to every session-scoped method makes
+//! the ownership check the host's *only* way to answer, so there is no listing that could
+//! include somebody else's work and no handle that could be guessed into.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use strata_core::engine::plan::QueryPlan;
-use strata_core::engine::Engine;
-use strata_model::{ColumnInfo, QueryOutput, TabId};
+use strata_core::engine::{Engine, WsId};
+use strata_model::{ColumnInfo, QueryOutput};
 use uuid::Uuid;
 
 use crate::error::AgentError;
@@ -111,29 +120,98 @@ pub enum Described {
     Pending { name: String },
 }
 
-/// Where a tab's last press got to. Tri-state rather than two booleans, because "in flight
-/// and settled" is not a thing a tab can be.
+/// One connected agent, for as long as its connection lasts.
+///
+/// Minted per MCP session rather than derived from what the client calls itself: two Claude
+/// Code windows are two agents and report the identical `clientInfo`, so a name is a label
+/// and never an identity. Ends when the connection does — a client that disconnects takes
+/// its query sessions with it, which is what "the pane shows what is happening now" means.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct AgentId(pub Uuid);
+
+impl AgentId {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> AgentId {
+        AgentId(Uuid::new_v4())
+    }
+}
+
+/// What a client says it is: MCP's `clientInfo`, which arrives at `initialize` and is the
+/// only thing a client ever tells us about itself.
+///
+/// Both fields can be empty, and the surface showing them has to survive that — a client is
+/// not obliged to introduce itself well, and a blank row is the honest rendering of one that
+/// did not.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct AgentIdentity {
+    pub name: String,
+    pub version: String,
+}
+
+/// An agent introducing itself: its connection's identity, and what it calls itself.
+///
+/// Only [`Host::open_query_session`] takes one, and that is the design rather than an
+/// economy: opening a session is when a host first has anything of this agent's to show, so
+/// it is the one call that needs the label. Everything after it is addressed by [`AgentId`]
+/// alone — which is also what lets every other tool be called with no MCP peer at all, the
+/// property the in-process chat pane (AA-06) will need.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Agent {
+    pub id: AgentId,
+    pub identity: AgentIdentity,
+}
+
+/// One **query session** — an agent's container for a sequence of runs, each replacing the
+/// last.
+///
+/// Deliberately not called a tab or a workspace. Bare "session" is taken twice over (MCP's
+/// own `Mcp-Session-Id`, and ours in `session.json`), and this collides with neither while
+/// mapping exactly onto the engine's [`WsId`]: a query session *is* an engine workspace, so
+/// supersede, retire and cancel are the engine's own, unchanged.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct QuerySessionId(pub Uuid);
+
+impl QuerySessionId {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> QuerySessionId {
+        QuerySessionId(Uuid::new_v4())
+    }
+}
+
+impl From<QuerySessionId> for WsId {
+    /// The `Uuid` widened, exactly as a `TabId` is — a query session and a tab are two kinds
+    /// of workspace on one engine, and v4 randomness is what keeps their key spaces apart.
+    fn from(session: QuerySessionId) -> WsId {
+        WsId(session.0.as_u128())
+    }
+}
+
+/// Where a query session's last run got to. Tri-state rather than two booleans, because "in
+/// flight and settled" is not a thing a session can be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TabState {
+pub enum QuerySessionState {
     /// Nothing has been run in it.
     Empty,
     Running,
     /// A run finished — with rows, a plan, an error, or a stop. All of those are settled;
-    /// only "in flight" is not, and a tab whose run failed has certainly not gone back to
-    /// [`Empty`](TabState::Empty).
+    /// only "in flight" is not, and a session whose run failed has certainly not gone back
+    /// to [`Empty`](QuerySessionState::Empty).
     Settled,
 }
 
-/// One open tab, as `list_tabs` reports it.
+/// One of the agent's own query sessions, as `list_query_sessions` reports it.
+///
+/// **No title.** A tab had one because a person names and reads tabs; a query session has
+/// nothing to be called — what it is, is what has run in it, which the agent already knows
+/// and the Agents pane shows.
 #[derive(Clone, Debug, PartialEq)]
-pub struct TabInfo {
-    pub tab: TabId,
-    pub title: String,
-    pub state: TabState,
+pub struct QuerySessionInfo {
+    pub session: QuerySessionId,
+    pub state: QuerySessionState,
 }
 
-/// What a `run` asks the tab to do. `Explain` materializes nothing and leaves the tab's
-/// settled snapshot alone, so a plan does not cost the agent its readable page.
+/// What a `run` asks for. `Explain` materializes nothing and leaves the session's settled
+/// snapshot alone, so a plan does not cost the agent its readable page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunMode {
     Run,
@@ -199,32 +277,55 @@ pub trait Host: Send + Sync + 'static {
         name: &str,
     ) -> impl Future<Output = Result<Described, AgentError>> + Send;
 
-    fn tabs(&self, project: &Path)
-        -> impl Future<Output = Result<Vec<TabInfo>, AgentError>> + Send;
-
-    fn open_tab(&self, project: &Path) -> impl Future<Output = Result<TabId, AgentError>> + Send;
-
-    /// Close `tab` through the same funnel the UI uses — a running press is cancelled the
-    /// ordinary way, not left orphaned.
-    fn close_tab(
+    /// `agent`'s own query sessions in `project`, and **only** those — see the module note.
+    fn query_sessions(
         &self,
         project: &Path,
-        tab: TabId,
+        agent: AgentId,
+    ) -> impl Future<Output = Result<Vec<QuerySessionInfo>, AgentError>> + Send;
+
+    /// Open a query session for `agent`. The identity travels with it because this is where
+    /// a host first learns the agent exists — there is no separate "an agent connected"
+    /// call, since an agent that opens nothing has done nothing to show.
+    fn open_query_session(
+        &self,
+        project: &Path,
+        agent: &Agent,
+    ) -> impl Future<Output = Result<QuerySessionId, AgentError>> + Send;
+
+    /// Close one of `agent`'s query sessions: a running query in it is cancelled, and the
+    /// engine workspace is torn down the way closing a tab tears down a tab's.
+    fn close_query_session(
+        &self,
+        project: &Path,
+        agent: AgentId,
+        session: QuerySessionId,
     ) -> impl Future<Output = Result<(), AgentError>> + Send;
 
-    /// Set `tab`'s request and await its settle — **an ordinary press**, on the same
-    /// machinery a human's is: same cache identity, same snapshot lifecycle, same history
-    /// and event log. The SQL arrives already past the policy gate; a host never re-judges
-    /// it, and never rewrites it (no injected `LIMIT` — the response is bounded by
-    /// `page_size` and paging, and the total stays exact).
+    /// Run `sql` in `session` and await its settle — **on the engine directly**, against the
+    /// session's own [`WsId`], so it is the same execution a person's press makes (same
+    /// snapshot lifecycle, same supersede, same cancel) without being one of their presses.
+    /// The SQL arrives already past the policy gate; a host never re-judges it, and never
+    /// rewrites it (no injected `LIMIT` — the response is bounded by `page_size` and paging,
+    /// and the total stays exact).
     fn run(
         &self,
         project: &Path,
-        tab: TabId,
+        agent: AgentId,
+        session: QuerySessionId,
         sql: String,
         mode: RunMode,
         page_size: usize,
     ) -> impl Future<Output = Result<RunSettle, AgentError>> + Send;
+
+    /// The agent's connection ended: retract it and everything it was showing.
+    ///
+    /// **Sync, and it must not block** — the caller is a `Drop` on whatever runtime the
+    /// transport happens to be running the session worker on, with no way to await and
+    /// nowhere to report a failure to. It is also *not* project-scoped: an agent may hold
+    /// query sessions in several windows and none of them survives its connection, so a
+    /// host retracts it everywhere it lent something.
+    fn agent_gone(&self, agent: AgentId);
 }
 
 /// Resolve the optional `project` argument against what is open.

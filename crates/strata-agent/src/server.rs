@@ -124,7 +124,11 @@ impl AgentServer {
         let tools = StrataTools::new(host);
         let sessions = Arc::new(LocalSessionManager::default());
         let service = StreamableHttpService::new(
-            move || Ok(tools.clone()),
+            // **One agent per client**, not per request: the factory runs once per MCP
+            // session and the value it returns is owned by that session's worker for its
+            // whole life, so `Connection`'s drop is the disconnect (`crate::tools`). A
+            // `clone()` here would make every client the same agent and never retract one.
+            move || Ok(tools.connection()),
             Arc::clone(&sessions),
             // Defaults throughout but the token: the DNS-rebinding host allow-list already
             // names loopback, and session mode is left as rmcp ships it so clients that
