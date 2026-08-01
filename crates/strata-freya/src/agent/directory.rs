@@ -325,8 +325,18 @@ impl Host for AgentDirectory {
         };
 
         // Straight down the sender the start was answered on — not a fresh lookup, which is
-        // what could deliver this to a different mount. Silent on a driver that has gone:
-        // there is nobody left to correct.
+        // what could deliver this to a different mount.
+        //
+        // **A settle nobody is left to hear is dropped, deliberately.** If the window closed
+        // while the query was executing, this send fails and the agent still gets its rows —
+        // which is the honest answer, because the query really did run. Answering
+        // `WindowGone` instead was considered and refused: it would report a fault for a
+        // statement that succeeded, and the agent's recovery from a window loss is to run it
+        // again, so it would pay for the same scan twice. Nothing is stranded by the silence
+        // either — the satellite that would have shown the row went with the window. The one
+        // case where a settle could have landed on a *live* satellite that never heard the
+        // start is the same-root remount, and resolving the whole bracket once (above) is
+        // what makes that unrepresentable.
         let _ = notices.send(AgentNotice::RunSettled {
             agent,
             session,

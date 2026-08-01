@@ -76,10 +76,39 @@ pub struct AgentRun {
     pub at: u64,
 }
 
+/// What closing a query session did.
+///
+/// Two answers rather than one, because a close can arrive while a run is being dispatched
+/// into the very session it names — MCP permits concurrent requests on one connection, and
+/// the dispatch is the *caller's* (`agent::directory`), bracketed by an ask and a notice. In
+/// that window the engine has not been given the work yet, so tearing the workspace down
+/// aborts and retires **nothing**, and the dispatch then lands on a `WsId` the satellite no
+/// longer holds — an entry no later close, retraction or cap eviction can ever name again.
+#[derive(PartialEq, Debug)]
+pub enum Closed {
+    /// Gone. Its engine workspace is the caller's to retire now.
+    Now,
+    /// Marked closed and kept, because a run is still in flight in it. The handle stops
+    /// answering immediately ([`Agents::holds`] is already false), and the workspace is
+    /// retired by whichever [`run_settled`](Agents::run_settled) lands last.
+    WhenItSettles,
+    /// This agent holds no such session.
+    NoSuchSession,
+}
+
 /// One agent's query session and what has run in it, newest first.
 #[derive(Clone, PartialEq, Debug)]
 pub struct QuerySession {
     pub id: QuerySessionId,
+    /// Closed by its agent while a run was still in flight — a tombstone, kept only until
+    /// that run settles so its workspace can be torn down then. See [`Closed`].
+    ///
+    /// It stays in the list rather than being tracked beside it, and that is what reaps it:
+    /// [`Agents::gone`] hands back every session an agent held, so a tombstone whose settle
+    /// never arrives (a client that hung up mid-run, dropping the run future) goes when the
+    /// connection does. The engine side of that case is already covered — `DispatchGuard`
+    /// retires whatever a dropped run materialized.
+    pub closing: bool,
     /// What the pane calls it — `Session 1`, `Session 2`, per agent, in the order they were
     /// opened.
     ///
@@ -93,14 +122,17 @@ pub struct QuerySession {
 }
 
 impl QuerySession {
-    /// Is this session's newest run still in flight? The satellite's own record of what the
+    /// Is **any** run in this session still in flight? The satellite's own record of what the
     /// driver observed — `Engine::is_running` is the authority a *tool* is answered with
     /// (`state::agent::sessions`), and asking it here would put a second answer on screen.
+    ///
+    /// Any, not the newest: MCP permits concurrent requests on one connection, so an agent
+    /// can have two runs open in one session, and a fast second settling first would
+    /// otherwise report the session idle while the first is still executing. Every consumer
+    /// wants the same reading — the pane's dress, the eviction gate, and the tombstone above
+    /// — and each of the other two destroys work if it is wrong.
     pub fn is_running(&self) -> bool {
-        matches!(
-            self.runs.front().map(|r| &r.outcome),
-            Some(RunOutcome::Running)
-        )
+        self.runs.iter().any(|r| r.outcome == RunOutcome::Running)
     }
 }
 
@@ -183,6 +215,7 @@ impl Agents {
         held.push_back(QuerySession {
             id: session,
             ordinal,
+            closing: false,
             runs: VecDeque::new(),
         });
         // Evict the oldest session that is **not working**, never the one just opened. The
@@ -219,20 +252,33 @@ impl Agents {
     /// Is `session` one this agent holds? The **whole** ownership check, in one place: an
     /// agent addressing a session it does not own is answered exactly as it would be for one
     /// that never existed.
+    ///
+    /// A tombstone (see [`Closed`]) is **not** held: it has been closed, so a second close or
+    /// a fresh run against that handle gets the same not-found any stale handle does. That is
+    /// also what stops a new run being dispatched into a session whose teardown is pending.
     pub fn holds(&self, agent: AgentId, session: QuerySessionId) -> bool {
-        self.session(agent, session).is_some()
+        self.session(agent, session).is_some_and(|s| !s.closing)
     }
 
-    /// Drop one of `agent`'s sessions. `false` when it holds no such session.
-    pub fn closed(&mut self, agent: AgentId, session: QuerySessionId) -> bool {
+    /// Close one of `agent`'s sessions — or mark it closed, when a run is still in flight in
+    /// it. See [`Closed`] for why the second answer exists.
+    pub fn closed(&mut self, agent: AgentId, session: QuerySessionId) -> Closed {
         let Some(held) = self.agents.iter_mut().find(|a| a.id == agent) else {
-            return false;
+            return Closed::NoSuchSession;
         };
         let Some(at) = held.sessions.iter().position(|s| s.id == session) else {
-            return false;
+            return Closed::NoSuchSession;
         };
+        // Already a tombstone: closed once, so this is the stale handle again.
+        if held.sessions[at].closing {
+            return Closed::NoSuchSession;
+        }
+        if held.sessions[at].is_running() {
+            held.sessions[at].closing = true;
+            return Closed::WhenItSettles;
+        }
         held.sessions.remove(at);
-        true
+        Closed::Now
     }
 
     /// The agent's connection ended: drop it, and hand back every session it was holding so
@@ -269,18 +315,38 @@ impl Agents {
     /// That run settled. Matched on the sequence number the dispatch minted rather than on
     /// "the newest run", because a settle can land after the agent has already pressed on:
     /// resolving it positionally would stamp the outcome of one query onto another.
+    ///
+    /// Returns the session when this settle was the **last** thing a tombstone was waiting
+    /// for, so the caller can retire the engine workspace it deferred — the other half of
+    /// [`Closed::WhenItSettles`]. `None` on every ordinary settle, which is all of them until
+    /// a close races a dispatch.
     pub fn run_settled(
         &mut self,
         agent: AgentId,
         session: QuerySessionId,
         seq: u64,
         outcome: RunOutcome,
-    ) {
-        let Some(held) = self.session_mut(agent, session) else {
-            return;
-        };
+    ) -> Option<QuerySessionId> {
+        let held = self.session_mut(agent, session)?;
         if let Some(run) = held.runs.iter_mut().find(|r| r.seq == seq) {
             run.outcome = outcome;
+        }
+        // A tombstone with a second run still open keeps waiting: the workspace belongs to
+        // whichever settles last, not to whichever settles first.
+        if !held.closing || held.is_running() {
+            return None;
+        }
+        self.remove(agent, session);
+        Some(session)
+    }
+
+    /// Drop a session from its agent's list, wherever it sits.
+    fn remove(&mut self, agent: AgentId, session: QuerySessionId) {
+        let Some(held) = self.agents.iter_mut().find(|a| a.id == agent) else {
+            return;
+        };
+        if let Some(at) = held.sessions.iter().position(|s| s.id == session) {
+            held.sessions.remove(at);
         }
     }
 
@@ -303,6 +369,10 @@ impl Agents {
 
     /// Every query session in flight across every agent — what the close confirm asks the
     /// engine about to tell "an agent is running a query" from "you are".
+    ///
+    /// Tombstones included, deliberately: a session closed while its run was still being
+    /// dispatched is one the engine may well still be executing, and the confirm's question
+    /// is about work that is about to be destroyed, not about handles that still answer.
     pub fn sessions(&self) -> Vec<QuerySessionId> {
         self.agents
             .iter()
@@ -454,12 +524,150 @@ mod tests {
 
         assert!(agents.holds(mine.id, ours));
         assert!(!agents.holds(mine.id, not_ours));
-        assert!(!agents.closed(mine.id, not_ours));
+        assert_eq!(agents.closed(mine.id, not_ours), Closed::NoSuchSession);
 
         // And a write against a session the agent does not hold records nothing.
         agents.run_started(mine.id, not_ours, "SELECT 1".into());
         let listed: Vec<usize> = agents.agents().map(|a| a.sessions[0].runs.len()).collect();
         assert_eq!(listed, vec![0, 0]);
+    }
+
+    /// An idle session closes outright, and its workspace is the caller's to retire now.
+    #[test]
+    fn closing_an_idle_session_is_done_immediately() {
+        let mut agents = Agents::default();
+        let who = agent("claude-code");
+        let session = opened(&mut agents, &who);
+
+        assert_eq!(agents.closed(who.id, session), Closed::Now);
+        assert!(!agents.holds(who.id, session));
+        assert!(agents.sessions().is_empty(), "nothing is left behind");
+    }
+
+    /// **A close that races a dispatch does not orphan the workspace.** This is the AA-03c
+    /// defect: a `RunStarting` is answered, and the close lands before the caller reaches
+    /// `engine.query`. Tearing the workspace down there would abort nothing — the engine has
+    /// not been given the work — and the dispatch would then register on a `WsId` no later
+    /// close, retraction or cap eviction could ever name.
+    ///
+    /// So the close is a tombstone: the handle stops answering at once, and the teardown is
+    /// handed to the settle.
+    #[test]
+    fn closing_a_session_mid_dispatch_defers_its_teardown_to_the_settle() {
+        let mut agents = Agents::default();
+        let who = agent("claude-code");
+        let session = opened(&mut agents, &who);
+        let seq = agents.next_run();
+        agents.run_started(who.id, session, "SELECT slow".into());
+
+        assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
+        // Closed to the agent from this moment: nothing more can be dispatched into it, and
+        // a second close is the same stale handle every other one is.
+        assert!(!agents.holds(who.id, session));
+        assert_eq!(agents.closed(who.id, session), Closed::NoSuchSession);
+        // But the confirm still counts it, because the engine may still be executing it.
+        assert_eq!(agents.sessions(), vec![session]);
+
+        // The settle is what retires it, and it names the session so the caller can.
+        let retire = agents.run_settled(
+            who.id,
+            session,
+            seq,
+            RunOutcome::Rows {
+                returned: 1,
+                total: 1,
+                elapsed_ms: 3,
+            },
+        );
+        assert_eq!(retire, Some(session));
+        assert!(agents.sessions().is_empty());
+        assert_eq!(agents.len(), 1, "the agent itself stays connected");
+    }
+
+    /// The workspace belongs to whichever run settles **last**. MCP permits concurrent
+    /// requests on one connection, so a tombstone can be waiting on two — and retiring on the
+    /// first would abort the second, which the agent would then be told it had stopped
+    /// itself.
+    #[test]
+    fn a_tombstone_waits_for_the_last_run_in_it() {
+        let mut agents = Agents::default();
+        let who = agent("claude-code");
+        let session = opened(&mut agents, &who);
+        let slow = agents.next_run();
+        agents.run_started(who.id, session, "SELECT slow".into());
+        let fast = agents.next_run();
+        agents.run_started(who.id, session, "SELECT fast".into());
+
+        assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
+        assert_eq!(
+            agents.run_settled(who.id, session, fast, RunOutcome::Plan { analyze: false }),
+            None,
+            "the slow one is still executing in that workspace"
+        );
+        assert_eq!(
+            agents.run_settled(who.id, session, slow, RunOutcome::Plan { analyze: false }),
+            Some(session)
+        );
+    }
+
+    /// An ordinary settle retires nothing — the deferred teardown is the tombstone's alone.
+    #[test]
+    fn an_ordinary_settle_retires_nothing() {
+        let mut agents = Agents::default();
+        let who = agent("claude-code");
+        let session = opened(&mut agents, &who);
+        let seq = agents.next_run();
+        agents.run_started(who.id, session, "SELECT 1".into());
+
+        assert_eq!(
+            agents.run_settled(who.id, session, seq, RunOutcome::Plan { analyze: false }),
+            None
+        );
+        assert!(
+            agents.holds(who.id, session),
+            "and the session is still open"
+        );
+    }
+
+    /// **A tombstone whose settle never comes is reaped by the connection ending** — the case
+    /// a deferred teardown has to answer for. A client that hangs up mid-run drops the run
+    /// future, so no notice ever arrives; the session is still in the agent's list, so `gone`
+    /// hands it back like any other.
+    #[test]
+    fn a_departed_agent_reaps_its_tombstones_too() {
+        let mut agents = Agents::default();
+        let who = agent("claude-code");
+        let session = opened(&mut agents, &who);
+        agents.run_started(who.id, session, "SELECT slow".into());
+        assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
+
+        assert_eq!(agents.gone(who.id), vec![session]);
+    }
+
+    /// A session is working while **any** run in it is, not merely its newest — a fast second
+    /// run settling first must not report the session idle under a slow first one. Every
+    /// consumer of this predicate destroys work when it is wrong: the cap evicts, and the
+    /// tombstone retires.
+    #[test]
+    fn a_session_is_working_while_any_of_its_runs_is() {
+        let mut agents = Agents::default();
+        let who = agent("claude-code");
+        let session = opened(&mut agents, &who);
+        let slow = agents.next_run();
+        agents.run_started(who.id, session, "SELECT slow".into());
+        let fast = agents.next_run();
+        agents.run_started(who.id, session, "SELECT fast".into());
+
+        agents.run_settled(who.id, session, fast, RunOutcome::Plan { analyze: false });
+        let listed = agents.agents().next().unwrap();
+        assert!(
+            listed.sessions[0].is_running(),
+            "the newest settled, but the slow one is still in flight"
+        );
+
+        agents.run_settled(who.id, session, slow, RunOutcome::Plan { analyze: false });
+        let listed = agents.agents().next().unwrap();
+        assert!(!listed.sessions[0].is_running());
     }
 
     /// A connection ending takes the agent and every session it held — and says which, so
@@ -498,11 +706,14 @@ mod tests {
         assert_eq!(runs.len(), RUNS_PER_SESSION);
         assert_eq!(runs[0].sql, format!("SELECT {}", RUNS_PER_SESSION + 2));
 
-        // Settle the trail first: eviction deliberately skips a session that is still
-        // working (see `the_session_cap_skips_a_session_that_is_working`), and this test is
-        // about the cap rather than that rule.
-        let newest = agents.next_seq;
-        agents.run_settled(who.id, session, newest, RunOutcome::Plan { analyze: false });
+        // Settle the **whole** trail first: eviction deliberately skips a session that is
+        // still working (see `the_session_cap_skips_a_session_that_is_working`), and this
+        // test is about the cap rather than that rule. Every row, not just the newest —
+        // `is_running` is any run in flight, so one unsettled row would keep the session
+        // working and it would never be evicted.
+        for seq in 1..=agents.next_seq {
+            agents.run_settled(who.id, session, seq, RunOutcome::Plan { analyze: false });
+        }
         let mut evicted = Vec::new();
         for _ in 0..SESSIONS_PER_AGENT {
             evicted.extend(agents.opened(&who, QuerySessionId::new()));

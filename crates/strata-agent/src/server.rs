@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::host::Host;
-use crate::tools::StrataTools;
+use crate::tools::{StrataTools, STATELESS_IDLE};
 
 /// The path the MCP endpoint is served at — the one an `mcp add --transport http` URL ends
 /// with.
@@ -80,6 +80,14 @@ pub struct AgentServer {
     rt: Option<Runtime>,
     cancel: CancellationToken,
     addr: SocketAddr,
+    /// Retract every stateless agent this server minted, run from [`Drop`].
+    ///
+    /// A boxed closure rather than a `StrataTools<H>` field, so `AgentServer` stays free of
+    /// the `H` parameter every caller would otherwise have to name. It cannot live in the
+    /// sweep task instead: `Drop` calls `shutdown_background`, which drops the runtime's
+    /// tasks rather than polling them, so anything placed after the loop's `break` would
+    /// simply never run.
+    retract: Box<dyn Fn() + Send>,
     /// The same manager the service routes through, kept so the app can ask how many clients
     /// are paired right now — see [`clients`](AgentServer::clients).
     sessions: Arc<LocalSessionManager>,
@@ -123,11 +131,17 @@ impl AgentServer {
         let cancel = CancellationToken::new();
         let tools = StrataTools::new(host);
         let sessions = Arc::new(LocalSessionManager::default());
+        let sweeper = tools.clone();
         let service = StreamableHttpService::new(
-            // **One agent per client**, not per request: the factory runs once per MCP
-            // session and the value it returns is owned by that session's worker for its
-            // whole life, so `Connection`'s drop is the disconnect (`crate::tools`). A
-            // `clone()` here would make every client the same agent and never retract one.
+            // **A connection's worth of agent, where there is a connection.** On the session
+            // lifecycle this factory runs once per MCP session and the value it returns is
+            // owned by that session's worker for its whole life, so `Connection`'s drop is
+            // the disconnect. On the stateless branch it runs per *request* and the value
+            // dies with the response — which is why the agent every session-scoped call is
+            // made under is resolved from the request (`tools::Caller`) rather than from
+            // this value. A `clone()` here would make every client on the first branch the
+            // same agent and never retract one; the retraction a per-request value performs
+            // removes nothing, because its id was never used.
             move || Ok(tools.connection()),
             Arc::clone(&sessions),
             // Defaults throughout but the token: the DNS-rebinding host allow-list already
@@ -136,6 +150,7 @@ impl AgentServer {
             StreamableHttpServerConfig::default().with_cancellation_token(cancel.clone()),
         );
         rt.spawn(accept(listener, service, Arc::new(token), cancel.clone()));
+        rt.spawn(sweep(sweeper.clone(), cancel.clone()));
 
         tracing::info!("agent access listening on http://{addr}{MCP_PATH}");
         Ok(AgentServer {
@@ -143,6 +158,7 @@ impl AgentServer {
             cancel,
             addr,
             sessions,
+            retract: Box::new(move || sweeper.retire_all()),
         })
     }
 
@@ -177,9 +193,38 @@ impl AgentServer {
 
 impl Drop for AgentServer {
     fn drop(&mut self) {
+        // **Before** the cancel, and here rather than in the sweep task: a stateless agent
+        // has no connection whose drop retracts it, so stopping the server is the last chance
+        // to release its query sessions. Without this, turning agent access off (or changing
+        // the port, which builds a fresh server and roster) leaves a ghost row in every
+        // window's Agents pane and holds each session's snapshot for the engine's life —
+        // while a session-lifecycle client retracts itself through `Connection::drop`, so the
+        // two paths would disagree.
+        (self.retract)();
         self.cancel.cancel();
         if let Some(rt) = self.rt.take() {
             rt.shutdown_background();
+        }
+    }
+}
+
+/// Retract stateless agents that have gone quiet.
+///
+/// **The one poll in this crate, and it is here because nothing on our side can observe the
+/// fact** (AGENTS.md §2): a client on MCP's discover lifecycle has no session, so its
+/// departure produces no close, no `DELETE` and no value whose drop means anything — see
+/// [`StrataTools::retire_idle`]. It exists only while the server does, which is the other
+/// half of that rule: the timer is not a standing cost of the app, it is a cost of having the
+/// feature on.
+///
+/// Swept at half the idle window, so an agent is retracted between one and one and a half
+/// [`STATELESS_IDLE`]s after its last call rather than up to two.
+async fn sweep<H: Host>(tools: StrataTools<H>, cancel: CancellationToken) {
+    let mut ticks = tokio::time::interval(STATELESS_IDLE / 2);
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = ticks.tick() => tools.retire_idle(STATELESS_IDLE),
         }
     }
 }

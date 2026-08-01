@@ -122,10 +122,16 @@ pub enum Described {
 
 /// One connected agent, for as long as its connection lasts.
 ///
-/// Minted per MCP session rather than derived from what the client calls itself: two Claude
-/// Code windows are two agents and report the identical `clientInfo`, so a name is a label
-/// and never an identity. Ends when the connection does — a client that disconnects takes
-/// its query sessions with it, which is what "the pane shows what is happening now" means.
+/// Minted per connection wherever there **is** one, rather than derived from what the client
+/// calls itself: two Claude Code windows are two agents and report the identical
+/// `clientInfo`, so a name is a label and never an identity. Ends when the connection does —
+/// a client that disconnects takes its query sessions with it, which is what "the pane shows
+/// what is happening now" means.
+///
+/// One transport path cannot honour that, and the limit is stated rather than hidden: MCP's
+/// 2026-07-28 discover lifecycle (SEP-2567) removes sessions altogether, so a client on it
+/// has no connection to key on and `clientInfo` is the only thing left. There, two windows of
+/// one client really do share an agent — see `tools::Caller`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct AgentId(pub Uuid);
 
@@ -142,7 +148,7 @@ impl AgentId {
 /// Both fields can be empty, and the surface showing them has to survive that — a client is
 /// not obliged to introduce itself well, and a blank row is the honest rendering of one that
 /// did not.
-#[derive(Clone, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
 pub struct AgentIdentity {
     pub name: String,
     pub version: String,

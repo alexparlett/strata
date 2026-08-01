@@ -50,7 +50,6 @@ use freya::radio::use_radio;
 use strata_agent::QuerySessionId;
 
 use self::run::RunCard;
-use crate::agent::RunOutcome;
 use crate::apps::project::state::{AgentRun, AgentsCtx, Chan, ConnectedAgent, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Meta, MonoValue, Prose};
@@ -291,10 +290,19 @@ impl Component for AgentGroup {
                 .agent
                 .sessions
                 .iter()
+                // A session the agent has already closed is not one it is working in — the
+                // same filter `state::agent::sessions` applies to the tool listing, and for
+                // the same reason: a tombstone's card offers a promote gesture for a handle
+                // every tool answers not-found for.
+                .filter(|session| !session.closing)
                 .map(|session| {
                     SessionGroup {
                         id: session.id,
                         ordinal: session.ordinal,
+                        // Asked of the session, never re-derived: the predicate has to agree
+                        // with the eviction gate and the tombstone, and restating it here is
+                        // what let it drift from them.
+                        running: session.is_running(),
                         runs: session.runs.iter().cloned().collect(),
                         theme: self.theme.clone(),
                         key: DiffKey::None,
@@ -331,8 +339,11 @@ impl Component for AgentGroup {
                             .text_overflow(TextOverflow::Ellipsis),
                     )
                     .child(
-                        Meta::new(plural_of(self.agent.sessions.len(), "session"))
-                            .color(self.theme.meta_color),
+                        Meta::new(plural_of(
+                            self.agent.sessions.iter().filter(|s| !s.closing).count(),
+                            "session",
+                        ))
+                        .color(self.theme.meta_color),
                     ),
             );
 
@@ -363,6 +374,10 @@ impl Component for AgentGroup {
 struct SessionGroup {
     id: QuerySessionId,
     ordinal: usize,
+    /// Whether a run in this session is still in flight, as `QuerySession::is_running` reads
+    /// it. A prop rather than something this component derives from `runs`, so the pane, the
+    /// session cap and the tombstone cannot disagree about what "working" means.
+    running: bool,
     runs: Vec<AgentRun>,
     theme: AgentsTheme,
     key: DiffKey,
@@ -385,11 +400,11 @@ impl Component for SessionGroup {
         // tab lives on, and one subscription for the whole list rather than one per card.
         let session = use_radio::<SessionState, Chan>(Chan::Tabs);
         // The satellite's own predicate — see `QuerySession::is_running` for why the pane
-        // paints the driver's observation rather than asking the engine.
-        let running = matches!(
-            self.runs.first().map(|r| &r.outcome),
-            Some(RunOutcome::Running)
-        );
+        // paints the driver's observation rather than asking the engine. Handed down from the
+        // `QuerySession` rather than recomputed from `runs`: this used to read `runs.first()`,
+        // which reported a session idle whenever a fast second run settled under a slow first
+        // one.
+        let running = self.running;
         // Read **unconditionally**, even though only a running session paints with it: a hook
         // reached from inside `running.then(|…|)` is a hook called a variable number of times
         // per render, which is the hook-order rule (AGENTS.md §3) and panics the whole app the
@@ -500,6 +515,7 @@ mod tests {
     use strata_core::util::collapse_sql;
 
     use super::*;
+    use crate::agent::RunOutcome;
     use crate::apps::project::state::Agents as AgentsStore;
     use crate::theme::strata_theme;
 

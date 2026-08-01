@@ -231,10 +231,10 @@ Things that must not regress. Each was fought for once already.
   per tab **on the engine their own press needed**. Worse, `list_tabs` handed an agent *every*
   open tab and a `run` on one replaced the buffer the user was typing in. AA-03b moves those runs
   to **query sessions** of the agent's own, shown in an Agents pane. The fix for the sharp edge
-  is structural rather than a guard: `StrataTools` **is** one agent (the transport asks for one
-  value per client connection, which mints an `AgentId` and retracts it on drop — RAII, the only
-  signal a transport gives), and every session-scoped tool is scoped to that id, so an agent is
-  never handed a handle on another agent's work, let alone on a tab. A handle it does not own
+  is structural rather than a guard: `StrataTools` **is** one agent, and every session-scoped
+  tool is scoped to that id, so an agent is never handed a handle on another agent's work, let
+  alone on a tab. **Which agent, though, comes from the request and not from how long a value
+  happens to live** (AA-03c) — see the entry below. A handle it does not own
   answers exactly as one that never existed, deliberately: a distinct "that is not yours" would
   confirm the session exists. The runs stay *real*, which is the half of the original decision
   that was right. The chat pane is the opposite case and keeps the tab gesture, because it is in
@@ -245,6 +245,65 @@ Things that must not regress. Each was fought for once already.
   "Queries are running" shown to somebody who pressed Run on nothing sends them looking for a
   query they never started. Not confirming at all for agent-only work was considered and
   rejected: it costs the one property that makes the confirm trustworthy.
+- **An agent's identity comes from the request, and a teardown that cannot happen yet is owed to
+  whoever finishes last** (AA-03c). Two holes the AA-03b seam left, and they are one family: the
+  seam identified things by something that was not their identity.
+
+  *Identity.* rmcp 3.0.1 serves Streamable HTTP two ways. On the session lifecycle the service
+  factory runs once per MCP session and the value it returns lives as long as the client does,
+  so an `AgentId` minted in that value and retracted by its `Drop` is exactly right. On the
+  **stateless** branch — taken by a client negotiating `2026-07-28` or sending per-request
+  `_meta`, and gated by `use_session = legacy_session_mode && is_legacy_request(…)` —
+  `get_service()` runs per *request* and the value dies with the response, so every request is a
+  different agent: `open_query_session` mints a session and the next `run` answers `No open
+  query session`, silently, for that client's whole life. Two remedies look obvious and are
+  both wrong. **There is no stopgap in the config**: `legacy_session_mode` already defaults to
+  `true` and can only turn sessions *off*, never force them on. And **keying on `Mcp-Session-Id`
+  fixes only the path that already works**: SEP-2567 removes sessions from the discover
+  lifecycle, and rmcp sets that header on exactly one response, inside the session branch — it
+  is absent precisely where identity is broken. Worse, it is not even the discriminator:
+  `is_legacy_request` reads the request's `_meta` and protocol version and never consults that
+  header, so a client that still echoes a stale session id while sending per-request `_meta`
+  takes the stateless branch and would be misread as owning its value — the bug, restored for
+  the client most likely to hit it. So `tools::Caller` **mirrors rmcp's own predicate**: no HTTP
+  `Parts` in the extensions at all means stdio or the in-process pane, where the value's
+  lifetime genuinely *is* the connection; a request whose `_meta` lacks the `2026-07-28`
+  required keys and whose version is older took the session branch, where it is too; anything
+  else is stateless and falls back to the only durable thing such a client sends, its `_meta`
+  `clientInfo`. That last is a real loss of resolution — two windows of one client share an
+  agent — and it is the honest maximum, because the protocol carries nothing else. Read from
+  `_meta` and **not** from the peer: rmcp reconstructs stateless `peer_info` with
+  `Implementation::default()`, which is `from_build_env` and therefore reads `rmcp` and the rmcp
+  version, so falling back to it labels every un-introduced client with the name of the MCP
+  library it happens to use. `clientInfo` is *optional* on that lifecycle, and a **blank
+  identity is refused the session-scoped tools rather than pooled**: one minted id behind two
+  different processes would let each list, page and close the other's query sessions, since that
+  id is the whole of both isolation checks — the AA-03 hole reopened by a bucket meant for
+  display. The **project-scoped** tools keep working; the line is whether a tool must know whose
+  agent is asking, not `read_only_hint` (which `list_query_sessions` and `read_page` both carry,
+  and both are refused). Retraction follows the same split: RAII where there
+  is a connection, and an idle sweep (`retire_idle`, matched to rmcp's own `keep_alive`) where
+  there is not — skipping any agent with a call in flight, because retiring one mid-run aborts
+  its own query and reports that back as "you stopped this", and running a final sweep from
+  `AgentServer::drop`, because `shutdown_background` never polls the sweep task again.
+
+  *Teardown.* MCP permits concurrent requests on one connection and the dispatch is the
+  caller's, so a `close_query_session` can land between a run's `RunStarting` and its
+  `engine.query`. Tearing the workspace down there aborts and retires **nothing** — the engine
+  has not been given the work — and the dispatch then registers a snapshot and an in-flight
+  entry on a `WsId` no later close, retraction or cap eviction can name, so it leaks for the
+  engine's life and feeds a phantom into the T2 confirm. The fix is a **tombstone**
+  (`agents::Closed`): the handle stops answering at once, the row is kept, and the workspace is
+  retired by whichever `run_settled` lands last. Not a lease, which would put the driver back to
+  waiting on a query — the very thing AA-03b moved out. What reaps a tombstone whose settle
+  never comes is already there: the row stays in the agent's session list, so `gone` hands it
+  back like any other when the connection ends, and the engine side of a dropped run future is
+  `DispatchGuard`'s. The adjacent rule is kept apart rather than blanket-refused: the session
+  **cap** never evicts a working session (the engine settles a torn-down workspace as
+  `cancelled`, which the vocabulary would report as "you stopped this" for a cancellation the
+  *app* performed), while an explicit close of a running session is the agent's own decision
+  about its own work and is allowed. `is_running` is **any** run in flight, not the newest —
+  every consumer of it destroys work when it is wrong.
 - **Poll only what nothing on our side can observe, and name the reason where the poll is.** The
   header's agent dot is the app's one sampled fact: how many MCP clients are paired lives in
   rmcp's `LocalSessionManager`, and a session is created inside `service.handle(req)` — below our
