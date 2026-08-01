@@ -44,6 +44,8 @@ pub struct ValueField {
     align: TextAlign,
     /// A glyph inside the box, before the text — a filter's magnifier, a unit marker.
     leading: Option<Element>,
+    /// Show the value as dots instead of characters — see [`ValueField::masked`].
+    masked: bool,
     enabled: bool,
     /// No chrome of its own — see [`ValueField::bare`].
     bare: bool,
@@ -62,6 +64,7 @@ impl ValueField {
             max_len: None,
             align: TextAlign::default(),
             leading: None,
+            masked: false,
             enabled: true,
             bare: false,
             a11y_id: None,
@@ -123,6 +126,19 @@ impl ValueField {
         self
     }
 
+    /// Show the value as dots rather than characters — a secret the surface displays but does
+    /// not want on screen by default (Settings ▸ Agent access's bearer token).
+    ///
+    /// `Input`'s own [`InputMode`], not a masked copy of the string, and the difference is the
+    /// whole reason this is a passthrough: the state keeps the real value, so revealing it is a
+    /// prop flip rather than a second source of truth to keep in step — and Freya's editable
+    /// refuses to copy a masked box's contents to the clipboard, which a hand-masked string
+    /// could not.
+    pub fn masked(mut self, masked: bool) -> Self {
+        self.masked = masked;
+        self
+    }
+
     /// Give the box an id the caller already holds, so it can watch the field's focus with
     /// `use_focus(id)`.
     ///
@@ -167,6 +183,7 @@ impl Component for ValueField {
                 .height(self.height.clone())
                 .text_align(self.align)
                 .enabled(self.enabled)
+                .maybe(self.masked, |el| el.mode(InputMode::new_password()))
                 .compact()
                 .map(self.a11y_id, |el, id| el.a11y_id(id))
                 .maybe(self.placeholder.is_some(), |el| {

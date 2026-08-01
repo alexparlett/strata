@@ -11,9 +11,13 @@
 //! builtin `Table`, and what they share beyond it — the note that appears between two rows — is
 //! [`RowNote`].
 //!
+//! AA-04's [`AgentAccessPane`] is the sixth, and back to the ordinary shape: a preferences form
+//! of three rows.
+//!
 //! [`Form::preferences`]: crate::components::form::Form::preferences
 //! [`Row`]: crate::components::form::Row
 
+mod agent_access;
 mod chrome;
 mod data_display;
 mod engine;
@@ -26,6 +30,7 @@ mod system;
 mod theme;
 mod title_bar;
 
+pub use agent_access::AgentAccessPane;
 pub use chrome::SettingsChrome;
 pub use data_display::DataDisplayPane;
 pub use engine::{EnginePane, PropRows};

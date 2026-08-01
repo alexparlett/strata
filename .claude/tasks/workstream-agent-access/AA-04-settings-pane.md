@@ -1,62 +1,63 @@
 # AA-04 · Settings ▸ Agent access
 
-**Workstream:** Agent access · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** AA-03
+**Workstream:** Agent access · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** AA-03
 
 ## Goal
-The control surface for a capability AA-03 ships dark: enable/disable, the port, the token
-(view / copy / regenerate), and enough status to configure a client without reading docs.
+The control surface for a capability AA-03 ships dark: enable/disable, the port, and the token
+(view / copy / regenerate).
 
-## Current state
-AA-03 reads `agent_access.*` settings (default off) from a hand-edited config. The Settings
-window has five built categories; the pane vocabulary is `components::form`
-(`Variant::Preferences`), the index is `apps/settings/search.rs`'s one-table `Anchor` enum, and
-new fields ride `settings_merge!` (a field that isn't merged is a build error).
+## What was built
 
-## What to build
+A sixth Settings category, **Agent access** — ungrouped, between Keymap and the Engine group,
+exactly where the canvas lists it (`Route::AgentAccess`, a `CATEGORIES` entry, breadcrumbs off
+`model.rs` as with every other page).
 
-### Settings fields (`strata-core::config::Settings`)
-`agent_access_enabled: bool` (default false), `agent_access_port: u16` (default: the constant
-AA-02/03 named), `agent_access_token: String` (minted on first enable). Through
-`settings_merge!`; committed via the standard per-field diff (draft vs seed).
+The pane (`apps/settings/views/agent_access.rs`) is an ordinary `Form::preferences` of three
+rows, all built through `Anchor::row()` so search reaches them:
 
-### The pane
-A new category (or a group under System — check the nav model's shape and the designer's
-breadcrumb conventions; a new category needs a `Route`, a `CATEGORIES` entry and breadcrumbs in
-`apps/settings/model.rs`). Rows, all via `Anchor::row()` so search reaches them:
+- **Enable agent access** — `Switch`, trailing, with the label block as a second press target.
+- **Port** — `NumberField` bounded to `AGENT_PORT_MIN..=AGENT_PORT_MAX` (`strata-core::config`,
+  named there beside the setting for the reason the column-width and history bounds are: the
+  field offers exactly the range its consumer can honour, and below 1024 needs root).
+- **Token** — a masked, read-only `ValueField` with reveal · copy · **Regenerate** beside it.
 
-- **Enable agent access** — Switch. Subtext states what it opens: a local server on
-  127.0.0.1 for MCP clients; off by default.
-- **Port** — `NumberField`, bounded to the valid range; subtext notes a change restarts the
-  server (AA-03's live start/stop handles it off `ConfigChan::Settings`).
-- **Token** — mono `ValueField` (read-only display) + copy + **Regenerate** (a T2-style confirm
-  is unnecessary — regenerating just invalidates clients; say so in the subtext).
-- **Client setup** — a `Note` row carrying the one-line `claude mcp add …` incantation with the
-  live port/token substituted, copyable. This is the row that makes the feature usable without
-  reading the spec.
-- **Status** — running / not running (and the reason when enabled-but-failed, e.g. port in
-  use). Read from the server handle's state, not derived from the settings — a toggle that
-  claims running while the bind failed is a lying control.
+Settings fields needed no work: AA-03 already shipped `Settings::agent_access` (an `AgentAccess`
+struct: `enabled` / `port` / `token`), already through `settings_merge!`.
 
-### Search index
-Every row above gets an `Anchor` variant + keywords ("mcp", "agent", "claude", "token",
-"port") in `search.rs`'s table. The category (if new) resolves through `model`'s `category` —
-never restated in the index.
+## Descoped
+
+- **Client setup** — a `Note` row carrying a `claude mcp add …` line. Cut: it is *one client's*
+  incantation on a surface that has no business favouring a client. Every client's setup belongs
+  in the README's Agent access section (spec §6 already says so).
+- **Status** — running / not running / why. Cut: the header's status dot (AA-03,
+  `agent/status.rs`) already reports listening and paired-client count, and it does it where the
+  user is working rather than behind a Settings category.
+
+Both were in this file's original sketch and neither is in the designer's canvas. The canvas won.
+
+## Decisions worth not re-litigating
+
+- **Regenerate is a draft edit, not an immediate write** — a divergence from the canvas's
+  subtext ("takes effect at once"). `Settings::merge_onto` diffs whole fields and `agent_access`
+  is one field, so a token committed behind the draft's back would be overwritten by the next
+  Apply that carried a changed switch. And a credential every client depends on should have an
+  undo; Cancel is it, which is also why the action needs no confirm of its own.
+- **The reveal sits beside the box, not inside it** — a divergence from the canvas, which draws
+  a 24×24 eye inside the field. An icon button in this app is a 28×28 `ToolButton` and a value
+  box stands at 30, so the in-box variant would be a hand-rolled lookalike of the one control
+  the app already has (AGENTS.md §3). Reveal and copy read as one cluster on the value.
+- **Masking is `Input`'s own `InputMode`**, exposed as `ValueField::masked` — the state keeps
+  the real token, so revealing is a prop flip rather than a second source of truth, and Freya's
+  editable refuses to copy a masked box's contents to the clipboard for free.
 
 ## Acceptance
-- Toggling enable starts/stops the server live (no app restart); status row tells the truth,
-  including bind failure.
-- Port edit + Apply restarts the server on the new port; out-of-range values can't be applied
-  (the field's bounds, not a post-hoc correction).
-- Regenerate mints a new token, persists it, and the old one 401s immediately.
-- Settings search finds every row and reveals it (scroll + flash) — the P4-09 machinery, driven
-  by the anchors.
-- `settings_merge!` covers the new fields (the compiler enforces it); another window's
-  concurrent setting commit survives an Apply here (the standard seed-diff behaviour — no new
-  work, just don't break it).
-- Unit tests where the panes already have them (model/search tables).
 
-## Notes
-- Don't build a client-config generator beyond the one Note row — the incantation is the whole
-  need.
-- If the designer supplies a canvas for this pane, it wins over the sketch above; the rows'
-  *existence* is settled, their dress is not.
+- Toggling enable, editing the port and regenerating all write the draft; Apply commits, and
+  `agent::use_agent_server` (mounted by every workspace window) starts / stops / restarts the
+  server off `ConfigChan::Settings` with no app restart.
+- Out-of-range ports can't be applied — the field's own bounds, not a post-hoc correction.
+- Settings search finds all three rows (by name, by the page, and by "mcp" / "agent" / "claude"
+  / "bearer" keywords) and reveals them — the P4-09 machinery, driven by the anchors.
+- `settings_merge!` already covers `agent_access`; another window's concurrent commit survives
+  an Apply here (the standard seed-diff behaviour).
+- Tests: `model`'s route/category pins cover the new page; `search`'s table gains one.

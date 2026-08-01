@@ -244,6 +244,17 @@ fn default_agent_port() -> u16 {
     47821
 }
 
+/// The ports Settings ▸ Agent access will accept, for the same reason the column-width and
+/// history bounds are named beside their settings: the field has to offer exactly what its
+/// consumer can honour.
+///
+/// The floor is the privileged range's ceiling plus one — binding below 1024 needs root on
+/// Unix, so a field that accepted 80 would be a field whose value can only ever fail to bind.
+/// The ceiling is the port number's own, stated rather than left to `u16` because the control
+/// is a [`u32`] field (`NumberField`) and would otherwise offer numbers no port can be.
+pub const AGENT_PORT_MIN: u16 = 1024;
+pub const AGENT_PORT_MAX: u16 = u16::MAX;
+
 /// Generates [`Settings::merge_onto`] from one list of the struct's fields.
 ///
 /// The list is checked against the struct by the compiler: the `let Settings { … } = self`

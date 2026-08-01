@@ -25,16 +25,21 @@ same UI seam the MCP server does.
 | 03 | In-app host: service directory · bridge · agent keepers · server lifecycle | ✅ | — | 02 |
 | 03b | The Agents pane: an agent's work is its own surface, not the user's tabs | ✅ | — | 03 |
 | 03c | Seam hardening: one identity per session, per client | ✅ | — | 03b |
-| 04 | Settings ▸ Agent access (enable · port · token · status) | ⬜ | — | 03 |
+| 04 | Settings ▸ Agent access (enable · port · token) | ✅ | — | 03 |
 | 05 | Headless host: `strata mcp <project>` over stdio | ⬜ | — | 01, 02 |
 | 06 | Chat pane (flagship; may graduate to its own workstream) | ⬜ | — | 03 |
 
 ## Why the order
 
-03c is what AA-03b's review left standing (its first item landed in the same PR), batched because each changes a *shape*
-rather than a line and two of them touch the `Host` trait. It is not a blocker for 04, 05 or 06 —
-but 06 inherits its third finding directly (an in-process caller has no `Mcp-Session-Id`), so
-whoever starts the chat pane should read it first.
+03c was what AA-03b's review left standing (its first item landed in the same PR), batched
+because each changes a *shape* rather than a line and two of them touch the `Host` trait. It
+blocked nothing, but **06 inherits its identity finding directly** and whoever starts the chat
+pane should read it first: an in-process caller has no transport identity at all, which is
+precisely `Caller::Owned` — the arm where a value's lifetime genuinely *is* the connection, so
+`Connection`'s RAII retraction stays right. (The finding was originally written as "an
+in-process caller has no `Mcp-Session-Id`". That framing was wrong in a way worth remembering:
+the header is not rmcp's lifecycle discriminator, and it is absent on the very branch where
+identity breaks — see the task file.)
 
 01 is pure `strata-core` and unblocks everything: without the exported policy verdict the tool
 layer cannot gate `run` through the editor's own funnel, and without the extracted registration
