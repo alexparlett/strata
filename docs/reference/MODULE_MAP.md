@@ -163,7 +163,9 @@ src/components/                  shared component library
                                  a form of ordinary rows
     field.rs                     `ValueField` (the mono box: stated height, length cap enforced
                                  on the state, the caller's width on the *wrapper* so a relative
-                                 one is a flex child of the row) + `NumberField` (bounded,
+                                 one is a flex child of the row, `.masked()` for a secret —
+                                 `Input`'s own `InputMode`, so the state keeps the real value and
+                                 revealing is a prop flip) + `NumberField` (bounded,
                                  `.unit("px")`, reports per keystroke and normalizes its text on
                                  blur) + `DirectoryField` (a path box + the native folder picker:
                                  one buffer, both write it — the picker sets the box and the box
@@ -173,7 +175,7 @@ src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
   views/                         title_bar · rail (SidebarRow) · projects · row · open (rfd pick)
 src/apps/settings/               the settings window (P4-03, `Settings.dc.html`) — one app-wide,
-                                 pinned above its opener. All five categories are built
+                                 pinned above its opener. All six categories are built
   mod.rs                         root + window config + the `settings` component theme, the
                                  **freya-router** `Route` per category, and `SettingsCtx` (the
                                  draft · its **seed** · Apply · the live-theme mirror). Apply
@@ -246,6 +248,17 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
                                  policy itself is `strata_core::keymap`'s, beside the resolution a
                                  hand-edited config meets. While a row is listening the menubar's
                                  accelerators are **suspended** — see src/menu.rs
+    agent_access.rs              AA-04 — the Agent-access pane: enable · port · token, the control
+                                 for the MCP server AA-03 ships dark. Three rows and no more: a
+                                 client-setup line (one client's incantation; the README's job)
+                                 and a live server status (the header's dot already says it) were
+                                 both sketched and both descoped. Applying is all the wiring there
+                                 is — every workspace window's `agent::use_agent_server` reconciles
+                                 the server off `ConfigChan::Settings`. Regenerate edits the
+                                 **draft** rather than committing at once: `agent_access` is one
+                                 merge field, so a token written behind the draft's back would be
+                                 overwritten by the next Apply — and Cancel is the undo a
+                                 credential wants
                                  `Strata.exportGroups()` for the options) — opened from the
                                  results toolbar, pinned above the project window that asked
   mod.rs                         root + window config + the `export` component theme, and

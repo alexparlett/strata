@@ -24,7 +24,11 @@
 //! nothing about the rhythm between them lives here. P4-06 added the third
 //! ([`views::SystemPane`]), P4-07 the fourth ([`views::EnginePane`]) — which is the one category
 //! to take both of [`views::Pane`]'s opt-outs, being a surface that manages its own height — and
-//! P4-08 the last ([`views::KeymapPane`]). The window is complete.
+//! P4-08 the last ([`views::KeymapPane`]).
+//!
+//! AA-04 added a sixth, [`views::AgentAccessPane`] — the control for the MCP server AA-03
+//! ships dark, and an ordinary preferences list again: the switch, the port and the token,
+//! committed by the same Apply as everything else.
 
 mod model;
 mod search;
@@ -38,7 +42,8 @@ use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use strata_core::config::{Command, Settings};
 
 use crate::apps::settings::views::{
-    DataDisplayPane, EnginePane, KeymapPane, PropRows, SettingsChrome, SystemPane, ThemePane,
+    AgentAccessPane, DataDisplayPane, EnginePane, KeymapPane, PropRows, SettingsChrome, SystemPane,
+    ThemePane,
 };
 use crate::components::form::Reveal;
 use crate::keymap::on_commands;
@@ -135,6 +140,8 @@ pub enum Route {
         DataDisplay,
         #[route("/keymap", KeymapPane)]
         Keymap,
+        #[route("/agent-access", AgentAccessPane)]
+        AgentAccess,
         #[route("/engine", EnginePane)]
         Engine,
 }
