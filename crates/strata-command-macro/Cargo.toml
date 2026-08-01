@@ -1,0 +1,17 @@
+[package]
+name = "strata-command-macro"
+version = "0.2.0"
+edition = "2021"
+description = "The #[command_router] / #[command] attribute pair behind Strata's command palette: one declaration site per command, carrying its metadata and its body together."
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+# Nothing but the three every attribute macro needs. This crate knows about idents, doc
+# comments and expressions — never about Strata's types, which is what keeps it a registration
+# mechanism rather than a second copy of the command vocabulary.
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

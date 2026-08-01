@@ -58,6 +58,30 @@ pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: Quer
     );
 }
 
+/// [`press_query`] with the "already running" gate in front of it — the **Run** command, wherever
+/// it is asked for: ⌘↵ over the workbench, and the command palette's Run query row.
+///
+/// The gate exists because a press that is already executing must not double-run; it lives here
+/// rather than beside a caller because the two callers cannot see the same things. The workbench
+/// had it inline against its own `running` mirror, which is the *active tab's* request as the
+/// results pane knows it — a value the palette (mounted at the window root, addressing the store)
+/// has no access to at all. So the question is put to the engine, which is the one thing that
+/// knows what is executing across every tab.
+///
+/// One window it does not cover, deliberately: between setting the request here and the engine
+/// dispatching it, `is_running` is still false. A second press landing in that gap supersedes the
+/// first, which the engine already settles as `superseded by a newer run` — a stop, not a fault
+/// (AGENTS.md §2), so the outcome is the run the user last asked for and nothing to report.
+///
+/// Not the Run *button*: it wears Cancel while a run is in flight, so there is nothing there to
+/// gate, and it presses [`press_query`] directly.
+pub fn run_query(engine: &EngineCtx, session: Radio<SessionState, Chan>, id: TabId) {
+    if engine.is_running(id.into()) {
+        return;
+    }
+    press_query(session, id, QueryMode::Run);
+}
+
 /// Load `sql` into the tab's buffer, replacing what it held — the History drawer's click
 /// (P3-14), and the first half of its double-click, which then calls [`press_query`].
 ///

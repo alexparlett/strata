@@ -1029,6 +1029,21 @@
             }
           }
         },
+        "keycap": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "header_bar": {
           "type": "object",
           "additionalProperties": false,
@@ -1136,15 +1151,6 @@
               "$ref": "#/$defs/colorPref"
             },
             "table_selection_background": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "keycap_background": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "keycap_border_fill": {
-              "$ref": "#/$defs/colorPref"
-            },
-            "keycap_color": {
               "$ref": "#/$defs/colorPref"
             },
             "slot_border_fill": {
@@ -1940,6 +1946,45 @@
               "$ref": "#/$defs/colorPref"
             },
             "empty_color": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
+        "command_palette": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "backdrop": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "row_active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "row_active_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "row_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "icon_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "sub_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "esc_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "shadow": {
               "$ref": "#/$defs/colorPref"
             }
           }

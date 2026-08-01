@@ -3,6 +3,7 @@
 //! inline SVG.
 
 use freya::prelude::*;
+use strata_model::CatalogKind;
 
 /// The app's icon set (grown as views need them). Each maps to the design comp's SVG.
 #[derive(PartialEq, Clone, Copy)]
@@ -68,6 +69,20 @@ pub enum IconName {
 }
 
 impl IconName {
+    /// The glyph for a catalog row's kind — the sidebar's rows and the command palette's, which
+    /// list the same things and so must mark them the same way.
+    ///
+    /// The mapping only, never the colour: the sidebar tints from the `catalog` theme and the
+    /// palette from its own, exactly as [`kind_color`](super::type_palette::kind_color) is one
+    /// mapping whose consumers each choose where to paint it.
+    pub fn for_catalog(kind: CatalogKind) -> Self {
+        match kind {
+            CatalogKind::Table => IconName::Database,
+            CatalogKind::View => IconName::Eye,
+            CatalogKind::Query => IconName::Brackets,
+        }
+    }
+
     fn svg(self) -> &'static str {
         match self {
             IconName::Play => PLAY,

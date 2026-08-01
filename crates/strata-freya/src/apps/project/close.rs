@@ -229,6 +229,36 @@ pub fn use_engineless_close(
     (close, closing)
 }
 
+/// Close this **window** through the close-while-running confirm — [`TabCloser::close`]'s
+/// window-scoped peer, and the gate every deliberate window close shares: ⇧⌘W, File ▸ Close
+/// Project, and the command palette's Close project row. (The red button reaches the same
+/// dialog by a different road: the `on_close` hook vetoes with [`Veto::Confirm`] and the root
+/// drains it into the same slot.)
+///
+/// The predicate is the hook's, exactly — the engine's own in-flight flag plus
+/// `confirm_close_running` — because AGENTS.md §2 requires every path that destroys a window's
+/// work to ask on the same terms. It lives here, beside the tab gate it mirrors, rather than
+/// inline at a call site: it was inline in `ProjectApp`'s shortcut handler, which is a scope the
+/// palette cannot reach, and a second copy of a confirm predicate is how one path ends up
+/// silently skipping the question.
+///
+/// `spawn_forever`, for [`use_engineless_close`]'s reason: the close unmounts the scope the
+/// handler belongs to — for the palette, its own overlay, which dismisses itself in the same
+/// breath — and scope teardown drops that scope's tasks before they are ever polled.
+pub fn close_project(
+    guard: &CloseGuard,
+    config: ConfigStation,
+    mut confirm: State<Option<CloseTarget>>,
+    platform: Platform,
+    app: AppCtx,
+) {
+    if guard.running.load(Ordering::Relaxed) && config.peek().settings.confirm_close_running {
+        confirm.set(Some(CloseTarget::Window));
+    } else {
+        spawn_forever(close_this_window(platform, app));
+    }
+}
+
 /// Close one tab through the close-while-running confirm — the gate **every**
 /// single-tab close path shares: ⌘W, the tab's × button, the tab context menu's Close,
 /// and the nav dropdown's ×. Provided into context by the workbench; bulk closes (close

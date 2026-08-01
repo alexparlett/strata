@@ -327,6 +327,17 @@ impl SessionState {
         self.layout.drawer = (self.layout.drawer != Some(tab)).then_some(tab);
     }
 
+    /// Show the drawer on `tab` — the command palette's **Query history**, and any other
+    /// surface that names a drawer tab rather than offering the rail's toggle.
+    ///
+    /// Not [`toggle_drawer`](Self::toggle_drawer): a rail button says "this pane", so pressing
+    /// the lit one to put it away is the whole gesture, but a palette row says "Query history"
+    /// and has to mean it — asking for the drawer you are already looking at must not collapse
+    /// it. The same distinction [`show_problems_tab`](Self::show_problems_tab) already draws.
+    pub fn open_drawer(&mut self, tab: DrawerTab) {
+        self.layout.drawer = Some(tab);
+    }
+
     /// Collapse the drawer (its header ×).
     pub fn close_drawer(&mut self) {
         self.layout.drawer = None;
@@ -912,8 +923,11 @@ mod tests {
         let mut s = SessionState::default();
         // Defaults: sidebar open on Catalog, inspector open, drawer collapsed.
         assert_eq!(s.layout.sidebar, Some(SidebarPane::Catalog));
-        assert!(s.layout.inspector_open);
+        assert!(!s.layout.inspector_open);
         assert_eq!(s.layout.drawer, None);
+
+        s.open_inspector();
+        assert!(s.layout.inspector_open);
 
         // Toggling the *active* pane collapses the sidebar; toggling while collapsed reopens
         // it on that pane; toggling a *different* pane switches without collapsing.

@@ -274,15 +274,18 @@ runtime, spawns each call onto it, and the caller awaits the `JoinHandle` — so
 thread and Freya's non-Tokio UI executor awaits engine methods like any async fn. There are no channels, no request
 ids and no worker loop; the Dioxus-era `Command`/`Event` protocol was deleted in the port.
 
-The full per-module map is in **[`CLAUDE.md`](CLAUDE.md)**, and the state design in
-[`docs/FREYA_STATE_ARCHITECTURE.md`](docs/FREYA_STATE_ARCHITECTURE.md).
+The full per-module map is in **[`docs/reference/MODULE_MAP.md`](docs/reference/MODULE_MAP.md)**,
+and the state design in [`docs/FREYA_STATE_ARCHITECTURE.md`](docs/FREYA_STATE_ARCHITECTURE.md).
 
 ---
 
 ## Docs
 
-- [`CLAUDE.md`](CLAUDE.md) — build, workspace layout, module map, docs index.
-- [`AGENTS.md`](AGENTS.md) — the engineering bar and every settled convention.
+- [`CLAUDE.md`](CLAUDE.md) — build, workspace layout, docs index, and where to look for the rest.
+- [`AGENTS.md`](AGENTS.md) — the engineering bar and every settled convention, one line each.
+- [`docs/reference/`](docs/reference) — the detail behind both: the module map, the architecture
+  invariants and their reasoning, the Freya UI conventions, the engine model, the fork/git workflow,
+  and what each finished task settled.
 - [`docs/FREYA_PORT_PLAN.md`](docs/FREYA_PORT_PLAN.md) — why the migration, and the phased plan.
 - [`docs/FREYA_STATE_ARCHITECTURE.md`](docs/FREYA_STATE_ARCHITECTURE.md) — the per-window state design.
 - [`docs/SNAPSHOT_SPEC.md`](docs/SNAPSHOT_SPEC.md) — the result-snapshot read model.

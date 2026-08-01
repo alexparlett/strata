@@ -36,6 +36,10 @@ tokio = { version = "1", default-features = false, features = ["sync", "macros"]
 # Our owned code-editor surface (vendored from freya-code-editor; see the crate's lib.rs).
 strata-code-editor = { path = "../strata-code-editor" }
 
+# The command palette's registration mechanism: one declaration site per command, carrying its
+# metadata and its body together (`apps::project::commands`).
+strata-command-macro = { path = "../strata-command-macro" }
+
 # The SQL grammar fed to the editor (derekstride/tree-sitter-sql). Its handle comes via
 # tree-sitter-language, so `LANGUAGE` drops into `EditorLanguage::new` with no direct tree-sitter dep.
 tree-sitter-sequel = "0.3"

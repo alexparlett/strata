@@ -32,8 +32,9 @@ use crate::apps::settings::{
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::IconName;
+use crate::components::keycap::KeyCap;
 use crate::components::tool_button::ToolButton;
-use crate::components::typography::{Control, MonoValue, Prose};
+use crate::components::typography::{Control, Prose};
 
 /// The header strip and a row, matching the Engine pane's grid — one height across the window's
 /// two tables. The canvas states a 30px floor for a keymap row and then fills it with 24px caps
@@ -44,14 +45,8 @@ const ROW_HEIGHT: f32 = 34.;
 /// The Shortcut column (canvas `width: 240px`), and the inset both columns share.
 const SHORTCUT_WIDTH: f32 = 240.;
 const CELL_INSET: f32 = 16.;
-/// A key cap: its floor (a single character still reads as a key), its height and its inset.
-const CAP_MIN_WIDTH: f32 = 22.;
-const CAP_HEIGHT: f32 = 24.;
-const CAP_INSET: f32 = 8.;
-/// The heavier bottom edge that makes a cap read as a key rather than a chip.
-const CAP_EDGE: f32 = 1.;
-const CAP_BOTTOM_EDGE: f32 = 2.;
-/// The gap between two caps of one chord, and between the chord and what sits beside it.
+/// The gap between two caps of one chord, and between the chord and what sits beside it. (A cap's
+/// own box is [`KeyCap`]'s — this grid only says how its caps are spaced.)
 const CAP_GAP: f32 = 4.;
 const SHORTCUT_GAP: f32 = 8.;
 /// The dash pattern on an empty slot's edge (canvas `border: 1px dashed`).
@@ -334,29 +329,12 @@ struct Caps {
 
 impl Component for Caps {
     fn render(&self) -> impl IntoElement {
-        let theme = settings_theme();
+        // One `KeyCap` per key, which is this grid's presentation of a chord — the palette shows
+        // the same chord as a single flat chip. The cap itself is shared, so the two windows
+        // cannot end up drawing a key two ways (`components::keycap`).
         let mut row = rect().horizontal().spacing(CAP_GAP);
         for cap in &self.caps {
-            row = row.child(
-                rect()
-                    .min_width(Size::px(CAP_MIN_WIDTH))
-                    .height(Size::px(CAP_HEIGHT))
-                    .padding(Gaps::new(0., CAP_INSET, 0., CAP_INSET))
-                    .center()
-                    .corner_radius(PILL_RADIUS)
-                    .background(theme.keycap_background)
-                    .border(
-                        Border::new()
-                            .width(BorderWidth {
-                                top: CAP_EDGE,
-                                right: CAP_EDGE,
-                                bottom: CAP_BOTTOM_EDGE,
-                                left: CAP_EDGE,
-                            })
-                            .fill(theme.keycap_border_fill),
-                    )
-                    .child(MonoValue::new(cap.clone()).color(theme.keycap_color)),
-            );
+            row = row.child(KeyCap::key(cap.clone()));
         }
         row
     }
