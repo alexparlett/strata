@@ -211,6 +211,38 @@
         "reference": "warning"
       }
     },
+    "agents": {
+      "name_color": {
+        "reference": "text_primary"
+      },
+      "session_color": {
+        "reference": "text_control"
+      },
+      "chevron_color": {
+        "reference": "disabled"
+      },
+      "meta_color": {
+        "reference": "disabled"
+      },
+      "figures_color": {
+        "reference": "text_muted"
+      },
+      "sql_color": {
+        "reference": "text_secondary"
+      },
+      "card_hover_fill": {
+        "reference": "surface_hover"
+      },
+      "empty_background": {
+        "reference": "surface_primary"
+      },
+      "empty_border_fill": {
+        "reference": "border_control"
+      },
+      "empty_color": {
+        "reference": "text_placeholder"
+      }
+    },
     "cell_view": {
       "backdrop": {
         "reference": "overlay"
@@ -840,7 +872,12 @@
         "specific": 4
       },
       "padding": {
-        "specific": [3, 8, 3, 8]
+        "specific": [
+          3,
+          8,
+          3,
+          8
+        ]
       },
       "color": {
         "reference": "text_secondary"

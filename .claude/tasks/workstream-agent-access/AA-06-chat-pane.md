@@ -5,7 +5,8 @@
 ## Goal
 The native conversation surface: a right-side pane in the project window where the user talks
 to an assistant that investigates their data — with every assistant query landing as an agent
-tab, exactly like MCP-driven ones. Spec §9 is the forward design; this task is large and may
+tab — the gesture a pane *in* the window may offer, where an MCP client's runs stay in
+query sessions of their own (AA-03b). Spec §9 is the forward design; this task is large and may
 graduate to its own workstream once started (if it does, this file becomes that workstream's
 seed and the AA README links out).
 
@@ -31,7 +32,8 @@ decision and reasoning here before building.
 - **Context attachment:** `@`-mention catalog objects (tables, views, saved queries) to pin
   their schemas into the conversation — answered from the same `describe_table` path, never a
   second schema serializer.
-- **Execution surface stays the tab strip:** assistant queries are agent tabs; the transcript
+- **Execution surface:** assistant queries are real runs in their own query sessions, which
+  the pane may deliberately promote into a tab (`actions::open_sql`); the transcript
   shows compact step cards (SQL · row count · elapsed) that focus the tab on press; inline
   mini-results for small answers with "open in tab" for anything bigger.
 - **Rendering:** the fork ships `freya-markdown` — evaluate it for transcript rendering before

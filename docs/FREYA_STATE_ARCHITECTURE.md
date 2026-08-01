@@ -413,9 +413,9 @@ own `Err` state (freya-query `Settled`), not through an event side-channel; genu
 
 ---
 
-## 8. Layout & log satellites
+## 8. Layout, log & agents satellites
 
-Both are small context signals, not Radio stations:
+All small context signals, not Radio stations:
 
 - **`LayoutCtx = State<Layout>`** — `{ sidebar_open, inspector_open, drawer_open, panel_sizes }`.
   A resize handle / toggle writes it directly (`layout.write().panel_sizes = …`); no action, no
@@ -435,6 +435,24 @@ Both are small context signals, not Radio stations:
   `Err("cancelled")` settle lands unsubscribed — the trigger is cleared in the same pass), and a
   tab's request keeper records a run's outcome. Adding a surface means capturing the `LogCtx` at
   render time and calling `log_event`.
+
+- **`AgentsCtx = State<Agents>`** — what each connected agent is doing in this project, behind
+  the sidebar's Agents pane. Built with **AA-03b** (`state/agents.rs`): per connected agent, its
+  query sessions, and per session a capped newest-first trail of runs (SQL + outcome + when).
+  Ephemeral, never persisted, and capped both ways (runs per session, sessions per agent).
+
+  It is a satellite for the same reason the log is, plus one of its own: an agent owns **no
+  tabs**, so there is nothing of it in `SessionSnapshot` to exclude and reopening a project
+  cannot restore work the user never asked for. It is also deliberately kept out of
+  `history.jsonl`, which is capped and deduped before the cap — exploratory agent queries would
+  evict runs the user actually made. History records what *the user* ran, and a promoted agent
+  query, run by a press, enters it the ordinary way.
+
+  **Appended by its observer**, like the log: the window's agent driver took the ask that opened
+  the session and the notice that settled the run, so the driver is what appends. A settle is
+  matched on the sequence number the dispatch minted rather than on "the newest run", because an
+  agent that presses on before a slow query finishes would otherwise have the older outcome
+  stamped onto the newer row.
 
   **No `origin` field.** An earlier draft of this section called for a level *and* an origin, so
   views could filter. The level is real — it is the dot. The origin is not: every message already
@@ -524,6 +542,7 @@ apps/project/
     catalog.rs      CatalogSelection — the inspected column (context signal, P3-02)
     channel.rs      Chan + RadioChannel impl
     history.rs      the query-history satellite
+    agents.rs       the agents satellite (AA-03b) — what each connected agent is doing
     hooks.rs        use_init_session / use_init_project / use_init_history / use_autosave
     mod.rs          typed accessors
   query/

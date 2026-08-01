@@ -16,6 +16,12 @@
 //!                             functions), so bulk reads never queue behind UI work
 //! ```
 //!
+//! An agent's work lives in **query sessions** of its own (AA-03b) — not in the user's
+//! editor tabs, which AA-03 tried and which put an agent's twenty-step investigation in the
+//! window somebody was working in. A query session maps onto the engine's `WsId`, so the
+//! runs stay real (same engine, same snapshots, same supersede) while the attention stays
+//! the user's; the app shows them in its Agents pane and promotes one into a tab on request.
+//!
 //! Read-only in v1, the editor's managed-DDL policy exactly: `SELECT` / `EXPLAIN` / `SHOW` /
 //! `DESCRIBE` pass and everything else is refused with the message the editor shows. The
 //! gate is AA-01's export of the editor's own predicate, applied **before dispatch** — one
@@ -31,8 +37,8 @@ pub mod wire;
 
 pub use error::AgentError;
 pub use host::{
-    CatalogEntry, Described, Host, Project, RegState, RunMode, RunSettle, Settled, TabInfo,
-    TabState,
+    Agent, AgentId, AgentIdentity, CatalogEntry, Described, Host, Project, QuerySessionId,
+    QuerySessionInfo, QuerySessionState, RegState, RunMode, RunSettle, Settled,
 };
 pub use server::{mint_token, AgentServer, MCP_PATH};
 pub use tools::{StrataTools, MAX_PAGE_SIZE};

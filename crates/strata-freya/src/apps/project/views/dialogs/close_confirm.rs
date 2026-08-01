@@ -14,7 +14,10 @@ use freya::radio::{use_radio, use_radio_station};
 use strata_core::util::folder_name;
 
 use crate::apps::project::close::CloseTarget;
-use crate::apps::project::state::{Chan, EngineRestart, ProjChan, ProjectState, SessionState};
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::state::{
+    Agents, AgentsCtx, Chan, EngineRestart, ProjChan, ProjectState, SessionState,
+};
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
@@ -49,6 +52,9 @@ impl Component for CloseConfirm {
         let restart = use_consume::<EngineRestart>();
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let project = use_radio_station::<ProjectState, ProjChan>();
+        // Whose work is actually in flight — see `agent_work_only`.
+        let engine = use_consume::<EngineCtx>();
+        let agents = use_consume::<AgentsCtx>();
         let config = use_config_station();
         let settings = use_config(ConfigChan::Settings);
         let theme = use_theme();
@@ -128,12 +134,22 @@ impl Component for CloseConfirm {
             return rect().into_element();
         };
 
+        // **Whose** queries these are. The gate itself is unchanged and must be — it is the
+        // engine's own engine-wide flag (AGENTS.md §2), and excluding an agent's work would
+        // mean a second, weaker predicate plus a long investigation destroyed with no notice.
+        // What changes is the sentence: "Queries are running" shown to somebody who pressed
+        // Run on nothing sends them looking for a query they never started.
+        let agent_only = agent_work_only(&engine, &radio.read(), &agents.read());
+
         // The canvas copy, per variant (`ccIsProject`) — plus the re-root, which is the
         // window variant's question about a project rather than the app.
         let (title, body, keep, action, action_icon) = match target {
             CloseTarget::Window => (
                 "Confirm exit",
-                "Queries are running. Are you sure you want to stop them and exit?",
+                match agent_only {
+                    true => "An agent is running a query. Stop it and exit?",
+                    false => "Queries are running. Are you sure you want to stop them and exit?",
+                },
                 "Cancel",
                 "Stop & exit",
                 IconName::LogOut,
@@ -147,7 +163,13 @@ impl Component for CloseConfirm {
             ),
             CloseTarget::Reroot(_) => (
                 "Confirm open",
-                "Queries are running. Are you sure you want to stop them and open another project?",
+                match agent_only {
+                    true => "An agent is running a query. Stop it and open another project?",
+                    false => {
+                        "Queries are running. Are you sure you want to stop them and open \
+                         another project?"
+                    }
+                },
                 "Cancel",
                 "Stop & open",
                 IconName::Stop,
@@ -262,4 +284,27 @@ impl Component for CloseConfirm {
             )
             .into_element()
     }
+}
+
+/// Is the work in flight **only** an agent's?
+///
+/// Asked of the engine on both sides, never of mounted UI: a tab is a workspace and so is a
+/// query session, so this is one question (`is_running`) put to two sets of `WsId`s. Deciding
+/// it from the satellite's own `Running` record instead would be a second answer to a question
+/// the engine already owns — and the one that goes stale.
+///
+/// It chooses a *sentence*, not whether to ask. AA-03b considered not confirming at all for
+/// agent-only work; it reads well ("it isn't the user's query") and costs the one property
+/// that makes the confirm trustworthy — that the app never destroys work in flight without
+/// saying so.
+fn agent_work_only(engine: &EngineCtx, session: &SessionState, agents: &Agents) -> bool {
+    let mine = session
+        .tabs
+        .keys()
+        .any(|tab| engine.is_running((*tab).into()));
+    let theirs = agents
+        .sessions()
+        .into_iter()
+        .any(|s| engine.is_running(s.into()));
+    theirs && !mine
 }

@@ -12,8 +12,9 @@
 //!   `CellFormat` — the same text the grid shows — so numbers come back as strings and a
 //!   null becomes JSON `null` rather than the configured NULL rendering, which is
 //!   presentation.
-//! - **A tab handle is its `TabId` as text.** Not a parallel id scheme: it is the tab's own
-//!   `Uuid`, so a handle from `open_tab` and a handle from `list_tabs` are the same thing.
+//! - **A query-session handle is its `QuerySessionId` as text.** Not a parallel id scheme:
+//!   it is the session's own `Uuid` — the same one the engine uses as its `WsId` — so a
+//!   handle from `open_query_session` and one from `list_query_sessions` are the same thing.
 
 use std::sync::Arc;
 
@@ -23,7 +24,9 @@ use strata_core::engine::plan::QueryPlan;
 use strata_core::engine::sql::{FunctionCatalog, FunctionSym};
 use strata_model::{Cell, ColumnInfo, Diagnostic, Kind, QueryOutput, Severity, Stat, StatKey};
 
-use crate::host::{CatalogEntry, Described, Project, RegState, RunMode, TabInfo, TabState};
+use crate::host::{
+    CatalogEntry, Described, Project, QuerySessionInfo, QuerySessionState, RegState, RunMode,
+};
 
 /// A result's columns, shared rather than copied.
 ///
@@ -68,20 +71,20 @@ pub struct ValidateParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct TabParams {
-    /// A tab handle from `open_tab` or `list_tabs`.
-    pub tab: String,
+pub struct QuerySessionParams {
+    /// A handle from `open_query_session` or `list_query_sessions`.
+    pub query_session: String,
     #[serde(default)]
     pub project: Option<String>,
 }
 
 /// `run` on the wire. `mode` is a parameter rather than a second tool because the two share
-/// every other argument and the tab they land in.
+/// every other argument and the query session they run in.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunParams {
-    /// A tab handle from `open_tab` or `list_tabs`. The run replaces whatever that tab was
-    /// showing, exactly as pressing Run in the app would.
-    pub tab: String,
+    /// A handle from `open_query_session` or `list_query_sessions`. The run replaces
+    /// whatever that session last produced.
+    pub query_session: String,
     /// The statement to run. Read-only: SELECT, EXPLAIN, SHOW and DESCRIBE only.
     pub sql: String,
     /// `run` (default) executes and returns page 1; `explain` returns the plan and
@@ -116,9 +119,9 @@ impl From<Mode> for RunMode {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadPageParams {
-    /// A tab handle whose last run settled with rows.
-    pub tab: String,
-    /// 1-based page number over the tab's settled snapshot.
+    /// A query-session handle whose last run settled with rows.
+    pub query_session: String,
+    /// 1-based page number over that session's settled snapshot.
     pub page: usize,
     /// Order the whole snapshot before the page window is taken.
     #[serde(default)]
@@ -523,26 +526,24 @@ pub enum SeverityWire {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct TabsResult {
-    pub tabs: Vec<TabWire>,
+pub struct QuerySessionsResult {
+    pub query_sessions: Vec<QuerySessionWire>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct TabWire {
-    pub tab: String,
-    pub title: String,
-    pub state: TabStateWire,
+pub struct QuerySessionWire {
+    pub query_session: String,
+    pub state: QuerySessionStateWire,
 }
 
-impl From<TabInfo> for TabWire {
-    fn from(t: TabInfo) -> TabWire {
-        TabWire {
-            tab: t.tab.0.to_string(),
-            title: t.title,
-            state: match t.state {
-                TabState::Empty => TabStateWire::Empty,
-                TabState::Running => TabStateWire::Running,
-                TabState::Settled => TabStateWire::Settled,
+impl From<QuerySessionInfo> for QuerySessionWire {
+    fn from(s: QuerySessionInfo) -> QuerySessionWire {
+        QuerySessionWire {
+            query_session: s.session.0.to_string(),
+            state: match s.state {
+                QuerySessionState::Empty => QuerySessionStateWire::Empty,
+                QuerySessionState::Running => QuerySessionStateWire::Running,
+                QuerySessionState::Settled => QuerySessionStateWire::Settled,
             },
         }
     }
@@ -550,15 +551,15 @@ impl From<TabInfo> for TabWire {
 
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum TabStateWire {
+pub enum QuerySessionStateWire {
     Empty,
     Running,
     Settled,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct TabResult {
-    pub tab: String,
+pub struct QuerySessionResult {
+    pub query_session: String,
 }
 
 /// What a `run` settled as. **A stop is a status, not an error**: a cancel in the app or a
@@ -579,7 +580,7 @@ pub struct TabResult {
 #[schemars(extend("type" = "object"))]
 pub enum RunResult {
     Ok {
-        tab: String,
+        query_session: String,
         columns: Columns,
         /// Page 1. A cell is `null` or its formatted text.
         rows: Vec<Vec<Option<String>>>,
@@ -590,7 +591,7 @@ pub enum RunResult {
         elapsed_ms: u64,
     },
     Plan {
-        tab: String,
+        query_session: String,
         /// True when the statement was `EXPLAIN ANALYZE`, so the physical plan carries
         /// per-operator metrics.
         analyze: bool,
@@ -598,14 +599,14 @@ pub enum RunResult {
         physical: String,
     },
     Stopped {
-        tab: String,
+        query_session: String,
         reason: String,
     },
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PageResult {
-    pub tab: String,
+    pub query_session: String,
     pub columns: Columns,
     pub rows: Vec<Vec<Option<String>>>,
     pub total: usize,
@@ -617,9 +618,9 @@ pub struct PageResult {
 /// and the one an agent can read. The app's structured `PlanNode` list exists to be
 /// *drawn* (it carries accent colours and time-share bars); over the wire it would be the
 /// same tree twice, once in a shape nothing off-screen can use.
-pub fn plan_result(tab: String, plan: QueryPlan) -> RunResult {
+pub fn plan_result(query_session: String, plan: QueryPlan) -> RunResult {
     RunResult::Plan {
-        tab,
+        query_session,
         analyze: plan.analyze,
         logical: plan.logical_text,
         physical: plan.physical_text,
@@ -628,9 +629,9 @@ pub fn plan_result(tab: String, plan: QueryPlan) -> RunResult {
 
 /// `columns` is passed in rather than derived here, so the caller can hand the same
 /// [`Columns`] to the cache `read_page` will answer from — one conversion per result.
-pub fn rows_result(tab: String, columns: Columns, output: QueryOutput) -> RunResult {
+pub fn rows_result(query_session: String, columns: Columns, output: QueryOutput) -> RunResult {
     RunResult::Ok {
-        tab,
+        query_session,
         columns,
         rows: cells(&output.rows),
         total: output.total,
@@ -728,8 +729,8 @@ mod tests {
         object_schema::<DescribeResult>("DescribeResult");
         object_schema::<FunctionsResult>("FunctionsResult");
         object_schema::<ValidateResult>("ValidateResult");
-        object_schema::<TabResult>("TabResult");
-        object_schema::<TabsResult>("TabsResult");
+        object_schema::<QuerySessionResult>("QuerySessionResult");
+        object_schema::<QuerySessionsResult>("QuerySessionsResult");
         object_schema::<RunResult>("RunResult");
         object_schema::<PageResult>("PageResult");
     }

@@ -267,37 +267,52 @@ Things that must not regress. Each was fought for once already.
   retired it). The one thing `read_page` deliberately does **not** do is pin: a pin is right
   for an export window, which owes the user the rows it was opened on, and wrong for a
   long-lived server, where the honest answer is that the tab has moved on.
-- **An agent drives the app through the app's own funnels; only a *gate* may be skipped, and
-  only when the gate is a question for the user.** The in-app host (AA-03) is a `Host` impl over
-  a cross-thread service directory each project window registers with, plus a serial driver on
-  the window that turns an ask into a Radio read or write. Every action it performs is the one a
-  person's would reach: `open_blank` opens the tab, `actions::load_sql` **then** `set_request`
-  runs the query — the History drawer's double-press exactly, and load-bearing rather than tidy,
-  because setting the request alone left the tab showing results over an *empty editor*, which
-  is the whole premise of landing agent queries in real tabs undone. `close_one` plus the root's
-  tab-diff cleanup closes the tab, which is what cancels a running press the ordinary way. The
-  one thing skipped is the **T2 confirm**, because it asks the *user* whether to destroy work
-  and neither answer serves a tool call: replying Ok while a dialog decides reports a tab closed
-  that is still open, and waiting on the dialog is the blocks-on-a-modal shape the spec already
-  refuses for profiling. Three more rules the seam holds. A run's reply is **parked**, not
-  awaited — the driver sets the request and moves on, and an *agent keeper* (`views::agent_keeper`,
-  the `RequestKeepers` pattern on a second question) completes the oneshot on settle, so one ask
-  at a time costs nothing. A registration is per **mount** of the project subtree and keyed by a
-  minted id rather than by the project root, since an engine restart remounts at the same root
-  and keying on it would make Freya's drop-before-mount ordering load-bearing for correctness.
-  And this directory is **not** the registry §4 rules out: that rule governs reactive UI state
-  threaded through one value, and this is a DI seam between threads, where context cannot reach.
+- **An agent drives the app through the app's own funnels, and works in a surface of its own;
+  only a *gate* may be skipped, and only when the gate is a question for the user.** The in-app
+  host (AA-03/AA-03b) is a `Host` impl over a cross-thread service directory each project window
+  registers with, plus a serial driver on the window. An agent's run is dispatched **straight at
+  the engine**, on its query session's own `WsId` — a real execution (same snapshot lifecycle,
+  same supersede, same cancel) that touches nothing of the user's — and the window brackets it:
+  `RunStarting` before (does this agent hold this session, and record what ran), `RunSettled`
+  after. Bringing an agent's query into the user's editor is the *user's* gesture, a press on a
+  run row through `actions::open_sql` — which opens a **new** tab, never the active one: the
+  History drawer loads into the tab you are in because being there *is* the ask, while an
+  agent's run arrives in a surface you were only looking at, and overwriting that buffer is the
+  exact harm the pane exists to prevent. There is no double-press-to-run either; promoting puts
+  a query where it can be read, and pressing Run is the user's next decision. The one thing
+  skipped is the **T2 confirm**, because it asks the *user* whether to destroy work and neither
+  answer serves a tool call. Four more rules the seam holds. A settle **names its run** by a
+  sequence number the dispatch minted, never "the newest", or an agent that presses on before a
+  slow query finishes has the older outcome stamped on the newer row. A registration is per
+  **mount** of the project subtree and keyed by a minted id rather than by the project root,
+  since an engine restart remounts at the same root. The **channels are two**, and the split is
+  load-bearing: asks are bounded and awaited (honest backpressure for a tool call), notices are
+  unbounded and one-way, because the most important of them is sent from a `Drop` — a connection
+  ending, with nothing to await on and nowhere to report a failure to. And this directory is
+  **not** the registry §4 rules out: that rule governs reactive UI state threaded through one
+  value, and this is a DI seam between threads, where context cannot reach.
 - **An agent that is not *in* the window does not write the window's state; it gets a surface of
-  its own.** AA-03 landed MCP runs in the user's own `QueryTab`s ("the investigation trail *is*
-  the tab strip") and using it showed the premise was wrong for a frontend that lives in a
-  terminal: the user is not watching, so an investigation moved the editor out from under them,
-  left tabs they had to close, and cost a diagnostics pass per tab **on the engine their own
-  press needed**. AA-03b moves those runs to an Agents pane and a press promotes one into a real
-  tab through `actions::load_sql`. The runs stay *real* — same engine, same snapshots, same
-  supersede — which is the half of the original decision that was right. The chat pane is the
-  opposite case and keeps the tab gesture, because it is in the window and the user is looking
-  at it. The general rule: **a surface's state belongs to whoever is looking at that surface**,
-  and "shared, last-writer-wins" is a fine rule for *content* and a bad one for *attention*.
+  its own — and the scoping is a type, not a check.** AA-03 landed MCP runs in the user's own
+  `QueryTab`s ("the investigation trail *is* the tab strip") and using it showed the premise was
+  wrong for a frontend that lives in a terminal: the user is not watching, so an investigation
+  moved the editor out from under them, left tabs they had to close, and cost a diagnostics pass
+  per tab **on the engine their own press needed**. Worse, `list_tabs` handed an agent *every*
+  open tab and a `run` on one replaced the buffer the user was typing in. AA-03b moves those runs
+  to **query sessions** of the agent's own, shown in an Agents pane. The fix for the sharp edge is
+  structural rather than a guard: `StrataTools` **is** one agent (the transport asks for one value
+  per client connection, which mints an `AgentId` and retracts it on drop — RAII, the only signal
+  a transport gives), and every session-scoped tool is scoped to that id, so an agent is never
+  handed a handle on another agent's work, let alone on a tab. A handle it does not own answers
+  exactly as one that never existed, deliberately: a distinct "that is not yours" would confirm
+  the session exists. The runs stay *real*, which is the half of the original decision that was
+  right. The chat pane is the opposite case and keeps the tab gesture, because it is in the window
+  and the user is looking at it. The general rule: **a surface's state belongs to whoever is
+  looking at that surface**, and "shared, last-writer-wins" is a fine rule for *content* and a bad
+  one for *attention*. Its corollary reaches the T2 confirm: the gate stays the engine's own
+  answer over *both* sets of workspaces, and only the **sentence** changes — "Queries are running"
+  shown to somebody who pressed Run on nothing sends them looking for a query they never started.
+  Not confirming at all for agent-only work was considered and rejected: it costs the one property
+  that makes the confirm trustworthy.
 - **Poll only what nothing on our side can observe, and name the reason where the poll is.** The
   header's agent dot is the app's one sampled fact: how many MCP clients are paired lives in
   rmcp's `LocalSessionManager`, and a session is created inside `service.handle(req)` — below our

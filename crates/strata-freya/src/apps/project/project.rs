@@ -31,11 +31,12 @@ use crate::apps::project::close::{close_bridge, CloseBridge, CloseGuard, CloseTa
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
     load_project, use_agent_bridge, use_autosave, use_diagnostics, use_engine_config,
-    use_engine_restart, use_init_catalog_selection, use_init_faults, use_init_history,
-    use_init_log, use_init_project, use_init_session, Chan, EngineRestart, Loaded, SessionState,
+    use_engine_restart, use_init_agents, use_init_catalog_selection, use_init_faults,
+    use_init_history, use_init_log, use_init_project, use_init_session, Chan, EngineRestart,
+    Loaded, SessionState,
 };
 use crate::apps::project::views::{
-    AgentKeepers, CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
+    CloseConfirm, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar, OpenPrompt,
     ProfileConfirm, ProfileTarget, ProjectLoadFailed, ProjectLoading, RequestKeepers, Shell,
 };
 use crate::keymap::on_commands;
@@ -592,6 +593,9 @@ impl Component for ProjectLoaded {
         // This project's Session store, from the snapshot the load already restored (tabs /
         // order / active / layout), else one blank tab.
         use_init_session(self.loaded.clone());
+        // What each connected agent is doing in this project (AA-03b) — the satellite behind
+        // the sidebar's Agents pane, stood up before the bridge that records into it.
+        use_init_agents();
         // Lend this project to the agent-access service directory for as long as *this mount*
         // lasts, and drive the asks that come back (AA-03). Here rather than on the window
         // layer because everything it lends — the engine, the two stores, the log — belongs to
@@ -695,11 +699,6 @@ impl Component for ProjectLoaded {
             // on purpose — the invariant is session-scoped, like the tab funnel above,
             // not a property of whichever layout shows the workbench (see `views::keeper`).
             .child(RequestKeepers)
-            // The same pin, asked a different question (AA-03): one subscriber per agent run
-            // whose reply is still owed, so a settle reaches the tool call that asked for it
-            // even after the tab has moved on to a newer press. Same cache identity as the
-            // keeper above, so still one execution.
-            .child(AgentKeepers)
             .child(HeaderBar::new(self.filled_by_app))
             .child(Shell::new())
     }

@@ -1,7 +1,6 @@
 //! The project window's feature views (workbench · sidebar · inspector · drawer). Real, keeper
 //! components built to the `design-handoff/` comps — grown in place, never thrown away.
 
-mod agent_keeper;
 mod configure_launch;
 mod dialogs;
 pub(super) mod drawer;
@@ -12,12 +11,11 @@ mod loading;
 mod rail;
 mod shell;
 mod sidebar;
-/// `pub(super)` for the same reason `drawer` is: the agent bridge (`state::agent`) runs an
-/// agent's SQL through the editor's own `actions`, so the tab it lands in holds the text the
-/// user can then read, edit and re-run.
+/// `pub(super)` for the same reason `drawer` is: the sidebar's Agents pane promotes an
+/// agent's query into the user's own tab through the editor's own `actions`, so it holds the
+/// text they can then read, edit and re-run.
 pub(super) mod workbench;
 
-pub use agent_keeper::AgentKeepers;
 pub use configure_launch::{ConfigureLauncher, ConfigureRequest};
 pub use dialogs::{
     use_profile_actions, CloseConfirm, DropConfirm, DropTarget, OpenPrompt, ProfileActions,
@@ -29,7 +27,7 @@ pub use inspector::InspectorThemePreference;
 pub use keeper::RequestKeepers;
 pub use loading::ProjectLoading;
 pub use shell::Shell;
-pub use sidebar::CatalogThemePreference;
+pub use sidebar::{AgentsThemePreference, CatalogThemePreference};
 pub use workbench::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
     DataGridThemePreference, ExplainPlanThemePreference, RecordViewThemePreference,

@@ -8,10 +8,10 @@
 //!
 //! The engine is **real**: a mock project registers actual tables and `run` actually
 //! executes, so the happy path a test asserts is the one the engine produces. What is faked
-//! is only what a host is: which projects exist, what the catalog says, and which tabs are
-//! open. [`MockProject::settling`] is the one deliberate lever — it makes the next run settle
-//! with an engine string of the test's choosing, which is how "the user cancelled this"
-//! becomes assertable without racing a real cancel.
+//! is only what a host is: which projects exist, what the catalog says, and which query
+//! sessions are open for whom. [`MockProject::settling`] is the one deliberate lever — it
+//! makes the next run settle with an engine string of the test's choosing, which is how "the
+//! user cancelled this" becomes assertable without racing a real cancel.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -20,12 +20,18 @@ use std::sync::{Arc, Mutex};
 
 use strata_core::engine::plan::as_explain;
 use strata_core::engine::{Engine, RunTag, WsId};
-use strata_model::TabId;
 
 use crate::error::AgentError;
 use crate::host::{
-    CatalogEntry, Described, Host, Project, RunMode, RunSettle, Settled, TabInfo, TabState,
+    Agent, AgentId, CatalogEntry, Described, Host, Project, QuerySessionId, QuerySessionInfo,
+    QuerySessionState, RunMode, RunSettle, Settled,
 };
+
+/// One query session the mock is holding, and whose it is.
+struct MockSession {
+    agent: AgentId,
+    info: QuerySessionInfo,
+}
 
 /// One project the mock serves. Build it, register whatever tables the test needs on its
 /// [`engine`](MockProject::engine), then hand it to [`MockHost::new`].
@@ -35,7 +41,7 @@ pub struct MockProject {
     pub engine: Arc<Engine>,
     pub catalog: Vec<CatalogEntry>,
     pub described: Vec<Described>,
-    tabs: Vec<TabInfo>,
+    sessions: Vec<MockSession>,
     settle: Option<String>,
 }
 
@@ -48,7 +54,7 @@ impl MockProject {
             engine: Arc::new(Engine::new(BTreeMap::new())),
             catalog: Vec::new(),
             described: Vec::new(),
-            tabs: Vec::new(),
+            sessions: Vec::new(),
             settle: None,
         }
     }
@@ -85,6 +91,21 @@ impl MockHost {
             page_size: AtomicUsize::new(100),
             runs: AtomicU64::new(0),
         })
+    }
+
+    /// Swap a project's engine, keeping its root — what an engine restart does to a project
+    /// window (P4-07 remounts the subtree at the *same* folder). The lever a test needs to
+    /// reach anything that remembers a per-engine id across a rebuild.
+    pub fn replace_engine(&self, root: &Path, engine: Arc<Engine>) {
+        if let Some(project) = self
+            .projects
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|p| p.root == root)
+        {
+            project.engine = engine;
+        }
     }
 
     /// What [`Host::default_page_size`] answers. Settable because the real one tracks a live
@@ -144,30 +165,57 @@ impl Host for MockHost {
         })
     }
 
-    async fn tabs(&self, project: &Path) -> Result<Vec<TabInfo>, AgentError> {
-        self.with(project, |p| Ok(p.tabs.clone()))
-    }
-
-    async fn open_tab(&self, project: &Path) -> Result<TabId, AgentError> {
+    /// **This agent's** sessions only — the contract's central scoping rule, kept here so a
+    /// host that leaked another agent's work would fail the vocabulary's own tests.
+    async fn query_sessions(
+        &self,
+        project: &Path,
+        agent: AgentId,
+    ) -> Result<Vec<QuerySessionInfo>, AgentError> {
         self.with(project, |p| {
-            let tab = TabId::new();
-            p.tabs.push(TabInfo {
-                tab,
-                title: format!("Query {}", p.tabs.len() + 1),
-                state: TabState::Empty,
-            });
-            Ok(tab)
+            Ok(p.sessions
+                .iter()
+                .filter(|s| s.agent == agent)
+                .map(|s| s.info.clone())
+                .collect())
         })
     }
 
-    async fn close_tab(&self, project: &Path, tab: TabId) -> Result<(), AgentError> {
+    async fn open_query_session(
+        &self,
+        project: &Path,
+        agent: &Agent,
+    ) -> Result<QuerySessionId, AgentError> {
         self.with(project, |p| {
-            match p.tabs.iter().position(|t| t.tab == tab) {
+            let session = QuerySessionId::new();
+            p.sessions.push(MockSession {
+                agent: agent.id,
+                info: QuerySessionInfo {
+                    session,
+                    state: QuerySessionState::Empty,
+                },
+            });
+            Ok(session)
+        })
+    }
+
+    async fn close_query_session(
+        &self,
+        project: &Path,
+        agent: AgentId,
+        session: QuerySessionId,
+    ) -> Result<(), AgentError> {
+        self.with(project, |p| {
+            match p
+                .sessions
+                .iter()
+                .position(|s| s.agent == agent && s.info.session == session)
+            {
                 Some(at) => {
-                    p.tabs.remove(at);
+                    p.sessions.remove(at);
                     Ok(())
                 }
-                None => Err(AgentError::no_such_tab(tab)),
+                None => Err(AgentError::no_such_query_session(session)),
             }
         })
     }
@@ -175,16 +223,21 @@ impl Host for MockHost {
     async fn run(
         &self,
         project: &Path,
-        tab: TabId,
+        agent: AgentId,
+        session: QuerySessionId,
         sql: String,
         mode: RunMode,
         page_size: usize,
     ) -> Result<RunSettle, AgentError> {
-        // Everything that needs the lock, taken before the await — a host answers UI-side
+        // Everything that needs the lock, taken before the await — a host answers its own
         // questions and then waits on the engine, never the other way round.
         let (engine, settle) = self.with(project, |p| {
-            if !p.tabs.iter().any(|t| t.tab == tab) {
-                return Err(AgentError::no_such_tab(tab));
+            if !p
+                .sessions
+                .iter()
+                .any(|s| s.agent == agent && s.info.session == session)
+            {
+                return Err(AgentError::no_such_query_session(session));
             }
             Ok((Arc::clone(&p.engine), p.settle.clone()))
         })?;
@@ -192,7 +245,7 @@ impl Host for MockHost {
             return Ok(Err(error));
         }
 
-        let ws = WsId::from(tab);
+        let ws = WsId::from(session);
         let run = RunTag(self.runs.fetch_add(1, Ordering::Relaxed) as u128);
         let settled = match mode {
             RunMode::Run => engine
@@ -207,15 +260,27 @@ impl Host for MockHost {
                 .map(Settled::Plan),
         };
         // Settled either way. A run that failed is still a run that finished — the dispatch
-        // happened, the previous snapshot went with it, and the tab shows an error. Reporting
-        // it as `Empty` would tell an agent nothing had ever run there.
+        // happened and the previous snapshot went with it. Reporting it as `Empty` would tell
+        // an agent nothing had ever run there.
         self.with(project, |p| {
-            if let Some(t) = p.tabs.iter_mut().find(|t| t.tab == tab) {
-                t.state = TabState::Settled;
+            if let Some(s) = p
+                .sessions
+                .iter_mut()
+                .find(|s| s.agent == agent && s.info.session == session)
+            {
+                s.info.state = QuerySessionState::Settled;
             }
             Ok(())
         })?;
         Ok(settled)
+    }
+
+    /// The connection ended, so its sessions go — in **every** project, since an agent may
+    /// hold sessions in several and none of them outlives it.
+    fn agent_gone(&self, agent: AgentId) {
+        for project in self.projects.lock().unwrap().iter_mut() {
+            project.sessions.retain(|s| s.agent != agent);
+        }
     }
 }
 

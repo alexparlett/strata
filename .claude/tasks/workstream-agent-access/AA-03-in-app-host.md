@@ -63,8 +63,9 @@ the field and nothing would write it back, invalidating the client config on eve
   showed the question was a *symptom*: needing a badge to say "this tab isn't really yours" is
   the tell that the tab should never have been the user's. That, the focus stealing, the tab
   pollution and the per-tab diagnostics cost are one problem, and **AA-03b** is the answer —
-  agent runs move to an Agents pane. The badge, `QueryTab::agent` and the toolbar wiring are
-  gone; `open_background` stays until 03b removes the tab landing entirely.
+  agent runs move to an Agents pane. The badge, `QueryTab::agent` and the toolbar wiring were
+  removed here; `open_background` and the agent keepers went with AA-03b, which removed the tab
+  landing entirely.
 - **The status dot is the app's one polled fact, and the reason is named.** The count lives in
   rmcp's `LocalSessionManager` (whose `sessions` map is `pub`), and a session is created inside
   `service.handle(req)` — below our `serve`, with nothing on our side to observe. Wrapping
@@ -90,7 +91,9 @@ session scratchpad, since an MCP server can only be attached at a client's sessi
 
 - `initialize` → `tools/list` (all ten) → `list_projects` → `list_tables` (failed defs listed
   with their errors) → `describe_table` → `open_tab` → `run` → `read_page` (paged **and**
-  sorted) → `run(mode: explain)` → `close_tab`. ✅
+  sorted) → `run(mode: explain)` → `close_tab`. ✅ *(the last five were renamed by AA-03b —
+  `open_query_session` / `list_query_sessions` / `close_query_session`, and `tab` →
+  `query_session`.)*
 - The run **appears in the window's tab strip**, with its SQL in the editor. ✅ (It appeared with
   an `AGENT` badge too, until that and the whole tab landing were superseded — see above.)
 - Policy gate: `CREATE TABLE …` and `DROP VIEW …` refused with the editor's own message. ✅
@@ -103,7 +106,9 @@ session scratchpad, since an MCP server can only be attached at a client's sessi
 **Not exercised end to end**, and worth doing by hand: a *user* re-run over an agent's in-flight
 press (the `stopped` outcome — the mock covers the mapping, and `stopped_on_purpose` is asked in
 one place), and window-close-mid-ask (`WindowGone` — covered by the directory test, not by a real
-close).
+close). The first of those is **moot under AA-03b**: a user's press and an agent's run are
+different workspaces, so neither can supersede the other; only an agent's own newer run in the
+same query session can.
 
 ## Notes for what follows
 

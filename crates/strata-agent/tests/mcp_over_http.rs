@@ -85,13 +85,13 @@ async fn a_client_lists_the_tools_and_calls_them() {
     assert_eq!(
         names,
         vec![
-            "close_tab",
+            "close_query_session",
             "describe_table",
             "list_functions",
             "list_projects",
+            "list_query_sessions",
             "list_tables",
-            "list_tabs",
-            "open_tab",
+            "open_query_session",
             "read_page",
             "run",
             "validate",
@@ -116,19 +116,22 @@ async fn a_client_lists_the_tools_and_calls_them() {
     let structured = tables.structured_content.expect("structured content");
     assert_eq!(structured["entries"][0]["name"], "people");
 
-    // Open a tab, run in it, and read the second page back — the full agent loop.
+    // Open a query session, run in it, and read the second page back — the full agent loop.
     let opened = client
-        .call_tool(CallToolRequestParams::new("open_tab"))
+        .call_tool(CallToolRequestParams::new("open_query_session"))
         .await
         .unwrap()
         .structured_content
         .expect("structured content");
-    let tab = opened["tab"].as_str().expect("a tab handle").to_string();
+    let session = opened["query_session"]
+        .as_str()
+        .expect("a query-session handle")
+        .to_string();
 
     let run = client
         .call_tool(
             CallToolRequestParams::new("run").with_arguments(
-                json!({ "tab": tab, "sql": "SELECT id FROM people ORDER BY id", "page_size": 1 })
+                json!({ "query_session": session, "sql": "SELECT id FROM people ORDER BY id", "page_size": 1 })
                     .as_object()
                     .unwrap()
                     .clone(),
@@ -145,7 +148,7 @@ async fn a_client_lists_the_tools_and_calls_them() {
     let page = client
         .call_tool(
             CallToolRequestParams::new("read_page").with_arguments(
-                json!({ "tab": tab, "page": 2 })
+                json!({ "query_session": session, "page": 2 })
                     .as_object()
                     .unwrap()
                     .clone(),
@@ -161,7 +164,7 @@ async fn a_client_lists_the_tools_and_calls_them() {
     let refused = client
         .call_tool(
             CallToolRequestParams::new("run").with_arguments(
-                json!({ "tab": tab, "sql": "DROP TABLE people" })
+                json!({ "query_session": session, "sql": "DROP TABLE people" })
                     .as_object()
                     .unwrap()
                     .clone(),

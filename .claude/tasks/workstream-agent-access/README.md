@@ -1,14 +1,14 @@
 # Workstream — Agent access (AA)
 
 Agent-driven access to a project's data: an AI agent (Claude Code first, an in-app assistant
-later) lists the catalog, inspects schemas, and runs read-only SQL — with **every agent query
-landing as a real query tab** on the ordinary press → snapshot machinery, so the investigation
-trail is the tab strip itself.
+later) lists the catalog, inspects schemas, and runs read-only SQL — with **every agent query a
+real run** on the ordinary press → snapshot machinery, shown in the window's Agents pane and
+promotable into a new tab with one press.
 
 **Spec: `docs/AGENT_ACCESS_SPEC.md`** (+ `docs/agent-access-dataflow.mermaid`). Read it first —
-it carries the settled decisions (read-only policy, agent-managed tab handles, shared
-last-writer-wins tabs, one app server with default-to-single-project scoping, cached-stats-only
-profiling) and the **verified** Tokio ↔ Freya bridge design every task here builds on.
+it carries the settled decisions (read-only policy, agent-managed query sessions, one app server
+with default-to-single-project scoping, cached-stats-only profiling) and the **verified**
+Tokio ↔ Freya bridge design every task here builds on.
 
 The architecture in one line: **one read-only tool vocabulary over one UI bridge, with thin
 swappable frontends** — MCP server first (any MCP client is the chat surface), native chat pane
@@ -23,12 +23,18 @@ same UI seam the MCP server does.
 | 01 | Core seams: export the DDL-policy verdict · extract the project registration pass | ✅ | — | — |
 | 02 | `strata-agent` crate: vocabulary + `Host` trait + rmcp server | ✅ | — | 01 |
 | 03 | In-app host: service directory · bridge · agent keepers · server lifecycle | ✅ | — | 02 |
-| 03b | The Agents pane: an agent's work is its own surface, not the user's tabs | ⬜ | — | 03 |
+| 03b | The Agents pane: an agent's work is its own surface, not the user's tabs | ✅ | — | 03 |
+| 03c | Seam hardening: one identity per run, per session, per client | ⬜ | — | 03b |
 | 04 | Settings ▸ Agent access (enable · port · token · status) | ⬜ | — | 03 |
 | 05 | Headless host: `strata mcp <project>` over stdio | ⬜ | — | 01, 02 |
 | 06 | Chat pane (flagship; may graduate to its own workstream) | ⬜ | — | 03 |
 
 ## Why the order
+
+03c is the three defects AA-03b's review left standing, batched because each changes a *shape*
+rather than a line and two of them touch the `Host` trait. It is not a blocker for 04, 05 or 06 —
+but 06 inherits its third finding directly (an in-process caller has no `Mcp-Session-Id`), so
+whoever starts the chat pane should read it first.
 
 01 is pure `strata-core` and unblocks everything: without the exported policy verdict the tool
 layer cannot gate `run` through the editor's own funnel, and without the extracted registration
@@ -42,24 +48,25 @@ client vs Agent SDK sidecar) and reuses everything below it unchanged.
 
 ## Standing rules this workstream inherits (AGENTS.md §2)
 
-- Agent runs are **ordinary presses**: `QuerySpec::query` is the only way a Run subscription is
-  built; cache-entry lifetime is subscriber presence. The bridge adds observers, never a second
-  results pipeline.
+- Agent runs are **real executions on the project's own engine** — same snapshot lifecycle, same
+  supersede, same cancel — dispatched against the query session's `WsId`. Never a second results
+  pipeline, and (since AA-03b) never a press on one of the user's tabs either.
 - The catalog is answered **from the store/defs, never DataFusion introspection**.
 - `stopped_on_purpose` is the only thing that knows a stopped run from a failed one — the tool
   error taxonomy maps every such settle to a non-fault outcome.
 - One funnel per policy: the DDL gate is the editor's own predicate, exported — never a second
   copy in the tool layer.
-- **An agent's action reaches the app through the app's own funnel** (AA-03): a promoted query
-  is `actions::load_sql` then `actions::press_query`, the History drawer's double-press. What an
+- **An agent's action reaches the app through the app's own funnel**: promoting a query is
+  `actions::open_sql` — a new tab, focused, holding ordinary editable text. What an
   agent skips is only the *gate* in front of a funnel where that gate is a question for the user
   — never the funnel itself, or the two ways of doing one thing start to drift.
 - **An agent that is not in the window does not touch the window's state** (AA-03b, reversing
   spec §1 for the MCP frontend). An MCP client is in a terminal, so its runs get their own
   surface — the Agents pane — rather than the user's tabs, which stealing focus, piling up and
-  costing a validation pass each made untenable. The runs stay *real*: same engine, same
-  snapshots, pageable and promotable. The chat pane (AA-06) is the other case and keeps the
-  tab gesture, because it is in the window and the user is looking at it.
+  costing a validation pass each made untenable. Scoping is structural: `StrataTools` *is* one
+  agent, minted per connection and retracted on drop, so an agent is never handed a handle on
+  another's work. The chat pane (AA-06) is the other case and keeps the tab gesture, because it
+  is in the window and the user is looking at it.
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

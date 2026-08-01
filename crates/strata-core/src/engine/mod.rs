@@ -152,6 +152,66 @@ struct InFlight {
     start: Instant,
 }
 
+/// Undoes a dispatch whose caller went away before it could settle.
+///
+/// A dispatch publishes its [`InFlight`] entry *before* awaiting the spawned work, so until
+/// the settle path runs the workspace looks busy. That was safe while every caller was
+/// freya-query, which by design never cancels an execution — but an agent's run (AA-03b) is
+/// awaited inside an MCP request future, and a client cancellation, a dropped connection or
+/// the agent server shutting down all drop it mid-await. Without this the entry is never
+/// removed: [`publish_inflight`](Engine::publish_inflight) latches the window's in-flight flag
+/// on for the engine's life, so every later close, re-root and restart asks the T2 confirm
+/// about a query that finished long ago, `is_running` reports a phantom, and the snapshot the
+/// detached task materialized is never retired.
+///
+/// Armed for the await and [`disarm`](Self::disarm)ed by the settle path, so the ordinary
+/// route pays nothing. The drop repeats the settle path's own `latest` check for the reason
+/// that check exists: a superseded call must not tear down the entry a newer dispatch owns.
+struct DispatchGuard<'a> {
+    engine: &'a Engine,
+    ws: WsId,
+    dispatch: u64,
+    armed: bool,
+}
+
+impl<'a> DispatchGuard<'a> {
+    fn arm(engine: &'a Engine, ws: WsId, dispatch: u64) -> Self {
+        Self {
+            engine,
+            ws,
+            dispatch,
+            armed: true,
+        }
+    }
+
+    /// The dispatch settled on its own terms; leave the entry to the settle path.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for DispatchGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // `lock()` rather than `unwrap()` on the guard: this runs during a drop, which may
+        // itself be an unwind, and a panic there aborts the process.
+        let Ok(mut lc) = self.engine.lifecycle.lock() else {
+            return;
+        };
+        if lc.inflight.get(&self.ws).map(|f| f.dispatch) != Some(self.dispatch) {
+            return;
+        }
+        if let Some(f) = lc.inflight.remove(&self.ws) {
+            // Aborts the detached task and retires whatever it managed to materialize —
+            // the same teardown `cleanup_ws` performs, for the same reason.
+            self.engine.abort_inflight(f);
+        }
+        self.engine.publish_inflight(&lc);
+    }
+}
+
 /// The engine's lifecycle bookkeeping, all under one lock (never held across an await):
 /// which run is in flight per workspace, which snapshot each workspace currently owns, and
 /// which catalog entries are being profiled.
@@ -316,6 +376,29 @@ impl Engine {
         self.lifecycle.lock().unwrap().inflight.contains_key(&ws)
     }
 
+    /// Whether anything **other than a workspace run** is in flight: a profile scan or an
+    /// export.
+    ///
+    /// The close confirm's gate is `watch_inflight`'s flag, which is runs ∪ profiles ∪
+    /// exports — so a surface deciding *whose* work is at stake cannot answer from
+    /// [`is_running`](Engine::is_running) alone. Enumerating the workspaces it knows about and
+    /// assuming the rest is idle is exactly the wrong answer: a scan or an export in flight is
+    /// the user's own work, and a dialog that named an agent instead would ask them to
+    /// destroy it under the wrong sentence.
+    pub fn has_background_work(&self) -> bool {
+        let lc = self.lifecycle.lock().unwrap();
+        !lc.profiles.is_empty() || lc.exports > 0
+    }
+
+    /// This engine's process-unique id — what makes a [`SnapshotId`] meaningful.
+    ///
+    /// Snapshot ids are a **per-engine** counter, so a restart mints `1` again: anything that
+    /// remembers a snapshot across a possible rebuild has to remember which engine minted it,
+    /// or it will read a *different* result that happens to share the number.
+    pub fn id(&self) -> u64 {
+        self.engine_id
+    }
+
     /// The registered SQL functions (the editor's language catalog).
     pub fn functions(&self) -> &FunctionCatalog {
         &self.functions
@@ -461,7 +544,10 @@ impl Engine {
             task
         };
 
+        // Armed for the await, disarmed the moment it returns — see [`DispatchGuard`].
+        let mut guard = DispatchGuard::arm(self, ws, dispatch);
         let joined = task.await;
+        guard.disarm();
 
         let mut lc = self.lifecycle.lock().unwrap();
         // Only the still-latest dispatch may settle workspace state; a newer one has
@@ -572,7 +658,11 @@ impl Engine {
             task
         };
 
+        // Same cancellation hazard as `query`'s — an agent reaches this through
+        // `mode: "explain"`. See [`DispatchGuard`].
+        let mut guard = DispatchGuard::arm(self, ws, dispatch);
         let joined = task.await;
+        guard.disarm();
 
         let mut lc = self.lifecycle.lock().unwrap();
         // By dispatch, not by tag — a repeat dispatch of the same tag owns the entry now
@@ -1277,6 +1367,10 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Waker};
+
     use strata_model::{SourceFormat, StatKey};
 
     use super::*;
@@ -1288,6 +1382,74 @@ mod tests {
     /// A view body whose **profile** is still counting when a test acts on it: 50M distinct
     /// values, aborted within a few dozen milliseconds, so the scan never accumulates far.
     const SLOW_ROWS: &str = "SELECT * FROM generate_series(1, 50000000)";
+
+    /// Drive `fut` to its first await point and hand it back still owned, so a test can drop
+    /// it there. One poll is all it takes: a dispatch's bookkeeping is synchronous and runs
+    /// before the `await` on the spawned work, so after this the entry is published and the
+    /// future is parked exactly where a cancelled caller would abandon it.
+    fn dispatched<F: Future>(fut: F) -> Pin<Box<F>> {
+        let mut fut = Box::pin(fut);
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(
+            fut.as_mut().poll(&mut cx).is_pending(),
+            "the run settled before it could be interrupted"
+        );
+        fut
+    }
+
+    /// **A caller that goes away mid-run leaves the engine idle.**
+    ///
+    /// Every caller used to be freya-query, which never cancels an execution, so `query`
+    /// could publish its in-flight entry and rely on its own settle path to clear it. An
+    /// agent's run (AA-03b) is awaited inside an MCP request future instead, and a client
+    /// cancellation, a dropped connection or the agent server shutting down all drop it
+    /// mid-await. Without `DispatchGuard` the entry survives forever: the window's in-flight
+    /// flag latches on, so every later close, re-root and engine restart raises the
+    /// close-while-running confirm for a query that finished long ago.
+    #[test]
+    fn a_dropped_run_future_does_not_leave_the_workspace_running() {
+        let engine = Engine::new(BTreeMap::new());
+        let ws = WsId(1);
+        let flag = Arc::new(AtomicBool::new(false));
+        engine.watch_inflight(Arc::clone(&flag));
+
+        let running = dispatched(engine.query(ws, RunTag(1), SLOW.into(), 10));
+        assert!(engine.is_running(ws), "the dispatch published");
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "and the window sees work in flight"
+        );
+
+        drop(running);
+
+        assert!(
+            !engine.is_running(ws),
+            "dropping the caller must retract the dispatch, not strand it"
+        );
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "and the close-while-running flag must go back down"
+        );
+    }
+
+    /// The guard must not tear down an entry a **newer** dispatch owns — the same `latest`
+    /// rule the settle path follows, for the same reason.
+    #[test]
+    fn a_dropped_superseded_run_leaves_the_newer_dispatch_alone() {
+        let engine = Engine::new(BTreeMap::new());
+        let ws = WsId(1);
+
+        let first = dispatched(engine.query(ws, RunTag(1), SLOW.into(), 10));
+        // A second dispatch supersedes it and now owns the workspace's entry.
+        let _second = dispatched(engine.query(ws, RunTag(2), SLOW.into(), 10));
+
+        drop(first);
+
+        assert!(
+            engine.is_running(ws),
+            "the superseded caller going away must not cancel the run that replaced it"
+        );
+    }
 
     fn overrides(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs

@@ -33,8 +33,9 @@ history. Open one per window; the app reopens what you had at last quit.
 - **Themes** — `Midnight` (dark) and `Daylight` (light) ship built in; user themes are JSON files in the themes
   directory. See [`docs/FREYA_THEME_SPEC.md`](docs/FREYA_THEME_SPEC.md).
 - **Agent access** — an opt-in MCP server so an AI agent (Claude Code, Cursor, Copilot…) can list your catalog,
-  inspect schemas and run read-only SQL. Every query it runs **lands as a real query tab**, so the investigation
-  trail is the tab strip. See [Agent access](#agent-access) below.
+  inspect schemas and run read-only SQL. Its queries are **real runs** on your engine, shown in the sidebar's
+  **Agents** pane — a press opens any of them in a new tab. Your tabs stay yours. See
+  [Agent access](#agent-access) below.
 - **Managed catalog DDL policy** — the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` **only**. Everything else is
   blocked with a message naming the surface that owns it: `CREATE TABLE` / `CREATE EXTERNAL TABLE` / `INSERT` → Table
   Config, `CREATE VIEW` → Save as view, `DROP` → the catalog, `COPY TO` → Export, `SET`/`RESET` → Settings.
@@ -111,6 +112,12 @@ Strata can serve its own catalog and query engine to an AI agent over the
 [Model Context Protocol](https://modelcontextprotocol.io). The agent lists tables, inspects schemas and runs
 **read-only** SQL — the editor's policy exactly. Its queries are real runs against the same engine, materializing the
 same immutable snapshots your own do, so anything it finds you can page, sort, export or take over.
+
+The agent works in **query sessions** of its own, not in your tabs: the sidebar's **Agents** pane shows each connected
+agent, what it is working on and every query it has run, with the figures each one came back with. Press a query and it
+opens in a **new** tab, yours to read, edit and run. Nothing an agent does opens, focuses or closes a tab of yours, and
+none of it reaches your query history — a query you promote and run goes in there like any other. Only connected agents
+appear: a client that disconnects takes its query sessions with it.
 
 Turn it on in **Settings ▸ Agent access**, which is also where the port and the bearer token live. It is **off by
 default**. The token is minted once and persisted, so a client stays configured across restarts — regenerating it

@@ -1,6 +1,6 @@
 # AA-03b · The Agents pane: an agent's work is its own surface, not the user's tabs
 
-**Workstream:** Agent access · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** AA-03
+**Workstream:** Agent access · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** AA-03
 
 ## Why this exists
 
@@ -95,14 +95,16 @@ is the honest rule: history records what *the user* ran.
 
 `SidebarPane::Agents` beside the catalog, on the rail's top group. Rows from the vocabulary the
 app already has — the catalog's `SidebarRow` for the agent/session level, the History drawer's
-card (SQL preview · figures · age) for a run. A run row is **pressable**: press loads the SQL
-into the active tab, double-press loads and runs, both through `actions::load_sql` /
-`actions::press_query`, so a promoted agent query is an ordinary press with its own nonce and
-its own cache entry. That is the History drawer's model verbatim, which is the point — it is
-already proven and already the gesture the user knows.
+card (SQL preview · figures · age) for a run. A run row is **pressable**: press opens its SQL in
+a **new** tab through `actions::open_sql`, so a promoted agent query is an ordinary scratch tab
+the user can read, edit and run.
+
+> Written before the canvas landed, this section said "loads into the active tab, double-press
+> loads and runs" — the History drawer's model verbatim. Both halves were overruled; see
+> **What the canvas overruled** below.
 
 The header's status dot stays as it is; the pane is where "what is it *doing*" is answered, and
-the dot stays "is anything connected".
+the dot stays "is anything connected". The **rail button** grows a live-agent count.
 
 ### What AA-03 built that this deletes
 
@@ -146,30 +148,123 @@ destroys work in flight without saying so.
 (`Engine::watch_inflight` publishes per dispatch regardless of workspace, so it should — the
 acceptance said "verify, don't assume" and it was not verified).
 
-## Open questions for the design
+## What the design settled (the three open questions, answered)
 
-- **The pane wants a canvas.** CLAUDE.md treats `.dc.html` as the pixel-perfect source of truth
-  and AGENTS.md §5 makes a design call the designer's. Building it from the catalog-row and
-  History-card vocabulary is the honest default, but a new sidebar surface is a design surface.
-- **What identifies an agent in the pane.** MCP's `clientInfo` (name + version) arrives at
-  `initialize` and is the only thing a client tells us about itself. Whether the pane groups by
-  agent or shows a flat run list is a design call that follows the canvas.
-- **Does a query session outlive its MCP session?** The natural rule is no — a client that
-  disconnects takes its query sessions with it, and the pane keeps the *trail* the way the event
-  log keeps events. Worth stating explicitly, because "the agent disconnected but its results are
-  still readable" is a defensible alternative.
+**A canvas arrived mid-task** (design bundle 42, `Strata.dc.html` `data-pane="agents"`, plus a
+CHANGELOG entry that argues the placement). It confirmed the pane's structure and the vocabulary
+it is built from, and overruled two guesses — both changes are in.
+
+- **It is a pane, not a drawer tab**, and the canvas states the rule better than the task did: a
+  drawer is an ephemeral log you consult, while this is a live, navigable tree of connected
+  things you press *into*, which is the catalog's job description. Rail order is Catalog ·
+  **Agents** · Connections, and the Agents button carries a **live-agent count** — accent, not
+  the Problems badge's error tone, because it counts things happening rather than things wrong.
+- **It groups by agent, then by query session**, built from vocabulary the app already has (the
+  catalog's `SidebarRow` for both levels, the History drawer's card for a run). MCP's
+  `clientInfo` is reachable without per-session bookkeeping — an rmcp 3 `#[tool]` method takes a
+  `Peer<RoleServer>` and reads `peer_info()` — so a row reads `claude-code`, with the version in
+  its tooltip and a plain `Agent` stand-in for a client that does not introduce itself. A session
+  row is `Query session N` from a **per-agent monotonic ordinal**: a query session genuinely has
+  no name, but a list of them needs rows a person can tell apart, and every alternative is worse
+  (the handle is a uuid, the newest query repeats the card under it, a *position* renumbers the
+  rest when one closes — which is the one place this diverges from the canvas's `qi + 1`, and it
+  is only visible after a close). Sessions list oldest-first so those ordinals read 1, 2, 3 down
+  the pane; the runs inside one list newest-first, because that is where "what is it doing now"
+  is read.
+- **A query session does not outlive its connection.** RAII on the per-connection service value,
+  which is the only signal a transport gives: `StrataTools` carries a `Connection` whose `Drop`
+  calls `Host::agent_gone`, and the window drops the agent and retires each session's engine
+  workspace. A retraction for an agent nothing ever heard of removes nothing, so the schema-probe
+  instance the transport builds costs a no-op rather than needing a flag to suppress it.
+
+## What the canvas overruled
+
+- **A promoted run opens a *new* tab** — not the active one, which the first build took from the
+  History drawer. The canvas's own comment names the reason and it is the task's own argument:
+  overwriting the buffer the user is working in is the precise harm this pane exists to prevent,
+  and loading into the active tab puts it straight back. The History drawer is the *other* case —
+  being in that tab is itself the ask. `actions::open_sql` is the funnel, composed from
+  `open_blank` + `load_sql` so a promoted query is an ordinary scratch tab in every respect.
+- **No double-press to run** (Alex, on top of the canvas, which still had one). Promoting is
+  putting a query where the user can read it; pressing Run is their next decision, and the tab it
+  lands in has a Run button an inch away. It also removes the only place this surface would have
+  needed to tell one press from two.
+- **No status dot on the agent row** (Alex). The canvas had one, always `--c-ok`; since only
+  connected agents appear it has exactly one value, which is decoration implying a distinction
+  the data does not carry — the same reasoning that left the History drawer's cards without one.
+  A session row still shows `RUNNING`, which *is* a distinction.
+
+## What it settled beyond that
+
+- **The scoping is a type, not a check.** `StrataTools` *is* one agent: the transport's service
+  factory runs once per MCP session and the value it returns is owned by that session's worker
+  for its whole life, so one connection is one `AgentId`. Every session-scoped tool is scoped to
+  it, and the run cache is keyed `(agent, root, session)` — the agent is *in* the key rather than
+  compared against it, because a key is a check that cannot be forgotten. A handle an agent does
+  not own answers exactly as one that never existed: a distinct "that is not yours" would confirm
+  the session exists.
+- **Only `open_query_session` needs the MCP peer.** Identity is wanted exactly once — when a host
+  first has something of this agent's to show — so every other tool is addressed by `AgentId`
+  alone, and `StrataTools::open_session` is the semantic call with no peer in it. That is what
+  keeps the whole vocabulary drivable in-process, which AA-06 needs and which a peer parameter on
+  five tools would have quietly cost.
+- **The run is dispatched by the *directory*, on the engine, and only bracketed by the window.**
+  `RunStarting` before (ownership check + record, replying with the run's sequence number),
+  `RunSettled` after. A settle **names its run** rather than taking the newest: an agent that
+  presses on before a slow query finishes would otherwise have the older outcome stamped on the
+  newer row. And it is what deletes AA-03's keepers outright — a run no longer rides a
+  `QuerySpec`, so there is nothing to observe through freya-query.
+- **Two channels, because one producer cannot wait.** Asks stay bounded and awaited (honest
+  backpressure for a tool call); notices are unbounded and one-way, because the most important of
+  them is sent from a `Drop` with nothing to await on. One serial loop drains both, **asks
+  first**, so a settle can never overtake the dispatch that minted its sequence number. That
+  needed `tokio`'s `macros` feature declared in `strata-freya`'s manifest — it would have
+  compiled either way through `strata-core`'s `full`, and a build that only works because of what
+  another crate happens to ask for is one manifest edit away from not.
+- **The T2 confirm keeps its gate and changes its sentence.** Which work is in flight is derived
+  by asking the engine about the tab `WsId`s and the query-session `WsId`s separately — never
+  from the satellite's own record, which would be a second answer to a question the engine owns.
+  *Not* confirming for agent-only work was rejected: it reads well and costs the one property
+  that makes the confirm trustworthy.
+
+## Deleted, as planned
+
+`views::agent_keeper` (and `AgentRuns`, the parked replies it drained), `SessionState::open_background`,
+and the `load_sql`-then-`set_request` pairing in the bridge's Run arm. `QueryTab::agent` and the
+`AGENT` badge were already gone (AA-03 removed them once the premise underneath was condemned).
 
 ## Acceptance
 
 - An agent's `run` executes, settles and appears in the Agents pane, and **no tab is opened,
-  focused, or validated**.
-- Pressing a run row loads its SQL into the active tab; double-press loads and runs it, as an
-  ordinary press.
+  focused, or validated**. ✅ (structural — nothing in the run path touches `SessionState`)
+- Pressing a run row opens its SQL in a **new** tab, leaving the user's own buffer untouched and
+  running nothing. ✅ (`views/sidebar/agents/run.rs` tests, driven through the real renderer)
 - `read_page` still pages the run's snapshot, and a newer run in that query session still
-  answers "the result was replaced".
-- The user's tab strip is untouched by anything an agent does.
+  answers "the result was replaced". ✅ (`tools.rs` tests, over a real engine)
+- The user's tab strip is untouched by anything an agent does. ✅
 - Unit tests on the satellite (append · cap · the projection the pane renders) with no renderer,
-  the way `state::log` and `state::history` are tested.
+  the way `state::log` and `state::history` are tested. ✅ (`state/agents.rs`, 7)
+- Driven live against the running app over real MCP/JSON-RPC, two clients at once: the whole
+  vocabulary, cross-agent scoping (a second client sees `[]` and a handle it should not have gets
+  the same not-found a made-up one does), the policy refusal, a failed run landing as a red row,
+  and a disconnect. ✅
+- The whole vocabulary still round-trips over the real transport. ✅
+  (`tests/mcp_over_http.rs`, renamed tools and all)
+
+## Left for a later pass
+
+- **Not verified by hand**: that a running agent press trips the window-close confirm at all
+  (`Engine::watch_inflight` publishes per dispatch regardless of workspace, so it should — AA-03
+  said "verify, don't assume" and it was not verified, and this task did not either).
+- **No control reaches into an agent's work from the pane** — no close-session, no cancel-run.
+  Deliberate: those are the agent's own, and a control that reached into somebody else's work
+  would be this task's argument pointed backwards. If it is wanted, it is a design call first.
+
+## Note on the design bundle
+
+The canvas is bundle **42** (`.claude/design-handoff/parquet-viewer-design-concept 42/`), which
+also carries the flattened Export/Configure option groups — unrelated to this task and **not
+built**. Bundle 39 is still in the worktree and is stale for this surface.
 
 ## Note for AA-06 (chat pane)
 
@@ -177,4 +272,6 @@ This is what makes the chat pane's story *better*, not worse. Chat lives in the 
 is looking at it, and "open this in a tab" is a wanted gesture there — so the chat pane can
 promote into a real tab deliberately, using the same `actions::load_sql` funnel this pane uses.
 The distinction that was missing in AA-03 is exactly the one between an agent that is in the
-window and an agent that is not.
+window and an agent that is not. Concretely: it holds a `StrataTools` of its own
+(`StrataTools::new`), introduces itself through `open_session` with an `AgentIdentity` of its
+own making, and needs no MCP peer anywhere.

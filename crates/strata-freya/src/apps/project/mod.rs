@@ -39,8 +39,8 @@ pub use state::{
     refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState, Reg,
 };
 pub use views::{
-    CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
-    DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,
-    HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
-    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
+    CellViewThemePreference, DataGridThemePreference, DrawerThemePreference,
+    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
+    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
