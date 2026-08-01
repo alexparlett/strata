@@ -466,12 +466,33 @@ impl<H: Host> StrataTools<H> {
     /// following this server's own instructions — start with `list_tables` and
     /// `describe_table`, `validate` the SQL, *then* open a session and run — would be retired
     /// in the middle of exactly the workflow it was told to follow.
-    fn touch(&self, caller: &Caller) {
+    ///
+    /// Returns a [`Busy`] guard for the same reason `agent()` does, and the distinction is
+    /// worth keeping: a stamp covers the gap *between* calls, the guard covers a call that is
+    /// slow in itself. Both are needed, and only having the first is what this signature used
+    /// to be.
+    fn touch(&self, caller: &Caller) -> Busy {
         let Caller::Stateless(identity) = caller else {
-            return;
+            return Busy::none();
         };
-        if let Some(entry) = self.roster.live.lock().unwrap().get_mut(identity) {
-            entry.seen = Instant::now();
+        // **Held for the call, not just stamped at its start.** A stamp alone only protects the
+        // gap *between* calls: a `validate` or `list_functions` slower than the sweep interval
+        // would still look idle, because nothing re-stamps while it runs and `busy` stays zero
+        // for a tool that never resolves an `AgentId`. The sweeper would then retract the agent
+        // mid-request and tear its query sessions down under a connection that is still there.
+        //
+        // Deliberately does **not** mint. A client that has never opened a query session has no
+        // roster entry, and giving it one for a catalog read would put a row in the pane for an
+        // agent doing nothing an agent needs an identity for.
+        let mut live = self.roster.live.lock().unwrap();
+        let Some(entry) = live.get_mut(identity) else {
+            return Busy::none();
+        };
+        entry.seen = Instant::now();
+        entry.busy += 1;
+        Busy {
+            roster: Some(Arc::clone(&self.roster)),
+            identity: identity.clone(),
         }
     }
 
@@ -485,21 +506,43 @@ impl<H: Host> StrataTools<H> {
     /// the pane for at most `ttl` after its last call, and never longer.
     ///
     /// Driven by whichever transport can afford a timer — the HTTP server's own runtime
-    /// (`crate::server`), which also calls this with a zero `ttl` as it stops, so turning
-    /// agent access off retracts rather than abandons. There is nothing to drive for stdio or
-    /// in-process, which is why it is called from there rather than started here.
+    /// (`crate::server`). Stopping is [`retire_all`](Self::retire_all)'s job, **not** this one
+    /// with a zero `ttl`: `idle` requires `busy == 0`, so a zero `ttl` would skip precisely the
+    /// agents with work in flight. There is nothing to drive for stdio or in-process, which is
+    /// why it is called from there rather than started here.
     pub fn retire_idle(&self, ttl: Duration) {
         let now = Instant::now();
+        // Never a working agent, however long the call has taken: see [`Live::busy`].
+        self.retire(|entry| entry.busy == 0 && now.duration_since(entry.seen) > ttl);
+    }
+
+    /// Retract **every** stateless agent, working or not — what the server calls as it stops.
+    ///
+    /// Not `retire_idle(Duration::ZERO)`, which was the first attempt and skips exactly the
+    /// agents that matter: `idle` requires `busy == 0`, so a zero `ttl` changes nothing for an
+    /// agent with a call in flight. The runtime is about to be dropped underneath it, and
+    /// [`Busy`]'s drop only decrements a counter — it does not, and must not, retract, because
+    /// on the ordinary path the connection is still there. So the one place that knows every
+    /// connection is ending has to say so itself.
+    ///
+    /// The `busy` guard exists to stop a *housekeeping* sweep destroying live work. Shutdown is
+    /// not housekeeping: the work is going away regardless, and the choice is only whether the
+    /// window hears about it.
+    pub fn retire_all(&self) {
+        self.retire(|_| true);
+    }
+
+    /// Drop every roster entry `doomed` accepts and tell the host about each.
+    fn retire(&self, doomed: impl Fn(&Live) -> bool) {
         let mut retired = Vec::new();
         {
             let mut live = self.roster.live.lock().unwrap();
             live.retain(|_, entry| {
-                // Never a working agent, however long the call has taken: see `Live::busy`.
-                let idle = entry.busy == 0 && now.duration_since(entry.seen) > ttl;
-                if idle {
+                let going = doomed(entry);
+                if going {
                     retired.push(entry.agent);
                 }
-                !idle
+                !going
             });
         }
         // Outside the lock: `agent_gone` reaches every window, and a host is not something to
@@ -605,7 +648,7 @@ impl<H: Host> StrataTools<H> {
     /// optional 'project' naming one of these, needed only when more than one is open.
     #[tool(annotations(read_only_hint = true))]
     async fn list_projects(&self, caller: Caller) -> Json<ProjectsResult> {
-        self.touch(&caller);
+        let _busy = self.touch(&caller);
         Json(ProjectsResult {
             projects: self
                 .host
@@ -626,7 +669,7 @@ impl<H: Host> StrataTools<H> {
         caller: Caller,
         Parameters(params): Parameters<ProjectParams>,
     ) -> Result<Json<TablesResult>, AgentError> {
-        self.touch(&caller);
+        let _busy = self.touch(&caller);
         let project = self.project(params.project.as_deref()).await?;
         let entries = self.host.catalog(&project.root).await?;
         Ok(Json(TablesResult {
@@ -643,7 +686,7 @@ impl<H: Host> StrataTools<H> {
         caller: Caller,
         Parameters(params): Parameters<DescribeTableParams>,
     ) -> Result<Json<DescribeResult>, AgentError> {
-        self.touch(&caller);
+        let _busy = self.touch(&caller);
         let project = self.project(params.project.as_deref()).await?;
         let described = self.host.describe(&project.root, &params.name).await?;
         Ok(Json(DescribeResult::from(described)))
@@ -657,7 +700,7 @@ impl<H: Host> StrataTools<H> {
         caller: Caller,
         Parameters(params): Parameters<ProjectParams>,
     ) -> Result<Json<FunctionsResult>, AgentError> {
-        self.touch(&caller);
+        let _busy = self.touch(&caller);
         let (_, engine) = self.engine(params.project.as_deref()).await?;
         Ok(Json(FunctionsResult::from(engine.functions())))
     }
@@ -670,7 +713,7 @@ impl<H: Host> StrataTools<H> {
         caller: Caller,
         Parameters(params): Parameters<ValidateParams>,
     ) -> Result<Json<ValidateResult>, AgentError> {
-        self.touch(&caller);
+        let _busy = self.touch(&caller);
         let (_, engine) = self.engine(params.project.as_deref()).await?;
         let diagnostics = engine.validate(params.sql).await;
         Ok(Json(ValidateResult {
@@ -1275,6 +1318,87 @@ mod tests {
                 "another agent's session is simply not there: {reached:?}"
             );
         }
+    }
+
+    /// **The idle sweep never takes an agent with a call in flight**, and that is what makes
+    /// `retire_all` a separate method rather than `retire_idle(ZERO)`.
+    ///
+    /// The guard is held by `agent()` for the length of a tool call, so a `run` slower than the
+    /// idle window is not retired out from under itself — the engine would abort its query and
+    /// the vocabulary would report that back as "you stopped this".
+    #[tokio::test]
+    async fn the_idle_sweep_spares_an_agent_with_a_call_in_flight() {
+        let (root, tools) = one_project("busy_sweep").await;
+        let who = AgentIdentity {
+            name: "claude-code".into(),
+            version: "2.1.4".into(),
+        };
+        let caller = Caller::Stateless(who);
+        let (agent, busy) = tools.agent(&caller).unwrap();
+        tools
+            .open_session_as(agent, AgentIdentity::default(), None)
+            .await
+            .unwrap();
+
+        // Everything is stale by any measure, but the call has not finished.
+        tools.retire_idle(Duration::ZERO);
+        assert_eq!(
+            tools.host.query_sessions(&root, agent).await.unwrap().len(),
+            1,
+            "a working agent survives the sweep however long it has taken"
+        );
+
+        // The guard's drop re-stamps, so the window is measured from when the call finished —
+        // an immediate sweep at the real TTL must still spare it.
+        drop(busy);
+        tools.retire_idle(STATELESS_IDLE);
+        assert_eq!(
+            tools.host.query_sessions(&root, agent).await.unwrap().len(),
+            1,
+            "and the idle window restarts when the call ends"
+        );
+
+        // Only once it is genuinely idle.
+        tools.retire_idle(Duration::ZERO);
+        assert!(tools
+            .host
+            .query_sessions(&root, agent)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// **Stopping the server retracts a working agent too.** `retire_idle(ZERO)` cannot do this
+    /// — `idle` requires `busy == 0`, so it skips exactly the agents that matter — and nothing
+    /// else would ever say `agent_gone` for them: the runtime is dropped a moment later, and
+    /// `Busy`'s drop only decrements a counter. Without this the agent's row and its query
+    /// sessions would outlive the server that minted them, holding engine workspaces for the
+    /// window's life.
+    #[tokio::test]
+    async fn stopping_retracts_even_an_agent_mid_call() {
+        let (root, tools) = one_project("retire_all").await;
+        let caller = Caller::Stateless(AgentIdentity {
+            name: "claude-code".into(),
+            version: "2.1.4".into(),
+        });
+        let (agent, _busy) = tools.agent(&caller).unwrap();
+        tools
+            .open_session_as(agent, AgentIdentity::default(), None)
+            .await
+            .unwrap();
+
+        // The guard is deliberately still held — this is the shutdown-mid-request case.
+        tools.retire_all();
+
+        assert!(
+            tools
+                .host
+                .query_sessions(&root, agent)
+                .await
+                .unwrap()
+                .is_empty(),
+            "stopping the server releases a working agent's sessions"
+        );
     }
 
     /// A connection ending takes its query sessions with it — the RAII half of the same

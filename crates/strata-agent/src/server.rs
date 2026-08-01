@@ -158,7 +158,7 @@ impl AgentServer {
             cancel,
             addr,
             sessions,
-            retract: Box::new(move || sweeper.retire_idle(Duration::ZERO)),
+            retract: Box::new(move || sweeper.retire_all()),
         })
     }
 
