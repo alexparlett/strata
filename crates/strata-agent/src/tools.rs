@@ -19,14 +19,18 @@
 //! - **`run` never rewrites SQL.** No injected `LIMIT`: the press materializes exactly what
 //!   a person's would, and the *response* is bounded by `page_size` plus `read_page`.
 //!
-//! ## One value per client connection (AA-03b)
+//! ## One agent per client, and the request says which (AA-03b, corrected by AA-03c)
 //!
-//! A [`StrataTools`] *is* one agent: it carries a [`Connection`], which mints the
-//! [`AgentId`] every session-scoped call is made under and retracts it on drop. The
-//! transport asks for one per client ([`StrataTools::connection`]) and every session-scoped
-//! answer is then scoped by construction rather than by a check somebody has to remember —
-//! which is the AA-03 hole restated as a type: an agent has no handle on another agent's
-//! work, nor on the user's tabs, because it never receives one.
+//! A [`StrataTools`] *is* one agent: it carries a [`Connection`], which mints an [`AgentId`]
+//! and retracts it on drop, and every session-scoped answer is scoped by that id rather than
+//! by a check somebody has to remember — the AA-03 hole restated as a type, so an agent has
+//! no handle on another agent's work, nor on the user's tabs, because it never receives one.
+//!
+//! What AA-03c corrects is *where the id comes from*. A value's lifetime is the connection's
+//! on only some of the transport's paths — rmcp's stateless branch builds one service per
+//! **request** — so the id is resolved from the request through [`Caller`], and this value's
+//! own connection is used only where it has been earned. The scoping is unchanged; what
+//! changed is that it can no longer be silently wrong.
 //!
 //! `Clone` deliberately *shares* the connection (the transport clones one service across a
 //! session's requests); `connection()` is the only thing that starts a new agent.
@@ -35,10 +39,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use http::request::Parts;
+use rmcp::handler::server::common::{AsRequestContext, FromContextPart};
 use rmcp::handler::server::wrapper::{Json, Parameters};
+use rmcp::model::ProtocolVersion;
 use rmcp::service::Peer;
-use rmcp::{tool, tool_handler, tool_router, RoleServer, ServerHandler};
+use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler};
 use strata_core::engine::{stopped_on_purpose, Engine};
 use strata_model::SnapshotId;
 use uuid::Uuid;
@@ -103,6 +111,189 @@ struct LastRun {
     seq: u64,
 }
 
+/// How long a **stateless** agent may go unheard from before it is retracted.
+///
+/// Only the discover lifecycle needs this: every other path has a connection whose end is an
+/// event, so its agent is retracted by a `Drop` rather than by a clock. Matched to rmcp's own
+/// `SessionConfig::keep_alive`, which reaps an abandoned HTTP session on the same terms and
+/// for the same reason — there is no other signal — so the two do not disagree about how long
+/// a quiet client stays listed. Long enough that an agent thinking between tool calls is
+/// never dropped mid-investigation.
+pub const STATELESS_IDLE: Duration = Duration::from_secs(300);
+
+/// Which agent a call is being made as.
+///
+/// **Identity comes from the request, because a service value's lifetime is the connection's
+/// on only some of the transport's paths.** rmcp 3.0.1 serves Streamable HTTP two ways
+/// (`transport::streamable_http_server::tower`): the session lifecycle, where one service
+/// value is owned by the session worker for the client's whole life, and — for a client
+/// negotiating `2026-07-28` or sending per-request `_meta` — the **stateless** branch, where
+/// `get_service()` is called per request and the value is dropped when the response is
+/// written. Minting the id from that value's lifetime makes every request a different agent
+/// on the second branch: `open_query_session` mints a session under one agent and the next
+/// call cannot see it, so the feature is silently dead for that client.
+///
+/// So the value's own agent is used only where it is *earned*, and the request says which:
+///
+/// - a call with no HTTP request behind it at all is stdio (AA-05) or the in-process chat
+///   pane (AA-06), where the value's lifetime genuinely **is** the connection;
+/// - a call rmcp served on its **session** lifecycle, where it is too;
+/// - anything else is stateless, and falls back to the only durable thing such a client
+///   sends.
+///
+/// **The branch is decided by rmcp's own predicate, not by `Mcp-Session-Id`.** That header
+/// looks like the discriminator and is not one: `use_session = legacy_session_mode &&
+/// is_legacy_request(…)` (`tower.rs`), and `is_legacy_request` reads the request's `_meta` and
+/// protocol version and never consults it. A client that still echoes a stale session id
+/// while sending per-request `_meta` takes the stateless branch, so keying on the header would
+/// call it `Owned` and hand it a fresh agent per request — the very bug this type exists to
+/// remove, reintroduced for exactly the client most likely to hit it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Caller {
+    /// This value's own connection — [`Connection`], retracted by its drop.
+    Owned,
+    /// A client with no connection to key on, identified by what it says it is (SEP-2575's
+    /// `_meta` `clientInfo`). Two windows of one client share this agent, which is a real
+    /// loss of resolution and is the honest maximum: the protocol carries nothing else.
+    ///
+    /// The identity may be **blank**, because `clientInfo` is not among the keys
+    /// `2026-07-28` requires (`RequestMetaObject::DRAFT_REQUIRED_KEYS` is `protocolVersion`
+    /// and `clientCapabilities`). A blank one is refused the session-scoped tools rather than
+    /// pooled — see [`StrataTools::agent`].
+    Stateless(AgentIdentity),
+}
+
+impl Caller {
+    /// What this caller calls itself.
+    ///
+    /// The request is preferred over the peer on the stateless branch because there is no
+    /// peer to speak of: rmcp reconstructs `peer_info` with `Implementation::default()`
+    /// (`tower.rs`, `peer_info_for_stateless_request`), and that is **not** a blank —
+    /// `Implementation::default` is `from_build_env`, so it reads `rmcp` / the rmcp version.
+    /// Falling back to it would label every un-introduced client with the name of the MCP
+    /// library it happens to use.
+    fn identity(&self, peer: &Peer<RoleServer>) -> AgentIdentity {
+        match self {
+            Caller::Stateless(identity) => identity.clone(),
+            Caller::Owned => peer_identity(peer),
+        }
+    }
+}
+
+/// What a client said it was at `initialize`, or a blank identity if it has not said.
+///
+/// A blank is rendered honestly by the surface that shows it rather than refused here: a
+/// client is not obliged to introduce itself well, and losing its whole session over a
+/// missing name would be the app punishing the user for the client's manners.
+fn peer_identity(peer: &Peer<RoleServer>) -> AgentIdentity {
+    peer.peer_info()
+        .map(|info| AgentIdentity {
+            name: info.client_info.name.clone(),
+            version: info.client_info.version.clone(),
+        })
+        .unwrap_or_default()
+}
+
+impl<C: AsRequestContext> FromContextPart<C> for Caller {
+    fn from_context_part(context: &mut C) -> Result<Self, ErrorData> {
+        let context = context.as_request_context();
+        // Read, never taken: `RequestMetaObject`'s own extractor swaps `_meta` out of the
+        // context, and a tool that wanted it after this one would find it emptied.
+        if context.extensions.get::<Parts>().is_none() {
+            // No HTTP request behind this call at all — stdio, or in-process.
+            return Ok(Caller::Owned);
+        }
+        // rmcp's `uses_legacy_lifecycle`, restated over the two inputs it reads: the discover
+        // lifecycle is taken when `_meta` carries everything `2026-07-28` requires, or when
+        // the negotiated version is that new. Mirroring the predicate rather than sniffing a
+        // header is the whole point — see the type's note.
+        let discover = context
+            .meta
+            .missing_required_keys(&ProtocolVersion::V_2026_07_28)
+            .is_empty();
+        let modern = context
+            .protocol_version()
+            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
+        if !discover && !modern {
+            return Ok(Caller::Owned);
+        }
+        Ok(Caller::Stateless(
+            context
+                .meta
+                .client_info()
+                .map(|info| AgentIdentity {
+                    name: info.name,
+                    version: info.version,
+                })
+                .unwrap_or_default(),
+        ))
+    }
+}
+
+/// The stateless agents this server has minted: what each is called, and whether it is idle.
+///
+/// Empty on every path but one, and that is the point: a [`Caller::Owned`] never reaches here
+/// because its id is its connection's and its retraction is that connection's drop.
+#[derive(Default)]
+struct Roster {
+    live: Mutex<HashMap<AgentIdentity, Live>>,
+}
+
+/// One stateless agent's id, when it was last heard from, and how many of its calls are still
+/// running.
+struct Live {
+    agent: AgentId,
+    seen: Instant,
+    /// **Why a clock alone will not do.** `seen` is stamped when a call is *resolved*, and a
+    /// `run` can then sit on the engine for minutes. Retiring on the stamp alone would abort
+    /// the agent's own query — `agent_gone` releases its sessions and `cleanup_ws` aborts
+    /// whatever is in flight — and the engine settles an abort as `cancelled`, which the
+    /// vocabulary reports back as "you stopped this" for a cancellation the *timer*
+    /// performed. That is the failure `Agents::opened`'s eviction gate exists to refuse, and
+    /// a housekeeping sweep has even less business causing it.
+    busy: usize,
+}
+
+/// One stateless call in flight, holding its agent against the sweeper.
+///
+/// RAII for [`SnapshotPin`](strata_core::engine::SnapshotPin)'s reason: the thing being
+/// protected outlives the statement that starts it, and every early return, `?` and dropped
+/// request future has to release it. Dropping re-stamps `seen`, so a long call leaves the
+/// agent's idle window starting from when it *finished*.
+///
+/// [`none`](Busy::none) is the whole of the non-stateless case — a `Caller::Owned` has no
+/// roster entry to hold, so its guard holds nothing and its drop does nothing.
+struct Busy {
+    roster: Option<Arc<Roster>>,
+    identity: AgentIdentity,
+}
+
+impl Busy {
+    fn none() -> Busy {
+        Busy {
+            roster: None,
+            identity: AgentIdentity::default(),
+        }
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        let Some(roster) = self.roster.take() else {
+            return;
+        };
+        // `lock()` rather than `unwrap()` on the guard: this runs during a drop, which may
+        // itself be an unwind, and a panic there aborts the process.
+        let Ok(mut live) = roster.live.lock() else {
+            return;
+        };
+        if let Some(entry) = live.get_mut(&self.identity) {
+            entry.busy = entry.busy.saturating_sub(1);
+            entry.seen = Instant::now();
+        }
+    }
+}
+
 /// One client connection: the agent it is, and the retraction that ends it.
 ///
 /// **RAII, for the same reason `SnapshotPin` and `AgentServer` are** — a connection ending
@@ -135,6 +326,9 @@ pub struct StrataTools<H: Host> {
     /// Stamps each remembered run so the oldest can be found. Shared with every clone of the
     /// service, like the map it orders.
     seq: Arc<AtomicU64>,
+    /// Shared with every connection *and* every clone, because its whole job is to outlive
+    /// the per-request values the stateless branch mints — see [`Caller`].
+    roster: Arc<Roster>,
     connection: Arc<Connection<H>>,
 }
 
@@ -147,6 +341,7 @@ impl<H: Host> Clone for StrataTools<H> {
             host: Arc::clone(&self.host),
             runs: Arc::clone(&self.runs),
             seq: Arc::clone(&self.seq),
+            roster: Arc::clone(&self.roster),
             connection: Arc::clone(&self.connection),
         }
     }
@@ -164,6 +359,7 @@ impl<H: Host> StrataTools<H> {
             host,
             runs: Arc::new(Mutex::new(HashMap::new())),
             seq: Arc::new(AtomicU64::new(0)),
+            roster: Arc::new(Roster::default()),
         }
     }
 
@@ -174,6 +370,7 @@ impl<H: Host> StrataTools<H> {
             host: Arc::clone(&self.host),
             runs: Arc::clone(&self.runs),
             seq: Arc::clone(&self.seq),
+            roster: Arc::clone(&self.roster),
             connection: Arc::new(Connection {
                 host: Arc::clone(&self.host),
                 agent: AgentId::new(),
@@ -193,26 +390,123 @@ impl<H: Host> StrataTools<H> {
         identity: AgentIdentity,
         project: Option<&str>,
     ) -> Result<QuerySessionId, AgentError> {
+        self.open_session_as(self.connection.agent, identity, project)
+            .await
+    }
+
+    /// The same, for a caller whose agent the *request* decided rather than this value's own
+    /// lifetime — see [`Caller`]. The tool wrapper's path; [`open_session`](Self::open_session)
+    /// is the in-process one, and its agent is always this value's own.
+    async fn open_session_as(
+        &self,
+        agent: AgentId,
+        identity: AgentIdentity,
+        project: Option<&str>,
+    ) -> Result<QuerySessionId, AgentError> {
         let project = self.project(project).await?;
         let agent = Agent {
-            id: self.connection.agent,
+            id: agent,
             identity,
         };
         self.host.open_query_session(&project.root, &agent).await
     }
 
-    /// What a client said it was at `initialize`, or a blank identity if it has not said.
+    /// Which [`AgentId`] this call is made under — the one place [`Caller`] is resolved — and
+    /// the guard that keeps it alive for the call's duration.
     ///
-    /// A blank is rendered honestly by the surface that shows it rather than refused here: a
-    /// client is not obliged to introduce itself well, and losing its whole session over a
-    /// missing name would be the app punishing the user for the client's manners.
-    fn identity(peer: &Peer<RoleServer>) -> AgentIdentity {
-        peer.peer_info()
-            .map(|info| AgentIdentity {
-                name: info.client_info.name.clone(),
-                version: info.client_info.version.clone(),
-            })
-            .unwrap_or_default()
+    /// A stateless caller's id is minted on first sight and kept, so the whole point of the
+    /// enum holds: the *same* client asking twice is the same agent. The [`Busy`] guard is
+    /// what stops [`retire_idle`](Self::retire_idle) reaping it out from under a call still
+    /// running — hold it for the body, and dropping it re-stamps the entry so the idle window
+    /// is measured from when the call *finished* rather than when it started.
+    ///
+    /// **A blank stateless identity is refused the session-scoped tools.** `clientInfo` is
+    /// optional on the discover lifecycle, so pooling every un-introduced client under one
+    /// minted id would put two different processes behind one [`AgentId`] — and that id is
+    /// the whole of both isolation checks (`Agents::holds` and this value's run-cache key).
+    /// One would list, page and close the other's query sessions: the AA-03 hole, reopened by
+    /// a bucket meant for display. There is nothing to split them on, so the honest answer is
+    /// to say so and keep the project-scoped tools working. (Not "the read-only tools" —
+    /// every tool here is read-only, and two of the refused five carry `read_only_hint`. The
+    /// line is whether a tool has to know *whose* agent is asking: `list_query_sessions` and
+    /// `read_page` mean nothing without an identity, which is exactly what is missing.)
+    fn agent(&self, caller: &Caller) -> Result<(AgentId, Busy), AgentError> {
+        let Caller::Stateless(identity) = caller else {
+            return Ok((self.connection.agent, Busy::none()));
+        };
+        if *identity == AgentIdentity::default() {
+            return Err(AgentError::Query(
+                "Your client sent no 'clientInfo', and this protocol version has no session \
+                 for the server to tell it apart by. Send '_meta' with \
+                 'io.modelcontextprotocol/clientInfo' on each request to use query sessions."
+                    .into(),
+            ));
+        }
+        let mut live = self.roster.live.lock().unwrap();
+        let entry = live.entry(identity.clone()).or_insert_with(|| Live {
+            agent: AgentId::new(),
+            seen: Instant::now(),
+            busy: 0,
+        });
+        entry.seen = Instant::now();
+        entry.busy += 1;
+        Ok((
+            entry.agent,
+            Busy {
+                roster: Some(Arc::clone(&self.roster)),
+                identity: identity.clone(),
+            },
+        ))
+    }
+
+    /// Stamp a caller as heard from without needing its id — what the tools that take no
+    /// [`AgentId`] call, so **every** tool keeps its agent alive.
+    ///
+    /// Without this only the five session-scoped tools would refresh the clock, and an agent
+    /// following this server's own instructions — start with `list_tables` and
+    /// `describe_table`, `validate` the SQL, *then* open a session and run — would be retired
+    /// in the middle of exactly the workflow it was told to follow.
+    fn touch(&self, caller: &Caller) {
+        let Caller::Stateless(identity) = caller else {
+            return;
+        };
+        if let Some(entry) = self.roster.live.lock().unwrap().get_mut(identity) {
+            entry.seen = Instant::now();
+        }
+    }
+
+    /// Retract every stateless agent unheard from for longer than `ttl` and with nothing in
+    /// flight, releasing its query sessions exactly as a disconnection would.
+    ///
+    /// **A poll, because nothing on our side can observe the fact** (AGENTS.md §2): a client
+    /// on the discover lifecycle has no connection, so its departure is not an event anywhere
+    /// — there is no socket close, no `DELETE`, and no value whose drop means anything. The
+    /// staleness is therefore bounded and stated rather than hidden: such an agent stays in
+    /// the pane for at most `ttl` after its last call, and never longer.
+    ///
+    /// Driven by whichever transport can afford a timer — the HTTP server's own runtime
+    /// (`crate::server`), which also calls this with a zero `ttl` as it stops, so turning
+    /// agent access off retracts rather than abandons. There is nothing to drive for stdio or
+    /// in-process, which is why it is called from there rather than started here.
+    pub fn retire_idle(&self, ttl: Duration) {
+        let now = Instant::now();
+        let mut retired = Vec::new();
+        {
+            let mut live = self.roster.live.lock().unwrap();
+            live.retain(|_, entry| {
+                // Never a working agent, however long the call has taken: see `Live::busy`.
+                let idle = entry.busy == 0 && now.duration_since(entry.seen) > ttl;
+                if idle {
+                    retired.push(entry.agent);
+                }
+                !idle
+            });
+        }
+        // Outside the lock: `agent_gone` reaches every window, and a host is not something to
+        // call with one of our mutexes held.
+        for agent in retired {
+            self.host.agent_gone(agent);
+        }
     }
 
     /// The one resolution path every project-scoped tool takes.
@@ -227,12 +521,19 @@ impl<H: Host> StrataTools<H> {
         Ok((project, engine))
     }
 
-    fn key(&self, root: &Path, session: QuerySessionId) -> (AgentId, PathBuf, QuerySessionId) {
-        (self.connection.agent, root.to_path_buf(), session)
+    fn key(
+        &self,
+        agent: AgentId,
+        root: &Path,
+        session: QuerySessionId,
+    ) -> (AgentId, PathBuf, QuerySessionId) {
+        (agent, root.to_path_buf(), session)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn remember(
         &self,
+        agent: AgentId,
         root: &Path,
         session: QuerySessionId,
         snapshot: Option<SnapshotId>,
@@ -241,10 +542,9 @@ impl<H: Host> StrataTools<H> {
         total: usize,
         page_size: usize,
     ) {
-        let agent = self.connection.agent;
         let mut runs = self.runs.lock().unwrap();
         runs.insert(
-            self.key(root, session),
+            self.key(agent, root, session),
             LastRun {
                 snapshot,
                 engine,
@@ -272,15 +572,18 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
-    fn forget(&self, root: &Path, session: QuerySessionId) {
-        self.runs.lock().unwrap().remove(&self.key(root, session));
-    }
-
-    fn recall(&self, root: &Path, session: QuerySessionId) -> Option<LastRun> {
+    fn forget(&self, agent: AgentId, root: &Path, session: QuerySessionId) {
         self.runs
             .lock()
             .unwrap()
-            .get(&self.key(root, session))
+            .remove(&self.key(agent, root, session));
+    }
+
+    fn recall(&self, agent: AgentId, root: &Path, session: QuerySessionId) -> Option<LastRun> {
+        self.runs
+            .lock()
+            .unwrap()
+            .get(&self.key(agent, root, session))
             .cloned()
     }
 }
@@ -301,7 +604,8 @@ impl<H: Host> StrataTools<H> {
     /// List the open Strata projects: name and root folder. Every other tool takes an
     /// optional 'project' naming one of these, needed only when more than one is open.
     #[tool(annotations(read_only_hint = true))]
-    async fn list_projects(&self) -> Json<ProjectsResult> {
+    async fn list_projects(&self, caller: Caller) -> Json<ProjectsResult> {
+        self.touch(&caller);
         Json(ProjectsResult {
             projects: self
                 .host
@@ -319,8 +623,10 @@ impl<H: Host> StrataTools<H> {
     #[tool(annotations(read_only_hint = true))]
     async fn list_tables(
         &self,
+        caller: Caller,
         Parameters(params): Parameters<ProjectParams>,
     ) -> Result<Json<TablesResult>, AgentError> {
+        self.touch(&caller);
         let project = self.project(params.project.as_deref()).await?;
         let entries = self.host.catalog(&project.root).await?;
         Ok(Json(TablesResult {
@@ -334,8 +640,10 @@ impl<H: Host> StrataTools<H> {
     #[tool(annotations(read_only_hint = true))]
     async fn describe_table(
         &self,
+        caller: Caller,
         Parameters(params): Parameters<DescribeTableParams>,
     ) -> Result<Json<DescribeResult>, AgentError> {
+        self.touch(&caller);
         let project = self.project(params.project.as_deref()).await?;
         let described = self.host.describe(&project.root, &params.name).await?;
         Ok(Json(DescribeResult::from(described)))
@@ -346,8 +654,10 @@ impl<H: Host> StrataTools<H> {
     #[tool(annotations(read_only_hint = true))]
     async fn list_functions(
         &self,
+        caller: Caller,
         Parameters(params): Parameters<ProjectParams>,
     ) -> Result<Json<FunctionsResult>, AgentError> {
+        self.touch(&caller);
         let (_, engine) = self.engine(params.project.as_deref()).await?;
         Ok(Json(FunctionsResult::from(engine.functions())))
     }
@@ -357,8 +667,10 @@ impl<H: Host> StrataTools<H> {
     #[tool(annotations(read_only_hint = true))]
     async fn validate(
         &self,
+        caller: Caller,
         Parameters(params): Parameters<ValidateParams>,
     ) -> Result<Json<ValidateResult>, AgentError> {
+        self.touch(&caller);
         let (_, engine) = self.engine(params.project.as_deref()).await?;
         let diagnostics = engine.validate(params.sql).await;
         Ok(Json(ValidateResult {
@@ -374,10 +686,12 @@ impl<H: Host> StrataTools<H> {
     async fn open_query_session(
         &self,
         peer: Peer<RoleServer>,
+        caller: Caller,
         Parameters(params): Parameters<ProjectParams>,
     ) -> Result<Json<QuerySessionResult>, AgentError> {
+        let (agent, _busy) = self.agent(&caller)?;
         let session = self
-            .open_session(Self::identity(&peer), params.project.as_deref())
+            .open_session_as(agent, caller.identity(&peer), params.project.as_deref())
             .await?;
         Ok(Json(QuerySessionResult {
             query_session: session.0.to_string(),
@@ -389,13 +703,12 @@ impl<H: Host> StrataTools<H> {
     #[tool(annotations(read_only_hint = true))]
     async fn list_query_sessions(
         &self,
+        caller: Caller,
         Parameters(params): Parameters<ProjectParams>,
     ) -> Result<Json<QuerySessionsResult>, AgentError> {
+        let (agent, _busy) = self.agent(&caller)?;
         let project = self.project(params.project.as_deref()).await?;
-        let sessions = self
-            .host
-            .query_sessions(&project.root, self.connection.agent)
-            .await?;
+        let sessions = self.host.query_sessions(&project.root, agent).await?;
         Ok(Json(QuerySessionsResult {
             query_sessions: sessions.into_iter().map(Into::into).collect(),
         }))
@@ -409,9 +722,13 @@ impl<H: Host> StrataTools<H> {
     #[tool]
     async fn run(
         &self,
+        caller: Caller,
         Parameters(params): Parameters<RunParams>,
     ) -> Result<Json<RunResult>, AgentError> {
         let session = session_handle(&params.query_session)?;
+        // Held for the whole call, dispatch included: the sweeper must not retire this agent
+        // while its query is on the engine — see `Live::busy`.
+        let (agent, _busy) = self.agent(&caller)?;
         let (project, engine) = self.engine(params.project.as_deref()).await?;
 
         // Nothing to run is refused before anything else, because the gate below cannot catch
@@ -446,21 +763,14 @@ impl<H: Host> StrataTools<H> {
 
         let settled = self
             .host
-            .run(
-                &project.root,
-                self.connection.agent,
-                session,
-                params.sql,
-                mode,
-                page_size,
-            )
+            .run(&project.root, agent, session, params.sql, mode, page_size)
             .await?;
         // **After** the dispatch, never before: a run refused at the ownership gate (or lost
         // to a window that went) never retired anything, so forgetting first would throw away
         // the page of a result that is still there to read. An explain materializes nothing
         // and leaves the previous result alone either way.
         if mode == RunMode::Run {
-            self.forget(&project.root, session);
+            self.forget(agent, &project.root, session);
         }
         let handle = params.query_session;
         match settled {
@@ -469,6 +779,7 @@ impl<H: Host> StrataTools<H> {
                 // same schema, so nothing re-walks it.
                 let cols = columns(&output.columns);
                 self.remember(
+                    agent,
                     &project.root,
                     session,
                     output.snapshot,
@@ -496,11 +807,13 @@ impl<H: Host> StrataTools<H> {
     #[tool(annotations(read_only_hint = true))]
     async fn read_page(
         &self,
+        caller: Caller,
         Parameters(params): Parameters<ReadPageParams>,
     ) -> Result<Json<PageResult>, AgentError> {
         let session = session_handle(&params.query_session)?;
+        let (agent, _busy) = self.agent(&caller)?;
         let (project, engine) = self.engine(params.project.as_deref()).await?;
-        let Some(last) = self.recall(&project.root, session) else {
+        let Some(last) = self.recall(agent, &project.root, session) else {
             return Err(AgentError::NotFound(format!(
                 "No result to read in query session '{}'. Run a query in it first.",
                 params.query_session
@@ -512,7 +825,7 @@ impl<H: Host> StrataTools<H> {
         // practice whatever the user has run since. Checked before the empty-page arm too, so
         // nothing is answered out of an entry the current engine never made.
         if last.engine != engine.id() {
-            self.forget(&project.root, session);
+            self.forget(agent, &project.root, session);
             return Err(AgentError::ResultMoved);
         }
         let page = params.page.max(1);
@@ -550,7 +863,7 @@ impl<H: Host> StrataTools<H> {
                 if engine.snapshot_live(snapshot) {
                     Err(AgentError::Query(e))
                 } else {
-                    self.forget(&project.root, session);
+                    self.forget(agent, &project.root, session);
                     Err(AgentError::ResultMoved)
                 }
             }
@@ -562,14 +875,16 @@ impl<H: Host> StrataTools<H> {
     #[tool(annotations(destructive_hint = false))]
     async fn close_query_session(
         &self,
+        caller: Caller,
         Parameters(params): Parameters<QuerySessionParams>,
     ) -> Result<Json<QuerySessionResult>, AgentError> {
         let session = session_handle(&params.query_session)?;
+        let (agent, _busy) = self.agent(&caller)?;
         let project = self.project(params.project.as_deref()).await?;
         self.host
-            .close_query_session(&project.root, self.connection.agent, session)
+            .close_query_session(&project.root, agent, session)
             .await?;
-        self.forget(&project.root, session);
+        self.forget(agent, &project.root, session);
         Ok(Json(QuerySessionResult {
             query_session: params.query_session,
         }))
@@ -699,7 +1014,7 @@ mod tests {
             MockProject::new("sales", "/w/sales"),
             MockProject::new("ops", "/w/ops"),
         ]));
-        let listed = tools.list_projects().await.0.projects;
+        let listed = tools.list_projects(Caller::Owned).await.0.projects;
         let names: Vec<&str> = listed.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["sales", "ops"]);
         assert_eq!(listed[1].root, "/w/ops");
@@ -713,7 +1028,10 @@ mod tests {
             MockProject::new("sales", "/w/sales"),
             MockProject::new("ops", "/w/ops"),
         ]));
-        let Err(e) = tools.list_tables(Parameters(no_project())).await else {
+        let Err(e) = tools
+            .list_tables(Caller::Owned, Parameters(no_project()))
+            .await
+        else {
             panic!("expected an ambiguous-project error");
         };
         let text = e.to_string();
@@ -722,9 +1040,12 @@ mod tests {
 
         // Naming one resolves it.
         let named = tools
-            .list_tables(Parameters(ProjectParams {
-                project: Some("ops".into()),
-            }))
+            .list_tables(
+                Caller::Owned,
+                Parameters(ProjectParams {
+                    project: Some("ops".into()),
+                }),
+            )
             .await
             .unwrap();
         assert!(named.0.entries.is_empty());
@@ -738,7 +1059,7 @@ mod tests {
     async fn list_tables_reports_a_failed_def_with_its_error() {
         let (_root, tools) = one_project("list_tables").await;
         let entries = tools
-            .list_tables(Parameters(no_project()))
+            .list_tables(Caller::Owned, Parameters(no_project()))
             .await
             .unwrap()
             .0
@@ -767,10 +1088,13 @@ mod tests {
     async fn describe_table_reports_what_registration_read() {
         let (_root, tools) = one_project("describe").await;
         let described = tools
-            .describe_table(Parameters(DescribeTableParams {
-                name: "people".into(),
-                project: None,
-            }))
+            .describe_table(
+                Caller::Owned,
+                Parameters(DescribeTableParams {
+                    name: "people".into(),
+                    project: None,
+                }),
+            )
             .await
             .unwrap()
             .0;
@@ -784,10 +1108,13 @@ mod tests {
     async fn describe_table_on_an_unknown_name_is_not_found() {
         let (_root, tools) = one_project("describe_unknown").await;
         let Err(AgentError::NotFound(message)) = tools
-            .describe_table(Parameters(DescribeTableParams {
-                name: "nope".into(),
-                project: None,
-            }))
+            .describe_table(
+                Caller::Owned,
+                Parameters(DescribeTableParams {
+                    name: "nope".into(),
+                    project: None,
+                }),
+            )
             .await
         else {
             panic!("expected a not-found error");
@@ -801,7 +1128,7 @@ mod tests {
     async fn list_functions_is_the_live_registry() {
         let (_root, tools) = one_project("functions").await;
         let functions = tools
-            .list_functions(Parameters(no_project()))
+            .list_functions(Caller::Owned, Parameters(no_project()))
             .await
             .unwrap()
             .0;
@@ -814,20 +1141,26 @@ mod tests {
     async fn validate_finds_a_missing_table_without_running_anything() {
         let (_root, tools) = one_project("validate").await;
         let clean = tools
-            .validate(Parameters(ValidateParams {
-                sql: "SELECT id FROM people".into(),
-                project: None,
-            }))
+            .validate(
+                Caller::Owned,
+                Parameters(ValidateParams {
+                    sql: "SELECT id FROM people".into(),
+                    project: None,
+                }),
+            )
             .await
             .unwrap()
             .0;
         assert!(clean.diagnostics.is_empty(), "{clean:?}");
 
         let broken = tools
-            .validate(Parameters(ValidateParams {
-                sql: "SELECT id FROM nope".into(),
-                project: None,
-            }))
+            .validate(
+                Caller::Owned,
+                Parameters(ValidateParams {
+                    sql: "SELECT id FROM nope".into(),
+                    project: None,
+                }),
+            )
             .await
             .unwrap()
             .0;
@@ -848,7 +1181,7 @@ mod tests {
         let session = open(&tools).await;
 
         let listed = tools
-            .list_query_sessions(Parameters(no_project()))
+            .list_query_sessions(Caller::Owned, Parameters(no_project()))
             .await
             .unwrap()
             .0
@@ -858,14 +1191,17 @@ mod tests {
         assert!(matches!(listed[0].state, QuerySessionStateWire::Empty));
 
         tools
-            .close_query_session(Parameters(QuerySessionParams {
-                query_session: session.clone(),
-                project: None,
-            }))
+            .close_query_session(
+                Caller::Owned,
+                Parameters(QuerySessionParams {
+                    query_session: session.clone(),
+                    project: None,
+                }),
+            )
             .await
             .unwrap();
         assert!(tools
-            .list_query_sessions(Parameters(no_project()))
+            .list_query_sessions(Caller::Owned, Parameters(no_project()))
             .await
             .unwrap()
             .0
@@ -875,10 +1211,13 @@ mod tests {
         // The handle is now stale, and the answer is the plain statement
         // `list_query_sessions` recovers from — the same one a handle that never existed gets.
         let Err(AgentError::NotFound(_)) = tools
-            .close_query_session(Parameters(QuerySessionParams {
-                query_session: session,
-                project: None,
-            }))
+            .close_query_session(
+                Caller::Owned,
+                Parameters(QuerySessionParams {
+                    query_session: session,
+                    project: None,
+                }),
+            )
             .await
         else {
             panic!("expected a not-found error");
@@ -900,13 +1239,13 @@ mod tests {
         open(&second).await;
 
         let mine = first
-            .list_query_sessions(Parameters(no_project()))
+            .list_query_sessions(Caller::Owned, Parameters(no_project()))
             .await
             .unwrap()
             .0
             .query_sessions;
         let theirs = second
-            .list_query_sessions(Parameters(no_project()))
+            .list_query_sessions(Caller::Owned, Parameters(no_project()))
             .await
             .unwrap()
             .0
@@ -917,14 +1256,17 @@ mod tests {
 
         for reached in [
             second
-                .run(Parameters(run_params(&borrowed, "SELECT 1")))
+                .run(Caller::Owned, Parameters(run_params(&borrowed, "SELECT 1")))
                 .await
                 .err(),
             second
-                .close_query_session(Parameters(QuerySessionParams {
-                    query_session: borrowed.clone(),
-                    project: None,
-                }))
+                .close_query_session(
+                    Caller::Owned,
+                    Parameters(QuerySessionParams {
+                        query_session: borrowed.clone(),
+                        project: None,
+                    }),
+                )
                 .await
                 .err(),
         ] {
@@ -976,7 +1318,10 @@ mod tests {
     async fn a_malformed_handle_is_not_found_rather_than_a_parse_error() {
         let (_root, tools) = one_project("bad_handle").await;
         let Err(AgentError::NotFound(message)) = tools
-            .run(Parameters(run_params("not-a-uuid", "SELECT 1")))
+            .run(
+                Caller::Owned,
+                Parameters(run_params("not-a-uuid", "SELECT 1")),
+            )
             .await
         else {
             panic!("expected a not-found error");
@@ -993,7 +1338,11 @@ mod tests {
         let mut params = run_params(&session, "SELECT id, name FROM people ORDER BY id");
         params.page_size = Some(2);
 
-        let result = tools.run(Parameters(params)).await.unwrap().0;
+        let result = tools
+            .run(Caller::Owned, Parameters(params))
+            .await
+            .unwrap()
+            .0;
         let RunResult::Ok {
             columns,
             rows,
@@ -1027,7 +1376,10 @@ mod tests {
         let (root, tools) = one_project("workspace").await;
         let session = open(&tools).await;
         let RunResult::Ok { .. } = tools
-            .run(Parameters(run_params(&session, "SELECT id FROM people")))
+            .run(
+                Caller::Owned,
+                Parameters(run_params(&session, "SELECT id FROM people")),
+            )
             .await
             .unwrap()
             .0
@@ -1049,12 +1401,15 @@ mod tests {
         assert!(
             matches!(
                 tools
-                    .read_page(Parameters(ReadPageParams {
-                        query_session: session,
-                        page: 1,
-                        sort: None,
-                        project: None,
-                    }))
+                    .read_page(
+                        Caller::Owned,
+                        Parameters(ReadPageParams {
+                            query_session: session,
+                            page: 1,
+                            sort: None,
+                            project: None,
+                        })
+                    )
                     .await,
                 Err(AgentError::ResultMoved)
             ),
@@ -1073,7 +1428,10 @@ mod tests {
         let RunResult::Ok {
             rows, page_size, ..
         } = tools
-            .run(Parameters(run_params(&session, "SELECT id FROM people")))
+            .run(
+                Caller::Owned,
+                Parameters(run_params(&session, "SELECT id FROM people")),
+            )
             .await
             .unwrap()
             .0
@@ -1094,7 +1452,10 @@ mod tests {
         for _ in 0..MAX_REMEMBERED_RUNS + 1 {
             let session = open(&tools).await;
             tools
-                .run(Parameters(run_params(&session, "SELECT id FROM people")))
+                .run(
+                    Caller::Owned,
+                    Parameters(run_params(&session, "SELECT id FROM people")),
+                )
                 .await
                 .unwrap();
             sessions.push(session);
@@ -1104,24 +1465,30 @@ mod tests {
         // The first session's result is gone, and reads exactly like a session that never
         // ran; the newest is still there.
         let evicted = tools
-            .read_page(Parameters(ReadPageParams {
-                query_session: sessions[0].clone(),
-                page: 1,
-                sort: None,
-                project: None,
-            }))
+            .read_page(
+                Caller::Owned,
+                Parameters(ReadPageParams {
+                    query_session: sessions[0].clone(),
+                    page: 1,
+                    sort: None,
+                    project: None,
+                }),
+            )
             .await;
         assert!(
             matches!(evicted, Err(AgentError::NotFound(_))),
             "the oldest is evicted"
         );
         assert!(tools
-            .read_page(Parameters(ReadPageParams {
-                query_session: sessions.pop().unwrap(),
-                page: 1,
-                sort: None,
-                project: None,
-            }))
+            .read_page(
+                Caller::Owned,
+                Parameters(ReadPageParams {
+                    query_session: sessions.pop().unwrap(),
+                    page: 1,
+                    sort: None,
+                    project: None,
+                })
+            )
             .await
             .is_ok());
     }
@@ -1136,26 +1503,35 @@ mod tests {
         let theirs = mine.connection();
 
         let kept = open(&mine).await;
-        mine.run(Parameters(run_params(&kept, "SELECT id FROM people")))
-            .await
-            .unwrap();
+        mine.run(
+            Caller::Owned,
+            Parameters(run_params(&kept, "SELECT id FROM people")),
+        )
+        .await
+        .unwrap();
 
         // The other agent fills its own quota and then some.
         for _ in 0..MAX_REMEMBERED_RUNS + 4 {
             let session = open(&theirs).await;
             theirs
-                .run(Parameters(run_params(&session, "SELECT id FROM people")))
+                .run(
+                    Caller::Owned,
+                    Parameters(run_params(&session, "SELECT id FROM people")),
+                )
                 .await
                 .unwrap();
         }
 
         assert!(
-            mine.read_page(Parameters(ReadPageParams {
-                query_session: kept,
-                page: 1,
-                sort: None,
-                project: None,
-            }))
+            mine.read_page(
+                Caller::Owned,
+                Parameters(ReadPageParams {
+                    query_session: kept,
+                    page: 1,
+                    sort: None,
+                    project: None,
+                })
+            )
             .await
             .is_ok(),
             "another agent's chatter must not discard my page"
@@ -1187,7 +1563,10 @@ mod tests {
 
         let session = open(&tools).await;
         tools
-            .run(Parameters(run_params(&session, "SELECT id FROM people")))
+            .run(
+                Caller::Owned,
+                Parameters(run_params(&session, "SELECT id FROM people")),
+            )
             .await
             .unwrap();
 
@@ -1205,12 +1584,15 @@ mod tests {
         assert!(
             matches!(
                 tools
-                    .read_page(Parameters(ReadPageParams {
-                        query_session: session,
-                        page: 1,
-                        sort: None,
-                        project: None,
-                    }))
+                    .read_page(
+                        Caller::Owned,
+                        Parameters(ReadPageParams {
+                            query_session: session,
+                            page: 1,
+                            sort: None,
+                            project: None,
+                        })
+                    )
                     .await,
                 Err(AgentError::ResultMoved)
             ),
@@ -1225,7 +1607,12 @@ mod tests {
         let mut params = run_params(&session, "SELECT id FROM people");
         params.page_size = Some(MAX_PAGE_SIZE * 10);
 
-        let RunResult::Ok { page_size, .. } = tools.run(Parameters(params)).await.unwrap().0 else {
+        let RunResult::Ok { page_size, .. } = tools
+            .run(Caller::Owned, Parameters(params))
+            .await
+            .unwrap()
+            .0
+        else {
             panic!("expected rows");
         };
         assert_eq!(page_size, MAX_PAGE_SIZE);
@@ -1237,10 +1624,13 @@ mod tests {
         let (_root, tools) = one_project("policy").await;
         let session = open(&tools).await;
         let Err(e) = tools
-            .run(Parameters(run_params(
-                &session,
-                "CREATE TABLE copy AS SELECT * FROM people",
-            )))
+            .run(
+                Caller::Owned,
+                Parameters(run_params(
+                    &session,
+                    "CREATE TABLE copy AS SELECT * FROM people",
+                )),
+            )
             .await
         else {
             panic!("expected a policy refusal");
@@ -1255,7 +1645,10 @@ mod tests {
         let session = open(&tools).await;
         assert!(matches!(
             tools
-                .run(Parameters(run_params(&session, "SELECT FROM WHERE )")))
+                .run(
+                    Caller::Owned,
+                    Parameters(run_params(&session, "SELECT FROM WHERE )"))
+                )
                 .await,
             Err(AgentError::Query(_))
         ));
@@ -1273,7 +1666,11 @@ mod tests {
             logical,
             physical,
             ..
-        } = tools.run(Parameters(params)).await.unwrap().0
+        } = tools
+            .run(Caller::Owned, Parameters(params))
+            .await
+            .unwrap()
+            .0
         else {
             panic!("expected a plan");
         };
@@ -1283,12 +1680,15 @@ mod tests {
 
         // Nothing was materialized, so there is nothing to page.
         let Err(AgentError::NotFound(_)) = tools
-            .read_page(Parameters(ReadPageParams {
-                query_session: session,
-                page: 1,
-                sort: None,
-                project: None,
-            }))
+            .read_page(
+                Caller::Owned,
+                Parameters(ReadPageParams {
+                    query_session: session,
+                    page: 1,
+                    sort: None,
+                    project: None,
+                }),
+            )
             .await
         else {
             panic!("an explain leaves no readable result");
@@ -1305,7 +1705,7 @@ mod tests {
         ]));
         let session = open(&tools).await;
         let result = tools
-            .run(Parameters(run_params(&session, "SELECT 1")))
+            .run(Caller::Owned, Parameters(run_params(&session, "SELECT 1")))
             .await
             .expect("a stop is not an error")
             .0;
@@ -1320,7 +1720,9 @@ mod tests {
         let (_root, tools) = one_project("run_unknown").await;
         let stray = QuerySessionId::new().0.to_string();
         assert!(matches!(
-            tools.run(Parameters(run_params(&stray, "SELECT 1"))).await,
+            tools
+                .run(Caller::Owned, Parameters(run_params(&stray, "SELECT 1")))
+                .await,
             Err(AgentError::NotFound(_))
         ));
     }
@@ -1333,15 +1735,18 @@ mod tests {
         let session = open(&tools).await;
         let mut params = run_params(&session, "SELECT id FROM people ORDER BY id");
         params.page_size = Some(2);
-        tools.run(Parameters(params)).await.unwrap();
+        tools.run(Caller::Owned, Parameters(params)).await.unwrap();
 
         let page = tools
-            .read_page(Parameters(ReadPageParams {
-                query_session: session.clone(),
-                page: 3,
-                sort: None,
-                project: None,
-            }))
+            .read_page(
+                Caller::Owned,
+                Parameters(ReadPageParams {
+                    query_session: session.clone(),
+                    page: 3,
+                    sort: None,
+                    project: None,
+                }),
+            )
             .await
             .unwrap()
             .0;
@@ -1351,15 +1756,18 @@ mod tests {
         assert_eq!(page.rows, vec![vec![Some("5".to_string())]]);
 
         let sorted = tools
-            .read_page(Parameters(ReadPageParams {
-                query_session: session,
-                page: 1,
-                sort: Some(Sort {
-                    column: "id".into(),
-                    ascending: false,
+            .read_page(
+                Caller::Owned,
+                Parameters(ReadPageParams {
+                    query_session: session,
+                    page: 1,
+                    sort: Some(Sort {
+                        column: "id".into(),
+                        ascending: false,
+                    }),
+                    project: None,
                 }),
-                project: None,
-            }))
+            )
             .await
             .unwrap()
             .0;
@@ -1373,7 +1781,10 @@ mod tests {
         let (root, tools) = one_project("moved").await;
         let session = open(&tools).await;
         tools
-            .run(Parameters(run_params(&session, "SELECT id FROM people")))
+            .run(
+                Caller::Owned,
+                Parameters(run_params(&session, "SELECT id FROM people")),
+            )
             .await
             .unwrap();
 
@@ -1391,12 +1802,15 @@ mod tests {
 
         assert!(matches!(
             tools
-                .read_page(Parameters(ReadPageParams {
-                    query_session: session.clone(),
-                    page: 1,
-                    sort: None,
-                    project: None,
-                }))
+                .read_page(
+                    Caller::Owned,
+                    Parameters(ReadPageParams {
+                        query_session: session.clone(),
+                        page: 1,
+                        sort: None,
+                        project: None,
+                    })
+                )
                 .await,
             Err(AgentError::ResultMoved)
         ));
@@ -1409,20 +1823,23 @@ mod tests {
         let (_root, tools) = one_project("empty").await;
         let session = open(&tools).await;
         tools
-            .run(Parameters(run_params(
-                &session,
-                "SELECT id FROM people WHERE id > 99",
-            )))
+            .run(
+                Caller::Owned,
+                Parameters(run_params(&session, "SELECT id FROM people WHERE id > 99")),
+            )
             .await
             .unwrap();
 
         let page = tools
-            .read_page(Parameters(ReadPageParams {
-                query_session: session,
-                page: 1,
-                sort: None,
-                project: None,
-            }))
+            .read_page(
+                Caller::Owned,
+                Parameters(ReadPageParams {
+                    query_session: session,
+                    page: 1,
+                    sort: None,
+                    project: None,
+                }),
+            )
             .await
             .unwrap()
             .0;

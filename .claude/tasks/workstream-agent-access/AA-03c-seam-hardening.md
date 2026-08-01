@@ -1,6 +1,6 @@
 # AA-03c · The seam's remaining holes: one identity per session, per client
 
-**Workstream:** Agent access · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** AA-03b
+**Workstream:** Agent access · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** AA-03b
 
 ## Why this exists
 
@@ -37,12 +37,13 @@ and asserts the settle lands on the registration that answered the start.
 The estimate that put it here was wrong: the fix is contained inside `AgentDirectory` and changes
 no signature. What is genuinely left is the **decision**, which is small:
 
-**A run whose registration has gone mid-flight currently settles into nothing, silently** — the
-notice send fails and the agent still gets its rows. That is defensible (the query really did
-run) but it means the pane can never show the outcome. The alternative is answering `WindowGone`,
-which is arguably more honest and is what every other window-loss answers — but the agent would
-then get an error for a query that *succeeded*, and `RunResult` has no arm for "it ran but nobody
-recorded it". Decide which, and if it stays silent, say so where `notify` is called.
+**Decided: it stays silent, and the reasoning is now written at the `notify` call**
+(`directory.rs`). Answering `WindowGone` was rejected — it would report a fault for a statement
+that demonstrably succeeded, and an agent's recovery from a window loss is to run it again, so
+it would pay for the same scan twice. Nothing is stranded by the silence either: if the
+registration is gone the satellite that would have shown the row went with the window, and the
+one case where a settle could have landed on a *live* satellite that never heard the start was
+the same-root remount, which resolving the whole bracket once already makes unrepresentable.
 
 ## 2. Closing a session must not race the run being dispatched into it
 
@@ -65,7 +66,33 @@ aborts and retires *nothing* because no dispatch has happened yet. The run then 
 engine's life, and `Engine::is_running(S)` stays true, feeding a phantom into the T2 close
 confirm. The same gap swallows an `AgentGone` that lands in it.
 
-**Shape of the fix — three options, and the choice is the task.**
+**Built: (c), the tombstone** — `Agents::closed` now answers `Closed::{Now, WhenItSettles,
+NoSuchSession}`, and `run_settled` returns the session whose deferred teardown has come due.
+Two corrections review forced on the first attempt, both worth keeping in view:
+
+- **The abort is not deferred; only the row is.** The first version skipped `cleanup_ws`
+  entirely on the tombstone arm, which broke `close_query_session`'s own promise that "a run
+  still in flight in it is cancelled" — the predicate is `is_running()`, true for the whole
+  execution and not just the pre-dispatch window, so a runaway scan would have burned to
+  completion with the handle already dead. `cleanup_ws` is a no-op when nothing is dispatched,
+  so it is now called on **both** arms and the tombstone defers only the satellite row and its
+  second teardown.
+- **What reaps a tombstone whose settle never comes** is `gone` — the row stays in the agent's
+  session list, so a connection ending hands it back like any other, and `DispatchGuard` already
+  covers the engine side of a dropped run future. The residual hole is a *single request*
+  cancelled while the connection stays alive: the row stays `Running` for that connection's
+  life. Bounded, engine-side clean, and no user-facing path depends on it (both the T2 confirm
+  and the tool listing ask the engine, not the satellite). The shape that would close it is
+  making the settle RAII on the caller's side — a guard that sends a `Stopped` notice on drop —
+  rather than a trailing `send`. Left for whoever next touches `directory::run`.
+
+`QuerySession::is_running` also became **any** run in flight rather than the newest, because all
+three consumers want that reading and two of them destroy work when it is wrong. (The "trail cap
+can hide a still-executing run" worry was chased and is not reachable: `Engine::query` supersedes
+per `WsId`, so at most one run per session is genuinely executing and the row the cap discards
+has already been aborted.)
+
+**The options as they were weighed:**
 
 - **(a) A lease.** `RunStarting` hands back a lease alongside the sequence number; the close path
   refuses (or defers) while one is out. Most explicit, and it puts the invariant in the type.
@@ -116,10 +143,57 @@ A smaller instance is live now: `get_tool_schema` builds a throwaway service per
 read its schema, each minting and retracting an id. Harmless since AA-03b's `Agents::knows` peek
 stopped those retractions waking every window, but it is the same mechanism.
 
-**Shape of the fix.** Derive the agent from the transport's own session identity
-(`Mcp-Session-Id`, reachable through the request's extensions) rather than from how long the
-service value happens to live, so it survives whichever branch rmcp takes. Pinning
-`legacy_session_mode` is a stopgap, not a fix — it stops working the day rmcp drops that path.
+**Shape of the fix — and two things this section originally prescribed that turned out to be
+wrong.** Neither survived contact with the rmcp source, and both are worth stating because they
+are the obvious moves:
+
+- **Pinning `legacy_session_mode` is not a stopgap, because there is nothing to pin.** It
+  already defaults to `true`, and the flag can only turn sessions *off* — never force them on.
+  `use_session = legacy_session_mode && is_legacy_request(…)`, so a client on the newer
+  lifecycle goes stateless regardless.
+- **Keying on `Mcp-Session-Id` fixes only the path that already works.** SEP-2567 removes
+  sessions from the discover lifecycle and rmcp sets that header on exactly one response, inside
+  the session branch — it is absent precisely where identity breaks. Worse, it is not the
+  discriminator at all: `is_legacy_request` reads the request's `_meta` and protocol version and
+  never consults it, so a client echoing a stale session id alongside per-request `_meta` takes
+  the stateless branch and would be misread as owning its value.
+
+**Built:** `tools::Caller`, which mirrors rmcp's own lifecycle predicate. No HTTP `Parts` in the
+request extensions means stdio (AA-05) or the in-process pane (AA-06), where the value's
+lifetime genuinely *is* the connection; a request whose `_meta` lacks the `2026-07-28` required
+keys and whose version is older took the session branch, where it is too; anything else is
+stateless and keys on `_meta` `clientInfo` through a roster that outlives the per-request value.
+`StrataTools::connection()` stays the seam and `Connection`'s RAII retraction is unchanged, so
+AA-05 and AA-06 are untouched.
+
+Three consequences that are the honest cost of a protocol with no connection, all found in
+review:
+
+- **Identity is read from `_meta`, never from the peer.** rmcp reconstructs stateless
+  `peer_info` with `Implementation::default()`, and that is *not* blank — it is `from_build_env`,
+  so it reads `rmcp` and the rmcp version. Falling back to it labels every un-introduced client
+  with the name of the MCP library it happens to use.
+- **A blank identity is refused the session-scoped tools rather than pooled.** `clientInfo` is
+  optional on that lifecycle (`DRAFT_REQUIRED_KEYS` is `protocolVersion` + `clientCapabilities`),
+  and one minted id behind two different processes would let each list, page and close the
+  other's query sessions — that id is the whole of both isolation checks. That is the AA-03 hole
+  reopened by a bucket meant for display. The **project-scoped** tools keep working — the
+  split is whether a tool needs to know whose agent is asking, not `read_only_hint`, which two
+  of the refused five carry — and the refusal
+  names the fix. **This is a product call worth revisiting** if a real client turns out to omit
+  `clientInfo`: the alternative is accepting the pooling and documenting it.
+- **Two windows of one client still share an agent.** Unavoidable — the protocol carries nothing
+  else — and stated on `AgentId`.
+
+Retraction splits the same way: RAII where there is a connection, and an idle sweep where there
+is not. The sweep needed two guards review found missing. It **skips an agent with a call in
+flight** (a `Busy` guard, refcounted per roster entry, re-stamping on drop), because retiring one
+mid-run aborts its own query and the vocabulary then reports that as "you stopped this" — exactly
+what `Agents::opened`'s eviction gate refuses to cause. And **every** tool stamps the clock, not
+just the five session-scoped ones, or an agent following this server's own instructions (start
+with `list_tables`, `describe_table`, `validate`, *then* open a session) is retired mid-workflow.
+The final sweep runs from `AgentServer::drop`, not after the loop's `break`: `shutdown_background`
+drops tasks rather than polling them, so anything past the `break` would never run.
 
 **The constraint that shapes it:** AA-05 (stdio) and AA-06 (in-process) have no `Mcp-Session-Id`
 at all. So the identity *source* is per-frontend and `StrataTools::connection()` should stay the

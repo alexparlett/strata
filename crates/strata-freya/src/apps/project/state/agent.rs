@@ -44,7 +44,7 @@ use crate::agent::ask::{AgentAsk, AgentNotice};
 use crate::agent::AgentCtx;
 use crate::apps::project::contexts::EngineCtx;
 
-use super::agents::{Agents, AgentsCtx};
+use super::agents::{Agents, AgentsCtx, Closed};
 use super::{log_event, LogCtx, LogLevel, ProjChan, ProjectState, Reg};
 
 /// Join the service directory for this mount's lifetime and drive its asks. Call once in
@@ -149,16 +149,29 @@ fn answer(
             session,
             reply,
         } => {
-            if !agents.write().closed(agent, session) {
+            let closed = agents.write().closed(agent, session);
+            if closed == Closed::NoSuchSession {
                 let _ = reply.send(Err(AgentError::no_such_query_session(session)));
                 return;
             }
-            // The same teardown a tab close reaches through the root's tab-diff effect:
-            // abort whatever is in flight and retire the workspace's snapshot. What it
-            // deliberately does not do is raise the T2 confirm — that dialog asks the *user*
-            // whether to destroy work, and neither answer suits a tool call. Nor does it need
-            // to: this is the agent's own session, so there is nobody else's work in it.
+            // **Always, on both arms.** The same teardown a tab close reaches through the
+            // root's tab-diff effect: abort whatever is in flight and retire the workspace's
+            // snapshot. `close_query_session` promises the agent that "a run still in flight
+            // in it is cancelled", and that promise is about a run the engine is really
+            // executing — deferring it because the satellite says `Running` would let a
+            // runaway scan burn to completion with no way left to stop it, since the handle
+            // stops answering here.
+            //
+            // What it deliberately does not do is raise the T2 confirm — that dialog asks the
+            // *user* whether to destroy work, and neither answer suits a tool call. Nor does
+            // it need to: this is the agent's own session, so there is nobody else's work in
+            // it.
             engine.cleanup_ws(session.into());
+            // `Closed::WhenItSettles` still defers the *row*, and a second `cleanup_ws` with
+            // it — see `Closed`. That is the AA-03c race: this call can land between a run's
+            // `RunStarting` and its `engine.query`, where the abort above finds nothing to
+            // abort because the engine has not been handed the work yet, and the dispatch
+            // then registers on a `WsId` nothing holds. The settle is what sweeps it.
             let _ = reply.send(Ok(()));
         }
         AgentAsk::RunStarting {
@@ -189,7 +202,14 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
             session,
             seq,
             outcome,
-        } => agents.write().run_settled(agent, session, seq, outcome),
+        } => {
+            // A settle that finishes a session closed mid-dispatch hands the session back,
+            // and the teardown its close deferred happens here — see `Closed`.
+            let retire = agents.write().run_settled(agent, session, seq, outcome);
+            if let Some(session) = retire {
+                engine.cleanup_ws(session.into());
+            }
+        }
         AgentNotice::AgentGone(agent) => {
             // **Peeked before writing.** The retraction is broadcast to every window, and
             // `State::write` notifies every subscriber *before* handing back the guard — so
@@ -306,6 +326,10 @@ fn sessions(agents: &Agents, agent: AgentId, engine: &Engine) -> Vec<QuerySessio
         .find(|a| a.id == agent)
         .into_iter()
         .flat_map(|a| a.sessions.iter())
+        // A session the agent has already closed is not one it holds, whatever is still
+        // finishing inside it — listing a tombstone would offer back a handle every other
+        // tool answers not-found for.
+        .filter(|session| !session.closing)
         .map(|session| QuerySessionInfo {
             session: session.id,
             state: match session.runs.is_empty() {

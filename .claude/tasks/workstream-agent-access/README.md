@@ -24,7 +24,7 @@ same UI seam the MCP server does.
 | 02 | `strata-agent` crate: vocabulary + `Host` trait + rmcp server | ✅ | — | 01 |
 | 03 | In-app host: service directory · bridge · agent keepers · server lifecycle | ✅ | — | 02 |
 | 03b | The Agents pane: an agent's work is its own surface, not the user's tabs | ✅ | — | 03 |
-| 03c | Seam hardening: one identity per session, per client | ⬜ | — | 03b |
+| 03c | Seam hardening: one identity per session, per client | ✅ | — | 03b |
 | 04 | Settings ▸ Agent access (enable · port · token · status) | ⬜ | — | 03 |
 | 05 | Headless host: `strata mcp <project>` over stdio | ⬜ | — | 01, 02 |
 | 06 | Chat pane (flagship; may graduate to its own workstream) | ⬜ | — | 03 |
@@ -64,9 +64,13 @@ client vs Agent SDK sidecar) and reuses everything below it unchanged.
   spec §1 for the MCP frontend). An MCP client is in a terminal, so its runs get their own
   surface — the Agents pane — rather than the user's tabs, which stealing focus, piling up and
   costing a validation pass each made untenable. Scoping is structural: `StrataTools` *is* one
-  agent, minted per connection and retracted on drop, so an agent is never handed a handle on
-  another's work. The chat pane (AA-06) is the other case and keeps the tab gesture, because it
-  is in the window and the user is looking at it.
+  agent, and every session-scoped tool is scoped to its id, so an agent is never handed a handle
+  on another's work. **Which** agent comes from the request rather than from how long the
+  service value happens to live (AA-03c) — rmcp builds one value per *request* on its stateless
+  branch, so `agent::Caller` mirrors rmcp's own lifecycle predicate and falls back to `_meta`
+  `clientInfo`, refusing the session-scoped tools to a client that identifies itself as nothing
+  at all. The chat pane (AA-06) is the other case and keeps the tab gesture, because it is in
+  the window and the user is looking at it.
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

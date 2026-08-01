@@ -126,6 +126,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   connection and retracted on drop, so a handle it does not own answers exactly as one that never
   existed. A surface's state belongs to whoever is looking at it: "shared, last-writer-wins" is a
   fine rule for *content* and a bad one for *attention*. Promotion is a press, into a **new** tab.
+- **An agent's identity comes from the request, and a teardown that cannot happen yet is owed to
+  whoever finishes last.** `Caller` mirrors rmcp's own lifecycle predicate — never the value's
+  lifetime, never `Mcp-Session-Id` (not the discriminator, and absent on the branch that
+  breaks), never `peer_info` (`Implementation::default()` reads `rmcp`), and there is no
+  `legacy_session_mode` stopgap. A blank stateless identity is **refused** the session-scoped
+  tools, never pooled. The idle sweep skips a busy agent and runs once more from
+  `AgentServer::drop`. A close racing a dispatch is a **tombstone** — but it still aborts the
+  engine immediately; only the *row* waits for the last settle. `is_running` is *any* run in
+  flight, and the pane reads it rather than restating it.
 - **Poll only what nothing on our side can observe, and name the reason where the poll is.**
   `try_read` never a wait; the timer exists only while the feature is on; staleness bounded and stated.
 
