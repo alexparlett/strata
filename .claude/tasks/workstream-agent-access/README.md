@@ -24,14 +24,14 @@ same UI seam the MCP server does.
 | 02 | `strata-agent` crate: vocabulary + `Host` trait + rmcp server | ✅ | — | 01 |
 | 03 | In-app host: service directory · bridge · agent keepers · server lifecycle | ✅ | — | 02 |
 | 03b | The Agents pane: an agent's work is its own surface, not the user's tabs | ✅ | — | 03 |
-| 03c | Seam hardening: one identity per run, per session, per client | ⬜ | — | 03b |
+| 03c | Seam hardening: one identity per session, per client | ⬜ | — | 03b |
 | 04 | Settings ▸ Agent access (enable · port · token · status) | ⬜ | — | 03 |
 | 05 | Headless host: `strata mcp <project>` over stdio | ⬜ | — | 01, 02 |
 | 06 | Chat pane (flagship; may graduate to its own workstream) | ⬜ | — | 03 |
 
 ## Why the order
 
-03c is the three defects AA-03b's review left standing, batched because each changes a *shape*
+03c is what AA-03b's review left standing (its first item landed in the same PR), batched because each changes a *shape*
 rather than a line and two of them touch the `Host` trait. It is not a blocker for 04, 05 or 06 —
 but 06 inherits its third finding directly (an in-process caller has no `Mcp-Session-Id`), so
 whoever starts the chat pane should read it first.

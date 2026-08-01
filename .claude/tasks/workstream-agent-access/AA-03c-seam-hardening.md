@@ -1,18 +1,18 @@
-# AA-03c · The seam's three unclosed holes: one identity per run, per session, per client
+# AA-03c · The seam's remaining holes: one identity per session, per client
 
 **Workstream:** Agent access · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** AA-03b
 
 ## Why this exists
 
-AA-03b's review turned up fifteen defects; eleven were fixed in place. The three left are the
-ones whose fix **changes a shape rather than a line** — each needs a decision, and two of them
-touch the `Host` trait, so batching them is cheaper and safer than three separate patches to the
-same seam.
+AA-03b's review turned up fifteen defects; eleven were fixed in place, and a twelfth (§1 below)
+landed in the same PR once a second review showed the estimate that deferred it was wrong. What
+is left is **two defects and one small decision**, kept together because they are one family.
 
-They are one family, which is the useful way to hold them: **the seam identifies three things by
-something that is not their identity.** A run is bracketed by *project root*, a session's
-teardown is ordered by *nothing*, and an agent is identified by *how long a value happens to
-live*. Each is right today and wrong under a condition the app can already reach.
+They are one family, which is the useful way to hold them: **the seam identifies things by
+something that is not their identity.** A session's teardown is ordered by *nothing*, and an
+agent is identified by *how long a value happens to live*. Each is right today and wrong under a
+condition the app can already reach. (§1 was the third — a run bracketed by *project root* — and
+is the worked example of what fixing one looks like.)
 
 None is a regression from AA-03 — the first two are new surface that AA-03b's direct-engine
 dispatch created, and the third was latent in AA-03 and became load-bearing when `AgentId`
@@ -20,43 +20,29 @@ started scoping every session.
 
 ---
 
-## 1. A run's bracket must name its registration, not its project root
+## 1. ~~A run's bracket must name its registration~~ — done; one question left
 
-**Where:** `crates/strata-freya/src/agent/directory.rs` — `Host::run`.
+**Fixed in AA-03b's PR** after review flagged it a second time. `Host::run` used to resolve its
+window three times independently (`engine_for`, the `RunStarting` ask, the `RunSettled` notify),
+each a `rev().find(root)` — so an engine restart, which remounts at the *same* root, could
+execute the run on the outgoing engine while the incoming window recorded it, or deliver a settle
+to a satellite that had never heard of the session, where it silently matched nothing and
+stranded the row at `Running`.
 
-The run resolves its window **three times**, independently, by path:
+`AgentDirectory::window` now takes the engine and both senders **together, under one lock**, and
+the run carries that resolution through the whole bracket. Pinned by
+`a_run_settles_into_the_registration_that_started_it`, which remounts at the same root mid-run
+and asserts the settle lands on the registration that answered the start.
 
-```rust
-let engine = self.engine_for(project)?;                       // rev().find(root)
-… self.ask(project, |reply| AgentAsk::RunStarting { … })      // rev().find(root)
-… self.notify(project, AgentNotice::RunSettled { … })         // rev().find(root)
-```
+The estimate that put it here was wrong: the fix is contained inside `AgentDirectory` and changes
+no signature. What is genuinely left is the **decision**, which is small:
 
-`RegId` exists precisely because the root is *not* an identity: an engine restart remounts the
-subtree at the same folder, and the module doc spends a paragraph on why the read path walks in
-`rev()` to cope. But `rev()` only picks the newest at each lookup — it cannot make three lookups
-agree with each other.
-
-**What goes wrong.** A restart landing between the ask and the notice bracket one run across two
-mounts: `RunStarting` is recorded on mount A's satellite, the settle is delivered to mount B's,
-whose `Agents` has no such session, and `run_settled` silently no-ops. The run is never reported
-finished anywhere. A restart between `engine_for` and the ask is worse in kind — the run executes
-on the outgoing engine while the *incoming* window records it.
-
-**Shape of the fix.** Resolve once, at the top, and carry the resolution through the call: clone
-the `Arc<Engine>` and both senders under a single lock (a private
-`fn window<T>(&self, project: &Path, take: impl FnOnce(&Window) -> T) -> Option<T>`), or resolve
-to a `RegId` and key the rest of the call on that. The `notify`-by-root path then disappears
-entirely, and so does the triple `rev().find` the review's simplification angle flagged
-separately. Prefer the single-lock clone: it makes the bracket structurally unable to span two
-mounts rather than merely unlikely to.
-
-**Decide:** whether a run whose registration has gone mid-flight should still settle into
-*nothing* (today's behaviour, silently) or answer `WindowGone` to the agent. The latter is
-probably right — the agent asked a window a question and the window left — but it is a
-behaviour change and the tool's result shape has no arm for "it ran but nobody recorded it".
-
----
+**A run whose registration has gone mid-flight currently settles into nothing, silently** — the
+notice send fails and the agent still gets its rows. That is defensible (the query really did
+run) but it means the pane can never show the outcome. The alternative is answering `WindowGone`,
+which is arguably more honest and is what every other window-loss answers — but the agent would
+then get an error for a query that *succeeded*, and `RunResult` has no arm for "it ran but nobody
+recorded it". Decide which, and if it stays silent, say so where `notify` is called.
 
 ## 2. Closing a session must not race the run being dispatched into it
 

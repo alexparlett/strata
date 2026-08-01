@@ -138,35 +138,27 @@ impl AgentDirectory {
         self.page_size.store(rows, Ordering::Relaxed);
     }
 
-    /// The ask channel for `project`, or [`AgentError::WindowGone`].
+    /// Take what a call needs from `project`'s window, under **one** lock.
     ///
-    /// Deliberately clones the sender out from under the lock rather than handing back a
-    /// borrow: the caller is about to `await`, and a `MutexGuard` held across an await is
-    /// both a `!Send` future and a lock the UI thread could then block on.
-    fn asks(&self, project: &Path) -> Result<mpsc::Sender<AgentAsk>, AgentError> {
+    /// Every reach for a window goes through here, and the `rev()` is why: registrations are
+    /// pushed, so the newest match is last, and two entries sharing a root can only ever be an
+    /// outgoing mount and its replacement (see [`RegId`]). Taking the first would hand the
+    /// caller the dead engine's `Arc` and a sender whose driver is being torn down.
+    ///
+    /// One lock **per call**, not per handle: a caller that reached three times would be three
+    /// independent lookups, and an engine restart landing between two of them remounts at the
+    /// same root — so the call could execute on the outgoing engine while recording on the
+    /// incoming window, or record a run's start on one satellite and deliver its settle to
+    /// another (where it silently matches nothing, stranding the row at `Running`). Resolving
+    /// once makes that unrepresentable rather than unlikely.
+    fn window<T>(&self, project: &Path, take: impl FnOnce(&Window) -> T) -> Option<T> {
         self.windows
             .lock()
             .unwrap()
             .iter()
             .rev()
             .find(|w| w.root == project)
-            .map(|w| w.asks.clone())
-            .ok_or(AgentError::WindowGone)
-    }
-
-    /// Tell one window a fact it cannot refuse. Silent on a window that has gone — there is
-    /// no caller to report to and nothing left to correct.
-    fn notify(&self, project: &Path, notice: AgentNotice) {
-        if let Some(window) = self
-            .windows
-            .lock()
-            .unwrap()
-            .iter()
-            .rev()
-            .find(|w| w.root == project)
-        {
-            let _ = window.notices.send(notice);
-        }
+            .map(take)
     }
 
     /// Tell **every** window a fact. An agent's connection is not project-scoped: it may
@@ -184,30 +176,32 @@ impl AgentDirectory {
     /// reply channel dropped with the scope that held it. A re-root and a close are
     /// indistinguishable here and should be: what the agent needs to know is that the window
     /// it was addressing is not the one in front of the user any more.
+    ///
+    /// The sender is cloned out from under the lock rather than borrowed: the caller is about
+    /// to `await`, and a `MutexGuard` held across an await is both a `!Send` future and a lock
+    /// the UI thread could then block on.
     async fn ask<T>(
         &self,
         project: &Path,
         build: impl FnOnce(oneshot::Sender<T>) -> AgentAsk,
     ) -> Result<T, AgentError> {
-        let asks = self.asks(project)?;
+        let asks = self
+            .window(project, |w| w.asks.clone())
+            .ok_or(AgentError::WindowGone)?;
+        Self::send(&asks, build).await
+    }
+
+    /// Ask over an **already-resolved** sender — the half of [`ask`](Self::ask) a caller that
+    /// resolved its window once needs, so it does not have to look the window up again.
+    async fn send<T>(
+        asks: &mpsc::Sender<AgentAsk>,
+        build: impl FnOnce(oneshot::Sender<T>) -> AgentAsk,
+    ) -> Result<T, AgentError> {
         let (tx, rx) = oneshot::channel();
         asks.send(build(tx))
             .await
             .map_err(|_| AgentError::WindowGone)?;
         rx.await.map_err(|_| AgentError::WindowGone)
-    }
-
-    /// The engine serving `project`, without the `Host` method's `async` — the run path needs
-    /// it twice and neither reach is a question for a window.
-    fn engine_for(&self, project: &Path) -> Result<Arc<Engine>, AgentError> {
-        self.windows
-            .lock()
-            .unwrap()
-            .iter()
-            .rev()
-            .find(|w| w.root == project)
-            .map(|w| Arc::clone(&w.engine))
-            .ok_or(AgentError::WindowGone)
     }
 }
 
@@ -229,7 +223,8 @@ impl Host for AgentDirectory {
     }
 
     async fn engine(&self, project: &Path) -> Result<Arc<Engine>, AgentError> {
-        self.engine_for(project)
+        self.window(project, |w| Arc::clone(&w.engine))
+            .ok_or(AgentError::WindowGone)
     }
 
     async fn catalog(&self, project: &Path) -> Result<Vec<CatalogEntry>, AgentError> {
@@ -293,17 +288,25 @@ impl Host for AgentDirectory {
         mode: RunMode,
         page_size: usize,
     ) -> Result<RunSettle, AgentError> {
-        let engine = self.engine_for(project)?;
-        let started = {
-            let sql = sql.clone();
-            self.ask(project, |reply| AgentAsk::RunStarting {
-                agent,
-                session,
-                sql,
-                reply,
-            })
-            .await??
+        // **One resolution for the whole bracket.** The engine that executes, the driver that
+        // records the start and the driver that hears the settle are taken together, under one
+        // lock, so a re-registration cannot land between them — see `window`. Resolving three
+        // times (as this did) let an engine restart execute the run on the outgoing engine
+        // while the incoming window recorded it, or deliver a settle to a satellite that had
+        // never heard of the session, where it silently matched nothing.
+        let Some((engine, asks, notices)) = self.window(project, |w| {
+            (Arc::clone(&w.engine), w.asks.clone(), w.notices.clone())
+        }) else {
+            return Err(AgentError::WindowGone);
         };
+
+        let started = Self::send(&asks, |reply| AgentAsk::RunStarting {
+            agent,
+            session,
+            sql: sql.clone(),
+            reply,
+        })
+        .await??;
 
         let ws = WsId::from(session);
         let tag = RunTag(self.runs.fetch_add(1, Ordering::Relaxed) as u128);
@@ -321,15 +324,15 @@ impl Host for AgentDirectory {
                 .map(Settled::Plan),
         };
 
-        self.notify(
-            project,
-            AgentNotice::RunSettled {
-                agent,
-                session,
-                seq: started,
-                outcome: RunOutcome::of(&settled),
-            },
-        );
+        // Straight down the sender the start was answered on — not a fresh lookup, which is
+        // what could deliver this to a different mount. Silent on a driver that has gone:
+        // there is nobody left to correct.
+        let _ = notices.send(AgentNotice::RunSettled {
+            agent,
+            session,
+            seq: started,
+            outcome: RunOutcome::of(&settled),
+        });
         Ok(settled)
     }
 
@@ -558,6 +561,66 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// **A run's bracket cannot span two mounts.** The engine that executes it, the driver that
+    /// records its start and the driver that hears its settle are resolved together — so an
+    /// engine restart landing mid-run (a remount at the *same* project root) cannot deliver the
+    /// settle to a satellite that never heard of the session, where `run_settled` would match
+    /// nothing and strand the row at `Running` forever.
+    #[test]
+    fn a_run_settles_into_the_registration_that_started_it() {
+        let directory = AgentDirectory::default();
+        let (id, mut asks, mut before) = directory.register(
+            PathBuf::from("/w/sales"),
+            "sales".into(),
+            Arc::new(Engine::new(BTreeMap::new())),
+        );
+        let who = AgentId::new();
+        let session = QuerySessionId::new();
+
+        let mut after = None;
+        let (settled, _) = block_on(join(
+            directory.run(
+                Path::new("/w/sales"),
+                who,
+                session,
+                "SELECT 1".into(),
+                RunMode::Run,
+                100,
+            ),
+            async {
+                let Some(AgentAsk::RunStarting { reply, .. }) = asks.recv().await else {
+                    panic!("expected a run-starting ask");
+                };
+                let _ = reply.send(Ok(7));
+                // The restart: this mount goes and a fresh one takes the same root, exactly
+                // as `ProjectLoaded` remounting does, while the run is still executing.
+                directory.deregister(id);
+                let (_, _new_asks, new_notices) = directory.register(
+                    PathBuf::from("/w/sales"),
+                    "sales".into(),
+                    Arc::new(Engine::new(BTreeMap::new())),
+                );
+                after = Some(new_notices);
+            },
+        ));
+
+        assert!(settled.unwrap().is_ok(), "the engine still ran it");
+        assert!(
+            matches!(
+                before.try_recv(),
+                Ok(AgentNotice::RunSettled { seq: 7, .. })
+            ),
+            "the settle belongs to the registration that answered the start"
+        );
+        assert!(
+            after
+                .expect("the replacement registered")
+                .try_recv()
+                .is_err(),
+            "and must not land on the mount that replaced it"
+        );
     }
 
     /// A connection ending is broadcast to **every** window, because an agent may hold query
