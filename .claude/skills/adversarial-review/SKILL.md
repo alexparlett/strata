@@ -1,7 +1,7 @@
 ---
 name: adversarial-review
 description: Review a change through isolated, hostile critics that assume it is wrong — then refute every finding before reporting it. Use before merging, on a change you just wrote yourself, when a normal review came back clean too easily, or when asked to red-team, stress-test, or adversarially review a diff or task.
-argument-hint: "[low|medium|high|max] [git ref, path, or task id] [--lens a,b]"
+argument-hint: "[low|medium|high|max] [PR number/URL, git ref, path, or task id] [--lens a,b]"
 ---
 
 # Adversarial review
@@ -36,11 +36,42 @@ can round a `BLOCK` down is not a gate.
 
 ### 1. Resolve the scope
 
+**No `git diff` shows an untracked file.** A change made entirely of new files diffs as empty, and
+the critics then review nothing and return `CLEAN` — on precisely this skill's headline case, a
+change you just wrote. So the default scope takes three readings, not one:
+
 ```bash
-git diff && git diff --cached && git diff main...HEAD --stat
+git status --porcelain && git diff "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD" && git diff
 ```
 
-- **no argument** — working tree + staged + this branch against `main`. The default.
+`git status --porcelain` marks untracked paths `??`; expand any directory it names, because it
+abbreviates (`?? .claude/agents/` is a directory, not a file):
+
+```bash
+git ls-files --others --exclude-standard
+```
+
+For those, **the whole file is the change** — say so in the brief, or a critic told to "read the
+changed files" reads hunks that do not exist.
+
+`"${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD"` rather than `main...HEAD`: the three-dot form is
+already merge-base relative, but the base branch is not always `main`, and the harness publishes
+the right one. Use `@{u}..` when you want only what this branch added on top of its upstream — and
+state the commit count, because a branch is often many commits and `HEAD~1` silently reviews one.
+
+Targets:
+
+- **no argument** — the three readings above. The default.
+- **a PR** — `123`, a URL, or `owner/repo/pull/123`:
+
+  ```bash
+  gh pr view <n> --json title,body,files,baseRefName && gh pr diff <n>
+  ```
+
+  **The diff is ground truth; the PR description is a claim *about* it.** Put the description in the
+  contract as a claim to audit, never in the scope as context to believe — it is exactly the
+  self-narration the isolation exists to keep out, and a description that disagrees with its diff is
+  a finding the contract lawyer should return. `gh pr list` if no number was given.
 - **a ref** (`HEAD~3`, a tag) — `git diff <ref>`.
 - **a path** — that file or directory in full, not only its changed lines.
 - **a task id** (`AA-04`, `P4-01`) — the diff above, plus that file under `.claude/tasks/` read as

@@ -107,6 +107,21 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   is a real clean result; a critic returning nothing at all is an absence of evidence. The two must
   not collapse: all-dead returns `FAILED` with a message saying so, because an empty findings card
   is indistinguishable from a clean pass.
+  **Scope is three readings, and a description is a claim.** No `git diff` shows an untracked file:
+  `git status --porcelain` marks them `??` and abbreviates directories, so a change made entirely of
+  new files produces an empty diff, gets no candidates, and returns `CLEAN` — on precisely this
+  skill's headline case, a change you just wrote. This is not hypothetical; it happened on the very
+  branch that added the skill, whose scope brief had to name the four untracked files by hand. So
+  the default scope is `git status --porcelain` + the branch diff + the working tree, with
+  untracked paths expanded through `git ls-files --others --exclude-standard` and marked whole-file
+  in the brief, because a critic told to read "the changed files" otherwise looks for hunks that do
+  not exist. The base is `${CLAUDE_CODE_BASE_REF:-origin/HEAD}` and never a hardcoded `main` — the
+  three-dot form is already merge-base relative, but the base branch is not always `main` and the
+  harness publishes the right one. A PR target is `gh pr view <n>` + `gh pr diff <n>`, and its
+  description belongs in the **contract**, not the scope: the diff is ground truth and the
+  description is a claim *about* it, so a description that disagrees with its own diff is a finding
+  the contract lawyer returns rather than context that explains the code away. An unread file and a
+  clean file are not the same answer, and the critics are told to say which one they are giving.
   **Findings go through `ReportFindings`, and the script hands over the exact shape.** The host
   renders a findings card — grouped by file, category chips, a per-row verdict badge, the effort
   level in the header, and Apply-fixes/Walk-through actions — which is the artifact most people
