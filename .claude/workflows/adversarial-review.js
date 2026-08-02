@@ -317,7 +317,12 @@ let split = 0
 for (const group of byLine.values()) {
   const clusters = []
   for (const c of group) {
-    const hit = clusters.find(cl => cl.some(m => sameDefect(m, c)))
+    // `every`, not `some`: complete linkage. Single linkage would let a candidate join on one
+    // match and chain the cluster transitively - A~B and B~C merges A with C even when A and C
+    // share nothing - which is precisely the wrong-merge this threshold exists to avoid, and it
+    // gets likelier the more lenses land on one line. Requiring a match against every member
+    // means a cluster is similar pairwise throughout, so the under-merge bias actually holds.
+    const hit = clusters.find(cl => cl.every(m => sameDefect(m, c)))
     if (hit) hit.push(c)
     else clusters.push([c])
   }

@@ -140,7 +140,7 @@ independently and the majority is still per-candidate — only the packing chang
 This is not a micro-optimisation, and the arithmetic is not academic. Measured on a 7-file diff:
 six critics raised **53 candidates over 32 distinct sites**, which per-candidate voting billed as
 **159 voters — 165 agents in flight**, with 21 of them re-judging a site another lens had already
-raised. Batched and deduplicated, the same review is **26**. Discovery is deliberately tuned to
+raised. Batched and deduplicated, the same review is **18** (6 critics + 3 voters x ceil(32/10)). Discovery is deliberately tuned to
 over-report; putting the widest possible gate directly behind a firehose is how that design choice
 turns into a bill.
 

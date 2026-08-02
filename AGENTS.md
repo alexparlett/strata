@@ -336,7 +336,7 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   computed in the script from the tally, and the tier is reported verbatim.
 - **A voter reads a batch of candidates, and dedup comes before the panel.** `voters ×
   ceil(sites/10)`, never `voters × sites`; per-candidate voting billed 165 agents on a 7-file diff
-  where the batched, deduplicated shape bills 26. Convergence is the promotion signal — count it
+  where the batched, deduplicated shape bills 18 (6 critics + 3 x ceil(32/10)). Convergence is the promotion signal — count it
   once, do not pay for it six times. Cap a lens at 12 candidates and log the drop.
 - **The merge keys on position *and* claim, and promotion runs before the red team.** Two lenses
   citing one line is routine, not agreement: merging on `file:line` alone deletes one claim unjudged
