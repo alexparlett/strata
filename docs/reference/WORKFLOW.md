@@ -54,6 +54,81 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
   against fork source and hand off to a Mac build (see CLAUDE.md's environment note).
+- **A change you wrote is reviewed by critics who cannot see why you wrote it** — the
+  `adversarial-review` skill, in front of the build check and never in place of it. A model that
+  can see the reasoning behind a diff rates that diff more favourably than a neutral reader, and
+  the gap is widest on the diffs that are actually wrong: self-review reproduces the reasoning
+  error rather than catching it, which is why a session that just built something and then reviews
+  it reliably returns "looks right". So the critics are **isolated read-only subagents**
+  (`.claude/agents/adversarial-reviewer.md`), one per lens, handed artifacts only — diff, files,
+  and the written contract (`AGENTS.md`, the `docs/reference/` entry, the task file). Never the
+  story: a brief that explains the intent rebuilds the echo chamber the isolation exists to break.
+  **Effort is the user's dial and the panel is not on it.** `/adversarial-review low|medium|high|max`
+  buys reasoning effort *and* panel width together — 1 voter at low/medium, a 3-voter majority panel
+  at high, and at `max` a further phase that red-teams every survivor on whether its severity is
+  honest, so a `max` run can return *fewer* findings than a `high` one and better ones.
+  **A voter reads a batch of candidates, and dedup comes before the panel.** Ten at a time, so the
+  panel costs `voters × ceil(sites/10)` and not `voters × sites` — independence and the
+  per-candidate majority are unchanged, only the packing. That is not a micro-optimisation:
+  measured on a 7-file diff, six critics raised 53
+  candidates over 32 distinct sites, which per-candidate voting billed as **165 agents in flight**,
+  21 of them re-judging a site another lens had already raised; batched and deduplicated the same
+  review is 18. Dedup runs before the panel and never after — convergence is the
+  promotion signal, to be counted once rather than paid for six times — and a single lens is capped
+  at 12 candidates, logged, because discovery is tuned to over-report and putting the widest gate
+  directly behind a firehose is how that choice becomes a bill.
+  **The merge keys on position *and* claim, and promotion runs before the red team.** Lenses hunt
+  different things, so two of them citing one line is routine and is not agreement; keying on
+  `file:line` alone deletes one claim before the panel can judge it *and* reports the collision as
+  convergence, promoting a severity for agreement that never happened — the promotion predicate
+  then cannot distinguish the two, which is exactly the property it exists to read. Claims are
+  clustered by content-word overlap, deliberately shallow and deterministic, with the threshold set
+  to **under-merge**: a missed merge costs one panel slot and one promotion, a wrong merge destroys
+  a finding outright and manufactures the agreement that promotes what is left. Promotion then runs
+  **before** the red team rather than after it, or `max`'s only extra phase would be nullified on
+  precisely the multi-lens sites it is most likely to reach, and the red team would be judging a
+  severity that is not the one the report prints.
+  A tier never buys the panel away: its floor is one voter, never zero,
+  and isolation and whole-file reading are fixed at every tier because those three are the whole
+  difference from a slower `/code-review`. `low` folds the lenses into one critic **and tells it
+  so** ("you are the ONLY critic"), rather than pretending six independent critics agreed. That is
+  the `claude-security` scan's shape, which collapses to a single researcher on a small diff and
+  logs that it is "still panel-verified". Which is also why this is a **workflow**
+  (`.claude/workflows/adversarial-review.js`) and not an Agent-tool fan-out: only `Workflow`'s
+  `agent()` takes a per-call `effort`, so an Agent-tool version could not offer the dial at all —
+  static frontmatter is all it has. The verdict is computed **in the script** from the severity
+  tally, never asked of a model, because a synthesiser that can round a `BLOCK` down is not a gate.
+  The tier is reported verbatim: a tier is a claim about how hard the change was looked at, and a
+  `low` report that reads like a `max` one is the failure this method exists to prevent.
+  **Discovery fails closed, not just the panel.** `agent()` resolves to null when a subagent dies
+  or is skipped, and an empty candidate list reads downstream exactly like a clean diff, so a review
+  in which every critic died would report `CLEAN` - and at `low`, or `medium` on a small change,
+  there is exactly *one* critic, so a single dead agent is enough. A critic returning `findings: []`
+  is a real clean result; a critic returning nothing at all is an absence of evidence. The two must
+  not collapse: all-dead returns `FAILED` with a message saying so, because an empty findings card
+  is indistinguishable from a clean pass.
+  **Findings go through `ReportFindings`, and the script hands over the exact shape.** The host
+  renders a findings card — grouped by file, category chips, a per-row verdict badge, the effort
+  level in the header, and Apply-fixes/Walk-through actions — which is the artifact most people
+  actually read, so the script returns `report` already in that tool's shape rather than leaving
+  the caller to map it: a shape the caller has to transform is a shape the caller can get wrong.
+  The panel is the verify pass, so every row carries a verdict — `CONFIRMED` when the vote was
+  unanimous, `PLAUSIBLE` when one voter refused, because flattening those to one word discards the
+  panel's own disagreement. Two things the card has no field for stay in prose beneath it: the
+  severity tally and the `BLOCK`/`CONCERNS`/`CLEAN` gate result. Never print the findings as prose
+  as well — a duplicated list is noise beside a card that already scrolls.
+  Two stages with opposite biases, because neither survives alone — hostile discovery is tuned to
+  over-report (a critic that hedges finds nothing), then a **refutation gate** takes every
+  candidate to a fresh skeptic told to kill it, defaulting to refuted on ambiguous evidence.
+  Discovery without the gate is a false-positive flood that gets the reviewer switched off after
+  two runs; the gate without hostile discovery is the rubber stamp it replaced. Two rules carry the
+  weight. **Each lens must name its strongest candidate** — "LGTM" from a hostile lens means the
+  lens did not run — but that obligation is on discovery only, so a `CLEAN` verdict after the gate
+  kills everything is a *result*, never a reason to invent or inflate a finding. And the **negation
+  pass**: models underweight negation, so a rule phrased "never X" is the one a critic waves
+  through, and `AGENTS.md` is written almost entirely in "never" — the fix is to grep the diff for
+  the forbidden thing itself rather than asking whether the rule was violated, turning an absence
+  the model must notice into a query the search answers.
 - **CI runs that same check on every PR** (`.github/workflows/ci.yml`): `cargo test --workspace
   --locked` on **macOS** (the platform we ship — a green Linux build proves nothing about the muda
   menubar or the traffic-light gutter), with `submodules: true`, because the build resolves Freya by

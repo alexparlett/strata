@@ -324,6 +324,33 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   `git submodule status`).
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`.
+- **A change you wrote is reviewed by critics who cannot see why you wrote it** — the
+  `adversarial-review` skill: isolated read-only lenses handed artifacts and the contract but never
+  the intent, then a refutation gate that defaults to killing a finding. In front of the build
+  check, never in place of it. Each lens must name its strongest candidate; a `CLEAN` verdict after
+  the gate is still a result.
+- **Effort is the user's dial and the panel is not on it.** `low|medium|high|max` buys reasoning
+  effort and panel width together (1 voter, then a 3-voter majority, then `max`'s red-team); its
+  floor is one voter, never zero, and isolation and whole-file reading are fixed at every tier. A
+  **workflow**, because only `Workflow`'s `agent()` takes a per-call `effort`. The verdict is
+  computed in the script from the tally, and the tier is reported verbatim.
+- **A voter reads a batch of candidates, and dedup comes before the panel.** `voters ×
+  ceil(sites/10)`, never `voters × sites`; per-candidate voting billed 165 agents on a 7-file diff
+  where the batched, deduplicated shape bills 26. Convergence is the promotion signal — count it
+  once, do not pay for it six times. Cap a lens at 12 candidates and log the drop.
+- **The merge keys on position *and* claim, and promotion runs before the red team.** Two lenses
+  citing one line is routine, not agreement: merging on `file:line` alone deletes one claim unjudged
+  and promotes the survivor for a convergence that never happened. Cluster by content-word overlap,
+  biased to **under-merge** — a missed merge costs a panel slot, a wrong one destroys a finding.
+  Promote first so `max`'s severity correction is the last word.
+- **Discovery fails closed, not just the panel.** A critic returning `findings: []` is a clean
+  result; a critic returning *nothing* is an absence of evidence, and collapsing the two lets a
+  review where every critic died report `CLEAN` — the worst thing the tool could say. All critics
+  dead is `FAILED`, never an empty findings card.
+- **Findings go through `ReportFindings`, and the script hands over the exact shape.** `report` is
+  returned ready to pass, sorted most-severe first; each row carries `CONFIRMED` (unanimous panel)
+  or `PLAUSIBLE` (one voter refused). The severity tally and the `BLOCK`/`CONCERNS`/`CLEAN` gate
+  go in prose beneath the card, which has no field for either. Never print the list twice.
 - **CI runs that same check on every PR** — `cargo test --workspace --locked` on **macOS**, with
   `submodules: true`, asserting the gitlink **before** compiling.
 - **The release path is a script CI calls, never a pipeline written in YAML.** Signing degrades
