@@ -178,7 +178,8 @@ Product / design:
 - **`FEATURES.md`** — full feature spec (every surface + its DataFusion/engine hook).
 - **`DEV_TASKS.md`** — the backlog: UI-surface audits (design-vs-code drift) + functional workstreams.
 
-Feature specs: `AGENT_ACCESS_SPEC.md` (+ `agent-access-dataflow.mermaid`), `COMPLETION_SPEC.md`
+Feature specs: `AGENT_ACCESS_SPEC.md` (+ `agent-access-dataflow.mermaid`), `CHART_SPEC.md`
+(the grounded chart-view design — supersedes the handoff bundle's CHART_SPEC on mechanism), `COMPLETION_SPEC.md`
 (the as-built P2-04 design — supersedes `SQL_LANGUAGE_SPEC.md` §4), `CONNECTIONS_SPEC.md`,
 `EXPLAIN_PLAN_SPEC.md`, `EXPORT_OPTIONS.md`, `IMPORT_OPTIONS.md`, `SQL_LANGUAGE_SPEC.md`,
 `EDITOR_LANG_SPIKE.md`, `F7-shared-state.md`, `SNAPSHOT_SPEC.md`.

@@ -67,9 +67,9 @@ Read this index first, then open only the phase/workstream file you're working i
 - **Connections + remote object stores** (`workstream-connections/`, DEV_TASKS **W7**) — the
   activity-rail button, the sidebar connections pane, and the config-table LOCATION toggle +
   S3/GCS/HTTP object stores. Touches Phase 2/3/4 surfaces. Spec: `docs/CONNECTIONS_SPEC.md`.
-- **Chart view** (`workstream-chart-view/`, DEV_TASKS **Rz2**) — the results Chart surface: chart
-  types, encoder strip, client-side aggregate, guardrails. A whole feature surface, not drift.
-  Spec: `docs/CHART_SPEC.md`.
+- **Chart view** (`workstream-chart-view/`, DEV_TASKS **Rz2**) — the results Chart surface:
+  engine-side chart data (`Engine::chart` over the snapshot), a plotters/Skia renderer, encoder
+  strip, guardrails, GROUP BY scaffold. A whole feature surface, not drift. Spec: `docs/CHART_SPEC.md`.
 - **Polymorphic JSON** (`workstream-json-polymorphic/`) — reading JSON whose fields disagree across
   records (a type-discriminated union), and querying inside the result. Two halves: **WJ-01** the
   Postgres-style JSON accessors (`json_get` / `->` / `->>`), and **WJ-02** a union-tolerant
