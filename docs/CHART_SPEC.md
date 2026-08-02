@@ -59,10 +59,15 @@ Derived from each result column's Arrow `DataType`, not name strings:
 
 | role | DataTypes |
 |---|---|
-| **measure** (Y, scatter axes, histogram value) | Int*/UInt*/Float*/Decimal* |
+| **measure** (Y, scatter axes, histogram value — and valid on X, below) | Int*/UInt*/Float*/Decimal* |
 | **temporal** (X; defaults to line) | Date32/Date64/Timestamp*/Time* |
 | **dimension** (X, series) | Utf8/LargeUtf8/Boolean/Dictionary |
 | **nested** — excluded from encoders | Struct/List/Map/Union |
+
+The role partition drives **defaults and ordering**, not what X may hold: a numeric column is a
+measure first but is also offered on X for bar/line/area (a step number, an integer code, an epoch
+column). A numeric X groups by value, ordered ascending, and is binnable with a uniform width —
+the numeric analog of the temporal stride (§5).
 
 Secondary signal only: a Utf8 column whose name matches the handoff's temporal-name regex
 (`(^|_)(ts|date|time|day|month|created|updated|_at)$` etc.) may be *offered* as temporal, but the
@@ -74,9 +79,9 @@ Six types. Each constrains which encoders are shown/valid:
 
 | Type | X | Y | Series | Aggregate |
 |---|---|---|---|---|
-| Bar | dimension/temporal or none | measure or `count(*)` | yes | yes |
-| Line | temporal/dimension | measure or `count(*)` | yes | yes |
-| Area | temporal/dimension | measure or `count(*)` | yes | yes |
+| Bar | dimension/temporal/numeric or none | measure or `count(*)` | yes | yes |
+| Line | temporal/dimension/numeric | measure or `count(*)` | yes | yes |
+| Area | temporal/dimension/numeric | measure or `count(*)` | yes | yes |
 | Pie | dimension | measure or `count(*)` | no | yes (always groups by X) |
 | Scatter | numeric | numeric | no | no (raw points) |
 | Histogram | — | numeric (the value) | no | no (engine bins) |
@@ -89,7 +94,10 @@ shapes (§5).
 One engine method, one freya-query capability in front of it.
 
 **Vocabulary (strata-model).** `ChartQuery` — the request, resolved from config + schema, no UI
-types: `Aggregate { x, series, y, agg_fn, bucket: Option<Stride>, group_cap }`,
+types: `Aggregate { x, series, measures: Vec<Measure>, bucket: Option<Bucket>, group_cap }` (`Measure`
+is `{ y, agg_fn }` — plural because a box plot or candlestick is extra measures on the same
+group, `CHART_FUNCTIONS.md` §2, though the core charts always send one; `Bucket` is a time
+stride for temporal X or a uniform width for numeric X),
 `Raw { x, y, cap }` (scatter), `Histogram { col, bins }`. `ChartData` — the chart-ready answer:
 categories + per-series `Vec<Option<f64>>` (wide, pivoted in the engine), or points, or bins; plus
 `group_count` / `capped` facts for guardrails. All fields hash/eq-able so `ChartQuery` can be cache
@@ -107,7 +115,11 @@ pivots to `ChartData` in Rust. Specifics:
   strip). Bucketed axes order by bucket ascending. `date_bin` emits no row for an empty bucket:
   the renderer must show a **gap** (that is why series values are `Option<f64>`), never
   interpolate across missing buckets.
-- **Category order is the snapshot's order** for non-temporal X: aggregate a
+- **A numeric X groups by value, ordered ascending.** Optionally binned with a uniform width
+  (`floor(x / w) * w`, labeled by bucket start) — the same control slot as the temporal stride,
+  with the same honesty rule: an empty bin is a gap, never interpolated.
+- **Category order is the snapshot's order** for categorical X (numeric and temporal axes order
+  by value ascending): aggregate a
   `min(row_number() OVER ())` alongside and order groups by it, so a result the user `ORDER BY`ed
   keeps that order in the chart. (Verify the row-number-follows-scan-order assumption with a test
   against a real snapshot; if it does not hold, fall back to ordering by the measure descending —
@@ -143,7 +155,7 @@ place of the canvas:
 
 | Condition | Message gist | CTA |
 |---|---|---|
-| Aggregate produced > `group_cap` (default 1 000; pie 24) groups | too many groups to chart honestly | **Add GROUP BY in SQL** |
+| Aggregate produced > `group_cap` (default 1 000; pie 24) groups | too many groups to chart honestly (a temporal/numeric X also nudges to a wider bucket) | **Add GROUP BY in SQL** |
 | Aggregate OFF (scatter/raw) and rows > `raw_cap` (default 6 000 points) | too many raw points | **Add GROUP BY in SQL** |
 | Histogram with no numeric column | pick a numeric column | — |
 | Scatter without numeric X and Y | pick two numeric columns | — |
@@ -165,7 +177,8 @@ ORDER BY 2 DESC;
 ```
 
 Temporal X scaffolds with `date_bin` using the currently-selected stride and orders by the bucket
-ascending. `COUNT(*) AS n` when Y is none; series adds a second grouping column. This is the
+ascending; a binned numeric X scaffolds the same shape with `floor(<x> / <w>) * <w> AS bucket`.
+`COUNT(*) AS n` when Y is none; series adds a second grouping column. This is the
 user-owned escape hatch the guardrails point at, and it is also offered on the healthy chart
 (promotion, not only refusal).
 
@@ -199,12 +212,17 @@ not yet enabled in `strata-freya`; enabling it is part of the workstream).
 
 ## 10. Later (owned follow-on, not scope creep)
 
+The full map of what the engine's function registry can turn into charts — box plots, candlesticks,
+ECDF, Pareto, heatmaps, Top-N + Other, share-of-total, gap-fill via `generate_series`, and the
+tiered build order — is **`docs/CHART_FUNCTIONS.md`**, the survey of the pinned DataFusion 54
+registry this spec's mechanism was designed against. Headlines that stay true here:
+
 - **Scatter trendline**: `regr_slope/regr_intercept/regr_r2` in the same `Engine::chart` call —
   never a client-side least-squares.
 - **Line/area overlays** (moving average, running total): window functions
   (`avg(y) OVER (ORDER BY x ROWS BETWEEN k PRECEDING AND CURRENT ROW)`, `sum … UNBOUNDED
   PRECEDING`) engine-side, drawn as dashed overlay series folded into the y-range.
-- **Richer aggregate menu**: `approx_percentile_cont`, `stddev` — cheap to add once the fn enum
+- **Richer aggregate menu**: `percentile_cont`, `stddev`, count-distinct — cheap once the fn enum
   exists.
 
 ## 11. Acceptance (workstream-level)

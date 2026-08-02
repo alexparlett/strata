@@ -18,8 +18,9 @@ The left control strip (X / Y / Series / Aggregate / stride) and the persisted p
   stays in the one site 02 built.
 - **Strip** (~232 logical px, own scroll, per the design visuals): standard components only —
   `Select`s for X / Y / Series filtered by column role (measure / temporal / dimension, nested
-  excluded; spec §3), the Aggregate toggle + fn `Select`, and the **stride control shown only when
-  X is temporal** (auto value visible, overridable). Options constrained per chart type (spec §4
+  excluded; numeric columns are offered on X for bar/line/area — spec §3), the Aggregate toggle +
+  fn `Select`, and the **bucket control shown when X is temporal (stride) or numeric (bin
+  width)** (auto value visible, overridable). Options constrained per chart type (spec §4
   table): e.g. no Series on pie/scatter/histogram, Y hidden for histogram's X. Typography roles
   for labels; no hardcoded fonts or colours.
 - Invalid encodings are **prevented by construction** (a control never offers a column the type

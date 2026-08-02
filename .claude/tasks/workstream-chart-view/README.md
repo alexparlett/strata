@@ -28,7 +28,7 @@ the design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visu
 | 02 | Chart body + plotters renderer | ⬜ | Rz2 | 01 |
 | 03 | Encoder strip + `ChartConfig` state | ⬜ | Rz2 | 02 |
 | 04 | Guardrails + GROUP BY scaffold | ⬜ | Rz2 | 02, 03 |
-| 05 | Trendline + overlays (follow-on) | ⬜ | Rz2 | 01–04 |
+| 05 | Analytical charts — the `CHART_FUNCTIONS.md` tiers (follow-on) | ⬜ | Rz2 | 01–04 |
 
 ## Why the order
 
