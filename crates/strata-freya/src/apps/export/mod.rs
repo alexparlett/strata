@@ -37,6 +37,7 @@ use crate::apps::export::views::{ExportBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::LogCtx;
 use crate::keymap::on_commands;
+use crate::menu::MenuScope;
 use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowKind};
 use crate::state::{use_share_config, AppCtx};
 use crate::theme::{peek_selection, use_strata_theme, window_background};
@@ -261,9 +262,12 @@ impl App for ExportApp {
         });
         let log = self.log;
         use_provide_context(move || log);
-        // Join the live window registry, so the app knows which window this panel belongs to…
+        // Join the live window registry, so the app knows which window this panel belongs to,
+        // and point the menubar here as a **panel** while this window is focused. Without that
+        // the menubar kept the owner project window's File menu, and Close Project (and its
+        // ⇧⌘W) closed *this* window while naming the project. Esc is how an export closes.
         let owner = self.owner;
-        use_register_window(self.app.windows, || WindowKind::Export);
+        use_register_window(&self.app, || WindowKind::Export, MenuScope::Panel);
         // …and close with the *subtree* the log above belongs to, not merely with the window that
         // owns it: a re-root and an engine restart both drop it while leaving that window open
         // under the same id.

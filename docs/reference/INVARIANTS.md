@@ -464,6 +464,29 @@ Things that must not regress. Each was fought for once already.
   otherwise would sit on a row whose reset control is gated off), and a bind to a command's own
   default clears the entry instead of storing a copy of it. One predicate behind the badge and the
   control, or a row wears a mark it has no way to remove.
+- **An app-global surface that follows the focused window is pointed by *every* window, and the
+  obligation rides the call each window already has to make.** The menubar is one bar for the whole
+  app, so its File and Window halves are only ever about whoever has focus — which means a window
+  that never says what its menubar is doesn't leave the bar blank, it leaves it showing the *last*
+  window's. Configure and Export shipped without the call, so with either focused the menubar still
+  carried the owner project window's File menu: Close Project (and its ⇧⌘W) closed the focused panel
+  while naming the project, and Open… sat enabled with no listener to reach. The fix is not to
+  remember harder — `use_file_menu` moved *inside* `use_register_window`, which every window root
+  must call anyway, and takes a `MenuScope` (`Project(OpenCtx)` · `Launcher` · `Panel`), so a new
+  kind of window cannot ship without answering the question. The scope is also the second half of
+  every gated item's enabled state: an item that reaches its window through the keyboard pipeline is
+  live only with **both** a chord to synthesize and a window that listens for it, which is why one
+  `apply` writes accelerator and enabled state together rather than two syncs racing on
+  `set_enabled`. Close Project is *removed* rather than greyed, because it routes at the focused
+  window directly and greying it would still leave the wrong window named. The gate is **four
+  independent flags, not a rank** (`workspace` · `project` · `workbench` · `cyclable`), because
+  where a command's listener lives differs per item and the differences do not nest: Close Project
+  is mounted on the window root and so works on a window whose project failed to load, while New
+  Query and Save Query are in the *workbench* and do not — the shape no "how much of a project
+  window is this" scale expresses. Whether AppKit claims a *disabled* item's key equivalent or lets
+  it fall through to the window is **unverified**, and nothing here depends on the answer: every
+  greyed item's command has no listener in the window that greys it, so both resolutions end in the
+  same nothing.
 - **A menubar accelerator is state, not decoration — and it must be disarmed while a chord is being
   captured.** The OS resolves an accelerator *before* the window sees the key, which makes both
   halves of this sharper than they look. A stale accelerator does not merely show the wrong text: it

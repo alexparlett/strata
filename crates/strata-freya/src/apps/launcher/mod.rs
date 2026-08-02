@@ -23,7 +23,7 @@ use strata_core::theme::os_is_dark;
 use crate::agent::use_agent_server;
 use crate::apps::launcher::views::{pick_and_open, LauncherRail, ProjectsPane, TitleBar};
 use crate::keymap::on_commands;
-use crate::menu::use_file_menu;
+use crate::menu::MenuScope;
 use crate::platform::{self, WindowKind};
 use crate::state::{use_share_config, AppCtx};
 use crate::theme::{peek_selection, use_strata_theme, window_background};
@@ -102,12 +102,12 @@ impl App for LauncherApp {
         });
         // Join the live window registry, so "open the launcher" finds this one instead of
         // opening a second, and a project window can tell whether it is the last one.
-        platform::use_register_window(self.app.windows, || WindowKind::Launcher);
-        // While this window is focused the File menu is *its* File menu: the recents it
-        // lists, and neither Close Project nor an open path — there is no project here to
-        // close, and nothing to open *into*, so a recent opens a window and this one stands
-        // down.
-        use_file_menu(&self.app, None);
+        //
+        // The same call points the menubar here while this window is focused: the recents it
+        // lists and Open…, but neither Close Project nor an open path — there is no project
+        // here to close, and nothing to open *into*, so a recent opens a window and this one
+        // stands down.
+        platform::use_register_window(&self.app, || WindowKind::Launcher, MenuScope::Launcher);
         // The agent-access server's other reconciler. There is always at least one *workspace*
         // window alive — the launcher takes the last project's place — so mounting it on both
         // kinds is what makes the setting still live when every project is closed. Idempotent,

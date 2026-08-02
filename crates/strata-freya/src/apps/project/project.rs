@@ -43,7 +43,7 @@ use crate::apps::project::views::{
     RequestKeepers, Shell,
 };
 use crate::keymap::on_commands;
-use crate::menu::use_file_menu;
+use crate::menu::MenuScope;
 use crate::platform::{
     close_this_window, open_settings, quit, use_register_window, OpenCtx, Subtree, WindowKind,
 };
@@ -240,6 +240,7 @@ impl App for ProjectApp {
             }),
             confirm,
             faulted: use_state(|| false),
+            loaded: use_state(|| false),
             restart: engine_restart,
         };
         use_provide_context(move || open);
@@ -248,14 +249,17 @@ impl App for ProjectApp {
         // "this project is already open" a focus instead of a second window, and what tells
         // this window whether it is the last one. Reactive on the open project, so a
         // re-rooted window is listed under what it actually shows.
-        let windows = self.app.windows;
-        use_register_window(windows, move || {
-            WindowKind::Project(open.root.read().to_string_lossy().into_owned())
-        });
-        // While this window is focused the File menu is *its* File menu: the recents, Close
-        // Project — which this window, unlike the launcher, has something to close — and the
-        // open path Open Recent resolves through.
-        use_file_menu(&self.app, Some(open));
+        //
+        // The same call points the menubar here while this window is focused. A project window
+        // is the one scope where every File and Window item applies — and it hands over its
+        // open path, so Open Recent honours this window's "Opening a project" preference.
+        // …and it hands back this window's own id, which is the one thing a window cannot
+        // learn any other way and `Command::CycleWindow` needs to name itself in the ring.
+        let window_id = use_register_window(
+            &self.app,
+            move || WindowKind::Project(open.root.read().to_string_lossy().into_owned()),
+            MenuScope::Project(open),
+        );
         // Keep the agent-access server in step with its setting. On the **window** layer, not
         // the project subtree: a re-root or an engine restart must not stop a server the app
         // is running, and this window is one of the two kinds that is always around to
@@ -278,6 +282,7 @@ impl App for ProjectApp {
         // anywhere changes.
         {
             let guard = guard.clone();
+            let windows = self.app.windows;
             use_side_effect(move || {
                 guard
                     .last
@@ -395,7 +400,21 @@ impl App for ProjectApp {
                     // ⌘K is gone from here: the palette owns it, from a node inside the project
                     // subtree that fires first. The two engineless arms have nothing to search,
                     // so it does nothing there — which is the honest answer, not a stub.
-                    Command::CycleWindow | Command::Find => {
+                    //
+                    // ⌘` — move focus to the next workspace window. Declines (falls through)
+                    // when this is the only one, since there is nowhere to go; the menubar
+                    // greys Window ▸ Cycle Windows on the same fact.
+                    Command::CycleWindow => match window_id
+                        .peek()
+                        .and_then(|here| app.windows.peek().cycle_from(here))
+                    {
+                        Some(next) => {
+                            platform.focus_window(Some(next));
+                            true
+                        }
+                        None => false,
+                    },
+                    Command::Find => {
                         tracing::debug!("shortcut {cmd:?}: target not built yet (stub)");
                         true
                     }
@@ -574,6 +593,20 @@ impl Component for ProjectLoaded {
                 restart,
             }
         });
+        // The loaded arm tells the *window* that its subtree is up — the mirror of the fault
+        // arm's own flag, and mount/drop for the same reason: the flag belongs to `OpenCtx`,
+        // which outlives every arm. What reads it is the menubar, which is built above this
+        // subtree and so cannot otherwise tell a window with a workbench in it from one showing
+        // a load error: File ▸ New Query and Save Query have their listeners *here*, while
+        // Close Project and Open… are the window's and work in every arm (`menu::MenuScope`).
+        {
+            let mut loaded = use_consume::<OpenCtx>().loaded;
+            use_hook(move || loaded.set(true));
+            use_drop(move || {
+                let mut loaded = loaded;
+                loaded.set(false);
+            });
+        }
         // This project's event log (P3-13) — the drawer's Events tab. First, because the open
         // below is its first entry: every later observer (Save, the drop confirm, a tab's request
         // keeper) reaches it from context.

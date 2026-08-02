@@ -19,5 +19,5 @@ pub use settings::{open_settings, use_settings_pin};
 pub use windows::{
     close_this_window, create_global_windows, end_quit, is_quitting, open_project,
     pick_project_folder, quit, quit_windows, resolve_project_folder, resolve_recent,
-    use_register_window, WindowKind, WindowRegistry,
+    use_register_window, WindowKind, WindowRegistry, Windows,
 };

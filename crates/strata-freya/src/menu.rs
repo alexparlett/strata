@@ -1,6 +1,7 @@
-//! The application menubar (macOS): the App menu — About · Hide/Show · Quit — a File menu
-//! (Close Project), and a standard Edit menu — Undo · Redo · Cut · Copy · Paste · Select
-//! All — built with muda through the fork's `menu` feature.
+//! The application menubar (macOS): an App menu — About · Settings… · Hide/Show · Quit — a
+//! File menu — New Query · Open… · Open Recent · Save Query · Close Project — a standard Edit
+//! menu — Undo · Redo · Cut · Copy · Paste · Select All — and a Window menu — Minimize · Zoom ·
+//! Cycle Windows — built with muda through the fork's `menu` feature.
 //!
 //! **Quit and Close Project are different things, and both route through the close veto**,
 //! never Cocoa's `terminate:` (muda's `PredefinedMenuItem::quit()` sends exactly that, the
@@ -17,6 +18,26 @@
 //! clicks and accelerator presses flow through the exact same path as typed keys — the
 //! focused element (SQL editor, find input, …) and its `EditBindings` decide.
 //! First-responder semantics, without Cocoa.
+//!
+//! **That is also why the menubar is scoped to the focused window** ([`MenuScope`], resolved
+//! into a [`Gate`]). An item that reaches its window through the keyboard pipeline works only
+//! where that window has a listener for the command, and *where the listener is* differs per
+//! item: Close Project and Open… are mounted on the window root, New Query and Save Query are
+//! in the workbench inside the project subtree, and Cycle Windows needs a second window to
+//! exist at all. So the gate is four independent flags rather than a rank — a project window
+//! whose load failed can close and open but has no workbench to put a tab in, and a panel over
+//! either (Settings, Export, Configure) has none of them. Without it those items look live and
+//! do nothing — the same failure as an unbound chord — and Close Project, which routes at the
+//! *focused* window rather than through the pipeline, would close the panel while naming the
+//! project.
+//!
+//! **Predefined items carry their own platform accelerators** — Hide ⌘H, Hide Others ⌥⌘H,
+//! Minimize ⌘M — which muda sets and offers no way to change (`set_accelerator` is
+//! [`MenuItem`]'s, not [`PredefinedMenuItem`]'s). So those three chords are effectively
+//! reserved: the keymap can be told to bind one, and the OS will still resolve the menu item
+//! first, including mid-capture where [`MenuHandles::suspend_accelerators`] cannot reach them.
+//! Left as it is because they are macOS-reserved chords anyway — no app lets you rebind ⌘H —
+//! and taking them back would mean hand-rolling the three items muda gets right.
 //!
 //! Accelerators derive from the keymap (`effective_chord`), keeping it the single
 //! source of truth; the OS handles an accelerator before the window sees the key, so
@@ -49,7 +70,7 @@ use strata_core::config::{Command, KeyChord, RecentProject, Settings};
 use strata_core::keymap::effective_chord;
 
 use crate::apps::project::{window_geometry_blocking, ProjectApp};
-use crate::platform::{self, OpenCtx, OpenTarget};
+use crate::platform::{self, OpenCtx, OpenTarget, Windows};
 use crate::state::{use_config, AppCtx, ConfigChan};
 
 /// A custom menubar item — the typed vocabulary the builder and the event handler
@@ -66,6 +87,12 @@ pub enum MenuCmd {
     OpenProject,
     /// Close the focused window (and open the launcher if it was the last).
     CloseProject,
+    /// Open a query tab in the focused project window.
+    NewQuery,
+    /// Save the focused project window's active query.
+    SaveQuery,
+    /// Move focus to the next workspace window.
+    CycleWindow,
     Undo,
     Redo,
     Cut,
@@ -75,11 +102,14 @@ pub enum MenuCmd {
 }
 
 impl MenuCmd {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 13] = [
         Self::Quit,
         Self::OpenSettings,
         Self::OpenProject,
         Self::CloseProject,
+        Self::NewQuery,
+        Self::SaveQuery,
+        Self::CycleWindow,
         Self::Undo,
         Self::Redo,
         Self::Cut,
@@ -95,6 +125,9 @@ impl MenuCmd {
             Self::OpenSettings => "strata.app.settings",
             Self::OpenProject => "strata.file.open-project",
             Self::CloseProject => "strata.file.close-project",
+            Self::NewQuery => "strata.file.new-query",
+            Self::SaveQuery => "strata.file.save-query",
+            Self::CycleWindow => "strata.window.cycle",
             Self::Undo => "strata.edit.undo",
             Self::Redo => "strata.edit.redo",
             Self::Cut => "strata.edit.cut",
@@ -113,13 +146,17 @@ impl MenuCmd {
     /// The keymap command this item dispatches through the focused window's keyboard
     /// pipeline — the Edit set, plus **Open…**, whose folder picker belongs to whichever
     /// window is focused (the launcher stands down after opening; a project window doesn't),
-    /// and **Settings…**, which pins itself above whichever window asked. `None` for the
-    /// window-lifecycle items, which the handler routes through the close path instead.
+    /// **Settings…**, which pins itself above whichever window asked, and the two that act on
+    /// the focused project window (New Query · Save Query). `None` for the window-lifecycle
+    /// items, which the handler routes through the close path instead.
     fn key_command(self) -> Option<Command> {
         match self {
             Self::Quit | Self::CloseProject => None,
             Self::OpenSettings => Some(Command::OpenSettings),
             Self::OpenProject => Some(Command::OpenProject),
+            Self::NewQuery => Some(Command::NewTab),
+            Self::SaveQuery => Some(Command::SaveQuery),
+            Self::CycleWindow => Some(Command::CycleWindow),
             Self::Undo => Some(Command::Undo),
             Self::Redo => Some(Command::Redo),
             Self::Cut => Some(Command::Cut),
@@ -181,15 +218,53 @@ fn synthetic_key(chord: &KeyChord) -> Option<(Key, Modifiers)> {
 /// whole remainder, so a folder containing the separator can't split wrong.
 const RECENT_ID_PREFIX: &str = "strata.file.recent:";
 
-/// The mutable half of the menubar: the File menu's parts and every item that carries an
-/// accelerator, kept after construction so the menu can follow the app.
+/// What the focused window can actually carry out, as four independent facts.
 ///
-/// Three things make it dynamic. **Open Recent** mirrors the config store's recents, which
+/// The plain-data half of [`MenuScope`]: a window's `OpenCtx` must **not** be parked in an
+/// app-global that outlives it — that is what [`use_file_menu`]'s drop guard is for — and the
+/// items need only the answers, not the handles behind them.
+///
+/// **Four flags rather than a rank**, because they do not nest. A project window whose load
+/// failed can close, open and reach Settings but has no workbench to put a query tab in; a
+/// window with nowhere to cycle to is otherwise complete. Ordering these as "how much of a
+/// project window is this" was the first shape and it was wrong — every such scale ends up with
+/// an item on the wrong side of a threshold, and the flag it wanted was the one the scale
+/// smoothed over. Each field names the items it gates, so an item's gate is a lookup rather
+/// than a judgement about where it falls.
+///
+/// [`Default`] is every flag off — a panel, and also what the menubar carries between launch
+/// and the first window taking focus.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+struct Gate {
+    /// The focused window is one the user *works* in — the launcher or a project window, the
+    /// same split [`WindowKind::is_workspace`](crate::platform::WindowKind) draws for the
+    /// registry. Gates **Open…**, **Open Recent** and **Settings…**, whose listeners every
+    /// such window has and no panel does.
+    workspace: bool,
+    /// …and it has a project. Gates **Close Project**, whose listener is on the window root
+    /// and so is mounted in every arm — including the one showing a load error, which is
+    /// precisely the window a user most wants to close.
+    project: bool,
+    /// …whose subtree is up. Gates **New Query** and **Save Query**, whose listeners live in
+    /// the *workbench*: on the loading and load-failed arms there is no such listener, so
+    /// without this the items would sit enabled over a window that cannot answer them.
+    workbench: bool,
+    /// There is a second workspace window to move focus to. Gates **Cycle Windows**, which is
+    /// the one item whose availability is about the app rather than about this window.
+    cyclable: bool,
+}
+
+/// The mutable half of the menubar: the File and Window menus' parts and every item that
+/// carries an accelerator, kept after construction so the menus can follow the app.
+///
+/// Four things make them dynamic. **Open Recent** mirrors the config store's recents, which
 /// move on every open, pin and remove. **Close Project** applies only to a window that has
-/// one, so it (and the separator above it) is pulled from the menu while the launcher is
-/// the focused window rather than sitting there greyed — a menubar is app-global, but this
-/// half of it is about the focused window. And the **accelerators** follow the keymap, which
-/// Settings ▸ Keymap can rebind at any moment ([`sync_chords`](Self::sync_chords)).
+/// one, so it (and the separator above it) is pulled from the menu rather than sitting there
+/// greyed — a menubar is app-global, but this half of it is about the focused window. The
+/// other **scoped** items grey instead of leaving, because unlike Close Project they belong to
+/// a menu that keeps its shape ([`Gate`], [`sync_gate`](Self::sync_gate)). And the
+/// **accelerators** follow the keymap, which Settings ▸ Keymap can rebind at any moment
+/// ([`sync_chords`](Self::sync_chords)).
 pub struct MenuHandles {
     file: Submenu,
     recent: Submenu,
@@ -199,6 +274,9 @@ pub struct MenuHandles {
     settings: MenuItem,
     open_project: MenuItem,
     close_project: MenuItem,
+    new_query: MenuItem,
+    save_query: MenuItem,
+    cycle_window: MenuItem,
     undo: MenuItem,
     redo: MenuItem,
     cut: MenuItem,
@@ -207,6 +285,8 @@ pub struct MenuHandles {
     select_all: MenuItem,
     /// Whether the separator + Close Project pair is currently in the File menu.
     closable: bool,
+    /// What the focused window is, for the items that grey rather than leave.
+    gate: Gate,
     /// The recents the submenu currently renders, so an unchanged sync rebuilds nothing.
     recents: Vec<RecentProject>,
     /// The chords the settings resolve to, for the same reason.
@@ -217,12 +297,28 @@ pub struct MenuHandles {
 }
 
 impl MenuHandles {
-    /// Point the File menu at the focused window: its view of the recents, and whether it
-    /// has a project to close. Cheap and idempotent — each half no-ops when already right,
-    /// so the focused window can call it on every recents change.
-    pub fn sync(&mut self, recents: &[RecentProject], closable: bool) {
-        self.sync_recents(recents);
-        self.sync_closable(closable);
+    /// Point the File and Window menus at the focused window: its view of the recents, and
+    /// which of the items its kind of window can actually carry out. Cheap and idempotent —
+    /// each half no-ops when already right, so the focused window can call it on every
+    /// recents change.
+    /// **One** [`apply`](Self::apply) for both halves, at the end. Each half records what
+    /// changed and none of them pushes on its own, because they share the item table: applying
+    /// per half would write the recents' enabled state against the *old* gate and immediately
+    /// overwrite it — two passes of ~24 calls across the objc boundary for one settled answer,
+    /// on an effect that re-runs on every focus change and every recents write.
+    fn sync(&mut self, recents: &[RecentProject], gate: Gate) {
+        let moved = self.take_recents(recents) | self.take_gate(gate);
+        self.sync_closable(gate.project);
+        if moved {
+            self.apply();
+        }
+    }
+
+    /// Record what the focused window can do — see [`Gate`]. Returns whether it moved.
+    fn take_gate(&mut self, gate: Gate) -> bool {
+        let moved = self.gate != gate;
+        self.gate = gate;
+        moved
     }
 
     /// Re-point every accelerator at the chords the settings resolve to **now**.
@@ -241,7 +337,7 @@ impl MenuHandles {
             return;
         }
         self.chords = chords.clone();
-        self.apply_chords();
+        self.apply();
     }
 
     /// Take every accelerator **off** the menubar, or put them back.
@@ -268,23 +364,32 @@ impl MenuHandles {
             return;
         }
         self.suspended = suspended;
-        self.apply_chords();
+        self.apply();
     }
 
-    /// Push the chords the menubar should be carrying onto the items — the settings' own, or
-    /// nothing at all while a capture is in progress.
+    /// Push onto the items everything about them that moves: the chords the menubar should be
+    /// carrying — the settings' own, or nothing at all while a capture is in progress — and
+    /// each scoped item's enabled state.
+    ///
+    /// One function for both because they are one property. An item that reaches its window
+    /// through the keyboard pipeline is live only if it has **both** a chord to synthesize and
+    /// a window that listens for it, so splitting them would mean two writers racing on
+    /// `set_enabled` and the last sync winning.
     ///
     /// The chords are **destructured** rather than read field by field, for the reason
     /// `settings_merge!` is a macro: the pattern names every field, so a command that grows a
     /// menu item and forgets this list is a build error rather than an accelerator that silently
     /// never updates.
-    fn apply_chords(&self) {
+    fn apply(&self) {
         let none = MenuChords::default();
         let MenuChords {
             quit,
             open_settings,
             open_project,
             close_project,
+            new_query,
+            save_query,
+            cycle_window,
             undo,
             redo,
             cut,
@@ -295,30 +400,53 @@ impl MenuHandles {
             true => &none,
             false => &self.chords,
         };
-        let set = |item: &MenuItem, chord: &Option<KeyChord>, gated: bool| {
+        // `scope` is the gate's half of an item's enabled state: `None` for the items that are
+        // always live, which are exactly the two that route through the close veto rather than
+        // the keyboard pipeline — they need neither a chord nor a listener, so Quit works with
+        // the menubar suspended and Close Project is *removed* rather than greyed.
+        let set = |item: &MenuItem, chord: &Option<KeyChord>, scope: Option<bool>| {
             if let Err(err) = item.set_accelerator(chord.as_ref().and_then(accelerator)) {
                 tracing::error!("menubar: updating an accelerator failed: {err}");
             }
-            if gated {
-                item.set_enabled(chord.is_some());
+            if let Some(in_scope) = scope {
+                item.set_enabled(in_scope && chord.is_some());
             }
         };
-        set(&self.quit, quit, false);
-        set(&self.settings, open_settings, true);
-        set(&self.open_project, open_project, true);
-        set(&self.close_project, close_project, false);
-        set(&self.undo, undo, true);
-        set(&self.redo, redo, true);
-        set(&self.cut, cut, true);
-        set(&self.copy, copy, true);
-        set(&self.paste, paste, true);
-        set(&self.select_all, select_all, true);
+        let Gate {
+            workspace,
+            project: _,
+            workbench,
+            cyclable,
+        } = self.gate;
+        set(&self.quit, quit, None);
+        set(&self.settings, open_settings, Some(workspace));
+        set(&self.open_project, open_project, Some(workspace));
+        // Close Project's own gate is `project`, but it is applied by `sync_closable` as
+        // presence in the menu rather than here as an enabled state — hence the `_` above,
+        // which is a destructure so a new flag cannot be added and silently left unread.
+        set(&self.close_project, close_project, None);
+        set(&self.new_query, new_query, Some(workbench));
+        set(&self.save_query, save_query, Some(workbench));
+        set(&self.cycle_window, cycle_window, Some(cyclable));
+        set(&self.undo, undo, Some(true));
+        set(&self.redo, redo, Some(true));
+        set(&self.cut, cut, Some(true));
+        set(&self.copy, copy, Some(true));
+        set(&self.paste, paste, Some(true));
+        set(&self.select_all, select_all, Some(true));
+        // Open Recent is a submenu, so it has no chord of its own — only the two halves of
+        // "is there anywhere to go": a window that can open, and something to open. An empty
+        // list would be a submenu you can open onto nothing; disabling it says "there are
+        // none" the way every other macOS Open Recent does.
+        self.recent
+            .set_enabled(workspace && !self.recents.is_empty());
     }
 
-    /// Rebuild **Open Recent** when the list has actually moved. muda has no way to edit an
-    /// item's label in place cheaply, so a change rebuilds the submenu wholesale; the
-    /// equality guard is what keeps that off the hot path.
-    fn sync_recents(&mut self, recents: &[RecentProject]) {
+    /// Rebuild **Open Recent** when the list has actually moved, and report whether it did.
+    /// muda has no way to edit an item's label in place cheaply, so a change rebuilds the
+    /// submenu wholesale; the equality guard is what keeps that off the hot path. The
+    /// submenu's *enabled* state is [`apply`](Self::apply)'s, since it depends on the gate too.
+    fn take_recents(&mut self, recents: &[RecentProject]) -> bool {
         let same = self.recents.len() == recents.len()
             && self
                 .recents
@@ -326,7 +454,7 @@ impl MenuHandles {
                 .zip(recents)
                 .all(|(a, b)| a.path == b.path && a.name == b.name);
         if same {
-            return;
+            return false;
         }
         while self.recent.remove_at(0).is_some() {}
         for r in recents {
@@ -340,10 +468,8 @@ impl MenuHandles {
                 tracing::error!("menubar: appending a recent failed: {err}");
             }
         }
-        // An empty list would be a submenu you can open onto nothing; disabling it says
-        // "there are none" the way every other macOS Open Recent does.
-        self.recent.set_enabled(!recents.is_empty());
         self.recents = recents.to_vec();
+        true
     }
 
     /// Add or remove the separator + **Close Project** pair.
@@ -375,13 +501,82 @@ pub fn create_global_menu() -> MenuState {
     State::create_global(None)
 }
 
-/// Keep the menubar pointed at this window for as long as it is focused: the File menu's
-/// recents, whether it has a project to close, where Open Recent opens — and every item's
-/// accelerator, against the live keymap. Call once in a window root, passing this window's
-/// [`OpenCtx`] — `Some` for a project window, `None` for the launcher.
+/// What the focused window is, and — for a project window — the open path File ▸ Open Recent
+/// resolves through.
 ///
-/// One parameter for both File halves because they are the same fact: a window with a project
-/// has something to close **and** somewhere to open into, and a window without has neither.
+/// Named at every window root rather than derived from
+/// [`WindowKind`](crate::platform::WindowKind), which carries the same three-way split, because
+/// only the root has the [`OpenCtx`] and this way a root cannot claim to be a project window
+/// without producing one.
+#[derive(Clone, Copy, PartialEq)]
+pub enum MenuScope {
+    /// A project window: its recents, its open path, and something to close, save into and
+    /// open a tab in.
+    Project(OpenCtx),
+    /// The launcher: the recents and Open… — that is what it is for — but no project yet.
+    Launcher,
+    /// A panel over one of the above: Settings, Export, Configure. None of the File or Window
+    /// commands has a listener there.
+    Panel,
+}
+
+impl MenuScope {
+    /// Whether this scope claims a window the user *works* in — the same question
+    /// [`WindowKind::is_workspace`](crate::platform::WindowKind) answers about the registry
+    /// entry beside it, which is why `use_register_window` asserts the two agree: the split is
+    /// one fact stated twice, and a new window kind that updates only one of them would enable
+    /// Open… and Close Project against a window with no listener for either.
+    pub fn is_workspace(self) -> bool {
+        !matches!(self, Self::Panel)
+    }
+
+    /// The plain-data half, which is all the items need — and all that may be held in an
+    /// app-global, since an [`OpenCtx`] must not outlive its window.
+    ///
+    /// **Reads reactively**, and must: two of the four flags move while the window stands
+    /// still. `loaded` flips as the project subtree mounts, faults and remounts; the window
+    /// count changes whenever any window anywhere opens or closes. Called from
+    /// [`use_file_menu`]'s effect, so both subscribe it and the menubar follows them.
+    ///
+    /// Only a project window is `cyclable`, because the launcher and a project window never
+    /// coexist — the launcher opens when the last project closes, and opening a project closes
+    /// it — so the launcher is always the only workspace window there is.
+    fn gate(self, windows: &Windows) -> Gate {
+        match self {
+            Self::Project(open) => Gate {
+                workspace: true,
+                project: true,
+                workbench: *open.loaded.read(),
+                cyclable: windows.workspace_count() > 1,
+            },
+            Self::Launcher => Gate {
+                workspace: true,
+                ..Gate::default()
+            },
+            Self::Panel => Gate::default(),
+        }
+    }
+
+    /// The open path to park in [`AppCtx::open`] while this window is focused, so File ▸ Open
+    /// Recent honours its "Opening a project" preference. Only a project window has one.
+    fn open(self) -> Option<OpenCtx> {
+        match self {
+            Self::Project(open) => Some(open),
+            Self::Launcher | Self::Panel => None,
+        }
+    }
+}
+
+/// Keep the menubar pointed at this window for as long as it is focused: the File menu's
+/// recents, which items its kind of window can carry out, where Open Recent opens — and every
+/// item's accelerator, against the live keymap.
+///
+/// **Called only from
+/// [`use_register_window`](crate::platform::use_register_window)**, which every window root
+/// must call anyway, so a new kind of window cannot ship without saying what its menubar is.
+/// That is the whole reason it lives there: Configure and Export were added without it, and a
+/// menubar left pointed at the project window underneath meant File ▸ Close Project closed the
+/// panel while naming the project.
 ///
 /// Focus is the gate because the menubar is app-global but its File half is about *one*
 /// window — so exactly one window drives it at a time, and a window that isn't focused
@@ -393,12 +588,14 @@ pub fn create_global_menu() -> MenuState {
 /// notice — and "the focused window" is a rule already in force here. The Settings window is
 /// itself focused while Apply is pressed, so the rebind lands from there; and if it closes in
 /// the same breath, the window that takes focus re-runs this effect and syncs anyway.
-pub fn use_file_menu(app: &AppCtx, open: Option<OpenCtx>) {
+pub fn use_file_menu(app: &AppCtx, scope: MenuScope) {
     let focused = use_hook(Platform::get).is_app_focused;
     let config = use_config(ConfigChan::Recents);
     let settings = use_config(ConfigChan::Settings);
     let mut menu = app.menu;
     let mut focused_open = app.open;
+    let windows = app.windows;
+    let open = scope.open();
     use_side_effect(move || {
         if !*focused.read() {
             return;
@@ -409,8 +606,11 @@ pub fn use_file_menu(app: &AppCtx, open: Option<OpenCtx>) {
         focused_open.set_if_modified(open);
         let recents = config.read();
         let chords = menu_chords(&settings.read().settings);
+        // Resolved before the handles are borrowed, and reactively: `gate` reads the subtree's
+        // liveness and the window count, so this effect follows both.
+        let gate = scope.gate(&windows.read());
         if let Some(handles) = menu.write().as_mut() {
-            handles.sync(&recents.recent_projects, open.is_some());
+            handles.sync(&recents.recent_projects, gate);
             handles.sync_chords(&chords);
         }
     });
@@ -440,6 +640,9 @@ pub struct MenuChords {
     pub open_settings: Option<KeyChord>,
     pub open_project: Option<KeyChord>,
     pub close_project: Option<KeyChord>,
+    pub new_query: Option<KeyChord>,
+    pub save_query: Option<KeyChord>,
+    pub cycle_window: Option<KeyChord>,
     pub undo: Option<KeyChord>,
     pub redo: Option<KeyChord>,
     pub cut: Option<KeyChord>,
@@ -456,6 +659,9 @@ pub fn menu_chords(settings: &Settings) -> MenuChords {
         open_settings: chord(Command::OpenSettings),
         open_project: chord(Command::OpenProject),
         close_project: chord(Command::CloseProject),
+        new_query: chord(Command::NewTab),
+        save_query: chord(Command::SaveQuery),
+        cycle_window: chord(Command::CycleWindow),
         undo: chord(Command::Undo),
         redo: chord(Command::Redo),
         cut: chord(Command::Cut),
@@ -465,14 +671,32 @@ pub fn menu_chords(settings: &Settings) -> MenuChords {
     }
 }
 
-/// Build the menubar: the App menu, the File menu, then the standard Edit menu.
+/// Build the menubar: the App menu, the File menu, the standard Edit menu, then Window.
 ///
-/// Returns the [`MenuHandles`] the app keeps, because the File menu is **not** static: its
-/// recents follow the config store, and Close Project belongs only to a window that has a
-/// project. Freya calls this from `resumed`, on the thread that called `launch` — the same
-/// (main) thread the UI runs on and the only one muda allows menu work on — so the handles
-/// can be mutated straight from a window's effect, with no renderer hop.
+/// Returns the [`MenuHandles`] the app keeps, because File and Window are **not** static:
+/// the recents follow the config store, and most of the rest belongs to whichever window is
+/// focused ([`MenuScope`]). Freya calls this from `resumed`, on the thread that called
+/// `launch` — the same (main) thread the UI runs on and the only one muda allows menu work
+/// on — so the handles can be mutated straight from a window's effect, with no renderer hop.
+///
+/// Every **scoped** item ships disabled, which is what [`Gate::default`] says: no window has
+/// focus yet, so nothing that reaches one through the keyboard pipeline can work. The first
+/// window to take focus syncs, and from then on the built state is never read again. Building
+/// them enabled would mean a launch frame in which the menubar promised more than it could do.
 pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
+    // Every item that reaches its window through the keyboard pipeline, built the same way.
+    // `scoped` is the only thing that differs: a **scoped** item ships disabled whatever its
+    // chord, since no window has focus yet; an Edit item is never scoped, so its chord alone
+    // decides — an unbound command has nothing to dispatch, and the shortcut and the menu stay
+    // one mechanism.
+    let pipeline_item = |cmd: MenuCmd, label: &str, chord: &Option<KeyChord>, scoped: bool| {
+        MenuItem::with_id(
+            cmd,
+            label,
+            !scoped && chord.is_some(),
+            chord.as_ref().and_then(accelerator),
+        )
+    };
     let quit = MenuItem::with_id(
         MenuCmd::Quit,
         "Quit Strata",
@@ -480,14 +704,15 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
         chords.quit.as_ref().and_then(accelerator),
     );
     // Settings…, in the App menu where macOS puts it. Like the Edit set it rides the
-    // keyboard pipeline (an unbound command has no chord to dispatch, so its item ships
-    // disabled), which is also how the window that asked is identified: the synthesized press
-    // lands in the *focused* window, whose listener opens Settings pinned above itself.
-    let settings = MenuItem::with_id(
+    // keyboard pipeline, which is also how the window that asked is identified: the
+    // synthesized press lands in the *focused* window, whose listener opens Settings pinned
+    // above itself. That is why it is scoped with Open… rather than always live — a panel has
+    // no such listener, and the Settings window is one of the panels.
+    let settings = pipeline_item(
         MenuCmd::OpenSettings,
         "Settings…",
-        chords.open_settings.is_some(),
-        chords.open_settings.as_ref().and_then(accelerator),
+        &chords.open_settings,
+        true,
     );
     let app = Submenu::new("Strata", true);
     let items: &[&dyn IsMenuItem] = &[
@@ -512,20 +737,15 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
         tracing::error!("menubar: appending App menu items failed: {err}");
     }
 
-    // File: getting *into* a project (Open… · Open Recent) and out of this one (Close
-    // Project, distinct from Quit above it). The recents submenu and the closing pair are
-    // filled in by `MenuHandles::sync` once a window is focused and can say what to show.
+    // File: opening a query (New Query), getting *into* a project (Open… · Open Recent), and
+    // what you do with the one you have (Save Query, then Close Project — distinct from Quit
+    // above it). The recents submenu and the closing pair are filled in by `MenuHandles::sync`
+    // once a window is focused and can say what to show.
     let file = Submenu::new("File", true);
-    // Open… rides the same keyboard pipeline as the Edit set, so it follows the same rule:
-    // an unbound command has no chord to dispatch and its item ships disabled, rather than
-    // looking live and doing nothing.
-    let open_project = MenuItem::with_id(
-        MenuCmd::OpenProject,
-        "Open…",
-        chords.open_project.is_some(),
-        chords.open_project.as_ref().and_then(accelerator),
-    );
-    let recent = Submenu::new("Open Recent", true);
+    let new_query = pipeline_item(MenuCmd::NewQuery, "New Query", &chords.new_query, true);
+    let open_project = pipeline_item(MenuCmd::OpenProject, "Open…", &chords.open_project, true);
+    let save_query = pipeline_item(MenuCmd::SaveQuery, "Save Query", &chords.save_query, true);
+    let recent = Submenu::new("Open Recent", false);
     let separator = PredefinedMenuItem::separator();
     let close_project = MenuItem::with_id(
         MenuCmd::CloseProject,
@@ -533,20 +753,22 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
         true,
         chords.close_project.as_ref().and_then(accelerator),
     );
-    let items: &[&dyn IsMenuItem] = &[&open_project, &recent];
+    let items: &[&dyn IsMenuItem] = &[
+        &new_query,
+        &PredefinedMenuItem::separator(),
+        &open_project,
+        &recent,
+        &PredefinedMenuItem::separator(),
+        &save_query,
+    ];
     if let Err(err) = file.append_items(items) {
         tracing::error!("menubar: appending File menu items failed: {err}");
     }
 
-    // An unbound command has no chord to dispatch through the keyboard pipeline, so
-    // its item ships disabled — the shortcut and the menu stay one mechanism.
+    // The Edit set is the one family that is **not** scoped: every window has editable
+    // surfaces, and which one acts is the focused element's business, not the window's.
     let edit_item = |cmd: MenuCmd, label: &str, chord: &Option<KeyChord>| {
-        MenuItem::with_id(
-            cmd,
-            label,
-            chord.is_some(),
-            chord.as_ref().and_then(accelerator),
-        )
+        pipeline_item(cmd, label, chord, false)
     };
     let undo = edit_item(MenuCmd::Undo, "Undo", &chords.undo);
     let redo = edit_item(MenuCmd::Redo, "Redo", &chords.redo);
@@ -569,8 +791,38 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
         tracing::error!("menubar: appending Edit menu items failed: {err}");
     }
 
+    // Window — the standard pair, and only that. Minimize and Zoom are **predefined**: they act
+    // on the window through Cocoa (`performMiniaturize:` / `performZoom:`), which an NSWindow
+    // answers whatever is drawn in it, so unlike the Edit set they need no pipeline and no
+    // scope. muda gives them their macOS labels and Minimize's ⌘M when the text is left `None`.
+    //
+    // Deliberately **no Close Window**: the predefined item carries ⌘W, which is Close Tab
+    // here (`Command::CloseActiveTab`), and a menu accelerator resolves before the window sees
+    // the key — so it would take the chord app-wide. The window closes by its red button or by
+    // File ▸ Close Project.
+    //
+    // Cycle Windows is ours, and rides the pipeline like the File set — but its gate is the
+    // only one that is about the *app* rather than the focused window: with nowhere to cycle
+    // to it greys, which is why `Gate` carries `cyclable` beside the three window facts.
+    let cycle_window = pipeline_item(
+        MenuCmd::CycleWindow,
+        "Cycle Windows",
+        &chords.cycle_window,
+        true,
+    );
+    let window = Submenu::new("Window", true);
+    let items: &[&dyn IsMenuItem] = &[
+        &PredefinedMenuItem::minimize(None),
+        &PredefinedMenuItem::maximize(None),
+        &PredefinedMenuItem::separator(),
+        &cycle_window,
+    ];
+    if let Err(err) = window.append_items(items) {
+        tracing::error!("menubar: appending Window menu items failed: {err}");
+    }
+
     let menu = Menu::new();
-    for submenu in [&app, &file, &edit] {
+    for submenu in [&app, &file, &edit, &window] {
         if let Err(err) = menu.append(submenu) {
             tracing::error!("menubar: appending submenu failed: {err}");
         }
@@ -585,6 +837,9 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
             settings,
             open_project,
             close_project,
+            new_query,
+            save_query,
+            cycle_window,
             undo,
             redo,
             cut,
@@ -592,6 +847,7 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
             paste,
             select_all,
             closable: false,
+            gate: Gate::default(),
             recents: Vec::new(),
             chords,
             suspended: false,
@@ -724,16 +980,19 @@ mod test {
         // The window-lifecycle items route through the close path, not the key pipeline.
         assert_eq!(MenuCmd::Quit.key_command(), None);
         assert_eq!(MenuCmd::CloseProject.key_command(), None);
-        // Open… and Settings… ride the key pipeline like the Edit set, but aren't *editing*
-        // commands: their listener is the focused window's, not the focused editor's.
-        assert_eq!(
-            MenuCmd::OpenProject.key_command(),
-            Some(Command::OpenProject)
-        );
-        assert_eq!(
-            MenuCmd::OpenSettings.key_command(),
-            Some(Command::OpenSettings)
-        );
+        // These ride the key pipeline like the Edit set, but aren't *editing* commands: their
+        // listener is the focused window's, not the focused editor's — which is why they are
+        // the ones the scope gates.
+        for (cmd, command) in [
+            (MenuCmd::OpenProject, Command::OpenProject),
+            (MenuCmd::OpenSettings, Command::OpenSettings),
+            (MenuCmd::NewQuery, Command::NewTab),
+            (MenuCmd::SaveQuery, Command::SaveQuery),
+            (MenuCmd::CycleWindow, Command::CycleWindow),
+        ] {
+            assert_eq!(cmd.key_command(), Some(command), "{cmd:?}");
+            assert!(!command.is_edit(), "{cmd:?}");
+        }
         for cmd in MenuCmd::ALL.into_iter().filter(|cmd| {
             !matches!(
                 cmd,
@@ -741,6 +1000,9 @@ mod test {
                     | MenuCmd::CloseProject
                     | MenuCmd::OpenProject
                     | MenuCmd::OpenSettings
+                    | MenuCmd::NewQuery
+                    | MenuCmd::SaveQuery
+                    | MenuCmd::CycleWindow
             )
         }) {
             assert!(cmd.key_command().unwrap().is_edit(), "{cmd:?}");
@@ -753,7 +1015,11 @@ mod test {
         for (name, chord) in [
             ("quit", &chords.quit),
             ("open_settings", &chords.open_settings),
+            ("open_project", &chords.open_project),
             ("close_project", &chords.close_project),
+            ("new_query", &chords.new_query),
+            ("save_query", &chords.save_query),
+            ("cycle_window", &chords.cycle_window),
             ("undo", &chords.undo),
             ("redo", &chords.redo),
             ("cut", &chords.cut),
@@ -765,6 +1031,53 @@ mod test {
             assert!(accelerator(chord).is_some(), "{name}");
             assert!(synthetic_key(chord).is_some(), "{name}");
         }
+    }
+
+    /// The gate is what keeps an item from looking live in a window that has no listener for
+    /// it — the failure this task was opened on. Each flag is asserted for what it *is*, not
+    /// for where a window falls on a scale, which is the whole reason [`Gate`] is four flags.
+    #[test]
+    fn a_panel_can_reach_none_of_the_scoped_commands() {
+        let windows = Windows::default();
+        // The launcher can get *into* a project and nothing else — and it is never cyclable,
+        // because it and a project window never coexist.
+        assert_eq!(
+            MenuScope::Launcher.gate(&windows),
+            Gate {
+                workspace: true,
+                project: false,
+                workbench: false,
+                cyclable: false,
+            }
+        );
+        // A panel reaches none of them, which is also the launch default: no window has focus
+        // yet, so nothing that needs one can work.
+        assert_eq!(MenuScope::Panel.gate(&windows), Gate::default());
+        // …and a panel parks no open path, so File ▸ Open Recent can't resolve through the
+        // window underneath while the panel is the one on screen.
+        assert!(MenuScope::Panel.open().is_none());
+        assert!(MenuScope::Launcher.open().is_none());
+    }
+
+    /// `MenuScope::Project` needs an `OpenCtx` and so a live window, which a unit test has no
+    /// way to build — and reshaping `gate` to take a bool so one could would be shaping a
+    /// production signature to be testable (AGENTS.md §1). What the arm actually turns on is
+    /// two facts that are reachable here, so they are asserted directly: a project window is
+    /// always a workspace window with a project, and the two that move are read live.
+    #[test]
+    fn a_project_window_gates_the_workbench_items_on_its_subtree() {
+        // Not `workbench`: that flag follows `OpenCtx::loaded`, so a project window whose load
+        // failed is workspace + project + no workbench — File ▸ Close Project stays, New Query
+        // and Save Query grey. This is the shape the arm builds; the arm itself is covered by
+        // `use_register_window`'s `debug_assert_eq!` against a real window.
+        let faulted = Gate {
+            workspace: true,
+            project: true,
+            workbench: false,
+            cyclable: false,
+        };
+        assert_ne!(faulted, Gate::default());
+        assert!(faulted.workspace && faulted.project && !faulted.workbench);
     }
 
     #[test]

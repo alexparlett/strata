@@ -188,6 +188,10 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   next to the resolution it has to agree with** (`keymap::propose` → `apply`, in strata-core). A
   reset is a proposal; a steal is expressed as the bindings it changes. An override is only "custom"
   if it takes effect.
+- **An app-global surface that follows the focused window is pointed by *every* window, and the
+  obligation rides the call each window already has to make.** `use_file_menu` lives inside
+  `use_register_window`, which takes a `MenuScope`; scope and chord are one enabled state, applied
+  together.
 - **A menubar accelerator is state, not decoration — and it must be disarmed while a chord is being
   captured.** `sync_chords` off a destructured `MenuChords`; `suspend_accelerators` for the capture.
 - **An app-wide flag held to protect one window's listener is released on losing focus, not only on
