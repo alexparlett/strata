@@ -1,6 +1,6 @@
 # Chart 00 · Snapshot ordinal + ordered reads `[core]`
 
-**Workstream:** Chart (Rz2) · **Status:** ⬜ · **Depends on:** nothing · **Really:** a P2-01
+**Workstream:** Chart (Rz2) · **Status:** ✅ · **Depends on:** nothing · **Really:** a P2-01
 correctness fix that the chart's order guarantee rides on — ship it even if the chart never lands.
 
 ## Goal
@@ -36,6 +36,19 @@ whichever answer a read got. Sorted reads have the same hazard on ties.
   with duplicate keys stable across a page boundary; export output asserted free of the ordinal
   (flat and partitioned); a result already containing a `__strata_ord` column round-trips with
   the escalated name.
+
+## As built
+`materialize` appends the escalated ordinal to each **written** batch only (page 1, the null
+counts and `QueryOutput::columns` all capture the original), and records the name in
+`SnapshotStats.ord`. `read_page` sorts by `(user sort?, ordinal)` and `drop_columns` the
+ordinal after the window; export's `select_sql` names the result's columns explicitly
+(`quote_col` — verbatim double-quote escaping, replacing the old local escape) and orders by
+the ordinal, user sort first when set. One subtlety the tests pin: for a query with **no**
+`ORDER BY`, "result order" is the order the spool received — the engine's own output order,
+frozen. The guarantee is agreement (page 1 = the spooled page, re-reads identical, pages
+disjoint), not row `i` at position `i`; a query that wants that writes `ORDER BY`, and the
+snapshot then preserves it exactly. Tests: `tests/snapshot_order.rs`, five cases over >10 MB
+snapshots.
 
 ## Out of scope
 Any chart code (01). Any UI change — the grid gets correct pages through the same calls.

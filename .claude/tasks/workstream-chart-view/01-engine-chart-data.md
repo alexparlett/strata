@@ -1,6 +1,6 @@
 # Chart 01 · `Engine::chart` renderer-first read + vocabulary `[core]`
 
-**Workstream:** Chart (Rz2) · **Status:** 🟡 re-cut · **Depends on:** 00 (the ordinal)
+**Workstream:** Chart (Rz2) · **Status:** ✅ · **Depends on:** 00 (the ordinal)
 
 ## Goal
 The data half of the chart, renderer-first: a `ChartQuery` → `ChartData` vocabulary in
@@ -9,11 +9,16 @@ order, `LIMIT cap + 1` — and pivots long→wide in Rust. No aggregation, no bu
 order. Spec: `docs/CHART_SPEC.md` §4–§5.
 
 ## Current state
-The branch (`claude/chart-01-43b662`, PR #94) holds the **withdrawn** first design: an engine-side
-aggregation pipeline (`AggFn`/`Measure`/`Bucket`/`Stride`/`Width`, auto-stride, axis builders,
-measure-descending order). Built, adversarially reviewed twice, withdrawn — the why lives in
-`docs/reference/INVARIANTS.md` (the chart entry) and `docs/CHART_SPEC.md` §1.2; do not resurrect
-it here. This task re-cuts the module to the renderer-first shape.
+Done — the re-cut landed. The withdrawn first design (an engine-side aggregation pipeline:
+`AggFn`/`Measure`/`Bucket`/`Stride`/`Width`, auto-stride, axis builders, measure-descending
+order) was built, adversarially reviewed twice, and replaced wholesale by the renderer-first
+read; the why lives in `docs/reference/INVARIANTS.md` (the chart entry) and
+`docs/CHART_SPEC.md` §1.2. `engine/chart.rs` went from ~2 200 lines to ~600 plus tests: a
+projection (`sort(ordinal)` + `limit(cap+1)` plans as a TopK, so memory is O(cap) however
+large the snapshot), the pivot keyed on `ScalarValue` pairs with an occupancy check answering
+`Duplicates`, `Axis.positions` for numeric/temporal/clock X, and the salvage list below.
+Tests: 21 unit cases in `engine::chart`, 6 facade cases in `tests/engine_chart.rs` (the lead
+one: a result the user `ORDER BY`ed draws in exactly that order, and the grid agrees).
 
 ## Build
 - **strata-model** (`chart.rs`): per spec §5 —

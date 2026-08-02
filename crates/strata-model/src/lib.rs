@@ -28,10 +28,7 @@ pub use catalog::{
     CatalogKind, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoveKind, RemoveTarget,
     SavedQuery, SourceFormat, TableDef, ViewDef,
 };
-pub use chart::{
-    AggFn, Bucket, CapUnit, ChartBin, ChartData, ChartPoint, ChartQuery, ChartSeries, Measure,
-    Stride, Width,
-};
+pub use chart::{Axis, CapUnit, ChartBin, ChartData, ChartPoint, ChartQuery, ChartSeries};
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;

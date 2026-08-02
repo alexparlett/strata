@@ -605,12 +605,27 @@ impl Engine {
     ) -> Result<(Vec<Vec<Cell>>, RecordBatch), String> {
         let ctx = self.ctx.clone();
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
+        // The snapshot's ordinal column (`docs/SNAPSHOT_SPEC.md` §9), from the same register
+        // `snapshot_live` reads — present for exactly the snapshots that are alive to read.
+        let ord = self.ordinal(snapshot);
         self.rt()
-            .spawn(
-                async move { query::fetch_page(&ctx, snapshot, page, page_size, sort, &fmt).await },
-            )
+            .spawn(async move {
+                query::fetch_page(&ctx, snapshot, page, page_size, sort, ord, &fmt).await
+            })
             .await
             .map_err(|e| format!("page task failed: {e}"))?
+    }
+
+    /// The name of `snapshot`'s ordinal column, if the write pass recorded one — `None` for
+    /// a retired snapshot (whose read fails anyway) and for a `Default` stats entry.
+    fn ordinal(&self, snapshot: SnapshotId) -> Option<String> {
+        self.lifecycle
+            .lock()
+            .unwrap()
+            .stats
+            .get(&snapshot)
+            .map(|s| s.ord.clone())
+            .filter(|ord| !ord.is_empty())
     }
 
     /// Read one immutable snapshot as a chart (Rz2, `docs/CHART_SPEC.md` §5) — the
@@ -638,8 +653,9 @@ impl Engine {
         let _reading = self.pin_snapshot(snapshot);
         let ctx = self.ctx.clone();
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
+        let ord = self.ordinal(snapshot);
         self.rt()
-            .spawn(async move { chart::run_chart(&ctx, snapshot, &q, &fmt).await })
+            .spawn(async move { chart::run_chart(&ctx, snapshot, &q, &fmt, ord.as_deref()).await })
             .await
             .map_err(|e| format!("chart task failed: {e}"))?
     }
