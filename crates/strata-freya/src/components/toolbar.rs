@@ -31,7 +31,8 @@ use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::tool_button::TOOL_SIZE;
 use crate::components::typography::Prose;
-use crate::keymap::KeyHint;
+use crate::keymap::{hint_title, KeyHint};
+use crate::state::{use_config, ConfigChan};
 use strata_core::config::Command;
 
 /// A separator's painted width. It is a 1px rule, but it carries the row's spacing on both sides
@@ -362,6 +363,25 @@ impl Component for Toolbar {
             (t.colors().border, t.colors().error, t.colors().primary)
         };
 
+        // Every action's tooltip, with its live chord appended. Resolved here rather than per
+        // action because `use_hint_title` is a hook and the item list is a variable length —
+        // one config read, then the pure `hint_title` per item. Reactive, so a rebind repaints
+        // every tooltip in the row. The guard drops before any element is built.
+        let config = use_config(ConfigChan::Settings);
+        let titles: Vec<String> = {
+            let settings = &config.read().settings;
+            self.items
+                .iter()
+                .map(|item| match item.inner() {
+                    ToolbarItem::Action(action) => match action.hint {
+                        Some(cmd) => hint_title(settings, &action.label, cmd),
+                        None => action.label.clone(),
+                    },
+                    _ => String::new(),
+                })
+                .collect()
+        };
+
         // What the items may spend: the row, less its padding, its pinned tail and the floor the
         // leading run keeps.
         //
@@ -393,10 +413,12 @@ impl Component for Toolbar {
             .items
             .iter()
             .zip(&keep)
-            .filter(|(_, keep)| **keep)
-            .map(|(item, _)| match item.inner() {
+            .zip(&titles)
+            .filter(|((_, keep), _)| **keep)
+            .map(|((item, _), title)| match item.inner() {
                 ToolbarItem::Action(action) => {
-                    action_button(action, danger, accent, self.control, self.flat).into_element()
+                    action_button(action, title, danger, accent, self.control, self.flat)
+                        .into_element()
                 }
                 ToolbarItem::Separator => Divider::vertical()
                     .length(Size::px(18.))
@@ -446,6 +468,7 @@ impl Component for Toolbar {
 /// tooltip.
 fn action_button(
     action: &ToolbarAction,
+    title: &str,
     danger: Color,
     accent: Color,
     control: f32,
@@ -470,7 +493,9 @@ fn action_button(
         .map(action.on_press.clone(), |b, f| b.on_press(f))
         .child(Icon::new(action.icon).size(15.));
 
-    TooltipContainer::new(Tooltip::new_text(action.label.clone()))
+    // `title`, not `label`: it carries the action's live chord (see `Toolbar::render`), which is
+    // what `ToolbarAction::hint` promises the tooltip shows.
+    TooltipContainer::new(Tooltip::new_text(title.to_string()))
         .position(AttachedPosition::Bottom)
         .child(button)
 }
@@ -557,6 +582,8 @@ mod tests {
     use super::{fold_plan, ToolbarAction, ToolbarItem, HEADER_CONTROL_SIZE, SEPARATOR_W};
     use crate::components::icon::IconName;
     use crate::components::tool_button::TOOL_SIZE;
+    use crate::keymap::hint_title;
+    use strata_core::config::{Command, Settings};
 
     const SPACING: f32 = 8.;
     /// The default toolbar control, which is also what the `⋯` trigger costs.
@@ -695,6 +722,36 @@ mod tests {
             folded: Some(rect().into_element()),
         };
         assert!(keeps.folds());
+    }
+
+    /// The inline tooltip carries the action's chord, exactly as the folded menu row does.
+    ///
+    /// The regression this pins: the tooltip was built from `label` alone while only the menu row
+    /// read `hint`, so moving the editor toolbar onto this component quietly dropped the "(⌘S)"
+    /// that `use_hint_title` used to compose — the doc said one thing and two renderings disagreed.
+    ///
+    /// Asserted against `hint_title` itself rather than a rendered tree, because the composition
+    /// is the contract: a call site passes a **bare** label and the chord is appended once, so a
+    /// pre-composed title would print it twice in the menu.
+    #[test]
+    fn a_hinted_action_says_its_chord_the_same_way_in_both_renderings() {
+        let settings = Settings::default();
+
+        let bound = hint_title(&settings, "Save query", Command::SaveQuery);
+        assert!(bound.starts_with("Save query"), "the label leads: {bound}");
+        assert!(
+            bound.len() > "Save query".len(),
+            "and the default binding is appended: {bound}"
+        );
+
+        // The menu row renders the bare label beside a `KeyHint` for the same command, so what a
+        // call site hands in must be the bare label — never one that already carries the chord.
+        let action = ToolbarAction::new(IconName::Save, "Save query").hint(Command::SaveQuery);
+        assert_eq!(
+            action.label, "Save query",
+            "a call site states the label alone; the chord is the component's to add"
+        );
+        assert_eq!(action.hint, Some(Command::SaveQuery));
     }
 
     /// A header row folds against **its own** control size, not a toolbar's.

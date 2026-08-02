@@ -6,7 +6,6 @@ use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment, TOOLBAR_TWO_ICON_WIDTH};
 use crate::components::toolbar::{Toolbar, ToolbarAction};
 use crate::components::typography::InputTypography;
-use crate::keymap::use_hint_title;
 use crate::platform::open_export;
 use freya::components::use_theme;
 use freya::prelude::*;
@@ -74,10 +73,6 @@ impl Component for ResultsToolbar {
         // The Table/Chart view mode — its own channel, so a flip wakes only the results pane.
         let mut view_radio = use_radio::<SessionState, Chan>(Chan::View(tab));
         let view = view_radio.read().view(tab);
-
-        // Find's title carries the effective find chord (reactive — a rebind repaints it), and the
-        // popover's ✕ the effective Esc.
-        let find_title = use_hint_title("Find in results", Command::Find);
 
         // The Export window's launch inputs arrive as a prop (see `ExportLaunch`); only the
         // `Platform` is taken here, because a handler has no scope to read one from.
@@ -204,7 +199,10 @@ impl Component for ResultsToolbar {
             // than an empty slot still charged for its width.
             .maybe(view == ResultsView::Grid, |bar| {
                 bar.item(
-                    ToolbarAction::new(IconName::Search, find_title.clone())
+                    // A **bare** label: `Toolbar` appends the chord to the tooltip itself, and the
+                    // folded menu row renders it as a `KeyHint`. Passing a pre-composed
+                    // "Find in results (⌘F)" here would print the chord twice in the menu.
+                    ToolbarAction::new(IconName::Search, "Find in results")
                         .hint(Command::Find)
                         .active(open)
                         .on_press(move |_| find.toggle()),
