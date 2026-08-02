@@ -25,6 +25,7 @@ use crate::apps::project::state::{
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::toolbar::{Toolbar, ToolbarItem};
 use crate::components::typography::{Eyebrow, InputTypography};
 
 /// A pane header that is just its name — every pane but the catalog, whose filter field *is*
@@ -57,6 +58,10 @@ fn label(text: &'static str, color: Color) -> Rect {
 /// 88px; below roughly this the field has under ~80px left, which is not enough to read a table
 /// name back in. Filtering stays reachable through the command palette.
 const CATALOG_FILTER_MIN: f32 = 168.;
+
+/// The header row's height and the box of the flat controls in it (the canvas's 48 / 24).
+const HEADER_HEIGHT: f32 = 48.;
+const HEADER_CONTROL: f32 = 24.;
 
 #[derive(PartialEq)]
 pub struct Sidebar;
@@ -99,10 +104,7 @@ impl Component for Sidebar {
             // Below `CATALOG_FILTER_MIN` the field is dropped for the pane's name: an input too
             // narrow to read a word in is worse than none, and its magnifier was drawing over the
             // ↻ beside it. ↻ and the collapse × keep their room either way.
-            SidebarPane::Catalog if !roomy => label("CATALOG", label_color)
-                .spacing(8.)
-                .child(RefreshButton)
-                .into_element(),
+            SidebarPane::Catalog if !roomy => label("CATALOG", label_color).into_element(),
             SidebarPane::Catalog => rect()
                 .width(Size::flex(1.))
                 .horizontal()
@@ -120,7 +122,6 @@ impl Component for Sidebar {
                     )
                     .width(Size::flex(1.)),
                 )
-                .child(RefreshButton)
                 .into_element(),
             SidebarPane::Connections => label("CONNECTIONS", label_color).into_element(),
             // The one pane header with something beside its name: the query-session model is
@@ -145,32 +146,47 @@ impl Component for Sidebar {
             .background(bg)
             .vertical()
             .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::px(48.))
-                    .horizontal()
-                    .on_sized(move |e: Event<SizedEventData>| {
-                        header_w.set_if_modified(e.area.width());
+                Toolbar::new()
+                    .header()
+                    .height(HEADER_HEIGHT)
+                    .padding(12.)
+                    // The pane's own run flexes, so the row distributes rather than hugs — else
+                    // the collapse × is the thing that gets pushed out.
+                    .leading(
+                        rect()
+                            .width(Size::flex(1.))
+                            .horizontal()
+                            .content(Content::Flex)
+                            .overflow(Overflow::Clip)
+                            .cross_align(Alignment::Center)
+                            .on_sized(move |e: Event<SizedEventData>| {
+                                header_w.set_if_modified(e.area.width());
+                            })
+                            .child(leading),
+                        0.,
+                    )
+                    // Re-scan folds into the `⋯` before the collapse × does, because × is pinned.
+                    // The palette offers the same scan, so a folded row loses nothing.
+                    .maybe(pane == SidebarPane::Catalog, |bar| {
+                        bar.item(ToolbarItem::Custom {
+                            width: HEADER_CONTROL,
+                            inline: RefreshButton.into_element(),
+                            folded: None,
+                        })
                     })
-                    .overflow(Overflow::Clip)
-                    // Same reason as `leading`'s: the pane's own run is `Size::flex`, so the row
-                    // has to distribute rather than hug — else the collapse × is the thing that
-                    // gets pushed out.
-                    .content(Content::Flex)
-                    .cross_align(Alignment::Center)
-                    .spacing(8.)
-                    .padding((0., 12.))
-                    .child(leading)
-                    .child(
+                    // Pinned: it is how the user gets out of a squeezed panel, so it outranks
+                    // everything the header could otherwise show.
+                    .pinned(
                         Button::new()
                             .flat()
-                            .width(Size::px(24.))
-                            .height(Size::px(24.))
+                            .width(Size::px(HEADER_CONTROL))
+                            .height(Size::px(HEADER_CONTROL))
                             .on_press(move |_| {
                                 let mut radio = radio;
                                 radio.write_channel(Chan::Layout).close_sidebar();
                             })
                             .child(Icon::new(IconName::Close).size(13.)),
+                        HEADER_CONTROL,
                     ),
             )
             .child(Divider::horizontal().color(border))

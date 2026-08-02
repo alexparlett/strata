@@ -18,6 +18,8 @@ use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
+use crate::components::tool_button::TOOL_SIZE;
+use crate::components::toolbar::{Toolbar, ToolbarItem};
 use crate::components::type_palette::type_palette;
 use crate::components::typography::Readout;
 
@@ -79,6 +81,13 @@ impl ExplainPlan {
         }
     }
 }
+
+/// What the toolbar's leading run cannot shrink below. The Physical/Logical pill is two text
+/// segments at the comp's 12px side padding either side of a control-role label, and the ANALYZE
+/// badge is a stated 22px pill — so the floor is arithmetic over boxes the design fixes, not a
+/// number anyone guessed.
+const PLAN_TABS_WIDTH: f32 = 148.;
+const ANALYZE_BADGE_WIDTH: f32 = 86.;
 
 impl Component for ExplainPlan {
     fn render(&self) -> impl IntoElement {
@@ -145,6 +154,28 @@ impl Component for ExplainPlan {
             .title(raw_title)
             .on_change(move |e: Event<ChangeEventData>| raw.set(e.value))
             .child(Icon::new(IconName::Lines).size(15.));
+        // A `Toolbar` (P5-06), so a narrow pane folds this row instead of spilling it. The
+        // Physical/Logical pill and the ANALYZE badge form the leading run — the pill is what says
+        // which tree is below, and the badge qualifies it, so neither belongs in an overflow menu.
+        // The raw/tree toggle is the one item, and it folds last by being the only one.
+        let leading = rect()
+            .width(Size::flex(1.))
+            .horizontal()
+            .content(Content::Flex)
+            .overflow(Overflow::Clip)
+            .cross_align(Alignment::Center)
+            .spacing(8.)
+            .maybe_child(tabs)
+            .maybe_child(badge);
+        // What that run cannot shrink below: the pill's two text segments when both trees exist,
+        // plus the badge when it is shown. Both are stated boxes, so the floor is arithmetic
+        // rather than a guess.
+        let leading_min = if show_tabs { PLAN_TABS_WIDTH } else { 0. }
+            + if self.plan.analyze && physical {
+                ANALYZE_BADGE_WIDTH + 8.
+            } else {
+                0.
+            };
         let toolbar = rect()
             .width(Size::fill())
             .height(Size::px(38.))
@@ -152,18 +183,15 @@ impl Component for ExplainPlan {
             .content(Content::Flex)
             .background(toolbar_bg)
             .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::flex(1.))
-                    .horizontal()
-                    .cross_align(Alignment::Center)
-                    .padding((0., 8.))
-                    .spacing(8.)
-                    .content(Content::Flex)
-                    .maybe_child(tabs)
-                    .maybe_child(badge)
-                    .child(rect().width(Size::flex(1.)))
-                    .child(raw_toggle),
+                Toolbar::new()
+                    .height(37.)
+                    .padding(8.)
+                    .leading(leading, leading_min)
+                    .item(ToolbarItem::Custom {
+                        width: TOOL_SIZE,
+                        inline: raw_toggle.into_element(),
+                        folded: None,
+                    }),
             )
             .child(Divider::horizontal().color(theme.border_fill));
 

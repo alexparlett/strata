@@ -4,8 +4,7 @@ use crate::apps::export::ExportLaunch;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment, TOOLBAR_TWO_ICON_WIDTH};
-use crate::components::tool_button::TOOL_SIZE;
-use crate::components::toolbar::{Toolbar, ToolbarAction, ToolbarItem};
+use crate::components::toolbar::{Toolbar, ToolbarAction};
 use crate::components::typography::InputTypography;
 use crate::keymap::use_hint_title;
 use crate::platform::open_export;
@@ -23,10 +22,14 @@ use super::selection::Selection;
 /// cluster are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke
 /// IconButton); **Find is grid-only** (CHART_SPEC §1), Reload and Download show in both modes.
 ///
-/// **Search** (P2-09) toggles the find popover — an [`Attached`] panel anchored to the trigger
-/// (bottom-end, so it opens down-and-left clear of the window edge), on the [`Menu`] base for its
-/// backdrop dismissal (outside-click / its own Esc). Every close path goes through
+/// **Search** (P2-09) toggles the find popover — an [`Attached`] panel on the [`Menu`] base for
+/// its backdrop dismissal (outside-click / its own Esc). Every close path goes through
 /// [`FindState::dismiss`], clearing the filter with the popover.
+///
+/// The panel is anchored to a **zero-width pinned slot**, not to the Search button, so the button
+/// is free to fold into the overflow menu at narrow widths (P5-06). Anchored to the button, folding
+/// it took the panel's anchor with it and ⌘F — which the datagrid handles, not this row — went
+/// silently dead exactly when the pane was too narrow to press the button instead.
 ///
 /// **Trash** clears the active tab's results (Rz8 / P2-14): it drops the tab's Run trigger,
 /// unmounting the grid back to the empty state — the per-run find state unmounts (and so resets)
@@ -56,15 +59,12 @@ impl ResultsToolbar {
 impl Component for ResultsToolbar {
     fn render(&self) -> impl IntoElement {
         let theme = use_theme();
-        // The destructive tone is no longer read here: `ToolbarAction::danger` owns that dress, so
-        // Clear's red hover is one variant rather than three overrides at this call site.
-        let (bg, accent, faint) = {
+        // Neither the destructive tone nor the accent is read here any more: `ToolbarAction`'s
+        // `danger` and `active` own those dresses, so Clear's red hover and Find's on-state are
+        // variants rather than five overrides at this call site.
+        let (bg, faint) = {
             let t = theme.read();
-            (
-                t.colors().background,
-                t.colors().primary,
-                t.colors().text_placeholder,
-            )
+            (t.colors().background, t.colors().text_placeholder)
         };
         // The grid's shared selection (provided by the results pane) — cleared with the results so
         // a later run doesn't wake up wearing the old grid's selection.
@@ -75,20 +75,8 @@ impl Component for ResultsToolbar {
         let mut view_radio = use_radio::<SessionState, Chan>(Chan::View(tab));
         let view = view_radio.read().view(tab);
 
-        // Find keeps its own button and tooltip: it is an [`Attached`] anchor, not just a control,
-        // so it cannot come from `Toolbar`'s action shape. Its title carries the effective find
-        // chord (reactive — a rebind repaints it), the popover's ✕ the effective Esc.
-        let tool = move |icon: IconName| {
-            Button::new()
-                .height(Size::px(TOOL_SIZE))
-                .width(Size::px(TOOL_SIZE))
-                .child(Icon::new(icon).size(15.))
-        };
-        let tip = |title: String, button: Button| {
-            TooltipContainer::new(Tooltip::new_text(title))
-                .position(AttachedPosition::Bottom)
-                .child(button)
-        };
+        // Find's title carries the effective find chord (reactive — a rebind repaints it), and the
+        // popover's ✕ the effective Esc.
         let find_title = use_hint_title("Find in results", Command::Find);
 
         // The Export window's launch inputs arrive as a prop (see `ExportLaunch`); only the
@@ -99,16 +87,6 @@ impl Component for ResultsToolbar {
         // ── find (Search) ─────────────────────────────────────────────────────────────────
         let find = self.find;
         let open = *find.open.read();
-
-        let trigger = tool(IconName::Search)
-            .on_press(move |_| find.toggle())
-            // The comp's `on` dress while the popover is open: accent icon over an
-            // accent-tinted fill and border (13% / 55% accent mixes).
-            .maybe(open, |b| {
-                b.background(accent.with_a(33))
-                    .border_fill(accent.with_a(140))
-                    .color(accent)
-            });
 
         // The popover panel (comp `res-find-panel`, 340×34): the `Menu` chrome *is* the
         // panel — one bordered row holding the magnifier, a chrome-less `Input` that fills
@@ -161,7 +139,15 @@ impl Component for ResultsToolbar {
                 .padding(Gaps::new(4., 0., 0., 0.))
                 .child(Menu::new().on_close(move |_| find.dismiss()).child(panel))
         };
-        let search = Attached::new(tip(find_title, trigger))
+        // **The popover's anchor is not the button.** It sits in the row's pinned slot at zero
+        // width, so it exists at every width the pane can take — which is what lets the Find
+        // *button* fold into the overflow menu like any other action.
+        //
+        // With the popover anchored to the button, folding the button took the panel's anchor with
+        // it: ⌘F (handled in the datagrid, not here) would flip `find.open` and nothing would
+        // render, so the chord went quietly dead exactly when the pane was too narrow to press the
+        // button instead. An anchor that cannot fold is the whole fix.
+        let search_anchor = Attached::new(rect())
             .bottom()
             .align_end()
             .maybe_child(open.then(popover));
@@ -199,10 +185,9 @@ impl Component for ResultsToolbar {
         // whole body below is, and it flexes to push the tool cluster to the far end exactly as
         // the comp draws it.
         //
-        // **Find is deliberately first**, so it is the last thing to fold. It is a `Custom` rather
-        // than an ordinary action because it is an [`Attached`] anchor as well as a button: the
-        // popover measures itself against this node, so the toolbar cannot rebuild it as a menu
-        // row. See the note below on what that costs.
+        // **Find is an ordinary action**, folding into the menu with its chord like the rest, and
+        // it is deliberately first so it is the last to go. Its popover hangs off the pinned
+        // anchor above rather than off this button, which is what lets it fold at all.
         let row = Toolbar::new()
             .background(bg)
             // Charged the toggle's real width, not zero: the wrapper flexes but the pill inside it
@@ -215,25 +200,15 @@ impl Component for ResultsToolbar {
                     .child(toggle),
                 TOOLBAR_TWO_ICON_WIDTH,
             )
-            .item(ToolbarItem::Custom {
-                // Find is grid-only, so in Chart mode the slot draws nothing and is charged
-                // nothing — otherwise the tools folded 36px earlier than they needed to.
-                width: match view {
-                    ResultsView::Grid => TOOL_SIZE,
-                    _ => 0.,
-                },
-                // Find is grid-only (CHART_SPEC §1) — in Chart mode the slot is an empty box.
-                inline: match view {
-                    ResultsView::Grid => search.into_element(),
-                    _ => rect().into_element(),
-                },
-                // No folded form, and this is the one seam P5-06 leaves: the popover is anchored
-                // to the trigger, so with the trigger gone ⌘F (handled in the datagrid) toggles
-                // state nothing renders. It only bites once the pane is narrower than the toggle
-                // plus two controls, where the grid shows nothing anyway. The fix is to host the
-                // popover on the results pane root rather than on this button — a change to the
-                // popover stack, which is high-risk ground (AGENTS.md §8) and wants its own pass.
-                folded: None,
+            // Find is grid-only (CHART_SPEC §1), so in Chart mode there is no item at all rather
+            // than an empty slot still charged for its width.
+            .maybe(view == ResultsView::Grid, |bar| {
+                bar.item(
+                    ToolbarAction::new(IconName::Search, find_title.clone())
+                        .hint(Command::Find)
+                        .active(open)
+                        .on_press(move |_| find.toggle()),
+                )
             })
             .item(
                 ToolbarAction::new(IconName::Reload, "Re-run the query to refresh the snapshot")
@@ -260,7 +235,9 @@ impl Component for ResultsToolbar {
                             open_export(platform.clone(), launch);
                         }
                     }),
-            );
+            )
+            // Zero width, so it costs the fold arithmetic nothing and never folds.
+            .pinned(search_anchor, 0.);
 
         rect().width(Size::fill()).vertical().child(row)
     }

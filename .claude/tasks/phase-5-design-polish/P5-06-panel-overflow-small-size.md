@@ -1,6 +1,6 @@
 # P5-06 · Panel overflow & small-size behaviour
 
-**Phase:** 5 · **Status:** 🟡 · **DEV_TASKS:** — · **Depends on:** P3-01 (shell) + the content tasks
+**Phase:** 5 · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** P3-01 (shell) + the content tasks
 
 ## Goal
 One consistent rule set for how every region degrades when the window runs out of room: what gives
@@ -24,7 +24,9 @@ reader looks for the frame's contract:
 2. **Space is given up in a stated order** — the proportional main pane first and entirely, then
    the pixel side panels in equal measure. That order *is* the sizing model, not a policy.
 3. **Chrome shrinks its flexible run, then folds its actions into `⋯`, then drops them.**
-4. **Pressure never collapses a panel; only a drag does.**
+4. **Neither a drag nor a squeeze closes a panel** — both stop at the stub, and closing stays the
+   rail button's or the header ×'s. (Drag-to-collapse was built, tried and rejected: a panel that
+   vanishes mid-drag reads as lost, and IntelliJ does not do it either.)
 5. **A body scrolls; chrome never does.** Vertically only — a long identifier ellipsizes.
 
 Anti-overlap rests on four checkable properties, not on arithmetic closing against a minimum:
@@ -33,7 +35,7 @@ folds or ellipsizes inside its own box; every panel rect is `Overflow::Clip`.
 
 ## Built
 
-**Fork** (`crates/freya`, 3 files — push the gitlink):
+**Fork** (`crates/freya`, 3 files — branch `strata/p5-06-panel-collapse`, gitlink pushed):
 - `torin/src/measure.rs` — **`flex_available_*` clamped at zero.** It could go negative, so a flex
   child was measured past its own origin and painted over its siblings. The single most direct
   cause of overlap. Covered by `flex_does_not_measure_negative_when_siblings_overflow`
@@ -63,7 +65,6 @@ folds or ellipsizes inside its own box; every panel rect is `Overflow::Clip`.
   rule 3's structure (`Content::Flex` + a flexing ellipsizing title) — they were `SpaceBetween`
   over `Content::Normal` with no clip, so their clusters drew over each other.
 - `DrawerEmpty` made scroll-safe.
-- `the_header_stays_inside_the_panel_at_its_stub_width` (inspector tests) sweeps 84 → 292px.
 
 ### Corrections this task carried
 - **The task's own premise was wrong**: "softer mins + graceful degradation" understates it. The
@@ -76,21 +77,38 @@ folds or ellipsizes inside its own box; every panel rect is `Overflow::Clip`.
 - Three surfaces the old task file named **do not exist**: no drawer tab strip or filter box (the
   rail *is* the switcher), no inspector tabs, no app-level status bar. The bodies already scroll.
 
+## Every chrome row is on `Toolbar`
+
+| Row | Leading (never folds) | Ladder |
+|---|---|---|
+| Editor toolbar | Run | tail-first: Save · Save-as-view · Clear · Format · Analyze · Explain |
+| Results toolbar | Table/Chart pill | tail-first: Export · Clear · Reload · Find |
+| Results status bar | the info cluster | ranked: page size · jump box · First/Last · **Prev/Next last** |
+| Explain toolbar | Physical/Logical + ANALYZE | the raw/tree toggle |
+| Sidebar header | the pane's own run | re-scan, then the pinned collapse × |
+| Inspector header | the title | pinned collapse × |
+| Drawer header | title + scopes/count | pinned expand + collapse × |
+
+`Toolbar::header()` is why the sidebar header could join: a panel header's controls are 24px flat
+against a toolbar's 28px outlined, and the `⋯` trigger has to match **the cluster it joins** — the
+fold arithmetic charges the row's own control size rather than a constant.
+
+`ToolbarItem::rank` exists for the pager, whose tail is where the navigation lives: folding
+tail-first would take Next and Last before the page-size dropdown, which is backwards.
+
+### The Find seam is closed
+The popover now hangs off a **zero-width pinned anchor**, not the Search button, so the button
+folds like any other action while the panel keeps somewhere to attach. Anchored to the button,
+folding it took the anchor with it and ⌘F — which the datagrid handles, not the toolbar — went
+silently dead exactly when the pane was too narrow to press the button instead.
+
+### The inspector body is bounded
+`PANE_BODY_MIN_W` gives every pane body a floor, so a run with no break opportunity
+(`customer_shipping_address_line_one`) no longer leaves centred rows starting at a **negative x**,
+painting off the left edge. Below the floor the panel clips, which is the point of having one.
+`the_panel_lays_out_within_its_body_floor_at_stub_width` sweeps 84 → 292px and bounds both edges.
+
 ## Left to do
-- [ ] **Status-bar pager** (`results/status_bar.rs`) onto `Toolbar`. Ranks exist for exactly its
-  ladder (size dropdown → jump box → First/Last → Prev/Next). Needs the row itself to become the
-  `Toolbar` with the info cluster as its leading run, which means hoisting the jump-input state out
-  of `PagerCluster`. Today it clips at the panel edge rather than overlapping, so this is polish.
-- [ ] **Explain toolbar** (`explain_plan/mod.rs`) and the **sidebar header** onto `Toolbar`. The
-  sidebar header is already structurally correct; it just doesn't fold.
-- [ ] **Find's popover anchor.** Find is a `Custom` item with no folded form, so at a stub width it
-  drops and ⌘F (handled in the datagrid) toggles state nothing renders. The fix is to host the
-  popover on the results pane root rather than on the toolbar trigger — a change to the popover
-  stack, which is high-risk ground (AGENTS.md §8) and wants its own pass.
-- [ ] **Inspector body at stub widths.** An identifier like `customer_shipping_address_line_one`
-  has no break opportunity, so its run is wider than an 84px panel whatever the layout does, and
-  centred rows then start at a negative x. Wants a character-level ellipsis or a horizontally
-  clipping body — a content decision, which is why the stub-width test is scoped to the header.
 - [ ] Manual pass on a Mac build (see the plan's verification list).
 
 ## Findings routed elsewhere

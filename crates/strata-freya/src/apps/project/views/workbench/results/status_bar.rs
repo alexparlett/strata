@@ -20,6 +20,7 @@ use super::selection::Selection;
 use super::ResultsState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::toolbar::{Toolbar, ToolbarAction, ToolbarItem};
 use crate::components::typography::{InputTypography, Meta, Path};
 use crate::keymap::use_hint;
 
@@ -37,6 +38,16 @@ define_theme!(
 
 /// The rows-per-page choices the page-size dropdown offers (matches the comp).
 const PAGE_SIZES: [usize; 4] = [100, 250, 500, 1000];
+
+/// The bar's own height, and the state dot's.
+const BAR_HEIGHT: f32 = 40.;
+const DOT_SIZE: f32 = 7.;
+/// What the two composite pager items cost the fold arithmetic. Stated because a `Custom` item
+/// cannot be measured before it is laid out, and these are the widths the comp draws:
+/// the `Select` at its longest label ("1000 / page"), and the page box plus its "of M".
+const PAGE_SIZE_WIDTH: f32 = 110.;
+const JUMP_INPUT_WIDTH: f32 = 44.;
+const JUMP_WIDTH: f32 = JUMP_INPUT_WIDTH + 8. + 38.;
 
 /// The pager's slots in the footer: the 1-based page and the rows-per-page the results pane
 /// owns (bumping either re-keys the pane's snapshot read), plus the snapshot total that bounds
@@ -193,70 +204,120 @@ impl Component for StatusBar {
             .and_then(|data| selection_agg(&sel.read(), data))
             .map(|a| a.label());
 
+        // The info cluster: the run's readouts, owning all the slack and clipping at its own
+        // edge, so a narrow pane never paints them under the pager. The aggregate ellipsizes
+        // first, since it takes the cluster's remaining width via `flex`.
+        let info_cluster = rect()
+            .width(Size::flex(1.))
+            .height(Size::fill())
+            .direction(Direction::Horizontal)
+            .content(Content::Flex)
+            .cross_align(Alignment::Center)
+            .spacing(12.)
+            .overflow(Overflow::Clip)
+            .child(
+                rect()
+                    .width(Size::px(DOT_SIZE))
+                    .height(Size::px(DOT_SIZE))
+                    .corner_radius(DOT_SIZE / 2.)
+                    .background(dot_color),
+            )
+            .child(Meta::new(label).color(dot_color))
+            .maybe_child(sub.map(|text| Path::new(text).color(theme.sub_color)))
+            .map(self.info, |el, info| {
+                el.child(SnapshotChip {
+                    settled: info.settled,
+                    color: theme.sub_color,
+                })
+            })
+            .maybe_child(agg.map(|text| {
+                Meta::new(text)
+                    .color(accent)
+                    .width(Size::flex(1.))
+                    .text_overflow(TextOverflow::Ellipsis)
+            }));
+
+        // The bar is a `Toolbar` (P5-06): the info cluster is its leading run, and the pager is a
+        // list of items that fold in a **stated ladder** rather than tail-first, because the tail
+        // is where the navigation lives.
+        //
+        // Ranks, lowest folding first:
+        //   0  the page-size dropdown and its rule — a preference, not navigation
+        //   1  the jump box and its "of N" — the page is still readable in the chevrons
+        //   2  First / Last — nice, but Prev / Next reach the same places
+        //   3  Prev / Next — the last thing standing, because a pager that cannot page is furniture
+        let bar = Toolbar::new()
+            .height(BAR_HEIGHT - 1.)
+            .padding(12.)
+            .spacing(12.)
+            .leading(info_cluster, 0.)
+            .map(self.pager, |bar, pager| {
+                let pages = pager.pages();
+                let current = *pager.page.read();
+                let nav = |icon, label: &'static str, enabled, target: usize| {
+                    ToolbarAction::new(icon, label)
+                        .enabled(enabled)
+                        .on_press(move |_| jump(sel, pager.page, target))
+                };
+
+                bar.item(
+                    ToolbarItem::Custom {
+                        width: PAGE_SIZE_WIDTH,
+                        inline: PageSize {
+                            pager,
+                            theme: theme.clone(),
+                            accent,
+                        }
+                        .into_element(),
+                        folded: None,
+                    }
+                    .rank(0),
+                )
+                .item(ToolbarItem::Separator.rank(0))
+                .item(nav(IconName::First, "First page", current > 1, 1).rank(2))
+                .item(
+                    nav(
+                        IconName::ChevronLeft,
+                        "Previous",
+                        current > 1,
+                        current.saturating_sub(1).max(1),
+                    )
+                    .rank(3),
+                )
+                .item(
+                    ToolbarItem::Custom {
+                        width: JUMP_WIDTH,
+                        inline: JumpBox {
+                            pager,
+                            color: theme.sub_color,
+                        }
+                        .into_element(),
+                        folded: None,
+                    }
+                    .rank(1),
+                )
+                .item(
+                    nav(
+                        IconName::ChevronRight,
+                        "Next",
+                        current < pages,
+                        (current + 1).min(pages),
+                    )
+                    .rank(3),
+                )
+                .item(nav(IconName::Last, "Last page", current < pages, pages).rank(2))
+            });
+
         rect()
             .width(Size::fill())
-            .height(Size::px(40.))
-            .min_height(Size::px(40.))
+            .height(Size::px(BAR_HEIGHT))
+            .min_height(Size::px(BAR_HEIGHT))
             .content(Content::Flex)
             .background(theme.background)
             // 1px top divider (Freya's `Border` is all-sides; a pinned 1px child is the local idiom
             // for a single edge), then the bar row fills the rest.
             .child(Divider::horizontal().color(theme.border_fill))
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::flex(1.))
-                    .direction(Direction::Horizontal)
-                    // Flex content so the info cluster below can flex — that's what pins the
-                    // pager to the right edge (a `Size::flex` child needs a flex-content parent).
-                    .content(Content::Flex)
-                    .cross_align(Alignment::Center)
-                    // padding 0 sp-4 · gap sp-4 (matches the comp's `statusbar` row).
-                    .padding(Gaps::new(0., 12., 0., 12.))
-                    .spacing(12.)
-                    // The info cluster owns all the slack (which is also what pins the pager
-                    // right) and clips at its own edge, so a narrow window never paints the
-                    // readouts under the pager — the aggregate ellipsizes first (it takes the
-                    // cluster's remaining width via `flex`).
-                    .child(
-                        rect()
-                            .width(Size::flex(1.))
-                            .height(Size::fill())
-                            .direction(Direction::Horizontal)
-                            .content(Content::Flex)
-                            .cross_align(Alignment::Center)
-                            .spacing(12.)
-                            .overflow(Overflow::Clip)
-                            .child(
-                                rect()
-                                    .width(Size::px(7.))
-                                    .height(Size::px(7.))
-                                    .corner_radius(3.5)
-                                    .background(dot_color),
-                            )
-                            .child(Meta::new(label).color(dot_color))
-                            .maybe_child(sub.map(|text| Path::new(text).color(theme.sub_color)))
-                            .map(self.info, |el, info| {
-                                el.child(SnapshotChip {
-                                    settled: info.settled,
-                                    color: theme.sub_color,
-                                })
-                            })
-                            .maybe_child(agg.map(|text| {
-                                Meta::new(text)
-                                    .color(accent)
-                                    .width(Size::flex(1.))
-                                    .text_overflow(TextOverflow::Ellipsis)
-                            })),
-                    )
-                    .map(self.pager, |el, pager| {
-                        el.child(PagerCluster {
-                            pager,
-                            theme: theme.clone(),
-                            accent,
-                        })
-                    }),
-            )
+            .child(bar)
     }
 }
 
@@ -405,60 +466,46 @@ fn selection_agg(sel: &Selection, data: &GridData) -> Option<AggView> {
     (agg.cells > 0).then_some(agg)
 }
 
-// ── pager cluster ─────────────────────────────────────────────────────────────────────────────
+// ── pager ─────────────────────────────────────────────────────────────────────────────────────
 
-/// The grid state's right cluster, to the comp: page-size dropdown (opens upward) · 1px divider ·
-/// first / prev / page-number input ("of M") / next / last as standard 28×28 flat `Button`s.
-/// Every jump clears the selection — its indices would silently point at *different* cells on
-/// the new page, and the aggregate would lie.
+/// Jump to `target` (already clamped): clear the page-local selection, then bump the page.
+///
+/// Every jump clears the selection — its indices would silently point at *different* cells on the
+/// new page, and the aggregate would lie.
+fn jump(mut sel: State<Selection>, mut page: State<usize>, target: usize) {
+    sel.set(Selection::None);
+    page.set(target);
+}
+
+/// The page-size dropdown: the app-standard [`Select`], pinned `open_up` because the bar sits on
+/// the window's bottom edge. A pick is a new cut of the snapshot, so it returns to page 1 — the
+/// old page number indexes a different cut.
+///
+/// Its own component so its width is the one thing the toolbar has to know about it.
 #[derive(PartialEq)]
-struct PagerCluster {
+struct PageSize {
     pager: Pager,
     theme: StatusBarTheme,
     accent: Color,
 }
 
-impl PagerCluster {
-    /// Jump to `target` (already clamped): clear the page-local selection, then bump the page.
-    fn jump(mut sel: State<Selection>, mut page: State<usize>, target: usize) {
-        sel.set(Selection::None);
-        page.set(target);
-    }
-}
-
-impl Component for PagerCluster {
+impl Component for PageSize {
     fn render(&self) -> impl IntoElement {
         let pager = self.pager;
         let mut page_size = pager.page_size;
-        let page = pager.page;
-        let pages = pager.pages();
-        let current = *page.read();
         let size = *page_size.read();
         let sel = consume_context::<State<Selection>>();
-
-        // The page input's text, following the page state (the chevrons and a size pick move it
-        // too). Submit parses + clamps; garbage snaps back to the shown page.
-        let mut text = use_state(move || current.to_string());
-        use_side_effect(move || {
-            let p = *page.read();
-            text.set_if_modified(p.to_string());
-        });
-
-        // ── page-size dropdown ────────────────────────────────────────────────────────────
-        // The app-standard `Select`: the input-shell trigger + item menu the comp draws
-        // (`data-hv="input"`), themed by `select` / `menu_item`. Pinned `open_up` — the bar
-        // sits on the window's bottom edge, so the comp always opens the menu upward. A pick
-        // is a new cut of the snapshot — back to page 1 of it (the old page number is
-        // meaningless).
         let accent = self.accent;
-        let dropdown = Select::new()
+        let control_color = self.theme.control_color;
+
+        Select::new()
             .open_up()
-            .selected_item(Meta::new(format!("{size} / page")).color(self.theme.control_color))
+            .selected_item(Meta::new(format!("{size} / page")).color(control_color))
             .children(PAGE_SIZES.iter().map(|&n| {
                 MenuItem::new()
                     .selected(n == size)
                     .on_press(move |_| {
-                        Self::jump(sel, page, 1);
+                        jump(sel, pager.page, 1);
                         page_size.set(n);
                     })
                     .child({
@@ -469,83 +516,58 @@ impl Component for PagerCluster {
                             label
                         }
                     })
-            }));
+            }))
+    }
+}
 
-        // ── nav buttons + page input ──────────────────────────────────────────────────────
-        // The standard flat ("ghost") `Button`, 28×28 like every other icon-button cluster in
-        // the app — the `flat_button` theme carries the whole dress, ghost hover and
-        // `disabled_*` at-a-bound tint included. Each wears its comp `title=` as a tooltip,
-        // opening upward — the bar sits on the window's bottom edge.
-        let nav = move |title: &'static str, icon: IconName, enabled: bool, target: usize| {
-            TooltipContainer::new(Tooltip::new_text(title))
-                .position(AttachedPosition::Top)
-                .child(
-                    Button::new()
-                        .flat()
-                        .enabled(enabled)
-                        .width(Size::px(28.))
-                        .height(Size::px(28.))
-                        .on_press(move |_| Self::jump(sel, page, target))
-                        .child(Icon::new(icon).size(15.)),
-                )
-        };
+/// The page-number box and its "of M". Its own component because the echo state and the effect
+/// that keeps it following the page are hooks, and hooks cannot live behind the `Option<Pager>`
+/// the status bar renders from.
+///
+/// Commits on submit only: each report is a snapshot page read, so per-keystroke would load a page
+/// per digit. Garbage snaps back to the shown page.
+#[derive(PartialEq)]
+struct JumpBox {
+    pager: Pager,
+    color: Color,
+}
 
-        let jump_input = rect()
-            .direction(Direction::Horizontal)
-            .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((0., 8.))
-            .child(InputTypography::mono(
-                Input::new(text)
-                    .compact()
-                    .width(Size::px(44.))
-                    .text_align(TextAlign::Center)
-                    .on_submit(move |v: String| {
-                        match v.trim().parse::<usize>() {
-                            Ok(n) => {
-                                let target = n.clamp(1, pages);
-                                Self::jump(sel, page, target);
-                                // Re-echo even when the page didn't move (e.g. "999" at the end).
-                                text.set(target.to_string());
-                            }
-                            Err(_) => text.set((*page.peek()).to_string()),
-                        }
-                    }),
-            ))
-            .child(Path::new(format!("of {}", count(pages))).color(self.theme.sub_color));
+impl Component for JumpBox {
+    fn render(&self) -> impl IntoElement {
+        let pager = self.pager;
+        let page = pager.page;
+        let pages = pager.pages();
+        let current = *page.read();
+        let sel = consume_context::<State<Selection>>();
+
+        // The box follows its parent: the chevrons and a size pick move the page, and the text
+        // syncs back.
+        let mut text = use_state(move || current.to_string());
+        use_side_effect(move || {
+            let p = *page.read();
+            text.set_if_modified(p.to_string());
+        });
 
         rect()
             .direction(Direction::Horizontal)
             .cross_align(Alignment::Center)
-            .spacing(12.)
-            .child(dropdown)
-            .child(
-                rect()
-                    .width(Size::px(1.))
-                    .height(Size::px(18.))
-                    .background(self.theme.border_fill),
-            )
-            .child(
-                rect()
-                    .direction(Direction::Horizontal)
-                    .cross_align(Alignment::Center)
-                    .spacing(2.)
-                    .child(nav("First page", IconName::First, current > 1, 1))
-                    .child(nav(
-                        "Previous",
-                        IconName::ChevronLeft,
-                        current > 1,
-                        current.saturating_sub(1).max(1),
-                    ))
-                    .child(jump_input)
-                    .child(nav(
-                        "Next",
-                        IconName::ChevronRight,
-                        current < pages,
-                        (current + 1).min(pages),
-                    ))
-                    .child(nav("Last page", IconName::Last, current < pages, pages)),
-            )
+            .spacing(8.)
+            .child(InputTypography::mono(
+                Input::new(text)
+                    .compact()
+                    .width(Size::px(JUMP_INPUT_WIDTH))
+                    .text_align(TextAlign::Center)
+                    .on_submit(move |v: String| match v.trim().parse::<usize>() {
+                        Ok(n) => {
+                            let target = n.clamp(1, pages);
+                            jump(sel, page, target);
+                            // Re-echo even when the page didn't move (e.g. "999" at the end).
+                            text.set(target.to_string());
+                        }
+                        Err(_) => text.set((*page.peek()).to_string()),
+                    }),
+            ))
+            .child(Path::new(format!("of {}", count(pages))).color(self.color))
     }
 }
 

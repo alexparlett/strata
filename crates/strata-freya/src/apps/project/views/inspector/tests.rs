@@ -22,7 +22,7 @@ use strata_model::{ColRef, ColumnInfo, Kind, SourceFormat, Stat, StatKey, TableD
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::views::ProfileTarget;
-use crate::components::ACTION_HEIGHT;
+use crate::components::{ACTION_HEIGHT, PANE_BODY_MIN_W};
 use crate::theme::strata_theme;
 
 /// The panel's own width, from the design canvas (`inspectorW: 292`).
@@ -648,22 +648,21 @@ fn past_the_edge_at(runner: &TestingRunner, width: f32) -> Vec<(f32, f32)> {
     })
 }
 
-/// P5-06: the panel's **header** stays inside the panel all the way down to the shell's stub
-/// width.
+/// P5-06: squeezed to the shell's stub width, the panel lays everything out **rightward from its
+/// own origin** and never wider than the stated body floor.
 ///
-/// It was `main_align(SpaceBetween)` over `Content::Normal` with no clip, and `Overflow` defaults
-/// to painting *outside* the bounds — so a narrow panel drew "COLUMN INSPECTOR" straight through
-/// the collapse ×. Nothing about the element tree was wrong, which is why this is measured
-/// geometry rather than a structural assertion.
+/// Two separate faults this pins. The header was `main_align(SpaceBetween)` over `Content::Normal`
+/// with no clip, and `Overflow` defaults to painting *outside* the bounds, so a narrow panel drew
+/// "COLUMN INSPECTOR" straight through the collapse ×. And the body had no floor at all, so a run
+/// with no break opportunity (`customer_shipping_address_line_one`) was wider than the panel
+/// whatever the layout did — and centred rows around it started at a **negative x**, painting off
+/// the left edge into the workbench.
 ///
-/// Scoped to the header band on purpose. The **body** still overflows at these widths, and for a
-/// different reason: an identifier like `customer_shipping_address_line_one` has no break
-/// opportunity, so its run is wider than an 84px panel whatever the layout does, and centred rows
-/// then start at a negative x. That wants either a character-level ellipsis or a horizontally
-/// clipping body, and it is a content decision rather than a shell one — recorded on the P5-06
-/// task file rather than papered over by loosening this assertion.
+/// The bound is `PANE_BODY_MIN_W`, not the panel: below that the body deliberately holds its floor
+/// and the panel clips it, which is the whole point of having one. What must never happen is
+/// content to the left of zero, or content wider than the floor it was promised.
 #[test]
-fn the_header_stays_inside_the_panel_at_its_stub_width() {
+fn the_panel_lays_out_within_its_body_floor_at_stub_width() {
     // The shell's `PANEL_STUB_W`. Restated rather than imported because it is a shell constant and
     // this is the panel's own test; if the two ever disagree the shell is what moves.
     const STUB: f32 = 84.;
@@ -696,15 +695,16 @@ fn the_header_stays_inside_the_panel_at_its_stub_width() {
             ),
         );
 
+        // Never narrower than the body's floor: under it the panel clips rather than reflowing.
+        let bound = width.max(PANE_BODY_MIN_W);
         let past: Vec<_> = runner.find_many(|node, _| {
             let a = node.layout().area;
-            let in_header = a.max_y() <= HEADER_HEIGHT + 0.5;
-            (in_header && a.width() > 0. && (a.max_x() > width + 0.5 || a.min_x() < -0.5))
+            (a.width() > 0. && (a.max_x() > bound + 0.5 || a.min_x() < -0.5))
                 .then(|| (a.min_x(), a.max_x()))
         });
         assert!(
             past.is_empty(),
-            "the header laid out past the {width}px panel edge: {past:?}"
+            "at a {width}px panel, laid out outside 0..={bound}: {past:?}"
         );
     }
 }

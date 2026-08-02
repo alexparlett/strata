@@ -38,8 +38,8 @@ use strata_core::config::Command;
 /// like any other item, so the arithmetic treats it as an ordinary member.
 const SEPARATOR_W: f32 = 1.;
 
-/// The room the `⋯` trigger needs once anything has folded.
-const OVERFLOW_W: f32 = TOOL_SIZE;
+/// A panel header's control box, against a toolbar's [`TOOL_SIZE`].
+const HEADER_CONTROL_SIZE: f32 = 24.;
 
 /// What a [`Toolbar`] shows in one slot.
 #[derive(PartialEq, Clone)]
@@ -87,10 +87,10 @@ impl ToolbarItem {
         }
     }
 
-    /// How much room this item needs in the row.
-    fn width(&self) -> f32 {
+    /// How much room this item needs in a row whose controls are `control` wide.
+    fn width(&self, control: f32) -> f32 {
         match self.inner() {
-            Self::Action(_) => TOOL_SIZE,
+            Self::Action(_) => control,
             Self::Separator => SEPARATOR_W,
             Self::Custom { width, .. } => *width,
             Self::Ranked(..) => unreachable!("inner() unwraps every rank"),
@@ -118,6 +118,7 @@ pub struct ToolbarAction {
     hint: Option<Command>,
     enabled: bool,
     danger: bool,
+    active: bool,
     on_press: Option<EventHandler<Event<PressEventData>>>,
 }
 
@@ -129,6 +130,7 @@ impl ToolbarAction {
             hint: None,
             enabled: true,
             danger: false,
+            active: false,
             on_press: None,
         }
     }
@@ -151,9 +153,25 @@ impl ToolbarAction {
         self
     }
 
+    /// The action's own state is **on** — it holds something open (the results pane's Find, while
+    /// its popover is showing). Wears the comp's accent dress inline.
+    ///
+    /// Inline only: `MenuButton` carries no selected state (that is `MenuItem`'s), and a folded
+    /// action whose panel is open needs no marker anyway — the panel itself is on screen.
+    pub fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
     pub fn on_press(mut self, f: impl Into<EventHandler<Event<PressEventData>>>) -> Self {
         self.on_press = Some(f.into());
         self
+    }
+
+    /// Fold this action only after everything of a lower rank has gone — the `ToolbarItem` builder
+    /// of the same name, reachable without spelling the conversion out at the call site.
+    pub fn rank(self, rank: u8) -> ToolbarItem {
+        ToolbarItem::from(self).rank(rank)
     }
 }
 
@@ -165,17 +183,24 @@ impl From<ToolbarAction> for ToolbarItem {
 
 /// What `items` cost in a row `spacing` wide-gapped, counting only those flagged in `keep`, plus
 /// the `⋯` trigger when anything has folded.
-fn run_width(items: &[ToolbarItem], keep: &[bool], spacing: f32, overflowing: bool) -> f32 {
+fn run_width(
+    items: &[ToolbarItem],
+    keep: &[bool],
+    spacing: f32,
+    control: f32,
+    overflowing: bool,
+) -> f32 {
     let mut total = 0.;
     let mut slots = 0usize;
     for (item, keep) in items.iter().zip(keep) {
         if *keep {
-            total += item.width();
+            total += item.width(control);
             slots += 1;
         }
     }
+    // The trigger is a control like any other in this row, so it costs what they cost.
     if overflowing {
-        total += OVERFLOW_W;
+        total += control;
         slots += 1;
     }
     total + spacing * slots.saturating_sub(1) as f32
@@ -192,9 +217,9 @@ fn run_width(items: &[ToolbarItem], keep: &[bool], spacing: f32, overflowing: bo
 /// `available` is what is left for the items after the row's padding, its pinned tail and the
 /// leading run's own floor. The `⋯` trigger only charges for itself once something has actually
 /// folded, so a row that fits exactly does not fold an item to make room for a menu holding it.
-fn fold_plan(items: &[ToolbarItem], available: f32, spacing: f32) -> Vec<bool> {
+fn fold_plan(items: &[ToolbarItem], available: f32, spacing: f32, control: f32) -> Vec<bool> {
     let mut keep = vec![true; items.len()];
-    if run_width(items, &keep, spacing, false) <= available {
+    if run_width(items, &keep, spacing, control, false) <= available {
         return keep;
     }
 
@@ -204,7 +229,7 @@ fn fold_plan(items: &[ToolbarItem], available: f32, spacing: f32) -> Vec<bool> {
 
     for i in order {
         keep[i] = false;
-        if run_width(items, &keep, spacing, true) <= available {
+        if run_width(items, &keep, spacing, control, true) <= available {
             break;
         }
     }
@@ -222,6 +247,8 @@ pub struct Toolbar {
     spacing: f32,
     padding: f32,
     height: f32,
+    control: f32,
+    flat: bool,
     background: Option<Color>,
     overflow_label: &'static str,
 }
@@ -243,9 +270,24 @@ impl Toolbar {
             spacing: 8.,
             padding: 10.,
             height: 38.,
+            control: TOOL_SIZE,
+            flat: false,
             background: None,
             overflow_label: "More actions",
         }
+    }
+
+    /// A **panel header**'s dress rather than a toolbar's: 24px flat controls instead of 28px
+    /// outlined ones.
+    ///
+    /// The distinction is the row's, not each action's, because the whole point is that the `⋯`
+    /// trigger matches the cluster it joins — a 28px outlined chevron dropped into a header's
+    /// 24px flat controls reads as a different kind of thing, which is exactly the drift this
+    /// component exists to stop.
+    pub fn header(mut self) -> Self {
+        self.control = HEADER_CONTROL_SIZE;
+        self.flat = true;
+        self
     }
 
     /// The run at the head of the row: a title, a filter box, a status readout, or a control that
@@ -315,9 +357,9 @@ impl Component for Toolbar {
         // is deliberately nowhere near the session store.
         let mut measured = use_state(|| f32::INFINITY);
         let theme = use_theme();
-        let (border, danger) = {
+        let (border, danger, accent) = {
             let t = theme.read();
-            (t.colors().border, t.colors().error)
+            (t.colors().border, t.colors().error, t.colors().primary)
         };
 
         // What the items may spend: the row, less its padding, its pinned tail and the floor the
@@ -337,7 +379,7 @@ impl Component for Toolbar {
             - self.pinned_width
             - tail_gap
             - self.spacing;
-        let keep = fold_plan(&self.items, available, self.spacing);
+        let keep = fold_plan(&self.items, available, self.spacing, self.control);
         let folded: Vec<ToolbarItem> = self
             .items
             .iter()
@@ -353,7 +395,9 @@ impl Component for Toolbar {
             .zip(&keep)
             .filter(|(_, keep)| **keep)
             .map(|(item, _)| match item.inner() {
-                ToolbarItem::Action(action) => action_button(action, danger).into_element(),
+                ToolbarItem::Action(action) => {
+                    action_button(action, danger, accent, self.control, self.flat).into_element()
+                }
                 ToolbarItem::Separator => Divider::vertical()
                     .length(Size::px(18.))
                     .color(border)
@@ -389,6 +433,8 @@ impl Component for Toolbar {
                 OverflowMenu {
                     items: folded,
                     label: self.overflow_label,
+                    control: self.control,
+                    flat: self.flat,
                 }
                 .into_element()
             }))
@@ -398,15 +444,28 @@ impl Component for Toolbar {
 
 /// One action, drawn in the row: the app's 28×28 outline icon button wearing its label as a
 /// tooltip.
-fn action_button(action: &ToolbarAction, danger: Color) -> impl IntoElement {
+fn action_button(
+    action: &ToolbarAction,
+    danger: Color,
+    accent: Color,
+    control: f32,
+    flat: bool,
+) -> impl IntoElement {
     let button = Button::new()
-        .height(Size::px(TOOL_SIZE))
-        .width(Size::px(TOOL_SIZE))
+        .maybe(flat, Button::flat)
+        .height(Size::px(control))
+        .width(Size::px(control))
         .enabled(action.enabled)
         .maybe(action.danger, |b| {
             b.hover_background(danger.with_a(38))
                 .hover_border_fill(danger.with_a(115))
                 .hover_color(danger)
+        })
+        // The comp's `on` dress: accent icon over accent-tinted fill and border (13% / 55%).
+        .maybe(action.active, |b| {
+            b.background(accent.with_a(33))
+                .border_fill(accent.with_a(140))
+                .color(accent)
         })
         .map(action.on_press.clone(), |b, f| b.on_press(f))
         .child(Icon::new(action.icon).size(15.));
@@ -421,6 +480,8 @@ fn action_button(action: &ToolbarAction, danger: Color) -> impl IntoElement {
 struct OverflowMenu {
     items: Vec<ToolbarItem>,
     label: &'static str,
+    control: f32,
+    flat: bool,
 }
 
 impl Component for OverflowMenu {
@@ -460,8 +521,9 @@ impl Component for OverflowMenu {
                 .position(AttachedPosition::Bottom)
                 .child(
                     Button::new()
-                        .height(Size::px(TOOL_SIZE))
-                        .width(Size::px(TOOL_SIZE))
+                        .maybe(self.flat, Button::flat)
+                        .height(Size::px(self.control))
+                        .width(Size::px(self.control))
                         .on_press(move |_| open.toggle())
                         .child(Icon::new(IconName::Dots).size(15.)),
                 ),
@@ -492,11 +554,13 @@ fn menu_row(label: &str, hint: Option<Command>) -> impl IntoElement {
 mod tests {
     use freya::prelude::{rect, IntoElement};
 
-    use super::{fold_plan, ToolbarAction, ToolbarItem, OVERFLOW_W, SEPARATOR_W};
+    use super::{fold_plan, ToolbarAction, ToolbarItem, HEADER_CONTROL_SIZE, SEPARATOR_W};
     use crate::components::icon::IconName;
     use crate::components::tool_button::TOOL_SIZE;
 
     const SPACING: f32 = 8.;
+    /// The default toolbar control, which is also what the `⋯` trigger costs.
+    const OVERFLOW_W: f32 = TOOL_SIZE;
 
     fn actions(n: usize) -> Vec<ToolbarItem> {
         (0..n)
@@ -511,7 +575,7 @@ mod tests {
 
     /// How many items the plan keeps inline.
     fn kept(items: &[ToolbarItem], available: f32) -> usize {
-        fold_plan(items, available, SPACING)
+        fold_plan(items, available, SPACING, TOOL_SIZE)
             .iter()
             .filter(|k| **k)
             .count()
@@ -519,7 +583,7 @@ mod tests {
 
     /// The indices the plan keeps, in order.
     fn kept_indices(items: &[ToolbarItem], available: f32) -> Vec<usize> {
-        fold_plan(items, available, SPACING)
+        fold_plan(items, available, SPACING, TOOL_SIZE)
             .into_iter()
             .enumerate()
             .filter(|(_, keep)| *keep)
@@ -606,7 +670,7 @@ mod tests {
             ToolbarItem::Separator,
             ToolbarItem::Action(ToolbarAction::new(IconName::Trash, "Clear")),
         ];
-        assert_eq!(items[1].width(), SEPARATOR_W);
+        assert_eq!(items[1].width(TOOL_SIZE), SEPARATOR_W);
         assert!(!items[1].folds());
         assert!(items[0].folds());
 
@@ -622,7 +686,7 @@ mod tests {
             inline: rect().into_element(),
             folded: None,
         };
-        assert_eq!(dropped.width(), 110.);
+        assert_eq!(dropped.width(TOOL_SIZE), 110.);
         assert!(!dropped.folds(), "no folded form means it is dropped");
 
         let keeps = ToolbarItem::Custom {
@@ -631,6 +695,35 @@ mod tests {
             folded: Some(rect().into_element()),
         };
         assert!(keeps.folds());
+    }
+
+    /// A header row folds against **its own** control size, not a toolbar's.
+    ///
+    /// The `⋯` trigger joins the cluster it folds into, so a 24px flat header must charge 24 for
+    /// it and for every action — charging a toolbar's 28 would fold a header early and then draw a
+    /// mismatched trigger in the gap it made.
+    #[test]
+    fn a_header_row_folds_against_its_own_control_size() {
+        let items = actions(4);
+        // Four 24px controls with 8px gaps: 4*24 + 3*8 = 120.
+        let header_run = HEADER_CONTROL_SIZE * 4. + SPACING * 3.;
+
+        assert_eq!(
+            fold_plan(&items, header_run, SPACING, HEADER_CONTROL_SIZE)
+                .iter()
+                .filter(|k| **k)
+                .count(),
+            4,
+            "all four fit a header row at their own size"
+        );
+        assert!(
+            fold_plan(&items, header_run, SPACING, TOOL_SIZE)
+                .iter()
+                .filter(|k| **k)
+                .count()
+                < 4,
+            "the same width folds when the controls are charged as a toolbar's"
+        );
     }
 
     /// A ranked item outlives the plain tail-first order: the pager's Prev and Next survive while
