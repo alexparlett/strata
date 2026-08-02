@@ -98,36 +98,75 @@ types: `Aggregate { x, series, measures: Vec<Measure>, bucket: Option<Bucket>, g
 is `{ y, agg_fn }` — plural because a box plot or candlestick is extra measures on the same
 group, `CHART_FUNCTIONS.md` §2, though the core charts always send one; `Bucket` is a time
 stride for temporal X or a uniform width for numeric X),
-`Raw { x, y, cap }` (scatter), `Histogram { col, bins }`. `ChartData` — the chart-ready answer:
-categories + per-series `Vec<Option<f64>>` (wide, pivoted in the engine), or points, or bins; plus
-`group_count` / `capped` facts for guardrails. All fields hash/eq-able so `ChartQuery` can be cache
-identity (no floats in the request).
+`Raw { x, y, cap }` (scatter), `Histogram { col, bins }`. All fields hash/eq-able so `ChartQuery`
+can be cache identity — which is why a bin width is a **`Width`**, a newtype over the `f64`'s own
+bits with a validating constructor: a width is unavoidably a float, and cache identity may not be
+approximate, so identity is exact and a zero/negative/NaN width has no representation at all.
+
+`ChartData` — the chart-ready answer: `Grouped { categories, series, bucket }` (per-series
+`Vec<Option<f64>>`, wide, pivoted in the engine), `Points`, `Bins`, or **`OverCap { unit, cap }`**.
+A refusal is its own variant rather than a `capped` flag beside a half-filled payload, because
+"honest boundaries" (§1.4) means there is no such thing as a truncated chart to hand a renderer.
+There is no `group_count` field either: `categories.len()` **is** the group count (the axis is the
+groups), and a second copy of a live fact is a thing to keep in step for nothing. `bucket` reports
+the width actually used, since the request's may have been `None`. Series run **measure by measure
+in request order**, and within a measure by series value ranked on what it measures — that order is
+how a multi-measure preset reads its parts back.
 
 **Engine (strata-core).** `Engine::chart(snapshot: SnapshotId, q: ChartQuery)` reads
 `ctx.table(__snap_{id})` — the `read_page` DataFrame precedent — applies the grouping/binning, and
 pivots to `ChartData` in Rust. Specifics:
 
 - **Aggregate fns**: `sum | avg | min | max | count | median | count-distinct`, all DataFusion
-  built-ins. `count` / Y = none is `count(*)`. Nulls in Y are skipped by the aggregates natively;
-  a NULL X (or series) value is its own group, labeled `(null)`.
-- **Temporal X buckets with `date_bin`** (stride auto-derived from the column's span — span > ~2y
-  → `1 month`, > ~60d → `1 day`, > ~2d → `1 hour`, else `5 minutes` — and user-overridable in the
-  strip). Bucketed axes order by bucket ascending. `date_bin` emits no row for an empty bucket:
-  the renderer must show a **gap** (that is why series values are `Option<f64>`), never
-  interpolate across missing buckets.
-- **A numeric X groups by value, ordered ascending.** Optionally binned with a uniform width
-  (`floor(x / w) * w`, labeled by bucket start) — the same control slot as the temporal stride,
-  with the same honesty rule: an empty bin is a gap, never interpolated.
-- **Category order is the snapshot's order** for categorical X (numeric and temporal axes order
-  by value ascending): aggregate a
-  `min(row_number() OVER ())` alongside and order groups by it, so a result the user `ORDER BY`ed
-  keeps that order in the chart. (Verify the row-number-follows-scan-order assumption with a test
-  against a real snapshot; if it does not hold, fall back to ordering by the measure descending —
-  but decide from evidence, not hope.)
-- **Caps are detected, not silently applied**: the aggregate query runs with
-  `LIMIT group_cap + 1`; `cap + 1` rows back means *refused*, reported as a fact in `ChartData`
-  (or an error variant), never a truncated chart. Same pattern for scatter's raw-point cap.
+  built-ins, named per measure. A measure with no Y is `count(*)` whichever function it names, and
+  nulls in Y are skipped by the aggregates natively.
+- **Temporal X buckets with `date_bin`** (`Timestamp`, `Date32`, `Date64` — all cast to
+  `Timestamp(Millisecond)` first, because `date_bin`'s signature takes neither date type and only
+  `Date32` coerces. A `Time32`/`Time64` column groups on its raw value like any other dimension.)
+  The stride is auto-derived from the column's span — span > ~2y → `1 month`, > ~60d → `1 day`,
+  > ~2d → `1 hour`, else `5 minutes` — **and then widened until the axis fits under `group_cap`**,
+  because the ladder alone produces axes that cannot be drawn: 60 days at the hourly rung is 1 440
+  buckets against a default cap of 1 000, so "chart my last two months" would refuse by
+  construction, and a default that guarantees a refusal is not a default. A stride the *request*
+  names is never widened — the user asked for it, and a refusal is the honest answer to a bucket
+  that doesn't fit. Resolution happens **engine-side**, and `ChartData::Grouped.bucket` reports
+  which width was used, so the strip shows the real answer rather than running a span query of its
+  own. Bucketed axes order by bucket ascending. `date_bin` emits no row for an empty bucket: the
+  engine fills the sequence back in with `None` values (that is why series values are
+  `Option<f64>`), so a renderer shows a **gap** and never interpolates across missing buckets.
+- **A numeric X groups by value, ordered ascending.** Optionally binned with a uniform width —
+  the same control slot as the temporal stride, and the same honesty rule: the bin sequence is
+  filled, so an empty bin is a gap, never interpolated and never a zero. The group key is the bin
+  **index** (`floor(x / w)`), with the start computed as `index × w`: identical buckets to
+  `floor(x / w) * w`, which is what the SQL scaffold writes, but keyed on an integer — matching
+  returned bucket starts against a generated sequence would compare floats that agree
+  mathematically and differ in their last bit.
+- **Category order is the measure, descending** for categorical X, ties broken by label ascending.
+  This spec previously proposed `min(row_number() OVER ())` to keep a result the user `ORDER BY`ed
+  in that order on the axis, and asked for the assumption to be tested. **It was, and it is false.**
+  An Arrow *File* scan is range-split across `target_partitions` once the file passes
+  `datafusion.optimizer.repartition_file_min_size` (10 MB), and a window with no `PARTITION BY` then
+  sits above a `CoalescePartitionsExec`, whose own contract is "no guarantees are made about the
+  order of the resulting partition". Measured on stock config: a 200k-row snapshot came back in
+  perfect file order, a 3M-row one put 2 975 424 of 3 000 000 rows out of it. The property would
+  therefore have held at every test size and silently reversed itself on exactly the large results
+  the chart exists for. Measure-descending is deterministic, independent of scan parallelism, and
+  needs no window function at all. Temporal and numeric axes order by value and never face the
+  question.
+- **Caps are detected, not silently applied**: the aggregate runs with `LIMIT group_cap + 1`, and
+  `cap + 1` rows back means *refused* — `ChartData::OverCap`, never a truncated chart. Same pattern
+  for scatter's raw-point cap (counted **after** null coordinates are filtered, so the cap counts
+  points that can be drawn). `group_cap` bounds **aggregate rows — categories × series** — which is
+  exactly the category count for the common unsplit chart and an honest budget for a split one. A
+  bucketed axis is capped a second time on the buckets it would *span*: two rows a decade apart are
+  two aggregate rows and eighty-seven thousand hourly buckets.
 - **A missing (category, series) cell is `None`** — bars render it as zero-height, lines as a gap.
+- **A NULL X or series is its own group, labelled `(null)` — and keyed by the value, not by that
+  label.** A column that genuinely holds the string `(null)` keeps its own category; merging the
+  two would drop one group's rows and say nothing about it. On a bucketed axis the NULL group sits
+  **after** the sequence, where it implies no position in time or on a number line.
+- **A bucket of the wrong kind for the column is refused, not ignored** — a stale width left on a
+  temporal X by an encoding change would otherwise chart something the strip isn't showing.
 
 **UI subscription (strata-freya).** A `QueryCapability` shaped exactly like `PageSpec` /
 `FetchSnapshotPage`: keys `(SnapshotId, ChartQuery)`, built in one place, no confirm dialog (a
@@ -161,7 +200,9 @@ place of the canvas:
 | Scatter without numeric X and Y | pick two numeric columns | — |
 
 Plus the **non-blocking high-cardinality banner** over the canvas when an aggregated chart has
-more than 60 distinct X groups (answered by `ChartData.group_count` — no extra query). The chart
+more than 60 distinct X groups (`categories.len()` — no extra query, no second copy of the fact,
+and the first two rows above are one answer from the engine: `ChartData::OverCap { unit, cap }`,
+where `unit` is the noun the message names). The chart
 still renders. There is deliberately **no materialize cap and no sampling** (§1.4, §1.6).
 
 ## 8. The "Add GROUP BY in SQL" scaffold
@@ -228,8 +269,9 @@ registry this spec's mechanism was designed against. Headlines that stay true he
 ## 11. Acceptance (workstream-level)
 
 - [ ] Selecting Chart shows a chart of the current result with visible, overridable defaults.
-- [ ] Bar/line/area/pie honor Aggregate + fn; series split by palette colour; category order
-      matches the snapshot; temporal X is `date_bin`-bucketed with a working stride control.
+- [ ] Bar/line/area/pie honor Aggregate + fn; series split by palette colour; a categorical
+      axis orders by the measure and a temporal or numeric one by value (§5); temporal X is
+      `date_bin`-bucketed with a working stride control.
 - [ ] Empty temporal buckets render as gaps, never interpolated lines.
 - [ ] Scatter/histogram enforce their encoding guardrails; over-cap results refuse with a working
       **Add GROUP BY in SQL** that opens an editable new tab and does not run it.

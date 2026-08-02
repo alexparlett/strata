@@ -26,6 +26,7 @@
 //! `crates/strata-dioxus`, which is reference code and no longer builds.)
 
 mod catalog;
+mod chart;
 pub mod config;
 mod explain;
 pub mod export;
@@ -93,7 +94,7 @@ use query::{
     claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
 };
 use sql::FunctionCatalog;
-use strata_model::{Cell, Diagnostic, QueryOutput, SnapshotId, TabId};
+use strata_model::{Cell, ChartData, ChartQuery, Diagnostic, QueryOutput, SnapshotId, TabId};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
 /// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
@@ -610,6 +611,37 @@ impl Engine {
             )
             .await
             .map_err(|e| format!("page task failed: {e}"))?
+    }
+
+    /// Read one immutable snapshot as a chart (Rz2, `docs/CHART_SPEC.md` §5) — the
+    /// grouped, raw or binned read `q` asks for, answered as a small chart-ready model.
+    ///
+    /// Snapshot-scoped and side-effect free like [`fetch_page`](Engine::fetch_page), and
+    /// cacheable on exactly the same terms: `(snapshot, q)` is the whole identity, so a
+    /// changed encoding is a different entry rather than a mutation. Deliberately no
+    /// lifecycle bookkeeping and no confirm in front of it — a `GROUP BY` over a local
+    /// snapshot is `fetch_page`-tier work, not [`profile`](Engine::profile)'s tier.
+    ///
+    /// The chart never re-reads the source files: it charts the result the grid is paging,
+    /// which is what makes the two agree when the data underneath has since moved.
+    pub async fn chart(
+        self: &Arc<Self>,
+        snapshot: SnapshotId,
+        q: ChartQuery,
+    ) -> Result<ChartData, String> {
+        // A chart is **two** reads for an open bucket or a histogram — a range pass, then the
+        // grouped one — so it holds the snapshot open across them. Without the pin a re-run in
+        // the owning tab between the passes deregisters the table mid-call, and a histogram
+        // would answer with the first pass's real edges and the second pass's zero counts:
+        // a chart of nothing, indistinguishable from a genuine empty range. Same rule as
+        // `export`'s in-call pin (AGENTS.md §2).
+        let _reading = self.pin_snapshot(snapshot);
+        let ctx = self.ctx.clone();
+        let fmt = CellFormat::new(&self.overrides.lock().unwrap());
+        self.rt()
+            .spawn(async move { chart::run_chart(&ctx, snapshot, &q, &fmt).await })
+            .await
+            .map_err(|e| format!("chart task failed: {e}"))?
     }
 
     /// Does `snapshot` still exist to be read?

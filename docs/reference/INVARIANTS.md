@@ -107,6 +107,26 @@ Things that must not regress. Each was fought for once already.
   snapshot's lifetime rather than in a footer or a sidecar. What remains of the old gate is
   `json_unions_as_text`, which is now **presentation, not storage**: `json_get`'s union renders as
   `{str=x}` and nobody typing `content -> 'type'` wants to read that.
+- **A chart is a grouped read of the snapshot, and a categorical axis orders by the measure — never
+  by the scan.** `Engine::chart` (Rz2) groups, bins and pivots in DataFusion over `__snap_{id}`, so an
+  aggregated chart over millions of rows is a normal hash aggregation and there is no client-side
+  reducer, no materialize cap and no sampling — over its cap it answers `ChartData::OverCap`, which
+  carries no data at all, because a truncated chart is not a state that can exist. What was *tried*
+  and must not come back is ordering categorical categories by `min(row_number() OVER ())` to keep
+  a user's `ORDER BY` on the axis: an Arrow **File** scan range-splits across `target_partitions`
+  once the file passes `datafusion.optimizer.repartition_file_min_size` (10 MB), and a window with
+  no `PARTITION BY` then sits above a `CoalescePartitionsExec`, whose own contract is "no guarantees
+  are made about the order of the resulting partition". Measured on stock config: a 200k-row
+  snapshot came back in perfect file order, a 3M-row one put 2 975 424 of 3 000 000 rows out of it —
+  so the property held at every size a test would use and reversed itself on exactly the results the
+  feature exists for. That shape of failure is the reason the rule is written down rather than left
+  to whoever next reads the `row_number` idea and finds it reasonable. Order is **measure
+  descending, ties by label**; a temporal or numeric axis orders by value and never faces the
+  question. A bucketed axis's empty buckets are filled back in as `None` (a gap, never an
+  interpolated line) and a numeric one is keyed on the bin **index** so that fill is exact rather
+  than a float comparison; a group is keyed by its **value** while `(null)` is only ever a label.
+  The request carries a measure *list*, not one `y`, because a chart type is a preset over a query
+  algebra (`docs/CHART_FUNCTIONS.md` §2) — a box plot is extra measures on the same group.
 - **A view of a value is bounded where the value is *encoded*, never afterwards — and it expands
   breadth-first.** The record view opened on a `config.json` row (19 struct columns, 241,425 nested
   fields) froze the window for a second or two, and the freeze was the **materialization**, not the

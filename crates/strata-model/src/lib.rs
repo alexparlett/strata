@@ -15,6 +15,7 @@
 //! stays in `crate::engine`: that's the engine's wire format, not shared vocabulary.
 
 mod catalog;
+mod chart;
 mod diagnostics;
 mod history;
 mod profile;
@@ -26,6 +27,10 @@ mod session;
 pub use catalog::{
     CatalogKind, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoveKind, RemoveTarget,
     SavedQuery, SourceFormat, TableDef, ViewDef,
+};
+pub use chart::{
+    AggFn, Bucket, CapUnit, ChartBin, ChartData, ChartPoint, ChartQuery, ChartSeries, Measure,
+    Stride, Width,
 };
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;

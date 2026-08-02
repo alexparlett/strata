@@ -19,12 +19,18 @@ the design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visu
 - **Chart data is a freya-query capability shaped like `PageSpec`** — keyed by
   `(SnapshotId, ChartQuery)`, no confirm dialog, store holds the config, never results.
 - **Refuse, never sample** — DataFusion has no `TABLESAMPLE`; over-cap is an overlay + scaffold CTA.
+- **A categorical axis orders by the measure, not by the snapshot** (settled by 01, from
+  measurement). `min(row_number() OVER ())` follows file order only while the snapshot stays under
+  `repartition_file_min_size`; above it the scan range-splits and the window's
+  `CoalescePartitionsExec` scrambles it — so it holds at every test size and fails on the results
+  the chart exists for. Ordering is measure-descending, ties by label; temporal and numeric axes
+  order by value. See 01's corrections and the `engine::chart` module header.
 
 ## Tasks
 
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
-| 01 | `Engine::chart` + chart vocabulary `[core]` | ⬜ | Rz2 | — (P2-01 ✅) |
+| 01 | `Engine::chart` + chart vocabulary `[core]` | ✅ | Rz2 | — (P2-01 ✅) |
 | 02 | Chart body + plotters renderer | ⬜ | Rz2 | 01 |
 | 03 | Encoder strip + `ChartConfig` state | ⬜ | Rz2 | 02 |
 | 04 | Guardrails + GROUP BY scaffold | ⬜ | Rz2 | 02, 03 |

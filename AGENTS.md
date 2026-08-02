@@ -82,6 +82,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   its `ENGINE_KEYS` default; `restart_owed` measures against `built_runtime`.
 - **Managed DDL policy.** The editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` only. Views are
   Save's artifact; typed DDL is blocked with validation pointing at the owning surface.
+- **A chart is a grouped read of the snapshot, and a categorical axis orders by the measure — never
+  by the scan.** `Engine::chart` groups/bins/pivots in DataFusion off a measure *list*; over its cap
+  it answers `OverCap` and draws nothing. `min(row_number() OVER ())` was tried and **is not**
+  snapshot order: a split scan under a `CoalescePartitionsExec` scrambles it above 10 MB, so it
+  holds at test sizes only. Temporal and numeric axes order by value; their empty buckets are filled
+  back as `None` gaps; a group is keyed by its value, `(null)` is only a label.
 
 **Data, values, rendering cost**
 

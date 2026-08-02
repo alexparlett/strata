@@ -516,8 +516,10 @@ impl CellFormat {
         }
     }
 
-    /// An arrow [`FormatOptions`] borrowing this config's date/timestamp patterns.
-    fn opts(&self) -> FormatOptions<'_> {
+    /// An arrow [`FormatOptions`] borrowing this config's date/timestamp patterns. Reachable
+    /// from the sibling modules so a surface that renders the same values — the chart's axis
+    /// labels ([`super::chart`]) — renders them the way the grid does.
+    pub(super) fn opts(&self) -> FormatOptions<'_> {
         let mut o = FormatOptions::default();
         if !self.date.is_empty() {
             o = o.with_date_format(Some(&self.date));
