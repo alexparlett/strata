@@ -217,15 +217,24 @@ impl Component for Drawer {
                     .width(Size::fill())
                     .height(Size::px(HEADER_HEIGHT))
                     .horizontal()
+                    // Flex with a flexing title run rather than `SpaceBetween` between two hugging
+                    // clusters (P5-06) — see the inspector header for why the old shape drew the
+                    // two over each other once the drawer got narrow.
+                    .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .main_align(Alignment::SpaceBetween)
+                    .spacing(8.)
                     .padding((0., 12.))
                     .child(
                         rect()
+                            .width(Size::flex(1.))
                             .horizontal()
                             .cross_align(Alignment::Center)
                             .spacing(8.)
-                            .child(Caption::new(title).color(theme.label_color))
+                            .child(
+                                Caption::new(title)
+                                    .color(theme.label_color)
+                                    .text_overflow(TextOverflow::Ellipsis),
+                            )
                             // Problems puts its **scopes** here instead of a number: each tab
                             // carries its own count, so a total beside the title would be a third
                             // copy of the same two figures (the IntelliJ arrangement — the panel

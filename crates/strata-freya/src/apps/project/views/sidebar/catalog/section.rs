@@ -65,6 +65,12 @@ impl Component for CatalogSection {
         let title = rect()
             .width(Size::flex(1.))
             .horizontal()
+            // Flex sizes this wrapper, but its children still hug — and `Overflow` defaults to
+            // painting *outside* the box, so without these two the label drew straight over the
+            // `+` beside it once the sidebar narrowed (P5-06). The name gives up its width and
+            // ellipsizes; the clip is the backstop for the chevron.
+            .content(Content::Flex)
+            .overflow(Overflow::Clip)
             .cross_align(Alignment::Center)
             .spacing(8.)
             .on_press(move |_| {
@@ -81,8 +87,11 @@ impl Component for CatalogSection {
                 .size(11.),
             )
             .child(
-                Eyebrow::new(format!("{} · {}", self.label, self.count))
-                    .color(self.theme.label_color),
+                rect().width(Size::flex(1.)).overflow(Overflow::Clip).child(
+                    Eyebrow::new(format!("{} · {}", self.label, self.count))
+                        .color(self.theme.label_color)
+                        .text_overflow(TextOverflow::Ellipsis),
+                ),
             );
 
         let header = rect()

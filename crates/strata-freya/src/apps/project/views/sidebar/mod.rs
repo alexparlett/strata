@@ -25,18 +25,49 @@ use crate::apps::project::state::{
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::toolbar::{Toolbar, ToolbarItem};
 use crate::components::typography::{Eyebrow, InputTypography};
 
 /// A pane header that is just its name — every pane but the catalog, whose filter field *is*
 /// its header. `Size::flex` for the shell's reason: the row distributes, so a `fill` label
 /// would push the collapse × off the panel.
+///
+/// The name sits in a flexing, clipping cell of its own rather than straight in the row. Flex
+/// sizes the *wrapper*, but a text child still hugs, and `Overflow` defaults to painting outside
+/// the box — so at a narrow width "AGENTS" drew over the ⓘ beside it and then over the collapse ×
+/// (P5-06). Anything the caller adds after it keeps its room.
 fn label(text: &'static str, color: Color) -> Rect {
     rect()
         .width(Size::flex(1.))
         .horizontal()
+        .content(Content::Flex)
+        .overflow(Overflow::Clip)
         .cross_align(Alignment::Center)
-        .child(Eyebrow::new(text).color(color))
+        .child(
+            rect().width(Size::flex(1.)).overflow(Overflow::Clip).child(
+                Eyebrow::new(text)
+                    .color(color)
+                    .text_overflow(TextOverflow::Ellipsis),
+            ),
+        )
 }
+
+/// The width of the header's **leading run** below which the catalog's filter field is dropped
+/// rather than squeezed.
+///
+/// Measured on the leading run itself, so this is the room the field would actually get — not the
+/// gross row width, from which the ↻, the pinned × and their gaps still have to come off. It was
+/// briefly both: the probe moved onto the flex wrapper when the header became a `Toolbar` while
+/// the threshold stayed calibrated for the row, which dropped the filter at panel widths with
+/// ~112px going spare.
+///
+/// Below this the field has too little left to read a table name back in. Filtering stays
+/// reachable through the command palette.
+const CATALOG_FILTER_MIN: f32 = 80.;
+
+/// The header row's height and the box of the flat controls in it (the canvas's 48 / 24).
+const HEADER_HEIGHT: f32 = 48.;
+const HEADER_CONTROL: f32 = 24.;
 
 #[derive(PartialEq)]
 pub struct Sidebar;
@@ -65,16 +96,29 @@ impl Component for Sidebar {
         // The catalog filter lives in the header beside the refresh button, but its consumer is
         // the tree below — so the shell owns the signal and hands it down.
         let filter = use_state(String::new);
+        // The leading run's measured width, so the filter can get out of the way before it is too
+        // narrow to type in (P5-06 rule 3: shrink, then hide). Local and per-mount — a fold
+        // verdict is derived state, like `components::toolbar`'s.
+        //
+        // The fixed run either side of it (↻ and the pinned ×) is the same whichever branch wins,
+        // so the measurement cannot oscillate between them.
+        let mut leading_w = use_state(|| f32::INFINITY);
+        let roomy = *leading_w.read() >= CATALOG_FILTER_MIN;
 
         let leading = match pane {
             // `Content::Flex` + a `Size::flex` field, *not* `Size::fill()`: fill takes the whole
             // parent width regardless of its siblings, so the filter ate the row and pushed ↻
             // out of the panel (the same trap `SidebarRow` documents). Flex distributes what is
             // left after the button's fixed 24px.
+            // Below `CATALOG_FILTER_MIN` the field is dropped for the pane's name: an input too
+            // narrow to read a word in is worse than none, and its magnifier was drawing over the
+            // ↻ beside it. ↻ and the collapse × keep their room either way.
+            SidebarPane::Catalog if !roomy => label("CATALOG", label_color).into_element(),
             SidebarPane::Catalog => rect()
                 .width(Size::flex(1.))
                 .horizontal()
                 .content(Content::Flex)
+                .overflow(Overflow::Clip)
                 .cross_align(Alignment::Center)
                 .spacing(8.)
                 .child(
@@ -87,7 +131,6 @@ impl Component for Sidebar {
                     )
                     .width(Size::flex(1.)),
                 )
-                .child(RefreshButton)
                 .into_element(),
             SidebarPane::Connections => label("CONNECTIONS", label_color).into_element(),
             // The one pane header with something beside its name: the query-session model is
@@ -112,28 +155,47 @@ impl Component for Sidebar {
             .background(bg)
             .vertical()
             .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::px(48.))
-                    .horizontal()
-                    // Same reason as `leading`'s: the pane's own run is `Size::flex`, so the row
-                    // has to distribute rather than hug — else the collapse × is the thing that
-                    // gets pushed out.
-                    .content(Content::Flex)
-                    .cross_align(Alignment::Center)
-                    .spacing(8.)
-                    .padding((0., 12.))
-                    .child(leading)
-                    .child(
+                Toolbar::new()
+                    .header()
+                    .height(HEADER_HEIGHT)
+                    .padding(12.)
+                    // The pane's own run flexes, so the row distributes rather than hugs — else
+                    // the collapse × is the thing that gets pushed out.
+                    .leading(
+                        rect()
+                            .width(Size::flex(1.))
+                            .horizontal()
+                            .content(Content::Flex)
+                            .overflow(Overflow::Clip)
+                            .cross_align(Alignment::Center)
+                            .on_sized(move |e: Event<SizedEventData>| {
+                                leading_w.set_if_modified(e.area.width());
+                            })
+                            .child(leading),
+                        0.,
+                    )
+                    // Re-scan folds into the `⋯` before the collapse × does, because × is pinned.
+                    // The palette offers the same scan, so a folded row loses nothing.
+                    .maybe(pane == SidebarPane::Catalog, |bar| {
+                        bar.item(ToolbarItem::Custom {
+                            width: HEADER_CONTROL,
+                            inline: RefreshButton.into_element(),
+                            folded: None,
+                        })
+                    })
+                    // Pinned: it is how the user gets out of a squeezed panel, so it outranks
+                    // everything the header could otherwise show.
+                    .pinned(
                         Button::new()
                             .flat()
-                            .width(Size::px(24.))
-                            .height(Size::px(24.))
+                            .width(Size::px(HEADER_CONTROL))
+                            .height(Size::px(HEADER_CONTROL))
                             .on_press(move |_| {
                                 let mut radio = radio;
                                 radio.write_channel(Chan::Layout).close_sidebar();
                             })
                             .child(Icon::new(IconName::Close).size(13.)),
+                        HEADER_CONTROL,
                     ),
             )
             .child(Divider::horizontal().color(border))

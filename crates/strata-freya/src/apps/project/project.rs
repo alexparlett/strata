@@ -106,14 +106,17 @@ impl ProjectApp {
         let (close, on_close) = close_bridge(app.config.peek().settings.confirm_close_running);
         // First-run default is roomy enough to show the whole rail · sidebar · workbench ·
         // inspector · drawer frame without cramping the workbench; a saved geometry (once the
-        // window has been sized) wins, and `min_size` still honours the small-window story. A
-        // project that has never been saved — or whose geometry could not be read in time —
-        // opens here, OS-placed.
+        // window has been sized) wins. A project that has never been saved — or whose geometry
+        // could not be read in time — opens here, OS-placed.
         let (width, height) = geometry.map_or((1200., 780.), |g| (g.width as f64, g.height as f64));
         WindowConfig::new_app(ProjectApp { app, close, root })
             .with_title("Strata")
             .with_size(width, height)
-            .with_min_size(880., 600.)
+            // A nominal stop, not a usability claim: the shell has no minimum worth the name, and
+            // squeezing it is meant to degrade (panels give in order, chrome folds into its
+            // overflow menu) rather than be refused. Below roughly this the header bar is shorter
+            // than its own traffic-light gutter and there is nothing left to lay out.
+            .with_min_size(360., 240.)
             .with_background(background)
             .with_on_close(on_close)
             // Offset from AppKit's default (≈7, 6): close button lands at (13, 16) —

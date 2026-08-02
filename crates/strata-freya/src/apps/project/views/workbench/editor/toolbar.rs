@@ -5,9 +5,10 @@ use crate::apps::project::state::{
 };
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
-use crate::components::icon::{Icon, IconName};
+use crate::components::icon::IconName;
 use crate::components::run_button::{RunButton, RunState};
-use crate::keymap::use_hint_title;
+use crate::components::tool_button::TOOL_SIZE;
+use crate::components::toolbar::{Toolbar, ToolbarAction};
 use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
@@ -103,64 +104,49 @@ impl Component for EditorToolbar {
             None => press(QueryMode::Run),
         };
 
-        // An outline icon button — `outline_button` variant with a centred icon. (Icon keeps its
-        // resting tint on hover; Freya's Button doesn't cascade its hover colour into an SvgViewer.)
-        let tool = move |icon: IconName| {
-            Button::new()
-                .height(Size::px(28.))
-                .width(Size::px(28.))
-                .child(Icon::new(icon).size(15.))
-        };
-        // Every tool wears its comp `title=` as a tooltip; Save's carries the effective
-        // save chord (reactive — a rebind repaints it).
-        let tip = |title: String, button: Button| {
-            TooltipContainer::new(Tooltip::new_text(title))
-                .position(AttachedPosition::Bottom)
-                .child(button)
-        };
-        let save_title = use_hint_title("Save query", Command::SaveQuery);
+        // The row folds tail-first once the pane is too narrow to hold it (P5-06,
+        // `components::toolbar`), which puts Save at the head of the queue and Explain at the
+        // back. That is the right order here as well as the positional default: the actions with
+        // chords are the ones a folded row costs least, and Save's rides into the menu with it.
+        //
+        // **Run is the leading run, so it never folds** — it is the pane's reason to exist, it
+        // carries the in-flight Cancel state, and a toolbar that has folded away its Run has
+        // stopped being an editor toolbar. It hugs rather than flexing, so everything else packs
+        // in behind it exactly as the comp draws it.
+        let action = |icon: IconName, label: &'static str| ToolbarAction::new(icon, label);
 
-        let row = rect()
-            .width(Size::fill())
-            .height(Size::px(38.))
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((0., 10.))
+        let row = Toolbar::new()
             .background(bg)
-            .child(RunButton::new(run_state).on_press(run_press))
-            .child(tip(
-                "Explain plan".into(),
-                tool(IconName::Explain)
+            .leading(RunButton::new(run_state).on_press(run_press), TOOL_SIZE)
+            .item(
+                action(IconName::Explain, "Explain plan")
                     .on_press(move |_| press(QueryMode::Explain { analyze: false })),
-            ))
-            .child(tip(
-                "Explain analyze".into(),
-                tool(IconName::Analyze)
+            )
+            .item(
+                action(IconName::Analyze, "Explain analyze")
                     .on_press(move |_| press(QueryMode::Explain { analyze: true })),
-            ))
-            .child(Divider::vertical().length(Size::px(18.)).color(border))
-            .child(tip(
-                "Format SQL".into(),
-                tool(IconName::Format).on_press(move |_| actions::format(radio, id)),
-            ))
-            .child(tip(
-                "Clear editor".into(),
-                tool(IconName::Trash).on_press(move |_| actions::clear(radio, id)),
-            ))
-            .child(Divider::vertical().length(Size::px(18.)).color(border))
-            .child(tip(
-                "Save as view".into(),
-                tool(IconName::Eye).on_press(move |_| {
-                    actions::save_as_view(radio, project, view_engine.clone(), catalog, report, id)
-                }),
-            ))
-            .child(tip(
-                save_title,
-                tool(IconName::Save).on_press(move |_| {
-                    actions::save(radio, project, save_engine.clone(), catalog, report, id)
-                }),
-            ));
+            )
+            .separator()
+            .item(
+                action(IconName::Format, "Format SQL")
+                    .on_press(move |_| actions::format(radio, id)),
+            )
+            .item(
+                action(IconName::Trash, "Clear editor")
+                    .on_press(move |_| actions::clear(radio, id)),
+            )
+            .separator()
+            .item(action(IconName::Eye, "Save as view").on_press(move |_| {
+                actions::save_as_view(radio, project, view_engine.clone(), catalog, report, id)
+            }))
+            .item(
+                action(IconName::Save, "Save query")
+                    // The live chord, in the tooltip inline and in the menu row once folded.
+                    .hint(Command::SaveQuery)
+                    .on_press(move |_| {
+                        actions::save(radio, project, save_engine.clone(), catalog, report, id)
+                    }),
+            );
 
         rect()
             .width(Size::fill())

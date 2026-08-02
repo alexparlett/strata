@@ -22,7 +22,7 @@ use strata_model::{ColRef, ColumnInfo, Kind, SourceFormat, Stat, StatKey, TableD
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::views::ProfileTarget;
-use crate::components::ACTION_HEIGHT;
+use crate::components::{ACTION_HEIGHT, PANE_BODY_MIN_W};
 use crate::theme::strata_theme;
 
 /// The panel's own width, from the design canvas (`inspectorW: 292`).
@@ -162,9 +162,15 @@ type Handles = (
 );
 
 fn runner() -> (TestingRunner, Handles) {
+    runner_at(PANEL_WIDTH)
+}
+
+/// The panel at an arbitrary width, so P5-06's squeeze can be laid out and measured. Every other
+/// test wants the canvas width, which is what plain [`runner`] gives.
+fn runner_at(width: f32) -> (TestingRunner, Handles) {
     TestingRunner::new(
         app,
-        (PANEL_WIDTH, 900.).into(),
+        (width, 900.).into(),
         |r| {
             let selection = r.provide_root_context(|| State::create(None::<ColRef>));
             let project = r
@@ -631,10 +637,76 @@ fn nothing_in_the_panel_is_laid_out_past_its_edge() {
 /// Every box laid out past the panel's right edge, as `(min_x, max_x)` — empty is the only
 /// acceptable answer. A run off the edge is invisible however correct the element tree is.
 fn past_the_edge(runner: &TestingRunner) -> Vec<(f32, f32)> {
+    past_the_edge_at(runner, PANEL_WIDTH)
+}
+
+/// As [`past_the_edge`], for a panel laid out at some other width.
+fn past_the_edge_at(runner: &TestingRunner, width: f32) -> Vec<(f32, f32)> {
     runner.find_many(|node, _| {
         let a = node.layout().area;
-        (a.width() > 0. && a.max_x() > PANEL_WIDTH + 0.5).then(|| (a.min_x(), a.max_x()))
+        (a.width() > 0. && a.max_x() > width + 0.5).then(|| (a.min_x(), a.max_x()))
     })
+}
+
+/// P5-06: squeezed to the shell's stub width, the panel lays everything out **rightward from its
+/// own origin** and never wider than the stated body floor.
+///
+/// Two separate faults this pins. The header was `main_align(SpaceBetween)` over `Content::Normal`
+/// with no clip, and `Overflow` defaults to painting *outside* the bounds, so a narrow panel drew
+/// "COLUMN INSPECTOR" straight through the collapse ×. And the body had no floor at all, so a run
+/// with no break opportunity (`customer_shipping_address_line_one`) was wider than the panel
+/// whatever the layout did — and centred rows around it started at a **negative x**, painting off
+/// the left edge into the workbench.
+///
+/// The bound is `PANE_BODY_MIN_W`, not the panel: below that the body deliberately holds its floor
+/// and the panel clips it, which is the whole point of having one. What must never happen is
+/// content to the left of zero, or content wider than the floor it was promised.
+#[test]
+fn the_panel_lays_out_within_its_body_floor_at_stub_width() {
+    // The shell's `PANEL_STUB_W`. Restated rather than imported because it is a shell constant and
+    // this is the panel's own test; if the two ever disagree the shell is what moves.
+    const STUB: f32 = 84.;
+
+    for width in [STUB, 120., 180., PANEL_WIDTH] {
+        let (mut runner, (mut sel, mut project, ..)) = runner_at(width);
+        settle(&mut runner);
+        project.write_channel(ProjChan::Tables).table_registered(
+            "events",
+            TableMeta {
+                columns: vec![col(
+                    "customer_shipping_address_line_one",
+                    "Timestamp",
+                    Kind::Str,
+                    vec![
+                        stat(StatKey::Nulls, "1"),
+                        stat(StatKey::Min, "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                    ],
+                )],
+                rows: Some(9),
+            },
+        );
+        select(
+            &mut runner,
+            &mut sel,
+            column(
+                CatalogKind::Table,
+                "events",
+                &["customer_shipping_address_line_one"],
+            ),
+        );
+
+        // Never narrower than the body's floor: under it the panel clips rather than reflowing.
+        let bound = width.max(PANE_BODY_MIN_W);
+        let past: Vec<_> = runner.find_many(|node, _| {
+            let a = node.layout().area;
+            (a.width() > 0. && (a.max_x() > bound + 0.5 || a.min_x() < -0.5))
+                .then(|| (a.min_x(), a.max_x()))
+        });
+        assert!(
+            past.is_empty(),
+            "at a {width}px panel, laid out outside 0..={bound}: {past:?}"
+        );
+    }
 }
 
 /// Headless previews for eyeballing against the canvas's inspector — one per shape the panel

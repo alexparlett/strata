@@ -18,6 +18,20 @@
 /// gets to retune — a taller button would break the strip's 58px and every layout built on it.
 pub const ACTION_HEIGHT: f32 = 34.;
 
+/// The narrowest a **pane body** lays its content out at, however narrow its panel gets.
+///
+/// A panel has no usability minimum (P5-06 — see `apps::project::views::shell`), so a body given
+/// its panel's width verbatim eventually gets less room than a single word. At that point wrapping
+/// text degrades into **one character per line** — a column of letters down the panel — which is
+/// the one outcome worth spending a floor to prevent.
+///
+/// So it is sized to **the longest word plus the widest pane inset**, and no more. Wrapping a
+/// sentence one word per line is fine, and is what RustRover does at the same widths; the floor
+/// exists only to stop the step past that. Sizing it to a body's *content* width instead (the
+/// inspector's 230px scan card was the tempting number) clips readable prose at panel widths a
+/// user would call perfectly reasonable, which is a worse failure than the one being fixed.
+pub const PANE_BODY_MIN_W: f32 = 132.;
+
 /// How long a wait must last before it is worth **telling the user about**.
 ///
 /// Below this, announcing progress costs more than it buys: the spinner and the thing it replaced
@@ -46,6 +60,7 @@ pub mod segmented_toggle;
 pub mod sidebar_row;
 pub mod toggle_button;
 pub mod tool_button;
+pub mod toolbar;
 pub mod type_palette;
 pub mod typography;
 pub mod window;

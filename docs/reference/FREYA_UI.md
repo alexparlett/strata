@@ -78,6 +78,30 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   handler (match `e.data().button()` for right-click). Diagnostic fingerprint of a replaced
   handler: sibling events (hover) still fire, the press reaches ancestors, the node's own handler
   is dead.
+- **A panel has no usability floor, only a stub floor — and a chrome row folds rather than
+  spilling.** The design canvas has no answer here: `Strata.dc.html` declares `min-width: 1180px`
+  on the app root and scrolls the page below it, so every narrow state had to be designed. The
+  reference is RustRover, and it is the opposite of a minimum — JetBrains state that *"it is not
+  possible to enforce minimal tool window size"*, and a window squeezed to ~680px keeps both tool
+  windows open while the editor between them is a ~45px stub. So: a floor exists only so a panel
+  cannot become a sliver too thin to grab; **space is given up in a stated order** (the
+  proportional main pane first and entirely, then the pixel side panels in equal measure, which is
+  the sizing model rather than a policy anyone writes down); **pressure never collapses a panel,
+  only a drag does**; and a chrome row shrinks its flexible run, then folds its actions into one
+  `⋯` menu, then drops them. The fold is `components::toolbar`, one policy for every row rather
+  than a breakpoint per surface — because with no floors there is no row for which "it always
+  fits" can be argued. Its arithmetic is over the item list, so adding a button moves the fold
+  point with nothing restated, and **an item is declared once**: it knows its width, its inline
+  form and its menu-row form, so the overflow menu is a second *rendering* rather than a second
+  copy. The measured width is local, per-mount state — a fold verdict is derived, like the theme,
+  and `Chan::LayoutSize` has no subscribers by design anyway. Two traps generalise. `Overflow`
+  has **no `Scroll` variant** and defaults to `None`, which lets children paint *outside* their
+  box, so a `main_align(SpaceBetween)` header over the default `Content::Normal` draws its two
+  clusters straight through each other once it narrows — the fix is `Content::Flex` plus a
+  flexing, ellipsizing leading run, never a clip. And a panel's `min_size` was only ever a *drag*
+  clamp: it never reached the layout node, so a shrinking container measured flex panels toward
+  zero and past it (torin applied a negative `flex_available_width` with no clamp) — both were
+  fork fixes, and the negative one is the single most direct cause of overlapping content.
 - **A border is painted, never laid out — a bordered box whose children have backgrounds needs
   padding equal to the stroke.** torin has no notion of `border` at all (`BorderAlignment` exists
   only in `style/border.rs` and `elements/rect.rs`), so the default `Inner` alignment draws the

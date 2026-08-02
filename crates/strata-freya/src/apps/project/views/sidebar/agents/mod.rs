@@ -53,6 +53,7 @@ use self::run::RunCard;
 use crate::apps::project::state::{AgentRun, AgentsCtx, Chan, ConnectedAgent, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Meta, MonoValue, Prose};
+use crate::components::PANE_BODY_MIN_W;
 
 define_theme!(
     %[component]
@@ -172,9 +173,13 @@ impl Component for Agents {
         rect()
             .expanded()
             .child(
+                // Floored at `PANE_BODY_MIN_W`, with the panel clipping the remainder: a narrow
+                // sidebar otherwise gave the empty state's sentence less room than one word, and
+                // "No agents connected." wrapped into a column of single letters (P5-06).
                 ScrollView::new().child(
                     rect()
                         .width(Size::fill())
+                        .min_width(Size::px(PANE_BODY_MIN_W))
                         .vertical()
                         .padding(BODY_PAD)
                         .children(groups),
@@ -228,6 +233,10 @@ impl Component for Empty {
     fn render(&self) -> impl IntoElement {
         rect()
             .width(Size::fill())
+            // The pane returns this *instead of* its scrolling body, so it carries the same floor
+            // itself — without it, "No agents connected." had less room than one word in a narrow
+            // sidebar and wrapped into a column of single letters (P5-06).
+            .min_width(Size::px(PANE_BODY_MIN_W))
             .vertical()
             .cross_align(Alignment::Center)
             .padding(EMPTY_PAD)

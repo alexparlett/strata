@@ -160,7 +160,20 @@ pub fn use_hint(cmd: Command) -> String {
 /// or just the label when the command is unbound. Reactive like [`use_hint`], so a
 /// rebind repaints every tooltip.
 pub fn use_hint_title(label: &str, cmd: Command) -> String {
-    let hint = use_hint(cmd);
+    hint_title(
+        &use_config(ConfigChan::Settings).read().settings,
+        label,
+        cmd,
+    )
+}
+
+/// [`use_hint_title`]'s formatting, against settings the caller has already read.
+///
+/// Exists for a caller composing a **variable number** of titles in one render — a
+/// [`Toolbar`](crate::components::toolbar::Toolbar) resolving the chord for every action it holds,
+/// where a hook per action would break hook order. It reads one config, then calls this per item.
+pub fn hint_title(settings: &Settings, label: &str, cmd: Command) -> String {
+    let hint = strata_core::keymap::hint(settings, cmd);
     if hint.is_empty() {
         label.to_string()
     } else {

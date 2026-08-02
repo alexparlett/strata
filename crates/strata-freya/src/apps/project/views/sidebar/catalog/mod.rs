@@ -41,6 +41,7 @@ use freya::prelude::*;
 
 use crate::apps::configure::ConfigureTarget;
 use crate::components::icon::{Icon, IconName};
+use crate::components::PANE_BODY_MIN_W;
 use freya::radio::use_radio;
 use strata_model::CatalogKind;
 
@@ -106,6 +107,10 @@ impl Component for Catalog {
         // inside it — which is also what keeps the scrollbar flush to the panel edge.
         let body = rect()
             .width(Size::fill())
+            // Floored, with the panel clipping the rest — see `PANE_BODY_MIN_W`. Rows ellipsize on
+            // their own, but the sections' empty states are prose and would wrap to one character
+            // per line without it (P5-06).
+            .min_width(Size::px(PANE_BODY_MIN_W))
             .vertical()
             .padding(Gaps::new(8., 8., 12., 8.))
             .child(TablesSection::new(

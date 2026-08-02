@@ -240,6 +240,13 @@ Full text: [docs/reference/FREYA_UI.md](docs/reference/FREYA_UI.md).
 - **One handler per underlying event name.** A second registration silently **replaces** the first,
   and the sugar family shares names with the primitives (`on_secondary_down` → `on_pointer_down`).
   Check `freya-core/src/elements/extensions.rs` before adding any `on_*`; branch inside one handler.
+- **A panel has no usability floor, only a stub floor — and a chrome row folds rather than
+  spilling.** RustRover's model, because the canvas declares `min-width: 1180px` and has no narrow
+  states. Space is given up in a stated order (proportional pane first and entirely, then pixel
+  panels equally); pressure never collapses a panel, only a drag does. One fold policy for every
+  row (`components::toolbar`), arithmetic over the item list, each item declared once. `Overflow`
+  has no `Scroll` and defaults to painting *outside* the box, so `SpaceBetween` over
+  `Content::Normal` overlaps — use `Content::Flex` + a flexing, ellipsizing leading run.
 - **A border is painted, never laid out — a bordered box whose children have backgrounds needs
   padding equal to the stroke.** Not CSS's border box.
 - **A size lands on the node the parent lays out** — a component that wraps its control sizes the

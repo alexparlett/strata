@@ -38,6 +38,7 @@ use crate::apps::project::state::{
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Eyebrow, Prose};
+use crate::components::PANE_BODY_MIN_W;
 
 define_theme!(
     %[component]
@@ -154,10 +155,22 @@ impl Component for Inspector {
                     .width(Size::fill())
                     .height(Size::px(HEADER_HEIGHT))
                     .horizontal()
+                    // `Content::Flex` with a flexing title, not `SpaceBetween` with two hugging
+                    // clusters (P5-06): `Content::Normal` never shrinks anything and `Overflow`
+                    // defaults to painting outside the box, so a narrow panel had the title and
+                    // the × drawn over each other. The title gives up its width and ellipsizes;
+                    // the × is pinned, because it is how the user escapes the squeeze.
+                    .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .main_align(Alignment::SpaceBetween)
+                    .spacing(8.)
                     .padding((0., PANEL_PAD))
-                    .child(Eyebrow::new("COLUMN INSPECTOR").color(theme.label_color))
+                    .child(
+                        rect().width(Size::flex(1.)).child(
+                            Eyebrow::new("COLUMN INSPECTOR")
+                                .color(theme.label_color)
+                                .text_overflow(TextOverflow::Ellipsis),
+                        ),
+                    )
                     .child(
                         Button::new()
                             .flat()
@@ -173,7 +186,18 @@ impl Component for Inspector {
             .child(Divider::horizontal().color(theme.border_fill))
             // The header holds still; only the body scrolls, so the panel's own title and its
             // collapse stay reachable however long a struct's field list runs.
-            .child(ScrollView::new().child(body))
+            //
+            // The body is floored at `PANE_BODY_MIN_W` and the panel clips what will not fit:
+            // without it, a narrow panel gave the scan card's copy less room than one word and it
+            // wrapped to a column of single letters (P5-06).
+            .child(
+                ScrollView::new().child(
+                    rect()
+                        .width(Size::fill())
+                        .min_width(Size::px(PANE_BODY_MIN_W))
+                        .child(body),
+                ),
+            )
     }
 }
 

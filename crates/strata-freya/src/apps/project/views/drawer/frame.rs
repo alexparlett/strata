@@ -80,14 +80,19 @@ impl DrawerEmpty {
 
 impl Component for DrawerEmpty {
     fn render(&self) -> impl IntoElement {
-        rect()
-            .expanded()
-            .vertical()
-            .main_align(Alignment::Center)
-            .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((0., 12.))
-            .child(Icon::new(self.icon).color(self.icon_color).size(26.))
-            .child(Body::new(self.text.clone()).color(self.color))
+        // Centred *inside a scroll view*, not centred in a bare box (P5-06): a drawer dragged to
+        // its stub is shorter than the glyph plus its line of copy, and a centred box with no
+        // scroll paints the pair straight through the header above it.
+        ScrollView::new().child(
+            rect()
+                .expanded()
+                .vertical()
+                .main_align(Alignment::Center)
+                .cross_align(Alignment::Center)
+                .spacing(8.)
+                .padding((0., 12.))
+                .child(Icon::new(self.icon).color(self.icon_color).size(26.))
+                .child(Body::new(self.text.clone()).color(self.color)),
+        )
     }
 }
