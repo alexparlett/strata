@@ -36,23 +36,36 @@ can round a `BLOCK` down is not a gate.
 
 ### 1. Resolve the scope
 
-**No `git diff` shows an untracked file.** A change made entirely of new files diffs as empty, and
-the critics then review nothing and return `CLEAN` — on precisely this skill's headline case, a
-change you just wrote. So the default scope takes three readings, not one:
+An uncommitted change sits in one of **four disjoint states**, and **each git command sees exactly
+one of them**. Miss a command and you miss that state entirely: the diff comes back empty, the
+critics review nothing, and the run returns `CLEAN` over unreviewed code — on precisely this
+skill's headline case, a change you just wrote.
+
+| State | Only this shows it |
+|---|---|
+| committed on this branch | `git diff "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD"` |
+| staged, not committed | `git diff --cached` |
+| unstaged working tree | `git diff` |
+| untracked | `git ls-files --others --exclude-standard` |
 
 ```bash
-git status --porcelain && git diff "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD" && git diff
-```
-
-`git status --porcelain` marks untracked paths `??`; expand any directory it names, because it
-abbreviates (`?? .claude/agents/` is a directory, not a file):
-
-```bash
+git status --porcelain
+git diff "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD" && git diff && git diff --cached
 git ls-files --others --exclude-standard
 ```
 
-For those, **the whole file is the change** — say so in the brief, or a critic told to "read the
-changed files" reads hunks that do not exist.
+`git status --porcelain` is the inventory, not a substitute: it *names* every state (`??`
+untracked, `M`/`A` staged in the first column) but carries no content, and it abbreviates a
+directory to one line — `?? .claude/agents/` is a directory, not a file — which is why the
+`ls-files` expansion is separate.
+
+Untracked files have no hunks: **the whole file is the change**, and the brief must say so, or a
+critic told to "read the changed files" goes looking for a diff that does not exist.
+
+**Do not edit this command by substitution.** It has already regressed once: a rewrite that added
+untracked coverage dropped `--cached` in the same stroke, trading the untracked hole for an
+identical staged one, and staged-not-committed is the single most common state for a change you
+are about to review. Check any replacement against all four rows above.
 
 `"${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD"` rather than `main...HEAD`: the three-dot form is
 already merge-base relative, but the base branch is not always `main`, and the harness publishes

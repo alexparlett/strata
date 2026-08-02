@@ -347,13 +347,15 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   result; a critic returning *nothing* is an absence of evidence, and collapsing the two lets a
   review where every critic died report `CLEAN` — the worst thing the tool could say. All critics
   dead is `FAILED`, never an empty findings card.
-- **Scope is three readings, and a description is a claim.** No `git diff` shows an untracked file,
-  so a change made entirely of new files reviews as empty and returns `CLEAN`: take
-  `git status --porcelain` (expanding the directories it abbreviates) beside the branch diff and the
-  working tree, and mark new files as whole-file in the brief. Base off
-  `${CLAUDE_CODE_BASE_REF:-origin/HEAD}`, never a hardcoded `main`. A PR is
-  `gh pr view` + `gh pr diff` — and its description goes in the **contract** as a claim to audit,
-  never in the scope as context to believe.
+- **Scope is four disjoint readings, and a description is a claim.** An uncommitted change sits in one of four
+  disjoint states and each git command sees exactly one: committed (`git diff
+  "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD"`), staged (`git diff --cached`), unstaged (`git
+  diff`), untracked (`git ls-files --others --exclude-standard`). Miss one and that state reviews as
+  empty and returns `CLEAN` over unreviewed code. `git status --porcelain` is the inventory only —
+  no content, and it abbreviates directories. Untracked files have no hunks, so mark them
+  whole-file. Never edit the command by substitution; check any replacement against all four states.
+  A PR is `gh pr view` + `gh pr diff`, and its description goes in the **contract** as a claim to
+  audit, never in the scope as context to believe.
 - **Findings go through `ReportFindings`, and the script hands over the exact shape.** `report` is
   returned ready to pass, sorted most-severe first; each row carries `CONFIRMED` (unanimous panel)
   or `PLAUSIBLE` (one voter refused). The severity tally and the `BLOCK`/`CONCERNS`/`CLEAN` gate

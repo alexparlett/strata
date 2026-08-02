@@ -107,18 +107,24 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   is a real clean result; a critic returning nothing at all is an absence of evidence. The two must
   not collapse: all-dead returns `FAILED` with a message saying so, because an empty findings card
   is indistinguishable from a clean pass.
-  **Scope is three readings, and a description is a claim.** No `git diff` shows an untracked file:
-  `git status --porcelain` marks them `??` and abbreviates directories, so a change made entirely of
-  new files produces an empty diff, gets no candidates, and returns `CLEAN` — on precisely this
-  skill's headline case, a change you just wrote. This is not hypothetical; it happened on the very
-  branch that added the skill, whose scope brief had to name the four untracked files by hand. So
-  the default scope is `git status --porcelain` + the branch diff + the working tree, with
-  untracked paths expanded through `git ls-files --others --exclude-standard` and marked whole-file
-  in the brief, because a critic told to read "the changed files" otherwise looks for hunks that do
-  not exist. The base is `${CLAUDE_CODE_BASE_REF:-origin/HEAD}` and never a hardcoded `main` — the
-  three-dot form is already merge-base relative, but the base branch is not always `main` and the
-  harness publishes the right one. A PR target is `gh pr view <n>` + `gh pr diff <n>`, and its
-  description belongs in the **contract**, not the scope: the diff is ground truth and the
+  **Scope is four disjoint readings, and a description is a claim.** An uncommitted change sits in one of **four disjoint
+  states**, and each git command sees exactly **one** of them: committed on this branch
+  (`git diff "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD"`), staged but not committed
+  (`git diff --cached`), unstaged working tree (`git diff`), and untracked
+  (`git ls-files --others --exclude-standard`). Miss a command and that whole state is invisible:
+  the diff returns empty, no candidates are raised, and the run reports `CLEAN` over unreviewed
+  code — on precisely this skill's headline case, a change you just wrote. Both halves of that have
+  now happened on this very branch. First the untracked hole: the four files adding the skill were
+  untracked, produced nothing from any `git diff`, and had to be named by hand in the scope brief
+  twice. Then, fixing it, the rewrite dropped `git diff --cached` in the same stroke and traded the
+  untracked hole for an identical staged one — and staged-not-committed is the *most* common state
+  for a change about to be reviewed. Hence the table rather than a command: `git status --porcelain`
+  is the inventory only, naming every state (`??` untracked, `M`/`A` staged) but carrying no content
+  and abbreviating a directory to one line, so it can never stand in for the four. Untracked files
+  have no hunks — the whole file is the change, and the brief must say so or a critic told to read
+  "the changed files" hunts a diff that does not exist. Do not edit the command by substitution;
+  check any replacement against all four states. A PR target is `gh pr view <n>` + `gh pr diff <n>`,
+  and its description belongs in the **contract**, not the scope: the diff is ground truth and the
   description is a claim *about* it, so a description that disagrees with its own diff is a finding
   the contract lawyer returns rather than context that explains the code away. An unread file and a
   clean file are not the same answer, and the critics are told to say which one they are giving.
