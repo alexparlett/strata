@@ -216,3 +216,108 @@ async fn a_user_column_named_like_the_ordinal_survives() {
         "the user's data, in result order"
     );
 }
+
+/// **A query that already has its own partitioned window keeps it, and the ordinal stays
+/// global.** The hazard is specific: if the appended `row_number() OVER ()` were merged into
+/// the user's window spec, the ordinal would number *within their partitions* — duplicates —
+/// and ordered paging over it would be nondeterministic among ties. Page contents in exact
+/// result order transitively prove the ordinal stayed one global sequence.
+#[tokio::test]
+async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
+    let eng = Engine::new(Default::default());
+    let snap = snapshot(
+        &eng,
+        "SELECT i, md5(i::text) AS h, \
+                row_number() OVER (PARTITION BY i % 4 ORDER BY i) AS rn \
+         FROM generate_series(1, 3000000) t(i) ORDER BY i",
+    )
+    .await;
+
+    for page in [1usize, 15_000] {
+        let (first, _) = eng.fetch_page(snap, page, 100, None).await.expect("page");
+        let (again, _) = eng
+            .fetch_page(snap, page, 100, None)
+            .await
+            .expect("page again");
+        let i = ints(&first, 0);
+        assert_eq!(i, ints(&again, 0), "page {page} reads the same twice");
+        let start = ((page - 1) * 100 + 1) as i64;
+        let expected: Vec<i64> = (start..start + 100).collect();
+        assert_eq!(i, expected, "page {page} is in the user's ORDER BY");
+        // The user's window computed correctly beneath ours: within PARTITION BY i % 4
+        // ORDER BY i, the row number of i is (i - 1) / 4 + 1.
+        let rn = ints(&first, 2);
+        for (i, rn) in i.iter().zip(rn) {
+            assert_eq!(rn, (i - 1) / 4 + 1, "user rn for i={i}");
+        }
+    }
+}
+
+/// The same, with **no outer ORDER BY**: the result order is whatever the engine produced,
+/// the snapshot freezes it, and the user's window values stay row-consistent — checkable
+/// per row regardless of arrival order.
+#[tokio::test]
+async fn an_unordered_partitioned_window_stays_row_consistent() {
+    let eng = Engine::new(Default::default());
+    let (out, _) = eng
+        .query(
+            WsId(1),
+            RunTag(1),
+            "SELECT i, md5(i::text) AS h, \
+                    row_number() OVER (PARTITION BY i % 4 ORDER BY i) AS rn \
+             FROM generate_series(1, 3000000) t(i)"
+                .into(),
+            100,
+        )
+        .await
+        .expect("run");
+    let snap = out.snapshot.expect("snapshot");
+
+    let spooled: Vec<String> = out.rows.iter().map(|r| r[0].text.clone()).collect();
+    let (fetched, _) = eng.fetch_page(snap, 1, 100, None).await.expect("page 1");
+    let read: Vec<String> = fetched.iter().map(|r| r[0].text.clone()).collect();
+    assert_eq!(read, spooled, "page 1 is the page the run delivered");
+
+    for page in [1usize, 20_000] {
+        let (rows, _) = eng.fetch_page(snap, page, 100, None).await.expect("page");
+        let (again, _) = eng
+            .fetch_page(snap, page, 100, None)
+            .await
+            .expect("page again");
+        assert_eq!(ints(&rows, 0), ints(&again, 0), "page {page} stable");
+        for (i, rn) in ints(&rows, 0).iter().zip(ints(&rows, 2)) {
+            assert_eq!(rn, (i - 1) / 4 + 1, "user rn for i={i}");
+        }
+    }
+}
+
+/// The compound case: the user's own window is **aliased to the ordinal's name**. The
+/// bookkeeping escalates around it; the user's column keeps its values and the pages keep
+/// the user's order.
+#[tokio::test]
+async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
+    let eng = Engine::new(Default::default());
+    let snap = snapshot(
+        &eng,
+        "SELECT i, md5(i::text) AS h, \
+                row_number() OVER (ORDER BY i DESC) AS __strata_ord \
+         FROM generate_series(1, 200000) t(i) ORDER BY i",
+    )
+    .await;
+
+    let (rows, batch) = eng.fetch_page(snap, 2, 100, None).await.expect("page 2");
+    let schema = batch.schema();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["i", "h", "__strata_ord"],
+        "the user's column survives under its own name"
+    );
+    let i = ints(&rows, 0);
+    let expected: Vec<i64> = (101..=200).collect();
+    assert_eq!(i, expected, "pages follow the user's ORDER BY i");
+    // Their window numbered DESC over 200k rows: rn = 200000 - i + 1.
+    for (i, rn) in i.iter().zip(ints(&rows, 2)) {
+        assert_eq!(rn, 200_000 - i + 1, "user's __strata_ord for i={i}");
+    }
+}
