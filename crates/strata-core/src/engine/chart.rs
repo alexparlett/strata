@@ -24,7 +24,7 @@
 //!   mistake (a text column as Y, a column that doesn't exist) is an `Err`, in this
 //!   module's words rather than DataFusion's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch};
 use datafusion::arrow::compute::{cast as cast_array, concat_batches};
@@ -109,20 +109,19 @@ async fn rows(
     }
 
     // One projection, each referenced column once — a duplicate name in a `select` is a
-    // schema error, and `x` may legitimately also be a Y.
-    fn position<'a>(name: &'a str, names: &mut Vec<&'a str>) -> usize {
-        match names.iter().position(|n| *n == name) {
-            Some(at) => at,
-            None => {
-                names.push(name);
-                names.len() - 1
-            }
+    // schema error, and `x` may legitimately also be a Y. The projection makes every name
+    // unique and exact, so columns are read back by name below.
+    let mut names: Vec<&str> = Vec::new();
+    for name in x
+        .iter()
+        .copied()
+        .chain(series.iter().copied())
+        .chain(ys.iter().map(String::as_str))
+    {
+        if !names.contains(&name) {
+            names.push(name);
         }
     }
-    let mut names: Vec<&str> = Vec::new();
-    let x_at = x.map(|n| position(n, &mut names));
-    let series_at = series.map(|n| position(n, &mut names));
-    let y_at: Vec<usize> = ys.iter().map(|n| position(n, &mut names)).collect();
 
     // Result order is the ordinal's (`SNAPSHOT_SPEC.md` §9) — sort + fetch plans as a TopK,
     // so memory is O(cap) however large the snapshot. The ordinal is `None` only for a
@@ -146,11 +145,11 @@ async fn rows(
         });
     }
 
-    let x_col = x_at.map(|at| batch.column(at).clone());
-    let series_col = series_at.map(|at| batch.column(at).clone());
+    let x_col = x.map(|n| projected(&batch, n)).transpose()?;
+    let series_col = series.map(|n| projected(&batch, n)).transpose()?;
     let mut y_cols = Vec::with_capacity(ys.len());
-    for at in &y_at {
-        y_cols.push(numbers(batch.column(*at))?);
+    for y in ys {
+        y_cols.push(numbers(&projected(&batch, y)?)?);
     }
 
     match (&series_col, &x_col) {
@@ -211,6 +210,9 @@ fn pivot(
     let mut label_positions = Vec::new();
     let mut slots: HashMap<ScalarValue, usize> = HashMap::new();
     let mut slot_labels = Vec::new();
+    // The fill below assigns, and an assignment is only sound while every row has a cell
+    // of its own — so a (category, slot) pair seen twice refuses right here.
+    let mut cells: HashSet<(usize, usize)> = HashSet::new();
     let mut of_row = Vec::with_capacity(keys.len());
     for row in 0..keys.len() {
         let key = ScalarValue::try_from_array(keys, row).map_err(|e| e.to_string())?;
@@ -226,21 +228,13 @@ fn pivot(
             slot_labels.push(split_labels[row].clone());
             slot_labels.len() - 1
         });
-        of_row.push((cat, slot));
-    }
-
-    // One occupancy check for every (category, slot) cell, before any value lands: the
-    // fill below assigns, and an assignment is only sound while every row has a cell of
-    // its own.
-    let mut filled = vec![false; labels.len() * slot_labels.len()];
-    for (cat, slot) in &of_row {
-        let at = slot * labels.len() + cat;
-        if std::mem::replace(&mut filled[at], true) {
+        if !cells.insert((cat, slot)) {
             return Ok(ChartData::Duplicates {
                 x: x_name.to_string(),
                 series: series_name.to_string(),
             });
         }
+        of_row.push((cat, slot));
     }
 
     let mut series = Vec::with_capacity(ys.len() * slot_labels.len());
@@ -357,6 +351,14 @@ async fn histogram(df: DataFrame, column: &str, bins: Option<usize>) -> Result<C
     }
 
     let width = (hi - lo) / bins as f64;
+    // `hi - lo` overflows to infinity when the column spans more than f64 can hold — the
+    // values are each finite, so the filter above cannot catch it, and an infinite width
+    // would put every row in bin 0 under edges that are not numbers.
+    if !width.is_finite() {
+        return Err(format!(
+            "'{column}' spans a wider range than a chart can bin"
+        ));
+    }
     let plan = df
         .aggregate(
             vec![floor((value - lit(lo)) / lit(width)).alias("bin")],
@@ -442,6 +444,15 @@ fn field_type(df: &DataFrame, name: &str) -> Result<DataType, String> {
         .find(|f| f.name() == name)
         .map(|f| f.data_type().clone())
         .ok_or_else(|| format!("no column '{name}' in this result"))
+}
+
+/// One projected column back out of the read, by the exact name the projection put in.
+/// Missing is an invariant break, not a user mistake — the select above named it.
+fn projected(batch: &RecordBatch, name: &str) -> Result<ArrayRef, String> {
+    batch
+        .column_by_name(name)
+        .cloned()
+        .ok_or_else(|| format!("projected column '{name}' went missing"))
 }
 
 /// Drain a plan into a single batch, against the plan's own schema.
@@ -1013,6 +1024,21 @@ mod tests {
                 count: 3
             }])
         );
+    }
+
+    /// A column spanning more than f64 can hold makes `hi - lo` infinite — refused by name,
+    /// not binned under edges that are not numbers.
+    #[test]
+    fn a_range_too_wide_to_bin_is_refused() {
+        let err = read(
+            vec![("v", floats(vec![Some(-1.7e308), Some(1.7e308)]))],
+            ChartQuery::Histogram {
+                col: "v".into(),
+                bins: Some(4),
+            },
+        )
+        .expect_err("the width is not a number");
+        assert!(err.contains("'v'"), "{err}");
     }
 
     /// Nothing to bin is a histogram of nothing, not a histogram of zeroes.

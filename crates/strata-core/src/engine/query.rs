@@ -17,7 +17,7 @@
 //! here is the *filesystem* side of it: the per-engine directory, the lock that marks it
 //! live, and the startup sweep of everything no live engine still holds.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::fs::{File, TryLockError};
@@ -28,15 +28,16 @@ use std::time::Instant;
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::compute::concat_batches;
-use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use datafusion::arrow::ipc::CompressionType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::common::Column;
-use datafusion::execution::options::ArrowReadOptions;
+use datafusion::execution::options::{ArrowReadOptions, ReadOptions};
 use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::expr::ScalarFunction;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use datafusion_functions_json::udfs::json_union_to_text_udf;
 use datafusion_functions_json::JSON_UNION_DATA_TYPE;
@@ -328,9 +329,9 @@ fn snapshot_ipc_options() -> Result<IpcWriteOptions, String> {
 }
 
 /// The name the snapshot's ordinal column gets: `__strata_ord`, prefix-escalated until it
-/// collides with nothing in the result — the same move as chart's measure aliasing, for the
-/// same reason. Result column names come out of the user's own query and can be anything.
-fn ordinal_name(schema: &datafusion::arrow::datatypes::Schema) -> String {
+/// collides with nothing in the result. Result column names come out of the user's own
+/// query and can be anything, including this one.
+fn ordinal_name(schema: &Schema) -> String {
     let mut name = String::from(ORDINAL_BASE);
     while schema.fields().iter().any(|f| f.name() == &name) {
         name.insert(0, '_');
@@ -383,9 +384,10 @@ pub struct SnapshotStats {
     /// The name of this snapshot's **ordinal column** (`docs/SNAPSHOT_SPEC.md` §9) — the
     /// written result order every ordered read sorts by and every reader projects away.
     /// Usually `__strata_ord`; escalated by prefix when the result itself has a column of
-    /// that name. Empty only on a `Default` (a snapshot nothing counted), which readers
-    /// treat as "no ordinal known".
-    pub ord: String,
+    /// that name. `None` means the file genuinely has no ordinal — an `EXPLAIN` result or
+    /// one with duplicate column names (see `materialize`) — and readers then read
+    /// unordered, exactly as every snapshot did before ordinals existed.
+    pub ord: Option<String>,
 }
 
 /// Render a `json_get` result as its canonical JSON text.
@@ -478,10 +480,33 @@ async fn materialize(
     // does, and every reader orders by it and projects it away. (`with_column` would replace
     // a user column of the same name, but `ordinal_name` escalated around every name in this
     // result, so the replace branch is unreachable.)
-    let ord = ordinal_name(&arrow_schema);
-    let df = df
-        .with_column(ord.as_str(), row_number())
-        .map_err(|e| e.to_string())?;
+    //
+    // Two plans cannot carry it, and both spool **without** one (`ord: None`) — the
+    // pre-ordinal read behavior, which every reader handles:
+    // - An `EXPLAIN` / `EXPLAIN ANALYZE`. DataFusion requires those at the plan root, so a
+    //   window on top fails the whole run with "Explain must be root of the plan" — and the
+    //   managed-DDL policy promises the editor can run them. Their output is a handful of
+    //   plan rows, nowhere near the scan-split threshold where order goes nondeterministic.
+    // - A result with duplicate column names (`SELECT a.i, b.i FROM … JOIN …`). The
+    //   registered table resolves columns by name, so a typed column appended after two
+    //   same-named ones makes every later read mis-map the second onto the ordinal's slot
+    //   and fail with an Arrow error. Ordinal-less, such a result reads exactly as it did
+    //   at base: degraded by the duplicate, but readable.
+    let plain = !matches!(
+        df.logical_plan(),
+        LogicalPlan::Explain(_) | LogicalPlan::Analyze(_)
+    );
+    let unique = {
+        let mut seen = HashSet::new();
+        columns.iter().all(|c| seen.insert(c.name.as_str()))
+    };
+    let ord = (plain && unique).then(|| ordinal_name(&arrow_schema));
+    let df = match &ord {
+        Some(ord) => df
+            .with_column(ord.as_str(), row_number())
+            .map_err(|e| e.to_string())?,
+        None => df,
+    };
     let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
     // The window appends its column last, so the user's columns are exactly the captured
     // schema's width — everything user-facing below reads this projection of each batch.
@@ -517,7 +542,25 @@ async fn materialize(
     let materialized = writer.is_some();
     if let Some(mut w) = writer {
         w.finish().map_err(|e| e.to_string())?;
-        ctx.register_arrow(snap.as_str(), file.as_str(), ArrowReadOptions::default())
+        // The same listing registration `register_arrow` performs, with one addition: the
+        // file's own write order is **declared** (`with_file_sort_order` on the ordinal),
+        // so an ordered read plans as a stream instead of a sort. Measured on a 3M-row /
+        // 157 MB snapshot: a page at offset 2.9M is 543 ms as a TopK over an undeclared
+        // scan — holding every candidate row in memory with no spill — and 97 ms with the
+        // order declared, where a shallow page plans as scan-level limit pushdown with the
+        // sort gone entirely, and an export streams into its COPY instead of buffering the
+        // result first. The declaration is a promise about the file, and it is exactly the
+        // property `materialize` constructs and `tests/snapshot_order.rs` pins.
+        let listing = ArrowReadOptions::default()
+            .to_listing_options(&ctx.copied_config(), ctx.copied_table_options());
+        let listing = match &ord {
+            Some(ord) => listing
+                .with_file_sort_order(vec![vec![
+                    col(Column::from_name(ord.clone())).sort(true, false)
+                ]]),
+            None => listing,
+        };
+        ctx.register_listing_table(snap.as_str(), file.as_str(), listing, None, None)
             .await
             .map_err(|e| e.to_string())?;
     }

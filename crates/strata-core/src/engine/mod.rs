@@ -617,24 +617,31 @@ impl Engine {
     }
 
     /// The name of `snapshot`'s ordinal column, if the write pass recorded one — `None` for
-    /// a retired snapshot (whose read fails anyway) and for a `Default` stats entry.
+    /// a retired snapshot (whose read fails anyway) and for a snapshot spooled without an
+    /// ordinal (an `EXPLAIN` result, or one with duplicate column names — see
+    /// `query::materialize`), which reads unordered exactly as it did before ordinals.
     fn ordinal(&self, snapshot: SnapshotId) -> Option<String> {
         self.lifecycle
             .lock()
             .unwrap()
             .stats
             .get(&snapshot)
-            .map(|s| s.ord.clone())
-            .filter(|ord| !ord.is_empty())
+            .and_then(|s| s.ord.clone())
     }
 
     /// Read one immutable snapshot as a chart (Rz2, `docs/CHART_SPEC.md` §5) — the
-    /// grouped, raw or binned read `q` asks for, answered as a small chart-ready model.
+    /// renderer-first read `q` asks for: a projected, ordinal-ordered, capped read plus a
+    /// long→wide pivot (`Rows`), raw points (`Raw`), or the one computed mark
+    /// (`Histogram`). No aggregation, no bucketing, no imposed order — the withdrawn
+    /// pipeline's grouped reads must not come back here (AGENTS.md §2).
     ///
-    /// Snapshot-scoped and side-effect free like [`fetch_page`](Engine::fetch_page), and
-    /// cacheable on exactly the same terms: `(snapshot, q)` is the whole identity, so a
-    /// changed encoding is a different entry rather than a mutation. Deliberately no
-    /// lifecycle bookkeeping and no confirm in front of it — a `GROUP BY` over a local
+    /// Snapshot-scoped and side-effect free like [`fetch_page`](Engine::fetch_page). Cache
+    /// identity is `(snapshot, q)` **plus the engine's display config**: axis labels render
+    /// through the live `datafusion.format.*` overrides, which `set_config` changes without
+    /// a restart — so a UI cache keyed on `(snapshot, q)` alone serves stale labels after a
+    /// Settings change, and the chart surface must re-render (not merely re-key) when those
+    /// overrides move, exactly as the grid's pages do. Deliberately no lifecycle
+    /// bookkeeping and no confirm in front of it — a projected, capped read of a local
     /// snapshot is `fetch_page`-tier work, not [`profile`](Engine::profile)'s tier.
     ///
     /// The chart never re-reads the source files: it charts the result the grid is paging,
@@ -644,12 +651,15 @@ impl Engine {
         snapshot: SnapshotId,
         q: ChartQuery,
     ) -> Result<ChartData, String> {
-        // A chart is **two** reads for an open bucket or a histogram — a range pass, then the
-        // grouped one — so it holds the snapshot open across them. Without the pin a re-run in
-        // the owning tab between the passes deregisters the table mid-call, and a histogram
-        // would answer with the first pass's real edges and the second pass's zero counts:
-        // a chart of nothing, indistinguishable from a genuine empty range. Same rule as
-        // `export`'s in-call pin (AGENTS.md §2).
+        // A histogram is **two** reads — a range pass, then the binning one — so the call
+        // holds the snapshot open across them. Without the pin a re-run in the owning tab
+        // between the passes deregisters the table mid-call, and a histogram would answer
+        // with the first pass's real edges and the second pass's zero counts: a chart of
+        // nothing, indistinguishable from a genuine empty range. Same rule as `export`'s
+        // in-call pin (AGENTS.md §2) — and the same limit: the pin lives in this future,
+        // so it holds only while the caller keeps awaiting. A dropped caller drops the pin
+        // while the spawned read runs on detached; the read may then fail against a retired
+        // table, but its answer has no listener, so nothing wrong is ever delivered.
         let _reading = self.pin_snapshot(snapshot);
         let ctx = self.ctx.clone();
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());

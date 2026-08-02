@@ -16,12 +16,13 @@ page 1 — duplicated and missing rows as the user pages — and the freya-query
 whichever answer a read got. Sorted reads have the same hazard on ties.
 
 ## Build
-- **Write** (`engine/query.rs::materialize`): append `__strata_ord` (Int64, 0-based, arrival
-  order — the spool is a single ordered stream) to each batch before it is written, **after**
-  `QueryOutput::columns` is captured so the user-visible schema never carries it. On a name
-  collision with a result column, escalate the prefix (`___strata_ord`, …) until free — the same
-  move as `chart.rs`'s `measure_alias` — and record the chosen name in `SnapshotStats`, which
-  already has exactly a snapshot's lifetime.
+- **Write** (`engine/query.rs::materialize`): the spool query carries `row_number() OVER ()`
+  (a UInt64, 1-based — nothing reads its values, only their order) aliased `__strata_ord`,
+  added **after** `QueryOutput::columns` is captured so the user-visible schema never carries
+  it. On a name collision with a result column, escalate the prefix (`___strata_ord`, …) until
+  free and record the chosen name in `SnapshotStats.ord: Option<String>`, which already has
+  exactly a snapshot's lifetime. `None` — an `EXPLAIN`, or a duplicate-named result — spools
+  without one and reads unordered, as at base.
 - **Reads** (`engine/query.rs::read_page`): no user sort → `ORDER BY <ord>`; user sort →
   `ORDER BY <user col> <dir>, <ord>` (the tie-break makes sorts stable across page windows).
   Project the ordinal away before returning — cells, batch, and schema.
@@ -51,17 +52,25 @@ the ordinal, user sort first when set. One subtlety the tests pin: for a query w
 `ORDER BY`, "result order" is the order the spool received — the engine's own output order,
 frozen. The guarantee is agreement (page 1 = the spooled page, re-reads identical, pages
 disjoint), not row `i` at position `i`; a query that wants that writes `ORDER BY`, and the
-snapshot then preserves it exactly. Tests: `tests/snapshot_order.rs`, five cases over >10 MB
-snapshots.
+snapshot then preserves it exactly.
+
+Post-review hardening (found by the branch's own review passes, all pinned in
+`tests/snapshot_order.rs` — eleven cases, the ordering/stability ones over >10 MB snapshots):
+typed `EXPLAIN`/`EXPLAIN ANALYZE` and duplicate-named results spool **ordinal-less** rather
+than failing (the window cannot wrap a root-only plan; a name-keyed read mis-maps a duplicate
+onto the ordinal's slot); the registration **declares** the file's sort order, so ordered reads
+plan as streams (deep page: 543 ms undeclared TopK vs 97 ms declared, measured at 3M rows) and
+exports stream into their `COPY`; a user's own partitioned window survives beneath the global
+ordinal; and a partitioned export is asserted ordinal-free, not only a flat one.
 
 ## Out of scope
 Any chart code (01). Any UI change — the grid gets correct pages through the same calls.
 
 ## Acceptance
-- [ ] Page reads over a 3M-row snapshot are stable and in result order; re-reads agree; page 2
+- [x] Page reads over a 3M-row snapshot are stable and in result order; re-reads agree; page 2
       continues page 1 exactly.
-- [ ] User sorts are stable across page windows on tied keys.
-- [ ] No export, page batch, or schema ever contains the ordinal; a colliding user column name
+- [x] User sorts are stable across page windows on tied keys.
+- [x] No export, page batch, or schema ever contains the ordinal; a colliding user column name
       is escalated around, not broken.
 
 ## References

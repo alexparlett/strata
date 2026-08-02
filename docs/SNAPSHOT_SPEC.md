@@ -308,8 +308,9 @@ views can hold contradictory copies of one page. §1 promises stable paging; wit
 the read path cannot deliver it.
 
 **The fix: order is a column, written by the spool query itself.** `materialize` adds
-`row_number() OVER ()` to the plan it streams — aliased `__strata_ord` — **after**
-`QueryOutput::columns` is captured, so the user-visible schema never contains it. The window
+`row_number() OVER ()` to the plan it streams — a **UInt64, 1-based** column (nothing reads its
+values, only their order), aliased `__strata_ord` — **after** `QueryOutput::columns` is
+captured, so the user-visible schema never contains it. The window
 sits on the same single stream the writer consumes, and therefore numbers rows in exactly the
 order they are written: measured on the racy over-threshold plan shape (contiguous across 3M
 rows; a user's `ORDER BY` preserved beneath the window; and **no spool cost** — the plan keeps
@@ -328,9 +329,31 @@ the hand assembly (schema extension, per-batch array construction) went. What th
 that the stitching did not — the window preserving its input order — is exactly what the
 regression suite pins.
 
+**Two plans spool without an ordinal** (`SnapshotStats.ord: None`), and their reads are
+unordered exactly as every snapshot's were before ordinals existed — both are small or
+degraded shapes where that is the honest behavior:
+
+- An `EXPLAIN` / `EXPLAIN ANALYZE`: DataFusion requires those at the plan root, so a window on
+  top fails the whole run — and the managed-DDL policy promises the editor can run them. Their
+  output is a handful of plan rows, nowhere near the split threshold.
+- A result with **duplicate column names** (`SELECT a.i, b.i FROM … JOIN …`): the registered
+  table resolves columns by name, so a typed column appended after two same-named ones made
+  every later read mis-map the second onto the ordinal's slot and fail. Ordinal-less, such a
+  result reads as it did at base — degraded by the duplicate, but readable.
+
+**The registration declares the order.** The snapshot registers as a listing table with
+`with_file_sort_order` on the ordinal — a promise about the file that is exactly what the
+single-stream spool constructs and this section's regression suite pins. Declared, an ordered
+read **plans as a stream**: measured on a 3M-row / 157 MB snapshot, a page at offset 2.9M is
+543 ms as an undeclared TopK (holding every candidate row in memory, no spill path) and 97 ms
+declared, shallow pages plan as scan-level limit pushdown with the sort elided, and a
+whole-snapshot export streams into its `COPY` instead of buffering the result first.
+
 The discipline the column demands — every reader accounts for it:
 
-- **Unsorted reads** (`fetch_page`, the chart): `ORDER BY __strata_ord`, then project it away.
+- **Unsorted reads** (`fetch_page`, the chart's `Rows`): `ORDER BY __strata_ord`, then project
+  it away. (Scatter's `Raw` and the histogram deliberately read unordered — `ChartData::Points`
+  is documented orderless, a scatter draws marks, and a histogram's bins are order-free.)
 - **Sorted reads**: the user's `ORDER BY` gets the ordinal appended as the **tie-break**, making
   sorts stable across page windows — ties were the same nondeterminism one layer down.
 - **Export** (`select_sql`): selects the result's columns explicitly, never `SELECT *` — a

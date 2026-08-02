@@ -13,6 +13,7 @@
 //! showing, so what lands on disk is what was on screen.
 
 use datafusion::arrow::array::Array;
+use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
 
@@ -226,7 +227,7 @@ pub async fn run_export(
     };
     let schema = table.schema().inner().clone();
 
-    let select = select_sql(&snap, &spec, &schema, &stats.ord);
+    let select = select_sql(&snap, &spec, &schema, stats.ord.as_deref());
 
     // `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option:
     // DataFusion 54's COPY parser re-renders each one with `Ident::to_string()`, so a
@@ -287,17 +288,12 @@ pub async fn run_export(
 /// The sort goes **before** the window, so "this page" means the page the user is looking
 /// at rather than an arbitrary slice re-ordered afterwards. `NULLS LAST` in both directions
 /// matches the grid's own ordering (Rz6).
-fn select_sql(
-    snap: &str,
-    spec: &ExportSpec,
-    schema: &datafusion::arrow::datatypes::Schema,
-    ord: &str,
-) -> String {
+fn select_sql(snap: &str, spec: &ExportSpec, schema: &Schema, ord: Option<&str>) -> String {
     let columns = schema
         .fields()
         .iter()
         .map(|f| f.name().as_str())
-        .filter(|name| ord.is_empty() || *name != ord)
+        .filter(|name| ord != Some(*name))
         .map(quote_col)
         .collect::<Vec<_>>()
         .join(", ");
@@ -307,7 +303,7 @@ fn select_sql(
         let dir = if *asc { "ASC" } else { "DESC" };
         order.push(format!("{} {dir} NULLS LAST", quote_col(name)));
     }
-    if !ord.is_empty() {
+    if let Some(ord) = ord {
         order.push(quote_col(ord));
     }
     if !order.is_empty() {
@@ -467,6 +463,8 @@ fn copy_row_count(batches: &[RecordBatch]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field};
+
     use super::*;
 
     fn spec(format: Format) -> ExportSpec {
@@ -501,7 +499,7 @@ mod tests {
                 "__snap_1",
                 &spec(Format::Arrow),
                 &result_schema(),
-                "__strata_ord"
+                Some("__strata_ord")
             ),
             "SELECT \"amount\", \"name\" FROM __snap_1 ORDER BY \"__strata_ord\""
         );
@@ -516,7 +514,7 @@ mod tests {
             page_size: 100,
         };
         assert_eq!(
-            select_sql("__snap_7", &s, &result_schema(), "__strata_ord"),
+            select_sql("__snap_7", &s, &result_schema(), Some("__strata_ord")),
             "SELECT \"amount\", \"name\" FROM __snap_7 ORDER BY \"amount\" DESC NULLS LAST, \
              \"__strata_ord\" LIMIT 100 OFFSET 200"
         );
@@ -526,19 +524,17 @@ mod tests {
     fn a_quote_in_a_sorted_column_name_cant_break_out_of_the_identifier() {
         let mut s = spec(Format::Arrow);
         s.sort = Some((r#"we"ird"#.into(), true));
-        assert!(
-            select_sql("__snap_1", &s, &result_schema(), "").contains(r#"ORDER BY "we""ird" ASC"#)
-        );
+        assert!(select_sql("__snap_1", &s, &result_schema(), None)
+            .contains(r#"ORDER BY "we""ird" ASC"#));
     }
 
     /// The snapshot table's schema as `run_export` sees it: the user's columns plus the
-    /// ordinal, which the SELECT must exclude.
-    fn result_schema() -> datafusion::arrow::datatypes::Schema {
-        use datafusion::arrow::datatypes::{DataType, Field};
-        datafusion::arrow::datatypes::Schema::new(vec![
+    /// ordinal (a `UInt64` — `row_number()`'s output type), which the SELECT must exclude.
+    fn result_schema() -> Schema {
+        Schema::new(vec![
             Field::new("amount", DataType::Int64, true),
             Field::new("name", DataType::Utf8, true),
-            Field::new("__strata_ord", DataType::Int64, false),
+            Field::new("__strata_ord", DataType::UInt64, false),
         ])
     }
 

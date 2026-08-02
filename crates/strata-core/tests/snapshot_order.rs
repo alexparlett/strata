@@ -321,3 +321,126 @@ async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
         assert_eq!(rn, 200_000 - i + 1, "user's __strata_ord for i={i}");
     }
 }
+
+/// **A typed `EXPLAIN` still runs.** DataFusion requires Explain/Analyze at the plan root,
+/// so those plans spool without an ordinal rather than failing under the window — a
+/// statement class the managed-DDL policy promises the editor can run.
+#[tokio::test]
+async fn explain_runs_and_pages_without_an_ordinal() {
+    let eng = Engine::new(Default::default());
+    for sql in ["EXPLAIN SELECT 1", "EXPLAIN ANALYZE SELECT 1"] {
+        let (out, _) = eng
+            .query(WsId(1), RunTag(1), sql.into(), 10)
+            .await
+            .unwrap_or_else(|e| panic!("{sql} must run: {e}"));
+        assert!(out.total > 0, "{sql} returns plan rows");
+        let snap = out.snapshot.expect("plan rows materialize");
+        let (rows, batch) = eng.fetch_page(snap, 1, 10, None).await.expect("page");
+        assert!(!rows.is_empty());
+        let schema = batch.schema();
+        assert!(
+            schema.fields().iter().all(|f| f.name() != "__strata_ord"),
+            "no ordinal leaks from an ordinal-less snapshot"
+        );
+    }
+}
+
+/// **A result with duplicate column names still reads.** The registered table resolves
+/// columns by name, so an ordinal appended after two same-named columns mis-mapped every
+/// later read; such a result now spools ordinal-less and reads exactly as it did at base.
+#[tokio::test]
+async fn duplicate_named_columns_still_read() {
+    let eng = Engine::new(Default::default());
+    let (out, _) = eng
+        .query(
+            WsId(1),
+            RunTag(1),
+            "SELECT a.i, b.i FROM generate_series(1, 3) AS a(i) \
+             JOIN generate_series(1, 3) AS b(i) ON a.i = b.i"
+                .into(),
+            10,
+        )
+        .await
+        .expect("run");
+    assert_eq!(out.total, 3);
+    let names: Vec<&str> = out.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["i", "i"],
+        "both columns survive in the result schema"
+    );
+    let snap = out.snapshot.expect("snapshot");
+    let (rows, _) = eng
+        .fetch_page(snap, 1, 10, None)
+        .await
+        .expect("a duplicate-named result must stay readable");
+    assert_eq!(rows.len(), 3);
+}
+
+/// **A partitioned export is as ordinal-free as a flat one** — the task's contract named
+/// both, and the partitioned path additionally crosses `PARTITIONED BY` and
+/// `keep_partition_by_columns`.
+#[tokio::test]
+async fn a_partitioned_export_never_writes_the_ordinal() {
+    let eng = Engine::new(Default::default());
+    let (out, _) = eng
+        .query(
+            WsId(1),
+            RunTag(1),
+            "SELECT i % 2 AS p, i FROM generate_series(1, 10) t(i)".into(),
+            10,
+        )
+        .await
+        .expect("run");
+    let snap = out.snapshot.expect("snapshot");
+
+    let dir = std::env::temp_dir().join(format!("strata_ord_part_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    eng.export(
+        snap,
+        ExportSpec {
+            path: dir.to_string_lossy().into_owned(),
+            format: Format::Csv(Csv {
+                header: true,
+                delimiter: ',',
+                null_value: String::new(),
+                quote: '"',
+                escape: None,
+                double_quote: true,
+                compression: Compression::None,
+            }),
+            scope: Scope::All,
+            sort: None,
+            partition: Partition {
+                columns: vec!["p".into()],
+                keep_columns: false,
+            },
+        },
+    )
+    .await
+    .expect("partitioned export");
+
+    let mut files = 0;
+    let mut stack = vec![dir.clone()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).expect("walk").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                files += 1;
+                let text = std::fs::read_to_string(&path).expect("read part file");
+                assert!(
+                    !text.contains("__strata_ord"),
+                    "{path:?} must not carry bookkeeping"
+                );
+            }
+        }
+    }
+    assert!(
+        files >= 2,
+        "the export actually partitioned ({files} files)"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

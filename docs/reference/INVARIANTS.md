@@ -134,11 +134,20 @@ Things that must not regress. Each was fought for once already.
   on the next), and a 200k-row snapshot with a text column pages stably but starting at row
   57 345, so `fetch_page`'s pages disagree with the spooled page 1 — rows duplicated and missing
   as the user pages, and the page cache freezes whichever answer a read happened to get. The fix
-  is written order: `materialize` appends `__strata_ord` (Int64, arrival order — the spool is a
-  single ordered stream) after `QueryOutput::columns` is captured, name-escalated on collision and
-  recorded in `SnapshotStats`. Unsorted reads `ORDER BY` it; user sorts append it as the
-  tie-break (stable across page windows); **every** reader projects it away, and export selects
-  explicit columns so a `COPY` never writes bookkeeping into the user's file.
+  is written order: `materialize` adds `row_number() OVER ()` to the spool query itself (the
+  column is a **UInt64, 1-based** — nothing reads its values, only their order), aliased to
+  `__strata_ord` after `QueryOutput::columns` is captured, name-escalated on collision and
+  recorded in `SnapshotStats.ord: Option<String>`. Two plans spool **without** one, `None`, and
+  read unordered as at base: an `EXPLAIN`/`EXPLAIN ANALYZE` (DataFusion requires those at the
+  plan root, so the window would fail a statement the DDL policy promises to run) and a result
+  with duplicate column names (name-keyed reads would mis-map a duplicate onto the ordinal's
+  slot). The registration **declares** the file's order (`with_file_sort_order`), so an ordered
+  read plans as a stream, not a sort — measured: a page at offset 2.9M of a 3M-row snapshot is
+  543 ms as an undeclared TopK holding every candidate row, 97 ms declared, with shallow pages
+  planning as scan-level limit pushdown and exports streaming into their `COPY`. Unsorted reads
+  `ORDER BY` it; user sorts append it as the tie-break (stable across page windows); **every**
+  reader projects it away, and export selects explicit columns so a `COPY` never writes
+  bookkeeping into the user's file.
 - **A view of a value is bounded where the value is *encoded*, never afterwards — and it expands
   breadth-first.** The record view opened on a `config.json` row (19 struct columns, 241,425 nested
   fields) froze the window for a second or two, and the freeze was the **materialization**, not the

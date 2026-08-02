@@ -134,13 +134,19 @@ async fn scatter_returns_points_and_refuses_over_cap() {
         )
         .await
         .expect("chart");
+    // As a SET: `ChartData::Points` promises no order (a scatter draws marks, not a
+    // sequence), and pinning one here would lend the scan an order the type disclaims.
+    let ChartData::Points(mut points) = data else {
+        panic!("expected points, got {data:?}")
+    };
+    points.sort_by(|a, b| a.x.total_cmp(&b.x));
     assert_eq!(
-        data,
-        ChartData::Points(vec![
-            ChartPoint { x: 3.0, y: 30.0 },
-            ChartPoint { x: 2.0, y: 20.0 },
+        points,
+        vec![
             ChartPoint { x: 1.0, y: 10.0 },
-        ])
+            ChartPoint { x: 2.0, y: 20.0 },
+            ChartPoint { x: 3.0, y: 30.0 },
+        ]
     );
 
     let data = eng

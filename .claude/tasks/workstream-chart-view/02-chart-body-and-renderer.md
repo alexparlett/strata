@@ -19,6 +19,11 @@ switcher, per-tab mode and body slot are done (P2-07). `strata-freya` does **not
   `strata-freya`'s freya features.
 - **Subscription**: a `QueryCapability` shaped exactly like `PageSpec`/`FetchSnapshotPage` — keys
   `(SnapshotId, ChartQuery)`, one construction site, `Engine::chart` behind it, no confirm dialog.
+  Two wiring facts from 01: `Engine::chart` takes `self: &Arc<Self>` (for its in-call pin), so it
+  is **not reachable through `EngineCtx`'s `Deref`** — add a thin wrapper on `EngineCtx` the way
+  `pin_snapshot` has one. And axis labels render through the engine's live `datafusion.format.*`
+  overrides, so the chart must re-render when those change (as the grid's pages do) — the cache
+  key alone does not carry that dependency.
   This task derives the `ChartQuery` from schema defaults (spec §6 rules); 03 replaces that with
   the real `ChartConfig`.
 - **Renderer**: one module per concern under `results/chart/` — a render fn per mark over

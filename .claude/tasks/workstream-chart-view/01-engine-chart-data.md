@@ -37,7 +37,7 @@ one: a result the user `ORDER BY`ed draws in exactly that order, and the grid ag
   label rendering + `DISPLAY_CHARS` clip; `(null)` as label-never-key; the `plottable` type
   refusal for `Raw`/`Histogram`; the finite-values filter; the whole histogram implementation
   (min/max pass, `√n` clamped 6..=24, ≤ 200 bins); the empty-result → empty-axis rule; the
-  `measure_alias`-style name-escalation idea (now 00's, for the ordinal).
+  name-escalation idea (now 00's `ordinal_name`, for the ordinal).
 - **Delete from the branch**: everything the pipeline needed — aggregation exprs, axis builders,
   stride ladder + widening loop, `by_measure` ordering, the bucket-kind refusals, and their tests.
 - Unit tests over in-memory fixtures per shape: pivot correctness (values, gaps, series naming —
