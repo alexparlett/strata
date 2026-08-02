@@ -356,6 +356,12 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   whole-file. Never edit the command by substitution; check any replacement against all four states.
   A PR is `gh pr view` + `gh pr diff`, and its description goes in the **contract** as a claim to
   audit, never in the scope as context to believe.
+- **A stage that cannot verify fails closed; a stage that only corrects keeps and marks.** The panel
+  drops a finding it could not verify — reporting an unverified one is the worse error. The red team
+  only ever lowers a severity or removes, so a missing verdict there keeps the panel-confirmed
+  finding, marks it `redTeamed: false`, names the batch that never answered, and reports
+  `adversarialPhase: 'partial'` with the uncovered count. Never let a phase claim coverage it did
+  not deliver.
 - **Findings go through `ReportFindings`, and the script hands over the exact shape.** `report` is
   returned ready to pass, sorted most-severe first; each row carries `CONFIRMED` (unanimous panel)
   or `PLAUSIBLE` (one voter refused). The severity tally and the `BLOCK`/`CONCERNS`/`CLEAN` gate

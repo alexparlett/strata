@@ -128,6 +128,19 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   description is a claim *about* it, so a description that disagrees with its own diff is a finding
   the contract lawyer returns rather than context that explains the code away. An unread file and a
   clean file are not the same answer, and the critics are told to say which one they are giving.
+  **A stage that cannot verify fails closed; a stage that only corrects keeps and marks.** These
+  pull opposite ways and both are right. The panel drops a site whose batch lost a voter: a finding
+  it could not verify must not reach the report, so a short panel is not keepable. The red team is
+  the reverse — it only ever lowers a severity or removes one, so failing closed there would throw
+  away work the panel already confirmed. It keeps the finding, marks it `redTeamed: false`, and
+  names the batch that never answered. What is *not* optional either way is saying so. The original
+  bug was silent on every channel at once: `parallel` resolved the dead batch to null,
+  `.filter(Boolean)` erased the index so nothing could name it, the drop-count log stayed quiet
+  because nothing had been dropped, and `ran.adversarialPhase` still read `true` — so findings
+  shipped with severities nobody had checked under a report claiming `max` had checked them. Hence
+  the batch index is carried through (as the panel's ballots already carried theirs) and
+  `adversarialPhase` is `'partial'` with `adversarialUncovered` whenever a batch is missing. A phase
+  may under-deliver; it may not claim otherwise.
   **Findings go through `ReportFindings`, and the script hands over the exact shape.** The host
   renders a findings card — grouped by file, category chips, a per-row verdict badge, the effort
   level in the header, and Apply-fixes/Walk-through actions — which is the artifact most people

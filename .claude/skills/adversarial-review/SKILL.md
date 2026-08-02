@@ -153,6 +153,12 @@ Report `ran` **verbatim** — a tier is a claim about how hard the change was lo
 report that reads like a `max` one is the failure this whole method exists to prevent. Carry the
 workflow's own log lines too, wherever a lens was skipped, a batch dropped or a shape collapsed.
 
+If `ran.adversarialPhase` is `"partial"`, say so and give `ran.adversarialUncovered`: that many
+findings kept the panel's severity because the red team never reached them. They are still
+panel-confirmed — nothing was invented — but their severity is unchecked, and at `max` the severity
+check is what the tier was bought for. A partial run reported as a whole one is the same lie as a
+`low` run reported as a `max` one, just further down.
+
 If the user presses **Apply fixes**, re-report afterwards with `outcome` set per finding
 (`fixed` / `skipped` / `no_change_needed`). Never re-report a finding as `fixed` without having
 changed the line it names.

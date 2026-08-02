@@ -60,6 +60,13 @@ const voters = VOTERS[tier]
 const triggers = Array.isArray(a.triggers) ? a.triggers : []
 const contract = a.contract || 'AGENTS.md, the matching docs/reference/ entry, and any task file under .claude/tasks/.'
 
+// Declared up here, not beside the adversarial phase that fills them, because `ranSummary`
+// reads them and the early returns below call it. A `let` is in its temporal dead zone until
+// execution reaches the declaration, so a hoisted function reading one from further down
+// throws ReferenceError on exactly the paths that never get there - the failure returns.
+let redBatches = 0
+let redUncovered = 0
+
 // ---------------------------------------------------------------- lenses
 
 // The host's finding card groups by category, not by lens - a reader wants to know what
@@ -444,19 +451,21 @@ survivors = survivors.map(s => {
 
 // ---------------------------------------------------------------- adversarial (max only)
 
-let redBatches = 0
-
 if (tier === 'max' && survivors.length) {
   phase('Adversarial')
   log(`red-teaming ${survivors.length} survivor${survivors.length === 1 ? '' : 's'} on severity and reachability.`)
 
+  const redGroups = []
+  for (let i = 0; i < survivors.length; i += BATCH) redGroups.push(survivors.slice(i, i + BATCH))
+  redBatches = redGroups.length
+
+  // The batch index is carried through, exactly as the panel's ballots carry theirs. Without
+  // it a dead batch vanishes inside `.filter(Boolean)` with nothing left to name it, its
+  // findings pass through un-red-teamed, the drop-count log stays silent because nothing was
+  // dropped, and the run still reports the adversarial phase as complete - a claim of scrutiny
+  // that was never applied, which is the one thing a review must never make.
   const red = (await parallel(
-    (() => {
-      const out = []
-      for (let i = 0; i < survivors.length; i += BATCH) out.push(survivors.slice(i, i + BATCH))
-      redBatches = out.length
-      return out
-    })().map((b, bi) => () => agent(
+    redGroups.map((b, bi) => () => agent(
       `Scope under review: ${a.scope}\n\n` +
       `These findings already survived a refutation panel. Do not re-litigate whether they are ` +
       `real - that is settled. Attack what is left, one verdict per id: is the severity honest or ` +
@@ -466,22 +475,38 @@ if (tier === 'max' && survivors.length) {
       `only holds under a state that cannot occur.\n\n` +
       b.map(f => `--- candidate ${f.id} ---\nseverity: ${f.severity}\nfile: ${f.file}:${f.line}\nclaim: ${f.claim}\nfailure: ${f.failure}`).join('\n\n'),
       { label: `redteam:batch${bi + 1}`, phase: 'Adversarial', agentType: 'finding-refuter', schema: PANEL, effort },
-    ))
-  )).filter(Boolean)
+    ).then(r => ({ bi, r })))
+  )).filter(x => x && x.r)
 
+  const covered = new Set(red.map(x => x.bi))
   const verdict = new Map()
-  for (const r of red) for (const v of r.verdicts) verdict.set(v.id, v)
+  for (const { r } of red) for (const v of r.verdicts) verdict.set(v.id, v)
+
+  // A missing red-team verdict must NOT delete the finding, so this stage does not fail closed
+  // the way the panel does - and the difference is the point. The panel fails closed because a
+  // finding it could not verify must not be reported. The red team only ever lowers a severity
+  // or removes, so a missing verdict there would throw away work the panel already confirmed.
+  // Keep the finding, mark it un-red-teamed, and name the batch that never answered.
+  for (let bi = 0; bi < redGroups.length; bi++) {
+    if (covered.has(bi)) continue
+    redUncovered += redGroups[bi].length
+    log(`red-team batch ${bi + 1} returned nothing - its ${redGroups[bi].length} finding${redGroups[bi].length === 1 ? '' : 's'} keep the panel's severity, un-red-teamed.`)
+  }
 
   const before = survivors.length
   survivors = survivors
     .map(s => {
       const v = verdict.get(s.id)
-      if (!v) return s                      // unjudged survives: the panel already kept it
+      // Also catches a candidate a live batch simply omitted: the schema requires one verdict
+      // per id but cannot enforce a count, so an id with no verdict is un-red-teamed either way.
+      if (!v) return { ...s, redTeamed: false }
       if (v.verdict === 'REFUTED') return null
-      return { ...s, severity: v.severity || s.severity }
+      return { ...s, severity: v.severity || s.severity, redTeamed: true }
     })
     .filter(Boolean)
   if (survivors.length < before) log(`red team dropped ${before - survivors.length}.`)
+  const missed = survivors.filter(s => s.redTeamed === false).length
+  if (missed !== redUncovered) redUncovered = missed
 }
 
 // ---------------------------------------------------------------- tally
@@ -511,7 +536,11 @@ function ranSummary(nSites, nAgents) {
     shape: folded ? 'one critic carrying every lens' : `${selected.length} isolated critics`,
     sites: nSites,
     agents: nAgents,
-    adversarialPhase: tier === 'max',
+    // `true` is a claim that every survivor was re-judged on severity. It is only allowed to
+    // be true when that actually happened; a batch that never answered makes it 'partial',
+    // with the count of findings whose severity nobody checked.
+    adversarialPhase: tier !== 'max' ? false : redUncovered ? 'partial' : true,
+    adversarialUncovered: redUncovered,
     note: 'Report `ran` verbatim in the scope line. A tier is a claim about how hard this was looked at.',
   }
 }
