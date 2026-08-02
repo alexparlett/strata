@@ -48,11 +48,27 @@ skill's headline case, a change you just wrote.
 | unstaged working tree | `git diff` |
 | untracked | `git ls-files --others --exclude-standard` |
 
+Run them **one per line, never chained with `&&`**, and check each one's exit code:
+
 ```bash
+git rev-parse --verify -q "${CLAUDE_CODE_BASE_REF:-origin/HEAD}"
 git status --porcelain
-git diff "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD" && git diff && git diff --cached
+git diff "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD"
+git diff
+git diff --cached
 git ls-files --others --exclude-standard
 ```
+
+`&&` short-circuits, so one failure silently swallows every state after it. That is not
+hypothetical: `origin/HEAD` is unset in any clone where `git remote set-head origin -a` never ran,
+the base diff then exits **128**, and `&& git diff && git diff --cached` never execute at all —
+measured in a scratch repo, the chained form showed **0** changed files where the separate form
+showed **2**. Same failure as a missing command, one line over.
+
+**A non-zero exit means that state is unread, not empty.** They look identical — both print
+nothing — and only one of them is safe to report as clean. If the base will not resolve, fix it
+(`git remote set-head origin -a`, or pass an explicit base) or name the gap in the brief. Never
+let a state fall out of the scope without the report saying it did.
 
 `git status --porcelain` is the inventory, not a substitute: it *names* every state (`??`
 untracked, `M`/`A` staged in the first column) but carries no content, and it abbreviates a
@@ -78,8 +94,12 @@ Targets:
 - **a PR** — `123`, a URL, or `owner/repo/pull/123`:
 
   ```bash
-  gh pr view <n> --json title,body,files,baseRefName && gh pr diff <n>
+  gh pr view <n> --json title,body,files,baseRefName
+  gh pr diff <n>
   ```
+
+  Separate lines here for the same reason as above — chained, an unauthenticated `gh` or a wrong
+  number takes the diff down with the metadata and leaves you reviewing nothing.
 
   **The diff is ground truth; the PR description is a claim *about* it.** Put the description in the
   contract as a claim to audit, never in the scope as context to believe — it is exactly the

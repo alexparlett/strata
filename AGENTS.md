@@ -353,7 +353,11 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   diff`), untracked (`git ls-files --others --exclude-standard`). Miss one and that state reviews as
   empty and returns `CLEAN` over unreviewed code. `git status --porcelain` is the inventory only —
   no content, and it abbreviates directories. Untracked files have no hunks, so mark them
-  whole-file. Never edit the command by substitution; check any replacement against all four states.
+  whole-file. Run the commands one per line, never chained with `&&`: a short-circuit swallows every
+  state after the failure, and `origin/HEAD` exits 128 wherever `git remote set-head` never ran. A
+  non-zero exit means that state is **unread, not empty** — the two print the same nothing and only
+  one is safe to call clean. Never edit the command by substitution; check any replacement against
+  all four states.
   A PR is `gh pr view` + `gh pr diff`, and its description goes in the **contract** as a claim to
   audit, never in the scope as context to believe.
 - **A stage that cannot verify fails closed; a stage that only corrects keeps and marks.** The panel

@@ -122,7 +122,15 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   is the inventory only, naming every state (`??` untracked, `M`/`A` staged) but carrying no content
   and abbreviating a directory to one line, so it can never stand in for the four. Untracked files
   have no hunks — the whole file is the change, and the brief must say so or a critic told to read
-  "the changed files" hunts a diff that does not exist. Do not edit the command by substitution;
+  "the changed files" hunts a diff that does not exist. The commands are run **one per line, never
+  chained with `&&`** — a short-circuit is the third way a state goes missing, after a dropped
+  command and a substituted one, and it is the least visible: `git diff
+  "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD"` exits **128** in any clone where
+  `git remote set-head origin -a` never ran, so the staged and unstaged reads after it never
+  execute. Measured in a scratch repo: the chained form reported 0 changed files where the separate
+  form reported 2. And a non-zero exit means that state is **unread, not empty** — they print the
+  same nothing, and only one of them may be reported as clean, so an unresolvable base is fixed or
+  named in the brief rather than passed over. Do not edit the command by substitution;
   check any replacement against all four states. A PR target is `gh pr view <n>` + `gh pr diff <n>`,
   and its description belongs in the **contract**, not the scope: the diff is ground truth and the
   description is a claim *about* it, so a description that disagrees with its own diff is a finding
