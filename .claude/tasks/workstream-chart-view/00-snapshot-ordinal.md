@@ -38,9 +38,13 @@ whichever answer a read got. Sorted reads have the same hazard on ties.
   the escalated name.
 
 ## As built
-`materialize` appends the escalated ordinal to each **written** batch only (page 1, the null
-counts and `QueryOutput::columns` all capture the original), and records the name in
-`SnapshotStats.ord`. `read_page` sorts by `(user sort?, ordinal)` and `drop_columns` the
+The ordinal rides the spool **query**: `materialize` adds `row_number() OVER ()` aliased to the
+escalated name after the result schema is captured, and reads everything user-facing (page 1,
+null counts) through a projection that drops the window's column. Measured before adopting: the
+window numbers the exact stream the writer consumes on the racy over-threshold shape, and a
+user's `ORDER BY` survives beneath it — the first implementation stitched the array into each
+batch by hand, and was replaced when review asked why the order wasn't simply part of the query
+(`SNAPSHOT_SPEC.md` §9, "considered and replaced"). The name rides in `SnapshotStats.ord`. `read_page` sorts by `(user sort?, ordinal)` and `drop_columns` the
 ordinal after the window; export's `select_sql` names the result's columns explicitly
 (`quote_col` — verbatim double-quote escaping, replacing the old local escape) and orders by
 the ordinal, user sort first when set. One subtlety the tests pin: for a query with **no**

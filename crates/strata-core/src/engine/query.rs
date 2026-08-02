@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 
-use datafusion::arrow::array::{Array, Int64Array};
+use datafusion::arrow::array::Array;
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::Field;
 use datafusion::arrow::ipc::writer::{FileWriter, IpcWriteOptions};
@@ -35,6 +35,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::common::Column;
 use datafusion::execution::options::ArrowReadOptions;
+use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::prelude::*;
 use datafusion_functions_json::udfs::json_union_to_text_udf;
@@ -464,16 +465,24 @@ async fn materialize(
     // Arrow schema of the result — captured before the DataFrame is consumed by the stream,
     // for concatenating page 1 into its `RecordBatch`.
     let arrow_schema = df.schema().inner().clone();
-    let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
 
-    // The ordinal column (`docs/SNAPSHOT_SPEC.md` §9): written into the file, and **only**
-    // the file. `columns`, the null counts, and page 1 were all captured from the result
-    // itself, so the user never sees it — a reader gets it back exactly once, as the thing
-    // ordered reads sort by, and projects it away.
+    // The ordinal column (`docs/SNAPSHOT_SPEC.md` §9) rides the spool **query itself**:
+    // `row_number() OVER ()` numbers the exact single stream the writer consumes — measured
+    // on the racy over-threshold plan shape, and re-measured by `tests/snapshot_order.rs`,
+    // which is the standing guard should a planner upgrade ever change window ordering
+    // semantics. Added *after* `columns` and `arrow_schema` were captured, so the
+    // user-visible schema never contains it — the file does, and every reader orders by it
+    // and projects it away.
     let ord = ordinal_name(&arrow_schema);
+    let df = df
+        .window(vec![row_number().alias(ord.as_str())])
+        .map_err(|e| e.to_string())?;
+    let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
+    // The window appends its column last, so the user's columns are exactly the captured
+    // schema's width — everything user-facing below reads this projection of each batch.
+    let user_columns: Vec<usize> = (0..arrow_schema.fields().len()).collect();
 
     let mut writer: Option<FileWriter<File>> = None;
-    let mut written_schema: Option<Arc<datafusion::arrow::datatypes::Schema>> = None;
     let mut total = 0usize;
     let mut nulls = vec![0u64; arrow_schema.fields().len()];
     let mut page1: Vec<Vec<Cell>> = Vec::new();
@@ -481,38 +490,21 @@ async fn materialize(
     while let Some(batch) = stream.next().await {
         let batch = batch.map_err(|e| e.to_string())?;
         if writer.is_none() {
-            // Extend the FIRST batch's schema, exactly as the writer used to be built from
-            // it — the stream's batches agree with each other, not necessarily with the
-            // planner's metadata.
-            let mut fields: Vec<Arc<Field>> = batch.schema().fields().iter().cloned().collect();
-            fields.push(Arc::new(Field::new(
-                ord.as_str(),
-                datafusion::arrow::datatypes::DataType::Int64,
-                false,
-            )));
-            let schema = Arc::new(datafusion::arrow::datatypes::Schema::new(fields));
             let out = File::create(&file).map_err(|e| e.to_string())?;
             writer = Some(
-                FileWriter::try_new_with_options(out, &schema, snapshot_ipc_options()?)
+                FileWriter::try_new_with_options(out, &batch.schema(), snapshot_ipc_options()?)
                     .map_err(|e| e.to_string())?,
             );
-            written_schema = Some(schema);
         }
-        if let (Some(w), Some(schema)) = (writer.as_mut(), written_schema.as_ref()) {
-            // Arrival order IS result order: the spool is a single ordered stream.
-            let ordinals = Int64Array::from_iter_values(
-                (total as i64)..(total as i64 + batch.num_rows() as i64),
-            );
-            let mut cols = batch.columns().to_vec();
-            cols.push(Arc::new(ordinals));
-            let extended = RecordBatch::try_new(schema.clone(), cols).map_err(|e| e.to_string())?;
-            w.write(&extended).map_err(|e| e.to_string())?;
+        if let Some(w) = writer.as_mut() {
+            w.write(&batch).map_err(|e| e.to_string())?;
         }
-        total += batch.num_rows();
-        for (i, col) in batch.columns().iter().enumerate() {
+        let user = batch.project(&user_columns).map_err(|e| e.to_string())?;
+        total += user.num_rows();
+        for (i, col) in user.columns().iter().enumerate() {
             nulls[i] += col.null_count() as u64;
         }
-        append_batch_capped(&batch, &mut page1, &mut page1_batches, page_size, fmt)?;
+        append_batch_capped(&user, &mut page1, &mut page1_batches, page_size, fmt)?;
     }
 
     // Only register a snapshot if the query produced rows; an empty result has

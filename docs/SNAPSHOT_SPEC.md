@@ -307,12 +307,24 @@ and the freya-query page cache then **freezes** whichever answer a read happened
 views can hold contradictory copies of one page. §1 promises stable paging; without an order key
 the read path cannot deliver it.
 
-**The fix: order is a column.** `materialize` appends a row ordinal to every batch as it spools
-— `__strata_ord`, `Int64`, 0-based, in arrival order, which *is* the query's result order because
-the spool is a single ordered stream. Appended **after** `QueryOutput::columns` is captured, so
-the user-visible schema never contains it. If the result already has a column of that name, the
-name escalates by prefix (`___strata_ord`, …) until free — the chosen name rides in the write
-pass's `SnapshotStats`, beside the null counts, with exactly the snapshot's lifetime.
+**The fix: order is a column, written by the spool query itself.** `materialize` adds
+`row_number() OVER ()` to the plan it streams — aliased `__strata_ord` — **after**
+`QueryOutput::columns` is captured, so the user-visible schema never contains it. The window
+forces a single input partition, sits on the same stream the writer consumes, and therefore
+numbers rows in exactly the order they are written: measured on the racy over-threshold plan
+shape (contiguous across 3M rows; a user's `ORDER BY` preserved beneath the window), and
+**re-measured on every test run** by the regression suite below, which is the standing guard
+should a planner upgrade ever change window ordering semantics. If the result already has a
+column of that name, the name escalates by prefix (`___strata_ord`, …) until free — the chosen
+name rides in the write pass's `SnapshotStats`, beside the null counts, with exactly the
+snapshot's lifetime.
+
+*Considered and replaced:* the first implementation stitched an `Int64` array into each batch
+by hand inside the writer loop. Same guarantee, but expressed below the query layer — review
+asked why the order wasn't simply part of the query, the window form was measured to hold, and
+the hand assembly (schema extension, per-batch array construction) went. What the swap leans on
+that the stitching did not — the window preserving its input order — is exactly what the
+regression suite pins.
 
 The discipline the column demands — every reader accounts for it:
 
