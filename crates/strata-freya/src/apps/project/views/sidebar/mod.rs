@@ -52,12 +52,18 @@ fn label(text: &'static str, color: Color) -> Rect {
         )
 }
 
-/// The header width below which the catalog's filter field is dropped rather than squeezed.
+/// The width of the header's **leading run** below which the catalog's filter field is dropped
+/// rather than squeezed.
 ///
-/// The header's fixed run is ↻ + × (24 each) with the row's 8px gaps and 12px side padding, i.e.
-/// 88px; below roughly this the field has under ~80px left, which is not enough to read a table
-/// name back in. Filtering stays reachable through the command palette.
-const CATALOG_FILTER_MIN: f32 = 168.;
+/// Measured on the leading run itself, so this is the room the field would actually get — not the
+/// gross row width, from which the ↻, the pinned × and their gaps still have to come off. It was
+/// briefly both: the probe moved onto the flex wrapper when the header became a `Toolbar` while
+/// the threshold stayed calibrated for the row, which dropped the filter at panel widths with
+/// ~112px going spare.
+///
+/// Below this the field has too little left to read a table name back in. Filtering stays
+/// reachable through the command palette.
+const CATALOG_FILTER_MIN: f32 = 80.;
 
 /// The header row's height and the box of the flat controls in it (the canvas's 48 / 24).
 const HEADER_HEIGHT: f32 = 48.;
@@ -90,11 +96,14 @@ impl Component for Sidebar {
         // The catalog filter lives in the header beside the refresh button, but its consumer is
         // the tree below — so the shell owns the signal and hands it down.
         let filter = use_state(String::new);
-        // The header's measured width, so the filter can get out of the way before it is too
+        // The leading run's measured width, so the filter can get out of the way before it is too
         // narrow to type in (P5-06 rule 3: shrink, then hide). Local and per-mount — a fold
         // verdict is derived state, like `components::toolbar`'s.
-        let mut header_w = use_state(|| f32::INFINITY);
-        let roomy = *header_w.read() >= CATALOG_FILTER_MIN;
+        //
+        // The fixed run either side of it (↻ and the pinned ×) is the same whichever branch wins,
+        // so the measurement cannot oscillate between them.
+        let mut leading_w = use_state(|| f32::INFINITY);
+        let roomy = *leading_w.read() >= CATALOG_FILTER_MIN;
 
         let leading = match pane {
             // `Content::Flex` + a `Size::flex` field, *not* `Size::fill()`: fill takes the whole
@@ -160,7 +169,7 @@ impl Component for Sidebar {
                             .overflow(Overflow::Clip)
                             .cross_align(Alignment::Center)
                             .on_sized(move |e: Event<SizedEventData>| {
-                                header_w.set_if_modified(e.area.width());
+                                leading_w.set_if_modified(e.area.width());
                             })
                             .child(leading),
                         0.,

@@ -47,7 +47,23 @@ const DOT_SIZE: f32 = 7.;
 /// the `Select` at its longest label ("1000 / page"), and the page box plus its "of M".
 const PAGE_SIZE_WIDTH: f32 = 110.;
 const JUMP_INPUT_WIDTH: f32 = 44.;
-const JUMP_WIDTH: f32 = JUMP_INPUT_WIDTH + 8. + 38.;
+
+/// What the jump box costs the fold arithmetic: its input, the gap, and the `"of {pages}"` beside
+/// it — whose width **follows the page count**, which has no upper bound (`total.div_ceil(100)` at
+/// the smallest page size runs to five digits and beyond).
+///
+/// `PAGE_SIZES` is a closed set so the dropdown can be a constant; this cannot. A fixed budget
+/// under-charges a wide count, and since `Custom::width` only feeds `fold_plan` while the real
+/// `JumpBox` renders at its natural width, the row would be judged to fit while the flex info
+/// cluster beside it got squeezed by the difference.
+///
+/// An estimate, not a measurement — 11px mono is ~6.6px/char, and the fold budget only needs to
+/// not be *under*.
+fn jump_width(pages: usize) -> f32 {
+    const CHAR_W: f32 = 6.6;
+    let digits = count(pages).chars().count() as f32;
+    JUMP_INPUT_WIDTH + 8. + ("of ".len() as f32 + digits) * CHAR_W
+}
 
 /// The pager's slots in the footer: the 1-based page and the rows-per-page the results pane
 /// owns (bumping either re-keys the pane's snapshot read), plus the snapshot total that bounds
@@ -286,7 +302,7 @@ impl Component for StatusBar {
                 )
                 .item(
                     ToolbarItem::Custom {
-                        width: JUMP_WIDTH,
+                        width: jump_width(pages),
                         inline: JumpBox {
                             pager,
                             color: theme.sub_color,
@@ -612,6 +628,29 @@ mod tests {
     use strata_model::{Cell, ColumnInfo};
 
     use super::*;
+
+    /// The jump box's fold budget follows the page count, which is unbounded.
+    ///
+    /// A fixed budget under-charged a wide count, and because `Custom::width` only feeds
+    /// `fold_plan` while the box renders at its natural width, the row was judged to fit while the
+    /// flex info cluster beside it absorbed the difference.
+    #[test]
+    fn the_jump_box_budget_grows_with_the_page_count() {
+        let one = jump_width(1);
+        let many = jump_width(12_345);
+
+        assert!(
+            many > one,
+            "a five-digit count costs more than a one-digit one: {many} vs {one}"
+        );
+        // "of 12,345" is six rendered characters against one, and the separator counts.
+        assert!(
+            many - one >= 5. * 6.,
+            "and by roughly the characters it added: {}",
+            many - one
+        );
+        assert!(one > JUMP_INPUT_WIDTH, "the label is always charged too");
+    }
 
     #[test]
     fn ints_group_by_thousands() {

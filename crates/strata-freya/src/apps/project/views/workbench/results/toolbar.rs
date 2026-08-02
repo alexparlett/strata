@@ -4,6 +4,7 @@ use crate::apps::export::ExportLaunch;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment, TOOLBAR_TWO_ICON_WIDTH};
+use crate::components::tool_button::TOOL_SIZE;
 use crate::components::toolbar::{Toolbar, ToolbarAction};
 use crate::components::typography::InputTypography;
 use crate::platform::open_export;
@@ -142,7 +143,12 @@ impl Component for ResultsToolbar {
         // it: ⌘F (handled in the datagrid, not here) would flip `find.open` and nothing would
         // render, so the chord went quietly dead exactly when the pane was too narrow to press the
         // button instead. An anchor that cannot fold is the whole fix.
-        let search_anchor = Attached::new(rect())
+        // Zero **width** so it costs the row nothing, but the height of the button it replaced:
+        // `AttachedPosition::Bottom` offsets the panel by `inner_height`, so a zero-height anchor
+        // would open it at the row's vertical centre, straight over the toolbar strip, instead of
+        // below the row. At `TOOL_SIZE` tall it is centred in the row exactly as the Search button
+        // was, and the panel lands where it always did.
+        let search_anchor = Attached::new(rect().width(Size::px(0.)).height(Size::px(TOOL_SIZE)))
             .bottom()
             .align_end()
             .maybe_child(open.then(popover));
