@@ -83,9 +83,11 @@ Members:
 - **`strata-code-editor`** — vendored Skia code editor (Rope buffer + tree-sitter highlighting) used
   by the Freya SQL editor.
 - **`strata-agent`** — agent access (AA-02): the read-only tool vocabulary, the `Host` seam that
-  answers it, the error taxonomy, and the MCP server. A member but **not** a default one, and
-  deliberately **Freya-free** — that is what lets one `StrataTools` serve HTTP (AA-03), stdio
-  headless (AA-05) and the in-process chat pane (AA-06). Spec: `docs/AGENT_ACCESS_SPEC.md`.
+  answers it, the error taxonomy, the MCP server, and the **headless host** (AA-05 —
+  `strata mcp <project>`: a `Host` over a plain `Engine` with AA-01's registration pass replayed
+  on it, served over stdio). A member but **not** a default one, and deliberately **Freya-free**
+  — that is what lets one `StrataTools` serve HTTP (AA-03), stdio headless (AA-05) and the
+  in-process chat pane (AA-06). Spec: `docs/AGENT_ACCESS_SPEC.md`.
 - **`strata-command-macro`** — the workspace's one proc macro: `#[command_router]` / `#[command]`,
   the command palette's registration mechanism (P6-01). rmcp's `#[tool_router]` declaration shape,
   but it generates an **enum**, so dispatch is total by construction. It knows nothing about

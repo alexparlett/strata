@@ -318,6 +318,29 @@ Things that must not regress. Each was fought for once already.
   app runs nothing. And the staleness is bounded and stated: a client that dies without its
   `DELETE` is over-reported until rmcp's `keep_alive` reaps it, five minutes, and never
   under-reported.
+- **A second deployment of the vocabulary answers the same questions from what it already has,
+  and owns nothing of the app's.** The headless host (AA-05, `strata mcp <project>`) is a
+  `Host` over a plain `Engine` with AA-01's `register_project` replayed on it, serving
+  `StrataTools` over rmcp's stdio transport — no port and no token, because the client spawns
+  the process and owning it *is* the access control. Four things make it a host rather than a
+  second implementation of the feature. **Registration outcomes are the catalog**, folded once
+  at open into the same `CatalogEntry`/`Described` shapes the app projects from its store — so
+  a def the engine refused is a `failed` row here too, and neither host asks DataFusion.
+  **The pass finishes before anything is served**, which is why this one needs no equivalent of
+  the app's scan claim: `Engine::register` deregisters before re-inferring, and there is no
+  second pass to race. **It has one project by construction**, so the `project` argument is not
+  consulted anywhere in the impl — `host::resolve` only ever hands back a project the host
+  listed, and a lookup would be a check that can only pass. And **it owns nothing of the
+  user's**: no app config (so no `datafusion.*` overrides — the engine runs defaults, and
+  `default_page_size` is `Settings::default().row_limit`, the shipped value reached without
+  opening the file), no `session.json`, no history, and a folder with no project in it is
+  refused rather than scaffolded — the GUI open path scaffolds, but a server the user cannot
+  see must not create the files the app owns. Running beside the live app is safe for the
+  reason two windows are: every engine lock-claims its own snapshot directory. The CLI branch
+  is taken **first in `main`**, ahead of the theme registry, app config, the windows registry
+  and the fonts, none of which exist for it — and **stdout belongs to the transport**, so
+  logging is a parameter (`init_logging(Log::Stderr)`) rather than a constant: one stray log
+  line on stdout is a parse error at the client.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. Mutations call the

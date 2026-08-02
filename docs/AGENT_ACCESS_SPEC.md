@@ -388,22 +388,35 @@ does, on the same `strata-agent` runtime, through the same bridge).
   decision is the chat workstream's first task, and nothing in the core prejudges it: both
   brains drive the identical tool layer.
 
-## 10. Headless host (`strata mcp <project>`)
+## 10. Headless host (`strata mcp <project>`) — built (AA-05)
 
 For app-closed use (CI, scripts, a second machine): the same binary, a CLI branch in `main()`
-**before** any GUI launches — beside the existing `argv[1]` project-path handling.
+**before** any GUI launches — beside the existing project-path handling, and before it, since
+nothing app-global exists for a server with no window.
 
-- Builds a plain `Engine` and replays the **project registration pass** (load defs → register
-  tables → create views), extracted to `strata-core` by AA-01 from its current home in the
-  Freya app's project-open hooks. Registration failures become `list_tables` `failed` rows,
-  exactly as in-app.
+- `strata_agent::headless::HeadlessHost` builds a plain `Engine` and replays the **project
+  registration pass** (load defs → register tables → create views), extracted to `strata-core`
+  by AA-01. Its outcomes **are** the catalog: folded once at open into the same `CatalogEntry` /
+  `Described` shapes the app projects from its store, so a registration failure is a `failed`
+  `list_tables` row exactly as in-app. The pass completes before anything is served, which is
+  why this host needs no equivalent of the app's scan claim.
 - **stdio transport** (the standard for locally-spawned MCP servers) — no port, no token; the
-  client owns the process.
+  client owns the process. `tools::Caller` reads that as `Owned` (no HTTP request behind the
+  call), so the service value's lifetime genuinely is the connection and there is no idle sweep
+  to run.
 - Touches **no shared state**: never reads or writes app config, `session.json`, or history.
   Snapshot directories are already safe side by side — each engine lock-claims its own dir
-  (`claim_snapshot_dir`), so a headless engine beside a running app cannot collide with it.
+  (`claim_snapshot_dir`), so a headless engine beside a running app cannot collide with it. Two
+  consequences of not reading app config, both stated rather than papered over: the engine runs
+  DataFusion's defaults (a `--config` flag can arrive if wanted), and `default_page_size` is the
+  **shipped** `Settings::default().row_limit` rather than the user's setting.
+- It writes nothing to the project either: a folder with **no** project in it is refused with a
+  message rather than scaffolded, which is where this deliberately parts from the GUI open path.
 - Query-session handles still exist (a session *is* a `WsId` — headless they are workspaces with
-  no UI at all), so agents see one vocabulary everywhere.
+  no UI at all), so agents see one vocabulary everywhere, AA-03c's close-vs-dispatch tombstone
+  included.
+- One project by construction, so the `project` argument resolves to it or to nothing and the
+  host consults it nowhere.
 
 ## 11. Open questions
 

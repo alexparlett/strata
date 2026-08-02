@@ -19,8 +19,16 @@ rmcp = { version = "3.0.1", features = [
     "transport-streamable-http-server",
     "transport-io",
 ] }
-# The server's own runtime (the Engine pattern) + its listener.
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
+# The server's own runtime (the Engine pattern) + its listener. `io-std` is the headless
+# host's stdin/stdout: rmcp's `transport-io` enables it too, and naming it here is the point —
+# a feature we depend on is not one to inherit by luck.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
+    "sync",
+    "macros",
+    "io-std",
+] }
 # `CancellationToken`: what stops the accept loop and every live MCP session on drop.
 # rmcp's own config field takes one, so this names a type already in the graph.
 tokio-util = "0.7"

@@ -120,6 +120,21 @@ pub enum Described {
     Pending { name: String },
 }
 
+impl Described {
+    /// The def this describes, whichever state it is in — what a host matches a
+    /// `describe_table` name against. On the type rather than beside each host, because
+    /// every host has to answer the same question and a second copy of the match is a second
+    /// place a new variant can be forgotten.
+    pub fn name(&self) -> &str {
+        match self {
+            Described::Table { name, .. }
+            | Described::View { name, .. }
+            | Described::Failed { name, .. }
+            | Described::Pending { name } => name,
+        }
+    }
+}
+
 /// One connected agent, for as long as its connection lasts.
 ///
 /// Minted per connection wherever there **is** one, rather than derived from what the client

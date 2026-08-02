@@ -137,6 +137,11 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   flight, and the pane reads it rather than restating it.
 - **Poll only what nothing on our side can observe, and name the reason where the poll is.**
   `try_read` never a wait; the timer exists only while the feature is on; staleness bounded and stated.
+- **A second deployment of the vocabulary answers the same questions from what it already has,
+  and owns nothing of the app's.** The headless host's catalog **is** the registration pass's
+  outcomes, its one project is not looked up, it reads no app config and scaffolds nothing — and
+  its CLI branch is taken before anything app-global, with logging on **stderr** because stdout
+  is the transport's.
 
 **Stores and state**
 

@@ -9,7 +9,7 @@
 //! in-process by the chat pane (AA-06) rather than re-implemented for it.
 //!
 //! ```text
-//!   rmcp server ─┐
+//!   rmcp server  ─┐
 //!   stdio server ─┼─→ StrataTools (the ten tools) ─→ Host ─┬─→ AA-03: the app's bridge
 //!   chat loop    ─┘        │                               └─→ AA-05: a plain Engine
 //!                          └─ data plane: Arc<Engine> direct (fetch_page / validate /
@@ -29,6 +29,7 @@
 //! tools; `run` never loosens.
 
 pub mod error;
+pub mod headless;
 pub mod host;
 pub mod mock;
 pub mod server;
@@ -36,6 +37,7 @@ pub mod tools;
 pub mod wire;
 
 pub use error::AgentError;
+pub use headless::{serve_stdio, HeadlessHost};
 pub use host::{
     Agent, AgentId, AgentIdentity, CatalogEntry, Described, Host, Project, QuerySessionId,
     QuerySessionInfo, QuerySessionState, RegState, RunMode, RunSettle, Settled,

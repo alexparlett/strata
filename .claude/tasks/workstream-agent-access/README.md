@@ -26,7 +26,7 @@ same UI seam the MCP server does.
 | 03b | The Agents pane: an agent's work is its own surface, not the user's tabs | ✅ | — | 03 |
 | 03c | Seam hardening: one identity per session, per client | ✅ | — | 03b |
 | 04 | Settings ▸ Agent access (enable · port · token) | ✅ | — | 03 |
-| 05 | Headless host: `strata mcp <project>` over stdio | ⬜ | — | 01, 02 |
+| 05 | Headless host: `strata mcp <project>` over stdio | ✅ | — | 01, 02 |
 | 06 | Chat pane (flagship; may graduate to its own workstream) | ⬜ | — | 03 |
 
 ## Why the order

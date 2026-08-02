@@ -1,6 +1,48 @@
 # AA-05 · Headless host: `strata mcp <project>` over stdio
 
-**Workstream:** Agent access · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** AA-01, AA-02
+**Workstream:** Agent access · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** AA-01, AA-02
+
+## As built
+
+- **The CLI branch** is `main.rs`'s `cli(args) -> Cli` — a pure parser over an iterator, taken
+  **first in `main`**, ahead of the theme registry, app config, the windows registry, the menubar
+  and the fonts. `Cli::{Gui(Option<String>), Mcp(String), Usage}`; `startup` now takes the folder
+  as an argument rather than reading `env::args` itself, which is what makes both testable.
+  `strata mcp` with no folder — or with two — is a usage error naming the form, because a client
+  that spawned this is waiting on stdout for MCP and a GUI would leave it waiting forever.
+- **Logging is a parameter, not a constant**: `init_logging(Log::Stdout | Log::Stderr)`. The
+  headless branch takes `Stderr` before anything can log, stdout being the transport's.
+- **The host** is `strata_agent::headless::HeadlessHost` — in the vocabulary's own crate, beside
+  the mock and the trait, so it is testable with no GUI and no renderer. `HeadlessHost::open(root)`
+  loads the defs, builds `Engine::new(BTreeMap::new())` and replays `register_project`; the pass's
+  outcomes are folded **once** into the catalog listing and the `describe` listing, which is the
+  "registration outcomes *are* the catalog" rule as data rather than as a lookup.
+- **The pass completes before anything is served**, which is why this host needs no equivalent of
+  the app's scan claim: `register` deregisters before re-inferring, and there is no second pass
+  here to race a query.
+- **A folder with no project is refused, not scaffolded** (`exists_at` first, with its own
+  message). The GUI open path scaffolds; a server the user cannot see must not create the files
+  the app owns.
+- **`default_page_size` is `Settings::default().row_limit`** — the shipped default reached without
+  opening app config. Same reasoning for the engine: no `datafusion.*` overrides in v1, stated in
+  the module doc.
+- **Query sessions are engine workspaces and nothing else**, with AA-03c's close-vs-dispatch
+  tombstone kept: a close aborts the engine immediately and, if a run is still in flight, leaves
+  the row for the last settle to sweep (`dispatched_back`). Without it a close landing between the
+  ownership check and `engine.query` would leave a workspace nothing holds.
+- **The `project` argument is not consulted** anywhere in the impl: `host::resolve` only ever
+  hands back a project this host listed, and it listed one. A lookup would be a check that can
+  only pass, and its error arm a taxonomy entry nothing can reach.
+- **`Described::name()`** moved onto the type (was a private helper in `mock.rs`), so the two
+  hosts match a `describe_table` name the same way and a new variant is forgettable in one place
+  rather than two.
+- **Tests**: `cli` unit tests in `main.rs` (three forms); `headless.rs` unit tests over a real
+  project on disk (catalog states, describe per kind, a real run in a session, cross-agent
+  scoping, close/disconnect teardown, the refusal, the page size); and
+  `tests/mcp_over_stdio.rs` — rmcp's own client against `StrataTools` over a `tokio::io::duplex`
+  pair, which is the *same* `AsyncRead + AsyncWrite` adapter `stdio()` feeds. It asserts the
+  vocabulary end to end, the policy refusal, and that `.strata/` still holds only what it
+  arrived with (no `session.json`, no `history.jsonl`).
 
 ## Goal
 The same vocabulary with the app closed: `strata mcp <project>` serves MCP over **stdio** (the
@@ -47,7 +89,9 @@ is the auth.
 
 ## Acceptance
 - `claude mcp add strata-headless -- strata mcp /path/to/project` works: list/describe/run/page
-  against a real project with the GUI closed.
+  against a real project with the GUI closed. (The bundled binary is
+  `/Applications/Strata.app/Contents/MacOS/Strata` — `CFBundleExecutable`, not the cargo bin
+  name. README's Agent access section carries the client configuration.)
 - Runs fine while the app is open on the same project (side-by-side engines; distinct snapshot
   dirs).
 - A project with a failing table def serves it as a `failed` catalog row; queries against the
