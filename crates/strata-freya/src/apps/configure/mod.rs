@@ -55,6 +55,7 @@ use crate::apps::project::ReportCtx;
 use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
 use crate::components::window::window_theme;
 use crate::keymap::on_commands;
+use crate::menu::MenuScope;
 use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowKind};
 use crate::state::{use_share_config, AppCtx};
 use crate::theme::{peek_selection, use_strata_theme, window_background};
@@ -271,16 +272,23 @@ impl App for ConfigureApp {
         use_provide_context(move || report.faults);
 
         // Join the live window registry, so a second Configure on this table focuses this
-        // window rather than opening another.
+        // window rather than opening another — and point the menubar here as a **panel** while
+        // this window is focused. Without that the menubar kept the owner project window's
+        // File menu, and Close Project (and its ⇧⌘W) closed *this* window while naming the
+        // project. Esc is how a Configure window closes.
         let owner = self.owner;
         let target = self.target.clone();
-        use_register_window(self.app.windows, {
-            let target = target.clone();
-            move || WindowKind::Configure {
-                owner,
-                target: target.clone(),
-            }
-        });
+        use_register_window(
+            &self.app,
+            {
+                let target = target.clone();
+                move || WindowKind::Configure {
+                    owner,
+                    target: target.clone(),
+                }
+            },
+            MenuScope::Panel,
+        );
         // …and close with the *subtree* the four handles above belong to, not merely with the
         // window that owns it: a re-root and an engine restart both drop them while leaving that
         // window open under the same id.

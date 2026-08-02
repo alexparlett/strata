@@ -47,7 +47,7 @@ use crate::apps::settings::views::{
 };
 use crate::components::form::Reveal;
 use crate::keymap::on_commands;
-use crate::menu::use_file_menu;
+use crate::menu::MenuScope;
 use crate::platform::{self, WindowKind};
 use crate::state::{
     use_share_config, write_config, AppCtx, ConfigChan, ConfigStation, ThemePreview, ThemeSel,
@@ -379,11 +379,19 @@ impl App for SettingsApp {
         // Join the live window registry, so a second ⌘, focuses this window rather than
         // opening another — and keep the registry's Settings pin true for this window's life,
         // handing focus back to its owner on the way out.
-        platform::use_register_window(self.app.windows, || WindowKind::Settings);
+        //
+        // The same call points the menubar here as a **panel**: none of the File or Window
+        // commands has a listener in this window, so every item that would reach it through
+        // the keyboard pipeline greys, Settings… included.
+        //
+        // Greying Settings… does not change what ⌘, does here, whichever way AppKit resolves a
+        // disabled item's key equivalent — **unverified, and deliberately not relied on**. If
+        // it skips the item the press falls through to this window's consuming listener below;
+        // if it claims it, the press stops at the menubar. Both end in "nothing happens", which
+        // is the right answer for a window that is already open, so the listener stays as the
+        // one that does *not* depend on the question.
+        platform::use_register_window(&self.app, || WindowKind::Settings, MenuScope::Panel);
         platform::use_settings_pin(self.app.clone());
-        // While this window is focused the File menu is *its* File menu: the recents, and no
-        // Close Project — there is no project here to close, exactly as on the launcher.
-        use_file_menu(&self.app, None);
 
         let config = self.app.config;
         let ctx = use_provide_context({

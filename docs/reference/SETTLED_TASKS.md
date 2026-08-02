@@ -166,5 +166,30 @@ by `ProjectApp`, above the subtree). And `WindowKind` now carries **less**: `Con
 and `Export`'s `owner` were the old pins' inputs, so once the pin read its owner from the launch
 value they were unread second copies of a fact that could go stale.
 
+**P6-02 (native menubar)** is ✅ — App · File · Edit · Window over muda, through the fork's `menu`
+feature (freya#782, ours to offer upstream). Three things it settled, two of them corrections.
+**The Edit menu is custom items, not muda's predefined set** — which overturns both this task's own
+plan and F8's: the predefined items send Cocoa first-responder selectors (`undo:` / `copy:` / …)
+that a Skia view never receives, so each item instead synthesizes its command's effective chord into
+the focused window's keyboard pipeline (`NativeEventExt::send_key_press`) and a menu click takes the
+identical path as a typed key. That is what dissolved F8 rather than answering it: with one Edit
+menu routing through the focused element there is no per-window divergence, so the muda-handler
+shims, the `global-hotkey` layer and the whole "menu follows the opener" design have no job. **What
+does vary is narrower**: which File and Window items the focused window can carry out
+(`MenuScope::Project(OpenCtx) | Launcher | Panel`, resolved into a **four-flag** `Gate` — `workspace`
+· `project` · `workbench` · `cyclable` — because where a command's listener lives differs per item
+and the differences do not nest: a project window whose load failed can close and open but has no
+workbench to put a tab in) — and Settings is a `Panel`, deliberately not "matched to its opener",
+because it has no listener for any of these commands. `Command::CycleWindow` was **built** here
+rather than left as the stub that would have made its menu item a lie. And **an app-global
+surface that follows the focused window must be pointed by every window**: Configure and Export
+shipped without the call, so the bar kept the owner project window's File menu and Close Project
+closed the focused *panel* while naming the project. `use_file_menu` now lives inside
+`use_register_window`, which every root must call and which takes a `MenuScope`, so forgetting is a
+build error rather than a wrong window closing. Scope and chord are one enabled state, written by
+one `apply`. Known limitation, recorded in the task file: muda's predefined items own their own
+accelerators (⌘H, ⌥⌘H, ⌘M) and `set_accelerator` is `MenuItem`'s alone, so those three chords are
+reserved and `suspend_accelerators` cannot reach them.
+
 ---
 

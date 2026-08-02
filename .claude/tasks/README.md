@@ -60,7 +60,7 @@ Read this index first, then open only the phase/workstream file you're working i
 | 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · bottom drawer | ✅ **done** — shell · header · catalog sidebar (re-scan · validity · drop confirm · row menus · failure messages) · column inspector + profiling + cost confirm · the whole drawer (Problems · Events · History) → `phase-3-catalog-inspector-drawer/` |
 | 4 · Multi-window | launcher · settings · export · config modal · native close · **write resiliency** | 🟡 **spine (incl. the load-fault close) + launcher + open path + session persistence + the whole Settings window + export + configure done**; New-Project UI (P4-13), layout persistence (P4-14) and **P4-15 (`.strata` write resiliency)** remain → `phase-4-multi-window/` |
 | 5 · Design polish | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | ⬜ ongoing → `phase-5-design-polish/` |
-| 6 · Platform + parity | keymap/hotkeys · command palette · native menu · then delete Dioxus | 🟡 **P6-01 (⌘K palette + its command registry) done**; native menu + the parity sweep remain → `phase-6-platform-parity/` |
+| 6 · Platform + parity | keymap/hotkeys · command palette · native menu · then delete Dioxus | 🟡 **P6-01 (⌘K palette + its command registry) and P6-02 (the App/File/Edit/Window menubar) done**; the platform seam + the parity sweep remain → `phase-6-platform-parity/` |
 
 ## Cross-cutting workstreams (not in a single phase)
 

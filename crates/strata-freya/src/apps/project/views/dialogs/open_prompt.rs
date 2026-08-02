@@ -238,6 +238,8 @@ mod interaction {
                     // A healthy window: the faulted-reload arm never fires here, and the
                     // generation is a fresh counter nothing remounts on.
                     faulted: State::create(false),
+                    // …and one whose subtree is up, which is what the prompt is asked from.
+                    loaded: State::create(true),
                     restart: EngineRestart(State::create(0)),
                 });
                 // The app-globals the actions are handed. Fresh per test, so nothing here

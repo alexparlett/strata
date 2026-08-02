@@ -34,6 +34,7 @@ use strata_core::project::STRATA_DIR;
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::launcher::LauncherApp;
 use crate::apps::project::{window_geometry, ProjectApp};
+use crate::menu::{use_file_menu, MenuScope};
 use crate::state::{write_config, AppCtx, ConfigChan, ConfigStation};
 
 /// What a window is showing. The project variant carries its folder (the
@@ -99,7 +100,37 @@ impl Windows {
     /// it would let the last project close onto an empty app: "not the last window" would be
     /// true right up to the moment both went.
     pub fn is_last(&self) -> bool {
-        self.by_id.values().filter(|k| k.is_workspace()).count() <= 1
+        self.workspace_count() <= 1
+    }
+
+    /// How many windows the user *works* in are open. The panels are excluded for the same
+    /// reason [`is_last`](Self::is_last) excludes them: each is a panel over one of these, so
+    /// it is never somewhere to be sent and never the app's last window.
+    pub fn workspace_count(&self) -> usize {
+        self.by_id.values().filter(|k| k.is_workspace()).count()
+    }
+
+    /// The workspace window after `current`, wrapping — what `Command::CycleWindow` moves
+    /// focus to. `None` when `current` is the only one, which is the command declining rather
+    /// than a failure: there is nowhere to go, so the press falls through.
+    ///
+    /// Ordered by [`WindowId`], which is arbitrary but **stable** for a window's life — so
+    /// cycling walks the same ring every time rather than reshuffling on each press, which a
+    /// `HashMap`'s iteration order would do. It is deliberately not open-order: nothing records
+    /// that, and inventing a second index to hold it would be a register to keep in step with
+    /// this one for a tie-break nobody can perceive.
+    pub fn cycle_from(&self, current: WindowId) -> Option<WindowId> {
+        let mut ring: Vec<WindowId> = self
+            .by_id
+            .iter()
+            .filter(|(_, kind)| kind.is_workspace())
+            .map(|(id, _)| *id)
+            .collect();
+        ring.sort_unstable();
+        let here = ring.iter().position(|id| *id == current)?;
+        ring.get((here + 1) % ring.len())
+            .copied()
+            .filter(|id| *id != current)
     }
 
     /// The window showing the project rooted at `path`, if one is open.
@@ -185,8 +216,15 @@ pub fn is_quitting() -> bool {
     QUITTING.load(Ordering::Relaxed)
 }
 
-/// Keep this window in the registry for as long as it lives, under whatever `kind` reports.
-/// Call once in a window root.
+/// Declare this window to the app for as long as it lives: the registry, under whatever `kind`
+/// reports, and the **menubar**, under `menu`. Call once in a window root.
+///
+/// The two are one call because they are one obligation — "say what this window is" — and
+/// because the menubar half is easy to forget and expensive to get wrong. Configure and Export
+/// were both added without it, which left the app-global menubar pointed at the project window
+/// underneath: File ▸ Close Project (and its ⇧⌘W) then closed the focused *panel* while naming
+/// the project, and Open… sat there enabled with no listener to reach. Requiring a
+/// [`MenuScope`] here means a new kind of window cannot ship without answering the question.
 ///
 /// A window learns its own id from the renderer (there is no context that carries it), so
 /// the first insert lands a beat after mount; the task is scope-bound, so a window that dies
@@ -196,8 +234,20 @@ pub fn is_quitting() -> bool {
 /// another project in place ([`OpenCtx::reroot`](crate::platform::OpenCtx::reroot)), and an
 /// entry left naming the old project would answer both of the registry's questions wrongly —
 /// opening the old one would focus a window that no longer shows it, and opening the new one
-/// would spawn a second window onto a project this one already has.
-pub fn use_register_window(mut windows: WindowRegistry, kind: impl Fn() -> WindowKind + 'static) {
+/// would spawn a second window onto a project this one already has. The `MenuScope` is *not*
+/// reactive for the same reason it doesn't need to be: a re-root swaps which project an
+/// `OpenCtx` points at, never whether there is one.
+/// Returns this window's id once the renderer has answered — `None` until then. Handed back
+/// rather than kept private because a window that must name *itself* among the others has no
+/// other way to: `Command::CycleWindow` asks [`Windows::cycle_from`] for the window after this
+/// one, and "this one" is exactly the value this hook already waits for.
+pub fn use_register_window(
+    app: &AppCtx,
+    kind: impl Fn() -> WindowKind + 'static,
+    menu: MenuScope,
+) -> State<Option<WindowId>> {
+    use_file_menu(app, menu);
+    let mut windows = app.windows;
     let mut id = use_state(|| None::<WindowId>);
     use_hook(move || {
         let platform = Platform::get();
@@ -211,6 +261,16 @@ pub fn use_register_window(mut windows: WindowRegistry, kind: impl Fn() -> Windo
         // Called before the early return so the effect subscribes to what `kind` reads even
         // on the passes where the id hasn't landed yet.
         let kind = kind();
+        // The workspace/panel split is one fact this call states twice — once for the registry,
+        // once for the menubar — and the two must not drift. Asserted here because this is the
+        // only place both answers exist; a window kind added as a panel that passes
+        // `MenuScope::Launcher` would otherwise enable Open… and Close Project against a window
+        // with no listener for either, which is silent at runtime and loud here.
+        debug_assert_eq!(
+            kind.is_workspace(),
+            menu.is_workspace(),
+            "window kind and menu scope disagree about {kind:?}"
+        );
         let Some(window_id) = *id.read() else {
             return;
         };
@@ -223,6 +283,7 @@ pub fn use_register_window(mut windows: WindowRegistry, kind: impl Fn() -> Windo
             windows.write().by_id.remove(&window_id);
         }
     });
+    id
 }
 
 /// Record a window we just opened, without waiting for it to render.
@@ -392,8 +453,55 @@ pub fn quit_windows(ctx: &mut RendererContext) {
 
 #[cfg(test)]
 mod tests {
-    use super::project_folder;
+    use super::{project_folder, WindowKind, Windows};
+    use freya::winit::window::WindowId;
     use std::path::{Path, PathBuf};
+
+    /// A registry holding the given kinds, under ids that sort in the order written — so a
+    /// test can say what the cycling ring should be and read it back. `WindowId: From<u64>` is
+    /// winit's own escape hatch for exactly this; the ids are otherwise opaque.
+    fn registry(kinds: [WindowKind; 4]) -> Windows {
+        let mut windows = Windows::default();
+        for (n, kind) in kinds.into_iter().enumerate() {
+            windows.by_id.insert(id(n as u64), kind);
+        }
+        windows
+    }
+
+    fn id(n: u64) -> WindowId {
+        WindowId::from(n)
+    }
+
+    #[test]
+    fn cycling_walks_the_workspace_windows_and_skips_the_panels() {
+        let windows = registry([
+            WindowKind::Project("/a".into()),
+            WindowKind::Settings,
+            WindowKind::Project("/b".into()),
+            WindowKind::Export,
+        ]);
+        // Settings and Export are panels over a project window, never somewhere to be sent.
+        assert_eq!(windows.workspace_count(), 2);
+        // …so the ring is the two project windows, and it wraps.
+        assert_eq!(windows.cycle_from(id(0)), Some(id(2)));
+        assert_eq!(windows.cycle_from(id(2)), Some(id(0)));
+    }
+
+    #[test]
+    fn cycling_declines_when_there_is_nowhere_to_go() {
+        let lone = registry([
+            WindowKind::Project("/a".into()),
+            WindowKind::Settings,
+            WindowKind::Export,
+            WindowKind::Export,
+        ]);
+        // One workspace window and three panels: the command declines rather than focusing
+        // this window again, which is what greys Window ▸ Cycle Windows.
+        assert_eq!(lone.cycle_from(id(0)), None);
+        // A window not in the registry — the beat after mount, before its id lands — names
+        // nothing in the ring, so there is no "next" to guess at.
+        assert_eq!(lone.cycle_from(id(9)), None);
+    }
 
     #[test]
     fn picking_the_strata_dir_opens_its_project() {

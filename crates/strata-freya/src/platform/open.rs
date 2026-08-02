@@ -69,6 +69,16 @@ pub struct OpenCtx {
     /// naming this window's own project is normally a no-op, but on a faulted window the
     /// user plainly means "load it again", so [`apply`](Self::apply) retries instead.
     pub faulted: State<bool>,
+    /// Whether the window's **project subtree is up** — set and cleared by the loaded arm
+    /// itself, the same mount/drop shape as [`faulted`](Self::faulted) above.
+    ///
+    /// Not the complement of `faulted`: the loading arm is neither, and the distinction is the
+    /// point. It exists because a handful of commands have their listeners *inside* the
+    /// subtree (New Query and Save Query, in the workbench) while the window-level ones —
+    /// Close Project, Open…, Settings… — are mounted in every arm. The menubar is built in the
+    /// window root, above the subtree, so without this it cannot tell the two apart and would
+    /// offer New Query on a window whose project failed to load (`menu::MenuScope`).
+    pub loaded: State<bool>,
     /// The window's engine generation, which is how a retry re-runs the load: the bump
     /// remounts the keyed project subtree — the same mechanism the fault dialog's own Try
     /// again uses.
