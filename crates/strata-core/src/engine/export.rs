@@ -13,6 +13,7 @@
 //! showing, so what lands on disk is what was on screen.
 
 use datafusion::arrow::array::Array;
+use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
 
@@ -226,7 +227,7 @@ pub async fn run_export(
     };
     let schema = table.schema().inner().clone();
 
-    let select = select_sql(&snap, &spec);
+    let select = select_sql(&snap, &spec, &schema, stats.ord.as_deref());
 
     // `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option:
     // DataFusion 54's COPY parser re-renders each one with `Ident::to_string()`, so a
@@ -274,25 +275,54 @@ pub async fn run_export(
     Ok((spec.path, copy_row_count(&batches)))
 }
 
-/// The `SELECT` the COPY wraps: the whole snapshot or one page window, in the grid's order.
+/// The `SELECT` the COPY wraps: the result's columns — **explicitly, never `*`** — over the
+/// whole snapshot or one page window, in the grid's order.
+///
+/// Explicit because the snapshot file carries the ordinal column
+/// (`docs/SNAPSHOT_SPEC.md` §9), and a `COPY` must not write bookkeeping into the user's
+/// file. The ordinal is what the read *orders by* instead: alone for an unsorted export, as
+/// the tie-break under a user sort — the same rule as `fetch_page`, which is what makes "the
+/// file matches what was on screen" true rather than hopeful (an unordered `LIMIT/OFFSET`
+/// over a split scan is nondeterministic, measured in §9).
 ///
 /// The sort goes **before** the window, so "this page" means the page the user is looking
 /// at rather than an arbitrary slice re-ordered afterwards. `NULLS LAST` in both directions
 /// matches the grid's own ordering (Rz6).
-fn select_sql(snap: &str, spec: &ExportSpec) -> String {
-    let mut sql = format!("SELECT * FROM {snap}");
+fn select_sql(snap: &str, spec: &ExportSpec, schema: &Schema, ord: Option<&str>) -> String {
+    let columns = schema
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .filter(|name| ord != Some(*name))
+        .map(quote_col)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut sql = format!("SELECT {columns} FROM {snap}");
+    let mut order = Vec::new();
     if let Some((name, asc)) = &spec.sort {
         let dir = if *asc { "ASC" } else { "DESC" };
-        sql.push_str(&format!(
-            " ORDER BY \"{}\" {dir} NULLS LAST",
-            quote_ident(name)
-        ));
+        order.push(format!("{} {dir} NULLS LAST", quote_col(name)));
+    }
+    if let Some(ord) = ord {
+        order.push(quote_col(ord));
+    }
+    if !order.is_empty() {
+        sql.push_str(&format!(" ORDER BY {}", order.join(", ")));
     }
     if let Scope::Page { page, page_size } = spec.scope {
         let offset = page.saturating_sub(1) * page_size;
         sql.push_str(&format!(" LIMIT {page_size} OFFSET {offset}"));
     }
     sql
+}
+
+/// A **result column name** rendered into SQL: double-quoted verbatim, embedded quotes
+/// doubled. Deliberately not the crate's `quote_ident`, which folds a bare word to
+/// lowercase — right for catalog names (that fold is their registered identity), wrong for
+/// a result column, whose name is exactly what the user's query produced. (Replaces the
+/// old local escape that the `ORDER BY` used; same rendering, one name.)
+fn quote_col(name: impl AsRef<str>) -> String {
+    format!("\"{}\"", name.as_ref().replace('"', "\"\""))
 }
 
 /// The ` OPTIONS (…)` clause for a format, or an empty string for one with no options.
@@ -358,11 +388,6 @@ fn ascii_byte(what: &str, c: char) -> Result<String, String> {
 /// inside `'…'`, so an embedded quote would otherwise close the literal early.
 fn quote_literal(raw: &str) -> String {
     raw.replace('\'', "''")
-}
-
-/// Escape a value for a double-quoted SQL identifier (the `ORDER BY` column).
-fn quote_ident(raw: &str) -> String {
-    raw.replace('"', "\"\"")
 }
 
 /// Refuse a partitioned export whose partition columns contain NULLs.
@@ -438,6 +463,8 @@ fn copy_row_count(batches: &[RecordBatch]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field};
+
     use super::*;
 
     fn spec(format: Format) -> ExportSpec {
@@ -464,9 +491,17 @@ mod tests {
 
     #[test]
     fn scope_all_reads_the_whole_snapshot_in_snapshot_order() {
+        // The snapshot file carries the ordinal; the SELECT names the user's columns
+        // explicitly and orders by the ordinal, so the file matches the grid without ever
+        // containing the bookkeeping.
         assert_eq!(
-            select_sql("__snap_1", &spec(Format::Arrow)),
-            "SELECT * FROM __snap_1"
+            select_sql(
+                "__snap_1",
+                &spec(Format::Arrow),
+                &result_schema(),
+                Some("__strata_ord")
+            ),
+            "SELECT \"amount\", \"name\" FROM __snap_1 ORDER BY \"__strata_ord\""
         );
     }
 
@@ -479,8 +514,9 @@ mod tests {
             page_size: 100,
         };
         assert_eq!(
-            select_sql("__snap_7", &s),
-            "SELECT * FROM __snap_7 ORDER BY \"amount\" DESC NULLS LAST LIMIT 100 OFFSET 200"
+            select_sql("__snap_7", &s, &result_schema(), Some("__strata_ord")),
+            "SELECT \"amount\", \"name\" FROM __snap_7 ORDER BY \"amount\" DESC NULLS LAST, \
+             \"__strata_ord\" LIMIT 100 OFFSET 200"
         );
     }
 
@@ -488,7 +524,18 @@ mod tests {
     fn a_quote_in_a_sorted_column_name_cant_break_out_of_the_identifier() {
         let mut s = spec(Format::Arrow);
         s.sort = Some((r#"we"ird"#.into(), true));
-        assert!(select_sql("__snap_1", &s).contains(r#"ORDER BY "we""ird" ASC"#));
+        assert!(select_sql("__snap_1", &s, &result_schema(), None)
+            .contains(r#"ORDER BY "we""ird" ASC"#));
+    }
+
+    /// The snapshot table's schema as `run_export` sees it: the user's columns plus the
+    /// ordinal (a `UInt64` — `row_number()`'s output type), which the SELECT must exclude.
+    fn result_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("amount", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("__strata_ord", DataType::UInt64, false),
+        ])
     }
 
     #[test]

@@ -26,6 +26,7 @@
 //! `crates/strata-dioxus`, which is reference code and no longer builds.)
 
 mod catalog;
+mod chart;
 pub mod config;
 mod explain;
 pub mod export;
@@ -93,7 +94,7 @@ use query::{
     claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
 };
 use sql::FunctionCatalog;
-use strata_model::{Cell, Diagnostic, QueryOutput, SnapshotId, TabId};
+use strata_model::{Cell, ChartData, ChartQuery, Diagnostic, QueryOutput, SnapshotId, TabId};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
 /// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
@@ -604,12 +605,69 @@ impl Engine {
     ) -> Result<(Vec<Vec<Cell>>, RecordBatch), String> {
         let ctx = self.ctx.clone();
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
+        // The snapshot's ordinal column (`docs/SNAPSHOT_SPEC.md` §9), from the same register
+        // `snapshot_live` reads — present for exactly the snapshots that are alive to read.
+        let ord = self.ordinal(snapshot);
         self.rt()
-            .spawn(
-                async move { query::fetch_page(&ctx, snapshot, page, page_size, sort, &fmt).await },
-            )
+            .spawn(async move {
+                query::fetch_page(&ctx, snapshot, page, page_size, sort, ord, &fmt).await
+            })
             .await
             .map_err(|e| format!("page task failed: {e}"))?
+    }
+
+    /// The name of `snapshot`'s ordinal column, if the write pass recorded one — `None` for
+    /// a retired snapshot (whose read fails anyway) and for a snapshot spooled without an
+    /// ordinal (an `EXPLAIN` result, or one with duplicate column names — see
+    /// `query::materialize`), which reads unordered exactly as it did before ordinals.
+    fn ordinal(&self, snapshot: SnapshotId) -> Option<String> {
+        self.lifecycle
+            .lock()
+            .unwrap()
+            .stats
+            .get(&snapshot)
+            .and_then(|s| s.ord.clone())
+    }
+
+    /// Read one immutable snapshot as a chart (Rz2, `docs/CHART_SPEC.md` §5) — the
+    /// renderer-first read `q` asks for: a projected, ordinal-ordered, capped read plus a
+    /// long→wide pivot (`Rows`), raw points (`Raw`), or the one computed mark
+    /// (`Histogram`). No aggregation, no bucketing, no imposed order — the withdrawn
+    /// pipeline's grouped reads must not come back here (AGENTS.md §2).
+    ///
+    /// Snapshot-scoped and side-effect free like [`fetch_page`](Engine::fetch_page). Cache
+    /// identity is `(snapshot, q)` **plus the engine's display config**: axis labels render
+    /// through the live `datafusion.format.*` overrides, which `set_config` changes without
+    /// a restart — so a UI cache keyed on `(snapshot, q)` alone serves stale labels after a
+    /// Settings change, and the chart surface must re-render (not merely re-key) when those
+    /// overrides move, exactly as the grid's pages do. Deliberately no lifecycle
+    /// bookkeeping and no confirm in front of it — a projected, capped read of a local
+    /// snapshot is `fetch_page`-tier work, not [`profile`](Engine::profile)'s tier.
+    ///
+    /// The chart never re-reads the source files: it charts the result the grid is paging,
+    /// which is what makes the two agree when the data underneath has since moved.
+    pub async fn chart(
+        self: &Arc<Self>,
+        snapshot: SnapshotId,
+        q: ChartQuery,
+    ) -> Result<ChartData, String> {
+        // A histogram is **two** reads — a range pass, then the binning one — so the call
+        // holds the snapshot open across them. Without the pin a re-run in the owning tab
+        // between the passes deregisters the table mid-call, and a histogram would answer
+        // with the first pass's real edges and the second pass's zero counts: a chart of
+        // nothing, indistinguishable from a genuine empty range. Same rule as `export`'s
+        // in-call pin (AGENTS.md §2) — and the same limit: the pin lives in this future,
+        // so it holds only while the caller keeps awaiting. A dropped caller drops the pin
+        // while the spawned read runs on detached; the read may then fail against a retired
+        // table, but its answer has no listener, so nothing wrong is ever delivered.
+        let _reading = self.pin_snapshot(snapshot);
+        let ctx = self.ctx.clone();
+        let fmt = CellFormat::new(&self.overrides.lock().unwrap());
+        let ord = self.ordinal(snapshot);
+        self.rt()
+            .spawn(async move { chart::run_chart(&ctx, snapshot, &q, &fmt, ord.as_deref()).await })
+            .await
+            .map_err(|e| format!("chart task failed: {e}"))?
     }
 
     /// Does `snapshot` still exist to be read?

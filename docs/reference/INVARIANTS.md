@@ -107,6 +107,47 @@ Things that must not regress. Each was fought for once already.
   snapshot's lifetime rather than in a footer or a sidecar. What remains of the old gate is
   `json_unions_as_text`, which is now **presentation, not storage**: `json_get`'s union renders as
   `{str=x}` and nobody typing `content -> 'type'` wants to read that.
+- **A chart renders the result in result order; it computes nothing SQL can say.** (Rz2 — the
+  renderer-first design, `docs/CHART_SPEC.md`; lands with the workstream re-cut.) `Engine::chart`
+  is a projected, ordinal-ordered, capped read of `__snap_{id}` plus a long→wide pivot: columns
+  map onto marks, multiple Y columns are multiple series, a series column pivots — and the pivot
+  is the only operation that can conflate rows, so it is the only thing that refuses on
+  duplicates (`ChartData::Duplicates`, CTA into the SQL scaffold). Over a cap it answers
+  `ChartData::OverCap`, which carries no data at all — a truncated chart is not a state that can
+  exist. The histogram's binning is the one engine computation (no `width_bucket` in DataFusion
+  54). What was **built and withdrawn** is the first design's engine-side aggregation pipeline —
+  `AggFn`/`Bucket`/`Stride`, auto-stride resolution, engine-imposed category order. Withdrawn on
+  two grounds, both evidenced: every hard defect of two adversarial reviews clustered in that
+  machinery (NaN comparator panics, `date_bin` overflow, cap arithmetic, bin-key collapse), and
+  its ordering fought the user's own `ORDER BY` — a `GROUP BY` has no output order, so
+  re-aggregating an already-shaped result destroys the order the user asked for, and the
+  measure-descending rule this entry used to state was a workaround for that self-inflicted loss.
+  Two measurements stay recorded because they motivate the ordinal (next entry): `min(row_number()
+  OVER ())` follows file order only below `repartition_file_min_size` (10 MB) — a 200k-row
+  snapshot perfect, a 3M-row one 2 975 424 of 3 000 000 rows out of order — and a chart that
+  re-aggregates cannot preserve order even over an ordered read. Do not resurrect either idea
+  without new evidence.
+- **A snapshot read has no order of its own; order is the ordinal column.** (`SNAPSHOT_SPEC.md`
+  §9; lands with the workstream re-cut.) Above 10 MB an Arrow File scan range-splits and a bare
+  `LIMIT/OFFSET` read sits over a `CoalescePartitionsExec` — measured: at 3M rows the *same page
+  re-read returns different rows* (page 1 arrived starting at row 1 843 201 on one read and 101
+  on the next), and a 200k-row snapshot with a text column pages stably but starting at row
+  57 345, so `fetch_page`'s pages disagree with the spooled page 1 — rows duplicated and missing
+  as the user pages, and the page cache freezes whichever answer a read happened to get. The fix
+  is written order: `materialize` adds `row_number() OVER ()` to the spool query itself (the
+  column is a **UInt64, 1-based** — nothing reads its values, only their order), aliased to
+  `__strata_ord` after `QueryOutput::columns` is captured, name-escalated on collision and
+  recorded in `SnapshotStats.ord: Option<String>`. Two plans spool **without** one, `None`, and
+  read unordered as at base: an `EXPLAIN`/`EXPLAIN ANALYZE` (DataFusion requires those at the
+  plan root, so the window would fail a statement the DDL policy promises to run) and a result
+  with duplicate column names (name-keyed reads would mis-map a duplicate onto the ordinal's
+  slot). The registration **declares** the file's order (`with_file_sort_order`), so an ordered
+  read plans as a stream, not a sort — measured: a page at offset 2.9M of a 3M-row snapshot is
+  543 ms as an undeclared TopK holding every candidate row, 97 ms declared, with shallow pages
+  planning as scan-level limit pushdown and exports streaming into their `COPY`. Unsorted reads
+  `ORDER BY` it; user sorts append it as the tie-break (stable across page windows); **every**
+  reader projects it away, and export selects explicit columns so a `COPY` never writes
+  bookkeeping into the user's file.
 - **A view of a value is bounded where the value is *encoded*, never afterwards — and it expands
   breadth-first.** The record view opened on a `config.json` row (19 struct columns, 241,425 nested
   fields) froze the window for a second or two, and the freeze was the **materialization**, not the

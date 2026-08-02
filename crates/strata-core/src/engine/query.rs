@@ -17,7 +17,7 @@
 //! here is the *filesystem* side of it: the per-engine directory, the lock that marks it
 //! live, and the startup sweep of everything no live engine still holds.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::fs::{File, TryLockError};
@@ -28,14 +28,16 @@ use std::time::Instant;
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::compute::concat_batches;
-use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use datafusion::arrow::ipc::CompressionType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::common::Column;
-use datafusion::execution::options::ArrowReadOptions;
+use datafusion::execution::options::{ArrowReadOptions, ReadOptions};
+use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::expr::ScalarFunction;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use datafusion_functions_json::udfs::json_union_to_text_udf;
 use datafusion_functions_json::JSON_UNION_DATA_TYPE;
@@ -326,6 +328,20 @@ fn snapshot_ipc_options() -> Result<IpcWriteOptions, String> {
         .map_err(|e| e.to_string())
 }
 
+/// The name the snapshot's ordinal column gets: `__strata_ord`, prefix-escalated until it
+/// collides with nothing in the result. Result column names come out of the user's own
+/// query and can be anything, including this one.
+fn ordinal_name(schema: &Schema) -> String {
+    let mut name = String::from(ORDINAL_BASE);
+    while schema.fields().iter().any(|f| f.name() == &name) {
+        name.insert(0, '_');
+    }
+    name
+}
+
+/// The unescalated ordinal column name (`docs/SNAPSHOT_SPEC.md` §9).
+const ORDINAL_BASE: &str = "__strata_ord";
+
 /// Run the query **once**, streaming every batch straight to a fresh IPC snapshot
 /// on disk while counting the exact total and capturing the first page — no separate
 /// `COUNT`, no re-read, bounded memory. On failure the partial snapshot is cleaned up
@@ -365,6 +381,13 @@ pub async fn run_and_snapshot(
 pub struct SnapshotStats {
     /// Exact null count per column, in `QueryOutput::columns` order.
     pub nulls: Vec<u64>,
+    /// The name of this snapshot's **ordinal column** (`docs/SNAPSHOT_SPEC.md` §9) — the
+    /// written result order every ordered read sorts by and every reader projects away.
+    /// Usually `__strata_ord`; escalated by prefix when the result itself has a column of
+    /// that name. `None` means the file genuinely has no ordinal — an `EXPLAIN` result or
+    /// one with duplicate column names (see `materialize`) — and readers then read
+    /// unordered, exactly as every snapshot did before ordinals existed.
+    pub ord: Option<String>,
 }
 
 /// Render a `json_get` result as its canonical JSON text.
@@ -444,7 +467,50 @@ async fn materialize(
     // Arrow schema of the result — captured before the DataFrame is consumed by the stream,
     // for concatenating page 1 into its `RecordBatch`.
     let arrow_schema = df.schema().inner().clone();
+
+    // The ordinal column (`docs/SNAPSHOT_SPEC.md` §9) rides the spool **query itself**:
+    // `row_number() OVER ()` numbers the exact single stream the writer consumes. Measured
+    // twice before trusting it: the numbering is contiguous on the racy over-threshold plan
+    // shape (and a user's ORDER BY survives beneath the window), and the window costs the
+    // spool nothing — the plan keeps its RepartitionExec, so the expensive projection still
+    // parallelises and only the numbering rides the merged stream. `tests/snapshot_order.rs`
+    // re-measures the ordering property on every run, which is the standing guard should a
+    // planner upgrade ever change window semantics. Added *after* `columns` and
+    // `arrow_schema` were captured, so the user-visible schema never contains it — the file
+    // does, and every reader orders by it and projects it away. (`with_column` would replace
+    // a user column of the same name, but `ordinal_name` escalated around every name in this
+    // result, so the replace branch is unreachable.)
+    //
+    // Two plans cannot carry it, and both spool **without** one (`ord: None`) — the
+    // pre-ordinal read behavior, which every reader handles:
+    // - An `EXPLAIN` / `EXPLAIN ANALYZE`. DataFusion requires those at the plan root, so a
+    //   window on top fails the whole run with "Explain must be root of the plan" — and the
+    //   managed-DDL policy promises the editor can run them. Their output is a handful of
+    //   plan rows, nowhere near the scan-split threshold where order goes nondeterministic.
+    // - A result with duplicate column names (`SELECT a.i, b.i FROM … JOIN …`). The
+    //   registered table resolves columns by name, so a typed column appended after two
+    //   same-named ones makes every later read mis-map the second onto the ordinal's slot
+    //   and fail with an Arrow error. Ordinal-less, such a result reads exactly as it did
+    //   at base: degraded by the duplicate, but readable.
+    let plain = !matches!(
+        df.logical_plan(),
+        LogicalPlan::Explain(_) | LogicalPlan::Analyze(_)
+    );
+    let unique = {
+        let mut seen = HashSet::new();
+        columns.iter().all(|c| seen.insert(c.name.as_str()))
+    };
+    let ord = (plain && unique).then(|| ordinal_name(&arrow_schema));
+    let df = match &ord {
+        Some(ord) => df
+            .with_column(ord.as_str(), row_number())
+            .map_err(|e| e.to_string())?,
+        None => df,
+    };
     let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
+    // The window appends its column last, so the user's columns are exactly the captured
+    // schema's width — everything user-facing below reads this projection of each batch.
+    let user_columns: Vec<usize> = (0..arrow_schema.fields().len()).collect();
 
     let mut writer: Option<FileWriter<File>> = None;
     let mut total = 0usize;
@@ -453,7 +519,6 @@ async fn materialize(
     let mut page1_batches: Vec<RecordBatch> = Vec::new();
     while let Some(batch) = stream.next().await {
         let batch = batch.map_err(|e| e.to_string())?;
-        total += batch.num_rows();
         if writer.is_none() {
             let out = File::create(&file).map_err(|e| e.to_string())?;
             writer = Some(
@@ -464,10 +529,12 @@ async fn materialize(
         if let Some(w) = writer.as_mut() {
             w.write(&batch).map_err(|e| e.to_string())?;
         }
-        for (i, col) in batch.columns().iter().enumerate() {
+        let user = batch.project(&user_columns).map_err(|e| e.to_string())?;
+        total += user.num_rows();
+        for (i, col) in user.columns().iter().enumerate() {
             nulls[i] += col.null_count() as u64;
         }
-        append_batch_capped(&batch, &mut page1, &mut page1_batches, page_size, fmt)?;
+        append_batch_capped(&user, &mut page1, &mut page1_batches, page_size, fmt)?;
     }
 
     // Only register a snapshot if the query produced rows; an empty result has
@@ -475,7 +542,25 @@ async fn materialize(
     let materialized = writer.is_some();
     if let Some(mut w) = writer {
         w.finish().map_err(|e| e.to_string())?;
-        ctx.register_arrow(snap.as_str(), file.as_str(), ArrowReadOptions::default())
+        // The same listing registration `register_arrow` performs, with one addition: the
+        // file's own write order is **declared** (`with_file_sort_order` on the ordinal),
+        // so an ordered read plans as a stream instead of a sort. Measured on a 3M-row /
+        // 157 MB snapshot: a page at offset 2.9M is 543 ms as a TopK over an undeclared
+        // scan — holding every candidate row in memory with no spill — and 97 ms with the
+        // order declared, where a shallow page plans as scan-level limit pushdown with the
+        // sort gone entirely, and an export streams into its COPY instead of buffering the
+        // result first. The declaration is a promise about the file, and it is exactly the
+        // property `materialize` constructs and `tests/snapshot_order.rs` pins.
+        let listing = ArrowReadOptions::default()
+            .to_listing_options(&ctx.copied_config(), ctx.copied_table_options());
+        let listing = match &ord {
+            Some(ord) => listing
+                .with_file_sort_order(vec![vec![
+                    col(Column::from_name(ord.clone())).sort(true, false)
+                ]]),
+            None => listing,
+        };
+        ctx.register_listing_table(snap.as_str(), file.as_str(), listing, None, None)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -492,7 +577,7 @@ async fn materialize(
             elapsed_ms: start.elapsed().as_millis(),
         },
         page1_batch,
-        SnapshotStats { nulls },
+        SnapshotStats { nulls, ord },
     ))
 }
 
@@ -516,8 +601,10 @@ impl CellFormat {
         }
     }
 
-    /// An arrow [`FormatOptions`] borrowing this config's date/timestamp patterns.
-    fn opts(&self) -> FormatOptions<'_> {
+    /// An arrow [`FormatOptions`] borrowing this config's date/timestamp patterns. Reachable
+    /// from the sibling modules so a surface that renders the same values — the chart's axis
+    /// labels ([`super::chart`]) — renders them the way the grid does.
+    pub(super) fn opts(&self) -> FormatOptions<'_> {
         let mut o = FormatOptions::default();
         if !self.date.is_empty() {
             o = o.with_date_format(Some(&self.date));
@@ -573,6 +660,7 @@ pub async fn fetch_page(
     page: usize,
     page_size: usize,
     sort: Option<(String, bool)>,
+    ord: Option<String>,
     fmt: &CellFormat,
 ) -> Result<Page, String> {
     let snap = snapshot_name(snapshot);
@@ -581,7 +669,7 @@ pub async fn fetch_page(
     // multiply — a panic in debug, and in release a wrap to some arbitrary small offset that
     // returns real rows under the page number the caller asked for.
     let offset = page.saturating_sub(1).saturating_mul(page_size);
-    read_page(ctx, &snap, offset, page_size, sort, fmt).await
+    read_page(ctx, &snap, offset, page_size, sort, ord, fmt).await
 }
 
 async fn read_page(
@@ -590,24 +678,38 @@ async fn read_page(
     offset: usize,
     limit: usize,
     sort: Option<(String, bool)>,
+    ord: Option<String>,
     fmt: &CellFormat,
 ) -> Result<Page, String> {
     let mut df = ctx.table(snap).await.map_err(|e| e.to_string())?;
-    // Arrow schema of the page (sort/limit preserve it) — for concatenating the page batch.
-    let schema = df.schema().inner().clone();
+    // Every read is ordered (`docs/SNAPSHOT_SPEC.md` §9): a bare `LIMIT/OFFSET` over the
+    // registered table has no order of its own, and above the scan-split threshold the same
+    // page re-read returned *different rows* — measured, and frozen into the page cache. An
+    // unsorted read orders by the ordinal entire; a user sort takes it as the tie-break, so
+    // a sort with duplicate keys is stable across page windows too. `Column::from_name`
+    // avoids identifier parsing on odd column names; `nulls_first = false` ⇒ nulls always
+    // sort last, both directions (Rz6).
+    let mut order = Vec::new();
     if let Some((name, asc)) = sort {
-        // ORDER BY the chosen column over the whole snapshot, then take the page window.
-        // `Column::from_name` avoids identifier parsing on odd column names; `nulls_first =
-        // false` ⇒ nulls always sort last, both directions (Rz6).
-        let expr = col(Column::from_name(name)).sort(asc, false);
-        df = df.sort(vec![expr]).map_err(|e| e.to_string())?;
+        order.push(col(Column::from_name(name)).sort(asc, false));
     }
-    let batches = df
-        .limit(offset, Some(limit))
-        .map_err(|e| e.to_string())?
-        .collect()
-        .await
-        .map_err(|e| e.to_string())?;
+    if let Some(ord) = &ord {
+        order.push(col(Column::from_name(ord.clone())).sort(true, false));
+    }
+    if !order.is_empty() {
+        df = df.sort(order).map_err(|e| e.to_string())?;
+    }
+    let mut df = df.limit(offset, Some(limit)).map_err(|e| e.to_string())?;
+    // The ordinal is bookkeeping, not a result column — no page batch, cell row, or schema
+    // ever carries it.
+    if let Some(ord) = &ord {
+        df = df
+            .drop_columns(&[ord.as_str()])
+            .map_err(|e| e.to_string())?;
+    }
+    // Arrow schema of the page, captured after the projection so it matches the batches.
+    let schema = df.schema().inner().clone();
+    let batches = df.collect().await.map_err(|e| e.to_string())?;
     let batch = concat_batches(&schema, &batches).map_err(|e| e.to_string())?;
     let rows = batches_to_rows(&batches, fmt)?;
     Ok((rows, batch))

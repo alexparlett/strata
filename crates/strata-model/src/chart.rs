@@ -1,0 +1,128 @@
+//! Chart vocabulary: the **request** a chart makes of a snapshot ([`ChartQuery`]) and the
+//! chart-ready **answer** it gets back ([`ChartData`]). Produced by
+//! `strata_core::engine::Engine::chart`, consumed by the results Chart surface
+//! (`docs/CHART_SPEC.md` §5).
+//!
+//! **Renderer-first** (spec §1.2): the chart computes nothing SQL can say. A request names
+//! columns and a cap — never an aggregate, a bucket, or an order — and the answer is the
+//! result's own rows reshaped for marks: in result order, pivoted long→wide when a series
+//! column splits them, capped and refused rather than truncated. The engine-side aggregation
+//! vocabulary that used to live here (`AggFn`, `Measure`, `Bucket`, `Stride`, `Width`) was
+//! built, reviewed and withdrawn — `docs/reference/INVARIANTS.md` (the chart entry) has the
+//! history; do not reintroduce it.
+//!
+//! [`ChartQuery`] is freya-query **cache identity**, which is why every field is hashable
+//! and comparable — column names and caps, no floats. [`ChartData`] carries no "was it
+//! capped" flag beside a half-filled payload: a refusal is [`ChartData::OverCap`] or
+//! [`ChartData::Duplicates`], with nothing to draw, because "honest boundaries" (spec §1.4)
+//! means there is no such thing as a truncated chart to render.
+
+/// One read of a snapshot, shaped for a chart. Resolved from the chart config + the result
+/// schema, and carrying no UI types — this is what the engine answers and what the
+/// freya-query entry is keyed by.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum ChartQuery {
+    /// The renderer-first read behind bar / line / area / pie: the referenced columns, in
+    /// result order, up to `cap + 1` rows.
+    Rows {
+        /// The category axis. `None` charts against the row index.
+        x: Option<String>,
+        /// The value columns — **each is its own series**, named by column, so
+        /// `SELECT month, revenue, cost …` is two lines with no configuration. Must not be
+        /// empty.
+        ys: Vec<String>,
+        /// Splits rows into one series per distinct value (the long→wide pivot). Requires
+        /// `x`; combined with several `ys`, series are named `value: column`.
+        series: Option<String>,
+        /// How many result rows the chart will draw before it refuses. Not a truncation
+        /// point: over it, nothing is drawn (spec §7).
+        cap: usize,
+    },
+    /// Raw points (scatter).
+    Raw { x: String, y: String, cap: usize },
+    /// Uniform-width bins over one numeric column, counted engine-side — the one mark that
+    /// computes (spec §1.2: DataFusion has no `width_bucket`, and a raw column cannot be
+    /// binned without a min/max pass). `bins` of `None` lets the engine pick from the row
+    /// count.
+    Histogram { col: String, bins: Option<usize> },
+}
+
+/// The category axis of a [`ChartData::Table`]: what each position is labelled, and — when
+/// X has an order of its own — where it truly sits.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Axis {
+    /// One label per category, in draw order (= result order), rendered through the
+    /// engine's display config so a value reads the way it reads in the grid. A NULL X is
+    /// `(null)` — a **label, not a key**: a NULL and a literal `"(null)"` string are two
+    /// categories.
+    pub labels: Vec<String>,
+    /// `Some` when X is numeric or temporal (epoch milliseconds; clock times in their own
+    /// ticks): one entry per category, so a line or scatter renderer can place marks truly
+    /// rather than equally spaced. `None` for a categorical X, and per-entry `None` for a
+    /// NULL, which has no position.
+    pub positions: Option<Vec<Option<f64>>>,
+}
+
+/// One drawn series: a legend entry and its value at every category.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChartSeries {
+    /// How this series reads in a legend: the Y column's name, the distinct series value,
+    /// or `value: column` when both split.
+    ///
+    /// A **label, not a key**. Two series can carry the same name for the same reason two
+    /// categories can — a NULL and a literal `(null)` render alike — so a consumer
+    /// addresses a series by position, never by this string.
+    pub name: String,
+    /// One value per entry of [`Axis::labels`], in that order. `None` is **no value in
+    /// that cell** — a NULL Y, or a (category, series) pair the data never contained. A
+    /// renderer draws it as a gap and never interpolates across it.
+    pub values: Vec<Option<f64>>,
+}
+
+/// One raw point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChartPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// One histogram bin: the half-open interval `[lo, hi)` and how many rows fell in it. The
+/// last bin of a set is closed at `hi`, so the maximum value has somewhere to land.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChartBin {
+    pub lo: f64,
+    pub hi: f64,
+    pub count: u64,
+}
+
+/// What a refusal counted (spec §7) — the noun its message names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CapUnit {
+    /// Result rows, for the [`ChartQuery::Rows`] read.
+    Rows,
+    /// Raw points, for scatter.
+    Points,
+}
+
+/// A chart-ready read of one snapshot.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ChartData {
+    /// The rows, reshaped for marks: the axis in result order, and every
+    /// [`ChartSeries::values`] exactly as long as it.
+    Table {
+        axis: Axis,
+        series: Vec<ChartSeries>,
+    },
+    /// Raw points. **In no particular order** — a scatter draws marks, not a sequence;
+    /// anything that needs one must sort for itself.
+    Points(Vec<ChartPoint>),
+    /// Histogram bins, ascending and contiguous.
+    Bins(Vec<ChartBin>),
+    /// Refused: the read would have exceeded `cap` of `unit`. Carries no data at all —
+    /// the chart is not drawn (spec §1.4, §7), and the surface offers the SQL scaffold.
+    OverCap { unit: CapUnit, cap: usize },
+    /// Refused: the long→wide pivot found two rows in one (X, series) cell. Aggregating
+    /// them is SQL's job, not the chart's (spec §1.2) — the surface offers the scaffold.
+    /// Carries the encoding's column names so the message can say which.
+    Duplicates { x: String, series: String },
+}

@@ -1,57 +1,62 @@
-# Chart 01 · `Engine::chart` + chart vocabulary `[core]`
+# Chart 01 · `Engine::chart` renderer-first read + vocabulary `[core]`
 
-**Workstream:** Chart (Rz2) · **Status:** ⬜ · **Depends on:** nothing open (P2-01 snapshots ✅)
+**Workstream:** Chart (Rz2) · **Status:** ✅ · **Depends on:** 00 (the ordinal)
 
 ## Goal
-The data half of the chart, engine-side: a `ChartQuery` → `ChartData` vocabulary in `strata-model`
-and an `Engine::chart(snapshot, query)` that runs the grouped / binned / raw read **in DataFusion
-over the snapshot table** and returns a chart-ready model. Spec: `docs/CHART_SPEC.md` §5.
+The data half of the chart, renderer-first: a `ChartQuery` → `ChartData` vocabulary in
+`strata-model` and an `Engine::chart(snapshot, query)` that **reads** — projected columns, ordinal
+order, `LIMIT cap + 1` — and pivots long→wide in Rust. No aggregation, no bucketing, no imposed
+order. Spec: `docs/CHART_SPEC.md` §4–§5.
 
 ## Current state
-Not built. The mechanism it rides is: every snapshot is registered as `__snap_{id}`
-(`engine/query.rs` — `snapshot_name`, `register_arrow`); `read_page` (`engine/query.rs`,
-`ctx.table` → DataFrame ops) and export's `select_sql` (`engine/export.rs`, SQL over the snapshot)
-are the two precedents for reading it. Prefer the DataFrame shape.
+Done — the re-cut landed. The withdrawn first design (an engine-side aggregation pipeline:
+`AggFn`/`Measure`/`Bucket`/`Stride`/`Width`, auto-stride, axis builders, measure-descending
+order) was built, adversarially reviewed twice, and replaced wholesale by the renderer-first
+read; the why lives in `docs/reference/INVARIANTS.md` (the chart entry) and
+`docs/CHART_SPEC.md` §1.2. `engine/chart.rs` went from ~2 200 lines to ~600 plus tests: a
+projection (`sort(ordinal)` + `limit(cap+1)` plans as a TopK, so memory is O(cap) however
+large the snapshot), the pivot keyed on `ScalarValue` pairs with an occupancy check answering
+`Duplicates`, `Axis.positions` for numeric/temporal/clock X, and the salvage list below.
+Tests: 21 unit cases in `engine::chart`, 6 facade cases in `tests/engine_chart.rs` (the lead
+one: a result the user `ORDER BY`ed draws in exactly that order, and the grid agrees).
 
 ## Build
-- **strata-model** (`chart.rs`): `ChartQuery` —
-  `Aggregate { x, series, measures: Vec<Measure>, bucket: Option<Bucket>, group_cap }` where
-  `Measure { y, agg_fn }` and `Bucket` is a time stride for temporal X or a uniform width for
-  numeric X; `Raw { x, y, cap }`, `Histogram { col, bins }`. The measure slot is **plural** even
-  though 02–04 only ever send one: `ChartData`'s pivot returns N series regardless, and 05's
-  presets (box plot, candlestick) are *additional measures on the same group*, not new shapes
-  (`CHART_FUNCTIONS.md` §2) — a single-`y` field is the hardcoded subset the bar forbids. The
-  window / derived-stat slots are **not** scaffolded here; they extend the struct additively when
-  05 picks them up (AGENTS.md §5). `ChartData` — categories + per-series `Vec<Option<f64>>`
-  (pivoted wide in the engine; a series comes from the series column, the measure list, or both),
-  or points, or bins, plus `group_count` / `capped`. Hash/Eq throughout — `ChartQuery` is
-  freya-query cache identity (02), so no floats in the request. `AggFn`:
-  `sum | avg | min | max | count | median | count-distinct` (all DF 54 built-ins; the live
-  registry is the truth, check nothing by name-list).
-- **Engine::chart** in `strata-core`:
-  - Temporal X → `date_bin(stride, x, epoch)` as the group expr; numeric X on bar/line/area is
-    first-class too — grouped by value, or binned `floor(x / w) * w` when a width is set
-    (spec §3, §5). Bucket resolution (auto from the column's span per spec §5, or the query's
-    override) happens **before** the query is built, so the request stays concrete and cacheable.
-  - Categorical X order = snapshot order via `min(row_number() OVER ())` per group; temporal and
-    numeric X order by value ascending.
-    **Verify with a test** that row_number over the registered IPC table follows file order; if it
-    does not, fall back to measure-descending and record that in the spec.
-  - NULL X / series is its own `(null)` group; missing (category, series) cells are `None`.
-  - Caps detected with `LIMIT cap + 1` — over-cap is a reported fact, never a truncated chart.
-  - Histogram: min/max pass then uniform bins (`min(24, max(6, ceil(sqrt(n))))`), engine-side.
-- Unit tests in `strata-core` over fixture batches (the sanctioned arrow dev-dep): each agg fn,
-  date_bin bucketing + gap (missing bucket absent, not zero), numeric X grouped and binned,
-  snapshot-order preservation, null grouping, cap detection, series pivot.
+- **strata-model** (`chart.rs`): per spec §5 —
+  `ChartQuery::{ Rows { x, ys, series, cap }, Raw { x, y, cap }, Histogram { col, bins } }`;
+  `ChartData::{ Table { axis, series }, Points, Bins, OverCap { unit, cap }, Duplicates { x, series } }`;
+  `Axis { labels, positions: Option<Vec<Option<f64>>> }`. Hash/Eq throughout (`ChartQuery` is
+  cache identity). `AggFn`, `Measure`, `Bucket`, `Stride`, `Width` are **deleted** — nothing else
+  consumes them.
+- **Engine::chart** (`engine/chart.rs`): `Rows` = select referenced columns + ordinal,
+  `ORDER BY <ord>`, `LIMIT cap + 1`, then pivot. `cap + 1` rows → `OverCap`. Pivot cell identity
+  is the (X, series) **value pair** (`ScalarValue` — never renderings; NULL and a literal
+  `"(null)"` stay distinct); a second row in one cell → `Duplicates`, carrying the encoding
+  names. NULL Y → `None` (a gap). `positions` from a numeric/temporal X (epoch ms). No series
+  column → no pivot: one category per row, duplicates draw.
+- **Salvage from the branch** (keep, with their tests): the in-call snapshot pin; `CellFormat`
+  label rendering + `DISPLAY_CHARS` clip; `(null)` as label-never-key; the `plottable` type
+  refusal for `Raw`/`Histogram`; the finite-values filter; the whole histogram implementation
+  (min/max pass, `√n` clamped 6..=24, ≤ 200 bins); the empty-result → empty-axis rule; the
+  name-escalation idea (now 00's `ordinal_name`, for the ordinal).
+- **Delete from the branch**: everything the pipeline needed — aggregation exprs, axis builders,
+  stride ladder + widening loop, `by_measure` ordering, the bucket-kind refusals, and their tests.
+- Unit tests over in-memory fixtures per shape: pivot correctness (values, gaps, series naming —
+  multi-Y, series column, both), duplicate refusal, `(null)` vs `"(null)"`, caps at exactly
+  `cap` / `cap + 1`, positions for numeric/temporal/categorical X, empty result, scatter finite
+  filter, histogram matrix. Facade tests over a real spooled snapshot: order agrees with the
+  grid's pages (via 00), a retired snapshot fails cleanly.
 
 ## Out of scope
-Trendline/overlays (05). Any UI. Any confirm gating — this is `fetch_page`-tier, not profile-tier.
+Sorting (the `sort` view transform is client-side, 03 — any float comparator there must be total,
+`total_cmp` with NaN last; the first build's `sort_by` panic is the standing lesson). Presets
+(05). Any UI.
 
 ## Acceptance
-- [ ] `Engine::chart` answers all three query shapes over a real snapshot with correct values,
-      order, gaps, `(null)` groups, and honest cap reporting; core tests cover the list above.
+- [ ] `Engine::chart` answers all three shapes over a real snapshot: result order, correct pivot,
+      gaps, honest `OverCap`/`Duplicates` refusals, positions where X is orderable; core tests
+      cover the matrix above; none of the withdrawn vocabulary remains exported.
 
 ## References
-`docs/CHART_SPEC.md` §3–§5, §7 (cap defaults). `docs/CHART_FUNCTIONS.md` §2 (the query algebra
-this vocabulary is the chassis for). `docs/reference/ENGINE.md`.
-`engine/query.rs` (`read_page`, `snapshot_name`), `engine/export.rs` (`select_sql`).
+`docs/CHART_SPEC.md` §4–§5. `docs/SNAPSHOT_SPEC.md` §9 (the ordinal this reads through).
+`docs/reference/INVARIANTS.md` (the chart + ordinal entries — the full history).
+`engine/query.rs` (`read_page` precedent), `engine/export.rs` (`select_sql`).

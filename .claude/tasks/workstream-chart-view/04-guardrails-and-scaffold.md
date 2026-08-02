@@ -1,33 +1,36 @@
-# Chart 04 · Guardrails + GROUP BY scaffold
+# Chart 04 · Guardrails + the SQL scaffold
 
 **Workstream:** Chart (Rz2) · **Status:** ⬜ · **Depends on:** 02, 03
 
 ## Goal
-The refusal surfaces and the user-owned escape hatch: guardrail overlays, the high-cardinality
-banner, and the **Add GROUP BY in SQL** scaffold into a new tab. Spec: `docs/CHART_SPEC.md` §7–§8.
+The refusal surfaces and the aggregation path: guardrail overlays, the high-cardinality banner,
+and the **Aggregate in SQL** scaffold into a new tab — promoted from escape hatch to the normal
+raw-data workflow. Spec: `docs/CHART_SPEC.md` §7–§8.
 
 ## Current state
-01 already *reports* the facts (`group_count`, `capped`); 02/03 render and configure. Nothing
-consumes the facts yet.
+01 answers the refusals as data (`OverCap`, `Duplicates`); 02/03 render and configure. Nothing
+consumes the refusals yet.
 
 ## Build
 - **Overlays** (in place of the canvas; icon + title + body + optional CTA, IDE-terse copy):
-  over `group_cap` groups (1 000; pie 24) → scaffold CTA; raw/scatter over `raw_cap` (6 000
-  points) → scaffold CTA; histogram without a numeric column and scatter without numeric X+Y →
-  instructional, no CTA. All driven by `ChartData`'s reported facts / the config — never by
-  re-deriving in the UI. There is **no materialize cap and no sampling** (settled).
-- **Banner**: non-blocking, across the canvas top, when an aggregated chart exceeds 60 groups
-  (`group_count` — no extra query). Chart still renders beneath.
+  `OverCap` (1 000 rows; pie 24; scatter 6 000 points) → scaffold CTA; `Duplicates { x, series }`
+  ("more than one row per category — aggregate in SQL") → scaffold CTA; no valid Y / histogram
+  without a numeric column → instructional, no CTA. All driven by `ChartData`'s refusal variants
+  / the config — never by re-deriving in the UI. There is **no materialize cap, no sampling, and
+  no aggregation fallback** (settled — spec §1.2, §7).
+- **Banner**: non-blocking, across the canvas top, past 60 categories (`axis.labels.len()` — no
+  extra query). Chart still renders beneath.
 - **Scaffold**: build the SQL from the current encoding — `SELECT <x>[, <series>],
-  <fn>(<y>) AS <fn>_<y>` (or `COUNT(*) AS n`) `FROM ( <the tab's SQL, verbatim> ) GROUP BY …
-  ORDER BY …`; temporal X uses `date_bin` with the currently-selected stride and orders by the
-  bucket ascending, otherwise order by the measure descending. Open through the existing funnel
-  (`session.open_named`), **never auto-run**. Offered from the healthy chart too (promotion), not
-  only from refusals. Quote identifiers the way export's `select_sql` does.
+  SUM(<y>) AS sum_<y>` (or `COUNT(*) AS n`) `FROM ( <the tab's SQL, verbatim> ) GROUP BY …
+  ORDER BY …`; temporal X uses `date_bin(interval '1 day', <x>)` as a starting stride the user
+  edits (the engine no longer guesses spans) and orders by the bucket ascending, otherwise by the
+  measure descending. Open through the existing funnel (`session.open_named`), **never auto-run**.
+  Offered from the healthy chart too — it is the normal path from raw data to a chartable shape,
+  not only the refusal CTA. Quote identifiers the way export's `select_sql` does.
 
 ## Acceptance
-- [ ] Each guardrail condition shows its overlay with working CTA; the banner appears over 60
-      groups and blocks nothing; no silent truncation anywhere.
+- [ ] Each guardrail condition shows its overlay with working CTA; the banner appears past 60
+      categories and blocks nothing; no silent truncation or aggregation anywhere.
 - [ ] The scaffold opens a new editable tab with correct, runnable SQL (categorical and temporal
       forms), and does not run it.
 

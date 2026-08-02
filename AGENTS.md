@@ -82,6 +82,16 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   its `ENGINE_KEYS` default; `restart_owed` measures against `built_runtime`.
 - **Managed DDL policy.** The editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` only. Views are
   Save's artifact; typed DDL is blocked with validation pointing at the owning surface.
+- **A chart renders the result in result order; it computes nothing SQL can say.** `Engine::chart`
+  is a projected, ordinal-ordered, capped read plus a long→wide pivot — no aggregation, no
+  bucketing, no imposed order (the histogram's binning is the one exception). Over a cap, or two
+  rows in one pivot cell, it refuses **to the SQL scaffold**. An engine-side aggregation pipeline
+  was built and withdrawn; the reasons and the scan-order measurements are the full entry —
+  re-litigate neither.
+- **A snapshot read has no order of its own; order is the ordinal column.** Reads that need order
+  `ORDER BY __strata_ord` (unsorted reads entire, user sorts as the tie-break) and every reader
+  projects it away — export must never write it. Measured: above 10 MB a bare `LIMIT/OFFSET` read
+  is nondeterministic (`SNAPSHOT_SPEC.md` §9).
 
 **Data, values, rendering cost**
 
