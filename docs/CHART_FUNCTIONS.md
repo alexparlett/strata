@@ -1,11 +1,19 @@
 # Chart view — the DataFusion function survey
 
-What the engine can actually compute, and the charting system that falls out of it. Companion to
-`docs/CHART_SPEC.md` (the buildable spec): this file is the **capability map** — every aggregate,
-window and scalar family in the engine considered for what it buys a chart, including the ones
-considered and rejected. The design method is deliberately inverted from the handoff: not "what
-did the designer draw, can we render it" but "what can one DataFusion query over the snapshot
-answer, and which of those answers are charts".
+What SQL over the snapshot can express, and which chart shapes each family buys. Companion to
+`docs/CHART_SPEC.md` (the buildable spec — **renderer-first**: the chart computes nothing SQL can
+say, so every capability below is something the *user writes* — or the scaffold/snippets write
+for them — never an engine-side chart pipeline). This file is the **capability map**: every
+aggregate, window and scalar family in the engine considered for what it buys a chart, including
+the ones considered and rejected.
+
+> **Framing revision.** An earlier revision of this file read the survey as the slots of an
+> engine-side query algebra (`ChartQuery ≈ { group, measures, window, derived }`) that
+> `Engine::chart` would compose. That pipeline was built, reviewed and withdrawn — the spec's
+> §1.2 records why. The survey itself is unchanged and still the ground truth for what a chartable
+> query can contain; what changed is **who writes the query**: the user, in SQL, with the
+> scaffold and snippet templates as the on-ramp, and the chart mapping the resulting columns onto
+> marks.
 
 **Ground truth:** the enumeration below was read from the **pinned DataFusion 54.0.0 sources**
 (`datafusion-functions{,-aggregate,-window,-nested}-54.0.0` in the cargo registry —
@@ -38,7 +46,7 @@ Any aggregate is also a window function via `OVER` — that composition is most 
 
 | Family | Functions | What it buys the chart |
 |---|---|---|
-| Numbering | `row_number` | Snapshot-order preservation for categorical axes (spec §5) — already load-bearing. |
+| Numbering | `row_number` | Explicit row numbering inside user SQL. (Not order preservation for the chart — that is the snapshot ordinal, `SNAPSHOT_SPEC.md` §9; `row_number() OVER ()` with no `ORDER BY` follows scan order, which is nondeterministic above 10 MB.) |
 | Ranking | `rank`, `dense_rank` | **Top-N + Other**: rank series/categories by measure, fold the tail into `Other` with a CASE — the *constructive* answer to high cardinality, where the current design only refuses. |
 | Distribution | `percent_rank`, `cume_dist` | **ECDF** — a cumulative-distribution chart is `cume_dist() OVER (ORDER BY x)`, essentially free, and often the honest replacement for a histogram. |
 | Bucketing | `ntile(n)` | **Equal-count bins**: decile/quartile summaries — the complement of the histogram's equal-width bins for skewed data. |
@@ -64,69 +72,56 @@ Any aggregate is also a window function via `OVER` — that composition is most 
 
 ---
 
-## 2. The system: chart types are presets over a query algebra
+## 2. The system: presets are column-role mappings over SQL the user owns
 
-The six handoff chart types stop being the design's unit. Read §1 as a whole and the real shape
-appears — every capability above is the same four-slot query:
+The six chart types stop being the design's unit, but not the way the algebra revision thought.
+Read §1 as a whole and the real shape is: **every analytical chart is an ordinary SQL result
+whose columns play named roles.**
 
-```
-ChartQuery ≈ {
-  group:    [bucket-transform exprs]         // date_bin / floor / date_part / CASE-band / raw
-  measures: [agg(measure) [FILTER (pred)]]   // one per series-from-measures, or count(*)
-  window:   [post-ops over the grouped rows] // running / moving / share / rank / lag / index
-  derived:  [whole-set stats]                // regr_* family, corr — drawn as annotations
-}
-```
-
-- **`Engine::chart` composes these four slots into one DataFrame plan** over `__snap_{id}` and
-  pivots the result. It does not know what a "candlestick" is.
-- **A chart type is a preset**: bar = 1 group + 1 measure; candlestick = `date_bin` group + 4
-  order-sensitive measures; ECDF = no group + one window op; Pareto = 1 group + 1 measure + rank +
-  running-share windows; heatmap = 2 groups + 1 measure. The renderer keys marks off the preset,
-  the engine only ever sees the algebra.
-- **Guardrails stay uniform** because every preset flows through the same `group_cap` /
-  `raw_cap` / `LIMIT cap+1` detection — a new chart type inherits refusal behavior instead of
-  reimplementing it.
-- **The scaffold stays total**: each algebra slot has a canonical SQL rendering (that is what the
-  window/aggregate columns above are), so **every** chart the system can draw can be handed to the
-  user as an editable query — the no-shadow-language principle (spec §1.3) scales with the system
-  instead of being outgrown by it.
-
-This is why the workstream's task 01 builds `ChartQuery` as data, not as six code paths: widening
-an enum of presets is additive; widening six pipelines is a rewrite.
+- The user (or a scaffold/snippet template) writes the query — `date_bin` group, percentiles,
+  window functions, whatever §1 offers.
+- The chart maps result columns onto mark roles: a **candlestick** is open/high/low/close
+  columns over a bucketed X; a **box plot** is p25/p50/p75 (+ whisker) columns; **error bands**
+  are `y`, `y_lo`, `y_hi`; a **Pareto** is a measure column beside a running-share column the
+  user computed with `sum(y) OVER (ORDER BY …)`; an **ECDF** is `cume_dist() OVER (ORDER BY x)`
+  charted as a line. The renderer keys marks off the preset; the engine only ever ran the
+  user's SQL.
+- **Guardrails stay uniform** because every preset flows through the same `Rows` read — result
+  order, `cap + 1`, duplicate-refusal. A new preset inherits refusal behaviour by construction.
+- **The scaffold stays total**: each preset ships with the SQL template that produces its
+  columns, so every chart the system can draw is one the user can open, read and edit — the
+  no-shadow-language principle (spec §1.3) scales with the system instead of being outgrown by
+  it.
 
 ## 3. Tiers — what to build, in what order
 
-**Tier A — richer encodings, no new chart types** (extends tasks 01–04 directly):
-aggregate menu grows `median` / `percentile_cont(p)` / `stddev` / count-distinct; **Top-N + Other**
-replaces refusal as the first response to high cardinality (rank + CASE fold, cap becomes a
-preference); **share-of-total** as a Y mode (100%-stacked bar/area, honest pie percentages);
-`FILTER`-split series (one measure, several predicates) as an alternative to a series column.
+**Tier A — better on-ramps, no new marks**: scaffold templates beyond plain `GROUP BY` — Top-N +
+Other (rank + CASE fold, the constructive answer to high cardinality), share-of-total
+(100%-stacked via `sum(y) OVER …`), `FILTER`-split series. Each is a snippet the user lands on
+and owns.
 
-**Tier B — new presets, each one engine query + one renderer** (successor of task 05's scope):
-box plot (`percentile_cont` ×3 + whiskers), error bands (`avg` ± `stddev`), **candlestick**
-(`first_value`/`last_value` ORDER BY + `min`/`max` over `date_bin`), **ECDF** (`cume_dist`),
-Pareto (rank + running share + `ROLLUP` total), **heatmap** (two group exprs; calendar variant via
-`date_part`), indexed comparison lines (`first_value` window), period-over-period delta (`lag`),
-scatter trendline (`regr_*` — already specced in task 05).
+**Tier B — new mark presets** (one role mapping + one renderer each; SQL template alongside):
+box plot, error bands, candlestick, ECDF, Pareto, heatmap (two group columns), indexed
+comparison, period-over-period delta. The one candidate for engine computation is the scatter
+**trendline** (`regr_*` in a single call) — weighed when 05 is picked up, as the exception it
+would be.
 
-**Tier C — system toggles**: gap-fill via `generate_series` + LEFT JOIN (explicit toggle, default
-off = gaps); explicit `random() < p` scatter sampling (labeled on the chart, never automatic);
-log-decade histogram binning; temporal *cast offers* for string/epoch columns (`to_timestamp` /
-`from_unixtime` instead of the name-regex guess).
+**Tier C — toggles and rescues**: gap-fill via `generate_series` LEFT JOIN (a template, default
+off = gaps); explicit labeled `random() < p` sampling for scatter (never automatic); log-decade
+histogram binning; temporal *cast offers* (`to_timestamp` / `from_unixtime`) replacing the
+name-regex guess.
 
-**Considered and rejected**: `bool_*`/`bit_*` reducers (nothing to encode); `TABLESAMPLE` (absent
-in 54 — and its absence is load-bearing for the honesty principle); native gap-fill/`locf`
-(absent; `generate_series` join is the mechanism); `width_bucket` (absent; `floor` arithmetic is
-the mechanism, not a stopgap).
+**Considered and rejected**: `bool_*`/`bit_*` reducers (nothing to encode); `TABLESAMPLE`
+(absent in 54 — its absence is load-bearing for the honesty principle); native gap-fill/`locf`
+(absent; the `generate_series` join is the mechanism); `width_bucket` (absent — which is exactly
+why the histogram is the one mark that computes, spec §1.2).
 
 Renderer cost note: every Tier B mark is rects, lines, circles and polygons — nothing new from
 `freya-plotters-backend`; the pie wedge (`fill_polygon`) is already the most exotic path used.
 
 ## 4. Where this lands in the workstream
 
-Tasks 01–04 already build the right chassis (`ChartQuery` as data, uniform caps, one scaffold
-funnel) — nothing in them changes shape because of this survey; Tier A widens their enums. Task
-05 is the survey's delivery vehicle: its scope is Tier A + the Tier B presets, picked by value,
-with Tier C as explicit toggles behind them. Per AGENTS.md §5, nothing in 01–04 pre-builds for a
-tier that hasn't been picked up — the algebra already accommodates it, which is the point.
+Tasks 01–04 build the renderer-first chassis (`Rows` read + pivot, marks, strip, guardrails +
+scaffold); nothing in them pre-builds for a tier that hasn't been picked up (AGENTS.md §5). Task
+05 is the delivery vehicle: Tier A templates, Tier B presets picked by value, Tier C toggles
+behind them. The survey above is the menu those choices order from.

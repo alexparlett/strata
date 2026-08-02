@@ -107,26 +107,38 @@ Things that must not regress. Each was fought for once already.
   snapshot's lifetime rather than in a footer or a sidecar. What remains of the old gate is
   `json_unions_as_text`, which is now **presentation, not storage**: `json_get`'s union renders as
   `{str=x}` and nobody typing `content -> 'type'` wants to read that.
-- **A chart is a grouped read of the snapshot, and a categorical axis orders by the measure — never
-  by the scan.** `Engine::chart` (Rz2) groups, bins and pivots in DataFusion over `__snap_{id}`, so an
-  aggregated chart over millions of rows is a normal hash aggregation and there is no client-side
-  reducer, no materialize cap and no sampling — over its cap it answers `ChartData::OverCap`, which
-  carries no data at all, because a truncated chart is not a state that can exist. What was *tried*
-  and must not come back is ordering categorical categories by `min(row_number() OVER ())` to keep
-  a user's `ORDER BY` on the axis: an Arrow **File** scan range-splits across `target_partitions`
-  once the file passes `datafusion.optimizer.repartition_file_min_size` (10 MB), and a window with
-  no `PARTITION BY` then sits above a `CoalescePartitionsExec`, whose own contract is "no guarantees
-  are made about the order of the resulting partition". Measured on stock config: a 200k-row
-  snapshot came back in perfect file order, a 3M-row one put 2 975 424 of 3 000 000 rows out of it —
-  so the property held at every size a test would use and reversed itself on exactly the results the
-  feature exists for. That shape of failure is the reason the rule is written down rather than left
-  to whoever next reads the `row_number` idea and finds it reasonable. Order is **measure
-  descending, ties by label**; a temporal or numeric axis orders by value and never faces the
-  question. A bucketed axis's empty buckets are filled back in as `None` (a gap, never an
-  interpolated line) and a numeric one is keyed on the bin **index** so that fill is exact rather
-  than a float comparison; a group is keyed by its **value** while `(null)` is only ever a label.
-  The request carries a measure *list*, not one `y`, because a chart type is a preset over a query
-  algebra (`docs/CHART_FUNCTIONS.md` §2) — a box plot is extra measures on the same group.
+- **A chart renders the result in result order; it computes nothing SQL can say.** (Rz2 — the
+  renderer-first design, `docs/CHART_SPEC.md`; lands with the workstream re-cut.) `Engine::chart`
+  is a projected, ordinal-ordered, capped read of `__snap_{id}` plus a long→wide pivot: columns
+  map onto marks, multiple Y columns are multiple series, a series column pivots — and the pivot
+  is the only operation that can conflate rows, so it is the only thing that refuses on
+  duplicates (`ChartData::Duplicates`, CTA into the SQL scaffold). Over a cap it answers
+  `ChartData::OverCap`, which carries no data at all — a truncated chart is not a state that can
+  exist. The histogram's binning is the one engine computation (no `width_bucket` in DataFusion
+  54). What was **built and withdrawn** is the first design's engine-side aggregation pipeline —
+  `AggFn`/`Bucket`/`Stride`, auto-stride resolution, engine-imposed category order. Withdrawn on
+  two grounds, both evidenced: every hard defect of two adversarial reviews clustered in that
+  machinery (NaN comparator panics, `date_bin` overflow, cap arithmetic, bin-key collapse), and
+  its ordering fought the user's own `ORDER BY` — a `GROUP BY` has no output order, so
+  re-aggregating an already-shaped result destroys the order the user asked for, and the
+  measure-descending rule this entry used to state was a workaround for that self-inflicted loss.
+  Two measurements stay recorded because they motivate the ordinal (next entry): `min(row_number()
+  OVER ())` follows file order only below `repartition_file_min_size` (10 MB) — a 200k-row
+  snapshot perfect, a 3M-row one 2 975 424 of 3 000 000 rows out of order — and a chart that
+  re-aggregates cannot preserve order even over an ordered read. Do not resurrect either idea
+  without new evidence.
+- **A snapshot read has no order of its own; order is the ordinal column.** (`SNAPSHOT_SPEC.md`
+  §9; lands with the workstream re-cut.) Above 10 MB an Arrow File scan range-splits and a bare
+  `LIMIT/OFFSET` read sits over a `CoalescePartitionsExec` — measured: at 3M rows the *same page
+  re-read returns different rows* (page 1 arrived starting at row 1 843 201 on one read and 101
+  on the next), and a 200k-row snapshot with a text column pages stably but starting at row
+  57 345, so `fetch_page`'s pages disagree with the spooled page 1 — rows duplicated and missing
+  as the user pages, and the page cache freezes whichever answer a read happened to get. The fix
+  is written order: `materialize` appends `__strata_ord` (Int64, arrival order — the spool is a
+  single ordered stream) after `QueryOutput::columns` is captured, name-escalated on collision and
+  recorded in `SnapshotStats`. Unsorted reads `ORDER BY` it; user sorts append it as the
+  tie-break (stable across page windows); **every** reader projects it away, and export selects
+  explicit columns so a `COPY` never writes bookkeeping into the user's file.
 - **A view of a value is bounded where the value is *encoded*, never afterwards — and it expands
   breadth-first.** The record view opened on a `config.json` row (19 struct columns, 241,425 nested
   fields) froze the window for a second or two, and the freeze was the **materialization**, not the

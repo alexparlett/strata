@@ -177,9 +177,11 @@ deliberately engine-internal: it never crosses the boundary, has no UI represent
 replaces nothing the tag can do.)
 
 `sort` stays a read-time parameter (an `ORDER BY` over the whole snapshot before the page
-window — Rz6), never a rewrite of the snapshot. **Filter** (P2-09/P2-13's find/filter work)
-extends `fetch_page` the same way when it lands: a `WHERE` over the snapshot, part of the read
-key, snapshot untouched. **Export** (its own task) adds `Engine::export` over `run_export`,
+window — Rz6), never a rewrite of the snapshot. An **unsorted** read is `ORDER BY` the row
+ordinal (§9) — a bare `LIMIT/OFFSET` over the registered table has **no** inherent order, and
+above the scan-split threshold it is measured-nondeterministic. **Filter** (P2-09/P2-13's
+find/filter work) extends `fetch_page` the same way when it lands: a `WHERE` over the snapshot,
+part of the read key, snapshot untouched. **Export** (its own task) adds `Engine::export` over `run_export`,
 streaming from one snapshot. The facade grows one method per feature; the logic lives in the
 engine's submodules as plain async functions.
 
@@ -284,3 +286,41 @@ path (close / close-others / close-right / close-all) is covered without touchin
   per-window discriminator adds nothing.
 - Snapshot naming by `ws_id` (`__snap_{ws}` / `ws_{ws}.parquet`) — replaced by per-run identity
   (§2); the ws keeps only *ownership* of its current snapshot for lifecycle (§4).
+
+## 9. Row order — the ordinal column
+
+**A snapshot read has no order of its own, and pretending otherwise is a measured bug.** The
+snapshot is registered as an Arrow *File* table, and DataFusion range-splits such a file across
+`target_partitions` once it passes `datafusion.optimizer.repartition_file_min_size` (10 MB
+default). Any read without an `ORDER BY` then sits above a `CoalescePartitionsExec`, whose own
+contract is that output order is arbitrary. Measured on stock config, `fetch_page` with no sort:
+
+| Snapshot | Behaviour |
+|---|---|
+| 3M rows (`i`, `md5` text) | **Unstable**: the same page re-read returns different rows — page 1 came back starting at row 1,843,201 on one read and row 101 on another |
+| 200k rows (`i`, `md5` text — the file already crosses 10 MB) | Stable but **wrong**: every read starts the stream at row 57,345, so pages 2+ (served by `fetch_page`) disagree with page 1 (served from the spool, in true order) — rows duplicated and missing as the user pages |
+| 200k rows, narrow (`i` only, under 10 MB) | Perfect file order — which is why this never showed up in tests |
+
+Each read is a *contiguous* run of the file (within-page order survives); it is the stream's
+starting partition that races. The failure is invisible below the threshold and total above it —
+and the freya-query page cache then **freezes** whichever answer a read happened to get, so two
+views can hold contradictory copies of one page. §1 promises stable paging; without an order key
+the read path cannot deliver it.
+
+**The fix: order is a column.** `materialize` appends a row ordinal to every batch as it spools
+— `__strata_ord`, `Int64`, 0-based, in arrival order, which *is* the query's result order because
+the spool is a single ordered stream. Appended **after** `QueryOutput::columns` is captured, so
+the user-visible schema never contains it. If the result already has a column of that name, the
+name escalates by prefix (`___strata_ord`, …) until free — the chosen name rides in the write
+pass's `SnapshotStats`, beside the null counts, with exactly the snapshot's lifetime.
+
+The discipline the column demands — every reader accounts for it:
+
+- **Unsorted reads** (`fetch_page`, the chart): `ORDER BY __strata_ord`, then project it away.
+- **Sorted reads**: the user's `ORDER BY` gets the ordinal appended as the **tie-break**, making
+  sorts stable across page windows — ties were the same nondeterminism one layer down.
+- **Export** (`select_sql`): selects the result's columns explicitly, never `SELECT *` — a
+  `COPY` must not write bookkeeping into the user's file.
+
+Cost: 8 bytes/row uncompressed; a monotonic sequence is near-free under the LZ4 the snapshot
+already uses. Written during the spool pass that is already streaming every batch.
