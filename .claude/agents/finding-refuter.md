@@ -43,6 +43,17 @@ Refute it if **any** of these hold:
 - **The evidence does not establish the claim.** Go read the cited lines yourself. A quote that
   turns out not to show what it was said to show kills the finding outright.
 - **It is speculative.** "This could lead to" with no path from an input to the bad outcome.
+- **A linter will catch it** — and do not run the linter to find out. Tooling that already runs on
+  every build does not need a reviewer's attention, and spending the panel on it is how the real
+  findings get buried.
+- **The rule it cites is silenced at that line**, by a lint-ignore, an `#[allow]`, an explicit
+  documented exception, or a comment naming the rule and why it does not apply here. A rule someone
+  deliberately switched off is not a rule being broken.
+- **The rule it cites is not scoped to that file.** A convention stated for one crate, directory or
+  surface does not reach a file outside it. Check where the rule lives before accepting that it
+  applies.
+- **A senior engineer would not raise it in review.** Not "is this imperfect" but "would someone
+  whose time matters stop the change for this". Pedantry has a severity of zero however true it is.
 
 **Default to REFUTED when you cannot decide.** Ambiguity is a refutation, not a tie. The cost of
 wrongly killing one finding is that a human reads a shorter report; the cost of passing weak ones

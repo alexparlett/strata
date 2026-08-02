@@ -72,6 +72,9 @@ Targets:
   contract as a claim to audit, never in the scope as context to believe — it is exactly the
   self-narration the isolation exists to keep out, and a description that disagrees with its diff is
   a finding the contract lawyer should return. `gh pr list` if no number was given.
+
+  Check before spending anything: a closed or merged PR, a draft, or one already reviewed
+  (`gh pr view <n> --comments`) is not worth six critics. Say which it was and stop.
 - **a ref** (`HEAD~3`, a tag) — `git diff <ref>`.
 - **a path** — that file or directory in full, not only its changed lines.
 - **a task id** (`AA-04`, `P4-01`) — the diff above, plus that file under `.claude/tasks/` read as
@@ -220,8 +223,14 @@ is the last word rather than something a later pass silently undoes.
 - **A `CLEAN` verdict is a result.** Discovery over-produces and the gate is allowed to kill all of
   it. Never invent a finding to fill an empty section, and never inflate a `NOTE` to make the run
   look worthwhile.
-- **The reviewer never fixes.** Read-only tools, enforced by the agent definitions: a checker that
-  can fix starts reviewing its own fixes. Fixes are a separate decision, after the report.
+- **The reviewer never fixes** — a checker that can fix starts reviewing its own fixes. Fixes are a
+  separate decision, after the report. Be precise about how much of that is enforced: the agent
+  definitions withhold `Edit`, `Write` and `NotebookEdit`, and this repo's `PreToolUse` hook blocks
+  destructive git, but `Bash` is granted whole for `git`/`rg` and unscoped `Bash` is a write path.
+  Agent `tools:` takes bare tool names — its parenthesised form names `Agent`s and `Workflow`s, not
+  command patterns — so scoped `Bash(git diff:*)` is only available on a command or skill's
+  `allowed-tools:`. Until that is applied here, read-only is *withheld editors plus a rule in the
+  prompt*, not a sandbox, and saying otherwise would be the kind of claim this skill exists to catch.
 - **Report what actually ran.** The workflow logs every skipped lens, dropped batch and collapsed
   shape. Carry those into the report — silent truncation reads as coverage.
 
@@ -237,8 +246,20 @@ is the last word rather than something a later pass silently undoes.
 
 ## Neighbours
 
-- **`/code-review`** — one careful pass, dimensions rather than adversaries, no isolation. The
-  right tool for someone else's change you are reading for the first time.
+- **`/code-review`** (the `code-review@claude-code-plugins` command) — four parallel agents over a
+  PR, per-issue validation subagents, a confidence threshold, and `--comment` to post inline. The
+  right tool for **someone else's** PR, and it is tuned the opposite way to this one on purpose:
+  it tells its reviewers *"if you are not certain an issue is real, do not flag it"*, because a bot
+  commenting on every PR pays for a false positive in reviewer trust. This skill is invoked
+  deliberately, so discovery over-reports and a panel does the killing. Borrow its refusals, not its
+  timidity — the categories it will never flag (pre-existing, linter-catchable, rule silenced at the
+  line, pedantry) are in the refuter's kill list, and they are about *what is never worth raising*,
+  which is a different thing from hedging on what is.
+
+  It also **gives its reviewers the PR title and description as author intent**, where this skill
+  hands them over as a claim to audit. Both are right for their case: reviewing someone else's work,
+  intent is legitimate context you lack; reviewing your own, it is the contaminant the isolation
+  exists to remove.
 - **`/security-review`** — one deep lens over the branch. The trust auditor here is triage, not a
   replacement.
 - **This skill** — for a change **you** just wrote, or one that came back clean suspiciously fast.
