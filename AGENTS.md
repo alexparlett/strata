@@ -333,6 +333,52 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   `git submodule status`).
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`.
+- **A change you wrote is reviewed by critics who cannot see why you wrote it** — the
+  `adversarial-review` skill: isolated read-only lenses handed artifacts and the contract but never
+  the intent, then a refutation gate that defaults to killing a finding. In front of the build
+  check, never in place of it. Each lens must name its strongest candidate; a `CLEAN` verdict after
+  the gate is still a result.
+- **Effort is the user's dial and the panel is not on it.** `low|medium|high|max` buys reasoning
+  effort and panel width together (1 voter, then a 3-voter majority, then `max`'s red-team); its
+  floor is one voter, never zero, and isolation and whole-file reading are fixed at every tier. A
+  **workflow**, because only `Workflow`'s `agent()` takes a per-call `effort`. The verdict is
+  computed in the script from the tally, and the tier is reported verbatim.
+- **A voter reads a batch of candidates, and dedup comes before the panel.** `voters ×
+  ceil(sites/10)`, never `voters × sites`; per-candidate voting billed 165 agents on a 7-file diff
+  where the batched, deduplicated shape bills 18 (6 critics + 3 x ceil(32/10)). Convergence is the promotion signal — count it
+  once, do not pay for it six times. Cap a lens at 12 candidates and log the drop.
+- **The merge keys on position *and* claim, and promotion runs before the red team.** Two lenses
+  citing one line is routine, not agreement: merging on `file:line` alone deletes one claim unjudged
+  and promotes the survivor for a convergence that never happened. Cluster by content-word overlap,
+  biased to **under-merge** — a missed merge costs a panel slot, a wrong one destroys a finding.
+  Promote first so `max`'s severity correction is the last word.
+- **Discovery fails closed, not just the panel.** A critic returning `findings: []` is a clean
+  result; a critic returning *nothing* is an absence of evidence, and collapsing the two lets a
+  review where every critic died report `CLEAN` — the worst thing the tool could say. All critics
+  dead is `FAILED`, never an empty findings card.
+- **Scope is four disjoint readings, and a description is a claim.** An uncommitted change sits in one of four
+  disjoint states and each git command sees exactly one: committed (`git diff
+  "${CLAUDE_CODE_BASE_REF:-origin/HEAD}...HEAD"`), staged (`git diff --cached`), unstaged (`git
+  diff`), untracked (`git ls-files --others --exclude-standard`). Miss one and that state reviews as
+  empty and returns `CLEAN` over unreviewed code. `git status --porcelain` is the inventory only —
+  no content, and it abbreviates directories. Untracked files have no hunks, so mark them
+  whole-file. Run the commands one per line, never chained with `&&`: a short-circuit swallows every
+  state after the failure, and `origin/HEAD` exits 128 wherever `git remote set-head` never ran. A
+  non-zero exit means that state is **unread, not empty** — the two print the same nothing and only
+  one is safe to call clean. Never edit the command by substitution; check any replacement against
+  all four states.
+  A PR is `gh pr view` + `gh pr diff`, and its description goes in the **contract** as a claim to
+  audit, never in the scope as context to believe.
+- **A stage that cannot verify fails closed; a stage that only corrects keeps and marks.** The panel
+  drops a finding it could not verify — reporting an unverified one is the worse error. The red team
+  only ever lowers a severity or removes, so a missing verdict there keeps the panel-confirmed
+  finding, marks it `redTeamed: false`, names the batch that never answered, and reports
+  `adversarialPhase: 'partial'` with the uncovered count. Never let a phase claim coverage it did
+  not deliver.
+- **Findings go through `ReportFindings`, and the script hands over the exact shape.** `report` is
+  returned ready to pass, sorted most-severe first; each row carries `CONFIRMED` (unanimous panel)
+  or `PLAUSIBLE` (one voter refused). The severity tally and the `BLOCK`/`CONCERNS`/`CLEAN` gate
+  go in prose beneath the card, which has no field for either. Never print the list twice.
 - **CI runs that same check on every PR** — `cargo test --workspace --locked` on **macOS**, with
   `submodules: true`, asserting the gitlink **before** compiling.
 - **The release path is a script CI calls, never a pipeline written in YAML.** Signing degrades

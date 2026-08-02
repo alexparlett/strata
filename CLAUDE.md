@@ -40,7 +40,9 @@ also bump the crate version, tag the commit and publish a release page in the sa
 
 Formatting is the **`fmt` skill**, never `cargo fmt --all` (which reformats the fork — see
 [AGENTS.md](AGENTS.md) §7). Running the app is the **`run-app` skill**; one Strata window across
-every session, enforced by a hook.
+every session, enforced by a hook. Reviewing a change *you* just wrote is the
+**`adversarial-review` skill** — isolated hostile critics plus a refutation gate, in front of the
+build check rather than in place of it.
 
 > **Environment note:** some agent sandboxes can't build this (no crates.io access, no Skia
 > toolchain). If you're in one, you can't run `cargo build`/`test` — verify changes against the fork
