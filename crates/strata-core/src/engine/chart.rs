@@ -129,6 +129,13 @@ enum Grouping {
         source: Expr,
         stride: Stride,
         auto: bool,
+        /// What a bucket boundary is *rendered* as, which is not what it is grouped as.
+        /// `date_bin` bins on the epoch value against a UTC origin and merely re-attaches the
+        /// column's timezone, so labelling a bucket in that zone reads a January bucket as
+        /// 7pm on 31 December. Boundaries are UTC, so they are labelled UTC. A column that
+        /// was a date is rendered back as one, so its axis uses `date_format` like the grid
+        /// rather than `timestamp_format`.
+        label_as: DataType,
     },
     /// A column with an order of its own — a number, or a clock time. Grouped by raw value,
     /// or by **bin index** when a width is set.
@@ -167,10 +174,12 @@ impl Grouping {
                 source,
                 stride,
                 auto: true,
+                label_as,
             } => stride.wider().map(|stride| Grouping::Time {
                 source: source.clone(),
                 stride,
                 auto: true,
+                label_as: label_as.clone(),
             }),
             _ => None,
         }
@@ -205,6 +214,14 @@ async fn aggregate(
         }
         None => None,
     };
+    if let (Some(x), Some(series)) = (x, series) {
+        if x == series {
+            // DataFusion answers this one itself, with "Schema contains duplicate qualified
+            // field name" — an internal message for an encoding mistake this module names in
+            // its own words everywhere else.
+            return Err(format!("'{x}' cannot be both the category and the series"));
+        }
+    }
     let series_expr = series.map(ident);
 
     // Run, and if what came back is more than the chart will draw, widen an engine-chosen
@@ -227,9 +244,12 @@ async fn aggregate(
                 let x_col = group.is_some().then(|| take(&batch, &mut next));
                 let series_col = series_expr.is_some().then(|| take(&batch, &mut next));
                 let axis = match (group.as_ref(), &x_col) {
-                    (Some(Grouping::Time { stride, .. }), Some(col)) => {
-                        temporal_axis(col, *stride, cap, fmt)?
-                    }
+                    (
+                        Some(Grouping::Time {
+                            stride, label_as, ..
+                        }),
+                        Some(col),
+                    ) => temporal_axis(col, *stride, cap, label_as, fmt)?,
                     (Some(Grouping::Ordered { width: Some(w), .. }), Some(col)) => {
                         binned_axis(col, w.get(), cap, fmt)?
                     }
@@ -276,8 +296,25 @@ async fn aggregate(
     // One slot per (measure, series value) pair — measure-major, which is the order the
     // answer promises. A cell nothing was returned for stays `None`: an empty bucket, or a
     // pair the data never contained.
+    //
+    // The assignment is only sound while the axis is **injective** — every returned group row
+    // in a cell of its own. That held silently until a binned axis folded four distinct keys
+    // onto one category and the last write won, so the invariant is checked rather than
+    // assumed: a collision is a defect in an axis builder, and it fails here instead of
+    // reaching the renderer as a plausible number.
     let split = legend.labels.len();
     let mut cells = vec![vec![None; axis.labels.len()]; measures.len() * split];
+    let mut filled = vec![false; axis.labels.len() * split];
+    for row in 0..rows {
+        let at = legend.of_row[row] * axis.labels.len() + axis.of_row[row];
+        if std::mem::replace(&mut filled[at], true) {
+            return Err(format!(
+                "two aggregate rows landed in category {} of series {} — the axis is not \
+                 one category per group",
+                axis.of_row[row], legend.of_row[row]
+            ));
+        }
+    }
     for (m, column) in values.iter().enumerate() {
         for row in 0..rows {
             cells[m * split + legend.of_row[row]][axis.of_row[row]] = column[row];
@@ -427,18 +464,33 @@ async fn grouping(
             }
             None => (auto_stride(range, cap), true),
         };
+        // A date renders as a date; every other instant renders in UTC, where its bucket
+        // boundary actually sits.
+        let label_as = match dtype {
+            DataType::Date32 | DataType::Date64 => DataType::Date32,
+            _ => DataType::Timestamp(TimeUnit::Millisecond, None),
+        };
         return Ok(Grouping::Time {
             source,
             stride,
             auto,
+            label_as,
         });
     }
     if dtype.is_numeric() || is_time_of_day(&dtype) {
         let width = match bucket {
             Some(Bucket::Width(width)) if dtype.is_numeric() => Some(width),
+            // Both arms below are a time-of-day column, which buckets neither way: it has no
+            // calendar for a stride and no meaningful width. Naming it a number and pointing
+            // at a width the arm above refuses would send the user in a circle.
             Some(Bucket::Width(_)) => {
                 return Err(format!(
-                    "'{name}' is a time of day, so it has no width to bin by"
+                    "'{name}' is a time of day, so it has no bucket to set"
+                ))
+            }
+            Some(Bucket::Time(_)) if is_time_of_day(&dtype) => {
+                return Err(format!(
+                    "'{name}' is a time of day, so it has no bucket to set"
                 ))
             }
             Some(Bucket::Time(_)) => {
@@ -639,6 +691,16 @@ struct Axis {
     of_row: Vec<usize>,
 }
 
+impl Axis {
+    /// No groups, so no categories. What an aggregate over an empty result produces.
+    fn empty() -> Axis {
+        Axis {
+            labels: Vec::new(),
+            of_row: Vec::new(),
+        }
+    }
+}
+
 /// The axis for a bucketed temporal X: every bucket from the first to the last, ascending,
 /// **including the ones no row fell in** — the gaps a renderer must not draw across.
 ///
@@ -654,12 +716,20 @@ fn temporal_axis(
     col: &ArrayRef,
     stride: Stride,
     cap: usize,
+    label_as: &DataType,
     fmt: &CellFormat,
 ) -> Result<Option<Axis>, String> {
-    let tz = match col.data_type() {
-        DataType::Timestamp(TimeUnit::Millisecond, tz) => tz.clone(),
-        other => return Err(format!("bucketed X came back as {other}, not a timestamp")),
-    };
+    // Any timestamp unit, not the millisecond one we cast the source to: `date_bin`'s
+    // signature lists its exact forms nanoseconds-first, and a timezone-stamped input coerces
+    // up to that variant, so the bucket column comes back as `Timestamp(ns, tz)`. Insisting on
+    // milliseconds here failed every zoned temporal X outright. `millis` casts whatever
+    // arrives, so the unit is not something this function needs to care about.
+    if !matches!(col.data_type(), DataType::Timestamp(_, _)) {
+        return Err(format!(
+            "bucketed X came back as {}, not a timestamp",
+            col.data_type()
+        ));
+    }
     let buckets = millis(col)?;
     let has_null = buckets.iter().any(|b| b.is_none());
     let Some(lo) = buckets.iter().flatten().min().copied() else {
@@ -686,8 +756,8 @@ fn temporal_axis(
     }
     let index: HashMap<i64, usize> = seq.iter().enumerate().map(|(i, at)| (*at, i)).collect();
 
-    let sequence: ArrayRef =
-        Arc::new(TimestampMillisecondArray::from(seq.clone()).with_timezone_opt(tz));
+    let sequence: ArrayRef = Arc::new(TimestampMillisecondArray::from(seq.clone()));
+    let sequence = cast_array(&sequence, label_as).map_err(|e| e.to_string())?;
     let (labels, null_at) = with_null_label(strings(&sequence, fmt)?, has_null);
 
     let mut of_row = Vec::with_capacity(buckets.len());
@@ -714,6 +784,18 @@ fn temporal_axis(
 /// way for every bin whether a row landed in it or not. Matching returned bucket *starts*
 /// against a generated sequence would have compared floats that agree mathematically and
 /// differ in their last bit.
+/// A bin key that is not a position on the axis. The group column is a `Float64`, so
+/// DataFusion hands back one group row per distinct key — and a NULL, a NaN and each infinity
+/// are **four different groups**, not one. Folding them together is what let two of them share
+/// a category and silently overwrite each other in the pivot, so each keeps its own identity
+/// here and gets its own tick.
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+enum Unplaced {
+    Null,
+    /// The key's bit pattern, so two distinct non-finite keys stay two categories.
+    NotFinite(u64),
+}
+
 fn binned_axis(
     col: &ArrayRef,
     width: f64,
@@ -721,28 +803,46 @@ fn binned_axis(
     fmt: &CellFormat,
 ) -> Result<Option<Axis>, String> {
     let index = numbers(col)?;
-    let has_null = index.iter().any(|k| k.is_none());
-    let whole = |k: f64| (k.is_finite() && k.abs() < 9.007_199_254_740_992e15).then_some(k);
-    // A non-finite index means a non-finite X — not a number, so not in any bin. It joins the
-    // NULL group rather than failing the read, which is what a NaN coordinate gets everywhere
-    // else here.
-    let placed: Vec<Option<f64>> = index.iter().map(|k| k.and_then(|k| whole(k))).collect();
-    let has_null = has_null
-        || placed
-            .iter()
-            .zip(&index)
-            .any(|(p, k)| p.is_none() && k.is_some());
-    let Some(lo) = placed.iter().flatten().copied().reduce(f64::min) else {
-        return Ok(Some(all_null_axis(index.len())));
+    if index.is_empty() {
+        return Ok(Some(Axis::empty()));
+    }
+    // A finite index is a bin, whatever its magnitude: an index past 2^53 has `f64` granularity
+    // rather than integer granularity, but that granularity is the *query's* — the group key is
+    // the float DataFusion grouped on — so nothing is lost by placing it, and the span check
+    // below refuses the range if it is genuinely too wide. Excluding those keys instead charted
+    // real rows as `(null)`.
+    let place = |k: Option<f64>| match k {
+        None => Err(Unplaced::Null),
+        Some(k) if k.is_finite() => Ok(k),
+        Some(k) => Err(Unplaced::NotFinite(k.to_bits())),
+    };
+    let placed: Vec<Result<f64, Unplaced>> = index.iter().map(|k| place(*k)).collect();
+
+    // One category per distinct unplaceable key, in first-seen order, after the sequence.
+    let mut off_axis: Vec<Unplaced> = Vec::new();
+    for key in placed.iter().filter_map(|p| p.err()) {
+        if !off_axis.contains(&key) {
+            off_axis.push(key);
+        }
+    }
+
+    let Some(lo) = placed.iter().filter_map(|p| p.ok()).reduce(f64::min) else {
+        // Nothing sits on the axis, but the unplaceable groups are still groups.
+        return Ok(Some(off_axis_only(
+            &placed,
+            &off_axis,
+            index.len(),
+            col,
+            fmt,
+        )?));
     };
     let hi = placed
         .iter()
-        .flatten()
-        .copied()
+        .filter_map(|p| p.ok())
         .reduce(f64::max)
         .unwrap_or(lo);
 
-    let budget = cap.saturating_sub(usize::from(has_null)) as f64;
+    let budget = cap.saturating_sub(off_axis.len()) as f64;
     // Compared as `f64` because that is what the index is: a tiny width over a wide column
     // spans more bins than an `i64` subtraction could hold, and it has to reach this check as
     // a big number rather than as a wrapped small one or an Arrow cast failure.
@@ -757,16 +857,64 @@ fn binned_axis(
         .map(|k| bin_start(lo + k as f64, width))
         .collect();
     let sequence: ArrayRef = Arc::new(Float64Array::from(starts));
-    let (labels, null_at) = with_null_label(strings(&sequence, fmt)?, has_null);
+    let mut labels = strings(&sequence, fmt)?;
+    let first_off = labels.len();
+    labels.extend(off_axis_labels(&off_axis, col, fmt)?);
 
     let mut of_row = Vec::with_capacity(index.len());
     for bin in &placed {
         of_row.push(match bin {
-            Some(k) => (k - lo) as usize,
-            None => null_at.ok_or("a NULL bin appeared after the axis was built")?,
+            Ok(k) => (k - lo) as usize,
+            Err(key) => first_off + position(&off_axis, key)?,
         });
     }
     Ok(Some(Axis { labels, of_row }))
+}
+
+/// The axis when every bin key was unplaceable — all NULL, all NaN, or a mix. Still one
+/// category per distinct key.
+fn off_axis_only(
+    placed: &[Result<f64, Unplaced>],
+    off_axis: &[Unplaced],
+    rows: usize,
+    col: &ArrayRef,
+    fmt: &CellFormat,
+) -> Result<Axis, String> {
+    let labels = off_axis_labels(off_axis, col, fmt)?;
+    let mut of_row = Vec::with_capacity(rows);
+    for bin in placed {
+        of_row.push(match bin {
+            Ok(_) => return Err("a placeable bin reached the off-axis path".into()),
+            Err(key) => position(off_axis, key)?,
+        });
+    }
+    Ok(Axis { labels, of_row })
+}
+
+/// How each unplaceable key reads: `(null)` for a NULL, and arrow's own rendering (`NaN`,
+/// `inf`) for a value that is a number's bit pattern but not a position.
+fn off_axis_labels(
+    off_axis: &[Unplaced],
+    col: &ArrayRef,
+    fmt: &CellFormat,
+) -> Result<Vec<String>, String> {
+    let values: Vec<Option<f64>> = off_axis
+        .iter()
+        .map(|key| match key {
+            Unplaced::Null => None,
+            Unplaced::NotFinite(bits) => Some(f64::from_bits(*bits)),
+        })
+        .collect();
+    let _ = col;
+    let array: ArrayRef = Arc::new(Float64Array::from(values));
+    strings(&array, fmt)
+}
+
+fn position(off_axis: &[Unplaced], key: &Unplaced) -> Result<usize, String> {
+    off_axis
+        .iter()
+        .position(|k| k == key)
+        .ok_or_else(|| "a bin key appeared after the axis was built".into())
 }
 
 /// The value a bin starts at: `index × width`, rounded back onto the grid the width defines
@@ -862,7 +1010,14 @@ fn value_axis(col: &ArrayRef, fmt: &CellFormat) -> Result<Axis, String> {
 }
 
 /// The axis of a bucketed X whose every value was NULL: one group, and it is the null one.
+///
+/// **Zero rows is not one null group.** An aggregate over an empty result returns no groups at
+/// all, and answering with a `(null)` tick asserts a group nothing created — an empty result
+/// draws an empty axis.
 fn all_null_axis(rows: usize) -> Axis {
+    if rows == 0 {
+        return Axis::empty();
+    }
     Axis {
         labels: vec![NULL_LABEL.into()],
         of_row: vec![0; rows],
@@ -961,8 +1116,12 @@ async fn raw(df: DataFrame, x: &str, y: &str, cap: usize) -> Result<ChartData, S
     // Filtered before the limit, so the cap counts points that can actually be drawn. A row
     // missing either coordinate has no position on the plane at all — that is not the
     // sampling §1.4 rules out, it is the absence of a point.
+    // Finite, not merely non-NULL. Arrow's null bitmap is unset for a NaN, so filtering NULLs
+    // alone let `ChartPoint { x: NaN }` out of here — a mark with no position, counted against
+    // a cap this function's own comment says counts points that can be drawn. Every other path
+    // in this module already excludes non-finite values.
     let plan = df
-        .filter(ident(x).is_not_null().and(ident(y).is_not_null()))
+        .filter(finite(ident(x)).and(finite(ident(y))))
         .map_err(|e| e.to_string())?
         .select(vec![
             cast(ident(x), DataType::Float64).alias("x"),
@@ -1001,12 +1160,7 @@ async fn histogram(df: DataFrame, col: &str, bins: Option<usize>) -> Result<Char
     // read — for a column pandas and Spark write NaN into routinely. `x > -inf AND x < inf`
     // is exactly the finite predicate: NaN fails both comparisons and each infinity fails one.
     let df = df
-        .filter(
-            value
-                .clone()
-                .gt(lit(f64::NEG_INFINITY))
-                .and(value.clone().lt(lit(f64::INFINITY))),
-        )
+        .filter(finite(value.clone()))
         .map_err(|e| e.to_string())?;
     let plan = df
         .clone()
@@ -1182,6 +1336,17 @@ fn strings(col: &ArrayRef, fmt: &CellFormat) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// Keeps only values with a position on a number line. `x > -inf AND x < inf` is exactly the
+/// finite predicate: a NaN fails both comparisons and each infinity fails one, and a NULL
+/// propagates to NULL, which `WHERE` drops. There is no `isfinite` in DataFusion 54.
+fn finite(value: Expr) -> Expr {
+    let value = cast(value, DataType::Float64);
+    value
+        .clone()
+        .gt(lit(f64::NEG_INFINITY))
+        .and(value.lt(lit(f64::INFINITY)))
+}
+
 /// Refuse a column a chart cannot put on a numeric axis, naming its type — the same answer
 /// [`numbers`] gives for a measure, given before the plan is built so the two paths agree.
 fn plottable(df: &DataFrame, name: &str) -> Result<(), String> {
@@ -1205,6 +1370,7 @@ fn field_type(df: &DataFrame, name: &str) -> Result<DataType, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::future::Future;
 
     use datafusion::arrow::array::{Date32Array, Int64Array, StringArray};
@@ -1241,7 +1407,7 @@ mod tests {
 
     fn read(columns: Vec<(&str, ArrayRef)>, q: ChartQuery) -> Result<ChartData, String> {
         let ctx = fixture(columns);
-        let fmt = CellFormat::new(&std::collections::BTreeMap::new());
+        let fmt = CellFormat::new(&BTreeMap::new());
         on_runtime(run_chart(&ctx, SnapshotId(1), &q, &fmt))
     }
 
@@ -2183,6 +2349,183 @@ mod tests {
         )
         .expect_err("text has no position on a plane");
         assert!(err.contains("measure"), "{err}");
+    }
+
+    /// **A NULL bin and a NaN bin are two groups, not one.** DataFusion emits a distinct group
+    /// row for each, and folding them onto one category made the pivot's plain assignment lose
+    /// whichever arrived first — nondeterministically, since it depends on emission order.
+    #[test]
+    fn a_binned_numeric_x_keeps_null_and_nan_apart() {
+        let (categories, series, _) = grouped(chart_of(
+            vec![(
+                "n",
+                floats(vec![
+                    Some(1.0),
+                    None,
+                    None,
+                    Some(f64::NAN),
+                    Some(f64::INFINITY),
+                ]),
+            )],
+            bucketed(
+                "n",
+                vec![m(None, AggFn::Count)],
+                Bucket::Width(Width::new(2.0).unwrap()),
+                1_000,
+            ),
+        ));
+        // One real bin, then one tick each for NULL, NaN and inf.
+        assert_eq!(categories.len(), 4, "{categories:?}");
+        assert_eq!(categories[0], "0.0", "{categories:?}");
+        assert_eq!(
+            categories.iter().filter(|c| *c == NULL_LABEL).count(),
+            1,
+            "{categories:?}"
+        );
+        let total: f64 = series[0].values.iter().flatten().sum();
+        assert_eq!(total, 5.0, "every row is still counted once: {series:?}");
+    }
+
+    /// A finite bin index past 2^53 is a real bin, not a null one. Excluding it charted real
+    /// rows as `(null)` rather than refusing.
+    #[test]
+    fn a_huge_bin_index_is_still_a_bin() {
+        let (categories, series, _) = grouped(chart_of(
+            vec![("n", floats(vec![Some(1e18), Some(1e18)]))],
+            bucketed(
+                "n",
+                vec![m(None, AggFn::Count)],
+                Bucket::Width(Width::new(100.0).unwrap()),
+                1_000,
+            ),
+        ));
+        assert_eq!(categories.len(), 1, "{categories:?}");
+        assert_ne!(categories[0], NULL_LABEL, "a real bin is not the null one");
+        assert_eq!(series[0].values, vec![Some(2.0)]);
+    }
+
+    /// A scatter point needs a position on the plane, and a NaN is not one — the null bitmap
+    /// is unset for a NaN, so filtering NULLs alone let it through.
+    #[test]
+    fn scatter_drops_a_non_finite_coordinate() {
+        let data = chart_of(
+            vec![
+                (
+                    "x",
+                    floats(vec![Some(1.0), Some(f64::NAN), Some(3.0), Some(4.0)]),
+                ),
+                (
+                    "y",
+                    floats(vec![
+                        Some(10.0),
+                        Some(20.0),
+                        Some(f64::INFINITY),
+                        Some(40.0),
+                    ]),
+                ),
+            ],
+            ChartQuery::Raw {
+                x: "x".into(),
+                y: "y".into(),
+                cap: 10,
+            },
+        );
+        assert_eq!(
+            data,
+            ChartData::Points(vec![
+                ChartPoint { x: 1.0, y: 10.0 },
+                ChartPoint { x: 4.0, y: 40.0 },
+            ])
+        );
+    }
+
+    /// An empty result has no groups, so it draws no categories — not one `(null)` tick
+    /// asserting a group nothing created.
+    #[test]
+    fn an_empty_result_draws_an_empty_axis() {
+        let (categories, series, _) = grouped(chart_of(
+            vec![("t", stamps(Vec::new())), ("v", ints(Vec::new()))],
+            agg(Some("t"), None, vec![m(Some("v"), AggFn::Sum)]),
+        ));
+        assert!(categories.is_empty(), "{categories:?}");
+        assert!(series.iter().all(|s| s.values.is_empty()), "{series:?}");
+    }
+
+    /// A bucket boundary is UTC, because `date_bin` bins against the UTC epoch and only
+    /// re-attaches the column's timezone. Labelling it in that zone read a January bucket as
+    /// 7pm on 31 December.
+    #[test]
+    fn a_zoned_timestamp_labels_its_buckets_where_they_actually_fall() {
+        let zoned: ArrayRef = Arc::new(
+            TimestampMillisecondArray::from(vec![
+                at("2024-01-05T00:00:00Z"),
+                at("2024-02-05T00:00:00Z"),
+            ])
+            .with_timezone("America/New_York"),
+        );
+        let (categories, _, _) = grouped(chart_of(
+            vec![("t", zoned)],
+            months("t", vec![m(None, AggFn::Count)], 1_000),
+        ));
+        assert!(
+            categories[0].starts_with("2024-01-01"),
+            "a month bucket starts on the first: {categories:?}"
+        );
+    }
+
+    /// A date column's axis reads as dates, through the same format key the grid uses for it.
+    #[test]
+    fn a_date_axis_reads_as_dates() {
+        let (categories, _, _) = grouped(chart_of(
+            vec![(
+                "d",
+                Arc::new(Date32Array::from(vec![19_732, 19_773])) as ArrayRef,
+            )],
+            months("d", vec![m(None, AggFn::Count)], 1_000),
+        ));
+        assert_eq!(
+            categories,
+            vec!["2024-01-01", "2024-02-01"],
+            "{categories:?}"
+        );
+    }
+
+    /// A time-of-day column buckets neither way, and the refusal must not send the user at a
+    /// setting the other arm refuses.
+    #[test]
+    fn a_time_of_day_column_is_refused_a_bucket_in_its_own_terms() {
+        use datafusion::arrow::array::Time64NanosecondArray;
+        let column = || {
+            vec![(
+                "t",
+                Arc::new(Time64NanosecondArray::from(vec![3_600_000_000_000i64])) as ArrayRef,
+            )]
+        };
+        for bucket in [
+            Bucket::Time(Stride::Month),
+            Bucket::Width(Width::new(2.0).unwrap()),
+        ] {
+            let err = read(
+                column(),
+                bucketed("t", vec![m(None, AggFn::Count)], bucket, 1_000),
+            )
+            .expect_err("a clock has no bucket");
+            assert!(err.contains("time of day"), "{err}");
+            assert!(!err.contains("is a number"), "{err}");
+        }
+    }
+
+    /// One column cannot be both the category and the series; DataFusion's own answer is an
+    /// internal schema message.
+    #[test]
+    fn the_same_column_on_x_and_series_is_refused_in_our_words() {
+        let err = read(
+            vec![("region", strs(vec![Some("eu")]))],
+            agg(Some("region"), Some("region"), vec![m(None, AggFn::Count)]),
+        )
+        .expect_err("one column cannot split itself");
+        assert!(err.contains("'region'"), "{err}");
+        assert!(!err.contains("Schema error"), "{err}");
     }
 
     /// A column the result doesn't have is named, not planned around.

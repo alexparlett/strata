@@ -17,7 +17,7 @@ over the snapshot table** and returns a chart-ready model. Spec: `docs/CHART_SPE
   DataFrame API throughout.
 - **`Engine::chart`** — spawned on the engine runtime like `fetch_page`; no lifecycle bookkeeping
   and no confirm, because a `GROUP BY` over a local snapshot is `fetch_page`-tier work.
-- Tests: 27 unit cases in `engine::chart` over in-memory fixtures (the answer matrix), 7 in
+- Tests: 45 unit cases in `engine::chart` over in-memory fixtures (the answer matrix), 7 in
   `tests/engine_chart.rs` through the facade over a **real spooled snapshot** (the IPC round trip,
   every shape, a retired snapshot), 6 in `strata-model` (the stride table, the width gate).
 
@@ -105,6 +105,29 @@ several are invisible until production scale or production data.
 - Doc corrections: `Points` is explicitly **unordered** (the change's own measurement disproves the
   guarantee it claimed), `AggFn` does **not** come from the live registry, and `CHART_SPEC.md` §11's
   acceptance no longer demands the snapshot order §5 withdrew.
+
+A second pass at `high` (six isolated lenses, 3-voter panel, 39 sites) found thirteen more,
+all fixed and pinned:
+
+- **A binned numeric axis folded four distinct group keys onto one category** — NULL, NaN, each
+  infinity, and every index past 2^53 — and the pivot *assigns*, so the last one written won,
+  nondeterministically. DataFusion emits each of those as its own group row. Each now gets its
+  own tick, a finite index is always a bin whatever its magnitude, and **the pivot checks for a
+  collision** rather than assuming every axis builder is injective.
+- **A zoned temporal X failed outright.** `date_bin`'s signature lists its exact forms
+  nanoseconds-first, so a timezone-stamped input coerces up and the bucket column returns as
+  `Timestamp(ns, tz)`, which the axis guard rejected. It now accepts any unit — and labels
+  buckets in **UTC**, where `date_bin` actually puts them, instead of in the column's zone
+  where a January bucket reads as 7pm on 31 December.
+- **A date X labels as a date**, through the same format key the grid uses for it, rather than
+  through `timestamp_format` because binning cast it to a timestamp.
+- **Scatter returned NaN coordinates** — Arrow's null bitmap is unset for a NaN, so filtering
+  NULLs alone let an undrawable point through and charged it against the cap.
+- **An empty result invented a `(null)` category**, asserting a group no row created.
+- **A time-of-day X given a stride** was told it "is a number, so it buckets by a width" — the
+  wrong type, pointing at a setting the neighbouring arm refuses.
+- **One column as both X and series** reached the user as DataFusion's own duplicate-field
+  schema error.
 
 **Deliberately not fixed, and why** — both are judgement calls rather than defects:
 
