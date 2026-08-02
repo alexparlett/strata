@@ -162,9 +162,15 @@ type Handles = (
 );
 
 fn runner() -> (TestingRunner, Handles) {
+    runner_at(PANEL_WIDTH)
+}
+
+/// The panel at an arbitrary width, so P5-06's squeeze can be laid out and measured. Every other
+/// test wants the canvas width, which is what plain [`runner`] gives.
+fn runner_at(width: f32) -> (TestingRunner, Handles) {
     TestingRunner::new(
         app,
-        (PANEL_WIDTH, 900.).into(),
+        (width, 900.).into(),
         |r| {
             let selection = r.provide_root_context(|| State::create(None::<ColRef>));
             let project = r
@@ -631,10 +637,76 @@ fn nothing_in_the_panel_is_laid_out_past_its_edge() {
 /// Every box laid out past the panel's right edge, as `(min_x, max_x)` — empty is the only
 /// acceptable answer. A run off the edge is invisible however correct the element tree is.
 fn past_the_edge(runner: &TestingRunner) -> Vec<(f32, f32)> {
+    past_the_edge_at(runner, PANEL_WIDTH)
+}
+
+/// As [`past_the_edge`], for a panel laid out at some other width.
+fn past_the_edge_at(runner: &TestingRunner, width: f32) -> Vec<(f32, f32)> {
     runner.find_many(|node, _| {
         let a = node.layout().area;
-        (a.width() > 0. && a.max_x() > PANEL_WIDTH + 0.5).then(|| (a.min_x(), a.max_x()))
+        (a.width() > 0. && a.max_x() > width + 0.5).then(|| (a.min_x(), a.max_x()))
     })
+}
+
+/// P5-06: the panel's **header** stays inside the panel all the way down to the shell's stub
+/// width.
+///
+/// It was `main_align(SpaceBetween)` over `Content::Normal` with no clip, and `Overflow` defaults
+/// to painting *outside* the bounds — so a narrow panel drew "COLUMN INSPECTOR" straight through
+/// the collapse ×. Nothing about the element tree was wrong, which is why this is measured
+/// geometry rather than a structural assertion.
+///
+/// Scoped to the header band on purpose. The **body** still overflows at these widths, and for a
+/// different reason: an identifier like `customer_shipping_address_line_one` has no break
+/// opportunity, so its run is wider than an 84px panel whatever the layout does, and centred rows
+/// then start at a negative x. That wants either a character-level ellipsis or a horizontally
+/// clipping body, and it is a content decision rather than a shell one — recorded on the P5-06
+/// task file rather than papered over by loosening this assertion.
+#[test]
+fn the_header_stays_inside_the_panel_at_its_stub_width() {
+    // The shell's `PANEL_STUB_W`. Restated rather than imported because it is a shell constant and
+    // this is the panel's own test; if the two ever disagree the shell is what moves.
+    const STUB: f32 = 84.;
+
+    for width in [STUB, 120., 180., PANEL_WIDTH] {
+        let (mut runner, (mut sel, mut project, ..)) = runner_at(width);
+        settle(&mut runner);
+        project.write_channel(ProjChan::Tables).table_registered(
+            "events",
+            TableMeta {
+                columns: vec![col(
+                    "customer_shipping_address_line_one",
+                    "Timestamp",
+                    Kind::Str,
+                    vec![
+                        stat(StatKey::Nulls, "1"),
+                        stat(StatKey::Min, "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                    ],
+                )],
+                rows: Some(9),
+            },
+        );
+        select(
+            &mut runner,
+            &mut sel,
+            column(
+                CatalogKind::Table,
+                "events",
+                &["customer_shipping_address_line_one"],
+            ),
+        );
+
+        let past: Vec<_> = runner.find_many(|node, _| {
+            let a = node.layout().area;
+            let in_header = a.max_y() <= HEADER_HEIGHT + 0.5;
+            (in_header && a.width() > 0. && (a.max_x() > width + 0.5 || a.min_x() < -0.5))
+                .then(|| (a.min_x(), a.max_x()))
+        });
+        assert!(
+            past.is_empty(),
+            "the header laid out past the {width}px panel edge: {past:?}"
+        );
+    }
 }
 
 /// Headless previews for eyeballing against the canvas's inspector — one per shape the panel

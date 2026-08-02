@@ -49,6 +49,13 @@ const INSET: f32 = 2.;
 /// A toolbar segment's fixed box: the icon segment's 32×24, and the height its divider spans.
 const TOOLBAR_SEGMENT_HEIGHT: f32 = 24.;
 const TOOLBAR_ICON_WIDTH: f32 = 32.;
+
+/// What a two-icon toolbar pill occupies: both segments plus the 1px divider between them. The
+/// border is painted rather than laid out (torin has no notion of one), so it adds nothing.
+///
+/// Exposed because a pill in a [`crate::components::toolbar::Toolbar`]'s leading run has to
+/// declare a width it cannot shrink below, and a call site guessing that number is how it drifts.
+pub const TOOLBAR_TWO_ICON_WIDTH: f32 = TOOLBAR_ICON_WIDTH * 2. + 1.;
 /// A toolbar text segment's side padding.
 const TOOLBAR_TEXT_PADDING: f32 = 12.;
 /// A form segment's corner (canvas `--r-1`) and its side padding (canvas `var(--sp-5)`).

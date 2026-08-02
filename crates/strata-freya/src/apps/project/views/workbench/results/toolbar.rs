@@ -3,7 +3,9 @@ use strata_model::{ResultsView, TabId};
 use crate::apps::export::ExportLaunch;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
-use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
+use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment, TOOLBAR_TWO_ICON_WIDTH};
+use crate::components::tool_button::TOOL_SIZE;
+use crate::components::toolbar::{Toolbar, ToolbarAction, ToolbarItem};
 use crate::components::typography::InputTypography;
 use crate::keymap::use_hint_title;
 use crate::platform::open_export;
@@ -54,11 +56,12 @@ impl ResultsToolbar {
 impl Component for ResultsToolbar {
     fn render(&self) -> impl IntoElement {
         let theme = use_theme();
-        let (bg, danger, accent, faint) = {
+        // The destructive tone is no longer read here: `ToolbarAction::danger` owns that dress, so
+        // Clear's red hover is one variant rather than three overrides at this call site.
+        let (bg, accent, faint) = {
             let t = theme.read();
             (
                 t.colors().background,
-                t.colors().error,
                 t.colors().primary,
                 t.colors().text_placeholder,
             )
@@ -72,16 +75,15 @@ impl Component for ResultsToolbar {
         let mut view_radio = use_radio::<SessionState, Chan>(Chan::View(tab));
         let view = view_radio.read().view(tab);
 
-        // An outline icon button — `outline_button` variant with a centred icon (the icon inherits
-        // the button's colour, hover included, via `currentColor`).
+        // Find keeps its own button and tooltip: it is an [`Attached`] anchor, not just a control,
+        // so it cannot come from `Toolbar`'s action shape. Its title carries the effective find
+        // chord (reactive — a rebind repaints it), the popover's ✕ the effective Esc.
         let tool = move |icon: IconName| {
             Button::new()
-                .height(Size::px(28.))
-                .width(Size::px(28.))
+                .height(Size::px(TOOL_SIZE))
+                .width(Size::px(TOOL_SIZE))
                 .child(Icon::new(icon).size(15.))
         };
-        // Every tool wears its comp `title=` as a tooltip; Find's carries the effective find
-        // chord (reactive — a rebind repaints it), the popover's ✕ the effective Esc.
         let tip = |title: String, button: Button| {
             TooltipContainer::new(Tooltip::new_text(title))
                 .position(AttachedPosition::Bottom)
@@ -190,48 +192,75 @@ impl Component for ResultsToolbar {
                     }),
             );
 
-        let row = rect()
-            .width(Size::fill())
-            .height(Size::px(38.))
-            .horizontal()
-            .content(Content::Flex)
-            .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((0., 10.))
+        // The row folds tail-first once the pane is too narrow to hold it (P5-06,
+        // `components::toolbar`): Export goes first, then Clear, then Reload.
+        //
+        // **The Table/Chart toggle is the leading run**, so it never folds — it decides what the
+        // whole body below is, and it flexes to push the tool cluster to the far end exactly as
+        // the comp draws it.
+        //
+        // **Find is deliberately first**, so it is the last thing to fold. It is a `Custom` rather
+        // than an ordinary action because it is an [`Attached`] anchor as well as a button: the
+        // popover measures itself against this node, so the toolbar cannot rebuild it as a menu
+        // row. See the note below on what that costs.
+        let row = Toolbar::new()
             .background(bg)
-            .child(toggle)
-            .child(rect().width(Size::flex(1.)))
-            .maybe_child((view == ResultsView::Grid).then_some(search))
-            .child(tip(
-                "Re-run the query to refresh the snapshot".into(),
-                tool(IconName::Reload),
-            ))
-            .child(tip(
-                "Clear results".into(),
+            // Charged the toggle's real width, not zero: the wrapper flexes but the pill inside it
+            // does not, so telling the fold arithmetic this run can vanish kept the tool cluster
+            // inline past the point it fitted, and the pill then painted out over it.
+            .leading(
+                rect()
+                    .width(Size::flex(1.))
+                    .overflow(Overflow::Clip)
+                    .child(toggle),
+                TOOLBAR_TWO_ICON_WIDTH,
+            )
+            .item(ToolbarItem::Custom {
+                // Find is grid-only, so in Chart mode the slot draws nothing and is charged
+                // nothing — otherwise the tools folded 36px earlier than they needed to.
+                width: match view {
+                    ResultsView::Grid => TOOL_SIZE,
+                    _ => 0.,
+                },
+                // Find is grid-only (CHART_SPEC §1) — in Chart mode the slot is an empty box.
+                inline: match view {
+                    ResultsView::Grid => search.into_element(),
+                    _ => rect().into_element(),
+                },
+                // No folded form, and this is the one seam P5-06 leaves: the popover is anchored
+                // to the trigger, so with the trigger gone ⌘F (handled in the datagrid) toggles
+                // state nothing renders. It only bites once the pane is narrower than the toggle
+                // plus two controls, where the grid shows nothing anyway. The fix is to host the
+                // popover on the results pane root rather than on this button — a change to the
+                // popover stack, which is high-risk ground (AGENTS.md §8) and wants its own pass.
+                folded: None,
+            })
+            .item(
+                ToolbarAction::new(IconName::Reload, "Re-run the query to refresh the snapshot")
+                    .enabled(false),
+            )
+            .item(
                 // Destructive dress on hover, per the comp: red icon over a red-tinted fill and
                 // border (the Dioxus `.res-clear` recipe — 15% / 45% red mixes).
-                tool(IconName::Trash)
-                    .hover_background(danger.with_a(38))
-                    .hover_border_fill(danger.with_a(115))
-                    .hover_color(danger)
+                ToolbarAction::new(IconName::Trash, "Clear results")
+                    .danger()
                     .on_press(move |_| {
                         session.write_channel(Chan::Request(tab)).clear_request(tab);
                         sel.set(Selection::None);
                     }),
-            ))
-            .child(tip(
-                "Export results".into(),
+            )
+            .item(
                 // Opens a window **on this run**, carrying its snapshot handle: the window
                 // pins that snapshot for its life, so re-running here afterwards doesn't
                 // change what it writes (SNAPSHOT_SPEC §4).
-                tool(IconName::Download)
+                ToolbarAction::new(IconName::Download, "Export results")
                     .enabled(export.is_some())
                     .on_press(move |_| {
                         if let Some(launch) = export.clone() {
                             open_export(platform.clone(), launch);
                         }
                     }),
-            ));
+            );
 
         rect().width(Size::fill()).vertical().child(row)
     }

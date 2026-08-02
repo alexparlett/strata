@@ -461,6 +461,11 @@ fn shell(body: Element, bar: StatusBar) -> Element {
             rect()
                 .width(Size::fill())
                 .height(Size::flex(1.))
+                // Clipped, because `Overflow` defaults to painting *outside* the box: a pane
+                // dragged short gives this slot less height than the body wants, and the centred
+                // empty / running / error states then drew straight through the status bar
+                // underneath them (P5-06). The bar keeps its 40px whatever the body does.
+                .overflow(Overflow::Clip)
                 .child(body),
         )
         .child(bar)

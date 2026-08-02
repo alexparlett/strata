@@ -19,5 +19,16 @@ canvas and file the residual drift.
 ## Acceptance
 - [ ] Each surface checked against its canvas; residual drift listed and the quick wins fixed.
 
+## Filed here by P5-06
+Two pieces of drift found while doing the small-size pass, both token questions rather than
+collapse ones:
+
+- **The three panel headers are 48 / 40 / 36px, and each documents itself as matching the other
+  two** (`sidebar/mod.rs`, `inspector/mod.rs:92-93`, `drawer/mod.rs:98-99`). At least two of those
+  doc comments are false whichever height wins.
+- **Icon buttons come in six sizes** — 30 (header actions), 28 (`TOOL_SIZE`; toolbars, pager, tab
+  controls), 24 (panel-header close/expand, inspector zone controls), 22 (catalog row ⋮), 20
+  (catalog `+`, find ✕), 16 (tab close). `TOOL_SIZE` is the only one that is a shared constant.
+
 ## Freya / references
 - The `.dc.html` canvases (`.claude/design-handoff/`), DEV_TASKS Part 1, `DESIGN_SPEC.md` §14.

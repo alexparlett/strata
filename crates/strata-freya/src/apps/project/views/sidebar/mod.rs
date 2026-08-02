@@ -30,13 +30,33 @@ use crate::components::typography::{Eyebrow, InputTypography};
 /// A pane header that is just its name — every pane but the catalog, whose filter field *is*
 /// its header. `Size::flex` for the shell's reason: the row distributes, so a `fill` label
 /// would push the collapse × off the panel.
+///
+/// The name sits in a flexing, clipping cell of its own rather than straight in the row. Flex
+/// sizes the *wrapper*, but a text child still hugs, and `Overflow` defaults to painting outside
+/// the box — so at a narrow width "AGENTS" drew over the ⓘ beside it and then over the collapse ×
+/// (P5-06). Anything the caller adds after it keeps its room.
 fn label(text: &'static str, color: Color) -> Rect {
     rect()
         .width(Size::flex(1.))
         .horizontal()
+        .content(Content::Flex)
+        .overflow(Overflow::Clip)
         .cross_align(Alignment::Center)
-        .child(Eyebrow::new(text).color(color))
+        .child(
+            rect().width(Size::flex(1.)).overflow(Overflow::Clip).child(
+                Eyebrow::new(text)
+                    .color(color)
+                    .text_overflow(TextOverflow::Ellipsis),
+            ),
+        )
 }
+
+/// The header width below which the catalog's filter field is dropped rather than squeezed.
+///
+/// The header's fixed run is ↻ + × (24 each) with the row's 8px gaps and 12px side padding, i.e.
+/// 88px; below roughly this the field has under ~80px left, which is not enough to read a table
+/// name back in. Filtering stays reachable through the command palette.
+const CATALOG_FILTER_MIN: f32 = 168.;
 
 #[derive(PartialEq)]
 pub struct Sidebar;
@@ -65,16 +85,29 @@ impl Component for Sidebar {
         // The catalog filter lives in the header beside the refresh button, but its consumer is
         // the tree below — so the shell owns the signal and hands it down.
         let filter = use_state(String::new);
+        // The header's measured width, so the filter can get out of the way before it is too
+        // narrow to type in (P5-06 rule 3: shrink, then hide). Local and per-mount — a fold
+        // verdict is derived state, like `components::toolbar`'s.
+        let mut header_w = use_state(|| f32::INFINITY);
+        let roomy = *header_w.read() >= CATALOG_FILTER_MIN;
 
         let leading = match pane {
             // `Content::Flex` + a `Size::flex` field, *not* `Size::fill()`: fill takes the whole
             // parent width regardless of its siblings, so the filter ate the row and pushed ↻
             // out of the panel (the same trap `SidebarRow` documents). Flex distributes what is
             // left after the button's fixed 24px.
+            // Below `CATALOG_FILTER_MIN` the field is dropped for the pane's name: an input too
+            // narrow to read a word in is worse than none, and its magnifier was drawing over the
+            // ↻ beside it. ↻ and the collapse × keep their room either way.
+            SidebarPane::Catalog if !roomy => label("CATALOG", label_color)
+                .spacing(8.)
+                .child(RefreshButton)
+                .into_element(),
             SidebarPane::Catalog => rect()
                 .width(Size::flex(1.))
                 .horizontal()
                 .content(Content::Flex)
+                .overflow(Overflow::Clip)
                 .cross_align(Alignment::Center)
                 .spacing(8.)
                 .child(
@@ -116,6 +149,10 @@ impl Component for Sidebar {
                     .width(Size::fill())
                     .height(Size::px(48.))
                     .horizontal()
+                    .on_sized(move |e: Event<SizedEventData>| {
+                        header_w.set_if_modified(e.area.width());
+                    })
+                    .overflow(Overflow::Clip)
                     // Same reason as `leading`'s: the pane's own run is `Size::flex`, so the row
                     // has to distribute rather than hug — else the collapse × is the thing that
                     // gets pushed out.

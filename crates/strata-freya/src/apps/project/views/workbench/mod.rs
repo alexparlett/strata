@@ -34,6 +34,20 @@ mod empty;
 mod results;
 mod tab_bar;
 
+/// The tab strip's fixed height (`tab_bar::bar`).
+const TAB_BAR_H: f32 = 38.;
+/// The shortest the editor pane may become: its toolbar, the rule under it, and one line of SQL.
+/// Like every floor in the shell this is a stub, not a usable size — see `views::shell`.
+const EDITOR_STUB_H: f32 = 60.;
+/// The canvas's editor-pane clamp (`Strata.dc.html` `onResizeEditor`).
+const EDITOR_MAX_H: f32 = 480.;
+/// The shortest the results pane may become: its toolbar over its status bar, with no body.
+const RESULTS_STUB_H: f32 = 78.;
+
+/// The shortest the whole workbench may become, which is what the drawer stops taking from.
+/// Derived rather than typed again, so adding a bar to either pane moves it.
+pub const WORKBENCH_STUB_H: f32 = TAB_BAR_H + EDITOR_STUB_H + 1. + RESULTS_STUB_H;
+
 pub use results::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
     DataGridThemePreference, ExplainPlanThemePreference, RecordViewThemePreference,
@@ -155,11 +169,18 @@ impl Component for Workbench {
                         .handle_size(1.)
                         .panel(
                             ResizablePanel::new(PanelSize::px(240.))
-                                .min_size(92.)
+                                .min_size(EDITOR_STUB_H)
+                                .max_size(EDITOR_MAX_H)
+                                // No `on_collapse`: unlike the side panels, nothing would bring
+                                // this one back, so it stops at its stub instead of closing.
                                 .child(EditorTab::new(id, running)),
                         )
                         .panel(
                             ResizablePanel::new(PanelSize::percent(100.))
+                                .min_pixels(RESULTS_STUB_H)
+                                // The pixel floor is the whole floor here: the defaulted
+                                // flex-weight minimum would outrank it (see `views::shell`).
+                                .min_size(0.)
                                 .child(Results::new(id, running)),
                         ),
                 )
