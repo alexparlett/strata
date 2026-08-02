@@ -7,10 +7,15 @@ Companion to [CLAUDE.md](../../CLAUDE.md) (workspace layout) and
 
 ```
 src/main.rs                      Freya launch + startup routing (reopen every project that had a
-                                 window at the last quit, else the launcher; argv[1] wins);
-                                 discovers ThemesCtx + creates the two app-globals — the reactive
-                                 AppConfig store and the live window registry. Each window's theme
-                                 is pure derived state (`use_strata_theme`)
+                                 window at the last quit, else the launcher; a folder argument
+                                 wins); discovers ThemesCtx + creates the two app-globals — the
+                                 reactive AppConfig store and the live window registry. Each
+                                 window's theme is pure derived state (`use_strata_theme`).
+                                 Also the **`strata mcp <project>` branch** (AA-05): `cli()` is a
+                                 pure parser taken first, ahead of everything app-global, and
+                                 `headless()` points logging at stderr (stdout is the MCP
+                                 transport's) and hands the resolved root to
+                                 `strata_agent::serve_stdio`
 src/platform/windows.rs          the **window model**: the live registry (WindowId → launcher /
                                  project folder / settings), `open_project` / `open_launcher`
                                  (focus-if-open), `close_this_window` (the launcher takes over

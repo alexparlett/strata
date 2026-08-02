@@ -34,8 +34,8 @@ history. Open one per window; the app reopens what you had at last quit.
   directory. See [`docs/FREYA_THEME_SPEC.md`](docs/FREYA_THEME_SPEC.md).
 - **Agent access** — an opt-in MCP server so an AI agent (Claude Code, Cursor, Copilot…) can list your catalog,
   inspect schemas and run read-only SQL. Its queries are **real runs** on your engine, shown in the sidebar's
-  **Agents** pane — a press opens any of them in a new tab. Your tabs stay yours. See
-  [Agent access](#agent-access) below.
+  **Agents** pane — a press opens any of them in a new tab. Your tabs stay yours. The same tools are available with
+  the app closed, over stdio: `strata mcp <project>`. See [Agent access](#agent-access) below.
 - **Managed catalog DDL policy** — the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` **only**. Everything else is
   blocked with a message naming the surface that owns it: `CREATE TABLE` / `CREATE EXTERNAL TABLE` / `INSERT` → Table
   Config, `CREATE VIEW` → Save as view, `DROP` → the catalog, `COPY TO` → Export, `SET`/`RESET` → Settings.
@@ -241,6 +241,35 @@ or upgrade.
 
 Point it at the URL as a Streamable HTTP server with that header. The token is checked before a request reaches a
 tool, so a missing or wrong one is a plain `401`; the scheme is matched case-insensitively, the secret is not.
+
+### With Strata closed
+
+The same tools without the app: `strata mcp <project folder>` serves one project over **stdio**, which is the
+transport for a server the client spawns itself — so there is no port, no token and no window, and the client owning
+the process is the whole of the access control.
+
+```bash
+claude mcp add strata-headless -- /Applications/Strata.app/Contents/MacOS/Strata mcp /data/sales
+```
+
+The equivalent entry for a client that reads a config file (Claude Desktop, and anything else that speaks stdio):
+
+```json
+{
+  "mcpServers": {
+    "strata": {
+      "command": "/Applications/Strata.app/Contents/MacOS/Strata",
+      "args": ["mcp", "/data/sales"]
+    }
+  }
+}
+```
+
+It runs happily beside the app, including on the same project — two engines, each with its own snapshots. What it does
+not share is anything of yours: it never reads or writes your settings, your window session or your query history, and
+a folder with no project in it is refused rather than turned into one. It also cannot see your `datafusion.*` overrides
+(those live in app settings), so it runs the engine's defaults. A table whose source is missing is served as a `failed`
+catalog row with its error, exactly as the app lists it, and the rest of the project queries normally.
 
 ### What you are exposing
 

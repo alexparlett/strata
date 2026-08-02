@@ -159,7 +159,7 @@ impl Host for MockHost {
         self.with(project, |p| {
             p.described
                 .iter()
-                .find(|d| described_name(d).eq_ignore_ascii_case(name))
+                .find(|d| d.name().eq_ignore_ascii_case(name))
                 .cloned()
                 .ok_or_else(|| AgentError::NotFound(format!("Table or view '{name}' not found.")))
         })
@@ -281,14 +281,5 @@ impl Host for MockHost {
         for project in self.projects.lock().unwrap().iter_mut() {
             project.sessions.retain(|s| s.agent != agent);
         }
-    }
-}
-
-fn described_name(described: &Described) -> &str {
-    match described {
-        Described::Table { name, .. }
-        | Described::View { name, .. }
-        | Described::Failed { name, .. }
-        | Described::Pending { name } => name,
     }
 }

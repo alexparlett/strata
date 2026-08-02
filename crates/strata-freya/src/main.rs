@@ -11,13 +11,13 @@
 //! UI just awaits its methods (`JoinHandle`s are executor-agnostic) — see
 //! `strata_core::engine` and `docs/SNAPSHOT_SPEC.md` §7.
 
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{env, fs, io, process};
 
 use apps::launcher::LauncherApp;
 use apps::project::{window_geometry_blocking, ProjectApp};
 use freya::prelude::*;
+use strata_agent::serve_stdio;
 use strata_core::config::AppConfig;
 use strata_core::engine::purge_snapshot_root;
 use strata_core::project as project_io;
@@ -38,9 +38,21 @@ mod task;
 mod theme;
 
 fn main() {
+    // **Before anything app-global.** `strata mcp <project>` is a headless MCP server, not a
+    // window: it must not build the theme registry, read app config, touch the windows
+    // registry or embed fonts, none of which exist for it — so the branch is taken here,
+    // ahead of all of them, rather than after a launch config has been assembled.
+    let folder = match cli(env::args().skip(1)) {
+        Cli::Mcp(folder) => return headless(&folder),
+        Cli::Usage => {
+            eprintln!("{USAGE}");
+            process::exit(2);
+        }
+        Cli::Gui(folder) => folder,
+    };
     // First thing: nothing logged before this exists. Every `tracing::*` call in the app
     // and in `strata-core` is a no-op until a subscriber is installed.
-    init_logging();
+    init_logging(Log::Stdout);
     // Clear snapshot leftovers from a previous crashed run (each live engine only ever
     // cleans its own subdirectory — safe only here, before any engine exists).
     purge_snapshot_root();
@@ -114,7 +126,7 @@ fn main() {
     // One window per project to restore, or the launcher. `with_window` may be called any
     // number of times, so the whole restore set opens as the app's initial windows — no
     // first-window-spawns-the-rest dance.
-    let launch_config = match startup(&config.peek(), reopen) {
+    let launch_config = match startup(&config.peek(), reopen, folder) {
         Startup::Projects(roots) => roots.into_iter().fold(launch_config, |cfg, root| {
             // Geometry is a launch input, resolved before the window exists. Blocking for it is
             // free here — there is no event loop yet to hold up — and it is bounded either way
@@ -177,6 +189,75 @@ fn with_embedded_fonts(config: LaunchConfig) -> LaunchConfig {
         })
 }
 
+/// The subcommand that means "serve, don't open a window". An exact string: a bare folder as
+/// the first argument still means `strata <project>`, which is what it has always meant.
+const MCP_SUBCOMMAND: &str = "mcp";
+
+/// What to print when the command line is not one of the two forms.
+const USAGE: &str = "usage: strata [<project folder>]\n       strata mcp <project folder>";
+
+/// What the command line asks for.
+#[derive(Debug, PartialEq)]
+enum Cli {
+    /// Open the GUI, on the named folder if there is one.
+    Gui(Option<String>),
+    /// Serve MCP over stdio for one project and never open a window.
+    Mcp(String),
+    /// Neither form — print [`USAGE`] and stop.
+    Usage,
+}
+
+/// Read the arguments after the executable's own.
+///
+/// Pure, over an iterator rather than `env::args`, so the three forms are testable: the
+/// alternative is a subcommand nobody can assert on until the app is launched.
+///
+/// `strata mcp` with no folder is a **usage error naming the form**, not a launcher: it asks
+/// for a server, and a client that spawned it would otherwise be handed a GUI it cannot speak
+/// to. A second path after the folder is refused for the same reason — this host serves one
+/// project by construction, so a caller passing two has misunderstood something and silently
+/// dropping the second would hide it.
+fn cli<A: IntoIterator<Item = String>>(args: A) -> Cli {
+    let mut args = args.into_iter();
+    match args.next() {
+        Some(first) if first == MCP_SUBCOMMAND => match (args.next(), args.next()) {
+            (Some(folder), None) => Cli::Mcp(folder),
+            _ => Cli::Usage,
+        },
+        // Extra arguments after a folder are ignored exactly as they always were: the GUI
+        // opens the first one, and macOS hands a launched app arguments of its own.
+        folder => Cli::Gui(folder),
+    }
+}
+
+/// `strata mcp <project>`: serve the agent-access vocabulary over stdio against a plain
+/// engine, and exit when the client disconnects.
+///
+/// Nothing app-global is built, because none of it exists for a server with no window — and
+/// the one thing it would be tempting to read, app config, is deliberately left alone: this
+/// process cannot see the app's `datafusion.*` overrides, so the engine runs the defaults
+/// (spec §10; a `--config` flag can arrive when somebody wants one).
+fn headless(folder: &str) {
+    // **stderr, always.** stdout is the MCP transport's, and one stray log line on it is a
+    // parse error at the client — so the subscriber is pointed away from it before anything
+    // this process does can log, `strata-core` included.
+    init_logging(Log::Stderr);
+    // The same sweep the GUI does, in the same place and for the same reason: once at
+    // startup, before this process has an engine of its own. A live engine's snapshot
+    // directory is lock-claimed, so an app running beside this one is untouched.
+    purge_snapshot_root();
+    // Through the shared normalisation, like every other open path: naming a project's own
+    // `.strata` directory serves the project rather than a fresh one inside it. A path that
+    // will not resolve is reported by `resolve_project_folder` itself.
+    let Some(root) = platform::resolve_project_folder(Path::new(folder)) else {
+        process::exit(1);
+    };
+    if let Err(e) = serve_stdio(root) {
+        tracing::error!("{e}");
+        process::exit(1);
+    }
+}
+
 /// What the app opens on launch.
 enum Startup {
     /// Reopen these project folders, one window each — the set that had a window at the
@@ -199,8 +280,8 @@ enum Startup {
 /// A path that won't resolve is reported and skipped rather than fatal: a project folder
 /// that has been moved or deleted since the last run is ordinary, and the launcher is a
 /// perfectly good place to land.
-fn startup(config: &AppConfig, reopen: Vec<String>) -> Startup {
-    if let Some(arg) = env::args().nth(1) {
+fn startup(config: &AppConfig, reopen: Vec<String>, folder: Option<String>) -> Startup {
+    if let Some(arg) = folder {
         // Through the shared normalisation, like every other open path: naming a project's
         // own `.strata` directory opens the project, not a fresh one scaffolded inside it.
         return match platform::resolve_project_folder(Path::new(&arg)) {
@@ -232,13 +313,69 @@ fn startup(config: &AppConfig, reopen: Vec<String>) -> Startup {
     Startup::Launcher
 }
 
+/// Where the log goes — a decision the headless branch has to make and the GUI does not.
+enum Log {
+    Stdout,
+    /// `strata mcp`: stdout carries the MCP framing, so a log line on it is a parse error at
+    /// the client rather than noise.
+    Stderr,
+}
+
 /// Install a tracing subscriber. Defaults to `warn` for deps + `info` for every `strata*`
 /// crate (`EnvFilter` matches targets by prefix, so one directive covers `strata_freya`,
 /// `strata_core`, `strata_model`, …); override with `RUST_LOG`. `try_init` is a no-op if a
 /// subscriber is already installed.
-fn init_logging() {
+fn init_logging(to: Log) {
     use tracing_subscriber::EnvFilter;
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,strata=info"));
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+    let subscriber = tracing_subscriber::fmt().with_env_filter(filter);
+    let _ = match to {
+        Log::Stdout => subscriber.try_init(),
+        Log::Stderr => subscriber.with_writer(io::stderr).try_init(),
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(argv: &[&str]) -> Vec<String> {
+        argv.iter().map(|a| a.to_string()).collect()
+    }
+
+    /// The two GUI forms, unchanged: no arguments is the startup routing's decision, and a
+    /// folder is an explicit "open this".
+    #[test]
+    fn no_arguments_and_a_folder_both_open_the_gui() {
+        assert_eq!(cli(args(&[])), Cli::Gui(None));
+        assert_eq!(
+            cli(args(&["/data/sales"])),
+            Cli::Gui(Some("/data/sales".into()))
+        );
+    }
+
+    /// The subcommand is the **exact** string, so a project folder that happens to be called
+    /// `mcp` is still opened in a window — it is a path, and paths are the other form.
+    #[test]
+    fn the_subcommand_is_the_exact_string_and_takes_the_folder_after_it() {
+        assert_eq!(
+            cli(args(&["mcp", "/data/sales"])),
+            Cli::Mcp("/data/sales".into())
+        );
+        assert_eq!(cli(args(&["./mcp"])), Cli::Gui(Some("./mcp".into())));
+        assert_eq!(
+            cli(args(&["MCP", "/data/sales"])),
+            Cli::Gui(Some("MCP".into()))
+        );
+    }
+
+    /// A server asked for with nothing to serve — or with two projects, which this host
+    /// cannot hold — is a usage error rather than a window: a client that spawned this is
+    /// waiting on stdout for MCP, and a GUI would leave it waiting forever.
+    #[test]
+    fn the_subcommand_without_exactly_one_folder_is_a_usage_error() {
+        assert_eq!(cli(args(&["mcp"])), Cli::Usage);
+        assert_eq!(cli(args(&["mcp", "/a", "/b"])), Cli::Usage);
+    }
 }
