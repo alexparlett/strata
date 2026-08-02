@@ -310,11 +310,13 @@ the read path cannot deliver it.
 **The fix: order is a column, written by the spool query itself.** `materialize` adds
 `row_number() OVER ()` to the plan it streams — aliased `__strata_ord` — **after**
 `QueryOutput::columns` is captured, so the user-visible schema never contains it. The window
-forces a single input partition, sits on the same stream the writer consumes, and therefore
-numbers rows in exactly the order they are written: measured on the racy over-threshold plan
-shape (contiguous across 3M rows; a user's `ORDER BY` preserved beneath the window), and
-**re-measured on every test run** by the regression suite below, which is the standing guard
-should a planner upgrade ever change window ordering semantics. If the result already has a
+sits on the same single stream the writer consumes, and therefore numbers rows in exactly the
+order they are written: measured on the racy over-threshold plan shape (contiguous across 3M
+rows; a user's `ORDER BY` preserved beneath the window; and **no spool cost** — the plan keeps
+its `RepartitionExec`, so the projection still parallelises and only the numbering rides the
+merged stream, timed at parity over a CPU-heavy 6M-row spool), and **re-measured on every test
+run** by the regression suite below, which is the standing guard should a planner upgrade ever
+change window ordering semantics. If the result already has a
 column of that name, the name escalates by prefix (`___strata_ord`, …) until free — the chosen
 name rides in the write pass's `SnapshotStats`, beside the null counts, with exactly the
 snapshot's lifetime.

@@ -467,15 +467,20 @@ async fn materialize(
     let arrow_schema = df.schema().inner().clone();
 
     // The ordinal column (`docs/SNAPSHOT_SPEC.md` §9) rides the spool **query itself**:
-    // `row_number() OVER ()` numbers the exact single stream the writer consumes — measured
-    // on the racy over-threshold plan shape, and re-measured by `tests/snapshot_order.rs`,
-    // which is the standing guard should a planner upgrade ever change window ordering
-    // semantics. Added *after* `columns` and `arrow_schema` were captured, so the
-    // user-visible schema never contains it — the file does, and every reader orders by it
-    // and projects it away.
+    // `row_number() OVER ()` numbers the exact single stream the writer consumes. Measured
+    // twice before trusting it: the numbering is contiguous on the racy over-threshold plan
+    // shape (and a user's ORDER BY survives beneath the window), and the window costs the
+    // spool nothing — the plan keeps its RepartitionExec, so the expensive projection still
+    // parallelises and only the numbering rides the merged stream. `tests/snapshot_order.rs`
+    // re-measures the ordering property on every run, which is the standing guard should a
+    // planner upgrade ever change window semantics. Added *after* `columns` and
+    // `arrow_schema` were captured, so the user-visible schema never contains it — the file
+    // does, and every reader orders by it and projects it away. (`with_column` would replace
+    // a user column of the same name, but `ordinal_name` escalated around every name in this
+    // result, so the replace branch is unreachable.)
     let ord = ordinal_name(&arrow_schema);
     let df = df
-        .window(vec![row_number().alias(ord.as_str())])
+        .with_column(ord.as_str(), row_number())
         .map_err(|e| e.to_string())?;
     let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
     // The window appends its column last, so the user's columns are exactly the captured
