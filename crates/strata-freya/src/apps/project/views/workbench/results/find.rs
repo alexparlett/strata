@@ -281,20 +281,14 @@ impl PageMemo {
 mod tests {
     use std::sync::Arc;
 
-    use strata_core::engine::{RecordBatch, Schema};
-    use strata_model::{Cell, ColumnInfo, Kind, SnapshotId};
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_core::engine::{column_info, RecordBatch, Schema};
+    use strata_model::{Cell, SnapshotId};
 
     use super::*;
 
     fn page() -> Rc<GridData> {
-        let col = |name: &str| ColumnInfo {
-            name: name.into(),
-            dtype: "t".into(),
-            kind: Kind::Str,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        };
+        let col = |name: &str| column_info(&Field::new(name, DataType::Utf8, true));
         let cell = |text: &str| Cell {
             text: text.into(),
             null: false,
@@ -399,14 +393,7 @@ mod tests {
         // that wants it first still has to match what follows.
         assert!(!contains_lowercased("İstanbul", "\u{307}i"));
         // And the filter sees it, not just the predicate.
-        let col = ColumnInfo {
-            name: "a".into(),
-            dtype: "t".into(),
-            kind: Kind::Str,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        };
+        let col = column_info(&Field::new("a", DataType::Utf8, true));
         let data = Rc::new(GridData {
             columns: vec![col],
             rows: vec![
@@ -439,14 +426,7 @@ mod tests {
 
     #[test]
     fn the_filter_narrows_non_ascii_rows() {
-        let col = ColumnInfo {
-            name: "a".into(),
-            dtype: "t".into(),
-            kind: Kind::Str,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        };
+        let col = column_info(&Field::new("a", DataType::Utf8, true));
         let cell = |text: &str| Cell {
             text: text.into(),
             null: false,

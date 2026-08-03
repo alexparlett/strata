@@ -16,10 +16,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use futures::executor::block_on;
 use strata_core::engine::export::Compression;
-use strata_core::engine::{Engine, RunTag, WsId};
-use strata_model::{Cell, ColumnInfo, Kind, SnapshotId};
+use strata_core::engine::{column_info, Engine, RunTag, WsId};
+use strata_model::{Cell, ColumnInfo, SnapshotId};
 
 use super::model::{
     CodecChoice, Edit, ExportDraft, ExportTarget, FormatId, NullChoice, ScopeChoice,
@@ -46,15 +47,8 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-fn col(name: &str, kind: Kind) -> ColumnInfo {
-    ColumnInfo {
-        name: name.into(),
-        dtype: "x".into(),
-        kind,
-        nullable: true,
-        children: vec![],
-        stats: vec![],
-    }
+fn col(name: &str, dtype: DataType) -> ColumnInfo {
+    column_info(&Field::new(name, dtype, true))
 }
 
 /// Run `SQL` and build the [`ExportTarget`] the results pane would hand the window — the real
@@ -601,8 +595,14 @@ fn exporting_a_snapshot_that_is_gone_writes_nothing_and_says_why() {
 fn the_partitionable_columns_are_the_ones_a_directory_name_can_hold() {
     let engine = Engine::new(Default::default());
     let mut target = open_on_a_result(&engine, None);
-    target.columns.push(col("created_at", Kind::Ts));
-    target.columns.push(col("payload", Kind::Struct));
+    target.columns.push(col(
+        "created_at",
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+    ));
+    target.columns.push(col(
+        "payload",
+        DataType::Struct(vec![Field::new("a", DataType::Utf8, true)].into()),
+    ));
 
     let offered: Vec<&str> = target
         .partitionable()

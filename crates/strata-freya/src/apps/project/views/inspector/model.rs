@@ -480,32 +480,31 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use strata_core::engine::{TableMeta, ViewMeta};
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_core::engine::{column_info, TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
     use strata_model::{TableDef, ViewDef};
 
     use super::*;
     use strata_model::SourceFormat;
 
-    fn col(name: &str, dtype: &str, kind: Kind, stats: Vec<Stat>) -> ColumnInfo {
+    /// As the inspector's own tests build one — through the engine's `column_info`, so a
+    /// fixture's dtype, kind and chart role are one Arrow type's answers rather than three.
+    fn col(name: &str, dtype: DataType, stats: Vec<Stat>) -> ColumnInfo {
         ColumnInfo {
-            name: name.into(),
-            dtype: dtype.into(),
-            kind,
-            nullable: true,
-            children: Vec::new(),
             stats,
+            ..column_info(&Field::new(name, dtype, true))
         }
     }
 
     fn nested(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
+        let fields: Vec<Field> = children
+            .iter()
+            .map(|c| Field::new(&c.name, DataType::Utf8, true))
+            .collect();
         ColumnInfo {
-            name: name.into(),
-            dtype: "Struct".into(),
-            kind: Kind::Struct,
-            nullable: true,
             children,
-            stats: Vec::new(),
+            ..column_info(&Field::new(name, DataType::Struct(fields.into()), true))
         }
     }
 
@@ -546,8 +545,7 @@ mod tests {
                 columns: vec![
                     col(
                         "amount",
-                        "Float64",
-                        Kind::Num,
+                        DataType::Float64,
                         vec![
                             stat(StatKey::Nulls, "147200"),
                             stat(StatKey::Min, "-240.0"),
@@ -557,8 +555,8 @@ mod tests {
                     nested(
                         "address",
                         vec![
-                            col("city", "Utf8", Kind::Str, Vec::new()),
-                            nested("geo", vec![col("lat", "Float64", Kind::Num, Vec::new())]),
+                            col("city", DataType::Utf8, Vec::new()),
+                            nested("geo", vec![col("lat", DataType::Float64, Vec::new())]),
                         ],
                     ),
                 ],
@@ -568,14 +566,14 @@ mod tests {
         p.table_registered(
             "uploads",
             TableMeta {
-                columns: vec![col("note", "Utf8", Kind::Str, Vec::new())],
+                columns: vec![col("note", DataType::Utf8, Vec::new())],
                 rows: None,
             },
         );
         p.view_registered(
             "daily",
             ViewMeta {
-                columns: vec![col("day", "Date32", Kind::Ts, Vec::new())],
+                columns: vec![col("day", DataType::Date32, Vec::new())],
                 tables: vec!["events".into()],
                 aliases: Vec::new(),
             },
@@ -691,11 +689,10 @@ mod tests {
             "events",
             TableMeta {
                 columns: vec![
-                    nested("address", vec![col("city", "Utf8", Kind::Str, Vec::new())]),
+                    nested("address", vec![col("city", DataType::Utf8, Vec::new())]),
                     col(
                         "city",
-                        "Int64",
-                        Kind::Num,
+                        DataType::Int64,
                         vec![stat(StatKey::Min, "1"), stat(StatKey::Max, "9")],
                     ),
                 ],
@@ -773,8 +770,7 @@ mod tests {
             TableMeta {
                 columns: vec![col(
                     "name",
-                    "Utf8",
-                    Kind::Str,
+                    DataType::Utf8,
                     vec![Stat {
                         key: StatKey::Max,
                         text: "Radia Perl".into(),
@@ -892,8 +888,7 @@ mod tests {
             TableMeta {
                 columns: vec![col(
                     "name",
-                    "Utf8",
-                    Kind::Str,
+                    DataType::Utf8,
                     vec![Stat {
                         key: StatKey::Max,
                         text: "Radia Perl".into(),

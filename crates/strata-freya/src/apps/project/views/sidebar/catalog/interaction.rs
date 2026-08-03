@@ -9,13 +9,14 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
 use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
-use strata_core::engine::{TableMeta, ViewMeta};
+use strata_core::engine::{column_info, TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ColRef, ColumnInfo, Kind, Origin, SavedQuery, SourceFormat, TableDef, ViewDef};
+use strata_model::{ColRef, ColumnInfo, Origin, SavedQuery, SourceFormat, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
@@ -30,27 +31,22 @@ use crate::state::ConfigStation;
 use crate::theme::strata_theme;
 use strata_core::config::AppConfig;
 
-/// A leaf column.
-fn col(name: &str, dtype: &str, kind: Kind) -> ColumnInfo {
-    ColumnInfo {
-        name: name.into(),
-        dtype: dtype.into(),
-        kind,
-        nullable: true,
-        children: Vec::new(),
-        stats: Vec::new(),
-    }
+/// A leaf column, through the engine's own `column_info` — so the fixture's type spelling,
+/// display kind and chart role are all derived from one Arrow type rather than stated three
+/// times and able to disagree.
+fn col(name: &str, dtype: DataType) -> ColumnInfo {
+    column_info(&Field::new(name, dtype, true))
 }
 
 /// A struct column with children.
 fn nested(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
+    let fields: Vec<Field> = children
+        .iter()
+        .map(|c| Field::new(&c.name, DataType::Utf8, true))
+        .collect();
     ColumnInfo {
-        name: name.into(),
-        dtype: "Struct".into(),
-        kind: Kind::Struct,
-        nullable: true,
         children,
-        stats: Vec::new(),
+        ..column_info(&Field::new(name, DataType::Struct(fields.into()), true))
     }
 }
 
@@ -119,15 +115,12 @@ fn project() -> ProjectState {
         "orders",
         TableMeta {
             columns: vec![
-                col("id", "Int64", Kind::Num),
+                col("id", DataType::Int64),
                 nested(
                     "address",
-                    vec![
-                        col("city", "Utf8", Kind::Str),
-                        col("zip", "Utf8", Kind::Str),
-                    ],
+                    vec![col("city", DataType::Utf8), col("zip", DataType::Utf8)],
                 ),
-                col("year", "Int32", Kind::Num),
+                col("year", DataType::Int32),
             ],
             rows: Some(10),
         },
@@ -136,7 +129,7 @@ fn project() -> ProjectState {
     p.view_registered(
         "archive_totals",
         ViewMeta {
-            columns: vec![col("total", "Int64", Kind::Num)],
+            columns: vec![col("total", DataType::Int64)],
             tables: vec!["archive".into()],
             aliases: Vec::new(),
         },
@@ -144,7 +137,7 @@ fn project() -> ProjectState {
     p.view_registered(
         "orders_daily",
         ViewMeta {
-            columns: vec![col("day", "Date32", Kind::Ts)],
+            columns: vec![col("day", DataType::Date32)],
             tables: vec!["orders".into()],
             aliases: Vec::new(),
         },
@@ -152,7 +145,7 @@ fn project() -> ProjectState {
     p.view_registered(
         "regions",
         ViewMeta {
-            columns: vec![col("region", "Utf8", Kind::Str)],
+            columns: vec![col("region", DataType::Utf8)],
             tables: Vec::new(),
             aliases: Vec::new(),
         },
@@ -732,7 +725,7 @@ fn a_triangle_clears_when_the_row_registers() {
     store.write_channel(ProjChan::Tables).table_registered(
         "events",
         TableMeta {
-            columns: vec![col("at", "Timestamp", Kind::Ts)],
+            columns: vec![col("at", DataType::Timestamp(TimeUnit::Millisecond, None))],
             rows: Some(4),
         },
     );
@@ -758,7 +751,7 @@ fn a_row_answered_inside_the_delay_never_spins() {
     store.write_channel(ProjChan::Tables).table_registered(
         "users",
         TableMeta {
-            columns: vec![col("id", "Int64", Kind::Num)],
+            columns: vec![col("id", DataType::Int64)],
             rows: Some(2),
         },
     );
@@ -826,7 +819,7 @@ fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
     store.write_channel(ProjChan::Tables).table_registered(
         "events",
         TableMeta {
-            columns: vec![col("at", "Timestamp", Kind::Ts)],
+            columns: vec![col("at", DataType::Timestamp(TimeUnit::Millisecond, None))],
             rows: Some(4),
         },
     );

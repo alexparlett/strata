@@ -8,8 +8,14 @@ and the **Aggregate in SQL** scaffold into a new tab — promoted from escape ha
 raw-data workflow. Spec: `docs/CHART_SPEC.md` §7–§8.
 
 ## Current state
-01 answers the refusals as data (`OverCap`, `Duplicates`); 02/03 render and configure. Nothing
-consumes the refusals yet.
+01 answers the refusals as data (`OverCap`, `Duplicates`); 02/03 render and configure.
+
+02 **states** every refusal already, as a centred title + body `Notice` in place of the canvas
+(`results/chart/mod.rs`: `notice` for the engine's two and for every shape that would
+otherwise paint nothing, `encode`'s `Err` for the encodings a schema cannot satisfy). What it does not do is offer a way out: this task adds the icon tile and
+the **Aggregate in SQL** CTA beneath that same copy, and the high-cardinality banner. The
+messages are the deliverable of that surface, so re-word them here if the CTA changes what they
+should say — do not leave two copies.
 
 ## Build
 - **Overlays** (in place of the canvas; icon + title + body + optional CTA, IDE-terse copy):

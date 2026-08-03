@@ -11,7 +11,7 @@ use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
 
 use strata_model::{
-    ColumnInfo, CsvRead, FileCompression, JsonShape, Kind, SourceFormat, Stat, StatKey,
+    ChartRole, ColumnInfo, CsvRead, FileCompression, JsonShape, Kind, SourceFormat, Stat, StatKey,
 };
 
 use crate::engine::json_poly::PolyJsonFormat;
@@ -708,11 +708,44 @@ fn stat_of(key: StatKey, p: &Precision<ScalarValue>) -> Option<Stat> {
     })
 }
 
+/// What a chart may encode a column of this type as (`docs/CHART_SPEC.md` §3) — matched on
+/// the `DataType` itself, here, because this is the last place that still has one: everything
+/// downstream sees a [`ColumnInfo`], and a type's *spelling* is a rendering of a type rather
+/// than the type.
+///
+/// The measure arm is [`DataType::is_numeric`] rather than a list of variants, because that is
+/// the very predicate [`super::chart`]'s read gates a Y on — so the encoder cannot offer a
+/// measure the read would then refuse. The temporal arm mirrors the same module's `positions`,
+/// which is what gives those columns a place on an axis. A dictionary is a **dimension**
+/// whatever it encodes: it is a category by construction, and a dictionary of numbers is not a
+/// measure the read accepts. Anything else — nested, binary, interval, a variant Arrow grows
+/// later — is [`ChartRole::Other`] and is offered nowhere, which is the safe default in the
+/// direction that matters.
+pub fn chart_role(dt: &DataType) -> ChartRole {
+    if dt.is_numeric() {
+        return ChartRole::Measure;
+    }
+    match dt {
+        DataType::Date32
+        | DataType::Date64
+        | DataType::Timestamp(_, _)
+        | DataType::Time32(_)
+        | DataType::Time64(_) => ChartRole::Temporal,
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Boolean
+        | DataType::Dictionary(_, _) => ChartRole::Dimension,
+        _ => ChartRole::Other,
+    }
+}
+
 pub fn column_info(field: &Field) -> ColumnInfo {
     let dtype = short_type(field.data_type());
     ColumnInfo {
         name: field.name().clone(),
         kind: Kind::from_arrow(&dtype),
+        role: chart_role(field.data_type()),
         dtype,
         nullable: field.is_nullable(),
         children: nested_children(field.data_type()),

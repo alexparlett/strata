@@ -287,25 +287,20 @@ impl Component for ProfileConfirm {
 mod tests {
     use std::path::PathBuf;
 
+    use datafusion::arrow::datatypes::{DataType, Field};
     use freya_testing::TestingRunner;
+    use strata_core::engine::column_info;
     use strata_core::engine::{TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_model::{ColumnInfo, Kind, TableDef, ViewDef};
+    use strata_model::{ColumnInfo, TableDef, ViewDef};
 
     use super::*;
     use crate::theme::strata_theme;
     use strata_model::SourceFormat;
 
     fn col(name: &str) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            dtype: "Utf8".into(),
-            kind: Kind::Str,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        }
+        column_info(&Field::new(name, DataType::Utf8, true))
     }
 
     /// One registered table and one registered view — the two things that can be profiled.

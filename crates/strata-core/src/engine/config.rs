@@ -450,6 +450,22 @@ pub fn is_owned_key(name: &str) -> bool {
     )
 }
 
+/// Just the `datafusion.format.*` entries of `overrides` — the **display** half, which
+/// changes how already-materialized values are rendered rather than what is read.
+///
+/// A read that formats values (`query::CellFormat`) answers differently
+/// after one of these moves, with no restart and no new snapshot, so a consumer that caches
+/// such an answer has to carry this subset in the answer's identity. The chart's read is the
+/// one that does (`docs/CHART_SPEC.md` §5 — its axis labels come out of `CellFormat`); the
+/// grid re-reads its pages for other reasons often enough not to have needed it.
+pub fn display_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    overrides
+        .iter()
+        .filter(|(k, _)| k.trim().starts_with("datafusion.format."))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
 /// The effective value for `key` given the overrides map — the override if present, else
 /// the known built-in default. `None` for a custom key with no override.
 pub fn effective(overrides: &BTreeMap<String, String>, key: &str) -> Option<String> {

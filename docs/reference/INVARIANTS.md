@@ -127,6 +127,29 @@ Things that must not regress. Each was fought for once already.
   snapshot perfect, a 3M-row one 2 975 424 of 3 000 000 rows out of order — and a chart that
   re-aggregates cannot preserve order even over an ordered read. Do not resurrect either idea
   without new evidence.
+
+  Two facts the **renderer** settled (Rz2/02), both about identity rather than drawing:
+
+  - **A column's chart role comes from the Arrow `DataType`, resolved in `column_info`.**
+    `ColumnInfo` carries `role: ChartRole` beside `kind`, and `engine::catalog::chart_role`
+    matches the type itself — its measure arm **is** `DataType::is_numeric`, the same predicate
+    `engine::chart`'s read gates a Y on, so an encoder cannot offer a measure the read would then
+    refuse. Neither of the two things already in hand is the source: a type's *spelling* is a
+    rendering of a type (and `short_type` folds `LargeUtf8` into `Utf8`, every list into `List`),
+    and `Kind` is the **display** taxonomy — deliberately coarser, and it reads a union as a
+    string, which is harmless for a swatch and wrong for an axis. Every `ColumnInfo` fixture in
+    the workspace is built through `column_info` for the same reason: a hand-written row states
+    the type three times and lets the three disagree.
+  - **A chart read's cache identity is `(snapshot, query, display config)`.** Axis labels render
+    through `CellFormat` — the engine's live `datafusion.format.*` — which `set_config` changes
+    with **no restart and no new snapshot**, so an entry keyed on the pair alone serves labels
+    rendered under a format the user has since changed. `ChartSpec` carries
+    `config::display_subset` of the app's engine overrides, which makes a format change a new
+    entry rather than a stale one and keeps `stale_time(MAX)` honest. It is read from the **app
+    config** (the store `use_engine_config` drives the engine from), not from the engine's own
+    copy: that is the reactive source, and Freya's runner drains a write's dirty scopes before it
+    polls the tasks queued alongside them, so the driver's `set_config` has landed by the time the
+    capability runs.
 - **A snapshot read has no order of its own; order is the ordinal column.** (`SNAPSHOT_SPEC.md`
   §9; lands with the workstream re-cut.) Above 10 MB an Arrow File scan range-splits and a bare
   `LIMIT/OFFSET` read sits over a `CoalescePartitionsExec` — measured: at 3M rows the *same page

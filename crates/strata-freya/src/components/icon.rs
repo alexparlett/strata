@@ -45,6 +45,15 @@ pub enum IconName {
     Last,
     Grid,
     Chart,
+    /// The six chart **marks**, for the Chart body's type picker (Rz2). Distinct from
+    /// [`Chart`](Self::Chart), which is the results toolbar's Table/Chart toggle: these are
+    /// six glyphs that have to read as a set, and the toggle's is one of a different pair.
+    MarkBar,
+    MarkLine,
+    MarkArea,
+    MarkScatter,
+    MarkHistogram,
+    MarkPie,
     Lines,
     Copy,
     Connections,
@@ -118,6 +127,12 @@ impl IconName {
             IconName::Last => LAST,
             IconName::Grid => GRID,
             IconName::Chart => CHART,
+            IconName::MarkBar => MARK_BAR,
+            IconName::MarkLine => MARK_LINE,
+            IconName::MarkArea => MARK_AREA,
+            IconName::MarkScatter => MARK_SCATTER,
+            IconName::MarkHistogram => MARK_HISTOGRAM,
+            IconName::MarkPie => MARK_PIE,
             IconName::Lines => LINES,
             IconName::Copy => COPY,
             IconName::Connections => CONNECTIONS,
@@ -232,6 +247,13 @@ const FIRST: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 2
 const GRID: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>"#;
 const CHART: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>"#;
 const LAST: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 6l6 6-6 6M16 6v12"/></svg>"#;
+// The Chart body's six mark tiles (design `chartTypes`).
+const MARK_BAR: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10h4v10zM10 20V4h4v16zM16 20v-7h4v7z"/></svg>"#;
+const MARK_LINE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 8-9"/></svg>"#;
+const MARK_AREA: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 8-9v11H3z"/></svg>"#;
+const MARK_SCATTER: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h.01M10 13h.01M14 15h.01M18 8h.01M8 9h.01"/></svg>"#;
+const MARK_HISTOGRAM: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V12h3v8zM9 20V7h3v13zM14 20V10h3v10zM19 20v-5h1v5z"/></svg>"#;
+const MARK_PIE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9l7.5 4.5A9 9 0 1 0 12 3z"/></svg>"#;
 // Ragged text lines — the plan view's Raw/Tree toggle.
 const LINES: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h10M4 17h13"/></svg>"#;
 // Two overlapped sheets — the record view's Copy row as JSON / CSV buttons.

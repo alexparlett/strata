@@ -21,10 +21,10 @@ use crate::apps::export::ExportThemePreference;
 use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
     AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
-    CellViewThemePreference, CommandPaletteThemePreference, DataGridThemePreference,
-    DrawerThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
-    InspectorThemePreference, RecordViewThemePreference, StatusBarThemePreference,
-    TabBarThemePreference, TabThemePreference,
+    CellViewThemePreference, ChartThemePreference, CommandPaletteThemePreference,
+    DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,
+    HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
+    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
@@ -591,6 +591,21 @@ strata_components! {
     "command_palette" => CommandPaletteThemePreference {
         background, border_fill, backdrop, label_color, row_active_background, row_active_color,
         row_color, icon_color, sub_color, esc_color, shadow,
+    },
+    // The results Chart body (Rz2): the canvas pane and the control strip either side of their
+    // rule, the strip's section eyebrows, a mark tile's resting and selected dress, the plot's
+    // own furniture (gridlines, the zero baseline, tick labels, legend entries) and the note a
+    // non-drawable encoding leaves in place of the plot. Then the **categorical ramp**: ten
+    // ordered series colours, `reference`d out of each theme's `chart_*` palette slots so a
+    // theme retunes the ramp as a set rather than ten unrelated fields. Ten because that is how
+    // many distinguishable hues a legend can carry; a series past the tenth wraps around.
+    "chart" => ChartThemePreference {
+        background, panel_background, border_fill, label_color,
+        tile_color, tile_border_fill, tile_active_background, tile_active_border_fill,
+        tile_active_color,
+        grid_fill, axis_fill, tick_color, legend_color, note_color,
+        series_1, series_2, series_3, series_4, series_5,
+        series_6, series_7, series_8, series_9, series_10,
     },
     // The results datagrid (our custom virtualized grid — distinct from Freya's builtin `table`):
     // surface, header (name/label/active), row (rest/zebra/hover), selection, gutter, dividers, and

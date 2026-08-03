@@ -350,21 +350,15 @@ impl Results {
 mod tests {
     use std::path::PathBuf;
 
-    use strata_core::engine::TableMeta;
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_core::engine::{column_info, TableMeta};
     use strata_model::{ColumnInfo, SourceFormat, TableDef, ViewDef};
 
     use super::*;
     use crate::apps::project::state::{TableRow, ViewInfo, ViewRow};
 
-    fn column(name: &str, dtype: &str, kind: Kind) -> ColumnInfo {
-        ColumnInfo {
-            name: name.to_string(),
-            dtype: dtype.to_string(),
-            kind,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        }
+    fn column(name: &str, dtype: DataType) -> ColumnInfo {
+        column_info(&Field::new(name, dtype, true))
     }
 
     fn table(name: &str, partition_cols: &[&str], reg: Reg<TableMeta>) -> TableRow {
@@ -396,8 +390,8 @@ mod tests {
                     &["country"],
                     Reg::Ready(TableMeta {
                         columns: vec![
-                            column("order_id", "Int64", Kind::Num),
-                            column("country", "Utf8", Kind::Str),
+                            column("order_id", DataType::Int64),
+                            column("country", DataType::Utf8),
                         ],
                         rows: Some(1_000),
                     }),
@@ -410,7 +404,7 @@ mod tests {
                     sql: "SELECT 1".to_string(),
                 },
                 reg: Reg::Ready(ViewInfo {
-                    columns: vec![column("total", "Float64", Kind::Num)],
+                    columns: vec![column("total", DataType::Float64)],
                     deps: vec!["orders".to_string()],
                     view_deps: Vec::new(),
                 }),
@@ -551,7 +545,7 @@ mod tests {
             unreachable!("the fixture's first table is registered")
         };
         meta.columns = (0..20)
-            .map(|i| column(&format!("c{i}"), "Int64", Kind::Num))
+            .map(|i| column(&format!("c{i}"), DataType::Int64))
             .collect();
 
         let groups = Index::new(&project).search("c");

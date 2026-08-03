@@ -10,7 +10,7 @@ license = "MIT"
 # Session store. The editor is our vendored `strata-code-editor` (owned fork of freya-code-editor),
 # NOT freya's `code-editor` feature — so we control cursor / gutter / line highlight / syntax palette
 # / squiggles / autocomplete.
-freya = { workspace = true, features = ["radio", "query", "menu", "router"] }
+freya = { workspace = true, features = ["radio", "query", "menu", "router", "plot"] }
 
 # The shared core: engine (Command/Event protocol + worker handle) + the data vocabulary.
 strata-core = { path = "../strata-core" }

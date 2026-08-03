@@ -28,13 +28,15 @@ pub use catalog::{
     CatalogKind, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoveKind, RemoveTarget,
     SavedQuery, SourceFormat, TableDef, ViewDef,
 };
-pub use chart::{Axis, CapUnit, ChartBin, ChartData, ChartPoint, ChartQuery, ChartSeries};
+pub use chart::{
+    Axis, CapUnit, ChartBin, ChartData, ChartMark, ChartPoint, ChartQuery, ChartSeries,
+};
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;
 pub use query_error::QueryError;
 pub use results::{Cell, QueryOutput, SnapshotId};
-pub use schema::{ColumnInfo, Kind, Stat, StatKey};
+pub use schema::{ChartRole, ColumnInfo, Kind, Stat, StatKey};
 pub use session::{
     expanded_drawer_h, DrawerTab, Layout, Origin, ProblemsTab, ResultsView, SessionSnapshot,
     SidebarPane, TabId, TabSnapshot, WindowGeom,

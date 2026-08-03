@@ -4,34 +4,33 @@
 use super::*;
 use std::collections::HashSet;
 
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
+
+use crate::engine::column_info;
 use crate::engine::sql::FunctionCatalog;
-use strata_model::{ColumnInfo, Kind};
+use strata_model::ColumnInfo;
 
 /// `events(user_id, amount, status, ts)` + `users(user_id, name, guid)` + a saved
 /// view `spenders(user_id, total)` + a few functions.
 fn catalog() -> Catalog {
-    fn col(name: &str, dtype: &str) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            dtype: dtype.into(),
-            kind: Kind::from_arrow(dtype),
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        }
+    fn col(name: &str, dtype: DataType) -> ColumnInfo {
+        column_info(&Field::new(name, dtype, true))
     }
     let events = [
-        col("user_id", "Int64"),
-        col("amount", "Float64"),
-        col("status", "Utf8"),
-        col("ts", "Timestamp"),
+        col("user_id", DataType::Int64),
+        col("amount", DataType::Float64),
+        col("status", DataType::Utf8),
+        col("ts", DataType::Timestamp(TimeUnit::Millisecond, None)),
     ];
     let users = [
-        col("user_id", "Int64"),
-        col("name", "Utf8"),
-        col("guid", "Utf8"),
+        col("user_id", DataType::Int64),
+        col("name", DataType::Utf8),
+        col("guid", DataType::Utf8),
     ];
-    let spenders = [col("user_id", "Int64"), col("total", "Float64")];
+    let spenders = [
+        col("user_id", DataType::Int64),
+        col("total", DataType::Float64),
+    ];
     Catalog::build(
         [("events", &events[..]), ("users", &users[..])],
         [("spenders", &spenders[..])],
@@ -456,14 +455,7 @@ fn identifier_accepts_never_add_a_space() {
 #[test]
 fn weird_identifiers_insert_quoted() {
     fn col(name: &str) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            dtype: "Utf8".into(),
-            kind: Kind::Str,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        }
+        column_info(&Field::new(name, DataType::Utf8, true))
     }
     let cols = [col("Amount USD"), col("order"), col("plain")];
     let cat = Catalog::build([("t", &cols[..])], [], FunctionCatalog::default());
@@ -610,14 +602,7 @@ fn grammar_vocabulary_columns_insert_quoted() {
     // wrong data; `case` breaks the parse. The collision set unions the
     // model's own grammar tables, not just the parser's reserved words.
     fn col(name: &str) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            dtype: "Utf8".into(),
-            kind: Kind::Str,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        }
+        column_info(&Field::new(name, DataType::Utf8, true))
     }
     let cols = [col("null"), col("case"), col("asc"), col("plain")];
     let cat = Catalog::build([("t", &cols[..])], [], FunctionCatalog::default());

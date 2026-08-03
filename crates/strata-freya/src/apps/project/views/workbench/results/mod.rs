@@ -48,6 +48,7 @@ use crate::apps::project::views::workbench::results::selection::Selection;
 use crate::platform::Subtree;
 use crate::state::AppCtx;
 pub use cell_view::CellViewThemePreference;
+pub use chart::ChartThemePreference;
 pub use datagrid::DataGridThemePreference;
 pub use explain_plan::ExplainPlanThemePreference;
 pub use record_view::RecordViewThemePreference;
@@ -332,14 +333,23 @@ impl Component for ResultsBody {
                 Running::new(cancel).into(),
                 StatusBar::new(ResultsState::Running),
             ),
-            // Chart mode (P2-07): the placeholder body under the shared toolbar. The pager
-            // and selection aggregate are grid concerns, so the bar keeps only the run
-            // readouts; the page/find/sort state above stays put for the switch back.
+            // Chart mode (P2-07): the chart body under the shared toolbar. The pager and
+            // selection aggregate are grid concerns, so the bar keeps only the run readouts;
+            // the page/find/sort state above stays put for the switch back. The snapshot and
+            // the run's schema ride with it — the chart reads the same materialized result
+            // the grid pages, and derives its encoding from that result's own columns.
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Rows(rows)),
                 settlement_instant,
             } if results_view == ResultsView::Chart => (
-                ChartView::new(ws, find, export_target(rows)).into(),
+                ChartView::new(
+                    ws,
+                    find,
+                    export_target(rows),
+                    rows.output.snapshot,
+                    rows.output.columns.clone(),
+                )
+                .into(),
                 StatusBar::new(ResultsState::Chart).info(RunInfo {
                     total: rows.output.total,
                     elapsed_ms: rows.output.elapsed_ms,

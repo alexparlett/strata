@@ -7,7 +7,15 @@ The left control strip (X / Ys / Series / Sort) and the persisted per-tab `Chart
 drives the chart. Spec: `docs/CHART_SPEC.md` §3, §4, §6.
 
 ## Current state
-02 charts off schema-derived defaults computed inline. No config state exists.
+02 charts off schema-derived defaults computed inline (`results/chart/mod.rs`: `Roles::of` over
+each column's `ChartRole`, then `encode`). No config state exists — the **mark** is a
+`use_state` on the body, written by the strip's tile grid, and it resets on a re-run because
+this task is what persists it.
+
+What is already built and should be extended rather than replaced: the strip itself
+(`results/chart/strip.rs` — 232px, its own scroll, `CHART TYPE` at the top and room under it),
+the `chart` component theme (its `label_color` is a section eyebrow's), and the **one**
+`ChartQuery` construction site (`encode`), which is where the config replaces the derivation.
 
 ## Build
 - **State**: `ChartConfig { mark, x, ys, series, sort }` (serde, `strata-model`) on `QueryTab`
@@ -15,7 +23,8 @@ drives the chart. Spec: `docs/CHART_SPEC.md` §3, §4, §6.
   (`derive_channel`: goes to `Persist`, like `View`). Persist via `TabSnapshot` alongside `view`.
   Defaults merge **under** user-set keys per spec §6; when a new result's columns no longer match
   the stored config, re-derive — a stale column name must never reach `ChartQuery`. The
-  `ChartQuery` construction from config + schema stays in the one site 02 built. **`sort` is a
+  `ChartQuery` construction from config + schema stays in the one site 02 built (`encode`).
+  Moving the mark there means the tile grid writes `config.mark` instead of its `use_state`. **`sort` is a
   view transform** (`ResultOrder` | `ByX` | `ByYDesc`): applied client-side to the settled
   `ChartData::Table`, never part of `ChartQuery` — flipping it repaints without a re-query. Any
   float comparison in that reorder is total (`total_cmp`, NaN last): the withdrawn pipeline's

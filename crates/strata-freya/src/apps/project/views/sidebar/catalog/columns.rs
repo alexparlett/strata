@@ -70,25 +70,25 @@ pub fn flatten_cols(
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_core::engine::column_info;
+
     use super::*;
 
+    /// A leaf text column, or a struct over `children` — built through the engine's own
+    /// `column_info`, so the fixture's type, kind and chart role are the ones production
+    /// would have derived rather than a second opinion about the same field.
     fn col(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
+        if children.is_empty() {
+            return column_info(&Field::new(name, DataType::Utf8, true));
+        }
+        let fields: Vec<Field> = children
+            .iter()
+            .map(|c| Field::new(&c.name, DataType::Utf8, true))
+            .collect();
         ColumnInfo {
-            name: name.into(),
-            dtype: if children.is_empty() {
-                "Utf8"
-            } else {
-                "Struct"
-            }
-            .into(),
-            kind: if children.is_empty() {
-                Kind::Str
-            } else {
-                Kind::Struct
-            },
-            nullable: true,
             children,
-            stats: Vec::new(),
+            ..column_info(&Field::new(name, DataType::Struct(fields.into()), true))
         }
     }
 

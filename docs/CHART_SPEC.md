@@ -57,8 +57,12 @@ replaces the placeholder tile with:
 
 ## 3. Column roles (from the Arrow type)
 
-Derived from each result column's Arrow `DataType`, not name strings. Roles drive the encoder
-menus and the defaults — they never change what the engine computes, because it computes nothing:
+Derived from each result column's Arrow `DataType`, not name strings — and derived where that
+type is still in hand: `engine::catalog::chart_role`, called by `column_info`, so every column
+carries its `ChartRole` beside its `Kind`. The measure arm **is** `DataType::is_numeric`, the
+same predicate the read gates a Y on, so an encoder cannot offer a measure the read then
+refuses. Roles drive the encoder menus and the defaults — they never change what the engine
+computes, because it computes nothing:
 
 | role | DataTypes |
 |---|---|
@@ -95,9 +99,15 @@ Three rules make the encoding model:
 
 ## 5. Data: `Engine::chart` over the snapshot
 
-One engine method, one freya-query capability in front of it, keyed `(SnapshotId, ChartQuery)`,
-no confirm — a projected, capped read of a local snapshot is `fetch_page`-tier work. The read
-holds the snapshot pin for the call, like `export`.
+One engine method, one freya-query capability in front of it, keyed `(SnapshotId, ChartQuery,
+display config)`, no confirm — a projected, capped read of a local snapshot is `fetch_page`-tier
+work. The read holds the snapshot pin for the call, like `export`.
+
+The third key is not optional: `Axis.labels` render through the engine's live
+`datafusion.format.*` (below), which Settings changes with no restart and no new snapshot, so an
+entry keyed on the first two alone serves labels rendered under a format the user has since
+changed. `ChartSpec` carries `config::display_subset` of the app's engine overrides, which makes
+a format change a new entry rather than a stale one.
 
 **Vocabulary (strata-model, `chart.rs`).** All hash/eq-able — `ChartQuery` is cache identity.
 
@@ -192,6 +202,17 @@ gridlines / nice max / abbreviated ticks / thinned X labels / zero baseline on n
 `chart` component theme plus the categorical palette as 10 palette slots, then
 `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`. Line/area may use `Axis.positions`
 for true placement when present; equally-spaced labels are the fallback, not the rule.
+
+As built (02), two mechanisms are worth naming because they are what keep §9 from becoming a
+hand-rolled axis stack:
+
+- The category axis is a plotters **`Ranged`** (`chart::axis::Categories`) that hands plotters
+  its own key points, so every gridline and tick lands *on* a category and is labelled with that
+  category's own text; thinning is the key-point stride, at one label per ~64 logical px.
+- True `Axis.positions` placement is taken only when the positions are present, finite and
+  **strictly increasing** — the case where result order and value order coincide. Otherwise
+  placing marks by value would re-order the axis §1.6 says is the user's, so it falls back to
+  equal spacing.
 
 ## 10. Later (owned follow-on, not scope creep)
 
