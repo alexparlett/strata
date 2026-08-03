@@ -38,16 +38,15 @@ fn col(name: &str, dtype: DataType) -> ColumnInfo {
     column_info(&Field::new(name, dtype, true))
 }
 
-/// A struct column with children.
-fn nested(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
-    let fields: Vec<Field> = children
-        .iter()
-        .map(|c| Field::new(&c.name, DataType::Utf8, true))
-        .collect();
-    ColumnInfo {
-        children,
-        ..column_info(&Field::new(name, DataType::Struct(fields.into()), true))
-    }
+/// A leaf column's Arrow field, for nesting inside a struct.
+fn field(name: &str, dtype: DataType) -> Field {
+    Field::new(name, dtype, true)
+}
+
+/// A struct column over its children — the fixture builds the Arrow type and `column_info`
+/// derives the whole row from it, nested children included.
+fn nested(name: &str, children: Vec<Field>) -> ColumnInfo {
+    column_info(&Field::new(name, DataType::Struct(children.into()), true))
 }
 
 fn table(name: &str, partition_cols: Vec<(String, String)>) -> TableDef {
@@ -118,7 +117,7 @@ fn project() -> ProjectState {
                 col("id", DataType::Int64),
                 nested(
                     "address",
-                    vec![col("city", DataType::Utf8), col("zip", DataType::Utf8)],
+                    vec![field("city", DataType::Utf8), field("zip", DataType::Utf8)],
                 ),
                 col("year", DataType::Int32),
             ],

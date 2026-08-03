@@ -75,21 +75,20 @@ mod tests {
 
     use super::*;
 
-    /// A leaf text column, or a struct over `children` — built through the engine's own
-    /// `column_info`, so the fixture's type, kind and chart role are the ones production
-    /// would have derived rather than a second opinion about the same field.
-    fn col(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
+    /// A leaf text column, or a struct over `children`, as the Arrow field production reads.
+    fn field(name: &str, children: Vec<Field>) -> Field {
         if children.is_empty() {
-            return column_info(&Field::new(name, DataType::Utf8, true));
+            Field::new(name, DataType::Utf8, true)
+        } else {
+            Field::new(name, DataType::Struct(children.into()), true)
         }
-        let fields: Vec<Field> = children
-            .iter()
-            .map(|c| Field::new(&c.name, DataType::Utf8, true))
-            .collect();
-        ColumnInfo {
-            children,
-            ..column_info(&Field::new(name, DataType::Struct(fields.into()), true))
-        }
+    }
+
+    /// The whole tree through the engine's own `column_info`, so the fixture's type, kind,
+    /// chart role **and nested children** are the ones production would have derived — rather
+    /// than a hand-built row wearing a derived one's clothes.
+    fn col(name: &str, children: Vec<Field>) -> ColumnInfo {
+        column_info(&field(name, children))
     }
 
     fn flatten(cols: &[ColumnInfo], parts: &[(String, String)], expanded: &[&str]) -> Vec<ColRow> {
@@ -101,7 +100,10 @@ mod tests {
 
     #[test]
     fn collapsed_struct_contributes_only_itself() {
-        let cols = vec![col("address", vec![col("city", vec![])]), col("id", vec![])];
+        let cols = vec![
+            col("address", vec![field("city", vec![])]),
+            col("id", vec![]),
+        ];
         let rows = flatten(&cols, &[], &[]);
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["address", "id"]);
@@ -112,7 +114,10 @@ mod tests {
 
     #[test]
     fn expanding_a_struct_splices_its_children_in_place() {
-        let cols = vec![col("address", vec![col("city", vec![])]), col("id", vec![])];
+        let cols = vec![
+            col("address", vec![field("city", vec![])]),
+            col("id", vec![]),
+        ];
         let rows = flatten(&cols, &[], &["orders::address"]);
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["address", "city", "id"], "depth-first, in place");
@@ -123,7 +128,7 @@ mod tests {
 
     #[test]
     fn nesting_recurses_only_through_expanded_ancestors() {
-        let cols = vec![col("a", vec![col("b", vec![col("c", vec![])])])];
+        let cols = vec![col("a", vec![field("b", vec![field("c", vec![])])])];
         // The grandchild's key is open, but its parent is not — so it stays hidden.
         let rows = flatten(&cols, &[], &["orders::a.b"]);
         assert_eq!(rows.len(), 1, "a closed ancestor hides the whole branch");
@@ -140,7 +145,7 @@ mod tests {
         // The bug this shape exists to prevent: selecting the nested `city` must not also
         // match the top-level one. Keys and paths differ even though the names don't.
         let cols = vec![
-            col("address", vec![col("city", vec![])]),
+            col("address", vec![field("city", vec![])]),
             col("city", vec![]),
         ];
         let rows = flatten(&cols, &[], &["orders::address"]);
@@ -155,7 +160,7 @@ mod tests {
     fn partition_flag_is_top_level_only() {
         let cols = vec![
             col("year", vec![]),
-            col("nested", vec![col("year", vec![])]),
+            col("nested", vec![field("year", vec![])]),
         ];
         let parts = vec![("year".to_string(), "Int32".to_string())];
         let rows = flatten(&cols, &parts, &["orders::nested"]);

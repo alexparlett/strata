@@ -491,21 +491,27 @@ mod tests {
     /// As the inspector's own tests build one — through the engine's `column_info`, so a
     /// fixture's dtype, kind and chart role are one Arrow type's answers rather than three.
     fn col(name: &str, dtype: DataType, stats: Vec<Stat>) -> ColumnInfo {
-        ColumnInfo {
-            stats,
-            ..column_info(&Field::new(name, dtype, true))
-        }
+        // Derive the row, then attach the facts — the order production uses (`free_stats` fills
+        // `stats` on an already-derived column), rather than a struct update over a derived value.
+        let mut column = column_info(&Field::new(name, dtype, true));
+        column.stats = stats;
+        column
     }
 
-    fn nested(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
-        let fields: Vec<Field> = children
-            .iter()
-            .map(|c| Field::new(&c.name, DataType::Utf8, true))
-            .collect();
-        ColumnInfo {
-            children,
-            ..column_info(&Field::new(name, DataType::Struct(fields.into()), true))
-        }
+    /// A leaf column's Arrow field, for nesting inside a struct.
+    fn field(name: &str, dtype: DataType) -> Field {
+        Field::new(name, dtype, true)
+    }
+
+    /// A struct field over its own children, for nesting inside another struct.
+    fn nested_field(name: &str, children: Vec<Field>) -> Field {
+        Field::new(name, DataType::Struct(children.into()), true)
+    }
+
+    /// A struct column — the fixture builds the Arrow type and `column_info` derives the whole
+    /// row from it, nested children included.
+    fn nested(name: &str, children: Vec<Field>) -> ColumnInfo {
+        column_info(&nested_field(name, children))
     }
 
     fn stat(key: StatKey, text: &str) -> Stat {
@@ -555,8 +561,8 @@ mod tests {
                     nested(
                         "address",
                         vec![
-                            col("city", DataType::Utf8, Vec::new()),
-                            nested("geo", vec![col("lat", DataType::Float64, Vec::new())]),
+                            field("city", DataType::Utf8),
+                            nested_field("geo", vec![field("lat", DataType::Float64)]),
                         ],
                     ),
                 ],
@@ -689,7 +695,7 @@ mod tests {
             "events",
             TableMeta {
                 columns: vec![
-                    nested("address", vec![col("city", DataType::Utf8, Vec::new())]),
+                    nested("address", vec![field("city", DataType::Utf8)]),
                     col(
                         "city",
                         DataType::Int64,
