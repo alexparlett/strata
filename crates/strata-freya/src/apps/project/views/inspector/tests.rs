@@ -11,13 +11,14 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
 use futures::executor::block_on;
-use strata_core::engine::{TableMeta, TableSpec, ViewMeta};
+use strata_core::engine::{column_info, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ColRef, ColumnInfo, Kind, SourceFormat, Stat, StatKey, TableDef, ViewDef};
+use strata_model::{ColRef, ColumnInfo, SourceFormat, Stat, StatKey, TableDef, ViewDef};
 
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
@@ -28,26 +29,31 @@ use crate::theme::strata_theme;
 /// The panel's own width, from the design canvas (`inspectorW: 292`).
 const PANEL_WIDTH: f32 = 292.;
 
-fn col(name: &str, dtype: &str, kind: Kind, stats: Vec<Stat>) -> ColumnInfo {
-    ColumnInfo {
-        name: name.into(),
-        dtype: dtype.into(),
-        kind,
-        nullable: true,
-        children: Vec::new(),
-        stats,
-    }
+/// A leaf column carrying the facts a source reported for free. Built through the engine's
+/// own `column_info`, so the fixture's dtype spelling, display kind and chart role all come
+/// from one Arrow type instead of being stated separately and drifting.
+fn col(name: &str, dtype: DataType, stats: Vec<Stat>) -> ColumnInfo {
+    // Derive the row, then attach the facts — the order production uses (`free_stats` fills
+    // `stats` on an already-derived column), rather than a struct update over a derived value.
+    let mut column = column_info(&Field::new(name, dtype, true));
+    column.stats = stats;
+    column
 }
 
-fn nested(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
-    ColumnInfo {
-        name: name.into(),
-        dtype: "Struct".into(),
-        kind: Kind::Struct,
-        nullable: true,
-        children,
-        stats: Vec::new(),
-    }
+/// A leaf column's Arrow field, for nesting inside a struct.
+fn field(name: &str, dtype: DataType) -> Field {
+    Field::new(name, dtype, true)
+}
+
+/// A struct field over its own children, for nesting inside another struct.
+fn nested_field(name: &str, children: Vec<Field>) -> Field {
+    Field::new(name, DataType::Struct(children.into()), true)
+}
+
+/// A struct column — the fixture builds the Arrow type and `column_info` derives the whole
+/// row from it, nested children included.
+fn nested(name: &str, children: Vec<Field>) -> ColumnInfo {
+    column_info(&nested_field(name, children))
 }
 
 fn stat(key: StatKey, text: &str) -> Stat {
@@ -100,8 +106,7 @@ fn project() -> ProjectState {
             columns: vec![
                 col(
                     "amount",
-                    "Float64",
-                    Kind::Num,
+                    DataType::Float64,
                     vec![
                         stat(StatKey::Nulls, "147200"),
                         stat(StatKey::Min, "-240.0"),
@@ -111,8 +116,8 @@ fn project() -> ProjectState {
                 nested(
                     "address",
                     vec![
-                        col("city", "Utf8", Kind::Str, Vec::new()),
-                        nested("geo", vec![col("lat", "Float64", Kind::Num, Vec::new())]),
+                        field("city", DataType::Utf8),
+                        nested_field("geo", vec![field("lat", DataType::Float64)]),
                     ],
                 ),
             ],
@@ -122,7 +127,7 @@ fn project() -> ProjectState {
     p.table_registered(
         "uploads",
         TableMeta {
-            columns: vec![col("note", "Utf8", Kind::Str, Vec::new())],
+            columns: vec![col("note", DataType::Utf8, Vec::new())],
             rows: None,
         },
     );
@@ -132,8 +137,8 @@ fn project() -> ProjectState {
         SCAN_TABLE,
         TableMeta {
             columns: vec![
-                col("country", "Utf8", Kind::Str, Vec::new()),
-                col("region", "Utf8", Kind::Str, Vec::new()),
+                col("country", DataType::Utf8, Vec::new()),
+                col("region", DataType::Utf8, Vec::new()),
             ],
             rows: None,
         },
@@ -141,7 +146,7 @@ fn project() -> ProjectState {
     p.view_registered(
         "daily",
         ViewMeta {
-            columns: vec![col("day", "Date32", Kind::Ts, Vec::new())],
+            columns: vec![col("day", DataType::Date32, Vec::new())],
             tables: vec!["events".into()],
             aliases: Vec::new(),
         },
@@ -453,8 +458,7 @@ fn a_landing_registration_refreshes_the_open_panel() {
         TableMeta {
             columns: vec![col(
                 "amount",
-                "Float64",
-                Kind::Num,
+                DataType::Float64,
                 vec![stat(StatKey::Min, "0.0")],
             )],
             rows: Some(12),
@@ -605,8 +609,7 @@ fn nothing_in_the_panel_is_laid_out_past_its_edge() {
         TableMeta {
             columns: vec![col(
                 "customer_shipping_address_line_one",
-                "Timestamp",
-                Kind::Str,
+                DataType::Timestamp(TimeUnit::Millisecond, None),
                 vec![
                     stat(StatKey::Nulls, "1"),
                     stat(StatKey::Min, "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -675,8 +678,7 @@ fn the_panel_lays_out_within_its_body_floor_at_stub_width() {
             TableMeta {
                 columns: vec![col(
                     "customer_shipping_address_line_one",
-                    "Timestamp",
-                    Kind::Str,
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
                     vec![
                         stat(StatKey::Nulls, "1"),
                         stat(StatKey::Min, "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),

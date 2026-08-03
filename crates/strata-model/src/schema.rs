@@ -100,6 +100,28 @@ impl Kind {
     }
 }
 
+/// What a column may be **encoded** as on a chart (`docs/CHART_SPEC.md` §3).
+///
+/// Sibling to [`Kind`], and deliberately a second taxonomy rather than a reading of that one:
+/// `Kind` is what a column *looks* like (dot and cell colours) and is coarser on purpose — it
+/// folds a union in with the strings, which is harmless for a swatch and wrong for an axis.
+///
+/// Resolved from the Arrow `DataType` itself, in the one place that still has it
+/// (`strata_core::engine::catalog::chart_role`, called by `column_info`) — never from a name
+/// and never from a type's *spelling*, which is a rendering of a type and not the type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ChartRole {
+    /// A number: a Y, either scatter axis, a histogram's value. Exactly the set the engine's
+    /// own read will accept as a measure.
+    Measure,
+    /// An instant or a clock time: the default X, and the reason a default mark is a line.
+    Temporal,
+    /// A category: an X, or the column a series splits on.
+    Dimension,
+    /// Nested, opaque, or simply not a thing with an axis — offered nowhere.
+    Other,
+}
+
 /// Which fact a [`Stat`] carries.
 ///
 /// Keyed rather than positional so the two tiers can interlock: D4's profile surfaces
@@ -141,6 +163,10 @@ pub struct ColumnInfo {
     pub name: String,
     pub dtype: String,
     pub kind: Kind,
+    /// What a chart may encode this column as — see [`ChartRole`]. Carried here because it is
+    /// a fact about the column's Arrow type, and this struct is what survives the boundary
+    /// the type itself does not cross.
+    pub role: ChartRole,
     pub nullable: bool,
     pub children: Vec<ColumnInfo>,
     /// Facts the source reports **for free** — read, never computed. Empty for any

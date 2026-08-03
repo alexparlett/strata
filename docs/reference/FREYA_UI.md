@@ -202,6 +202,28 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   (`EventsCombos::pressed(loc).is_double()`), not via `on_press`.
 - **`VirtualScrollView` memoizes its builder closure**, so snapshots captured in the closure go
   stale. Each child reads shared state reactively (`state.read()`) and computes its own view.
+- **Two siblings on the same layer have no paint order — set a layer, don't rely on document
+  order.** `RenderPipeline` walks `tree.layers` in sorted key order, and a layer's nodes are an
+  `FxHashSet`: **unordered**. So an element that must paint over a sibling has to say so, and
+  "it is declared second" is not saying so — it works until the hash order changes. The symptom
+  is distinctive and misleading: the covered element appears to have **alpha**, because all you
+  see of it is what shows through the semi-transparent parts of whatever painted on top. Use
+  `Layer::Relative(1)` for "in front of my siblings"; `Layer::Overlay` is a big jump for content
+  that must clear the whole window (a dialog, a menu), and reaching for it to fix a local
+  ordering problem puts a tooltip over your modals. The chart's hover readout is the case
+  (`results/chart/paint.rs`).
+- **A `canvas` paints from a slot, and repaints only when asked.** `RenderCallback`'s `PartialEq`
+  is **always true**, so `CanvasElement::diff` never sees a new closure as a change and the
+  callback stored in the tree stays the one from the first render — the same staleness
+  `VirtualScrollView`'s builder has, but silent, because the element is still on screen and still
+  painting. A callback that captured its data by value therefore paints the first frame forever.
+  Put the frame in a `State` the callback **peeks**, and have the side effect that fills it also
+  call `Platform::get().send(UserEvent::RequestRedraw)` — nothing else schedules a paint (this is
+  `examples/feature_plot_3d.rs`'s idiom; a resize repaints the tree anyway). Build that effect
+  with `use_side_effect_with_deps`, not `use_side_effect`, for the reason below: a plain effect's
+  closure is built once and would capture the first frame too. `CanvasContext::size` is logical
+  and the canvas is pre-scaled, so everything drawn inside is in logical units. First used by the
+  results Chart body (`results/chart/paint.rs`).
 - **Reactivity**: `state()`/`.read()` subscribe (re-render on change); `.peek()` does not (use in
   event handlers/actions); `.set()`/`.write()` need `let mut`.
 - **Logical units everywhere.** `on_sized` areas, authored offsets/positions/margins, and (since

@@ -624,8 +624,9 @@ fn ago_label(d: Duration) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use strata_core::engine::{RecordBatch, Schema};
-    use strata_model::{Cell, ColumnInfo};
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_core::engine::{column_info, RecordBatch, Schema};
+    use strata_model::Cell;
 
     use super::*;
 
@@ -677,20 +678,13 @@ mod tests {
     }
 
     fn grid() -> GridData {
-        let col = |name: &str, kind: Kind| ColumnInfo {
-            name: name.into(),
-            dtype: "t".into(),
-            kind,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        };
+        let col = |name: &str, dtype: DataType| column_info(&Field::new(name, dtype, true));
         let cell = |text: &str| Cell {
             text: text.into(),
             null: false,
         };
         GridData {
-            columns: vec![col("n", Kind::Num), col("s", Kind::Str)],
+            columns: vec![col("n", DataType::Int64), col("s", DataType::Utf8)],
             rows: vec![
                 vec![cell("1,000"), cell("a")],
                 vec![

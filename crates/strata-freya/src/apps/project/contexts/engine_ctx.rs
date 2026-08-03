@@ -13,7 +13,7 @@ use std::sync::Arc;
 use freya::query::Captured;
 use strata_core::engine::{Engine, SnapshotPin};
 
-use strata_model::{SnapshotId, TabId};
+use strata_model::{ChartData, ChartQuery, SnapshotId, TabId};
 
 /// A window's engine handle for context — an `Arc` over the shared [`Engine`], cheap to
 /// `Clone`, provided once via `use_provide_context`. Derefs to the engine, so callers
@@ -71,6 +71,16 @@ impl EngineCtx {
     /// keeps the engine alive), and deref only ever hands out `&Engine`.
     pub fn pin_snapshot(&self, snapshot: SnapshotId) -> SnapshotPin {
         self.eng.pin_snapshot(snapshot)
+    }
+
+    /// Read `snapshot` as a chart (Rz2, `docs/CHART_SPEC.md` §5) — the results Chart body's
+    /// capability, behind `FetchChart`.
+    ///
+    /// Not reachable through `Deref` for the same reason [`Self::pin_snapshot`] isn't:
+    /// [`Engine::chart`] takes `&Arc<Engine>` (it holds a pin across its own reads, and the
+    /// pin keeps the engine alive), and deref only ever hands out `&Engine`.
+    pub async fn chart(&self, snapshot: SnapshotId, q: ChartQuery) -> Result<ChartData, String> {
+        self.eng.chart(snapshot, q).await
     }
 }
 

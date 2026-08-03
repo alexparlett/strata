@@ -340,7 +340,9 @@ src/apps/project/                the project window (Valin-shaped)
   query/                         the freya-query capabilities over the engine facade — run_query
                                  (RunQuery · FetchSnapshotPage), validate, profile (P3-09: the
                                  scan, keyed by `ProfileSpec { owner, scan }`, with `use_profile`
-                                 the one place that Query is built)
+                                 the one place that Query is built), chart (Rz2: `FetchChart`
+                                 keyed by `ChartSpec { snapshot, query, display }` — the display
+                                 config is in the key because axis labels render through it)
   state/                         per-window state (Radio): channel, hooks, session
                                  agent.rs = the **window driver** (AA-03, re-pointed by AA-03b):
                                  one serial loop over both channels. It never waits for a query —
@@ -509,5 +511,11 @@ src/apps/project/                the project window (Valin-shaped)
                                  for
         selection.rs             cell/row/column selection model + SelCtl controller
         find.rs                  find-in-results (P2-09): FindState + the page-local filter
+        chart/                   the Chart body (Rz2): mod.rs is the surface — column roles,
+                                 the schema-derived encoding, the `ChartSpec` subscription and
+                                 the notice states; strip.rs the mark picker; paint.rs the
+                                 frame + the `canvas` (slot-peeked, redraw requested);
+                                 axis.rs the plotters `Ranged` category coord + nice max +
+                                 abbreviated tick; marks.rs a render fn per mark
         toolbar.rs, status_bar.rs, running.rs, explain_plan.rs, empty.rs, error.rs
 ```

@@ -279,19 +279,15 @@ fn resolve(raw: &str) -> Option<char> {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_core::engine::column_info;
+
     use super::*;
     use crate::apps::export::model::{CodecChoice, ScopeChoice};
     use strata_model::{ColumnInfo, SnapshotId};
 
-    fn col(name: &str, kind: Kind) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            dtype: "x".into(),
-            kind,
-            nullable: true,
-            children: vec![],
-            stats: vec![],
-        }
+    fn col(name: &str, dtype: DataType) -> ColumnInfo {
+        column_info(&Field::new(name, dtype, true))
     }
 
     fn cell(text: &str) -> Cell {
@@ -311,7 +307,10 @@ mod tests {
     fn target() -> ExportTarget {
         ExportTarget {
             snapshot: SnapshotId(1),
-            columns: vec![col("region", Kind::Str), col("amount", Kind::Num)],
+            columns: vec![
+                col("region", DataType::Utf8),
+                col("amount", DataType::Int64),
+            ],
             total: 48_213,
             sort: None,
             page: 1,

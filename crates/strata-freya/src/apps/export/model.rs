@@ -670,17 +670,26 @@ pub fn thousands(n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
+    use strata_core::engine::column_info;
+
     use super::*;
 
     fn target() -> ExportTarget {
         ExportTarget {
             snapshot: SnapshotId(1),
             columns: vec![
-                col("region", Kind::Str),
-                col("amount", Kind::Num),
-                col("created_at", Kind::Ts),
-                col("active", Kind::Bool),
-                col("payload", Kind::Struct),
+                col("region", DataType::Utf8),
+                col("amount", DataType::Int64),
+                col(
+                    "created_at",
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                ),
+                col("active", DataType::Boolean),
+                col(
+                    "payload",
+                    DataType::Struct(vec![Field::new("a", DataType::Utf8, true)].into()),
+                ),
             ],
             total: 48_213,
             sort: None,
@@ -691,15 +700,8 @@ mod tests {
         }
     }
 
-    fn col(name: &str, kind: Kind) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            dtype: "x".into(),
-            kind,
-            nullable: true,
-            children: vec![],
-            stats: vec![],
-        }
+    fn col(name: &str, dtype: DataType) -> ColumnInfo {
+        column_info(&Field::new(name, dtype, true))
     }
 
     fn labels(groups: &[Group]) -> Vec<String> {

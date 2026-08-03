@@ -2775,10 +2775,12 @@ dependencies = [
  "freya-engine",
  "freya-markdown",
  "freya-performance-plugin",
+ "freya-plotters-backend",
  "freya-query",
  "freya-radio",
  "freya-router",
  "freya-winit",
+ "plotters",
  "torin",
 ]
 
@@ -2904,6 +2906,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "freya-plotters-backend"
+version = "0.4.0"
+dependencies = [
+ "freya-engine",
+ "plotters-backend",
+]
+
+[[package]]
 name = "freya-query"
 version = "0.4.0"
 dependencies = [
@@ -3024,7 +3034,7 @@ dependencies = [
  "glutin",
  "glutin-winit",
  "hotpath",
- "image",
+ "image 0.25.10",
  "keyboard-types 0.8.3",
  "muda",
  "mundy",
@@ -3898,6 +3908,20 @@ dependencies = [
 
 [[package]]
 name = "image"
+version = "0.24.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5690139d2f55868e080017335e4b94cb7414274c74f1669c84fb5feba2c9f69d"
+dependencies = [
+ "bytemuck",
+ "byteorder",
+ "color_quant",
+ "jpeg-decoder",
+ "num-traits",
+ "png 0.17.16",
+]
+
+[[package]]
+name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
@@ -4110,6 +4134,12 @@ dependencies = [
  "getrandom 0.4.3",
  "libc",
 ]
+
+[[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
 
 [[package]]
 name = "js-sys"
@@ -5397,6 +5427,26 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "plotters"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aeb6f403d7a4911efb1e33402027fc44f29b5bf6def3effcc22d7bb75f2b747"
+dependencies = [
+ "chrono",
+ "image 0.24.9",
+ "num-traits",
+ "plotters-backend",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "plotters-backend"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df42e13c12958a16b3f7f4386b9ab1f3e7933914ecea48da7139435263a4172a"
 
 [[package]]
 name = "png"

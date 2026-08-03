@@ -49,6 +49,16 @@
     "border_control": "#363e4a",
     "border_hover": "#4e5866",
     "border_overlay": "#414a57",
+    "chart_1": "#4cc6ff",
+    "chart_10": "#b6e36b",
+    "chart_2": "#7ee787",
+    "chart_3": "#ffa657",
+    "chart_4": "#d2a8ff",
+    "chart_5": "#ff7b9c",
+    "chart_6": "#f2cc60",
+    "chart_7": "#6ee7d6",
+    "chart_8": "#a0b4ff",
+    "chart_9": "#ff9f6b",
     "danger_soft": "rgba(229,72,77,.16)",
     "danger_soft_hover": "rgba(229,72,77,.24)",
     "line": "#23272f",
@@ -279,6 +289,80 @@
       },
       "body_color": {
         "reference": "text_secondary"
+      }
+    },
+    "chart": {
+      "background": {
+        "reference": "surface_secondary"
+      },
+      "panel_background": {
+        "reference": "surface_primary"
+      },
+      "border_fill": {
+        "reference": "border"
+      },
+      "label_color": {
+        "reference": "text_label"
+      },
+      "tile_color": {
+        "reference": "text_control"
+      },
+      "tile_border_fill": {
+        "reference": "border_control"
+      },
+      "tile_active_background": {
+        "reference": "focus"
+      },
+      "tile_active_border_fill": {
+        "reference": "primary"
+      },
+      "tile_active_color": {
+        "reference": "primary"
+      },
+      "grid_fill": {
+        "reference": "border_control"
+      },
+      "axis_fill": {
+        "reference": "border"
+      },
+      "tick_color": {
+        "reference": "text_placeholder"
+      },
+      "legend_color": {
+        "reference": "text_secondary"
+      },
+      "note_color": {
+        "reference": "text_muted"
+      },
+      "series_1": {
+        "reference": "chart_1"
+      },
+      "series_2": {
+        "reference": "chart_2"
+      },
+      "series_3": {
+        "reference": "chart_3"
+      },
+      "series_4": {
+        "reference": "chart_4"
+      },
+      "series_5": {
+        "reference": "chart_5"
+      },
+      "series_6": {
+        "reference": "chart_6"
+      },
+      "series_7": {
+        "reference": "chart_7"
+      },
+      "series_8": {
+        "reference": "chart_8"
+      },
+      "series_9": {
+        "reference": "chart_9"
+      },
+      "series_10": {
+        "reference": "chart_10"
       }
     },
     "checkbox": {

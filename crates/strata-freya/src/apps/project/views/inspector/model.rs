@@ -480,33 +480,38 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use strata_core::engine::{TableMeta, ViewMeta};
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_core::engine::{column_info, TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
     use strata_model::{TableDef, ViewDef};
 
     use super::*;
     use strata_model::SourceFormat;
 
-    fn col(name: &str, dtype: &str, kind: Kind, stats: Vec<Stat>) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            dtype: dtype.into(),
-            kind,
-            nullable: true,
-            children: Vec::new(),
-            stats,
-        }
+    /// As the inspector's own tests build one — through the engine's `column_info`, so a
+    /// fixture's dtype, kind and chart role are one Arrow type's answers rather than three.
+    fn col(name: &str, dtype: DataType, stats: Vec<Stat>) -> ColumnInfo {
+        // Derive the row, then attach the facts — the order production uses (`free_stats` fills
+        // `stats` on an already-derived column), rather than a struct update over a derived value.
+        let mut column = column_info(&Field::new(name, dtype, true));
+        column.stats = stats;
+        column
     }
 
-    fn nested(name: &str, children: Vec<ColumnInfo>) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            dtype: "Struct".into(),
-            kind: Kind::Struct,
-            nullable: true,
-            children,
-            stats: Vec::new(),
-        }
+    /// A leaf column's Arrow field, for nesting inside a struct.
+    fn field(name: &str, dtype: DataType) -> Field {
+        Field::new(name, dtype, true)
+    }
+
+    /// A struct field over its own children, for nesting inside another struct.
+    fn nested_field(name: &str, children: Vec<Field>) -> Field {
+        Field::new(name, DataType::Struct(children.into()), true)
+    }
+
+    /// A struct column — the fixture builds the Arrow type and `column_info` derives the whole
+    /// row from it, nested children included.
+    fn nested(name: &str, children: Vec<Field>) -> ColumnInfo {
+        column_info(&nested_field(name, children))
     }
 
     fn stat(key: StatKey, text: &str) -> Stat {
@@ -546,8 +551,7 @@ mod tests {
                 columns: vec![
                     col(
                         "amount",
-                        "Float64",
-                        Kind::Num,
+                        DataType::Float64,
                         vec![
                             stat(StatKey::Nulls, "147200"),
                             stat(StatKey::Min, "-240.0"),
@@ -557,8 +561,8 @@ mod tests {
                     nested(
                         "address",
                         vec![
-                            col("city", "Utf8", Kind::Str, Vec::new()),
-                            nested("geo", vec![col("lat", "Float64", Kind::Num, Vec::new())]),
+                            field("city", DataType::Utf8),
+                            nested_field("geo", vec![field("lat", DataType::Float64)]),
                         ],
                     ),
                 ],
@@ -568,14 +572,14 @@ mod tests {
         p.table_registered(
             "uploads",
             TableMeta {
-                columns: vec![col("note", "Utf8", Kind::Str, Vec::new())],
+                columns: vec![col("note", DataType::Utf8, Vec::new())],
                 rows: None,
             },
         );
         p.view_registered(
             "daily",
             ViewMeta {
-                columns: vec![col("day", "Date32", Kind::Ts, Vec::new())],
+                columns: vec![col("day", DataType::Date32, Vec::new())],
                 tables: vec!["events".into()],
                 aliases: Vec::new(),
             },
@@ -691,11 +695,10 @@ mod tests {
             "events",
             TableMeta {
                 columns: vec![
-                    nested("address", vec![col("city", "Utf8", Kind::Str, Vec::new())]),
+                    nested("address", vec![field("city", DataType::Utf8)]),
                     col(
                         "city",
-                        "Int64",
-                        Kind::Num,
+                        DataType::Int64,
                         vec![stat(StatKey::Min, "1"), stat(StatKey::Max, "9")],
                     ),
                 ],
@@ -773,8 +776,7 @@ mod tests {
             TableMeta {
                 columns: vec![col(
                     "name",
-                    "Utf8",
-                    Kind::Str,
+                    DataType::Utf8,
                     vec![Stat {
                         key: StatKey::Max,
                         text: "Radia Perl".into(),
@@ -892,8 +894,7 @@ mod tests {
             TableMeta {
                 columns: vec![col(
                     "name",
-                    "Utf8",
-                    Kind::Str,
+                    DataType::Utf8,
                     vec![Stat {
                         key: StatKey::Max,
                         text: "Radia Perl".into(),

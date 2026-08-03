@@ -407,10 +407,11 @@ impl Component for RecordView {
 mod interaction {
     use std::sync::Arc;
 
+    use datafusion::arrow::datatypes::{DataType, Field};
     use freya_testing::TestingRunner;
-    use strata_core::engine::{RecordBatch, Schema};
+    use strata_core::engine::{column_info, RecordBatch, Schema};
     use strata_core::theme::load;
-    use strata_model::{Cell, ColumnInfo, Kind};
+    use strata_model::Cell;
 
     use super::*;
     use crate::theme::strata_theme;
@@ -418,22 +419,18 @@ mod interaction {
     /// A 3-row page: a scalar column, a nested column (empty batch — the pretty-JSON read
     /// falls back to the display text, which is all the interaction test needs), a null.
     fn page() -> Rc<GridData> {
-        let col = |name: &str, dtype: &str, kind: Kind| ColumnInfo {
-            name: name.into(),
-            dtype: dtype.into(),
-            kind,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        };
+        let col = |name: &str, dtype: DataType| column_info(&Field::new(name, dtype, true));
         let cell = |text: &str, null: bool| Cell {
             text: text.into(),
             null,
         };
         Rc::new(GridData {
             columns: vec![
-                col("id", "Int64", Kind::Num),
-                col("attrs", "Struct", Kind::Struct),
+                col("id", DataType::Int64),
+                col(
+                    "attrs",
+                    DataType::Struct(vec![Field::new("plan", DataType::Utf8, true)].into()),
+                ),
             ],
             rows: vec![
                 vec![cell("1", false), cell("{plan: pro}", false)],

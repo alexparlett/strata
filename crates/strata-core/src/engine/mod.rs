@@ -39,7 +39,11 @@ pub mod serialize;
 pub mod sql;
 pub mod value_tree;
 
-pub use catalog::{TableMeta, TableSpec, ViewMeta};
+/// [`column_info`] and [`chart_role`] are `pub` because a column's vocabulary row is derived
+/// from an Arrow field in exactly one place, and anything building a column — a fixture
+/// included — should go through it rather than hand-writing a row whose `kind` and `role` are
+/// then a second opinion about the same type.
+pub use catalog::{chart_role, column_info, TableMeta, TableSpec, ViewMeta};
 pub use query::purge_snapshot_root;
 
 use sql::PolicyRefusal;

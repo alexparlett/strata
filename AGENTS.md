@@ -87,7 +87,10 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   bucketing, no imposed order (the histogram's binning is the one exception). Over a cap, or two
   rows in one pivot cell, it refuses **to the SQL scaffold**. An engine-side aggregation pipeline
   was built and withdrawn; the reasons and the scan-order measurements are the full entry —
-  re-litigate neither.
+  re-litigate neither. A column's **chart role** comes from the Arrow `DataType` in `column_info`
+  (its measure arm *is* the read's own `is_numeric` gate), never from a type's spelling or from
+  `Kind`; and a chart read's cache identity is `(snapshot, query, **display config**)`, because
+  axis labels render through `datafusion.format.*`.
 - **A snapshot read has no order of its own; order is the ordinal column.** Reads that need order
   `ORDER BY __strata_ord` (unsorted reads entire, user sorts as the tie-break) and every reader
   projects it away — export must never write it. Measured: above 10 MB a bare `LIMIT/OFFSET` read
@@ -282,6 +285,12 @@ Full text: [docs/reference/FREYA_UI.md](docs/reference/FREYA_UI.md).
   follow-up `on_press` — do double-click detection inside that same handler.
 - **`VirtualScrollView` memoizes its builder closure**, so captured snapshots go stale. Each child
   reads shared state reactively.
+- **Two siblings on the same layer have no paint order — set a layer.** A layer's nodes are an
+  unordered set, so "declared second" is not "painted second"; the covered element reads as
+  though it had alpha. `Layer::Relative(1)` for a sibling, `Overlay` only to clear the window.
+- **A `canvas` paints from a slot, and repaints only when asked.** `RenderCallback`'s `PartialEq`
+  is always true, so the tree keeps the first render's closure — put the frame in a `State` the
+  callback peeks, and request a redraw from the effect that fills it.
 - **Reactivity**: `state()`/`.read()` subscribe; `.peek()` does not; `.set()`/`.write()` need `let mut`.
 - **Logical units everywhere.** Never multiply/divide by the scale factor in component code.
 - **Naming**: plain nouns for structs, no role suffixes; DI handles end in `Ctx`.

@@ -1989,6 +1989,84 @@
             }
           }
         },
+        "chart": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "panel_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "label_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "tile_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "tile_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "tile_active_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "tile_active_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "tile_active_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "grid_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "axis_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "tick_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "legend_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "note_color": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_1": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_2": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_3": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_4": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_5": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_6": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_7": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_8": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_9": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "series_10": {
+              "$ref": "#/$defs/colorPref"
+            }
+          }
+        },
         "datagrid": {
           "type": "object",
           "additionalProperties": false,

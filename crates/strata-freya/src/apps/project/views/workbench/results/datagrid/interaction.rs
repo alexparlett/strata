@@ -4,12 +4,13 @@
 
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{DataType, Field};
 use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
 use strata_core::config::AppConfig;
-use strata_core::engine::{RecordBatch, Schema};
+use strata_core::engine::{column_info, RecordBatch, Schema};
 use strata_core::theme::load;
-use strata_model::{Cell as CellData, ColumnInfo, Kind};
+use strata_model::Cell as CellData;
 
 use super::super::find::FindState;
 use super::super::sort::SortState;
@@ -20,23 +21,13 @@ use crate::theme::strata_theme;
 
 /// A 2×2 page (scalar columns, empty batch — ⌘A is pure selection, no serialization).
 fn page() -> Rc<GridData> {
-    let col = |name: &str, dtype: &str, kind: Kind| ColumnInfo {
-        name: name.into(),
-        dtype: dtype.into(),
-        kind,
-        nullable: true,
-        children: Vec::new(),
-        stats: Vec::new(),
-    };
+    let col = |name: &str, dtype: DataType| column_info(&Field::new(name, dtype, true));
     let cell = |text: &str| CellData {
         text: text.into(),
         null: false,
     };
     Rc::new(GridData {
-        columns: vec![
-            col("id", "Int64", Kind::Num),
-            col("name", "Utf8", Kind::Str),
-        ],
+        columns: vec![col("id", DataType::Int64), col("name", DataType::Utf8)],
         rows: vec![vec![cell("1"), cell("a")], vec![cell("2"), cell("b")]],
         batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
     })

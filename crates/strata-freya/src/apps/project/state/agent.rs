@@ -358,23 +358,17 @@ fn reg_state<T>(reg: &Reg<T>) -> RegState {
 mod tests {
     use std::collections::BTreeMap;
 
+    use datafusion::arrow::datatypes::{DataType, Field};
     use strata_agent::{Agent, AgentIdentity};
-    use strata_core::engine::{TableMeta, ViewMeta};
+    use strata_core::engine::{column_info, TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
-    use strata_model::{ColumnInfo, Kind, SavedQuery, SourceFormat, TableDef, ViewDef};
+    use strata_model::{ColumnInfo, SavedQuery, SourceFormat, TableDef, ViewDef};
     use uuid::Uuid;
 
     use super::*;
 
     fn column(name: &str) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            dtype: "Int64".into(),
-            kind: Kind::Num,
-            nullable: true,
-            children: Vec::new(),
-            stats: Vec::new(),
-        }
+        column_info(&Field::new(name, DataType::Int64, true))
     }
 
     /// A store with one ready table, one refused table, one ready view and a saved query —

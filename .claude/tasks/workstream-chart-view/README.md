@@ -31,7 +31,7 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
 |---|---|---|---|---|
 | 00 | Snapshot ordinal + ordered reads `[core]` | ✅ | Rz2 (P2-01 fix) | — |
 | 01 | `Engine::chart` renderer-first read + vocabulary `[core]` | ✅ | Rz2 | 00 |
-| 02 | Chart body + plotters renderer | ⬜ | Rz2 | 01 |
+| 02 | Chart body + plotters renderer | ✅ | Rz2 | 01 |
 | 03 | Encoder strip + `ChartConfig` state | ⬜ | Rz2 | 02 |
 | 04 | Guardrails + the SQL scaffold | ⬜ | Rz2 | 02, 03 |
 | 05 | Analytical presets — role mappings + templates (follow-on) | ⬜ | Rz2 | 01–04 |

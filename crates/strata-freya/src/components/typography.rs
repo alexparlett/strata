@@ -24,9 +24,13 @@ use freya::prelude::*;
 /// under [`TYPOGRAPHY_KEY`]. A standard theme lookup (the same context mechanism every component
 /// theme uses): no provider, no cache. The `unwrap_or_else` is defensive — the theme always seeds it.
 ///
+/// `pub(crate)` for the one surface that cannot use a role component: a `canvas` paints its own
+/// text, so the chart reads the scale and hands family and size to the plot backend. It reads it
+/// **here** rather than repeating the lookup, so the fallback rule has one home.
+///
 /// [`strata_theme`]: crate::theme::strata_theme
 /// [`TYPOGRAPHY_KEY`]: crate::theme::TYPOGRAPHY_KEY
-fn scale() -> Typography {
+pub(crate) fn scale() -> Typography {
     let theme = use_theme();
     let theme = theme.read();
     theme

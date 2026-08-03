@@ -17,6 +17,52 @@
 //! [`ChartData::Duplicates`], with nothing to draw, because "honest boundaries" (spec §1.4)
 //! means there is no such thing as a truncated chart to render.
 
+/// Which mark the chart draws (`docs/CHART_SPEC.md` §4).
+///
+/// The mark is the **renderer's** choice, not the engine's: it decides which
+/// [`ChartQuery`] shape the surface asks for and how the answer is painted, and switching
+/// between two marks over the same query (bar ↔ line ↔ area, and pie over the same
+/// columns) is a repaint rather than a re-read.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ChartMark {
+    /// Grouped bars over the categories, one run per series ([`ChartQuery::Rows`]).
+    Bar,
+    /// A line per series, with a gap wherever a value is missing ([`ChartQuery::Rows`]).
+    Line,
+    /// [`Line`](Self::Line) with the span down to the zero baseline tinted.
+    Area,
+    /// Raw points over two measures ([`ChartQuery::Raw`]).
+    Scatter,
+    /// Engine-binned counts over one measure ([`ChartQuery::Histogram`]).
+    Histogram,
+    /// One slice per category over a single measure ([`ChartQuery::Rows`], capped).
+    Pie,
+}
+
+impl ChartMark {
+    /// Every mark, in the order the picker offers them (the design's tile grid).
+    pub const ALL: [ChartMark; 6] = [
+        ChartMark::Bar,
+        ChartMark::Line,
+        ChartMark::Area,
+        ChartMark::Scatter,
+        ChartMark::Histogram,
+        ChartMark::Pie,
+    ];
+
+    /// How this mark reads in the picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            ChartMark::Bar => "Bar",
+            ChartMark::Line => "Line",
+            ChartMark::Area => "Area",
+            ChartMark::Scatter => "Scatter",
+            ChartMark::Histogram => "Histogram",
+            ChartMark::Pie => "Pie",
+        }
+    }
+}
+
 /// One read of a snapshot, shaped for a chart. Resolved from the chart config + the result
 /// schema, and carrying no UI types — this is what the engine answers and what the
 /// freya-query entry is keyed by.

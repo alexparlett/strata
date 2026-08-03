@@ -42,6 +42,7 @@ pub use sidebar::{AgentsThemePreference, CatalogThemePreference};
 pub use workbench::editor::actions;
 pub use workbench::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
-    DataGridThemePreference, ExplainPlanThemePreference, RecordViewThemePreference,
-    StatusBarThemePreference, TabBarThemePreference, TabThemePreference, Workbench,
+    ChartThemePreference, DataGridThemePreference, ExplainPlanThemePreference,
+    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    Workbench,
 };
