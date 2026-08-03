@@ -244,13 +244,14 @@ impl ChartCanvas {
 impl Component for ChartCanvas {
     fn render(&self) -> impl IntoElement {
         let platform = use_hook(Platform::get);
-        let frame = self.frame.clone();
-        // One `Rc` per render, shared with the seed: the `use_state` initialiser is only ever
-        // called on the first render, but the block that builds it is evaluated on every one —
-        // so cloning the frame in there deep-copied every row, every render, to throw it away.
-        let published = Rc::new(frame.clone());
+        // Seeded, and cloned **once**. A `use_state` initialiser only ever runs on the first
+        // render, but the expression building its seed is evaluated on every one — so this is
+        // one deep copy of the read per render, and it used to be two. It is not zero on
+        // purpose: an empty slot filled by the effect below would leave the first paint with
+        // nothing to draw, and the paint is what records the hit regions the pointer reads, so
+        // a chart would not answer a hover until something else asked it to repaint.
         let mut slot = use_state({
-            let seed = Rc::clone(&published);
+            let seed = Rc::new(self.frame.clone());
             move || seed
         });
 
@@ -261,7 +262,7 @@ impl Component for ChartCanvas {
 
         // `use_reactive` under the hood, because a `use_side_effect` closure is built once and
         // would capture the *first* frame forever (AGENTS.md §3).
-        use_side_effect_with_deps(&frame, move |frame| {
+        use_side_effect_with_deps(&self.frame, move |frame| {
             slot.set(Rc::new(frame.clone()));
             // The repaint this asks for rebuilds every hit region, so whatever the readout was
             // naming is gone: keeping it would leave a label pinned over a mark that has moved
