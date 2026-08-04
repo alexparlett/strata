@@ -33,11 +33,18 @@ Per `docs/STATEMENTS_SPEC.md` §4:
 - **Fail closed, default deny**: parse failure stays the caller-side `Err`; the sqlparser
   wildcard stays `Refuse(Unsupported)`; the DFParser five-variant match stays wildcard-free (a
   new DF variant must be a compile error).
-- `Blocked` reshaped: keep `CreateExternalTable`, `CreateDatabase`, non-table/view `Drop`,
-  `Unsupported`; add `InsertExternal`, `InsertOverwrite`, `SetOwned`, `SetRuntime`, `SetFormat`,
-  `PrepareNonQuery`, `ReservedName` (a `__snap_`-prefixed reference in an intercepted statement).
-  Delete or reword every message that pointed at a surface which now accepts the statement.
-  Message register: terse IDE sentences, single-quoted identifiers.
+- `Blocked` grows, never shrinks: **every existing variant and its `editor_message` stay
+  verbatim** — `Capability::Agent` still refuses `CREATE TABLE`/`INSERT`/`CREATE VIEW`/`DROP
+  VIEW`/`DROP`/`COPY`/`SET`/`RESET` with today's exact variant and words, and `strata-agent`'s
+  tests name `Blocked::CreateTable`/`Insert`/`CreateDatabase` directly
+  (`crates/strata-agent/src/error.rs:145`, `:159`, `tools.rs:1762`), so a deleted variant is a
+  compile break. On the Editor path the kept variants simply become unreachable for intercepted
+  kinds. Add `InsertExternal`, `InsertOverwrite`, `SetOwned`, `SetRuntime`, `SetFormat`,
+  `PrepareNonQuery`, `ReservedName` — the last for a `__snap_`-prefixed identifier anywhere in
+  an intercepted statement, **target names included** (`CREATE TABLE __snap_2` / CTAS /
+  `CREATE VIEW __snap_2` / `INSERT`/`DROP` onto the prefix must refuse before they can collide
+  with a live snapshot registration — spec §4, reserved names). Message register: terse IDE
+  sentences, single-quoted identifiers.
 - Editor diagnostics tier 2 consumes `classify(_, Editor)` — an `Intercept` verdict produces no
   squiggle; a `Refuse` produces the message as today.
 - Note: some refusals need context the bare statement lacks (INSERT target origin, SET key

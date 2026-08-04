@@ -32,9 +32,11 @@ data, external removes only the def — with dependents named in the report.
   until a compaction task exists.
 
 **DROP TABLE (`engine/ddl.rs::drop_table`):**
-- Both origins, no dialog (settled 2026-08-04). Sequence: `cancel_profile` →
-  `ctx.deregister_table` → internal only: delete `.strata/tables/<slug>/` →
-  `StoreEffect::TableRemoved { name, dependents }`.
+- Both origins, no dialog (settled 2026-08-04). The target resolves against the store first —
+  an unknown name errors, `IF EXISTS` no-ops, and nothing ever calls `ctx.deregister_table` for
+  a name with no def (a `__snap_` target was already refused at the router — spec §4 reserved
+  names). Then: `cancel_profile` → `ctx.deregister_table` → internal only: delete
+  `.strata/tables/<slug>/` → `StoreEffect::TableRemoved { name, dependents }`.
 - Wording distinguishes origins: internal "'t' and its data were deleted"; external "'x' removed
   from the catalog. Source files were not deleted". Dependent views named in the report (from the
   store fold, which owns `ViewInfo`); no cascade — they go `Reg::Failed` on the epoch bump's

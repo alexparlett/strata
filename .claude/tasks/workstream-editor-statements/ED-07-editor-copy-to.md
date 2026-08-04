@@ -38,7 +38,8 @@ The Export window is unchanged and remains the snapshot-backed, race-free path.
    changes no catalog state; history and the event log still record it (ED-02).
 4. Fix the `keep_partition_by_columns` wart in `run_export`: save/restore around the COPY (or
    route through ED-08's overlay if it lands first — coordinate, don't duplicate).
-5. Update the COPY invariant text + `Blocked::CopyTo` message per spec §10.
+5. Update the COPY invariant text per spec §10. `Blocked::CopyTo` and its message stay verbatim
+   — the agent surface still renders them; the editor path simply no longer reaches them.
 
 ## Acceptance
 

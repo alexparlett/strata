@@ -122,17 +122,27 @@ with `StmtKind` covering `CreateTable`, `Ctas`, `Insert`, `DropTable`, `CreateVi
 - **Fail closed, default deny.** Parse failure is still `Err` ("could not judge"); the sqlparser
   wildcard still lands `Refuse(Unsupported)`; the DFParser match stays wildcard-free so a new DF
   variant is a compile error.
-- `Blocked` shrinks but does not empty: `CREATE EXTERNAL TABLE` (Table Config's),
-  `CREATE DATABASE`/`SCHEMA`, `Drop` of other object types, transactions/wildcard, plus new
-  refusals — INSERT into a non-internal target, `INSERT OVERWRITE`, owned/runtime/format-key
-  `SET`, non-query `PREPARE`. Messages are rewritten in the IDE register (terse sentences,
-  single-quoted identifiers); every message that pointed at a surface which now accepts the
-  statement is deleted or reworded.
+- `Blocked` grows and never shrinks: **every existing variant and its rendered message stay
+  verbatim**, because `Capability::Agent` must refuse `CREATE TABLE`/`INSERT`/`CREATE VIEW`/
+  `DROP VIEW`/`DROP`/`COPY`/`SET`/`RESET` message-identically — the agent error path renders
+  `editor_message()` and `strata-agent`'s parity tests name `Blocked::CreateTable`/`Insert`/
+  `CreateDatabase` directly (`error.rs:145`, `tools.rs:1762`), so deleting a variant is a
+  compile break, not just a wording change. On the Editor path the kept variants simply become
+  unreachable for intercepted kinds. New refusals join them: INSERT into a non-internal target,
+  `INSERT OVERWRITE`, owned/runtime/format-key `SET`, non-query `PREPARE`, reserved names — in
+  the same register (terse sentences, single-quoted identifiers).
 - **One statement per Run** (today's behavior, kept): a multi-statement buffer is judged per
   statement by diagnostics as now, and Run refuses a mixed batch with a policy message.
-- **Reserved names**: an intercepted statement that references a `__snap_`-prefixed table is
-  refused — a typed `COPY (SELECT * FROM __snap_3)` must never write `__strata_ord` into a user
-  file.
+- **Reserved names, read and write**: an intercepted statement that references a
+  `__snap_`-prefixed table — or **names one as its target** — is refused. The read half keeps a
+  typed `COPY (SELECT * FROM __snap_3)` from writing `__strata_ord` into a user file. The write
+  half keeps `CREATE TABLE __snap_2 …` / CTAS / `CREATE VIEW __snap_2` / `INSERT` / `DROP` off
+  the snapshot namespace: `snapshot_name` is `__snap_{seq}` off a counter starting near zero
+  (`engine/mod.rs:517`), the provider's `register_table` is last-write-wins, and a collision is
+  invisible in SHOW/information_schema because the same prefix filters it — either the user's
+  table is silently displaced by the next Run or a Run's readers get the user's rows. Defense in
+  depth at the funnel: `register_external` refuses a reserved-prefix spec name too, which also
+  covers a Configure-typed or hand-edited def.
 
 **Dispatch.** New facade entry:
 
@@ -205,8 +215,9 @@ owns the `tables/` payload with the snapshot writer's discipline (tmp + rename, 
 **CTAS** (`Intercept(Ctas)`): refuse unsupported clauses up front from the parsed statement —
 constraints, column defaults, `TEMPORARY` — and duplicate result column names (DF's own
 `ensure_unique_column_names` rule, reproduced; an IPC file would store them and every later read
-would degrade). Resolve `IF NOT EXISTS` / `OR REPLACE` / plain-exists against the store's
-namespace (tables + views, case-insensitive). Then spool: render
+would degrade). A `__snap_`-prefixed target name refuses at the router (§4 reserved names), and
+`register_external` backstops the same rule. Resolve `IF NOT EXISTS` / `OR REPLACE` /
+plain-exists against the store's namespace (tables + views, case-insensitive). Then spool: render
 `COPY (<the user's inner query text, sliced verbatim>) TO '<data_dir>/.tmp-<nonce>/' STORED AS
 ARROW` and drive it internally — streaming, memory-bounded, and the sink's `count` column is the
 exact row count for the report. Rename tmp → `.strata/tables/<slug>/` (atomic; a crash leaves
@@ -263,6 +274,8 @@ no-files mapping.
 
 - The name resolves to a **base table** → refuse ("'sales' is a table") — this closes DF's own
   silent table-replacement hazard (§2).
+- A `__snap_`-prefixed view **name**, like a `__snap_` reference in the body → refuse (§4
+  reserved names, both halves).
 - Plain `CREATE VIEW` over an existing view → "View 'v' already exists. Use CREATE OR REPLACE
   VIEW."
 - Otherwise → the existing `Engine::create_view(name, sql)` — one implementation shared with ⌘S,

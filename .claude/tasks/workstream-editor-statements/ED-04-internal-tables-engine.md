@@ -29,8 +29,10 @@ namespace kept; old `project.json` loads unchanged; a def is one list entry eith
   by every pass, answering only "may a write statement target this" (never a second catalog).
 - `Engine::set_data_dir(root)`: the absolute `.strata/tables` root, set at project open by the
   app and the headless host; CTAS refuses politely when unset.
-- `engine/ddl.rs::ctas`: refuse constraints/defaults/`TEMPORARY`/duplicate result columns from
-  the parsed statement; resolve `IF NOT EXISTS`/`OR REPLACE`/plain-exists against the namespace;
+- `engine/ddl.rs::ctas`: refuse constraints/defaults/`TEMPORARY`/duplicate result columns and a
+  `__snap_`-prefixed target name (`Blocked::ReservedName` — spec §4; `register_external`
+  backstops the same rule at the funnel, which also covers a Configure-typed or hand-edited
+  def); resolve `IF NOT EXISTS`/`OR REPLACE`/plain-exists against the namespace;
   spool via an internally rendered
   `COPY (<inner query text, sliced verbatim>) TO '<data_dir>/.tmp-<nonce>/' STORED AS ARROW`
   (streaming; the sink's count column is the report's row count); rename tmp → final (atomic);
@@ -55,6 +57,8 @@ Save.
   restart replays it (schema from the IPC file, not the def).
 - `IF NOT EXISTS` no-ops with a report; plain create over an existing name errors; `OR REPLACE`
   replaces; constraints/`TEMPORARY` refuse tersely.
+- `CREATE TABLE __snap_1 (a INT)` refuses with the reserved-name message; a def hand-named
+  `__snap_1` fails registration through `register_external` with the same class of error.
 - Close and reopen the project: the internal table returns through the ordinary pass
   (`register_project` test in `strata-core` covers the headless half). A copy of the project
   without `.strata/tables/` shows an honest `Reg::Failed` row.

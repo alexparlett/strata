@@ -26,7 +26,8 @@ indistinguishable by origin. `docs/STATEMENTS_SPEC.md` §6.2.
   is what lands in `ViewDef.sql`, so it round-trips through Save exactly as ⌘S text does).
 - Fences: name resolves to a base table → refuse ("'sales' is a table"); plain `CREATE VIEW`
   over an existing view → "View 'v' already exists. Use CREATE OR REPLACE VIEW."; a
-  `__snap_`-prefixed reference → `Blocked::ReservedName`.
+  `__snap_`-prefixed view **name** or a `__snap_` reference in the body → `Blocked::ReservedName`
+  (spec §4, both halves — a reserved view name would collide with a live snapshot registration).
 - Otherwise delegate to `Engine::create_view` → `StoreEffect::ViewUpserted { def, meta }` — the
   app-side fold is ED-02's shared settle, which is the same sequence `save_view` performs.
 - `DROP VIEW`: type-check (a table name → the DROP TABLE arm's territory, refuse here),

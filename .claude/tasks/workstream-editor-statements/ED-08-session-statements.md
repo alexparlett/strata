@@ -34,7 +34,9 @@ Session-scoped statements, with the Settings store untouched as the durable conf
   baselines under the overlay's keys? No — settled: **the overlay wins for its keys until RESET
   or restart**, and a `set_config` restart drops the overlay silently. `restart_owed` unchanged
   (runtime keys can't enter the overlay).
-- Update the SET/RESET invariant text + messages per spec §10.
+- Update the SET/RESET invariant text per spec §10. `Blocked::Set`/`Reset` keep their variants
+  and words for the agent surface; the new `SetOwned`/`SetRuntime`/`SetFormat` messages join
+  them.
 
 **PREPARE/EXECUTE/DEALLOCATE:**
 - PREPARE: verify the parsed statement's inner statement is a query (`Blocked::PrepareNonQuery`:
