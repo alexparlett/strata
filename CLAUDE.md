@@ -183,7 +183,9 @@ Feature specs: `AGENT_ACCESS_SPEC.md` (+ `agent-access-dataflow.mermaid`), `CHAR
 `CHART_FUNCTIONS.md` is its DataFusion capability map), `COMPLETION_SPEC.md`
 (the as-built P2-04 design — supersedes `SQL_LANGUAGE_SPEC.md` §4), `CONNECTIONS_SPEC.md`,
 `EXPLAIN_PLAN_SPEC.md`, `EXPORT_OPTIONS.md`, `IMPORT_OPTIONS.md`, `SQL_LANGUAGE_SPEC.md`,
-`EDITOR_LANG_SPIKE.md`, `F7-shared-state.md`, `SNAPSHOT_SPEC.md`.
+`STATEMENTS_SPEC.md` (the full-statement editor — internal tables, typed DDL, editor COPY,
+session statements; supersedes the managed-DDL sections of `reference/ENGINE.md` on mechanism as
+its workstream lands), `EDITOR_LANG_SPIKE.md`, `F7-shared-state.md`, `SNAPSHOT_SPEC.md`.
 
 The **design handoff** lives in **`.claude/design-handoff/`** (gitignored — local only). It's a
 Claude Design (claude.ai/design) bundle: the `.dc.html` HTML/CSS prototypes that are the
