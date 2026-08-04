@@ -71,8 +71,12 @@ computes, because it computes nothing:
 | **dimension** (X, series) | Utf8/LargeUtf8/Boolean/Dictionary |
 | **nested** — excluded from encoders | Struct/List/Map/Union |
 
-Secondary signal only: a Utf8 column whose name matches the handoff's temporal-name regex may be
-*offered* as temporal, but the Arrow type wins.
+**Never built, and deliberately not:** an earlier revision allowed a secondary signal — a Utf8
+column whose *name* matched the handoff's temporal-name regex could be offered as temporal, with
+the Arrow type winning. Nothing in the workstream implements it (`chart_role` matches the
+`DataType` and nothing else), and it contradicts the invariant that settled around it: a role
+comes from the type, never from a name and never from a type's spelling. A Utf8 column that holds
+a timestamp is a **cast** the user makes in SQL, which is Chart 05's Tier C.
 
 ## 4. Marks and encodings
 
@@ -184,9 +188,12 @@ answer to "too much data" is always the user's own SQL, one click away.
 
 ## 8. The scaffold — the bridge into SQL (promoted)
 
-The scaffold is no longer an escape hatch beside the chart's own aggregation — it **is** the
-aggregation path. It builds a real query from the current encoding and opens it in a **new tab**
-through the existing funnel (`session.open_named`), never auto-run:
+**The scaffold does not aggregate; it writes SQL that does.** It is no longer an escape hatch
+beside the chart's own aggregation — that aggregation is gone, and this is where its job went:
+back to the user's own query. It builds a real query from the current encoding and opens it in a
+**new tab** through the existing funnel (`session.open_named`), never auto-run, so what the chart
+gets back is an ordinary result it renders like any other. Nothing here runs inside the chart,
+and nothing the user cannot read and edit:
 
 ```sql
 SELECT country, SUM(amount) AS sum_amount
