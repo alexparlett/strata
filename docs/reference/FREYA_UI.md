@@ -43,12 +43,14 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   naming those same two slots is a second copy of them. Override only for a genuinely different
   tone (the destructive action reading `cancel_button`).
 - **A surface with its own component theme reads colours from that theme, not also from the
-  sheet.** Once a component has a `define_theme!`, every colour it paints — surfaces, borders,
-  hairlines, tints — is one of its own fields, authored as a `reference` to a sheet slot where it
-  should track one. The sheet is reached for directly only where the value is **semantic**
-  (`success` / `warning` / `error` / `info` — the status bar's state dot), because those must
-  follow the app-wide ramp wherever they appear. Mixing the two sources in one component is how
-  `colors.border` ends up beside a `border_fill` that already holds the same value.
+  roles.** Once a component has a `define_theme!`, every colour it paints — surfaces, borders,
+  hairlines, tints — is one of its own fields, mapped onto a role in the static table
+  (`theme/components.rs`). `use_roles()` is reached directly only where no component theme
+  covers the surface, and the four **semantic** tones (`success` / `warning` / `error` /
+  `info` — the status bar's state dot) only through the shared `tones()` hook, because those
+  must follow the app-wide ramp wherever they appear. Mixing the two sources in one component
+  is how `roles.get(Role::Border)` ends up beside a `border_fill` that already holds the same
+  value.
 - **A shared theme's fields are named for the role they play, not for whoever needed one first,
   and a component's own dress never becomes one.** The `drawer` theme dresses three bodies, so a
   field called `stats_color` is one the other two can never use — it is `value_color`, "a row's
