@@ -74,7 +74,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
     // `filled_button` needs no retune at all: the fork's accent dress resolves through the
     // bridge (primary → accent, tertiary → accent.hover, secondary → accent.ring).
     builtin::<ButtonColorsThemePreference>(th, "outline_button", |p| {
-        p.background = clear();
+        p.background = role(Role::GhostElementBackground);
         p.hover_background = role(Role::GhostElementHover);
         p.border_fill = role(Role::BorderControl);
         p.focus_border_fill = role(Role::Accent);
@@ -154,6 +154,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.border_fill = role(Role::BorderOverlay);
     });
     builtin::<MenuItemThemePreference>(th, "menu_item", |p| {
+        p.background = role(Role::GhostElementBackground);
         p.hover_background = role(Role::ElevatedElementHover);
         p.select_background = role(Role::ElementSelected);
         p.select_border_fill = clear();
@@ -171,6 +172,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.font_weight = Preference::Specific(typo.body.weight);
     });
     builtin::<FloatingTabThemePreference>(th, "floating_tab", |p| {
+        p.background = role(Role::GhostElementBackground);
         p.hover_background = role(Role::GhostElementHover);
         p.selected_background = role(Role::GhostElementSelected);
         p.color = role(Role::TextMuted);
@@ -181,7 +183,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.border_fill = role(Role::BorderControl);
     });
     builtin::<ButtonSegmentThemePreference>(th, "button_segment", |p| {
-        p.background = clear();
+        p.background = role(Role::GhostElementBackground);
         p.hover_background = role(Role::GhostElementHover);
         p.disabled_background = clear();
         p.selected_background = role(Role::GhostElementSelected);
@@ -197,7 +199,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
     });
     builtin::<SideBarItemThemePreference>(th, "sidebar_item", |p| {
         p.color = role(Role::TextMuted);
-        p.background = clear();
+        p.background = role(Role::GhostElementBackground);
         p.active_background = role(Role::GhostElementSelected);
         p.hover_background = role(Role::GhostElementHover);
     });
@@ -455,7 +457,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
     th.set(
         "toggle_button",
         ToggleButtonThemePreference {
-            background: clear(),
+            background: role(Role::GhostElementBackground),
             color: role(Role::TextDim),
             active_background: role(Role::AccentMuted),
             active_color: role(Role::Accent),
@@ -471,7 +473,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
     th.set(
         "tab",
         TabThemePreference {
-            background: clear(),
+            background: role(Role::GhostElementBackground),
             hover_background: role(Role::GhostElementHover),
             // The active tab reveals the app base coat, seating it over the editor pane.
             active_background: role(Role::Background),

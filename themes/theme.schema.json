@@ -40,12 +40,10 @@
         "shadow",
         "element.background",
         "element.hover",
-        "element.active",
         "element.selected",
         "element.disabled",
         "ghost_element.background",
         "ghost_element.hover",
-        "ghost_element.active",
         "ghost_element.selected",
         "elevated_element.hover",
         "list.hover",
@@ -174,7 +172,8 @@
           "$ref": "#/$defs/color"
         },
         "element.active": {
-          "$ref": "#/$defs/color"
+          "$ref": "#/$defs/color",
+          "description": "Optional; omitted reads 'element.hover'."
         },
         "element.selected": {
           "$ref": "#/$defs/color"
@@ -189,7 +188,8 @@
           "$ref": "#/$defs/color"
         },
         "ghost_element.active": {
-          "$ref": "#/$defs/color"
+          "$ref": "#/$defs/color",
+          "description": "Optional; omitted reads 'ghost_element.selected'."
         },
         "ghost_element.selected": {
           "$ref": "#/$defs/color"

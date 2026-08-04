@@ -1,7 +1,7 @@
 //! A hairline divider — the 1px rule that separates groups. One place for the pattern that was
 //! otherwise re-inlined as a bare `rect` all over (tab strip, menus, toolbars). Horizontal (fills the
 //! width) or vertical (fills the height); the cross-axis length, thickness, colour and margin are all
-//! overridable, and the colour defaults to the sheet's `border`.
+//! overridable, and the colour defaults to the `border` role.
 
 use freya::prelude::*;
 

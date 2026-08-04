@@ -2,9 +2,9 @@
 //! chrome-less press-to-flip button whose `on` state wears the accent-soft tint — matching
 //! the segmented toggle's selected look. First used as the plan view's Raw/Tree switch
 //! (P2-05), but any mode toggle wears it. The content is the caller's children (usually an
-//! `Icon`), inheriting the dress via the ambient colour; rest and active dress come wholly
-//! from the theme file's `components.toggle_button`, and the hover is the comp's soft
-//! semantic overlay (the same palette-derived recipe as `ToggleSegment`).
+//! `Icon`), inheriting the dress via the ambient colour; rest and active dress are the
+//! `toggle_button` rows of the mapping table (`theme/components.rs`), and the hover is the
+//! comp's soft semantic overlay (the same accent-wash recipe as `ToggleSegment`).
 
 use freya::prelude::*;
 

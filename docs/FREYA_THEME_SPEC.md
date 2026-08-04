@@ -44,9 +44,9 @@ never a computed tint, which no shipping theme format does either. The authorita
 (`UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`).
 
 **Surfaces** — elevation tiers, not widget names:
-`background` (the app base coat) · `surface.background` (the standard panel: sidebars, tab bar,
-grid body, input wells) · `surface.raised` (one step up: drawer, inspector, settings/launcher
-body) · `surface.sunken` (opt → `background`; the EXPLAIN canvas) · `surface.subtle` (the
+`background` (the app base coat) · `surface.background` (the standard panel: tab bar,
+grid body, input wells) · `surface.raised` (one step up: the sidebar, drawer, inspector,
+settings/launcher body) · `surface.sunken` (opt → `background`; the EXPLAIN canvas) · `surface.subtle` (the
 faintest raised box) · `surface.stripe` (opt → transparent; the grid's zebra tint, authored
 translucent) · `elevated_surface.background` (floating chrome: menus, popups, tooltips, palette,
 modals) · `backdrop` (the modal scrim) · `shadow`.
@@ -83,8 +83,10 @@ eyebrows) · `text.placeholder` · `text.disabled` · `text.accent` (opt → `ac
 **Status** — one global triad per semantic, never per-surface:
 `error` + `error.background` + `error.background.hover` + `error.border` (error alone carries a
 hover, for Cancel and Run-while-running) · `warning`/`success`/`info` each + `.background` +
-`.border`. Surfaces read these through the shared `tones()` hook
-(`components/tones.rs`), never through their own theme.
+`.border`. In app code the four *tones* are read through the shared `tones()` hook
+(`components/tones.rs`), never restated per surface; the tinted `.background`/`.border`
+variants reach components through mapping-table rows (the run/cancel buttons' running dress,
+export's warning banner), which is the table doing its job, not a surface restating the ramp.
 
 **Editor chrome**: `editor.background` (its own role — the built-ins genuinely put it on
 different tiers) · `editor.line_number` · `editor.active_line_number` · `editor.selection` ·

@@ -10,7 +10,7 @@
 
 use freya::prelude::*;
 
-use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
+use crate::apps::settings::{settings_theme, SettingsCtx};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::tones::tones;
@@ -25,11 +25,7 @@ pub struct Footer;
 
 impl Component for Footer {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         let ctx = use_consume::<SettingsCtx>();
         let platform = use_hook(Platform::get);
         let dirty = ctx.dirty();

@@ -147,7 +147,7 @@ impl Component for ProjectRow {
             // def the engine refused apart from a file that will not save — so it is a fact, not
             // the incidental annotation `meta_color` dresses elsewhere in this drawer (an Events
             // timestamp, a Queries `line L:C`). As plain `Path` on `meta_color` it resolved to
-            // the sheet's `disabled` at **2.15:1** against the drawer, under the 3:1 floor at any
+            // `text.disabled` at **2.15:1** against the drawer, under the 3:1 floor at any
             // size and illegible at mono 400 11.
             //
             // `Badge::value` is the role History's line-count pill already uses, and the tint it

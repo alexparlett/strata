@@ -179,7 +179,7 @@ enum SegmentContent {
 
 /// One 24px-tall segment: a glyph or label wearing its tooltip `title`, the active dress
 /// (accent tint + accent content) when `selected`, and the comp's soft hover (a 7% text-colour
-/// overlay, semantic — read from the palette) otherwise.
+/// overlay derived from its own theme) otherwise.
 #[derive(PartialEq)]
 pub struct ToggleSegment {
     content: SegmentContent,

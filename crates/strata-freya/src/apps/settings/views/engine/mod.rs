@@ -28,7 +28,7 @@ use freya::prelude::*;
 use crate::apps::settings::views::engine::inspector::Inspector;
 use crate::apps::settings::views::engine::table::PropTable;
 use crate::apps::settings::views::Pane;
-use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
+use crate::apps::settings::{settings_theme, SettingsCtx};
 use crate::components::icon::{Icon, IconName};
 use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
@@ -52,11 +52,7 @@ pub struct EnginePane;
 
 impl Component for EnginePane {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         let ctx = use_consume::<SettingsCtx>();
         let mut rows = ctx.engine;
 

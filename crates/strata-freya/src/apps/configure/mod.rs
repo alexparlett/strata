@@ -21,8 +21,8 @@
 //! branch back.
 //!
 //! **No theme of its own.** A window is not a component: its chrome — body, rules, panels,
-//! text — is the app's *sheet*, and everything form-shaped is the shared `form` theme. A
-//! per-window block of sixteen fields that all resolve to the same handful of sheet slots is
+//! text — is the app's role vocabulary, and everything form-shaped is the shared `form`
+//! theme. A per-window block of sixteen fields that all resolve to the same handful of roles is
 //! four blocks to keep in step for one reskin, which is the drift a shared vocabulary exists to
 //! prevent. (The three windows that still carry one predate this and should follow.)
 //!

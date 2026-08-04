@@ -17,7 +17,7 @@ use freya::prelude::*;
 use strata_core::theme::{Source, StrataTheme};
 
 use crate::apps::settings::views::Pane;
-use crate::apps::settings::{Anchor, SettingsCtx, SettingsThemePartial, SettingsThemePreference};
+use crate::apps::settings::{settings_theme, Anchor, SettingsCtx};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::form::Form;
@@ -205,11 +205,7 @@ const CHECK_SIZE: f32 = 16.;
 
 impl Component for ThemeCard {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         let ctx = use_consume::<SettingsCtx>();
         let mut hovering = use_state(|| false);
         let a11y_id = use_a11y();

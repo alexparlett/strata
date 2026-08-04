@@ -225,7 +225,9 @@ impl Component for Dialog {
             // Never wider than the window on a small screen.
             .max_width(Size::window_percent(92.))
             .corner_radius(14.)
-            .background(roles.get(Role::ElementBackground))
+            // The modal card sits on the floating-chrome tier with every other modal
+            // (popup, palette, cell/record view) — not on the control fill.
+            .background(roles.get(Role::ElevatedSurface))
             .border(Border::new().width(1.).fill(roles.get(Role::Border)))
             .shadow(
                 Shadow::new()

@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use freya::prelude::*;
 use strata_code_editor::editor_theme::{EditorSyntaxThemePreference, SYNTAX_SCOPES};
-use strata_core::theme::ThemeRegistry;
+use strata_core::theme::{generate_schema as core_schema, ThemeRegistry};
 
 use crate::state::{use_config_channel, ConfigChan, ConfigStation, ThemePreview, ThemeSel};
 
@@ -161,7 +161,7 @@ fn bridge_sheet(roles: &RoleColors) -> ColorsSheet {
         surface_inverse_tertiary: roles.get(Role::ScrollbarThumbActive),
         border: roles.get(Role::Border),
         border_focus: roles.get(Role::BorderFocused),
-        border_disabled: roles.get(Role::BorderVariant),
+        border_disabled: roles.get(Role::BorderDisabled),
         text_primary: roles.get(Role::Text),
         text_secondary: roles.get(Role::TextMuted),
         text_placeholder: roles.get(Role::TextPlaceholder),
@@ -282,10 +282,11 @@ pub fn strata_theme(t: &StrataTheme) -> Theme {
 pub const TYPOGRAPHY_KEY: &str = "strata_typography";
 
 /// The theme JSON schema for this app: the core model schema
-/// ([`strata_core::theme::generate_schema`]) over the editor's [`SYNTAX_SCOPES`]. The
-/// `schema_in_sync` test keeps `themes/theme.schema.json` equal to this.
+/// ([`strata_core::theme::generate_schema`], imported as `core_schema` — a genuine collision
+/// with this wrapper's own name) over the editor's [`SYNTAX_SCOPES`]. The `schema_in_sync`
+/// test keeps `themes/theme.schema.json` equal to this.
 pub fn generate_schema() -> serde_json::Value {
-    strata_core::theme::generate_schema(SYNTAX_SCOPES)
+    core_schema(SYNTAX_SCOPES)
 }
 
 /// Parse an authored colour: `#rrggbb`, `#rrggbbaa`, or `rgba(r,g,b,a)`. Anything else →
@@ -304,11 +305,17 @@ fn pc(s: &str) -> Color {
         }
     }
     let hex = s.trim_start_matches('#');
+    // Gate before slicing: `len()` is bytes, so a multibyte character in a "6-char" value
+    // would split a UTF-8 boundary and panic — and a broken user theme must never take the
+    // app down. A wrong-character value of the right length is the same loud magenta, not a
+    // silently zeroed channel.
+    if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return MAGENTA;
+    }
     let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
     match hex.len() {
         6 => Color::from_rgb(byte(0), byte(2), byte(4)),
-        8 => Color::from_rgb(byte(0), byte(2), byte(4)).with_a(byte(6)),
-        _ => MAGENTA,
+        _ => Color::from_rgb(byte(0), byte(2), byte(4)).with_a(byte(6)),
     }
 }
 

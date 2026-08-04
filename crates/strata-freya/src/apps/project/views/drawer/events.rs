@@ -10,12 +10,13 @@
 //! nothing to jump to. A run's error appears here as one line of history; the run's own results
 //! pane is where it is rendered in full.
 //!
-//! ## The severity ramp comes off the sheet
+//! ## The severity ramp is the shared `tones()`
 //!
-//! A [`LogLevel`]'s dot is `success` / `info` / `warning` / `error` straight from the sheet, like
-//! Problems' glyphs and the status bar's state dot: those four are semantic, and a semantic colour
-//! follows the app-wide ramp wherever it appears (AGENTS.md §3). Everything else the tab paints —
-//! the message, the timestamp, the row rule, the empty state — is the `drawer` theme's.
+//! A [`LogLevel`]'s dot is `success` / `info` / `warning` / `error` through the shared `tones()`
+//! hook, like Problems' glyphs and the status bar's state dot: those four are semantic, and a
+//! semantic colour follows the app-wide ramp wherever it appears (AGENTS.md §3). Everything else
+//! the tab paints — the message, the timestamp, the row rule, the empty state — is the `drawer`
+//! theme's.
 
 use freya::prelude::*;
 

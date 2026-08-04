@@ -51,7 +51,7 @@ define_theme!(
         nav_background: Color,
         /// Hover for a project row.
         row_hover_background: Color,
-        /// Hover for a row's Remove action (its glyph goes to the sheet's `error`).
+        /// Hover for a row's Remove action (its glyph goes to the shared ramp's `error`).
         remove_hover_background: Color,
     }
 );

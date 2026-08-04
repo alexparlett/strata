@@ -87,8 +87,8 @@ define_theme!(
         /// The selected-partition row's order badge, and its text.
         badge_background: Color,
         badge_color: Color,
-        /// The high-cardinality warning banner (its glyph and text take the sheet's `warning`,
-        /// which is semantic and must follow the app-wide ramp).
+        /// The high-cardinality warning banner (its glyph and text take the shared ramp's
+        /// `warning`, which is semantic and must follow the app wherever it appears).
         warning_background: Color,
         warning_border_fill: Color,
     }

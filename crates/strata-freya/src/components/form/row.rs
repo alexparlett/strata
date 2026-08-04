@@ -292,11 +292,11 @@ impl Note {
 impl Component for Note {
     fn render(&self) -> impl IntoElement {
         let theme = form_theme();
-        // The box comes off the form's own theme, not the base sheet. Reading `surface_primary`
-        // there looked equivalent and is not: it is a *lower* tone than the window body, so the
-        // note read as a hole punched in the surface while the panes beside it read as raised. A
-        // component's dress is its own theme's (AGENTS.md §3), and the sheet is only for the
-        // semantic ramp — which a note is not.
+        // The box comes off the form's own theme, never a direct role read. Reaching for
+        // `surface.background` there looked equivalent and is not: it is a *lower* tone than the
+        // window body, so the note read as a hole punched in the surface while the panes beside
+        // it read as raised. A component's dress is its own theme's (AGENTS.md §3), and direct
+        // reads are only for the semantic ramp — which a note is not.
         rect()
             .width(Size::fill())
             .padding((12., 12.))

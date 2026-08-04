@@ -64,9 +64,9 @@ impl Component for Running {
             roles.get(Role::TextPlaceholder),
             roles.get(Role::SurfaceRaised),
         );
-        // The Cancel control's own theme component — authored per theme in the file's
-        // `components.cancel_button`, whose values track `run_button`'s `running_*` set (the
-        // same cancel dress the toolbar's Run→Cancel flip wears, P2-15).
+        // The Cancel control's own theme component — its mapping-table rows track
+        // `run_button`'s `running_*` set (the same cancel dress the toolbar's Run→Cancel
+        // flip wears, P2-15).
         let cancel = get_theme!(&self.theme, CancelButtonThemePreference, "cancel_button");
 
         // Ticks from mount — the body is keyed on the press's nonce, so a new Run always

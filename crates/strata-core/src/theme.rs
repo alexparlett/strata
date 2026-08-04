@@ -94,9 +94,10 @@ roles! {
     // ---- Surfaces: elevation tiers, not widget names --------------------------------------
     /// The app base coat: the window body, the active tab's well behind everything.
     Background => "background",
-    /// The standard panel surface: sidebars, tab bar, status bar, grid body, input wells, cards.
+    /// The standard panel surface: tab bar, status bar, grid body, input wells, cards.
     SurfaceBackground => "surface.background",
-    /// One step up: drawer, inspector, chart canvas, settings/launcher body, title bar.
+    /// One step up: the sidebar, drawer, inspector, chart canvas, settings/launcher body,
+    /// title bar.
     SurfaceRaised => "surface.raised",
     /// Below base: the EXPLAIN plan canvas.
     SurfaceSunken => "surface.sunken" (or Background),
@@ -126,8 +127,9 @@ roles! {
     ElementBackground => "element.background",
     /// Filled-control hover fill (also the strong hover of icon flat-buttons).
     ElementHover => "element.hover",
-    /// Filled-control pressed fill.
-    ElementActive => "element.active",
+    /// Filled-control pressed fill. No control paints a distinct pressed fill yet, so this is
+    /// optional until one does — authoring it is how a theme splits press from hover.
+    ElementActive => "element.active" (or ElementHover),
     /// Neutral selected fill: a menu's checked item, the active grid gutter/header.
     ElementSelected => "element.selected",
     /// Disabled filled-control fill.
@@ -136,8 +138,9 @@ roles! {
     GhostElementBackground => "ghost_element.background",
     /// Flush hover wash: tabs, sidebar rows, drawer rows, segments.
     GhostElementHover => "ghost_element.hover",
-    /// Flush pressed fill.
-    GhostElementActive => "ghost_element.active",
+    /// Flush pressed fill. As with `element.active`: optional until a flush control paints a
+    /// distinct pressed state.
+    GhostElementActive => "ghost_element.active" (or GhostElementSelected),
     /// Flush neutral selected fill: the active tab pill, the selected sidebar row.
     GhostElementSelected => "ghost_element.selected",
     /// Hover wash for items on elevated/filled bases (menu items, select options, completion
@@ -355,10 +358,10 @@ pub struct StrataTheme {
     pub syntax: BTreeMap<String, String>,
     #[serde(default)]
     pub fonts: BTreeMap<String, String>,
-    /// The type scale — named roles (display · title · body · meta · …), each fixing a font
+    /// The type scale — named roles (title · body · meta · …), each fixing a font
     /// family (`ui`/`mono`, resolved via `fonts`), weight and size (+ optional line-height /
     /// letter-spacing). A **top-level** section (not a `components` entry): its fields are
-    /// `TypeRole` objects, not the colour `Pref`s every `components.*` map holds. Resolved
+    /// `TypeRole` objects, not colour strings like `roles` and `syntax` hold. Resolved
     /// into a [`Typography`] by [`resolve_typography`].
     #[serde(default)]
     pub typography: BTreeMap<String, TypeRole>,

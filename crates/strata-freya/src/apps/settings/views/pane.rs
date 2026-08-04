@@ -13,7 +13,7 @@ use freya::components::{use_scroll_controller, ScrollConfig};
 use freya::prelude::*;
 use freya::router::*;
 
-use crate::apps::settings::{category, Route, SettingsThemePartial, SettingsThemePreference};
+use crate::apps::settings::{category, settings_theme, Route};
 use crate::components::form::RevealScroll;
 use crate::components::typography::Control;
 
@@ -117,11 +117,7 @@ struct Breadcrumb {
 
 impl Component for Breadcrumb {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         // Every route has a category (`model`'s test pins that); a page with none would be
         // unreachable, so there is nothing sensible to draw for it.
         let Some(category) = category(&self.route) else {
