@@ -29,6 +29,299 @@ const DAYLIGHT_JSON: &str = include_str!("../../../themes/daylight.json");
 /// The default theme id (used until Settings/prefs pick another).
 pub const DEFAULT_THEME: &str = "midnight";
 
+/// What an omitted role resolves to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Fallback {
+    /// The role is required: a file that omits it is warned at discovery and paints magenta.
+    Required,
+    /// Omitted ⇒ read this role's value instead.
+    Role(Role),
+    /// Omitted ⇒ fully transparent.
+    Transparent,
+}
+
+macro_rules! role_fallback {
+    () => {
+        Fallback::Required
+    };
+    (transparent) => {
+        Fallback::Transparent
+    };
+    ($role:ident) => {
+        Fallback::Role(Role::$role)
+    };
+}
+
+/// One table generates the enum, the dotted names, the lookup and the fallback rules — so a role
+/// cannot exist without a name, nor a fallback point at a role that doesn't.
+macro_rules! roles {
+    ($( $(#[$doc:meta])* $variant:ident => $name:literal $(( or $fb:tt ))? ),* $(,)?) => {
+        /// One role of the theme vocabulary — the closed set of names a theme file's `roles` map
+        /// may author, and the only names the frontend's component mapping may reference.
+        /// Ordinals are stable within a build (the frontend indexes a resolved array by them).
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub enum Role {
+            $( $(#[$doc])* $variant ),*
+        }
+
+        impl Role {
+            /// Every role, in declaration (family) order.
+            pub const ALL: &'static [Role] = &[ $( Role::$variant ),* ];
+            pub const COUNT: usize = Role::ALL.len();
+
+            /// The dotted name this role has in a theme file's `roles` map.
+            pub fn name(self) -> &'static str {
+                match self { $( Role::$variant => $name ),* }
+            }
+
+            /// The role a dotted name denotes, if it is one.
+            pub fn from_name(name: &str) -> Option<Role> {
+                match name { $( $name => Some(Role::$variant), )* _ => None }
+            }
+
+            /// What an authored file may omit for this role, and what the omission reads as.
+            /// Fallbacks are always "read this other named role" — never a computed tint, which
+            /// no shipping theme format does either.
+            pub fn fallback(self) -> Fallback {
+                match self { $( Role::$variant => role_fallback!($($fb)?) ),* }
+            }
+        }
+    };
+}
+
+roles! {
+    // ---- Surfaces: elevation tiers, not widget names --------------------------------------
+    /// The app base coat: the window body, the active tab's well behind everything.
+    Background => "background",
+    /// The standard panel surface: sidebars, tab bar, status bar, grid body, input wells, cards.
+    SurfaceBackground => "surface.background",
+    /// One step up: drawer, inspector, chart canvas, settings/launcher body, title bar.
+    SurfaceRaised => "surface.raised",
+    /// Below base: the EXPLAIN plan canvas.
+    SurfaceSunken => "surface.sunken" (or Background),
+    /// A barely-raised quiet box: insight panels, the faintest tint washes.
+    SurfaceSubtle => "surface.subtle",
+    /// The grid's zebra-row tint, painted translucent over `surface.background`.
+    SurfaceStripe => "surface.stripe" (or transparent),
+    /// Floating chrome: menus, popups, tooltips, the command palette, modal cards.
+    ElevatedSurface => "elevated_surface.background",
+    /// The scrim behind modals and the palette.
+    Backdrop => "backdrop",
+    /// Drop shadow of floating chrome.
+    Shadow => "shadow",
+
+    // ---- Location refinements: a place, not a widget, that may leave its tier --------------
+    /// Drawer / inspector body, when a theme wants panels off the raised tier.
+    PanelBackground => "panel.background" (or SurfaceRaised),
+    /// The editor tab strip's container.
+    TabBarBackground => "tab_bar.background" (or SurfaceBackground),
+    /// The results-pane footer.
+    StatusBarBackground => "status_bar.background" (or SurfaceBackground),
+    /// The header bar.
+    TitleBarBackground => "title_bar.background" (or SurfaceRaised),
+
+    // ---- Interactive elements: filled controls, flush controls, and the odd fills ----------
+    /// Filled-control rest fill: buttons, select triggers, segmented containers, grid headers.
+    ElementBackground => "element.background",
+    /// Filled-control hover fill (also the strong hover of icon flat-buttons).
+    ElementHover => "element.hover",
+    /// Filled-control pressed fill.
+    ElementActive => "element.active",
+    /// Neutral selected fill: a menu's checked item, the active grid gutter/header.
+    ElementSelected => "element.selected",
+    /// Disabled filled-control fill.
+    ElementDisabled => "element.disabled",
+    /// Flush-control rest fill (transparent in both built-ins, themeable).
+    GhostElementBackground => "ghost_element.background",
+    /// Flush hover wash: tabs, sidebar rows, drawer rows, segments.
+    GhostElementHover => "ghost_element.hover",
+    /// Flush pressed fill.
+    GhostElementActive => "ghost_element.active",
+    /// Flush neutral selected fill: the active tab pill, the selected sidebar row.
+    GhostElementSelected => "ghost_element.selected",
+    /// Hover wash for items on elevated/filled bases (menu items, select options, completion
+    /// rows, card hover) — authored translucent so one value works on every base.
+    ElevatedElementHover => "elevated_element.hover",
+    /// Data-row hover (grid cells, table rows) — hue-distinct from control hover in Daylight.
+    ListHover => "list.hover",
+    /// Drag-and-drop placeholder fill (the tab drag slot).
+    DropTarget => "drop_target.background",
+    /// Progress/slider channel fill.
+    Track => "track",
+    /// The light control knob: switch thumbs, the checkbox check mark.
+    Knob => "knob",
+
+    // ---- Borders ---------------------------------------------------------------------------
+    /// Standard hairline: panel dividers, pane rules.
+    Border => "border",
+    /// Fainter hairline: in-list row rules, grid row dividers, tree guides.
+    BorderVariant => "border.variant",
+    /// Control outline: buttons, inputs, chips, boxed tables.
+    BorderControl => "border.control",
+    /// Emphasized outline: hovered cards, the keymap's dashed empty slot.
+    BorderStrong => "border.strong",
+    /// Focus ring.
+    BorderFocused => "border.focused",
+    /// Selected-card/chip outline.
+    BorderSelected => "border.selected" (or BorderFocused),
+    /// Disabled control outline.
+    BorderDisabled => "border.disabled" (or BorderVariant),
+    /// Edge of floating chrome; also checkbox/radio rest outline and the switch track.
+    BorderOverlay => "border.overlay",
+
+    // ---- Text (icons read these too; an `icon.*` family is the named escape if one ever
+    //      needs to differ) ------------------------------------------------------------------
+    /// Primary content and headings.
+    Text => "text",
+    /// Secondary body: labels, values, legends, row text.
+    TextMuted => "text.muted",
+    /// Control labels at rest (buttons, segment items, status-bar controls).
+    TextControl => "text.control",
+    /// Recessive chrome text: status bar, flat buttons at rest, tab labels, empty states.
+    TextDim => "text.dim",
+    /// Uppercase eyebrow/field labels.
+    TextLabel => "text.label",
+    /// Placeholders, hints, chevrons, line numbers.
+    TextPlaceholder => "text.placeholder",
+    /// Disabled/meta text: timestamps, tallies, null tiles.
+    TextDisabled => "text.disabled",
+    /// Emphasized/link text.
+    TextAccent => "text.accent" (or Accent),
+    /// Text and glyphs on an accent or status fill.
+    TextOnAccent => "text.on_accent",
+
+    // ---- Accent ----------------------------------------------------------------------------
+    /// The brand accent: filled buttons, selection marks, links, cursors.
+    Accent => "accent",
+    /// Filled-accent hover.
+    AccentHover => "accent.hover",
+    /// Focus ring on an accent-filled control.
+    AccentRing => "accent.ring" (or Accent),
+    /// The ~12% accent wash: selected rows/pills/cards, nav pills, the palette's active row.
+    AccentSelection => "accent.selection",
+    /// The stronger ~22% wash: toggle-button active, the form reveal flash.
+    AccentMuted => "accent.muted",
+    /// The ~12% badge/icon-chip fill.
+    AccentBadge => "accent.badge",
+
+    // ---- Status: one global triad per semantic (error also carries a hover, for the two
+    //      live controls dressed in it) -------------------------------------------------------
+    /// The error tone.
+    Error => "error",
+    /// The tinted error fill.
+    ErrorBackground => "error.background",
+    /// The tinted error fill, hovered (Cancel, Run-while-running).
+    ErrorBackgroundHover => "error.background.hover",
+    /// The tinted error outline.
+    ErrorBorder => "error.border",
+    /// The warning tone.
+    Warning => "warning",
+    /// The tinted warning fill.
+    WarningBackground => "warning.background",
+    /// The tinted warning outline.
+    WarningBorder => "warning.border",
+    /// The success tone.
+    Success => "success",
+    /// The tinted success fill.
+    SuccessBackground => "success.background",
+    /// The tinted success outline.
+    SuccessBorder => "success.border",
+    /// The info tone.
+    Info => "info",
+    /// The tinted info fill.
+    InfoBackground => "info.background",
+    /// The tinted info outline.
+    InfoBorder => "info.border",
+
+    // ---- Editor chrome (syntax is the separate `syntax` section) ---------------------------
+    /// The code editor well — its own role because the built-ins genuinely put it on
+    /// different tiers.
+    EditorBackground => "editor.background",
+    /// Gutter numbers at rest.
+    EditorLineNumber => "editor.line_number",
+    /// The cursor line's gutter number.
+    EditorActiveLineNumber => "editor.active_line_number",
+    /// Text-selection wash.
+    EditorSelection => "editor.selection",
+    /// The caret.
+    EditorCursor => "editor.cursor" (or Accent),
+
+    // ---- Scrollbar -------------------------------------------------------------------------
+    /// The track.
+    ScrollbarTrack => "scrollbar.track",
+    /// The thumb at rest.
+    ScrollbarThumb => "scrollbar.thumb",
+    /// The thumb, hovered.
+    ScrollbarThumbHover => "scrollbar.thumb.hover",
+    /// The thumb, grabbed.
+    ScrollbarThumbActive => "scrollbar.thumb.active",
+
+    // ---- The categorical data-type ramp (Strata's display taxonomy — see `Kind`) -----------
+    /// Strings.
+    DataTypeString => "data_type.string",
+    /// Numbers.
+    DataTypeNumber => "data_type.number",
+    /// Booleans.
+    DataTypeBoolean => "data_type.boolean",
+    /// Timestamps/dates.
+    DataTypeTimestamp => "data_type.timestamp",
+    /// Structs.
+    DataTypeStruct => "data_type.struct",
+    /// Lists.
+    DataTypeList => "data_type.list",
+    /// Maps.
+    DataTypeMap => "data_type.map",
+
+    // ---- The ordered chart series ramp ------------------------------------------------------
+    /// Series 1.
+    Chart1 => "chart.1",
+    /// Series 2.
+    Chart2 => "chart.2",
+    /// Series 3.
+    Chart3 => "chart.3",
+    /// Series 4.
+    Chart4 => "chart.4",
+    /// Series 5.
+    Chart5 => "chart.5",
+    /// Series 6.
+    Chart6 => "chart.6",
+    /// Series 7.
+    Chart7 => "chart.7",
+    /// Series 8.
+    Chart8 => "chart.8",
+    /// Series 9.
+    Chart9 => "chart.9",
+    /// Series 10.
+    Chart10 => "chart.10",
+
+    // ---- Entity kinds: catalog icons + completion kinds, one reconciled set -----------------
+    /// A table.
+    EntityTable => "entity.table",
+    /// A view.
+    EntityView => "entity.view",
+    /// A saved query.
+    EntityQuery => "entity.query",
+    /// A column.
+    EntityColumn => "entity.column",
+    /// A function.
+    EntityFunction => "entity.function",
+    /// A keyword (completion), aligned with the syntax keyword hue.
+    EntityKeyword => "entity.keyword",
+
+    // ---- Source-format badges: a closed set, deliberately NOT the data-type ramp —
+    //      retinting strings must not repaint file badges ------------------------------------
+    /// Parquet.
+    FormatParquet => "format.parquet",
+    /// CSV.
+    FormatCsv => "format.csv",
+    /// JSON.
+    FormatJson => "format.json",
+    /// Arrow.
+    FormatArrow => "format.arrow",
+    /// A view badge.
+    FormatView => "format.view",
+}
+
 /// The 27 `ColorsSheet` slot names — reference targets + the required sheet keys.
 pub const SLOTS: &[&str] = &[
     "primary",
@@ -595,6 +888,46 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The vocabulary's internal coherence: every dotted name is unique and round-trips through
+    /// `from_name`, and every fallback chain terminates at a required role in bounded steps —
+    /// a cycle would hang resolution, and nothing else checks for one.
+    #[test]
+    fn role_table_is_coherent() {
+        let mut seen = std::collections::BTreeSet::new();
+        for role in Role::ALL {
+            assert!(
+                seen.insert(role.name()),
+                "duplicate role name {}",
+                role.name()
+            );
+            assert_eq!(Role::from_name(role.name()), Some(*role), "{}", role.name());
+            assert!(
+                role.name()
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._".contains(c)),
+                "role name '{}' is not lowercase dotted",
+                role.name()
+            );
+            let mut current = *role;
+            let mut steps = 0;
+            loop {
+                match current.fallback() {
+                    Fallback::Required | Fallback::Transparent => break,
+                    Fallback::Role(next) => {
+                        current = next;
+                        steps += 1;
+                        assert!(steps <= Role::COUNT, "fallback cycle at {}", role.name());
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            Role::COUNT,
+            100,
+            "the vocabulary is a deliberate, counted set"
+        );
     }
 
     #[test]
