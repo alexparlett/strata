@@ -19,7 +19,7 @@
 
 use std::rc::Rc;
 
-use freya::components::{define_theme, get_theme, use_theme, Disclosure, Tree, TreeItem};
+use freya::components::{define_theme, get_theme, Disclosure, Tree, TreeItem};
 use freya::prelude::*;
 
 use super::value_tree::{leaf_text, RowKind, TreeModel, TreeRow};
@@ -28,6 +28,7 @@ use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue};
+use crate::theme::{use_roles, Role};
 
 define_theme!(
     %[component]
@@ -192,8 +193,7 @@ impl Component for CellView {
     fn render(&self) -> impl IntoElement {
         let mut close_hover = use_state(|| false);
         let theme = get_theme!(&self.theme, CellViewThemePreference, "cell_view");
-        let sheet = use_theme();
-        let shadow = sheet.read().colors().shadow;
+        let shadow = use_roles().get(Role::Shadow);
         let mut open = self.open;
         let close = move |_: Event<PressEventData>| open.set(None);
 

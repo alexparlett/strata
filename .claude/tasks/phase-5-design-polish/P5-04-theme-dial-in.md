@@ -10,8 +10,19 @@ The Freya theme system + both built-in themes exist; per-surface colour accuracy
 surfaces are built.
 
 ## Build
-- Preview with the Freya component gallery / `FreyaThemeGallery.dc.html`; adjust sheet + component
-  tokens so each surface matches its canvas (Midnight = JetBrains-style tiers; Daylight = comfort zone).
+- Preview with the Freya component gallery / `FreyaThemeGallery.dc.html`; adjust the **roles**
+  in both theme files (and, where a role is genuinely over-shared, split it in `roles!` + the
+  mapping table) so each surface matches its canvas (Midnight = JetBrains-style tiers;
+  Daylight = comfort zone). Attend first to the reconciliations theme v2 flagged for visual
+  judgment: the translucent `elevated_element.hover`, the merged `accent.selection` intensity,
+  `ghost_element.hover` absorbing the sidebar/launcher hovers, `data_type.timestamp` on tan,
+  and the entity hues agreed between catalog and completion. The adversarial review then named
+  five more resolved-colour changes the migration's commit had not flagged — judge these too:
+  `inspector.emphasis_color` (Midnight pale `#cfe1ff` → the accent, via `text.accent`'s
+  fallback), the cell view's badge (Midnight cyan `#8ad4ff` → accent + `accent.badge`),
+  `launcher.remove_hover_background` (Midnight opaque `#14100f` → the `error.background` wash),
+  `flat_button.disabled_color` (both themes → `text.disabled`), and the confirm dialog's card
+  joining the other modals on `elevated_surface.background`.
 - **After any theme change**, regenerate + verify the schema:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`.
 
@@ -19,4 +30,6 @@ surfaces are built.
 - [ ] Both themes match the canvases across surfaces; `schema_in_sync` passes.
 
 ## Freya / references
-- `theme.rs` + JSON themes, `FreyaThemeGallery.dc.html`, the `schema_in_sync` test. DEV_TASKS W5.
+- `themes/*.json` + `strata-core`'s `roles!` + `strata-freya/src/theme/components.rs`,
+  `FreyaThemeGallery.dc.html`, the `schema_in_sync` test, `docs/FREYA_THEME_SPEC.md`.
+  DEV_TASKS W5.

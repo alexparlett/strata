@@ -9,7 +9,7 @@
 mod agents;
 mod catalog;
 
-use freya::components::{use_theme, CircularLoader, Input};
+use freya::components::{CircularLoader, Input};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::SidebarPane;
@@ -27,6 +27,7 @@ use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::toolbar::{Toolbar, ToolbarItem};
 use crate::components::typography::{Eyebrow, InputTypography};
+use crate::theme::{use_roles, Role};
 
 /// A pane header that is just its name — every pane but the catalog, whose filter field *is*
 /// its header. `Size::flex` for the shell's reason: the row distributes, so a `fill` label
@@ -82,16 +83,13 @@ impl Component for Sidebar {
     fn render(&self) -> impl IntoElement {
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let pane = radio.read().layout.sidebar.unwrap_or(SidebarPane::Catalog);
-        let theme = use_theme();
-        let (bg, border, label_color, faint) = {
-            let t = theme.read();
-            (
-                t.colors().surface_secondary,
-                t.colors().border,
-                t.colors().text_placeholder,
-                t.colors().text_placeholder,
-            )
-        };
+        let roles = use_roles();
+        let (bg, border, label_color, faint) = (
+            roles.get(Role::SurfaceRaised),
+            roles.get(Role::Border),
+            roles.get(Role::TextPlaceholder),
+            roles.get(Role::TextPlaceholder),
+        );
 
         // The catalog filter lives in the header beside the refresh button, but its consumer is
         // the tree below — so the shell owns the signal and hands it down.

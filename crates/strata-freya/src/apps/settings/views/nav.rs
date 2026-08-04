@@ -34,8 +34,7 @@ use strata_core::config::Command;
 
 use crate::apps::settings::views::PropRows;
 use crate::apps::settings::{
-    search, Category, Hit, NavGroup, SettingsCtx, SettingsThemePartial, SettingsThemePreference,
-    CATEGORIES,
+    search, settings_theme, Category, Hit, NavGroup, SettingsCtx, CATEGORIES,
 };
 use crate::components::divider::Divider;
 use crate::components::form::Reveal;
@@ -100,11 +99,7 @@ pub struct Nav;
 
 impl Component for Nav {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         // Which headings are folded away. Collapsed-by-exception, so a group added later
         // shows up rather than hiding.
         let collapsed = use_state(HashSet::<NavGroup>::new);
@@ -211,8 +206,8 @@ impl Component for Nav {
                             Input::new(query)
                                 .placeholder("Search settings")
                                 // The glyph's tone is the rail's own recessive one, off the
-                                // `settings` theme — not the sheet's `text_placeholder`, which is
-                                // the same colour today and the wrong source (AGENTS.md §3: a
+                                // `settings` theme — not a direct `text.placeholder` read, which
+                                // is the same colour today and the wrong source (AGENTS.md §3: a
                                 // surface with a component theme reads its colours from it).
                                 .leading(
                                     Icon::new(IconName::Search)
@@ -300,11 +295,7 @@ impl KeyExt for ResultRow {
 
 impl Component for ResultRow {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         let hit = self.hit;
         let (reveal, engine, query) = (self.reveal, self.engine, self.query);
 
@@ -352,11 +343,7 @@ struct GroupHeading {
 
 impl Component for GroupHeading {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         let group = self.group;
         let mut collapsed = self.collapsed;
         let open = !collapsed.read().contains(&group);
@@ -400,11 +387,7 @@ struct CategoryRow {
 
 impl Component for CategoryRow {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         let route = self.category.route.clone();
         let padding = if self.category.group.is_some() {
             ROW_PADDING
@@ -438,11 +421,7 @@ struct CategoryLabel {
 
 impl Component for CategoryLabel {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         let color = if use_is_active() {
             theme.item_active_color
         } else {

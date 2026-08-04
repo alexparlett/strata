@@ -237,7 +237,7 @@ Unchanged from the previous revision in mechanism — `canvas(RenderCallback)` t
 `PlotSkiaBackend` (`freya::plot`, fork feature; `draw_pixel` is a reachable `todo!()` to fix and
 push first), logical units only, explicit repaint requests, marks per §4, plotters mesh with ~5
 gridlines / nice max / abbreviated ticks / thinned X labels / zero baseline on negative spans, a
-`chart` component theme plus the categorical palette as 10 palette slots, then
+`chart` component theme plus the categorical ramp as the `chart.1`…`chart.10` roles, then
 `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`. Line/area may use `Axis.positions`
 for true placement when present; equally-spaced labels are the fallback, not the rule.
 

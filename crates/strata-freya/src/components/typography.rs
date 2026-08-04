@@ -4,11 +4,11 @@
 //! (+ weight / line-height / letter-spacing) from the theme file's top-level `typography` section,
 //! resolved once into a [`Typography`] and provided at the window root (see `project.rs`).
 //!
-//! Roles (family · weight · size): **Hero** (ui 600 26) · **Metric** (mono 600 22) · **Code**
-//! (mono 500 20) · **Title** (ui 600 14.5) · **Strong** (ui 600 13) · **Body** (ui 500 13,
-//! default UI text) · **Control** (ui 600 12.5, button/control label) · **Prose** (ui 400 12.5) ·
-//! **Caption** (ui 400 11) · **MonoValue** (mono 500 12.5) · **Readout** (mono 400 12) ·
-//! **Eyebrow** (mono 600 10, tracked) · **Meta** (mono 500 10) · **Path** (mono 400 11).
+//! Roles (family · weight · size): **Title** (ui 600 14.5) · **Strong** (ui 600 13) ·
+//! **Body** (ui 500 13, default UI text) · **Control** (ui 600 12.5, button/control label) ·
+//! **Prose** (ui 400 12.5) · **Caption** (ui 400 11) · **MonoValue** (mono 500 12.5) ·
+//! **Readout** (mono 400 12) · **Eyebrow** (mono 600 10, tracked) · **Meta** (mono 500 10) ·
+//! **Path** (mono 400 11).
 //!
 //! Deliberately **not** an enum-variant API — every role is its own component so call sites read
 //! `Title::new(..)`, `Meta::new(..)`, matching the dioxus ergonomics. The role fixes the *type*
@@ -177,12 +177,6 @@ macro_rules! roles {
 }
 
 roles! {
-    /// Hero display — specimens / welcome (ui · 600 · 26).
-    Hero => display,
-    /// Data metric — a big mono figure (mono · 600 · 22).
-    Metric => data_display,
-    /// Code display — inline code / SQL at display size (mono · 500 · 20).
-    Code => code_display,
     /// Title / window heading (ui · 600 · 14.5).
     Title => title,
     /// Strong body — emphasised UI text (ui · 600 · 13).

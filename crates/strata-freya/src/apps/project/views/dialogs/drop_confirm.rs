@@ -17,7 +17,7 @@
 //! D10/D11). So the warning says exactly what the catalog row will say afterwards: these
 //! views are flagged, and they will not survive a reopen.
 
-use freya::components::{get_theme, use_theme, ScrollView};
+use freya::components::{get_theme, ScrollView};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
 use strata_model::CatalogKind;
@@ -32,7 +32,9 @@ use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePre
 use crate::components::badge::Badge;
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Caption, Control, MonoValue, Prose, Title};
+use crate::theme::{use_roles, Role};
 
 /// What a drop confirm is about. The variants mirror the catalog's identity rules: tables and
 /// views are addressed by **name** (their engine/SQL identity, one shared namespace), a saved
@@ -161,7 +163,8 @@ impl Component for DropConfirm {
         // the one failure mode the catalog itself cannot show: a `DROP VIEW` the engine refused
         // after the def was already gone.
         let report = use_report();
-        let theme = use_theme();
+        let tones = tones();
+        let roles = use_roles();
         // The destructive action wears the shared `cancel_button` dress — the themes' authored
         // destructive tone (the running body's Cancel, the close confirm's Stop), not a
         // hardcoded red.
@@ -187,7 +190,6 @@ impl Component for DropConfirm {
             return rect().into_element();
         };
 
-        let c = theme.read().colors().clone();
         // Subscribed to `ProjChan::Views` (see above), so a view registering or being dropped
         // under the open dialog refreshes the count — the dialog blocks input, not the engine,
         // and this is the one screen where acting on a stale count is destructive.
@@ -200,10 +202,10 @@ impl Component for DropConfirm {
         let title = rect()
             .width(Size::fill())
             .vertical()
-            .child(Title::new(target.verb()).color(c.text_primary))
+            .child(Title::new(target.verb()).color(roles.get(Role::Text)))
             .child(
                 MonoValue::new(target.name().to_string())
-                    .color(c.primary)
+                    .color(roles.get(Role::Accent))
                     .text_overflow(TextOverflow::Ellipsis),
             );
 
@@ -214,22 +216,22 @@ impl Component for DropConfirm {
                 // comp's `margin-top: var(--sp-4)` above the callout.
                 .corner_radius(10.)
                 .padding(12.)
-                .background(c.warning.with_a(23))
-                .border(Border::new().width(1.).fill(c.warning.with_a(82)))
+                .background(tones.warning.with_a(23))
+                .border(Border::new().width(1.).fill(tones.warning.with_a(82)))
                 .horizontal()
                 .content(Content::Flex)
                 .spacing(8.)
                 .child(
                     rect()
                         .margin((1., 0., 0., 0.))
-                        .child(Icon::new(IconName::Warning).color(c.warning).size(15.)),
+                        .child(Icon::new(IconName::Warning).color(tones.warning).size(15.)),
                 )
                 .child(
                     rect()
                         .width(Size::flex(1.))
                         .vertical()
                         .spacing(8.)
-                        .child(Caption::new(line).color(c.warning).wrap())
+                        .child(Caption::new(line).color(tones.warning).wrap())
                         // The names themselves, as chips. A tall list caps and scrolls rather
                         // than growing the card off the screen (the comp's 96px well).
                         .child(
@@ -248,7 +250,7 @@ impl Component for DropConfirm {
                                         .children(
                                             dependents
                                                 .into_iter()
-                                                .map(|name| Badge::value(name, c.warning)),
+                                                .map(|name| Badge::value(name, tones.warning)),
                                         ),
                                 ),
                         ),
@@ -261,13 +263,17 @@ impl Component for DropConfirm {
             .width(Size::fill())
             .vertical()
             .spacing(12.)
-            .child(Prose::new(target.body()).color(c.text_secondary).wrap())
+            .child(
+                Prose::new(target.body())
+                    .color(roles.get(Role::TextMuted))
+                    .wrap(),
+            )
             .maybe_child(callout);
 
         Dialog::new()
             .on_dismiss(move |_| slot.set(None))
             .on_confirm(move |_| confirm(&key_engine))
-            .header(DialogHeader::new(IconName::Trash, c.error, title))
+            .header(DialogHeader::new(IconName::Trash, tones.error, title))
             .body(body)
             .action(
                 Button::new()

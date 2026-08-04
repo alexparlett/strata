@@ -8,13 +8,13 @@
 //!
 //! [`SegmentedToggle`]: crate::components::segmented_toggle::SegmentedToggle
 
-use freya::components::use_theme;
 use freya::prelude::*;
 
 use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference, FormatId};
 use crate::components::icon::{Icon, IconName};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Eyebrow, Meta, Strong};
+use crate::theme::{use_roles, Role};
 use strata_model::Kind;
 
 #[derive(PartialEq)]
@@ -71,7 +71,7 @@ impl Component for FormatCard {
         let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
         let ctx = use_consume::<ExportCtx>();
         let mut hovered = use_state(|| false);
-        let accent = use_theme().read().colors().primary;
+        let accent = use_roles().get(Role::Accent);
         let palette = type_palette();
 
         let format = self.format;

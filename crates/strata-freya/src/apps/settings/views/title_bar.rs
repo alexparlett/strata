@@ -10,7 +10,7 @@
 
 use freya::prelude::*;
 
-use crate::apps::settings::{SettingsThemePartial, SettingsThemePreference};
+use crate::apps::settings::settings_theme;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Title;
@@ -29,11 +29,7 @@ pub struct TitleBar;
 
 impl Component for TitleBar {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
 
         // The window's mark: the gear in an accent-tinted tile, then its name in the scale's
         // Title role (ui 600 14.5, the comp's).

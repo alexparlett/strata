@@ -27,8 +27,11 @@ was the design's dress or the banner.
   variants and the config — never re-derived in the UI. No CTA, no button (§8).
 - **Banner** — non-blocking, across the canvas top, past 60 categories (`axis.labels.len()`, no
   extra query). The chart renders beneath it, unaltered. Wears the Export window's banner: the
-  `chart` theme's new `warning_background` / `warning_border_fill` pair for the box, the sheet's
-  semantic `warning` for glyph and text, so there is one warning tone app-wide.
+  `chart` theme's new `warning_background` / `warning_border_fill` pair for the box, fixed onto
+  `Role::WarningBackground` / `Role::WarningBorder` in `theme::components` — the same two roles
+  export's banner takes — and the sheet's semantic `warning` for glyph and text. One warning
+  tone app-wide, not a second. (Rehomed onto Theme v2's role table when this branch merged
+  main; a theme file authors no component dress any more.)
 - **`ChartRole::Temporal` split into `Instant` + `Clock`** — see below.
 - **A collapsed pane clips the notice rather than reflowing it.** Found by eyeballing a narrow
   window: the pane gives its width away entirely, and the refusal copy — a block that took the

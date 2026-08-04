@@ -10,9 +10,10 @@
 
 use freya::prelude::*;
 
-use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
+use crate::apps::settings::{settings_theme, SettingsCtx};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::Control;
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`) and its buttons' height.
@@ -24,11 +25,7 @@ pub struct Footer;
 
 impl Component for Footer {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         let ctx = use_consume::<SettingsCtx>();
         let platform = use_hook(Platform::get);
         let dirty = ctx.dirty();
@@ -43,7 +40,7 @@ impl Component for Footer {
         // the instant it was reported — the retry the open window exists to offer, taken away by
         // the message offering it. Only a blocker may disable the button.
         let message = blocker.clone().or_else(|| ctx.failure());
-        let error = use_theme().read().colors().error;
+        let error = tones().error;
 
         let cancel = {
             let platform = platform.clone();

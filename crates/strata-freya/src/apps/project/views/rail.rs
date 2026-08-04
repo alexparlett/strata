@@ -13,7 +13,6 @@
 //! open the pane/tab, or collapse it if it's already the active one. The Connections **button**
 //! lives here; its sidebar pane content is W7.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::{DrawerTab, SidebarPane};
@@ -24,7 +23,9 @@ use crate::apps::project::state::{
 use crate::apps::project::views::drawer::project_error_count;
 use crate::components::icon::{Icon, IconName};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
+use crate::components::tones::tones;
 use crate::components::typography::Meta;
+use crate::theme::{use_roles, Role};
 
 #[derive(PartialEq)]
 pub struct ActivityRail;
@@ -41,7 +42,7 @@ impl Component for ActivityRail {
         // dress, but a resize drag (on `Chan::LayoutSize`) does not.
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let layout = radio.read().layout;
-        let background = use_theme().read().colors().surface_primary;
+        let background = use_roles().get(Role::SurfaceBackground);
 
         // A rail toggle: 40×38, `on` derived from the layout, a press routing to `toggle`
         // (a fn pointer — `toggle_pane` / `toggle_drawer` for the chosen pane / tab).
@@ -148,13 +149,13 @@ impl Component for ProblemsBadge {
         let _ = views.read();
         let errors =
             session.read().error_count() + project_error_count(&tables.read(), &faults.read());
-        let theme = use_theme();
-        let (background, color, ring) = {
-            let t = theme.read();
-            let c = t.colors();
-            // Semantic: the badge is the app-wide error tone wherever it appears (AGENTS.md §3).
-            (c.error, c.text_inverse, c.surface_primary)
-        };
+        let roles = use_roles();
+        // Semantic: the badge is the app-wide error tone wherever it appears (AGENTS.md §3).
+        let (background, color, ring) = (
+            tones().error,
+            roles.get(Role::TextOnAccent),
+            roles.get(Role::SurfaceBackground),
+        );
 
         // Nothing to say: no pill, not an empty one (canvas `sc-if hasProblems`).
         if errors == 0 {
@@ -204,12 +205,8 @@ impl Component for AgentsBadge {
     fn render(&self) -> impl IntoElement {
         let agents = use_consume::<AgentsCtx>();
         let live = agents.read().len();
-        let theme = use_theme();
-        let (background, color) = {
-            let t = theme.read();
-            let c = t.colors();
-            (c.primary, c.text_inverse)
-        };
+        let roles = use_roles();
+        let (background, color) = (roles.get(Role::Accent), roles.get(Role::TextOnAccent));
 
         if live == 0 {
             return rect();

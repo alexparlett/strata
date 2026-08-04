@@ -40,6 +40,7 @@ use crate::apps::project::state::{Chan, FaultsCtx, ProjChan, ProjectState, Sessi
 use freya::components::{Activable, FloatingTab};
 
 use crate::components::badge::Badge;
+use crate::components::tones::{tones, Tones};
 use crate::components::typography::Control;
 
 pub use project::project_error_count;
@@ -51,31 +52,6 @@ pub(super) const GROUP_HEIGHT: f32 = 32.;
 pub(super) const ROW_INDENT: f32 = 32.;
 /// The panel's horizontal padding (canvas `--sp-4`).
 pub(super) const PAD: f32 = 12.;
-
-/// The semantic tones a problem wears, plus the clean state's tick. Read straight off the
-/// **sheet** rather than restated on the drawer's own theme: `error` / `warning` / `info` /
-/// `success` must follow the app-wide ramp wherever they appear (AGENTS.md §3).
-#[derive(Clone, Copy, PartialEq)]
-pub(super) struct Tones {
-    pub error: Color,
-    pub warning: Color,
-    pub info: Color,
-    pub ok: Color,
-}
-
-/// Resolve [`Tones`] from the active theme. A **hook** (one theme read), so call it exactly once
-/// per render — like `type_palette`.
-pub(super) fn tones() -> Tones {
-    let theme = use_theme();
-    let t = theme.read();
-    let c = t.colors();
-    Tones {
-        error: c.error,
-        warning: c.warning,
-        info: c.info,
-        ok: c.success,
-    }
-}
 
 /// The Problems body: whichever scope the header's strip has selected.
 ///

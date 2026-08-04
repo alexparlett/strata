@@ -1,6 +1,6 @@
 //! The editor's Run control — a purpose-built button with three visual states (idle / disabled /
-//! running). Themed via `define_theme!`; its colours are defined wholly in the theme file's
-//! `components.run_button` (see `crate::theme`). Idle runs the query, running shows a stop glyph,
+//! running). Themed via `define_theme!`; its colours are the `run_button` rows of the mapping
+//! table (see `crate::theme`). Idle runs the query, running shows a stop glyph,
 //! disabled is inert (its press never fires). The tooltip is the comp's `runTitle` — keymap-derived
 //! per state ("Run (⌘↵)" / "Cancel query (Esc)"), "Enter a query to run" while disabled (a blank
 //! buffer is the one disabled cause the Freya toolbar models).

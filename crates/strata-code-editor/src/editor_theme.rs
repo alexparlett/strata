@@ -92,6 +92,65 @@ define_theme! {
     }
 }
 
+macro_rules! syntax_scopes {
+    ($( $field:ident => $scope:literal ),* $(,)?) => {
+        /// The author-facing scope names of the syntax theme — the keys of a Strata theme file's
+        /// `syntax` section, in [`EditorSyntaxTheme`] field order. One table pairs each scope
+        /// with its field (Rust underscore ↔ scope dot, with `type_` → `"type"`), so the schema's
+        /// scope list, the builder and the struct cannot drift apart.
+        pub const SYNTAX_SCOPES: &[&str] = &[ $( $scope ),* ];
+
+        impl EditorSyntaxThemePreference {
+            /// Build the registrable syntax theme by looking up each scope's colour. A scope the
+            /// lookup cannot answer paints magenta — the loud omission, never a silent default.
+            pub fn from_scopes(lookup: impl Fn(&str) -> Option<Color>) -> Self {
+                Self {
+                    $( $field: Preference::Specific(
+                        lookup($scope).unwrap_or(Color::from_rgb(255, 0, 255)),
+                    ) ),*
+                }
+            }
+        }
+    };
+}
+
+syntax_scopes! {
+    text => "text",
+    whitespace => "whitespace",
+    attribute => "attribute",
+    boolean => "boolean",
+    comment => "comment",
+    constant => "constant",
+    constructor => "constructor",
+    escape => "escape",
+    function => "function",
+    function_macro => "function.macro",
+    function_method => "function.method",
+    keyword => "keyword",
+    label => "label",
+    module => "module",
+    number => "number",
+    operator => "operator",
+    property => "property",
+    punctuation => "punctuation",
+    punctuation_bracket => "punctuation.bracket",
+    punctuation_delimiter => "punctuation.delimiter",
+    punctuation_special => "punctuation.special",
+    string => "string",
+    string_escape => "string.escape",
+    string_special => "string.special",
+    tag => "tag",
+    text_literal => "text.literal",
+    text_reference => "text.reference",
+    text_title => "text.title",
+    text_uri => "text.uri",
+    text_emphasis => "text.emphasis",
+    type_ => "type",
+    variable => "variable",
+    variable_builtin => "variable.builtin",
+    variable_parameter => "variable.parameter",
+}
+
 impl EditorTheme {
     /// The squiggle colour for a decoration severity — the render-time map, like
     /// [`EditorSyntaxTheme::color`].

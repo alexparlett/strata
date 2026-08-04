@@ -13,7 +13,6 @@
 //! is **keyed on the folder** to make that true even when one question replaces another
 //! without the slot passing through `None`.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 
 use std::path::PathBuf;
@@ -23,6 +22,7 @@ use crate::components::icon::IconName;
 use crate::components::typography::{Control, Prose, Title};
 use crate::platform::OpenCtx;
 use crate::state::AppCtx;
+use crate::theme::{use_roles, Role};
 
 /// Mounted at the window root beside the other dialogs, and above them in document order:
 /// while it is open its key barrier precedes every feature listener, so Esc dismisses the
@@ -60,8 +60,7 @@ impl Component for OpenPromptCard {
     fn render(&self) -> impl IntoElement {
         let platform = use_hook(Platform::get);
         let remember = use_state(|| false);
-        let theme = use_theme();
-        let c = theme.read().colors().clone();
+        let roles = use_roles();
         let open = self.open;
 
         // One binding per handler: `AppCtx` and `Platform` are `Clone`, not `Copy`, so each
@@ -74,13 +73,13 @@ impl Component for OpenPromptCard {
 
         let header = DialogHeader::new(
             IconName::Folder,
-            c.primary,
+            roles.get(Role::Accent),
             rect()
                 .vertical()
-                .child(Title::new("Open Project").color(c.text_primary))
+                .child(Title::new("Open Project").color(roles.get(Role::Text)))
                 .child(
                     Prose::new(self.path.display().to_string())
-                        .color(c.text_placeholder)
+                        .color(roles.get(Role::TextPlaceholder))
                         .text_overflow(TextOverflow::Ellipsis),
                 ),
         );
@@ -96,7 +95,7 @@ impl Component for OpenPromptCard {
                 remember.toggle();
             })
             .child(Checkbox::new().selected(*remember.read()).size(16.))
-            .child(Prose::new("Remember, don't ask again").color(c.text_placeholder));
+            .child(Prose::new("Remember, don't ask again").color(roles.get(Role::TextPlaceholder)));
 
         Dialog::new()
             .on_dismiss(move |_| open.dismiss())
@@ -117,7 +116,7 @@ impl Component for OpenPromptCard {
                     .spacing(12.)
                     .child(
                         Prose::new("Open this project in the current window, or in a new window?")
-                            .color(c.text_secondary)
+                            .color(roles.get(Role::TextMuted))
                             .wrap(),
                     )
                     .child(checkbox_row),

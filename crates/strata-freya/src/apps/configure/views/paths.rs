@@ -13,6 +13,7 @@ use freya::prelude::*;
 use crate::apps::configure::ConfigureCtx;
 use crate::components::form::{form_theme, Row, ValueField, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::Prose;
 use crate::components::window::window_theme;
@@ -64,9 +65,9 @@ struct Toolbar;
 impl Component for Toolbar {
     fn render(&self) -> impl IntoElement {
         let win = window_theme();
-        // `error` is one of the sheet's four semantic slots, so it is read from there wherever
+        // `error` is one of the four semantic tones, so it is read from the shared ramp wherever
         // it appears rather than restated on a component theme.
-        let error = use_theme().read().colors().error;
+        let error = tones().error;
         let ctx = use_consume::<ConfigureCtx>();
         // Subscribes: remove is disabled on an empty list, which is the one thing the toolbar
         // has to know about the list.

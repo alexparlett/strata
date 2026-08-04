@@ -1,4 +1,4 @@
-use freya::components::{use_theme, ScrollController};
+use freya::components::ScrollController;
 use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
 
@@ -12,7 +12,9 @@ use crate::apps::project::state::{Chan, SessionState};
 use crate::components::divider::Divider;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Caption, InputTypography, Prose};
+use crate::theme::{use_roles, Role};
 
 /// A flat 28×28 icon button — the cluster's building block. The icon takes no explicit colour, so it
 /// inherits the button's (hover-reactive) `color`. Callers add the `.on_press`.
@@ -80,16 +82,14 @@ struct NavPalette {
 
 impl NavPalette {
     fn read() -> Self {
-        let theme = use_theme();
-        let theme_ref = theme.read();
-        let c = theme_ref.colors();
+        let roles = use_roles();
         Self {
-            dot_dirty: c.warning,
-            dot_active: c.primary,
-            dot_idle: c.text_placeholder,
-            active_fg: c.text_primary,
-            row_fg: c.text_secondary,
-            faint: c.text_placeholder,
+            dot_dirty: tones().warning,
+            dot_active: roles.get(Role::Accent),
+            dot_idle: roles.get(Role::TextPlaceholder),
+            active_fg: roles.get(Role::Text),
+            row_fg: roles.get(Role::TextMuted),
+            faint: roles.get(Role::TextPlaceholder),
         }
     }
 

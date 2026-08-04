@@ -6,9 +6,9 @@ use crate::apps::project::views::workbench::tab_bar::drag;
 use crate::apps::project::views::workbench::tab_bar::tab::{Tab, TAB_HEIGHT};
 use crate::components::divider::Divider;
 use crate::components::typography::Body;
+use crate::theme::{use_roles, Role};
 use freya::components::{
-    define_theme, get_theme, use_drag, use_scroll_controller, use_theme, DropZone, ScrollConfig,
-    ScrollView,
+    define_theme, get_theme, use_drag, use_scroll_controller, DropZone, ScrollConfig, ScrollView,
 };
 use freya::prelude::{
     rect, use_state, Alignment, Area, ChildrenExt, Color, Component, ContainerExt,
@@ -98,7 +98,7 @@ impl Component for TabBar {
                     .map(|(_, n, ..)| n.clone())
             })
             .unwrap_or_default();
-        let slot_bg = use_theme().read().colors().surface_inverse;
+        let slot_bg = use_roles().get(Role::DropTarget);
 
         // While a drag is live, one global pointer handler drives both the placeholder slot and
         // edge-scroll. It hit-tests the *remaining* tabs (dragged excluded, matching how the strip

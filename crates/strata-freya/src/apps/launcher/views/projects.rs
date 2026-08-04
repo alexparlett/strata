@@ -16,6 +16,7 @@ use crate::apps::launcher::{LauncherThemePartial, LauncherThemePreference};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Control, Eyebrow, InputTypography, Prose};
 use crate::state::{use_config, AppCtx, ConfigChan};
+use crate::theme::{use_roles, Role};
 
 /// The filter box's cap (canvas `max-width: 420px`), so it doesn't stretch to the pane.
 const SEARCH_MAX_WIDTH: f32 = 420.;
@@ -32,7 +33,7 @@ impl Component for ProjectsPane {
             LauncherThemePreference,
             "launcher"
         );
-        let colors = use_theme().read().colors().clone();
+        let roles = use_roles();
         let query = use_state(String::new);
 
         // Two subscriptions, one read: the recents move when a project is opened, pinned or
@@ -94,7 +95,11 @@ impl Component for ProjectsPane {
             rect()
                 .width(Size::fill())
                 .padding(Gaps::new(24., 12., 24., 12.))
-                .child(Prose::new(copy).color(colors.text_placeholder).wrap())
+                .child(
+                    Prose::new(copy)
+                        .color(roles.get(Role::TextPlaceholder))
+                        .wrap(),
+                )
         });
 
         let open_app = self.app.clone();
@@ -114,7 +119,7 @@ impl Component for ProjectsPane {
                             Input::new(query)
                                 .leading(
                                     Icon::new(IconName::Search)
-                                        .color(colors.text_placeholder)
+                                        .color(roles.get(Role::TextPlaceholder))
                                         .size(14.),
                                 )
                                 .placeholder("Search projects")
@@ -135,7 +140,7 @@ impl Component for ProjectsPane {
                     .theme_colors(
                         ButtonColorsThemePartial::default()
                             .color(theme.title_color)
-                            .hover_color(colors.primary),
+                            .hover_color(roles.get(Role::Accent)),
                     )
                     .on_press(move |_| pick_and_open(open_app.clone()))
                     .child(

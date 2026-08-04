@@ -10,14 +10,15 @@
 //! The AVAILABLE pane offers **numeric and string columns only**: a directory name has to be a
 //! short stable scalar, and a timestamp or a struct has no sensible one.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 
 use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
 use crate::components::form::{Row, ValueField};
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue, Prose};
+use crate::theme::{use_roles, Role};
 
 /// The panes' list box. **Fixed**, not sized from its rows: the two panes sit side by side, so
 /// a height derived from each one's own content makes them different heights, and a long list
@@ -174,7 +175,7 @@ impl Component for Available {
         // Hooks first and unconditionally: the filter box comes and goes with the column
         // count, and the row list is a loop — calling either of these inside one would make
         // the hook count vary per render.
-        let accent = use_theme().read().colors().primary;
+        let accent = use_roles().get(Role::Accent);
         let filter_text = use_state(String::new);
         let target = ctx.target.read();
         let draft = ctx.draft.read();
@@ -433,9 +434,9 @@ impl Component for KeepColumns {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
         let ctx = use_consume::<ExportCtx>();
-        // Hoisted: the banner below is conditional, and `use_theme` inside it would make the
+        // Hoisted: the banner below is conditional, and `tones` inside it would make the
         // hook count vary with the toggle.
-        let warning = use_theme().read().colors().warning;
+        let warning = tones().warning;
         let keep = ctx.draft.read().partition.keep_columns;
 
         let row = rect()

@@ -32,9 +32,10 @@ use strata_core::util::plural;
 use strata_model::{Diagnostic, Severity, TabId};
 
 use super::super::{DrawerBody, DrawerEmpty, DrawerTheme};
-use super::{tones, Tones, GROUP_HEIGHT, PAD, ROW_HEIGHT, ROW_INDENT};
+use super::{GROUP_HEIGHT, PAD, ROW_HEIGHT, ROW_INDENT};
 use crate::apps::project::state::{Chan, ProblemGroup, SessionState};
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::{tones, Tones};
 use crate::components::typography::{Body, Caption, Control, Path};
 
 #[derive(PartialEq)]
@@ -60,7 +61,6 @@ impl Component for Queries {
         let el: Element = match groups.is_empty() {
             true => DrawerEmpty::new(IconName::Check, "No problems found")
                 .icon_color(tones.ok)
-                .color(self.theme.empty_color)
                 .into_element(),
             false => DrawerBody::new()
                 .children(groups.into_iter().map(|group| {

@@ -4,7 +4,6 @@
 //! New-query button wears the effective new-tab chord as an inline key-cap chip (the comp's chip,
 //! keymap-derived so a rebind repaints it); Reopen names the tab it would restore in its tooltip.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_core::config::Command;
@@ -14,6 +13,7 @@ use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Control, Prose, Title};
 use crate::keymap::use_hint;
+use crate::theme::{use_roles, Role};
 
 /// The centre-pane placeholder when the session has no open tabs.
 #[derive(PartialEq)]
@@ -32,22 +32,19 @@ impl Component for EmptyState {
         let last_closed = radio.read().closed.last().map(|(_, t)| t.name.clone());
         let new_hint = use_hint(Command::NewTab);
 
-        let (background, tile_bg, tile_border, icon_c, title_c, sub_c, chip_c) = {
-            let theme_ref = use_theme().read();
-            let c = theme_ref.colors();
-            (
-                c.surface_secondary,
-                c.surface_tertiary,
-                c.border,
-                c.text_placeholder,
-                c.text_primary,
-                c.text_secondary,
-                // The comp's chip over the accent fill: a translucent `text_inverse` (the
-                // on-accent ink) scrim, the caps at 60% of the same — theme-derived, no
-                // literal colour.
-                c.text_inverse,
-            )
-        };
+        let roles = use_roles();
+        let (background, tile_bg, tile_border, icon_c, title_c, sub_c, chip_c) = (
+            roles.get(Role::SurfaceRaised),
+            roles.get(Role::ElementBackground),
+            roles.get(Role::Border),
+            roles.get(Role::TextPlaceholder),
+            roles.get(Role::Text),
+            roles.get(Role::TextMuted),
+            // The comp's chip over the accent fill: a translucent `text.on_accent` (the
+            // on-accent ink) scrim, the caps at 60% of the same — theme-derived, no
+            // literal colour.
+            roles.get(Role::TextOnAccent),
+        );
 
         // The hero: a 60×60 rounded tile (elevated surface + hairline border) with a faint database
         // glyph.

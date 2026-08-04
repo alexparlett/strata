@@ -55,7 +55,7 @@ use strata_core::keymap::{self, Bind, Rebind};
 use crate::apps::settings::views::keymap::model::{has_overrides, rows, Blocked, Editing};
 use crate::apps::settings::views::keymap::table::KeyTable;
 use crate::apps::settings::views::Pane;
-use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
+use crate::apps::settings::{settings_theme, SettingsCtx};
 use crate::components::typography::{Control, Prose};
 use crate::keymap::chord_from_event;
 use crate::menu::menu_chords;
@@ -76,11 +76,7 @@ pub struct KeymapPane;
 
 impl Component for KeymapPane {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
         let ctx = use_consume::<SettingsCtx>();
         let mut editing = use_state(Editing::default);
 

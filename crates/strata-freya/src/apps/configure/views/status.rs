@@ -14,8 +14,10 @@ use freya::prelude::*;
 use crate::apps::configure::ConfigureCtx;
 use crate::apps::configure::Status;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Path, Readout, Strong};
 use crate::components::window::window_theme;
+use crate::theme::{use_roles, Role};
 
 /// The blocks' inset and the gap inside them (canvas `padding: var(--sp-4) var(--sp-5)`).
 const BLOCK_PADDING: Gaps = Gaps::new(12., 16., 12., 16.);
@@ -28,9 +30,8 @@ pub struct StatusBlock;
 impl Component for StatusBlock {
     fn render(&self) -> impl IntoElement {
         let win = window_theme();
-        let colors = use_theme().read().colors().clone();
-        let error = colors.error;
-        let text = colors.text_secondary;
+        let error = tones().error;
+        let text = use_roles().get(Role::TextMuted);
         let ctx = use_consume::<ConfigureCtx>();
         let status = ctx.status.read().clone();
 

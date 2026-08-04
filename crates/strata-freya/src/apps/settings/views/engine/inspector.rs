@@ -10,9 +10,10 @@
 
 use freya::prelude::*;
 
+use crate::apps::settings::settings_theme;
 use crate::apps::settings::views::engine::model::{KeyStatus, PropRows};
-use crate::apps::settings::{SettingsTheme, SettingsThemePartial, SettingsThemePreference};
 use crate::components::badge::Badge;
+use crate::components::tones::tones;
 use crate::components::typography::{Meta, Prose, Strong};
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`) and the gap above it.
@@ -38,9 +39,7 @@ pub struct Inspector {
 impl Component for Inspector {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
-        let colors = use_theme();
-        let warning = colors.read().colors().warning;
-        let error = colors.read().colors().error;
+        let tones = tones();
 
         let list = self.rows.read();
         let Some(row) = list.selected_row() else {
@@ -56,7 +55,7 @@ impl Component for Inspector {
         // The badge and the sentence are one answer read twice, not two lookups.
         let (badge, blurb) = match status {
             KeyStatus::Known(def) => (None, def.desc),
-            KeyStatus::Reserved => (Some(("RESERVED", error)), RESERVED),
+            KeyStatus::Reserved => (Some(("RESERVED", tones.error)), RESERVED),
             KeyStatus::Custom => (Some(("CUSTOM", theme.hint_color)), CUSTOM),
             KeyStatus::Blank => unreachable!("returned above"),
         };
@@ -82,7 +81,7 @@ impl Component for Inspector {
                     .cross_align(Alignment::Center)
                     .spacing(PILL_GAP)
                     .child(Strong::new(row.key()).color(theme.item_active_color))
-                    .maybe_child(restart.then(|| Badge::tag("RESTART", warning)))
+                    .maybe_child(restart.then(|| Badge::tag("RESTART", tones.warning)))
                     .maybe_child(badge.map(|(text, color)| Badge::tag(text, color).outlined())),
             )
             .child(Prose::new(blurb).color(theme.hint_color).wrap())
@@ -101,12 +100,4 @@ impl Component for Inspector {
                     )
             }))
     }
-}
-
-fn settings_theme() -> SettingsTheme {
-    get_theme!(
-        &None::<SettingsThemePartial>,
-        SettingsThemePreference,
-        "settings"
-    )
 }

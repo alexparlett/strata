@@ -17,6 +17,7 @@ use strata_core::keymap::{effective_chord, resolve};
 
 use crate::components::typography::Meta;
 use crate::state::{use_config, ConfigChan, ConfigStation};
+use crate::theme::{use_roles, Role};
 
 /// Fold a key event into a normalized [`KeyChord`]: `primary` = ⌘ *or* Ctrl (every ⌘
 /// shortcut also responds to Ctrl), characters lowercased (⇧⌘T arrives as `"T"` but is
@@ -191,7 +192,7 @@ pub struct KeyHint(pub Command);
 impl Component for KeyHint {
     fn render(&self) -> impl IntoElement {
         let hint = use_hint(self.0);
-        let color = use_theme().read().colors().text_secondary;
+        let color = use_roles().get(Role::TextMuted);
         rect().maybe(!hint.is_empty(), |el| {
             el.child(Meta::new(hint).color(color))
         })

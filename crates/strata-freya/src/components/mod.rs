@@ -1,6 +1,7 @@
 //! Strata's design-system components — reusable, theme-authorable widgets built to the
 //! `design-handoff/` comps. Each owns its `define_theme!` theme (default registered in
-//! `crate::theme`), so its colours follow the sheet and are overridable like every built-in.
+//! `crate::theme`), so its colours follow the role vocabulary via the mapping table like
+//! every built-in.
 //!
 //! Sizes the design system fixes across components live here, not on any one of them: a constant
 //! scoped to a component is a constant every other consumer has to reach *into* that component
@@ -59,6 +60,7 @@ pub mod run_button;
 pub mod segmented_toggle;
 pub mod sidebar_row;
 pub mod toggle_button;
+pub mod tones;
 pub mod tool_button;
 pub mod toolbar;
 pub mod type_palette;

@@ -19,11 +19,11 @@
 //! The variant is set **once, on the pill**, and reaches the segments through context: a caller
 //! that had to remember it on every child would eventually forget one.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Control;
+use crate::theme::{use_roles, Role};
 
 define_theme!(
     %[component]
@@ -179,7 +179,7 @@ enum SegmentContent {
 
 /// One 24px-tall segment: a glyph or label wearing its tooltip `title`, the active dress
 /// (accent tint + accent content) when `selected`, and the comp's soft hover (a 7% text-colour
-/// overlay, semantic — read from the palette) otherwise.
+/// overlay derived from its own theme) otherwise.
 #[derive(PartialEq)]
 pub struct ToggleSegment {
     content: SegmentContent,
@@ -235,7 +235,7 @@ impl Component for ToggleSegment {
             SegmentedToggleThemePreference,
             "segmented_toggle"
         );
-        let hover = use_theme().read().colors().text_primary.with_a(18);
+        let hover = use_roles().get(Role::Text).with_a(18);
         let mut hovered = use_state(|| false);
 
         let background = if self.selected {

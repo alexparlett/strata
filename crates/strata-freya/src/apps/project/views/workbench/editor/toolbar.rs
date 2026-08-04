@@ -9,7 +9,7 @@ use crate::components::icon::IconName;
 use crate::components::run_button::{RunButton, RunState};
 use crate::components::tool_button::TOOL_SIZE;
 use crate::components::toolbar::{Toolbar, ToolbarAction};
-use freya::components::use_theme;
+use crate::theme::{use_roles, Role};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
 use strata_core::config::Command;
@@ -42,11 +42,8 @@ pub struct EditorToolbar {
 impl Component for EditorToolbar {
     fn render(&self) -> impl IntoElement {
         let id = self.id;
-        let theme = use_theme();
-        let (bg, border) = {
-            let t = theme.read();
-            (t.colors().background, t.colors().border)
-        };
+        let roles = use_roles();
+        let (bg, border) = (roles.get(Role::Background), roles.get(Role::Border));
         let radio = use_radio::<SessionState, Chan>(Chan::Tab(id));
         let engine = use_consume::<EngineCtx>();
         // The Project store — save-target access only, so no channel subscription (the

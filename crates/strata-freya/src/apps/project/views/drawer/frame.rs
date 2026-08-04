@@ -9,6 +9,7 @@
 use freya::components::ScrollView;
 use freya::prelude::*;
 
+use super::{DrawerThemePartial, DrawerThemePreference};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Body;
 
@@ -46,40 +47,36 @@ impl Component for DrawerBody {
 }
 
 /// A drawer tab with nothing to show: its glyph over one line of copy, centred in the body.
-/// The glyph's colour is the caller's, because each tab's is **semantic** — Problems' tick is the
-/// sheet's `success` — and semantic colours are read off the sheet wherever they appear
-/// (AGENTS.md §3).
+/// Both paint the drawer theme's `empty_color`; the glyph alone stays overridable because a
+/// tab's can be **semantic** — Problems' tick is the shared ramp's `ok` — and semantic colours
+/// follow the app-wide ramp wherever they appear (AGENTS.md §3).
 #[derive(PartialEq)]
 pub struct DrawerEmpty {
     icon: IconName,
-    icon_color: Color,
+    icon_color: Option<Color>,
     text: String,
-    color: Color,
 }
 
 impl DrawerEmpty {
     pub fn new(icon: IconName, text: impl Into<String>) -> Self {
         Self {
             icon,
-            icon_color: Color::WHITE,
+            icon_color: None,
             text: text.into(),
-            color: Color::WHITE,
         }
     }
 
     pub fn icon_color(mut self, color: Color) -> Self {
-        self.icon_color = color;
-        self
-    }
-
-    pub fn color(mut self, color: Color) -> Self {
-        self.color = color;
+        self.icon_color = Some(color);
         self
     }
 }
 
 impl Component for DrawerEmpty {
     fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(&None::<DrawerThemePartial>, DrawerThemePreference, "drawer");
+        let icon_color = self.icon_color.unwrap_or(theme.empty_color);
+        let color = theme.empty_color;
         // Centred *inside a scroll view*, not centred in a bare box (P5-06): a drawer dragged to
         // its stub is shorter than the glyph plus its line of copy, and a centred box with no
         // scroll paints the pair straight through the header above it.
@@ -91,8 +88,8 @@ impl Component for DrawerEmpty {
                 .cross_align(Alignment::Center)
                 .spacing(8.)
                 .padding((0., 12.))
-                .child(Icon::new(self.icon).color(self.icon_color).size(26.))
-                .child(Body::new(self.text.clone()).color(self.color)),
+                .child(Icon::new(self.icon).color(icon_color).size(26.))
+                .child(Body::new(self.text.clone()).color(color)),
         )
     }
 }
