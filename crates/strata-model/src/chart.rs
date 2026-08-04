@@ -16,6 +16,12 @@
 //! capped" flag beside a half-filled payload: a refusal is [`ChartData::OverCap`] or
 //! [`ChartData::Duplicates`], with nothing to draw, because "honest boundaries" (spec §1.4)
 //! means there is no such thing as a truncated chart to render.
+//!
+//! [`ChartConfig`] is the third thing here and the only **persisted** one: what the user
+//! asked for, as opposed to what the engine was asked and what it answered. It holds
+//! intent, never a resolved read — see its own note.
+
+use serde::{Deserialize, Serialize};
 
 /// Which mark the chart draws (`docs/CHART_SPEC.md` §4).
 ///
@@ -23,7 +29,8 @@
 /// [`ChartQuery`] shape the surface asks for and how the answer is painted, and switching
 /// between two marks over the same query (bar ↔ line ↔ area, and pie over the same
 /// columns) is a repaint rather than a re-read.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChartMark {
     /// Grouped bars over the categories, one run per series ([`ChartQuery::Rows`]).
     Bar,
@@ -59,6 +66,101 @@ impl ChartMark {
             ChartMark::Scatter => "Scatter",
             ChartMark::Histogram => "Histogram",
             ChartMark::Pie => "Pie",
+        }
+    }
+}
+
+/// **How the user left the chart** (`docs/CHART_SPEC.md` §6): a mark, three column
+/// assignments and a view preference. Persisted per tab (`TabSnapshot::chart`).
+///
+/// This is *intent*, never a resolved read. Every channel can say "I have not chosen" —
+/// [`None`] on the mark and the Ys, [`ChartX::Auto`] on X — and an unchosen channel takes the
+/// schema-derived default, so a result with different columns charts sensibly without the
+/// user touching anything. Resolving intent + schema into the read is the surface's job (the
+/// one `encode` site), which is also what keeps a column name the result no longer has from
+/// ever reaching a [`ChartQuery`]: a reference that no longer resolves falls back to the
+/// default rather than being written out of the config, so it comes back if the column does.
+///
+/// [`sort`](Self::sort) is the odd one out: a **view transform** over the settled
+/// [`ChartData`], not part of the read (spec §6), so flipping it repaints without
+/// re-querying and never touches cache identity.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct ChartConfig {
+    /// The chosen mark, or `None` to take the default for X's role (line over a temporal X,
+    /// bar otherwise).
+    #[serde(default)]
+    pub mark: Option<ChartMark>,
+    /// The category axis.
+    #[serde(default)]
+    pub x: ChartX,
+    /// The value columns, each its own series. `None` takes the default (the leading
+    /// measures); `Some(vec![])` is the user having deliberately unpicked them all, which is
+    /// a chart with nothing to plot and says so.
+    #[serde(default)]
+    pub ys: Option<Vec<String>>,
+    /// The column the long→wide pivot splits on. `None` is *no split* — both the default and
+    /// the explicit choice, which are the same thing here, so there is nothing to tell apart.
+    #[serde(default)]
+    pub series: Option<String>,
+    /// How the settled rows are ordered on the way to the marks.
+    #[serde(default)]
+    pub sort: ChartSort,
+}
+
+/// What sits on the category axis.
+///
+/// Three states rather than an `Option<String>`, because "not chosen" and "chosen to be
+/// nothing" are different answers: an unchosen X takes the schema's default, while an X the
+/// user set to [`RowIndex`](Self::RowIndex) charts against the row number and must stay that
+/// way when the next result happens to have a date column in it.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartX {
+    /// Take the default: the first temporal column, else the first dimension, else the row
+    /// index.
+    #[default]
+    Auto,
+    /// Chart against the row number — what "X: none" means (spec §4).
+    RowIndex,
+    /// This column, when the result still has it.
+    Column(String),
+}
+
+/// The order the rows draw in — a **view transform** over the settled data (spec §6), so it
+/// re-renders rather than re-reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartSort {
+    /// The order the user's own query produced, which is the snapshot ordinal's
+    /// (`SNAPSHOT_SPEC.md` §9). The default, and the only one the engine has any part in.
+    #[default]
+    ResultOrder,
+    /// By the category axis, ascending — by true position where X has one, else by label.
+    ByX,
+    /// By the first series' value, descending.
+    ByYDesc,
+}
+
+impl ChartSort {
+    /// Every order, in the order the picker offers them.
+    pub const ALL: [ChartSort; 3] = [ChartSort::ResultOrder, ChartSort::ByX, ChartSort::ByYDesc];
+
+    /// How this order reads in the picker — short, because three of them share a strip
+    /// 232px wide.
+    pub fn label(self) -> &'static str {
+        match self {
+            ChartSort::ResultOrder => "Result",
+            ChartSort::ByX => "X",
+            ChartSort::ByYDesc => "Value",
+        }
+    }
+
+    /// What the short label means, for the segment's tooltip.
+    pub fn title(self) -> &'static str {
+        match self {
+            ChartSort::ResultOrder => "Result order",
+            ChartSort::ByX => "Sort by X, ascending",
+            ChartSort::ByYDesc => "Sort by value, descending",
         }
     }
 }

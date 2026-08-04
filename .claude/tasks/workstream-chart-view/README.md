@@ -24,6 +24,11 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
   `CanvasContext` is logical-units and pre-scaled; redraw needs an explicit request.
 - **Chart data is a freya-query capability shaped like `PageSpec`** — keyed
   `(SnapshotId, ChartQuery)`, no confirm dialog, store holds the config, never results.
+- **The config is intent, and the option sets are the constraint** (03). Unset channels take the
+  schema's defaults; a reference the result cannot answer falls back at *read* time and is never
+  written out of the config. What a control offers is the mark's own option set, so an invalid
+  encoding is unreachable rather than reported. The sort is a view transform over the settled
+  data, never part of the read.
 
 ## Tasks
 
@@ -32,7 +37,7 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
 | 00 | Snapshot ordinal + ordered reads `[core]` | ✅ | Rz2 (P2-01 fix) | — |
 | 01 | `Engine::chart` renderer-first read + vocabulary `[core]` | ✅ | Rz2 | 00 |
 | 02 | Chart body + plotters renderer | ✅ | Rz2 | 01 |
-| 03 | Encoder strip + `ChartConfig` state | ⬜ | Rz2 | 02 |
+| 03 | Encoder strip + `ChartConfig` state | ✅ | Rz2 | 02 |
 | 04 | Guardrails + the SQL scaffold | ⬜ | Rz2 | 02, 03 |
 | 05 | Analytical presets — role mappings + templates (follow-on) | ⬜ | Rz2 | 01–04 |
 

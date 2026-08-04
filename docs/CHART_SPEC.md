@@ -149,6 +149,14 @@ keeps the previous engine implementation: a min/max pass over finite values, the
 view preference, no results. Lives on `QueryTab` under **`Chan::Chart(tab)`**, persists via
 `TabSnapshot`, re-derives when a new result's columns no longer match.
 
+As built (03), it holds **intent**: `mark` and `ys` are `Option` (unset ⇒ derive), and `x` is a
+three-state `ChartX { Auto, RowIndex, Column(name) }` — "not chosen" and "chosen to be the row
+index" are different answers, and an `Option<String>` would let the next result's date column
+overrule a deliberate row-index axis. Re-deriving is a **read-time fallback** in
+`config::resolve`, never a write back into the config, so a column that disappears from one
+result and returns in the next brings the user's choice back with it. Likewise a mark that takes
+one Y narrows the resolved encoding and leaves the config holding the rest.
+
 **`sort` is a view transform, not part of the read.** `ResultOrder` (default) | `ByX` |
 `ByYDesc` — applied client-side to the settled `ChartData::Table`, so flipping it is a
 re-render, not a re-query, and cache identity stays untouched. Any float comparison in that

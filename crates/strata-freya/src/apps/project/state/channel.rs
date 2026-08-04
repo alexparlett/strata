@@ -5,7 +5,10 @@
 //! tab's subscribers. `Request(id)` = that tab's Run trigger alone, split from `Tab(id)` so a
 //! press wakes only the tab's results pane and toolbar — never the editor — and keystrokes
 //! never wake the results. `View(id)` = that tab's Table/Chart results view mode (P2-07),
-//! split the same way so a body flip wakes only the tab's results pane. `Layout` = the
+//! split the same way so a body flip wakes only the tab's results pane. `Chart(id)` = that
+//! tab's chart encoding (Rz2), split off `View(id)` for the same reason `View` is split off
+//! `Tab`: picking a Y column must re-chart and nothing else — not the toolbar that reads the
+//! view mode, and certainly not the editor. `Layout` = the
 //! window's panel arrangement (which side panels / drawer are open + active — P3-01), which
 //! the shell + activity rail subscribe to. `LayoutSize` = the panels' last sizes, split off
 //! `Layout` so a resize drag (which `ResizableContainer` fires ~per-frame) persists without
@@ -46,6 +49,9 @@ pub enum Chan {
     Tab(TabId),
     Request(TabId),
     View(TabId),
+    /// That tab's chart encoding (Rz2 — `ChartConfig`): the mark, the column assignments and
+    /// the sort. Its own channel, so an encoder edit wakes the chart body alone.
+    Chart(TabId),
     /// Every tab's validation verdict, on one channel — see the module note.
     Diagnostics,
     /// The window's panel arrangement (P3-01): which side panels / drawer are open, on
@@ -74,7 +80,7 @@ impl RadioChannel<SessionState> for Chan {
             // A tab's buffer: persisted *and* watched by the validation driver.
             Chan::Tab(_) => vec![self, Chan::Persist, Chan::Text],
             // The other persisted facets → also wake autosave.
-            Chan::Tabs | Chan::View(_) | Chan::Layout | Chan::LayoutSize => {
+            Chan::Tabs | Chan::View(_) | Chan::Chart(_) | Chan::Layout | Chan::LayoutSize => {
                 vec![self, Chan::Persist]
             }
             // Ephemeral / the sinks themselves → just themselves.

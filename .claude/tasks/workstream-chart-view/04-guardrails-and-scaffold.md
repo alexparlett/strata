@@ -17,6 +17,14 @@ the **Aggregate in SQL** CTA beneath that same copy, and the high-cardinality ba
 messages are the deliverable of that surface, so re-word them here if the CTA changes what they
 should say — do not leave two copies.
 
+03 moved `encode` (and its `Err` messages) into `results/chart/config.rs`, where the encoding is
+resolved from the tab's `ChartConfig`. Two things follow for this task: the **scaffold reads the
+resolved `Encoding`** (`config::resolve`'s output — real column names, already checked against
+the result), not the stored config; and the encodings a *choice* can reach are now narrower than
+the schema's — the option sets make an invalid encoding unreachable, so what is left for an
+overlay is genuinely "nothing valid to offer" (no measure at all, fewer than two for a scatter,
+no category for a pie) plus the deliberately-emptied Y.
+
 ## Build
 - **Overlays** (in place of the canvas; icon + title + body + optional CTA, IDE-terse copy):
   `OverCap` (1 000 rows; pie 24; scatter 6 000 points) → scaffold CTA; `Duplicates { x, series }`
