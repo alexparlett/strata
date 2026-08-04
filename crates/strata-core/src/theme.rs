@@ -1,21 +1,22 @@
 //! The Strata theme **data model** — the native JSON theme format (`themes/*.json`),
 //! framework-agnostic.
 //!
-//! Midnight/Daylight are built-ins (embedded); custom themes load the same shape from a
-//! plugin dir (roadmap). A theme file has: a `sheet` copied 1:1 into the frontend's core colour
-//! slots (Freya's `ColorsSheet`), a `palette` of app-named slots extending it, a `components`
-//! map of per-component overrides keyed by component key, `fonts`, and a top-level `typography`
-//! type scale. Each component field is a tagged [`Pref`] — `{ "specific": … }` or
-//! `{ "reference": "<slot>" }`, where a slot is a sheet slot **or** a `palette` key.
+//! Midnight/Daylight are built-ins (embedded); custom themes load the same shape from the user
+//! themes dir. A theme file authors **roles**: a closed, schema-enumerated vocabulary of dotted
+//! colour names ([`Role`]) covering surfaces, element states, borders, text, accent, the status
+//! triads and the data ramps — plus a `syntax` map for the editor's scopes, `fonts`, and the
+//! `typography` type scale. Components are **not** in the file: the frontend maps every
+//! component field onto a role in one static table, so a theme retunes the app by retuning
+//! roles alone.
 //!
-//! This module owns the authored shapes, the [`ThemeRegistry`] (discovery over the embedded
-//! built-ins + the user themes dir, with [`Source`] badges and id lookup), the resolved
-//! [`Typography`] scale, the Sync-with-OS selection helpers, and the JSON-schema generator
-//! ([`generate_schema`], parameterized over the frontend's component registries). Everything
-//! Freya-specific — coercing [`Pref`]s into `Preference<Color>`s, the component registries
-//! themselves, schema sync — lives in `strata-freya`'s `theme` module.
+//! This module owns the authored shape, the [`Role`] table (names + fallback rules), the
+//! [`ThemeRegistry`] (discovery over the embedded built-ins + the user themes dir, with
+//! [`Source`] badges and id lookup), the resolved [`Typography`] scale, the Sync-with-OS
+//! selection helpers, and the JSON-schema generator ([`generate_schema`], parameterized over
+//! the editor's syntax-scope list). Everything Freya-specific — resolving roles into `Color`s,
+//! the component mapping table, schema sync — lives in `strata-freya`'s `theme` module.
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::from_str;
 use std::collections::BTreeMap;
 use std::env;
@@ -322,36 +323,8 @@ roles! {
     FormatView => "format.view",
 }
 
-/// The 27 `ColorsSheet` slot names — reference targets + the required sheet keys.
-pub const SLOTS: &[&str] = &[
-    "primary",
-    "secondary",
-    "tertiary",
-    "success",
-    "warning",
-    "error",
-    "info",
-    "background",
-    "surface_primary",
-    "surface_secondary",
-    "surface_tertiary",
-    "surface_inverse",
-    "surface_inverse_secondary",
-    "surface_inverse_tertiary",
-    "border",
-    "border_focus",
-    "border_disabled",
-    "text_primary",
-    "text_secondary",
-    "text_placeholder",
-    "text_inverse",
-    "text_highlight",
-    "focus",
-    "active",
-    "disabled",
-    "overlay",
-    "shadow",
-];
+/// The authored form of "fully transparent" — what a [`Fallback::Transparent`] role reads as.
+pub const TRANSPARENT: &str = "rgba(0,0,0,0)";
 
 /// Light/dark grouping — picks the frontend's base theme and (later) the Sync-with-OS split.
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -362,21 +335,24 @@ pub enum Mode {
 }
 
 /// A theme file exactly as authored.
+///
+/// `roles` and `syntax` are deliberately **required** (no serde default): a pre-roles file —
+/// one with a `sheet`/`components` section — fails to parse and takes discovery's warn-and-skip
+/// path, with a legacy-specific message, rather than loading as an all-magenta theme.
 #[derive(Deserialize)]
 pub struct StrataTheme {
     pub id: String,
     pub name: String,
     pub mode: Mode,
-    pub sheet: SheetDef,
-    #[serde(default)]
-    pub components: BTreeMap<String, BTreeMap<String, Pref>>,
-    /// App-named colour slots, extending the 27 [`SLOTS`] the frontend palette carries. A
-    /// `reference` in `components` resolves against the sheet first, then this map — so a tone
-    /// the sheet has no name for (a muted meta text, a hairline, an accent) is stated **once**
-    /// here and referenced everywhere, instead of being repeated as a `specific` per field.
-    /// Names are free-form; the frontend paints an unresolvable one magenta.
-    #[serde(default)]
-    pub palette: BTreeMap<String, String>,
+    /// The authored vocabulary: dotted [`Role`] name → colour string. The closed set of names
+    /// is [`Role::ALL`]; an unknown name is warned at discovery and ignored, a missing required
+    /// one is warned and paints magenta. Values are always literal colours — no aliasing inside
+    /// the file, because per-theme aliasing is exactly how the old palette rotted.
+    pub roles: BTreeMap<String, String>,
+    /// The editor's syntax colours: author-facing scope name (`keyword`,
+    /// `punctuation.bracket`, …) → colour string. The scope list is the editor crate's
+    /// `SYNTAX_SCOPES`; validation is parameterized over it because this crate is Freya-free.
+    pub syntax: BTreeMap<String, String>,
     #[serde(default)]
     pub fonts: BTreeMap<String, String>,
     /// The type scale — named roles (display · title · body · meta · …), each fixing a font
@@ -401,118 +377,60 @@ pub struct TypeRole {
     pub letter_spacing: Option<f32>,
 }
 
-/// A component field override — the `specific` / `reference` discriminated union.
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Pref {
-    Specific(SpecificValue),
-    Reference(String),
-}
-
-/// The payload of a `specific` — a colour/font string, a scalar, or four gap sides (distinct
-/// JSON types). Deserialized by hand through `serde_json::Value` rather than `#[serde(untagged)]`:
-/// untagged buffering breaks on non-integer numbers when serde_json's `arbitrary_precision`
-/// feature is enabled anywhere in the workspace (this crate enables it), and `Value` handles it
-/// natively.
-pub enum SpecificValue {
-    Color(String),
-    Scalar(f32),
-    Sides([f32; 4]),
-}
-
-impl<'de> Deserialize<'de> for SpecificValue {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
-        match serde_json::Value::deserialize(d)? {
-            serde_json::Value::String(s) => Ok(Self::Color(s)),
-            serde_json::Value::Number(n) => Ok(Self::Scalar(
-                n.as_f64()
-                    .ok_or_else(|| D::Error::custom("specific number out of range"))?
-                    as f32,
-            )),
-            serde_json::Value::Array(a) => {
-                let sides: Vec<f32> = a
-                    .iter()
-                    .map(|v| v.as_f64().map(|n| n as f32))
-                    .collect::<Option<_>>()
-                    .ok_or_else(|| D::Error::custom("specific sides must be numbers"))?;
-                let sides: [f32; 4] = sides
-                    .try_into()
-                    .map_err(|_| D::Error::custom("specific sides must have exactly 4 numbers"))?;
-                Ok(Self::Sides(sides))
+impl StrataTheme {
+    /// The effective authored value for a role: its own `roles` entry, or the first authored
+    /// value along its fallback chain. `None` means a **required** role is missing — the
+    /// frontend paints magenta and [`missing_roles`](Self::missing_roles) names it at discovery.
+    pub fn role_value(&self, role: Role) -> Option<&str> {
+        let mut current = role;
+        loop {
+            if let Some(v) = self.roles.get(current.name()) {
+                return Some(v);
             }
-            _ => Err(D::Error::custom(
-                "specific must be a colour/font string, a number, or a 4-number array",
-            )),
+            match current.fallback() {
+                Fallback::Role(next) => current = next,
+                Fallback::Transparent => return Some(TRANSPARENT),
+                Fallback::Required => return None,
+            }
         }
     }
-}
 
-/// A component field's value type — drives both the frontend's runtime coercion and the schema.
-#[derive(Clone, Copy)]
-pub enum Kind {
-    Color,
-    F32,
-    I32,
-    Gaps,
-    Corner,
-    /// A font family: a `fonts` key (`ui`/`mono`) resolved to the real family name, or a
-    /// literal family name.
-    Font,
-}
+    /// Authored role names the vocabulary doesn't know — typos, or roles from a newer build.
+    /// Warned at discovery; the values are ignored.
+    pub fn unknown_roles(&self) -> Vec<&str> {
+        self.roles
+            .keys()
+            .filter(|k| Role::from_name(k).is_none())
+            .map(String::as_str)
+            .collect()
+    }
 
-/// The 27 fields of Freya's `ColorsSheet`, as authored colour strings.
-#[derive(Deserialize)]
-pub struct SheetDef {
-    pub primary: String,
-    pub secondary: String,
-    pub tertiary: String,
-    pub success: String,
-    pub warning: String,
-    pub error: String,
-    pub info: String,
-    pub background: String,
-    pub surface_primary: String,
-    pub surface_secondary: String,
-    pub surface_tertiary: String,
-    pub surface_inverse: String,
-    pub surface_inverse_secondary: String,
-    pub surface_inverse_tertiary: String,
-    pub border: String,
-    pub border_focus: String,
-    pub border_disabled: String,
-    pub text_primary: String,
-    pub text_secondary: String,
-    pub text_placeholder: String,
-    pub text_inverse: String,
-    pub text_highlight: String,
-    pub focus: String,
-    pub active: String,
-    pub disabled: String,
-    pub overlay: String,
-    pub shadow: String,
-}
+    /// Roles with no effective value — required, unauthored, and with no authored fallback.
+    /// Warned at discovery; each paints magenta until the file names it.
+    pub fn missing_roles(&self) -> Vec<&'static str> {
+        Role::ALL
+            .iter()
+            .filter(|r| self.role_value(**r).is_none())
+            .map(|r| r.name())
+            .collect()
+    }
 
-impl StrataTheme {
-    /// Every `reference` in `components` naming neither a core [`SLOTS`] entry nor a
-    /// [`palette`](Self::palette) key, formatted `"<component>.<field> -> <name>"`.
-    ///
-    /// `reference` is an open namespace (a theme names its own palette slots), so the JSON
-    /// schema can no longer enumerate the valid targets the way a closed enum did. This is what
-    /// replaces that check: the theme still renders — an unresolved reference paints magenta —
-    /// but a typo becomes a warning at load instead of a colour nobody looks at twice.
-    pub fn unresolved_references(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        for (component, fields) in &self.components {
-            for (field, pref) in fields {
-                if let Pref::Reference(name) = pref {
-                    if !SLOTS.contains(&name.as_str()) && !self.palette.contains_key(name) {
-                        out.push(format!("{component}.{field} -> {name}"));
-                    }
-                }
-            }
-        }
-        out
+    /// Authored syntax scopes the editor doesn't know, against its `scopes` list.
+    pub fn unknown_syntax<'a>(&'a self, scopes: &[&str]) -> Vec<&'a str> {
+        self.syntax
+            .keys()
+            .filter(|k| !scopes.contains(&k.as_str()))
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// Editor scopes the file doesn't author. Warned at discovery; each paints magenta.
+    pub fn missing_syntax<'a>(&self, scopes: &[&'a str]) -> Vec<&'a str> {
+        scopes
+            .iter()
+            .filter(|s| !self.syntax.contains_key(**s))
+            .copied()
+            .collect()
     }
 }
 
@@ -553,19 +471,20 @@ pub struct ThemeRegistry {
 
 impl ThemeRegistry {
     /// Discover the registry: built-ins + the user themes dir (created best-effort so
-    /// there's always a place to drop themes).
-    pub fn discover() -> Self {
+    /// there's always a place to drop themes). `syntax_scopes` is the editor's scope list,
+    /// threaded in because this crate is Freya-free — it gates the `syntax` warnings only.
+    pub fn discover(syntax_scopes: &[&str]) -> Self {
         let dirs: Vec<PathBuf> = user_themes_dir().into_iter().collect();
         for dir in &dirs {
             let _ = fs::create_dir_all(dir);
         }
-        Self::with_dirs(&dirs)
+        Self::with_dirs(&dirs, syntax_scopes)
     }
 
     /// Build from the built-ins plus the given theme dirs (the testable core of
     /// [`discover`](Self::discover)). Unreadable/invalid files are skipped with a warning —
     /// a broken user theme must never take the app down.
-    pub fn with_dirs(dirs: &[PathBuf]) -> Self {
+    pub fn with_dirs(dirs: &[PathBuf], syntax_scopes: &[&str]) -> Self {
         let mut entries: Vec<ThemeEntry> = [MIDNIGHT_JSON, DAYLIGHT_JSON]
             .iter()
             .map(|raw| ThemeEntry {
@@ -590,8 +509,20 @@ impl ThemeRegistry {
             for path in paths {
                 match parse_theme_file(&path) {
                     Ok(theme) => {
-                        for r in theme.unresolved_references() {
-                            tracing::warn!("theme {}: unresolved reference {r}", path.display());
+                        // Warn, never reject: every one of these still renders (magenta where a
+                        // value is missing), and a loud wrong colour beats a theme that
+                        // silently vanished from the list.
+                        for r in theme.unknown_roles() {
+                            tracing::warn!("theme {}: unknown role '{r}'", path.display());
+                        }
+                        for r in theme.missing_roles() {
+                            tracing::warn!("theme {}: missing role '{r}'", path.display());
+                        }
+                        for s in theme.unknown_syntax(syntax_scopes) {
+                            tracing::warn!("theme {}: unknown syntax scope '{s}'", path.display());
+                        }
+                        for s in theme.missing_syntax(syntax_scopes) {
+                            tracing::warn!("theme {}: missing syntax scope '{s}'", path.display());
                         }
                         upsert(&mut entries, theme, Source::User)
                     }
@@ -626,7 +557,15 @@ impl ThemeRegistry {
 
 fn parse_theme_file(path: &Path) -> Result<StrataTheme, String> {
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    from_str(&raw).map_err(|e| e.to_string())
+    from_str(&raw).map_err(|e| {
+        // A pre-roles file fails on the missing `roles` field; name the real problem instead of
+        // handing the author a bare serde error.
+        if raw.contains("\"sheet\"") {
+            format!("pre-roles theme format (has a 'sheet' section); see docs/FREYA_THEME_SPEC.md")
+        } else {
+            e.to_string()
+        }
+    })
 }
 
 /// Insert a discovered theme: same-id replaces in place (keeps display position), new ids
@@ -713,15 +652,12 @@ pub struct TextStyle {
 /// theme file's `typography.<role>` keys (and [`generate_schema`]'s `TYPE_ROLES`).
 #[derive(Clone, PartialEq)]
 pub struct Typography {
-    pub display: TextStyle,
     pub title: TextStyle,
     pub strong_body: TextStyle,
     pub body_medium: TextStyle,
     pub control: TextStyle,
     pub body: TextStyle,
     pub caption: TextStyle,
-    pub code_display: TextStyle,
-    pub data_display: TextStyle,
     pub data_value: TextStyle,
     pub code_block: TextStyle,
     pub field_label: TextStyle,
@@ -763,15 +699,12 @@ pub fn resolve_typography(t: &StrataTheme) -> Typography {
         }
     };
     Typography {
-        display: role("display"),
         title: role("title"),
         strong_body: role("strong_body"),
         body_medium: role("body_medium"),
         control: role("control"),
         body: role("body"),
         caption: role("caption"),
-        code_display: role("code_display"),
-        data_display: role("data_display"),
         data_value: role("data_value"),
         code_block: role("code_block"),
         field_label: role("field_label"),
@@ -780,50 +713,46 @@ pub fn resolve_typography(t: &StrataTheme) -> Typography {
     }
 }
 
-/// Build the JSON schema for the theme format: the fixed model (sheet slots, palette, fonts,
-/// typography roles) plus the frontend's themeable components — `component_registries` is a
-/// set of `(component key, fields + kinds)` tables (e.g. Freya's builtin-override registry
-/// and its custom-component registry). The frontend's `schema_in_sync` test keeps
-/// `themes/theme.schema.json` equal to this.
-pub fn generate_schema(component_registries: &[&[(&str, &[(&str, Kind)])]]) -> serde_json::Value {
+/// Build the JSON schema for the theme format: the [`Role`] vocabulary (each role an explicit
+/// property, required unless it has a fallback), the editor's `syntax` scopes (threaded in as
+/// `syntax_scopes` because this crate is Freya-free), `fonts` and the `typography` roles. The
+/// frontend's `schema_in_sync` test keeps `themes/theme.schema.json` equal to this.
+pub fn generate_schema(syntax_scopes: &[&str]) -> serde_json::Value {
     use serde_json::{json, Map, Value};
 
-    let ref_for = |k: &Kind| match k {
-        Kind::Color => "#/$defs/colorPref",
-        Kind::F32 | Kind::I32 | Kind::Corner => "#/$defs/numberPref",
-        Kind::Gaps => "#/$defs/gapsPref",
-        Kind::Font => "#/$defs/fontPref",
-    };
-
-    let mut components = Map::new();
-    for (key, fields) in component_registries.iter().flat_map(|r| r.iter()) {
-        let mut props = Map::new();
-        for (name, kind) in *fields {
-            props.insert((*name).to_string(), json!({ "$ref": ref_for(kind) }));
-        }
-        components.insert(
-            (*key).to_string(),
-            json!({ "type": "object", "additionalProperties": false, "properties": Value::Object(props) }),
-        );
+    let mut role_props = Map::new();
+    let mut role_required = Vec::new();
+    for role in Role::ALL {
+        let doc = match role.fallback() {
+            Fallback::Required => {
+                role_required.push(role.name());
+                json!({ "$ref": "#/$defs/color" })
+            }
+            Fallback::Role(other) => json!({
+                "$ref": "#/$defs/color",
+                "description": format!("Optional; omitted reads '{}'.", other.name()),
+            }),
+            Fallback::Transparent => json!({
+                "$ref": "#/$defs/color",
+                "description": "Optional; omitted is transparent.",
+            }),
+        };
+        role_props.insert(role.name().to_string(), doc);
     }
 
-    let mut sheet_props = Map::new();
-    for s in SLOTS {
-        sheet_props.insert((*s).to_string(), json!({ "$ref": "#/$defs/color" }));
+    let mut syntax_props = Map::new();
+    for s in syntax_scopes {
+        syntax_props.insert((*s).to_string(), json!({ "$ref": "#/$defs/color" }));
     }
-    let slots = serde_json::to_value(SLOTS).unwrap();
 
-    // The type scale — a top-level `typography` section, one `typeRole` per named role.
+    // The type scale — one `typeRole` per named role; mirrors `Typography`'s fields.
     const TYPE_ROLES: &[&str] = &[
-        "display",
         "title",
         "strong_body",
         "body_medium",
         "control",
         "body",
         "caption",
-        "code_display",
-        "data_display",
         "data_value",
         "code_block",
         "field_label",
@@ -840,32 +769,20 @@ pub fn generate_schema(component_registries: &[&[(&str, &[(&str, Kind)])]]) -> s
         "$id": "https://strata.dev/schemas/freya-theme.schema.json",
         "title": "Strata (Freya) theme",
         "type": "object",
-        "required": ["id", "name", "mode", "sheet"],
+        "required": ["id", "name", "mode", "roles", "syntax"],
         "additionalProperties": false,
         "properties": {
             "$schema": { "type": "string" },
             "id": { "type": "string" },
             "name": { "type": "string" },
-            "author": { "type": "string" },
             "mode": { "enum": ["dark", "light"] },
-            "sheet": { "$ref": "#/$defs/sheet" },
-            "components": { "type": "object", "additionalProperties": false, "properties": Value::Object(components) },
-            "palette": { "type": "object", "additionalProperties": { "$ref": "#/$defs/color" } },
-            "scale": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": { "type": "number" } } },
+            "roles": { "type": "object", "additionalProperties": false, "required": role_required, "properties": Value::Object(role_props) },
+            "syntax": { "type": "object", "additionalProperties": false, "required": syntax_scopes, "properties": Value::Object(syntax_props) },
             "fonts": { "type": "object", "properties": { "ui": { "type": "string" }, "mono": { "type": "string" } }, "additionalProperties": { "type": "string" } },
             "typography": { "type": "object", "additionalProperties": false, "properties": Value::Object(typo_props) }
         },
         "$defs": {
             "color": { "type": "string", "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|rgba\\([^)]*\\))$" },
-            "slot": { "type": "string", "description": "A core sheet slot, or a key of this theme's `palette`", "examples": slots.clone() },
-            "colorPref": { "oneOf": [
-                { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "$ref": "#/$defs/color" } } },
-                { "type": "object", "required": ["reference"], "additionalProperties": false, "properties": { "reference": { "$ref": "#/$defs/slot" } } }
-            ] },
-            "numberPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "type": "number" } } },
-            "fontPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "type": "string", "description": "A fonts key (ui/mono) or a literal family name" } } },
-            "gapsPref": { "type": "object", "required": ["specific"], "additionalProperties": false, "properties": { "specific": { "oneOf": [ { "type": "number" }, { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 } ] } } },
-            "sheet": { "type": "object", "additionalProperties": false, "required": slots, "properties": Value::Object(sheet_props) },
             "typeRole": { "type": "object", "required": ["family", "weight", "size"], "additionalProperties": false, "properties": {
                 "family": { "type": "string", "enum": ["ui", "mono"] },
                 "weight": { "type": "number" },
@@ -932,7 +849,7 @@ mod tests {
 
     #[test]
     fn registry_discovers_builtins_and_falls_back() {
-        let reg = ThemeRegistry::with_dirs(&[]);
+        let reg = ThemeRegistry::with_dirs(&[], &[]);
         let ids: Vec<&str> = reg.entries().iter().map(|e| e.theme.id.as_str()).collect();
         assert_eq!(ids, ["midnight", "daylight"]);
         assert!(reg.entries().iter().all(|e| e.source == Source::Builtin));
@@ -952,8 +869,15 @@ mod tests {
         fs::write(dir.join("midnight-tweak.json"), renamed).unwrap();
         // Broken files are skipped, never fatal.
         fs::write(dir.join("broken.json"), "{ not json").unwrap();
+        // A pre-roles file (the old sheet/components format) is skipped the same way — it
+        // fails on the missing `roles` field, and `parse_theme_file` names the real problem.
+        fs::write(
+            dir.join("legacy.json"),
+            r#"{ "id": "legacy", "name": "Legacy", "mode": "dark", "sheet": {}, "components": {} }"#,
+        )
+        .unwrap();
 
-        let reg = ThemeRegistry::with_dirs(std::slice::from_ref(&dir));
+        let reg = ThemeRegistry::with_dirs(std::slice::from_ref(&dir), &[]);
         let ids: Vec<&str> = reg.entries().iter().map(|e| e.theme.id.as_str()).collect();
         assert_eq!(ids, ["midnight", "daylight", "custom"]);
         assert_eq!(reg.get("midnight").unwrap().name, "My Midnight");

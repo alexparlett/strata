@@ -24,7 +24,7 @@ use crate::components::form::Form;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Body;
 use crate::state::ThemeSel;
-use crate::theme::{pc, ThemesCtx};
+use crate::theme::{authored_role, Role, ThemesCtx};
 
 /// Cards per row (canvas `grid-template-columns: 1fr 1fr`), and the gutter between them.
 const CARDS_PER_ROW: usize = 2;
@@ -167,10 +167,10 @@ struct Swatch {
 impl Swatch {
     fn of(theme: &StrataTheme) -> Self {
         Self {
-            body: pc(&theme.sheet.background),
-            raised: pc(&theme.sheet.surface_secondary),
-            line: pc(&theme.sheet.border),
-            accent: pc(&theme.sheet.primary),
+            body: authored_role(theme, Role::Background),
+            raised: authored_role(theme, Role::SurfaceRaised),
+            line: authored_role(theme, Role::Border),
+            accent: authored_role(theme, Role::Accent),
         }
     }
 }
