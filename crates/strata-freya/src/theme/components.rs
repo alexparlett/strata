@@ -649,6 +649,10 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             tick_color: role(Role::TextPlaceholder),
             legend_color: role(Role::TextMuted),
             note_color: role(Role::TextDim),
+            // The high-cardinality banner's box, on the same two roles the Export window's
+            // banner takes — one warning tone app-wide, not a second.
+            warning_background: role(Role::WarningBackground),
+            warning_border_fill: role(Role::WarningBorder),
             series_1: role(Role::Chart1),
             series_2: role(Role::Chart2),
             series_3: role(Role::Chart3),

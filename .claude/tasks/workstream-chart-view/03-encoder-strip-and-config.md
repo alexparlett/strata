@@ -66,8 +66,9 @@ tail instead of deferring it — and the items keep a `Content::Fit` parent, or 
 - [x] Editing an encoder redraws the chart without waking any other results/editor channel.
 
 ## Notes for later tasks
-- 04's scaffold should read the resolved `Encoding`, not the stored config — those are real
-  column names, already checked against the result.
+- Anything that generates SQL from the chart should read the resolved `Encoding`, not the
+  stored config — those are real column names, already checked against the result. (04 built
+  such a thing and it was cut; the note stands for 05's templates.)
 - The preview harness (`preview.rs`, `#[ignore]`d) now renders the strip over a real schema and
   can click before it shoots: `chart-strip-open.png` is an encoder's open list, which is the one
   part of this surface a static render cannot show.

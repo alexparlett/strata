@@ -22,9 +22,12 @@
 //! and a 24-slice pie has no honest layout at all. The strip already scrolls, so the legend
 //! grows down instead of over — and the plot keeps its whole width for data.
 //!
-//! The design's **Aggregate** toggle and its function menu are deliberately absent: the chart
-//! computes nothing SQL can say (spec §1.2, §1.3), and aggregation is reached through Chart
-//! 04's scaffold instead.
+//! The design's **Aggregate** toggle and its function menu are deliberately absent, and nothing
+//! stands in their place: the chart computes nothing SQL can say (spec §1.2, §1.3), so every
+//! control here changes what is *drawn* and none of them changes the data. Aggregating is the
+//! user's own `GROUP BY`, which the refusal overlays name in prose. A press that wrote that
+//! query into a new tab was built and cut — spec §8 records why, and it is the chart-side
+//! aggregation behind it that is worth revisiting rather than the shortcut.
 
 use freya::components::get_theme;
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
@@ -828,5 +831,24 @@ mod tests {
 
         click_text(&mut runner, ChartSort::ByYDesc.label());
         assert_eq!(config(&session).sort, ChartSort::ByYDesc);
+    }
+
+    /// **Every control here changes what is drawn, and none of them leaves the chart.** The
+    /// strip is the encoding and nothing else: the design's Aggregate toggle is absent because
+    /// the chart aggregates nothing, and the press that would have written that `GROUP BY` into
+    /// a new tab was cut with it (spec §8). Pinned because it is an absence, and an absence is
+    /// the kind of decision that gets quietly undone.
+    #[test]
+    fn the_strip_offers_no_control_that_leaves_the_chart() {
+        let (mut runner, _) = runner();
+        settle(&mut runner);
+
+        let seen = texts(&runner);
+        for absent in ["Aggregate in SQL", "Aggregate", "GROUP BY"] {
+            assert!(
+                !seen.iter().any(|t| t == absent),
+                "the strip offers {absent:?}: {seen:?}"
+            );
+        }
     }
 }

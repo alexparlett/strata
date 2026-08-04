@@ -7,7 +7,7 @@
 //! (`docs/SNAPSHOT_SPEC.md` §9), `LIMIT cap + 1` — then a long→wide pivot in Rust when a
 //! series column splits the rows. No aggregation, no bucketing, no imposed order: the rows
 //! draw in the order the user's query produced them, and everything analytical is the
-//! user's own SQL, reached through the scaffold. The engine-side aggregation pipeline that
+//! user's own SQL, written by the user. The engine-side aggregation pipeline that
 //! used to live here was built, adversarially reviewed twice, and withdrawn —
 //! `docs/reference/INVARIANTS.md` (the chart entry) records the evidence; do not
 //! resurrect it.
@@ -20,7 +20,8 @@
 //!   is the bin count, not a row count.
 //! - **Refusals are answers, not errors.** Over a cap ([`ChartData::OverCap`]) or two rows
 //!   in one pivot cell ([`ChartData::Duplicates`]) the read succeeds and carries nothing to
-//!   draw — the surface renders the refusal and offers the SQL scaffold. An *encoding*
+//!   draw — the surface renders the refusal, which names the user's own `GROUP BY` as the
+//!   fix and puts no control behind it (spec §7, §8). An *encoding*
 //!   mistake (a text column as Y, a column that doesn't exist) is an `Err`, in this
 //!   module's words rather than DataFusion's.
 
@@ -707,7 +708,7 @@ mod tests {
     /// **Two rows in one pivot cell refuse** — aggregating them is SQL's job, and the
     /// refusal names the encoding so the message can say which columns to group by.
     #[test]
-    fn a_duplicate_pivot_cell_refuses_to_the_scaffold() {
+    fn a_duplicate_pivot_cell_refuses_rather_than_keeping_either_row() {
         let data = chart_of(
             vec![
                 ("m", strs(vec![Some("jan"), Some("jan")])),

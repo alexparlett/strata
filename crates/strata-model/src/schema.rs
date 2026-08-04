@@ -114,8 +114,21 @@ pub enum ChartRole {
     /// A number: a Y, either scatter axis, a histogram's value. Exactly the set the engine's
     /// own read will accept as a measure.
     Measure,
-    /// An instant or a clock time: the default X, and the reason a default mark is a line.
-    Temporal,
+    /// A point on the calendar (a date or a timestamp): the default X, the reason a default
+    /// mark is a line, and the only role a **stride** means anything to — which is why it is
+    /// not the same variant as [`Clock`](Self::Clock). `date_bin(interval '1 day', …)` over a
+    /// time of day is not a coarser reading of it, it is one bucket; DataFusion says so
+    /// outright ("DATE_BIN stride for TIME input must be less than 1 day").
+    ///
+    /// **Nothing reads the distinction today.** It was split for a scaffold that wrote that
+    /// SQL, and the scaffold was cut (`docs/CHART_SPEC.md` §8); the split was kept because
+    /// chart-side bucketing needs it (§10) and the only way to recover it later is a type's
+    /// *spelling*, which this taxonomy exists to rule out.
+    Instant,
+    /// A time of day, with no calendar under it. An axis and a series split like
+    /// [`Instant`](Self::Instant) — it is ordered, and a line across it reads — but nothing a
+    /// date stride can bin.
+    Clock,
     /// A category: an X, or the column a series splits on.
     Dimension,
     /// Nested, opaque, or simply not a thing with an axis — offered nowhere.

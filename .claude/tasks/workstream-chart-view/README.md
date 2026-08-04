@@ -1,8 +1,8 @@
 # Workstream — Chart view (Rz2)
 
 The results **Chart** surface: a **renderer-first** chart over the result set — snapshot ordinal,
-a projected read + long→wide pivot, a plotters/Skia renderer, an encoder strip, guardrails, and
-the SQL scaffold as the aggregation path. Switched into by the results Table/Chart segment
+a projected read + long→wide pivot, a plotters/Skia renderer, an encoder strip and guardrails.
+Aggregation is the user's own SQL and V1 writes none of it. Switched into by the Table/Chart segment
 (P2-07, done). Spec: **`docs/CHART_SPEC.md`** — the committed renderer-first spec; the
 design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* reference only.
 
@@ -17,9 +17,13 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
 - **Result order is real, and it is the snapshot ordinal** (`SNAPSHOT_SPEC.md` §9). Measured: a
   bare snapshot read is nondeterministic above 10 MB — the *grid's paging* is affected today, so
   task 00 is a bug fix that happens to unblock the chart, not chart pre-work.
-- **Aggregation's on-ramp is the scaffold**, promoted from escape hatch to the normal workflow:
-  raw data → one click → an editable `GROUP BY` tab → chart the shaped result.
-- **Refuse, never sample** — over-cap and pivot-duplicates both refuse with a CTA into SQL.
+- **Aggregation is the user's own SQL, and V1 does not write it for them** (04). The
+  *Aggregate in SQL* press — a `GROUP BY` composed from the encoding, opened unrun in a new tab
+  — was built and **cut**: sound mechanism, wrong surface (no comparable tool puts it among the
+  encoders), and it was standing in for the chart-side aggregation actually worth building.
+  `docs/CHART_SPEC.md` §8 has the full reasoning. Do not re-add it to the strip.
+- **Refuse, never sample** — over-cap and pivot-duplicates both refuse, and the message names
+  the fix in prose.
 - **Rendering is `freya-plotters-backend`** (fork, `plot` feature) on a `canvas`;
   `CanvasContext` is logical-units and pre-scaled; redraw needs an explicit request.
 - **Chart data is a freya-query capability shaped like `PageSpec`** — keyed
@@ -29,6 +33,10 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
   written out of the config. What a control offers is the mark's own option set, so an invalid
   encoding is unreachable rather than reported. The sort is a view transform over the settled
   data, never part of the read.
+- **A time column is two roles** (04): `Instant` (date/timestamp) and `Clock` (time of day) are
+  identical on an axis and differ wherever a stride does — DataFusion refuses a day-wide
+  `date_bin` over a `Time`. Nothing in V1 reads the distinction; it is kept because recovering
+  it later means reading a type's spelling, which the role invariant rules out.
 
 ## Tasks
 
@@ -38,7 +46,7 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
 | 01 | `Engine::chart` renderer-first read + vocabulary `[core]` | ✅ | Rz2 | 00 |
 | 02 | Chart body + plotters renderer | ✅ | Rz2 | 01 |
 | 03 | Encoder strip + `ChartConfig` state | ✅ | Rz2 | 02 |
-| 04 | Guardrails + the SQL scaffold | ⬜ | Rz2 | 02, 03 |
+| 04 | Guardrails (overlays + banner) | ✅ | Rz2 | 02, 03 |
 | 05 | Analytical presets — role mappings + templates (follow-on) | ⬜ | Rz2 | 01–04 |
 
 ## Why the order
@@ -48,7 +56,7 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
 renderer-first shape — the branch holds the withdrawn pipeline's implementation, and its
 salvageable parts (caps, `CellFormat` labels, `(null)` handling, pivot collision refusal,
 histogram, pin, most tests) carry over. 02 makes the surface real over schema-derived defaults;
-03 adds the strip and persisted config; 04 adds the refusal surfaces and the scaffold. 05 is
+03 adds the strip and persisted config; 04 adds the refusal surfaces. 05 is
 deliberately last and optional-shaped: presets are role mappings + SQL templates over the same
 `Rows` read, so nothing earlier pre-builds for them (AGENTS.md §5).
 

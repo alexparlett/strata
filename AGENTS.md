@@ -85,12 +85,18 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **A chart renders the result in result order; it computes nothing SQL can say.** `Engine::chart`
   is a projected, ordinal-ordered, capped read plus a long→wide pivot — no aggregation, no
   bucketing, no imposed order (the histogram's binning is the one exception). Over a cap, or two
-  rows in one pivot cell, it refuses **to the SQL scaffold**. An engine-side aggregation pipeline
+  rows in one pivot cell, it refuses, naming the user's own `GROUP BY` as the fix. An engine-side aggregation pipeline
   was built and withdrawn; the reasons and the scan-order measurements are the full entry —
   re-litigate neither. A column's **chart role** comes from the Arrow `DataType` in `column_info`
   (its measure arm *is* the read's own `is_numeric` gate), never from a type's spelling or from
-  `Kind`; and a chart read's cache identity is `(snapshot, query, **display config**)`, because
+  `Kind` — and a time column is **two** roles, `Instant` and `Clock`, identical on an axis and
+  different wherever a stride is, because a day-wide `date_bin` over a `Time` column is refused;
+  and a chart read's cache identity is `(snapshot, query, **display config**)`, because
   axis labels render through `datafusion.format.*`.
+- **A chart refusal names its fix in prose, and V1 puts no control behind it.** The
+  *Aggregate in SQL* press was built and cut: sound mechanism, wrong surface (no tool puts it
+  among the encoders), and it stood in for the chart-side aggregation actually worth building.
+  Re-litigate the placement only with a surface that isn't the strip.
 - **A chart config is intent; resolving it against the result is a read-time fallback, never a
   write.** Unset channels take the schema's defaults and a reference this result cannot answer
   falls back at read time (X is a three-state `ChartX`: "not chosen" and "the row index" are

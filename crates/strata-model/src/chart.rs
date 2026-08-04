@@ -267,10 +267,11 @@ pub enum ChartData {
     /// Histogram bins, ascending and contiguous.
     Bins(Vec<ChartBin>),
     /// Refused: the read would have exceeded `cap` of `unit`. Carries no data at all —
-    /// the chart is not drawn (spec §1.4, §7), and the surface offers the SQL scaffold.
+    /// the chart is not drawn (spec §1.4, §7), and the surface says to aggregate in SQL.
     OverCap { unit: CapUnit, cap: usize },
     /// Refused: the long→wide pivot found two rows in one (X, series) cell. Aggregating
-    /// them is SQL's job, not the chart's (spec §1.2) — the surface offers the scaffold.
+    /// them is SQL's job, not the chart's (spec §1.2), and the user's own `GROUP BY` —
+    /// the surface names it and offers no control behind it (spec §8).
     /// Carries the encoding's column names so the message can say which.
     Duplicates { x: String, series: String },
 }

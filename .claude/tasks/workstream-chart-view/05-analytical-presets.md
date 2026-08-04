@@ -9,7 +9,7 @@ an **ordinary SQL result whose columns play named roles**, plus the template tha
 Never an engine-side computation — spec §1.2 and §10.
 
 ## Build (pick by value, in tier order; each item independently shippable)
-- **Tier A — scaffold/snippet templates** beyond plain `GROUP BY`: Top-N + Other (rank + CASE
+- **Tier A — snippet templates** beyond plain `GROUP BY`: Top-N + Other (rank + CASE
   fold — the constructive answer to high cardinality, with the cap refusal as the fallback);
   share-of-total (`sum(y) OVER …` → 100%-stacked bar/area, honest pie percentages);
   `FILTER`-split series. Each lands the user in an editable tab they own.
@@ -38,8 +38,14 @@ Never an engine-side computation — spec §1.2 and §10.
 
 ## Acceptance
 - [ ] Each shipped preset renders from columns the user's SQL produced, ships the template that
-      produces them, and keeps scaffold parity (spec §1.3). Nothing computes engine-side except
-      a recorded, weighed trendline decision.
+      produces them (spec §1.3). Nothing computes engine-side except a recorded, weighed
+      trendline decision.
+
+## Note on where a template lands
+04 built an *Aggregate in SQL* press into the control strip and it was **cut** — sound
+mechanism, wrong surface (spec §8). Tier A's templates have the same question to answer, and
+the answer is not the strip: the command palette or the editor's own snippet surface are the
+candidates. Settle that before building the first one.
 
 ## References
 `docs/CHART_FUNCTIONS.md` (the survey + tiers). `docs/CHART_SPEC.md` §4–§5, §10.
