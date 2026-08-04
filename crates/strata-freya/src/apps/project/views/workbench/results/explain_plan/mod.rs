@@ -8,7 +8,6 @@
 //! card with its three-tier metrics block; [`palette`] maps kind / metric / group / tone
 //! onto the theme's colour fields; `preview` is the headless render harness.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 
 use strata_core::engine::plan::{guide_rails, PlanTab, QueryPlan};
@@ -18,10 +17,12 @@ use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
+use crate::components::tones::tones;
 use crate::components::tool_button::TOOL_SIZE;
 use crate::components::toolbar::{Toolbar, ToolbarItem};
 use crate::components::type_palette::type_palette;
 use crate::components::typography::Readout;
+use crate::theme::{use_roles, Role};
 
 mod node;
 mod palette;
@@ -92,12 +93,13 @@ const ANALYZE_BADGE_WIDTH: f32 = 86.;
 impl Component for ExplainPlan {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, ExplainPlanThemePreference, "explain_plan");
-        let app_theme = use_theme();
-        let (toolbar_bg, accent, error, count_color) = {
-            let theme_ref = app_theme.read();
-            let c = theme_ref.colors();
-            (c.background, c.primary, c.error, c.text_secondary)
-        };
+        let roles = use_roles();
+        let (toolbar_bg, accent, error, count_color) = (
+            roles.get(Role::Background),
+            roles.get(Role::Accent),
+            tones().error,
+            roles.get(Role::TextMuted),
+        );
         let palette = PlanPalette {
             theme: theme.clone(),
             types: type_palette(),

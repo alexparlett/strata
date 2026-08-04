@@ -9,7 +9,6 @@
 //! (the canvas's `onCmdkHover`). That is what makes a palette answer to the mouse and the keyboard
 //! at once instead of carrying two selections that disagree.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 use strata_model::CatalogKind;
 
@@ -20,6 +19,7 @@ use crate::components::icon::{Icon, IconName};
 use crate::components::keycap::KeyCap;
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Eyebrow, MonoValue, Prose};
+use crate::theme::{use_roles, Role};
 
 /// The canvas's row box: 42px tall, `--sp-4` inside and between, `--r-2` corners.
 const ROW_HEIGHT: f32 = 42.;
@@ -73,7 +73,7 @@ pub struct PaletteRow {
 impl Component for PaletteRow {
     fn render(&self) -> impl IntoElement {
         let theme = palette_theme();
-        let accent = use_theme().read().colors().primary;
+        let accent = use_roles().get(Role::Accent);
         let types = type_palette();
 
         let (label_color, icon_color) = match self.active {

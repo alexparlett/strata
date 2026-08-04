@@ -29,10 +29,12 @@ use freya::prelude::*;
 
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::tool_button::TOOL_SIZE;
 use crate::components::typography::Prose;
 use crate::keymap::{hint_title, KeyHint};
 use crate::state::{use_config, ConfigChan};
+use crate::theme::{use_roles, Role};
 use strata_core::config::Command;
 
 /// A separator's painted width. It is a 1px rule, but it carries the row's spacing on both sides
@@ -357,11 +359,12 @@ impl Component for Toolbar {
         // The row's measured width. Local, per-mount and derived -- see the module docs on why it
         // is deliberately nowhere near the session store.
         let mut measured = use_state(|| f32::INFINITY);
-        let theme = use_theme();
-        let (border, danger, accent) = {
-            let t = theme.read();
-            (t.colors().border, t.colors().error, t.colors().primary)
-        };
+        let roles = use_roles();
+        let (border, danger, accent) = (
+            roles.get(Role::Border),
+            tones().error,
+            roles.get(Role::Accent),
+        );
 
         // Every action's tooltip, with its live chord appended. Resolved here rather than per
         // action because `use_hint_title` is a hook and the item list is a variable length —

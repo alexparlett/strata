@@ -21,6 +21,8 @@ per-widget CSS. Do these once the surfaces exist; several can run in parallel wi
 | P5-06 | Panel overflow & small-size behaviour (scroll / fold / hide) | ✅ | — | P3-01 + content |
 | P5-07 | One `Search` control for the app's four filter boxes | ⬜ | — | surfaces exist |
 | P5-08 | Scroll acceleration for long lists (fork: `scrollviews::shared`) | ⬜ | — | — |
+| P5-09 | Window-theme unification (settings / export / launcher → `window`) | ⬜ | — | theme v2 |
+| P5-10 | Role-read re-homing (component-themed surfaces off the direct reads) | ⬜ | — | theme v2 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo.

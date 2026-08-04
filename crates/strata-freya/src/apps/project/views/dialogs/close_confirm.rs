@@ -7,7 +7,8 @@
 //! `crate::apps::project::close`.
 
 use crate::state::{use_config, use_config_station, write_config, AppCtx, ConfigChan};
-use freya::components::{get_theme, use_theme};
+use crate::theme::{use_roles, Role};
+use freya::components::get_theme;
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station};
 
@@ -21,6 +22,7 @@ use crate::apps::project::state::{
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Control, Prose, Title};
 use crate::platform::{self, OpenCtx};
 
@@ -57,7 +59,8 @@ impl Component for CloseConfirm {
         let agents = use_consume::<AgentsCtx>();
         let config = use_config_station();
         let settings = use_config(ConfigChan::Settings);
-        let theme = use_theme();
+        let roles = use_roles();
+        let warning = tones().warning;
         // The action wears the shared `cancel_button` dress (the running body's Cancel)
         // — the themes' authored stop-the-query tone, not a hardcoded red.
         let cancel = get_theme!(
@@ -199,8 +202,6 @@ impl Component for CloseConfirm {
             CloseTarget::Restart => project.read().name.clone(),
         };
 
-        let c = theme.read().colors().clone();
-
         // Checked = don't ask = the `confirm_close_running` setting off. Toggling writes
         // the app-global config (the close guard mirrors it immediately) and persists in
         // the same funnel — the comp's checkbox edits the setting directly, not a local
@@ -215,13 +216,13 @@ impl Component for CloseConfirm {
         // The title run beside the chip: what is being closed, over its name.
         let header = DialogHeader::new(
             IconName::Warning,
-            c.warning,
+            warning,
             rect()
                 .vertical()
-                .child(Title::new(title).color(c.text_primary))
+                .child(Title::new(title).color(roles.get(Role::Text)))
                 .child(
                     Prose::new(name)
-                        .color(c.text_placeholder)
+                        .color(roles.get(Role::TextPlaceholder))
                         .text_overflow(TextOverflow::Ellipsis),
                 ),
         );
@@ -234,7 +235,7 @@ impl Component for CloseConfirm {
             .corner_radius(8.)
             .on_press(toggle_dont_ask)
             .child(Checkbox::new().selected(dont_ask).size(16.))
-            .child(Prose::new("Don't ask again").color(c.text_placeholder));
+            .child(Prose::new("Don't ask again").color(roles.get(Role::TextPlaceholder)));
 
         // The card, the strip and the modal keys (Esc keeps, Enter stops) are `Dialog`'s; this
         // supplies the comp's own header, body and its two actions.
@@ -251,7 +252,7 @@ impl Component for CloseConfirm {
                     .width(Size::fill())
                     .vertical()
                     .spacing(12.)
-                    .child(Prose::new(body).color(c.text_secondary).wrap())
+                    .child(Prose::new(body).color(roles.get(Role::TextMuted)).wrap())
                     .child(checkbox_row),
             )
             .action(

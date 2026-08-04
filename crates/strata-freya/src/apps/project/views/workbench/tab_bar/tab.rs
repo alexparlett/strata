@@ -10,9 +10,11 @@ use crate::apps::project::close::TabCloser;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Body, InputTypography};
 use crate::keymap::on_command;
-use freya::components::{use_theme, DragZone};
+use crate::theme::{use_roles, Role};
+use freya::components::DragZone;
 use freya::prelude::*;
 use freya::radio::use_radio;
 
@@ -133,10 +135,10 @@ impl Component for Tab {
             ..
         } = get_theme!(&self.theme, TabThemePreference, "tab");
 
-        // The unsaved dot is a semantic palette slot; the close × is a flat `Button`, so its icon
+        // The unsaved dot is a semantic tone; the close × is a flat `Button`, so its icon
         // inherits that button's colour. (The context menu's separators are `Divider::menu`'s
         // own business — nothing to read here for them.)
-        let dot_color = use_theme().read().colors().warning;
+        let dot_color = tones().warning;
 
         let (bg, fg, accent_fill) = if self.active {
             (active_background, active_color, accent)
@@ -368,11 +370,7 @@ impl Component for TabChrome {
             ..
         } = get_theme!(&self.theme, TabThemePreference, "tab");
 
-        let (dot_color, x_color) = {
-            let theme_ref = use_theme().read();
-            let c = theme_ref.colors();
-            (c.warning, c.disabled)
-        };
+        let (dot_color, x_color) = (tones().warning, use_roles().get(Role::TextDisabled));
 
         let (bg, fg, accent_fill) = if self.active {
             (active_background, active_color, accent)
@@ -387,9 +385,7 @@ impl Component for TabChrome {
             .main_align(Alignment::Center)
             .cross_align(Alignment::Center)
             .maybe(self.dirty, |el| el.child(Dot::new(dot_color)))
-            .maybe(!self.dirty, |el| {
-                el.child(label().text("×").font_size(13.).color(x_color))
-            });
+            .maybe(!self.dirty, |el| el.child(Body::new("×").color(x_color)));
 
         rect()
             .height(Size::px(TAB_HEIGHT))

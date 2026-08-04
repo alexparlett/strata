@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use async_io::Timer;
-use freya::components::{use_theme, CircularLoader};
+use freya::components::CircularLoader;
 use freya::prelude::*;
 
 use crate::state::use_config_station;
@@ -16,6 +16,7 @@ use strata_core::config::Command;
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Body, Control, Path};
 use crate::keymap::{on_command, use_hint};
+use crate::theme::{use_roles, Role};
 
 define_theme!(
     %[no_ext]
@@ -57,15 +58,15 @@ impl Running {
 
 impl Component for Running {
     fn render(&self) -> impl IntoElement {
-        let theme = use_theme();
-        let (title_color, sub_color, background) = {
-            let theme_ref = theme.read();
-            let c = theme_ref.colors();
-            (c.text_secondary, c.text_placeholder, c.surface_secondary)
-        };
-        // The Cancel control's own theme component — authored per theme in the file's
-        // `components.cancel_button`, whose values track `run_button`'s `running_*` set (the
-        // same cancel dress the toolbar's Run→Cancel flip wears, P2-15).
+        let roles = use_roles();
+        let (title_color, sub_color, background) = (
+            roles.get(Role::TextMuted),
+            roles.get(Role::TextPlaceholder),
+            roles.get(Role::SurfaceRaised),
+        );
+        // The Cancel control's own theme component — its mapping-table rows track
+        // `run_button`'s `running_*` set (the same cancel dress the toolbar's Run→Cancel
+        // flip wears, P2-15).
         let cancel = get_theme!(&self.theme, CancelButtonThemePreference, "cancel_button");
 
         // Ticks from mount — the body is keyed on the press's nonce, so a new Run always

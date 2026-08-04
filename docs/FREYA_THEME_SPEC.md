@@ -1,213 +1,184 @@
 # Strata (Freya) — theme spec
 
-A **native theme format for the Freya frontend**, authored directly against Freya's theming model — no lossy mapping.
-Four blocks:
+A **role-first theme format**: a theme file authors a closed vocabulary of ~100 named colour
+roles, and nothing about components. Every component's dress is fixed onto roles by **one static
+mapping table** in the app (`strata-freya/src/theme/components.rs`); a theme retunes the whole
+app by retuning roles alone. This is the shape the newest IDE theme systems converged on (Zed's
+role-only format; Visual Studio 2026's 1,806-token → 229-role consolidation), adopted here after
+the per-component format's two shipped themes had measurably drifted apart — same field
+`specific` in one theme and `reference` in the other, per-theme palette aliasing with no stable
+answer to "is X the same token as Y", and a dead component group nothing had validated.
 
-- **`sheet`** → the 27 core slots, copied 1:1 into Freya's `ColorsSheet`. Every component's
-  `Reference("<slot>")` resolves against this at render, so it does most of the work.
-- **`palette`** → **app-named slots extending the sheet**, for the tones the 27 have no name for
-  (`text_muted`, `border_control`, `surface_hover`, `accent_violet`, …). References resolve against
-  the sheet **first**, then here — so a palette key can never shadow a core slot a built-in
-  component depends on. A colour used by more than one field belongs here, named once, rather than
-  repeated as a `specific` per field.
-- **`components`** → per-component overrides, keyed by **Freya's component key**
-  (`"button"`, `"menu_container"`, `"switch"`, …). Each field is a **Preference**: a *Specific*
-  value or a *Reference* to a sheet slot or palette key. Overrides are **partial** — unspecified
-  fields keep Freya's default. Our own components (grid, editor, …) join this map once built with
-  `define_theme!`.
-- **`fonts`**.
+A theme file has four blocks:
 
-Plus a top-level `typography` type scale, and `scale` — the design system's `spacing`/`radius`
-ramps, which both built-ins already carry. **`scale` is inert:** the schema accepts it so the
-committed themes validate, but `StrataTheme` has no field for it, so serde drops it and no surface
-reads it. Authoring one today is a silent no-op; it is kept as design input for whichever task
-first needs a spacing scale. (Not to be confused with `Palette::scalar` below, the fork-side hook
-that would *resolve* such a scale.)
+- **`roles`** — a flat map of dotted role names → colour strings. The closed set below;
+  the schema enumerates every name and rejects unknown ones.
+- **`syntax`** — the editor's syntax colours, keyed by author-facing scope name
+  (`keyword`, `punctuation.bracket`, `string.escape`, …). The scope list is
+  `strata-code-editor`'s `SYNTAX_SCOPES` (34 scopes; Rust field ↔ scope name by
+  underscore ↔ dot, with `type_` ↔ `type`). Plain colour strings; a
+  `{ color, font_style, font_weight }` object form is the documented extension point if the
+  editor grows styled scopes.
+- **`fonts`** — `{ "ui": …, "mono": … }`, the two families the `typography` roles resolve
+  through. Naming a new family here means embedding it in the bundle in the same change.
+- **`typography`** — the type scale: 11 named roles (`title`, `strong_body`, `body_medium`,
+  `control`, `body`, `caption`, `data_value`, `code_block`, `field_label`, `meta`,
+  `mono_path`), each `{ family: ui|mono, weight, size, line_height?, letter_spacing? }`.
+  The editor's type is `code_block`; the tooltip's is `body` — both resolved by the mapping
+  table, so the scale is the single source of type.
 
-Colours are `#rrggbb`, `#rrggbbaa`, or `rgba(r,g,b,a)`. Field names are `snake_case`.
+Colours are `#rrggbb`, `#rrggbbaa`, or `rgba(r,g,b,a)`. Reference the schema via
+`"$schema": "./theme.schema.json"` for editor autocomplete + validation.
 
-Midnight/Daylight ship built-in; custom themes load the same shape (roadmap: a plugin theme dir, like any IDE). Every
-theme file is validated by **`themes/theme.schema.json`** — reference it via `"$schema": "./theme.schema.json"` for
-editor autocomplete + validation. Because `reference` is an open namespace (a theme names its own
-palette slots), the schema can't enumerate valid targets: a name that is neither a sheet slot nor a
-palette key paints **magenta** and is warned about at load
-(`StrataTheme::unresolved_references`, pinned for the built-ins by the `references_resolve` test).
+There is deliberately **no aliasing inside the file** (no variables, no role-to-role
+references): values are literal colours, because per-theme aliasing is exactly how the old
+palette rotted. The don't-repeat-yourself pressure is answered by the role set being small and
+semantic, not by an indirection layer.
 
----
+## The role vocabulary
 
-## A — `sheet` (→ Freya `ColorsSheet`, all 27 fields)
+Every role is **required** unless marked `(opt → X)`, in which case omitting it reads role `X`
+(`surface.stripe` omits to transparent). A fallback is always "read this other named role" —
+never a computed tint, which no shipping theme format does either. The authoritative table is
+`strata-core/src/theme.rs`'s `roles!` invocation; the schema is generated from it
+(`UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`).
 
-Verified complete against the `ColorsSheet` struct. Fill every slot — components reference these, so a gap shows as a
-leftover Freya default.
+**Surfaces** — elevation tiers, not widget names:
+`background` (the app base coat) · `surface.background` (the standard panel: tab bar,
+grid body, input wells) · `surface.raised` (one step up: the sidebar, drawer, inspector,
+settings/launcher body) · `surface.sunken` (opt → `background`; the EXPLAIN canvas) · `surface.subtle` (the
+faintest raised box) · `surface.stripe` (opt → transparent; the grid's zebra tint, authored
+translucent) · `elevated_surface.background` (floating chrome: menus, popups, tooltips, palette,
+modals) · `backdrop` (the modal scrim) · `shadow`.
 
-### Brand
+**Location refinements** — a *place* that may leave its tier, the pressure valve against
+under-granular roles: `panel.background` (opt → `surface.raised`) · `tab_bar.background`
+(opt → `surface.background`) · `status_bar.background` (opt → `surface.background`) ·
+`title_bar.background` (opt → `surface.raised`).
 
-`secondary`/`tertiary` are **accent tints**, not separate hues — Freya uses them for filled-control states (`tertiary` =
-filled hover; `secondary` = filled focus / switch track / slider thumb). Set them as a lighter and darker `primary`.
+**Elements** — two interaction families with explicit states (no state is ever derived):
+`element.{background,hover,active,selected,disabled}` for filled controls (buttons, select
+triggers, grid headers) · `ghost_element.{background,hover,active,selected}` for flush controls
+(tabs, sidebar rows, drawer rows, segments) · `elevated_element.hover` (one translucent wash for
+items on elevated/filled bases: menu items, select options, completion rows, card hover) ·
+`list.hover` (data rows — hue-distinct from control hover in Daylight) ·
+`drop_target.background` · `track` (progress/slider channel) · `knob` (switch thumb, check
+mark — its own role because `text.on_accent` is dark in Midnight).
 
-| field       | controls                                                       | Midnight  | Daylight  |
-|-------------|----------------------------------------------------------------|-----------|-----------|
-| `primary`   | filled buttons, toggled thumb, selected marks, progress, links | `#4cc6ff` | `#2b7fd0` |
-| `secondary` | lighter accent tint (filled focus, switch track, slider)       | `#a9e2ff` | `#7fbce8` |
-| `tertiary`  | darker accent tint (filled hover)                              | `#2ea6e0` | `#1f6bb0` |
+**Borders**: `border` · `border.variant` (fainter: in-list rules, tree guides) ·
+`border.control` (control outlines) · `border.strong` (emphasized: hovered cards, the keymap's
+dashed slot) · `border.focused` · `border.selected` (opt → `border.focused`) ·
+`border.disabled` (opt → `border.variant`) · `border.overlay` (floating-chrome edges,
+checkbox/radio rest outlines, the switch track).
 
-### Status
+**Text** — icons read these too; an `icon.*` family is the named escape if an icon ever needs
+to differ: `text` · `text.muted` · `text.control` · `text.dim` · `text.label` (uppercase
+eyebrows) · `text.placeholder` · `text.disabled` · `text.accent` (opt → `accent`) ·
+`text.on_accent`.
 
-| field     | controls             | Midnight  | Daylight  |
-|-----------|----------------------|-----------|-----------|
-| `success` | success / valid      | `#9fe6b4` | `#1a7f4b` |
-| `warning` | warning              | `#ffa657` | `#bc4c00` |
-| `error`   | error / destructive  | `#ff8a8a` | `#c0332e` |
-| `info`    | informational accent | `#4cc6ff` | `#2b7fd0` |
+**Accent**: `accent` · `accent.hover` · `accent.ring` (opt → `accent`) · `accent.selection`
+(the ~12% wash — selected rows, nav pills, the palette's active row) · `accent.muted` (the
+~22% wash) · `accent.badge`.
 
-### Surfaces (elevation ramp)
+**Status** — one global triad per semantic, never per-surface:
+`error` + `error.background` + `error.background.hover` + `error.border` (error alone carries a
+hover, for Cancel and Run-while-running) · `warning`/`success`/`info` each + `.background` +
+`.border`. In app code the four *tones* are read through the shared `tones()` hook
+(`components/tones.rs`), never restated per surface; the tinted `.background`/`.border`
+variants reach components through mapping-table rows (the run/cancel buttons' running dress,
+export's warning banner), which is the table doing its job, not a surface restating the ramp.
 
-| field                       | controls                      | Midnight  | Daylight  |
-|-----------------------------|-------------------------------|-----------|-----------|
-| `background`                | app base / window body        | `#15181e` | `#eceef1` |
-| `surface_primary`           | panels, sidebars              | `#333b47` | `#d3d7de` |
-| `surface_secondary`         | universal hover / raised rows | `#38414f` | `#e4e8ee` |
-| `surface_tertiary`          | default control background    | `#2a313c` | `#ffffff` |
-| `surface_inverse`           | thumbs, unchecked marks       | `#6f7988` | `#aeb4bf` |
-| `surface_inverse_secondary` | thumb hover                   | `#8792a2` | `#949ba7` |
-| `surface_inverse_tertiary`  | thumb active / unchecked fill | `#a1abbb` | `#7c828e` |
+**Editor chrome**: `editor.background` (its own role — the built-ins genuinely put it on
+different tiers) · `editor.line_number` · `editor.active_line_number` · `editor.selection` ·
+`editor.cursor` (opt → `accent`). Syntax is the separate `syntax` block.
 
-### Borders
+**Scrollbar**: `scrollbar.track` · `scrollbar.thumb` · `scrollbar.thumb.hover` ·
+`scrollbar.thumb.active`.
 
-| field             | controls            | Midnight  | Daylight  |
-|-------------------|---------------------|-----------|-----------|
-| `border`          | dividers / outlines | `#363e4a` | `#d0d4db` |
-| `border_focus`    | focus ring          | `#4cc6ff` | `#2b7fd0` |
-| `border_disabled` | disabled outline    | `#23272f` | `#edeef1` |
+**Data ramps** — Strata's own categorical vocabularies:
+`data_type.{string,number,boolean,timestamp,struct,list,map}` (the seven-hue display taxonomy —
+dtype labels, swatches, per-type cell text) · `chart.1` … `chart.10` (the ordered series ramp) ·
+`entity.{table,view,query,column,function,keyword}` (catalog icons + completion kinds, one
+agreed set) · `format.{parquet,csv,json,arrow,view}` (source-format badges — deliberately NOT
+folded into the data-type ramp even where hues coincide: retinting strings must not repaint
+file badges).
 
-### Text
-| field              | controls                  | Midnight  | Daylight  |
-|--------------------|---------------------------|-----------|-----------|
-| `text_primary`     | body text                 | `#edf0f5` | `#1a1c22` |
-| `text_secondary`   | labels / placeholders-ish | `#cfd6e0` | `#33373f` |
-| `text_placeholder` | placeholders              | `#6f7988` | `#7c828e` |
-| `text_inverse`     | text on an accent fill    | `#08111a` | `#ffffff` |
-| `text_highlight`   | links / highlight         | `#4cc6ff` | `#2b7fd0` |
+## Resolution model
 
-### States / Utility
+`strata_theme()` resolves the file once per theme build: roles → a `RoleColors` array, installed
+on the Freya `Theme` under `ROLES_KEY`; the mapping table registers every component theme with
+`Preference::Reference(role-name)` colour fields, which the fork resolves against the palette at
+**read** time — so the registrations are theme-independent and only the palette, syntax and
+fonts vary per theme.
 
-(`ColorsSheet` has no `hover` slot — hover comes from `surface_secondary`.)
+The fork stays untouched. Its 27-slot `ColorsSheet` is fed by `bridge_sheet()` (each old slot
+mapped to a role by the slot's behaviour in fork defaults), so built-in component defaults the
+table doesn't override keep painting correctly, and the dotted role names resolve through the
+pluggable `Palette::color` seam. Seven role names coincide with core slot names (`background`,
+`border`, `shadow`, and the four status tones); the bridge maps those slots to the same-named
+roles, and the `a_role_reference_resolves_to_its_own_colour` test pins that either resolution
+path answers the role's own colour.
 
-| field      | controls              | Midnight               | Daylight               |
-|------------|-----------------------|------------------------|------------------------|
-| `focus`    | focus background fill | `rgba(76,198,255,.14)` | `rgba(43,127,208,.12)` |
-| `active`   | pressed background    | `#414a57`              | `#dfe4ea`              |
-| `disabled` | disabled fill/text    | `#4d5765`              | `#a3a9b3`              |
-| `overlay`  | modal scrim           | `rgba(0,0,0,.5)`       | `rgba(15,23,42,.4)`    |
-| `shadow`   | drop shadow           | `rgba(0,0,0,.45)`      | `rgba(15,23,42,.18)`   |
+**Missing/unknown is loud, never fatal.** A missing required role or syntax scope paints
+**magenta**; unknown names are ignored. Both are warned per file at discovery
+(`ThemeRegistry::with_dirs`). A **pre-roles** file (one with a `sheet`/`components` section)
+fails to parse on the missing `roles` field and is skipped with a legacy-specific warning — the
+app never breaks on an old theme, it just doesn't list it.
 
----
+In app code, a surface reads colours from its **component theme** (`get_theme!`); the roles are
+reached directly (`use_roles().get(Role::…)`) only where the component theme has no field for
+the value, and the four semantic tones only through `tones()`. Splitting an over-shared role is
+a three-site change: add it to `roles!`, retarget the mapping rows, author the value in the two
+built-in files — `schema_in_sync` regenerates the schema.
 
-## B — `components` (per-component overrides)
+## Discovery
 
-### Preference grammar (per field value)
+Midnight and Daylight ship embedded (`strata-core` `include_str!`s this repo's `themes/*.json`).
+User themes: drop a `*.json` of the same shape into the user themes dir
+(macOS `~/Library/Application Support/Strata/themes`, else `~/.config/Strata/themes`); a file
+reusing a built-in `id` replaces it in place. Discovery happens **once** at launch
+(`ThemesCtx::discover()` in `main`).
 
-Each field is a **tagged `Preference`** — an object with exactly one of `specific` / `reference`
-(a serde externally-tagged enum, so the discriminator is explicit — no string-vs-object sniffing):
-
-| author writes                                             | means                                                                 |
-|-----------------------------------------------------------|-----------------------------------------------------------------------|
-| `{ "specific": "#2a313c" }` / `{ "specific": "rgba(…)" }` | `Preference::Specific(Color)`                                         |
-| `{ "specific": 14 }`                                      | `Preference::Specific(f32)` (`font_size`, `size`)                     |
-| `{ "specific": 8 }`                                       | `Preference::Specific(CornerRadius::new_all(8))` (`corner_radius`)    |
-| `{ "specific": 4 }` / `{ "specific": [6,12,6,12] }`       | `Preference::Specific(Gaps)` — all-sides / `[top,right,bottom,left]`  |
-| `{ "reference": "surface_tertiary" }`                     | `Preference::reference(..)` — a sheet slot, else a `palette` key       |
-
-The `specific` value's JSON type (string / number / array) is inferred, then coerced to the field's known type (see the
-table below). **References are colours-only** — Freya panics on a reference for a number/gaps/radius field. (`Palette`
-carries a defaulted `scalar` hook for a future spacing/radius scale; nothing declares one yet, so don't author one.)
-**Overrides are partial**: only the fields you list change; the rest keep Freya's default (which references the sheet,
-so still follows the palette).
-
-### Supported component keys + field types
-
-**Generic across all components.** A single macro in `theme.rs` drives `get → override the
-listed fields → set` for *any* component in the registration, so a theme author can override any field of any registered
-component (colour fields as `specific` or `reference`; layout fields as `specific`). The registration covers the
-built-in Freya set — buttons (+ variants +
-`button_layout`), cards, inputs (+ variants + `input_layout`), `switch`(+`switch_layout`),
-`checkbox`, `radio`, `select`, `menu_container`, `menu_item`, `popup`, `tooltip`,
-`floating_tab`, `segmented_button`, `button_segment`, `chip`, `sidebar_item`, `accordion`,
-`scrollbar`, `progressbar`, `circular_loader`, `skeleton`, `resizable_handle`, `slider`,
-`color_picker`, `table`, `typography`. Adding another Freya component is **one line** in the registration. Field names +
-types come from Freya's `themes.rs`; the schema (`theme.schema.json`) validates authored files. Representative subset:
-
-| key                | colour fields                                                                                                            | layout fields                  |
-|--------------------|--------------------------------------------------------------------------------------------------------------------------|--------------------------------|
-| `scrollbar`        | background, thumb_background, hover_thumb_background, active_thumb_background                                            | size (f32)                     |
-| `switch`           | background, thumb_background, toggled_background, toggled_thumb_background, focus_border_fill                            | —                              |
-| `checkbox`         | unselected_fill, selected_fill, selected_icon_fill, border_fill                                                          | —                              |
-| `menu_container`   | background, shadow, border_fill                                                                                          | padding (Gaps), corner_radius  |
-| `menu_item`        | background, hover_background, select_background, border_fill, select_border_fill, color                                  | corner_radius                  |
-| `tooltip`          | background, color, border_fill                                                                                           | font_size (f32)                |
-| `table`            | background, arrow_fill, row_background, cell_hover_background, divider_fill, color                                        | corner_radius                  |
-| `button`           | background, hover_background, border_fill, focus_border_fill, color                                                      | — (layout via `button_layout`) |
-| `input`            | background, focus_background, color, placeholder_color, border_fill, focus_border_fill                                   | —                              |
-| `select`           | select_background, background_button, hover_background, color, border_fill, focus_border_fill, arrow_fill                | —                              |
-| `sidebar_item`     | color, background, active_background, hover_background, focus_border_fill                                                | corner_radius, padding, margin |
-| `chip`             | background, hover_background, selected_background, border_fill, focus_border_fill, color, hover_color, selected_color, … | corner_radius, padding         |
-| `segmented_button` | background, border_fill                                                                                                  | corner_radius                  |
-| `button_segment`   | background, hover_background, disabled_background, selected_background, focus_background, color, selected_icon_fill      | padding, selected_padding      |
-
-Full field lists + Freya's defaults live in `freya-components/src/theming/themes.rs`; the loader mirrors them per key.
-
-### Our own components (future)
-
-The results grid, code editor, status dots, and typography presets will define their
-`*ThemePreference` with `define_theme!` (exported at `freya::components::define_theme`), register defaults in the same
-pass, and read via `get_theme!`. They then appear as component keys here (`"editor"`, `"grid"`, …) authored
-identically — one system for Freya's widgets and ours.
-
----
-
-## C — `fonts`
-
-| field  | value                                         |
-|--------|-----------------------------------------------|
-| `ui`   | `IBM Plex Sans` (bundled app-side; name only) |
-| `mono` | `JetBrains Mono`                              |
-
----
-
-## D — file shape
+## Example (abbreviated)
 
 ```json
 {
+  "$schema": "./theme.schema.json",
   "id": "midnight",
   "name": "Midnight",
   "mode": "dark",
-  "sheet": {
-    "primary": "#4cc6ff",
+  "roles": {
     "background": "#15181e",
-    "surface_tertiary": "#2a313c",
-    "text_primary": "#edf0f5"
+    "surface.background": "#191d24",
+    "surface.raised": "#1e232b",
+    "elevated_surface.background": "#262c35",
+    "element.background": "#2a313c",
+    "element.hover": "#333d4b",
+    "ghost_element.hover": "#262d37",
+    "border": "#2c333d",
+    "text": "#edf0f5",
+    "text.muted": "#cfd6e0",
+    "accent": "#4cc6ff",
+    "accent.selection": "rgba(76,198,255,.12)",
+    "error": "#ff8a8a",
+    "error.background": "rgba(229,72,77,.16)",
+    "editor.background": "#191d24",
+    "data_type.number": "#79c0ff",
+    "chart.1": "#4cc6ff"
   },
-  "components": {
-    "menu_container": {
-      "background": { "specific": "#262c35" },
-      "border_fill": { "reference": "border" },
-      "shadow": { "specific": "rgba(0,0,0,.45)" },
-      "corner_radius": { "specific": 8 }
-    },
-    "switch": {
-      "background": { "specific": "#333d4b" },
-      "toggled_background": { "specific": "#2ea6e0" },
-      "focus_border_fill": { "reference": "border_focus" }
-    },
-    "tooltip": {
-      "background": { "specific": "#2a313c" },
-      "color": { "specific": "#edf0f5" },
-      "font_size": { "specific": 14 }
-    }
+  "syntax": {
+    "keyword": "#ff7b9c",
+    "string": "#a5d6ff",
+    "punctuation.bracket": "#909aa9",
+    "type": "#d2a8ff"
   },
-  "fonts": { "ui": "IBM Plex Sans", "mono": "JetBrains Mono" }
+  "fonts": { "ui": "IBM Plex Sans", "mono": "JetBrains Mono" },
+  "typography": {
+    "body": { "family": "ui", "weight": 400, "size": 12.5 },
+    "code_block": { "family": "mono", "weight": 400, "size": 12, "line_height": 1.6 }
+  }
 }
 ```
 
-(`sheet` field set is pinned to Freya's `ColorsSheet`; the `components` key/field set is whatever the loader maps —
-extended as we adopt more components.)
+The full files are `themes/midnight.json` / `themes/daylight.json` — the working reference for
+every role's intended tier and weight in each mode.

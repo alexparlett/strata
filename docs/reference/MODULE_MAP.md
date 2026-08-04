@@ -118,15 +118,18 @@ src/task.rs                      `offload` — **the** way blocking work leaves 
                                  a quiet network mount freezes the app. A thread per call (a pool
                                  would let one wedged mount hold up the next open), and cancelling
                                  means dropping the answer — a blocking syscall cannot be stopped
-src/theme.rs                     Freya theme application: `theme_registry!` / `strata_components!`
-                                 macros, Pref→Preference coercion, ThemesCtx (the shared
-                                 ThemeRegistry handle, discovered once in main; every window root
-                                 *derives* its theme through it, but only the roots whose subtree
-                                 reads the registry itself — project, settings — also `provide` it,
-                                 so a new consumer must check its window does), schema-sync test.
-                                 The theme data model + loader +
-                                 ThemeRegistry (built-ins + user themes dir) + schema gen live in
-                                 `strata-core::theme`; the theme files themselves in root `themes/`
+src/theme/                       Freya theme application. `mod.rs`: RoleColors + `use_roles()`,
+                                 StrataPalette + `bridge_sheet` (feeds the fork's 27-slot
+                                 ColorsSheet from the roles), syntax registration, ThemesCtx (the
+                                 shared ThemeRegistry handle, discovered once in main; every
+                                 window root *derives* its theme through it, but only the roots
+                                 whose subtree reads the registry itself — project, settings —
+                                 also `provide` it, so a new consumer must check its window
+                                 does), schema-sync test. `components.rs`: the static mapping
+                                 table — every component field fixed onto a role; built-ins as
+                                 partial retunes, Strata components whole-cloth. The Role
+                                 vocabulary + data model + loader + ThemeRegistry + schema gen
+                                 live in `strata-core::theme`; the theme files in root `themes/`
 src/components/                  shared component library
   divider, dot, icon, run_button, segmented_toggle, toggle_button, typography
   badge.rs                       tinted label pill (PART · HOTSPOT · ANALYZE · dtype).
@@ -212,9 +215,9 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
                                  navigates: a property with no override gets no row made for it
     theme.rs                     P4-04 — the Appearance pane: Sync-with-OS + the theme grid, both
                                  `Setting`s. Each card's thumbnail is painted from **that** theme's
-                                 own sheet slots, so a user theme previews with nothing authored
-                                 per theme; the tick follows `ThemeSel::effective`, not the stored
-                                 id
+                                 own authored roles (`authored_role`), so a user theme previews
+                                 with nothing authored per theme; the tick follows
+                                 `ThemeSel::effective`, not the stored id
     data_display.rs              P4-05 — the Data-display pane: row density · zebra · default
                                  column width · default row limit. All four already had their
                                  consumer (the grid reads three off the config store, the catalog's

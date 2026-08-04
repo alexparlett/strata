@@ -20,7 +20,7 @@
 //! avoid. Recorded in the P3-09 task file and DEV_TASKS D4.
 
 use async_io::Timer;
-use freya::components::{use_theme, CircularLoader};
+use freya::components::CircularLoader;
 use freya::prelude::*;
 use freya::query::QueryStateData;
 use freya::radio::{use_radio_station, RadioStation};
@@ -41,6 +41,7 @@ use crate::apps::project::views::{use_profile_actions, ProfileActions, ProfileTa
 use crate::components::badge::Badge;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::type_palette::{kind_color, type_palette, TypePaletteTheme};
 use crate::components::typography::{Body, Control, Eyebrow, Meta, MonoValue, Path, Prose};
 use crate::components::{ACTION_HEIGHT, PROGRESS_HOLD};
@@ -395,10 +396,10 @@ impl Component for ScannedStatistics {
         let query = use_profile(&engine, &self.facts.owner, self.scan);
         let session = use_radio_station::<SessionState, Chan>();
         let actions = use_profile_actions();
-        // The one colour this component takes from the **sheet** rather than from its own theme:
-        // a failure is semantic, and must follow the app-wide error ramp wherever it appears
-        // (AGENTS.md §3).
-        let danger = use_theme().read().colors().error;
+        // The one colour this component takes from the **shared ramp** rather than from its own
+        // theme: a failure is semantic, and must follow the app-wide error ramp wherever it
+        // appears (AGENTS.md §3).
+        let danger = tones().error;
 
         // Cloned out, so the query's read guard is gone before any element is built. A `Loading`
         // entry never carries a previous value here — every request is a fresh key — so it is

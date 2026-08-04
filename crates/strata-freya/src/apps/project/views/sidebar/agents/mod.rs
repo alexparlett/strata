@@ -42,8 +42,8 @@
 mod run;
 
 use freya::components::{
-    define_theme, get_theme, use_theme, Disclosure, ScrollView, Tooltip, TooltipContainer,
-    TreeConfig, TreeItem, TreeThemePartial,
+    define_theme, get_theme, Disclosure, ScrollView, Tooltip, TooltipContainer, TreeConfig,
+    TreeItem, TreeThemePartial,
 };
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -54,6 +54,7 @@ use crate::apps::project::state::{AgentRun, AgentsCtx, Chan, ConnectedAgent, Ses
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Meta, MonoValue, Prose};
 use crate::components::PANE_BODY_MIN_W;
+use crate::theme::{use_roles, Role};
 
 define_theme!(
     %[component]
@@ -418,7 +419,7 @@ impl Component for SessionGroup {
         // reached from inside `running.then(|…|)` is a hook called a variable number of times
         // per render, which is the hook-order rule (AGENTS.md §3) and panics the whole app the
         // first time a session settles.
-        let accent = use_theme().read().colors().primary;
+        let accent = use_roles().get(Role::Accent);
 
         let cards: Vec<Element> = match open() {
             false => Vec::new(),

@@ -8,7 +8,6 @@
 use std::time::{Duration, Instant};
 
 use async_io::Timer;
-use freya::components::use_theme;
 use freya::prelude::*;
 use strata_core::config::Command;
 use strata_core::engine::plan::PlanTab;
@@ -20,9 +19,11 @@ use super::selection::Selection;
 use super::ResultsState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::toolbar::{Toolbar, ToolbarAction, ToolbarItem};
 use crate::components::typography::{InputTypography, Meta, Path};
 use crate::keymap::use_hint;
+use crate::theme::{use_roles, Role};
 
 define_theme!(
     %[component]
@@ -154,21 +155,18 @@ impl Component for StatusBar {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, StatusBarThemePreference, "status_bar");
 
-        // Dot + label tone and the aggregate's accent are semantic palette slots, independent
-        // of the `status_bar` token.
-        let app_theme = use_theme();
-        let (dot_color, accent) = {
-            let theme_ref = app_theme.read();
-            let c = theme_ref.colors();
-            let dot = match self.state {
-                ResultsState::Empty => c.text_placeholder,
-                ResultsState::Running => c.warning,
-                ResultsState::Grid | ResultsState::Chart => c.success,
-                ResultsState::ExplainPlan => c.info,
-                ResultsState::Error => c.error,
-            };
-            (dot, c.primary)
+        // Dot + label tone come off the shared semantic ramp; the empty dot and the aggregate's
+        // accent are role reads, independent of the `status_bar` token.
+        let tones = tones();
+        let roles = use_roles();
+        let dot_color = match self.state {
+            ResultsState::Empty => roles.get(Role::TextPlaceholder),
+            ResultsState::Running => tones.warning,
+            ResultsState::Grid | ResultsState::Chart => tones.ok,
+            ResultsState::ExplainPlan => tones.info,
+            ResultsState::Error => tones.error,
         };
+        let accent = roles.get(Role::Accent);
 
         // Label + sub-label per state (comp `_statusVals`): the grid state leads with the real
         // row count and trails the engine elapsed; the plan state counts operators. The empty

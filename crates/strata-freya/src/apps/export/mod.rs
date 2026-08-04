@@ -40,7 +40,7 @@ use crate::keymap::on_commands;
 use crate::menu::MenuScope;
 use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowKind};
 use crate::state::{use_share_config, AppCtx};
-use crate::theme::{peek_selection, use_strata_theme, window_background};
+use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
 pub use model::{ExportDraft, ExportTarget, FormatId, ScopeChoice};
 
@@ -87,8 +87,8 @@ define_theme!(
         /// The selected-partition row's order badge, and its text.
         badge_background: Color,
         badge_color: Color,
-        /// The high-cardinality warning banner (its glyph and text take the sheet's `warning`,
-        /// which is semantic and must follow the app-wide ramp).
+        /// The high-cardinality warning banner (its glyph and text take the shared ramp's
+        /// `warning`, which is semantic and must follow the app wherever it appears).
         warning_background: Color,
         warning_border_fill: Color,
     }
@@ -301,7 +301,7 @@ impl App for ExportApp {
             .background(theme.background)
             // The window's ambient text colour, like the launcher's: runs that don't name one
             // inherit it rather than Freya's base-theme default.
-            .color(use_theme().read().colors().text_primary)
+            .color(use_roles().get(Role::Text))
             .child(TitleBar)
             .child(ExportBody)
             .child(Footer)

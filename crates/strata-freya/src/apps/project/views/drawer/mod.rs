@@ -75,17 +75,17 @@ define_theme!(
         /// Not History's: Problems' rows are pressable too (they switch to the owning tab) and
         /// have no hover feedback at all, which is a gap this names rather than creates.
         ///
-        /// It is the app's `surface_hover`, not the canvas's `--c-surface2`: the canvas's value
-        /// is one step off *its* drawer surface, but ours is `surface_secondary`, which in
+        /// It is the app's `ghost_element.hover`, not the canvas's `--c-surface2`: the canvas's
+        /// value is one step off *its* drawer surface, but ours is `surface.raised`, which in
         /// Daylight is pure white — leaving a ~2% step that reads as no hover at all. A History
         /// card carries no pointer cursor and no tooltip, so the fill is its only affordance; it
-        /// has to be the slot the rail and the tab strip already hover with.
+        /// has to be the role the rail and the tab strip already hover with.
         row_hover_fill: Color,
         /// The rule under an Events row — the recessive hairline *inside* a list, a step back
         /// from [`border_fill`](Self::border_fill), which separates the header from the body.
         divider_fill: Color,
-        /// An empty state's copy. Its glyph wears a sheet colour, like every other semantic
-        /// mark in the app.
+        /// An empty state's copy. A semantic glyph (Problems' tick) wears the shared ramp,
+        /// like every other semantic mark in the app.
         empty_color: Color,
     }
 );

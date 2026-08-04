@@ -28,7 +28,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_io::Timer;
-use freya::components::use_theme;
 use freya::prelude::*;
 use strata_core::util::folder_name;
 
@@ -36,6 +35,7 @@ use crate::apps::project::close::{use_engineless_close, CloseTarget};
 use crate::apps::project::views::WindowDragStrip;
 use crate::components::typography::{Control, Title};
 use crate::state::AppCtx;
+use crate::theme::{use_roles, Role};
 
 /// How long a load may take before the window admits to being busy.
 ///
@@ -66,7 +66,7 @@ pub struct ProjectLoading {
 
 impl Component for ProjectLoading {
     fn render(&self) -> impl IntoElement {
-        let theme = use_theme();
+        let roles = use_roles();
         let (close, _closing) = use_engineless_close(self.app.clone(), self.confirm);
 
         // Say nothing about a load that finishes before anyone could read it. Scope-bound, so a
@@ -80,7 +80,6 @@ impl Component for ProjectLoading {
         });
 
         let name = folder_name(&self.root);
-        let c = theme.read().colors().clone();
 
         // No spacing on this one: its only in-flow child is the card below (the drag strip is
         // globally positioned, so torin leaves it out of the flow entirely), and a gap value that
@@ -96,7 +95,7 @@ impl Component for ProjectLoading {
                     .cross_align(Alignment::Center)
                     .spacing(16.)
                     .child(CircularLoader::new().size(28.))
-                    .child(Title::new(format!("Opening '{name}'")).color(c.text_primary))
+                    .child(Title::new(format!("Opening '{name}'")).color(roles.get(Role::Text)))
                     .child(
                         Button::new()
                             .outline()

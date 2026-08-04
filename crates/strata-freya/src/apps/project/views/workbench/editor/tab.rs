@@ -5,7 +5,7 @@ use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
 use crate::keymap::{chord_from_event, edit_bindings};
 use crate::state::{use_config, use_config_station, ConfigChan};
-use freya::components::use_theme;
+use crate::theme::{use_roles, Role};
 use freya::prelude::{
     rect, use_a11y, use_consume, use_side_effect, use_state, ChildrenExt, Component, ComponentKey,
     ContainerSizeExt, ContainerWithContentExt, Content, DiffKey, Event, IntoElement, IntoWritable,
@@ -131,7 +131,7 @@ impl Component for EditorTab {
                 .map(to_completion_item)
                 .collect::<Vec<_>>()
         };
-        let border = use_theme().read().colors().border;
+        let border = use_roles().get(Role::Border);
 
         rect()
             .expanded()

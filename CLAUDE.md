@@ -26,7 +26,7 @@ cargo run --release    # first build pulls DataFusion + compiles Skia; give it t
 
 After **any theme change**, regenerate + verify the schema:
 `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
-`themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`).
+`themes/theme.schema.json` must match the `Role` vocabulary + the editor's syntax scopes).
 
 To build something you can hand to a tester — a universal `.app` + DMG in `target/dist/`:
 

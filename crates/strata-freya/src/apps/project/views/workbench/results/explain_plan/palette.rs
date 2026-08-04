@@ -1,8 +1,8 @@
 //! The plan view's colour resolution: [`PlanPalette`] bundles the resolved `explain_plan`
-//! theme with the semantic sheet slots it borrows, and maps every categorical dimension —
+//! theme with the semantic tones it borrows, and maps every categorical dimension —
 //! operator kind, metric unit, tier-3 group, insight tone — onto them. The mapping mirrors
 //! the core's CSS-var palette (`PlanKind::color` & friends, which the Dioxus app consumes
-//! directly) — the palette *values* live in the theme file, the mapping here.
+//! directly) — the values live on the theme's roles, the mapping here.
 
 use freya::prelude::*;
 
@@ -12,7 +12,7 @@ use super::ExplainPlanTheme;
 use crate::components::type_palette::TypePaletteTheme;
 
 /// The resolved plan dress every card reads: the `explain_plan` component theme plus the
-/// semantic sheet slots the palette borrows (accent · error · secondary text). The mapping
+/// semantic tones the palette borrows (accent · error · secondary text). The mapping
 /// fns mirror the core's CSS-var palette exactly (`PlanKind::color`, `MetricKind::color`,
 /// `group_color`, `InsightTone::color`) — one mapping source, two frontends.
 #[derive(Clone, PartialEq)]

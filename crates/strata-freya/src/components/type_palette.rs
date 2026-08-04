@@ -9,10 +9,10 @@
 //!
 //! It is a shared **token group**, not a component: `%[no_ext]` so `define_theme!` emits the theme
 //! types without the `…ThemePartialExt` trait that would need a component struct to hang off. It
-//! registers under its own `"type_palette"` key like any other entry in `strata_components!`, so a
-//! theme file states the ramp **once** instead of repeating it per consumer — which is how the four
-//! copies had already drifted (Daylight's `datagrid` and `record_view` were still carrying
-//! Midnight's neon ramp on a white background).
+//! registers under its own `"type_palette"` key like any other entry in the mapping table
+//! (`theme/components.rs`), mapped once onto the `data_type.*` roles instead of repeated per
+//! consumer — which is how the four copies had already drifted (Daylight's `datagrid` and
+//! `record_view` were still carrying Midnight's neon ramp on a white background).
 //!
 //! Reading this from a component is *not* the cross-component theme read the surrounding code
 //! warns against — nobody reaches into `datagrid`'s theme. It is one palette with one owner.

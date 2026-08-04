@@ -10,18 +10,14 @@ use freya::router::*;
 use crate::apps::settings::views::footer::Footer;
 use crate::apps::settings::views::nav::Nav;
 use crate::apps::settings::views::title_bar::TitleBar;
-use crate::apps::settings::{Route, SettingsThemePartial, SettingsThemePreference};
+use crate::apps::settings::{settings_theme, Route};
 
 #[derive(PartialEq)]
 pub struct SettingsChrome;
 
 impl Component for SettingsChrome {
     fn render(&self) -> impl IntoElement {
-        let theme = get_theme!(
-            &None::<SettingsThemePartial>,
-            SettingsThemePreference,
-            "settings"
-        );
+        let theme = settings_theme();
 
         rect()
             .expanded()

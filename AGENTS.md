@@ -184,7 +184,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   `theme.set(...)`.
 - **An uncommitted value that must be live everywhere is a second *input* to the derivation, never a
   stored result.** Keep the slot narrow; dropping it is the revert.
-- **A repeated colour is a palette slot, never a repeated `specific`.** Collapse on Midnight.
+- **A theme is roles; a component's colour is a role reference in one static table.** The file
+  authors the closed role vocabulary + syntax + fonts + typography and nothing per-component;
+  an over-shared role is split, never worked around with a literal.
 - **Panel layout lives on `SessionState`** — `Chan::Layout` (structure) + `Chan::LayoutSize` (sizes,
   unsubscribed). Keep panels keyed with fixed `.order()`.
 
@@ -250,8 +252,9 @@ Full text: [docs/reference/FREYA_UI.md](docs/reference/FREYA_UI.md).
   the component's theme **in the fork**, never as a token on the consuming surface. But the test is
   whether the gap is in the *component*: what a table has no opinion about stays composed in the app.
   Don't restate at a call site what a variant already resolves.
-- **A surface with its own component theme reads colours from that theme, not also from the sheet.**
-  The sheet is reached directly only for the semantic slots (success/warning/error/info).
+- **A surface with its own component theme reads colours from that theme, not also from the
+  roles.** `use_roles()` only where no component theme covers the surface; the semantic tones
+  (success/warning/error/info) only through the shared `tones()` hook.
 - **A shared theme's fields are named for the role they play, not for whoever needed one first, and
   a component's own dress never becomes one.**
 - **Fonts are never hardcoded.** Typography role components; `InputTypography` around `Input`s.

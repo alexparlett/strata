@@ -689,16 +689,24 @@ Things that must not regress. Each was fought for once already.
   (mirror with `set_if_modified` for the same reason). And **dropping it is the revert** — Cancel,
   Esc and the red button all just clear the slot, so there is no restore path to keep in step with
   the commit path.
-- **A repeated colour is a palette slot, never a repeated `specific`.** A theme file's colour
-  source is the 27-slot `sheet` **plus** its own `palette` of app-named slots, together forming the
-  `Palette` a `Theme` resolves references against (fork-side: `Theme.palette: Box<dyn Palette>`,
-  `sheet()` required so a custom palette can never break a built-in, `color()` open and consulted
-  only for non-core names). Authoring the same hex in two fields is the smell the palette exists to
-  remove — name it once and reference it. Two consequences to hold: `reference` is an **open**
-  namespace, so the schema can't enumerate targets — an unresolvable name paints magenta and warns
-  via `unresolved_references` (`references_resolve` pins the built-ins); and a colour is only one
-  token if it is one *per theme*, so collapse on the design source of truth (Midnight) and let the
-  others normalize onto it rather than freezing each theme's drift into separate specifics.
+- **A theme is roles; a component's colour is a role reference in one static table.** A theme
+  file authors the closed ~100-name role vocabulary (`roles!` in `strata-core`), `syntax`,
+  `fonts` and `typography` — components are **not** in the file. Every component field is fixed
+  onto a role by the mapping table (`strata-freya/src/theme/components.rs`): built-ins as
+  partial retunes over fork defaults, Strata components as whole-cloth struct literals the
+  compiler keeps total, `role(Role::…)` the only colour-reference constructor so the table
+  cannot hold a typo'd name. The old per-theme `components` sections are how the two built-ins
+  drifted (same field `specific` in one, `reference` in the other; a dead group nothing
+  validated; per-theme palette aliasing) — do not reintroduce a per-theme override layer, and
+  do not put a literal colour in the table where a role exists (`Color::TRANSPARENT` for
+  structural absence and non-colour layout constants are the exceptions). The fork stays
+  untouched: `bridge_sheet()` feeds its `ColorsSheet` by each slot's behaviour in fork
+  defaults, dotted names resolve through the pluggable `Palette::color` seam, and
+  `StrataPalette::color` answers magenta (never `None` — Freya's `primary` fallback would hide
+  the typo). A role that turns out to be shared by two things that must differ is **split** —
+  add to `roles!`, retarget the table rows, author two values, `schema_in_sync` regenerates —
+  never worked around with a call-site literal. Values in the file are literal colours; there
+  is deliberately no in-file aliasing, which is exactly how the old palette rotted.
 - **Panel layout lives on `SessionState`** (not a peer store), so it rides `SessionSnapshot` +
   autosave and survives restart. Two channels, both `Persist`: `Chan::Layout` = structure,
   `Chan::LayoutSize` = sizes (nobody subscribes; a resize drag persists without re-rendering the

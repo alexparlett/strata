@@ -37,12 +37,13 @@
 //!
 //! Mount it only while the dialog is open — it renders no "closed" state of its own.
 
-use freya::components::{use_theme, PopupBackground};
+use freya::components::PopupBackground;
 use freya::prelude::*;
 
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::ACTION_HEIGHT;
+use crate::theme::{use_roles, Role};
 
 /// The comps' card width — 420 for every confirm in the design.
 const DEFAULT_WIDTH: f32 = 420.;
@@ -187,8 +188,7 @@ impl Dialog {
 
 impl Component for Dialog {
     fn render(&self) -> impl IntoElement {
-        let theme = use_theme();
-        let c = theme.read().colors().clone();
+        let roles = use_roles();
 
         let dismiss = self.on_dismiss.clone();
         let backdrop_dismiss = self.on_dismiss.clone();
@@ -204,7 +204,7 @@ impl Component for Dialog {
                 .cross_align(Alignment::Center)
                 .spacing(8.)
                 .padding((12., 24.))
-                .background(c.surface_secondary)
+                .background(roles.get(Role::SurfaceRaised))
                 .children(self.actions.iter().map(|action| {
                     // The design system's action height, layered over whatever layout theme the
                     // action arrived with, so a variant's padding and radius still apply. A
@@ -225,9 +225,16 @@ impl Component for Dialog {
             // Never wider than the window on a small screen.
             .max_width(Size::window_percent(92.))
             .corner_radius(14.)
-            .background(c.surface_tertiary)
-            .border(Border::new().width(1.).fill(c.border))
-            .shadow(Shadow::new().y(30.).blur(80.).color(c.shadow))
+            // The modal card sits on the floating-chrome tier with every other modal
+            // (popup, palette, cell/record view) — not on the control fill.
+            .background(roles.get(Role::ElevatedSurface))
+            .border(Border::new().width(1.).fill(roles.get(Role::Border)))
+            .shadow(
+                Shadow::new()
+                    .y(30.)
+                    .blur(80.)
+                    .color(roles.get(Role::Shadow)),
+            )
             .overflow(Overflow::Clip)
             // Announced as a dialog rather than an anonymous group, like Freya's own `Popup`.
             .a11y_role(AccessibilityRole::Dialog)
@@ -241,11 +248,11 @@ impl Component for Dialog {
                     .maybe_child(self.header.clone())
                     .child(self.body.clone()),
             )
-            .maybe_child(
-                strip
-                    .as_ref()
-                    .map(|_| Divider::horizontal().color(c.border).into_element()),
-            )
+            .maybe_child(strip.as_ref().map(|_| {
+                Divider::horizontal()
+                    .color(roles.get(Role::Border))
+                    .into_element()
+            }))
             .maybe_child(strip);
 
         rect()
@@ -284,7 +291,7 @@ impl Component for Dialog {
                         dismiss.call(());
                     }
                 },
-                c.overlay,
+                roles.get(Role::Backdrop),
             ))
     }
 }

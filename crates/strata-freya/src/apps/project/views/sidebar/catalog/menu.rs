@@ -31,7 +31,7 @@
 //! live (a row re-answering swaps its own status glyph while the menu is up); only the labels in
 //! the open card are frozen.
 
-use freya::components::{use_theme, MenuItemThemePartial};
+use freya::components::MenuItemThemePartial;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
 use strata_model::{CatalogKind, Origin, SavedQuery};
@@ -47,6 +47,7 @@ use crate::apps::project::views::{
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::Prose;
 use crate::state::{use_config_station, ConfigStation};
 
@@ -105,7 +106,7 @@ pub fn use_catalog_actions() -> CatalogActions {
         config: use_config_station(),
         drop_target: use_consume::<State<Option<DropTarget>>>(),
         profile: use_profile_actions(),
-        danger: use_theme().read().colors().error,
+        danger: tones().error,
         configure_target: use_consume::<ConfigureRequest>(),
         report: use_report(),
     }

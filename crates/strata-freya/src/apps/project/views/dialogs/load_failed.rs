@@ -18,7 +18,6 @@
 
 use std::path::PathBuf;
 
-use freya::components::use_theme;
 use freya::prelude::*;
 use strata_core::util::folder_name;
 
@@ -27,9 +26,11 @@ use crate::apps::project::state::EngineRestart;
 use crate::apps::project::views::WindowDragStrip;
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::IconName;
+use crate::components::tones::tones;
 use crate::components::typography::{Control, Prose, Title};
 use crate::platform::OpenCtx;
 use crate::state::AppCtx;
+use crate::theme::{use_roles, Role};
 
 /// [`ProjectRoot`](crate::apps::project)'s fault arm: the whole subtree while the project
 /// could not load. Esc and the backdrop deliberately do nothing — there is no state behind
@@ -54,7 +55,8 @@ pub struct ProjectLoadFailed {
 
 impl Component for ProjectLoadFailed {
     fn render(&self) -> impl IntoElement {
-        let theme = use_theme();
+        let roles = use_roles();
+        let danger = tones().error;
         let open = use_consume::<OpenCtx>();
         let restart = use_consume::<EngineRestart>();
         // The close this arm can offer, and the drain of the confirm slot it mounts no dialog
@@ -88,17 +90,16 @@ impl Component for ProjectLoadFailed {
 
         // The folder name identifies the project; the full path is in the error body.
         let name = folder_name(&self.root);
-        let c = theme.read().colors().clone();
 
         let header = DialogHeader::new(
             IconName::Warning,
-            c.error,
+            danger,
             rect()
                 .vertical()
-                .child(Title::new("Cannot open project").color(c.text_primary))
+                .child(Title::new("Cannot open project").color(roles.get(Role::Text)))
                 .child(
                     Prose::new(name)
-                        .color(c.text_placeholder)
+                        .color(roles.get(Role::TextPlaceholder))
                         .text_overflow(TextOverflow::Ellipsis),
                 ),
         );
@@ -125,7 +126,7 @@ impl Component for ProjectLoadFailed {
                     .body(
                         rect()
                             .width(Size::fill())
-                            .child(Prose::new(error).color(c.text_secondary).wrap()),
+                            .child(Prose::new(error).color(roles.get(Role::TextMuted)).wrap()),
                     )
                     .action(
                         Button::new()
