@@ -432,7 +432,7 @@ mod tests {
     use super::*;
     use std::env;
     use std::process;
-    use strata_model::{Layout, Origin, ResultsView, TabId, TabSnapshot, WindowGeom};
+    use strata_model::{ChartConfig, Layout, Origin, ResultsView, TabId, TabSnapshot, WindowGeom};
     use uuid::Uuid;
 
     /// A fresh temp project folder, cleaned up on drop.
@@ -534,6 +534,7 @@ mod tests {
             origin: Origin::Scratch,
             text: text.into(),
             view: ResultsView::Grid,
+            chart: ChartConfig::default(),
         }
     }
 
@@ -570,6 +571,36 @@ mod tests {
             gi,
             "session.json\nsession.json.corrupt\nhistory.jsonl\n.*.tmp\n"
         );
+    }
+
+    /// **A session file written before a per-tab facet existed still loads**, with that facet
+    /// at its default. Every one of them is `#[serde(default)]` for this reason, and the file
+    /// on a user's disk is older than the code reading it after *every* release — so the case
+    /// is the normal one, not an edge.
+    ///
+    /// Written as literal JSON rather than by serializing an older struct, because the point is
+    /// what is *on disk*: a round-trip through today's types could not reproduce a file missing
+    /// today's fields.
+    #[test]
+    fn a_session_file_predating_a_tab_field_loads_with_its_default() {
+        let root = TempRoot::new("session-old");
+        let id = TabId::new();
+        // No `view`, no `chart`, no `layout`, no `window` — the shape before P2-07 and Rz2.
+        let text = format!(
+            r#"{{"tabs":[{{"id":"{}","name":"query 1","origin":"Scratch","text":"SELECT 1"}}],"active":"{}"}}"#,
+            id.0, id.0
+        );
+        fs::create_dir_all(strata_dir(&root.0)).unwrap();
+        fs::write(session_path(&root.0), text).unwrap();
+
+        let loaded = load_session(&root.0)
+            .unwrap()
+            .expect("an old file still loads");
+        assert_eq!(loaded.tabs.len(), 1);
+        assert_eq!(loaded.tabs[0].text, "SELECT 1");
+        assert_eq!(loaded.tabs[0].view, ResultsView::Grid);
+        assert_eq!(loaded.tabs[0].chart, ChartConfig::default());
+        assert_eq!(loaded.active, Some(id));
     }
 
     /// One history entry (timestamps irrelevant to the file-ordering tests).

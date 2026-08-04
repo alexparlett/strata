@@ -29,7 +29,8 @@ pub use catalog::{
     SavedQuery, SourceFormat, TableDef, ViewDef,
 };
 pub use chart::{
-    Axis, CapUnit, ChartBin, ChartData, ChartMark, ChartPoint, ChartQuery, ChartSeries,
+    Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,
+    ChartSeries, ChartSort, ChartX,
 };
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;

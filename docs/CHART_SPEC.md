@@ -71,8 +71,12 @@ computes, because it computes nothing:
 | **dimension** (X, series) | Utf8/LargeUtf8/Boolean/Dictionary |
 | **nested** — excluded from encoders | Struct/List/Map/Union |
 
-Secondary signal only: a Utf8 column whose name matches the handoff's temporal-name regex may be
-*offered* as temporal, but the Arrow type wins.
+**Never built, and deliberately not:** an earlier revision allowed a secondary signal — a Utf8
+column whose *name* matched the handoff's temporal-name regex could be offered as temporal, with
+the Arrow type winning. Nothing in the workstream implements it (`chart_role` matches the
+`DataType` and nothing else), and it contradicts the invariant that settled around it: a role
+comes from the type, never from a name and never from a type's spelling. A Utf8 column that holds
+a timestamp is a **cast** the user makes in SQL, which is Chart 05's Tier C.
 
 ## 4. Marks and encodings
 
@@ -149,6 +153,14 @@ keeps the previous engine implementation: a min/max pass over finite values, the
 view preference, no results. Lives on `QueryTab` under **`Chan::Chart(tab)`**, persists via
 `TabSnapshot`, re-derives when a new result's columns no longer match.
 
+As built (03), it holds **intent**: `mark` and `ys` are `Option` (unset ⇒ derive), and `x` is a
+three-state `ChartX { Auto, RowIndex, Column(name) }` — "not chosen" and "chosen to be the row
+index" are different answers, and an `Option<String>` would let the next result's date column
+overrule a deliberate row-index axis. Re-deriving is a **read-time fallback** in
+`config::resolve`, never a write back into the config, so a column that disappears from one
+result and returns in the next brings the user's choice back with it. Likewise a mark that takes
+one Y narrows the resolved encoding and leaves the config holding the rest.
+
 **`sort` is a view transform, not part of the read.** `ResultOrder` (default) | `ByX` |
 `ByYDesc` — applied client-side to the settled `ChartData::Table`, so flipping it is a
 re-render, not a re-query, and cache identity stays untouched. Any float comparison in that
@@ -176,9 +188,12 @@ answer to "too much data" is always the user's own SQL, one click away.
 
 ## 8. The scaffold — the bridge into SQL (promoted)
 
-The scaffold is no longer an escape hatch beside the chart's own aggregation — it **is** the
-aggregation path. It builds a real query from the current encoding and opens it in a **new tab**
-through the existing funnel (`session.open_named`), never auto-run:
+**The scaffold does not aggregate; it writes SQL that does.** It is no longer an escape hatch
+beside the chart's own aggregation — that aggregation is gone, and this is where its job went:
+back to the user's own query. It builds a real query from the current encoding and opens it in a
+**new tab** through the existing funnel (`session.open_named`), never auto-run, so what the chart
+gets back is an ordinary result it renders like any other. Nothing here runs inside the chart,
+and nothing the user cannot read and edit:
 
 ```sql
 SELECT country, SUM(amount) AS sum_amount

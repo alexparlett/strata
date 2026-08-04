@@ -91,6 +91,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   (its measure arm *is* the read's own `is_numeric` gate), never from a type's spelling or from
   `Kind`; and a chart read's cache identity is `(snapshot, query, **display config**)`, because
   axis labels render through `datafusion.format.*`.
+- **A chart config is intent; resolving it against the result is a read-time fallback, never a
+  write.** Unset channels take the schema's defaults and a reference this result cannot answer
+  falls back at read time (X is a three-state `ChartX`: "not chosen" and "the row index" are
+  different answers; the default mark reads the *charted* axis, not the column list). `resolve` →
+  `encode` is the one construction site; the per-mark option sets make an invalid encoding
+  unreachable rather than reported.
+- **The chart's sort is a view transform over the settled data, and its comparison is total in
+  both directions.** Never in `ChartQuery`, so flipping it repaints rather than re-reads; the
+  comparator takes a direction flag, because reversing it moves the gaps to the head of the chart.
 - **A snapshot read has no order of its own; order is the ordinal column.** Reads that need order
   `ORDER BY __strata_ord` (unsorted reads entire, user sorts as the tie-break) and every reader
   projects it away — export must never write it. Measured: above 10 MB a bare `LIMIT/OFFSET` read

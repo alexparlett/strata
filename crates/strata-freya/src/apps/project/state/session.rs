@@ -15,8 +15,8 @@ use std::mem;
 
 use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
 use strata_model::{
-    expanded_drawer_h, Diagnostic, DrawerTab, Layout, Origin, ProblemsTab, ResultsView,
-    SessionSnapshot, SidebarPane, TabId, TabSnapshot,
+    expanded_drawer_h, ChartConfig, Diagnostic, DrawerTab, Layout, Origin, ProblemsTab,
+    ResultsView, SessionSnapshot, SidebarPane, TabId, TabSnapshot,
 };
 use uuid::Uuid;
 
@@ -52,6 +52,12 @@ pub struct QueryTab {
     /// The results view mode (Table/Chart toggle). Its own channel too
     /// ([`Chan::View`](super::Chan)) — a flip wakes only the tab's results pane.
     pub view: ResultsView,
+    /// How this tab's chart is encoded (Rz2, `docs/CHART_SPEC.md` §6) — the mark, the column
+    /// assignments and the sort, as *intent*: unset channels take the result schema's
+    /// defaults, and a reference the current result cannot resolve falls back to one without
+    /// being erased. Written on [`Chan::Chart`](super::Chan), so an encoder edit re-charts
+    /// without waking the editor, the grid or the toolbar.
+    pub chart: ChartConfig,
     /// The tab's current validation diagnostics: the debounced engine dry-plan pass over the
     /// editor text. Written on [`Chan::Diagnostics`](super::Chan) by the window's one driver
     /// (`state::diagnostics`); the editor's squiggles are the same facts, carried as
@@ -95,6 +101,7 @@ impl QueryTab {
             origin,
             request: None,
             view: ResultsView::default(),
+            chart: ChartConfig::default(),
             diagnostics: Vec::new(),
             validated: None,
         }
@@ -107,26 +114,25 @@ impl QueryTab {
 
     /// Rebuild a tab from a persisted snapshot (P4-14 load). Like [`new`](Self::new) but
     /// **keeps the original [`TabId`]** — so the snapshot's `active` / order still resolve
-    /// against it — and restores its results-view intent. Marked saved at the restored
-    /// text (a reopened project starts clean, like a freshly loaded artifact); the
+    /// against it — and restores its results-view and chart intent. Marked saved at the
+    /// restored text (a reopened project starts clean, like a freshly loaded artifact); the
     /// validation pass re-derives diagnostics once the pane mounts.
-    pub fn restored(
-        id: TabId,
-        name: String,
-        sql: String,
-        origin: Origin,
-        view: ResultsView,
-    ) -> Self {
-        let mut editor = CodeEditorData::new(Rope::from_str(&sql), Some(sql_language()));
+    ///
+    /// Takes the whole [`TabSnapshot`]: everything it carries is a tab field, and a
+    /// positional list that grows with each persisted facet is how one ends up passed in the
+    /// wrong order.
+    pub fn restored(snap: TabSnapshot) -> Self {
+        let mut editor = CodeEditorData::new(Rope::from_str(&snap.text), Some(sql_language()));
         editor.parse();
         editor.mark_as_saved();
         Self {
-            id,
-            name,
+            id: snap.id,
+            name: snap.name,
             editor,
-            origin,
+            origin: snap.origin,
             request: None,
-            view,
+            view: snap.view,
+            chart: snap.chart,
             diagnostics: Vec::new(),
             validated: None,
         }
@@ -304,6 +310,23 @@ impl SessionState {
     pub fn set_view(&mut self, id: TabId, view: ResultsView) {
         if let Some(t) = self.tabs.get_mut(&id) {
             t.view = view;
+        }
+    }
+
+    /// The tab's chart encoding (a missing tab reads the defaults — every channel unset,
+    /// which is what a chart with nothing chosen is).
+    pub fn chart(&self, id: TabId) -> ChartConfig {
+        self.tabs
+            .get(&id)
+            .map(|t| t.chart.clone())
+            .unwrap_or_default()
+    }
+
+    /// Set `id`'s chart encoding (any control in the encoder strip). Write on
+    /// [`Chan::Chart(id)`](super::Chan).
+    pub fn set_chart(&mut self, id: TabId, chart: ChartConfig) {
+        if let Some(t) = self.tabs.get_mut(&id) {
+            t.chart = chart;
         }
     }
 
@@ -733,6 +756,7 @@ impl SessionState {
                 origin: t.origin.clone(),
                 text: t.text(),
                 view: t.view,
+                chart: t.chart.clone(),
             })
             .collect();
         SessionSnapshot {
@@ -756,7 +780,7 @@ impl SessionState {
         let mut tabs = HashMap::with_capacity(snap.tabs.len());
         let mut order = Vec::with_capacity(snap.tabs.len());
         for t in snap.tabs {
-            let tab = QueryTab::restored(t.id, t.name, t.text, t.origin, t.view);
+            let tab = QueryTab::restored(t);
             order.push(tab.id);
             tabs.insert(tab.id, tab);
         }
@@ -777,6 +801,8 @@ impl SessionState {
 
 #[cfg(test)]
 mod tests {
+    use strata_model::{ChartMark, ChartSort, ChartX};
+
     use super::*;
 
     /// The session side of a save (state-arch §4): the tab rebinds to its target, a
@@ -887,14 +913,24 @@ mod tests {
         );
     }
 
-    /// Snapshot → restore preserves order, active, text, origin and view; the reopen stack
-    /// and diagnostics do not travel.
+    /// Snapshot → restore preserves order, active, text, origin, view and chart encoding;
+    /// the reopen stack and diagnostics do not travel.
     #[test]
     fn snapshot_round_trips_tabs_order_active_and_view() {
         let mut s = SessionState::default();
         let a = s.open_named("alpha", "SELECT 1".into(), Origin::View("alpha".into()));
         let b = s.open_named("beta", "SELECT 2".into(), Origin::Scratch);
         s.set_view(b, ResultsView::Chart);
+        s.set_chart(
+            b,
+            ChartConfig {
+                mark: Some(ChartMark::Area),
+                x: ChartX::Column("month".into()),
+                ys: Some(vec!["revenue".into()]),
+                series: Some("region".into()),
+                sort: ChartSort::ByYDesc,
+            },
+        );
         s.switch(a);
 
         let restored =
@@ -908,11 +944,28 @@ mod tests {
         assert_eq!(ra.text(), "SELECT 1");
         assert!(matches!(&ra.origin, Origin::View(v) if v == "alpha"));
         assert_eq!(ra.view, ResultsView::Grid);
+        assert_eq!(
+            ra.chart,
+            ChartConfig::default(),
+            "an untouched chart restores unset, not resolved"
+        );
         assert!(!ra.is_dirty(), "a restored bound tab starts clean");
 
         let rb = &restored.tabs[&b];
         assert_eq!(rb.text(), "SELECT 2");
         assert_eq!(rb.view, ResultsView::Chart, "per-tab view intent preserved");
+        assert_eq!(
+            rb.chart.mark,
+            Some(ChartMark::Area),
+            "and so is the chart encoding, whole"
+        );
+        assert_eq!(rb.chart.x, ChartX::Column("month".into()));
+        assert_eq!(
+            rb.chart.ys.as_deref(),
+            Some(["revenue".to_string()].as_ref())
+        );
+        assert_eq!(rb.chart.series.as_deref(), Some("region"));
+        assert_eq!(rb.chart.sort, ChartSort::ByYDesc);
     }
 
     /// The rail toggles follow the design's `onRailPane` / `onOpen*` semantics: toggling the

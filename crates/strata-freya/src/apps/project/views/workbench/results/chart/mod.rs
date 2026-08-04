@@ -5,10 +5,13 @@
 //!
 //! The snapshot the grid is paging — never the source files (spec §1.1). The read is
 //! [`ChartSpec`], a freya-query entry on the page read's terms, and the request it carries is
-//! derived here from the **result's own schema** (spec §6: X is the first temporal column
-//! else the first dimension, the Ys are the measures, the mark starts on line over a temporal
-//! X and bar otherwise). Chart 03 replaces that derivation with the persisted `ChartConfig`
-//! the encoder strip edits; the mark picker below is already writing the first field of it.
+//! the tab's persisted [`ChartConfig`] resolved against the **result's own schema** — see
+//! [`config`], which owns both halves: the defaults an unset channel takes, and the one
+//! `encode` site that turns the resolved encoding into a [`ChartQuery`].
+//!
+//! The **sort** never reaches that request. It is a view transform over the settled answer
+//! (spec §6, [`sort`]), so flipping it permutes what is already in hand instead of paying for
+//! a second read of the same rows.
 //!
 //! ## What each state renders
 //!
@@ -25,22 +28,25 @@
 //! CTA under these same messages (AGENTS.md §5).
 
 mod axis;
+mod config;
 mod marks;
 mod paint;
 #[cfg(test)]
 mod preview;
+mod sort;
 mod strip;
 
 use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
 use freya::query::{use_query, QueryStateData};
+use freya::radio::use_radio;
 use strata_core::engine::config::display_subset;
 use strata_core::util::fmt_int;
 use strata_model::{
-    CapUnit, ChartData, ChartMark, ChartQuery, ChartRole, ChartSeries, ColumnInfo, SnapshotId,
-    TabId,
+    CapUnit, ChartData, ChartMark, ChartQuery, ChartSeries, ColumnInfo, SnapshotId, TabId,
 };
 
+use self::config::{encode, resolve, Roles};
 use self::paint::{ChartCanvas, Dress, Frame};
 use self::strip::{ControlStrip, LegendEntry};
 use super::find::FindState;
@@ -48,6 +54,7 @@ use super::toolbar::ResultsToolbar;
 use crate::apps::export::ExportLaunch;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::ChartSpec;
+use crate::apps::project::state::{Chan, SessionState};
 use crate::components::typography::{scale, Prose, Title};
 use crate::state::{use_config, ConfigChan};
 
@@ -91,121 +98,6 @@ define_theme!(
     }
 );
 
-/// How many result rows the renderer-first read will draw before it refuses (spec §7).
-const ROWS_CAP: usize = 1_000;
-/// A pie's own cap — slices, not rows.
-const PIE_CAP: usize = 24;
-/// Raw points a scatter will draw before it refuses.
-const RAW_CAP: usize = 6_000;
-/// How many measures the schema-derived default charts at once. Every measure would make a
-/// wide result unreadable before the encoder strip (03) exists to narrow it.
-const DEFAULT_YS: usize = 4;
-
-// ---- column roles (spec §3) ----
-
-/// A result's columns, split by [`ChartRole`] and kept in result order — which is what makes
-/// "the first temporal column" a thing the user can predict from their own SELECT list.
-///
-/// The role is read off the column, not derived here: it was resolved from the Arrow
-/// `DataType` where the engine still had one (`engine::catalog::chart_role`), so the encoder
-/// and the read agree on what a measure is by construction.
-#[derive(Clone, PartialEq, Debug, Default)]
-struct Roles {
-    measures: Vec<String>,
-    temporal: Vec<String>,
-    dimensions: Vec<String>,
-}
-
-impl Roles {
-    fn of(columns: &[ColumnInfo]) -> Self {
-        let mut roles = Roles::default();
-        for column in columns {
-            match column.role {
-                ChartRole::Measure => roles.measures.push(column.name.clone()),
-                ChartRole::Temporal => roles.temporal.push(column.name.clone()),
-                ChartRole::Dimension => roles.dimensions.push(column.name.clone()),
-                ChartRole::Other => {}
-            }
-        }
-        roles
-    }
-
-    /// The default category axis (spec §6): the first temporal column, else the first
-    /// dimension, else none — which charts against the row index.
-    fn x(&self) -> Option<&String> {
-        self.temporal.first().or_else(|| self.dimensions.first())
-    }
-
-    /// The default mark: a line where X is temporal, a bar otherwise.
-    fn mark(&self) -> ChartMark {
-        if self.temporal.is_empty() {
-            ChartMark::Bar
-        } else {
-            ChartMark::Line
-        }
-    }
-}
-
-/// What the read is, or why the columns cannot answer this mark. The message is the whole
-/// answer at this stage — Chart 04 adds the scaffold CTA beneath it.
-fn encode(roles: &Roles, mark: ChartMark) -> Result<ChartQuery, (&'static str, &'static str)> {
-    const NEED_MEASURE: (&str, &str) = (
-        "Pick a numeric column",
-        "This mark plots a measure, and the result has no numeric column to plot.",
-    );
-    match mark {
-        ChartMark::Scatter => {
-            let mut measures = roles.measures.iter();
-            match (measures.next(), measures.next()) {
-                (Some(x), Some(y)) => Ok(ChartQuery::Raw {
-                    x: x.clone(),
-                    y: y.clone(),
-                    cap: RAW_CAP,
-                }),
-                _ => Err((
-                    "Pick two numeric columns",
-                    "A scatter plots one measure against another, and the result has fewer than two.",
-                )),
-            }
-        }
-        ChartMark::Histogram => match roles.measures.first() {
-            Some(col) => Ok(ChartQuery::Histogram {
-                col: col.clone(),
-                bins: None,
-            }),
-            None => Err(NEED_MEASURE),
-        },
-        // `roles.x()` rather than the dimensions alone: it is the app's one answer to what can
-        // carry a category axis, and a month is as sliceable as a country. Refusing a temporal
-        // column here told the user their result had no category while one sat in it, and the
-        // read would have accepted it.
-        ChartMark::Pie => match (roles.x(), roles.measures.first()) {
-            (Some(x), Some(y)) => Ok(ChartQuery::Rows {
-                x: Some(x.clone()),
-                ys: vec![y.clone()],
-                series: None,
-                cap: PIE_CAP,
-            }),
-            (None, _) => Err((
-                "Pick a category column",
-                "A pie slices one measure by a category, and the result has no column to slice by.",
-            )),
-            (_, None) => Err(NEED_MEASURE),
-        },
-        ChartMark::Bar | ChartMark::Line | ChartMark::Area => {
-            if roles.measures.is_empty() {
-                return Err(NEED_MEASURE);
-            }
-            Ok(ChartQuery::Rows {
-                x: roles.x().cloned(),
-                ys: roles.measures.iter().take(DEFAULT_YS).cloned().collect(),
-                series: None,
-                cap: ROWS_CAP,
-            })
-        }
-    }
-}
-
 // ---- the body ----
 
 /// The chart body: the shared toolbar on top, then the control strip beside the plot.
@@ -246,16 +138,16 @@ impl Component for ChartView {
         let engine = use_consume::<EngineCtx>();
         let roles = Roles::of(&self.columns);
 
-        // The chosen mark. Local to this body for now: Chart 03 moves it onto `QueryTab`
-        // under `Chan::Chart(tab)` with the rest of `ChartConfig`, which is what makes it
-        // survive a re-run. Seeded from the schema, so the first thing drawn is the mark the
-        // data suggests.
-        let mark = use_state({
-            let seed = roles.mark();
-            move || seed
-        });
-        let mark_now = *mark.read();
-        let encoded = encode(&roles, mark_now);
+        // The tab's encoding, on its own channel — so the strip's edits re-chart this body
+        // and wake nothing else, and so they survive a re-run and a restart. What is *drawn*
+        // is that intent resolved against this result's columns: unset channels take the
+        // schema's defaults, and a column this result no longer has falls back to one rather
+        // than reaching the read.
+        let session = use_radio::<SessionState, Chan>(Chan::Chart(self.tab));
+        let config = session.read().chart(self.tab);
+        let encoding = resolve(&config, &roles);
+        let mark_now = encoding.mark;
+        let encoded = encode(&encoding, &roles);
 
         // The engine's display config rides in the key: axis labels render through it, and it
         // changes without a restart (see `ChartSpec`). Subscribed, not peeked — a format
@@ -300,18 +192,24 @@ impl Component for ChartView {
                 QueryStateData::Settled { res: Err(err), .. } => {
                     Notice::new("The chart could not be read", err.clone(), theme.note_color).into()
                 }
-                QueryStateData::Settled { res: Ok(data), .. } => match notice(data, mark_now) {
-                    Some((title, body)) => Notice::new(title, body, theme.note_color).into(),
-                    None => {
-                        key = legend(data, mark_now, &dress);
-                        ChartCanvas::new(Frame {
-                            data: data.clone(),
-                            mark: mark_now,
-                            dress: dress.clone(),
-                        })
-                        .into()
+                QueryStateData::Settled { res: Ok(data), .. } => {
+                    // The one clone per render, with the strip's order applied on the way
+                    // through — the notice, the legend and the frame all read the rows in
+                    // the order they will be drawn in.
+                    let data = sort::sorted(data.clone(), encoding.sort);
+                    match notice(&data, mark_now) {
+                        Some((title, body)) => Notice::new(title, body, theme.note_color).into(),
+                        None => {
+                            key = legend(&data, mark_now, &dress);
+                            ChartCanvas::new(Frame {
+                                data,
+                                mark: mark_now,
+                                dress: dress.clone(),
+                            })
+                            .into()
+                        }
                     }
-                },
+                }
             },
         };
 
@@ -331,7 +229,7 @@ impl Component for ChartView {
                     .horizontal()
                     .content(Content::Flex)
                     .background(theme.background)
-                    .child(ControlStrip::new(mark).legend(key))
+                    .child(ControlStrip::new(self.tab, config, encoding, roles).legend(key))
                     .child(
                         rect()
                             .width(Size::flex(1.))
@@ -510,136 +408,10 @@ impl Component for Notice {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
-    use strata_core::engine::column_info;
     use strata_model::Axis;
 
+    use super::config::ROWS_CAP;
     use super::*;
-
-    /// A result column built the way the engine builds one — from a real Arrow field, through
-    /// the same `column_info` a Run's schema goes through. Nothing here restates the role
-    /// mapping; the point of these cases is what the *encoder* does with it.
-    fn column(name: &str, dtype: DataType) -> ColumnInfo {
-        column_info(&Field::new(name, dtype, true))
-    }
-
-    #[test]
-    fn a_temporal_x_defaults_to_a_line_over_every_measure() {
-        let roles = Roles::of(&[
-            column("month", DataType::Date32),
-            column("country", DataType::Utf8),
-            column("revenue", DataType::Int64),
-            column("cost", DataType::Float64),
-        ]);
-        assert_eq!(roles.mark(), ChartMark::Line);
-        assert_eq!(roles.x().map(String::as_str), Some("month"));
-        assert_eq!(
-            encode(&roles, ChartMark::Line),
-            Ok(ChartQuery::Rows {
-                x: Some("month".into()),
-                ys: vec!["revenue".into(), "cost".into()],
-                series: None,
-                cap: ROWS_CAP,
-            })
-        );
-    }
-
-    /// A nested column has no axis to sit on and no value to plot, so it is invisible to the
-    /// encoder — which is the one place the chart's taxonomy has to be finer than the display
-    /// one (a union renders as a string and cannot be charted as one).
-    #[test]
-    fn nested_columns_are_offered_nowhere() {
-        let roles = Roles::of(&[
-            column(
-                "payload",
-                DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into()),
-            ),
-            column(
-                "tags",
-                DataType::List(Field::new("item", DataType::Utf8, true).into()),
-            ),
-            column("elapsed", DataType::Duration(TimeUnit::Second)),
-            column("n", DataType::Int64),
-        ]);
-        assert_eq!(roles.measures, ["n"]);
-        assert!(roles.dimensions.is_empty() && roles.temporal.is_empty());
-    }
-
-    #[test]
-    fn without_a_temporal_column_the_first_dimension_is_the_axis_and_the_mark_is_a_bar() {
-        let roles = Roles::of(&[
-            column("country", DataType::Utf8),
-            column("revenue", DataType::Int64),
-        ]);
-        assert_eq!(roles.mark(), ChartMark::Bar);
-        assert_eq!(
-            encode(&roles, ChartMark::Bar),
-            Ok(ChartQuery::Rows {
-                x: Some("country".into()),
-                ys: vec!["revenue".into()],
-                series: None,
-                cap: ROWS_CAP,
-            })
-        );
-        // A pie is the same columns under a much smaller cap (spec §7).
-        assert_eq!(
-            encode(&roles, ChartMark::Pie),
-            Ok(ChartQuery::Rows {
-                x: Some("country".into()),
-                ys: vec!["revenue".into()],
-                series: None,
-                cap: PIE_CAP,
-            })
-        );
-    }
-
-    /// With no column to put on the axis the read still happens — against the row index,
-    /// which is what "X: none" means (spec §4).
-    #[test]
-    fn measures_alone_chart_against_the_row_index() {
-        let roles = Roles::of(&[column("n", DataType::Int64)]);
-        assert_eq!(
-            encode(&roles, ChartMark::Bar),
-            Ok(ChartQuery::Rows {
-                x: None,
-                ys: vec!["n".into()],
-                series: None,
-                cap: ROWS_CAP,
-            })
-        );
-    }
-
-    #[test]
-    fn the_marks_that_need_measures_say_so_rather_than_reading_nothing() {
-        let text = Roles::of(&[column("country", DataType::Utf8)]);
-        assert!(encode(&text, ChartMark::Bar).is_err());
-        assert!(encode(&text, ChartMark::Histogram).is_err());
-        assert!(encode(&text, ChartMark::Scatter).is_err());
-
-        // A scatter needs two, and one is not two.
-        let one = Roles::of(&[column("n", DataType::Int64)]);
-        assert!(encode(&one, ChartMark::Scatter).is_err());
-        assert_eq!(
-            encode(&one, ChartMark::Histogram),
-            Ok(ChartQuery::Histogram {
-                col: "n".into(),
-                bins: None,
-            })
-        );
-
-        // And a pie needs a category to slice by.
-        assert!(encode(&one, ChartMark::Pie).is_err());
-
-        let two = Roles::of(&[column("x", DataType::Int64), column("y", DataType::Float64)]);
-        assert_eq!(
-            encode(&two, ChartMark::Scatter),
-            Ok(ChartQuery::Raw {
-                x: "x".into(),
-                y: "y".into(),
-                cap: RAW_CAP,
-            })
-        );
-    }
 
     fn series(name: &str, values: &[Option<f64>]) -> ChartSeries {
         ChartSeries {

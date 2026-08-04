@@ -150,6 +150,32 @@ Things that must not regress. Each was fought for once already.
     copy: that is the reactive source, and Freya's runner drains a write's dirty scopes before it
     polls the tasks queued alongside them, so the driver's `set_config` has landed by the time the
     capability runs.
+
+  And two the **encoder** settled (Rz2/03), both about the config being intent rather than a
+  resolved read:
+
+  - **A chart config is intent; resolving it against the result is a read-time fallback, never a
+    write.** `ChartConfig` (on `QueryTab`, `Chan::Chart(tab)`, persisted via `TabSnapshot`) says
+    what the user chose and *whether* they chose: `mark`/`ys` are `Option`, and X is a three-state
+    `ChartX` because "not chosen" and "chosen to be the row index" are different answers — an
+    `Option<String>` would let the next result's date column overrule a deliberate row-index axis.
+    `config::resolve` merges the schema's defaults **under** the choices and drops any reference
+    this result cannot answer; nothing writes that fallback back, so a column that disappears from
+    one result and returns in the next brings the user's choice back with it. The same rule is why
+    a mark that draws one Y (pie, scatter, histogram) narrows the *encoding* and leaves the config
+    holding all four — flipping to a pie and back costs nothing. What each control offers is
+    `config`'s per-mark option sets (spec §4 as functions), so an invalid encoding is unreachable
+    rather than reported: the engine's own three refusals around a series column (needs an X, not
+    the X, a category) are option-set arithmetic, and `encode` stays the one `ChartQuery`
+    construction site.
+  - **The chart's sort is a view transform over the settled data, and its comparison is total in
+    both directions.** `ChartSort` never reaches `ChartQuery`, so flipping it permutes what is already
+    in hand — no re-read, no change to cache identity — and it is offered only for the marks whose
+    data has an order to permute (points are documented unordered, bins ascending). The
+    comparator takes a `descending` flag rather than being reversed at the call site: reversing it
+    reverses where the **gaps** go, which put every NULL and NaN at the head of a value-descending
+    chart the first time it was written. A gap is not a small value; `total_cmp` and a stated place
+    for the missing ones are what keep the withdrawn pipeline's `sort_by` panic from coming back.
 - **A snapshot read has no order of its own; order is the ordinal column.** (`SNAPSHOT_SPEC.md`
   §9; lands with the workstream re-cut.) Above 10 MB an Arrow File scan range-splits and a bare
   `LIMIT/OFFSET` read sits over a `CoalescePartitionsExec` — measured: at 3M rows the *same page

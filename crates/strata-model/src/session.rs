@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::chart::ChartConfig;
+
 /// Stable per-tab identity — real identity, so no allocator and no duplicate-id repair.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TabId(pub Uuid);
@@ -170,6 +172,11 @@ pub struct TabSnapshot {
     pub text: String,
     #[serde(default)]
     pub view: ResultsView,
+    /// How the tab's chart is encoded (`docs/CHART_SPEC.md` §6). Column *references*, so a
+    /// restored tab whose next result has different columns falls back to the defaults
+    /// rather than asking for a column that isn't there.
+    #[serde(default)]
+    pub chart: ChartConfig,
 }
 
 /// The window's on-screen geometry, in **logical** units (like `Platform::root_size` /

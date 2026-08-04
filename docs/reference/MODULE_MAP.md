@@ -511,11 +511,15 @@ src/apps/project/                the project window (Valin-shaped)
                                  for
         selection.rs             cell/row/column selection model + SelCtl controller
         find.rs                  find-in-results (P2-09): FindState + the page-local filter
-        chart/                   the Chart body (Rz2): mod.rs is the surface — column roles,
-                                 the schema-derived encoding, the `ChartSpec` subscription and
-                                 the notice states; strip.rs the mark picker; paint.rs the
-                                 frame + the `canvas` (slot-peeked, redraw requested);
-                                 axis.rs the plotters `Ranged` category coord + nice max +
-                                 abbreviated tick; marks.rs a render fn per mark
+        chart/                   the Chart body (Rz2): mod.rs is the surface — the
+                                 `ChartSpec` subscription and the notice states; config.rs
+                                 the column roles, the per-mark option sets, and the one
+                                 place a `ChartConfig` + a schema resolve into a `ChartQuery`
+                                 (`resolve` → `encode`); sort.rs the strip's order, a view
+                                 transform over the settled data; strip.rs the mark picker,
+                                 the X/Y/Series encoders, the sort toggle and the legend;
+                                 paint.rs the frame + the `canvas` (slot-peeked, redraw
+                                 requested); axis.rs the plotters `Ranged` category coord +
+                                 nice max + abbreviated tick; marks.rs a render fn per mark
         toolbar.rs, status_bar.rs, running.rs, explain_plan.rs, empty.rs, error.rs
 ```
