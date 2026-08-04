@@ -69,7 +69,7 @@ Read this index first, then open only the phase/workstream file you're working i
   S3/GCS/HTTP object stores. Touches Phase 2/3/4 surfaces. Spec: `docs/CONNECTIONS_SPEC.md`.
 - **Chart view** (`workstream-chart-view/`, DEV_TASKS **Rz2**) — the results Chart surface:
   engine-side chart data (`Engine::chart` over the snapshot), a plotters/Skia renderer, encoder
-  strip, guardrails, GROUP BY scaffold. A whole feature surface, not drift. Spec: `docs/CHART_SPEC.md`.
+  strip, guardrails. A whole feature surface, not drift. Spec: `docs/CHART_SPEC.md`.
 - **Polymorphic JSON** (`workstream-json-polymorphic/`) — reading JSON whose fields disagree across
   records (a type-discriminated union), and querying inside the result. Two halves: **WJ-01** the
   Postgres-style JSON accessors (`json_get` / `->` / `->>`), and **WJ-02** a union-tolerant

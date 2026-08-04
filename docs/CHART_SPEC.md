@@ -33,9 +33,9 @@ anything else disagree on mechanism, this file wins.
    needs a min/max pass and DataFusion 54 has no `width_bucket`, so hand-writing it is genuinely
    tedious. It is the only mark that computes.
 3. **No shadow query language** — now literal. No aggregate menu, no bucket control, no engine
-   algebra. Aggregation lives in SQL, reached through the scaffold (§8).
+   algebra. Aggregation is the user's own SQL, in the editor two keystrokes away (§8).
 4. **Honest boundaries.** Never silently sample, truncate, or aggregate. Above a cap, or when
-   the data's shape doesn't fit the mark, the chart refuses with a message and a CTA into SQL.
+   the data's shape doesn't fit the mark, the chart refuses, and the message names the fix.
 5. **Rendering is `freya-plotters-backend`** (fork, `plot` feature) on a `canvas` — plotters'
    `ChartBuilder`/series machinery, never a hand-rolled axis/tick/mark stack.
 6. **Result order is the axis order, and it is real.** Rows draw in the order the user's query
@@ -67,9 +67,19 @@ computes, because it computes nothing:
 | role | DataTypes |
 |---|---|
 | **measure** (Y, scatter axes, histogram value — valid on X too) | Int*/UInt*/Float*/Decimal* |
-| **temporal** (X; defaults to line) | Date32/Date64/Timestamp*/Time* |
+| **instant** (X; defaults to line; the only role a stride bins) | Date32/Date64/Timestamp* |
+| **clock** (X; defaults to line) | Time32/Time64 |
 | **dimension** (X, series) | Utf8/LargeUtf8/Boolean/Dictionary |
 | **nested** — excluded from encoders | Struct/List/Map/Union |
+
+**Instant and clock are one thing on an axis and two in SQL** (04). Both order, both default to
+a line, and both are offered wherever a "temporal" column was — the encoder reads them together
+(`config::is_time`). They are separate roles because they differ wherever a **stride** does:
+`date_bin(interval '1 day', …)` is a coarser reading of a calendar instant and is refused
+outright over a time of day ("DATE_BIN stride for TIME input must be less than 1 day",
+measured). Nothing in V1 reads the distinction — it was split for the cut scaffold (§8) and
+kept for the chart-side bucketing of §10, because the alternative is re-deriving it later from
+a type's *spelling*, which is the thing this section exists to rule out.
 
 **Never built, and deliberately not:** an earlier revision allowed a secondary signal — a Utf8
 column whose *name* matched the handoff's temporal-name regex could be offered as temporal, with
@@ -167,46 +177,59 @@ re-render, not a re-query, and cache identity stays untouched. Any float compari
 reorder must be total (`total_cmp`, NaN last) — the withdrawn pipeline's `sort_by` panic is the
 standing lesson.
 
-Defaults, merged under user-set keys: x = first temporal else first dimension else none;
-ys = the measure columns (first few); mark = line if x is temporal else bar; series = none.
+Defaults, merged under user-set keys: x = first time column (instant or clock) else first
+dimension else none; ys = the measure columns (first few); mark = line if x is a time column
+else bar; series = none.
 
 ## 7. Guardrails
 
 Computed from the settled `ChartData` or the config — never re-derived in the UI:
 
-| Condition | Message gist | CTA |
-|---|---|---|
-| `Rows` returned > `cap` rows (default 1 000; pie 24) | too many rows to chart honestly | **Aggregate in SQL** (§8) |
-| `Duplicates { x, series }` | more than one row per category — aggregate in SQL | **Aggregate in SQL** |
-| Scatter > `raw_cap` (6 000) points | too many raw points | **Aggregate in SQL** |
-| No Y column chosen / none valid | pick a numeric column | — |
-| Histogram with no numeric column | pick a numeric column | — |
+| Condition | Message gist |
+|---|---|
+| `Rows` returned > `cap` rows (default 1 000; pie 24) | too many rows to chart honestly — aggregate it in SQL |
+| `Duplicates { x, series }` | more than one row per category — aggregate them in SQL |
+| Scatter > `raw_cap` (6 000) points | too many raw points — aggregate it in SQL |
+| No Y column chosen / none valid | pick a numeric column |
+| Histogram with no numeric column | pick a numeric column |
 
-Plus the non-blocking high-cardinality banner over the canvas when `axis.labels.len() > 60`.
+Plus the non-blocking high-cardinality banner over the canvas when `axis.labels.len() > 60` —
+the labels already in hand, so the nudge costs no second query, and the chart still renders
+beneath it. It wears the Export window's warning banner (the `chart` theme's `warning_*` box,
+the sheet's semantic `warning` for glyph and text), not a second warning tone.
 There is deliberately **no materialize cap and no sampling** — and no aggregation fallback: the
-answer to "too much data" is always the user's own SQL, one click away.
+answer to "too much data" is always the user's own SQL.
 
-## 8. The scaffold — the bridge into SQL (promoted)
+As built (04), every row above renders as one overlay in place of the canvas — a glyph tile, the
+title, the body, and nothing else. **The fix is named in prose, and there is no control behind
+it**: the two refusals say to aggregate in SQL, which is the user's own `GROUP BY`; "pick a
+numeric column" is answered by the encoder strip. §8 is why there is no button.
 
-**The scaffold does not aggregate; it writes SQL that does.** It is no longer an escape hatch
-beside the chart's own aggregation — that aggregation is gone, and this is where its job went:
-back to the user's own query. It builds a real query from the current encoding and opens it in a
-**new tab** through the existing funnel (`session.open_named`), never auto-run, so what the chart
-gets back is an ordinary result it renders like any other. Nothing here runs inside the chart,
-and nothing the user cannot read and edit:
+## 8. Aggregation is the user's SQL, and V1 does not write it for them
 
-```sql
-SELECT country, SUM(amount) AS sum_amount
-FROM ( <the tab's SQL, verbatim> )
-GROUP BY 1
-ORDER BY 2 DESC;
-```
+The chart aggregates nothing (§1.2), so a result that is too big or too long to chart is fixed
+by changing the query. **V1 says so and stops there.** The refusal overlays name the fix; the
+user writes it.
 
-Temporal X scaffolds with `date_bin(interval '1 day', <x>)` (a starting stride the user edits —
-the engine no longer guesses spans) and orders by the bucket ascending; `COUNT(*) AS n` when no
-measure is chosen; a series column adds a second grouping column. Identifier quoting follows
-export's `select_sql`. Offered from every refusal in §7 **and** from the healthy chart — it is
-how a raw-data tab becomes a chartable one, which is the normal workflow, not the failure path.
+A press that wrote it for them — *Aggregate in SQL*, composing a `GROUP BY` from the resolved
+encoding over the run's SQL and opening it unrun in a new tab — was **built and cut**. It
+worked, and the reasons it went are worth keeping:
+
+- **The placement had no precedent.** The capability is well precedented — DBeaver's Grouping
+  panel composes and runs a `GROUP BY` beside the results grid; Metabase, Superset and Looker
+  all let you eject a UI-built query into its SQL. But every one of them puts it in a menu or a
+  surface of its own. None puts it beside the encoders, which is where it landed here: the one
+  control in the strip that *left* the chart rather than changing it.
+- **It was standing in for the wrong thing.** Its real job was to make up for the chart having
+  no aggregation of its own. That gap is the thing worth revisiting (§10), and a shortcut that
+  makes the gap tolerable is a reason not to close it.
+- **Cutting it costs the user a paragraph of typing**, in a tool whose user writes SQL for a
+  living, and only in the case where their result is already wrong for the chart.
+
+What survives the cut, because it earned its place independently: the **instant / clock role
+split** (§3). Chart-side bucketing needs exactly that distinction — a day-wide `date_bin` stride
+is meaningful over a calendar instant and refused outright over a time of day — and it belongs
+where the Arrow `DataType` still is, not re-derived later from a type's spelling.
 
 ## 9. Rendering
 
@@ -234,7 +257,7 @@ hand-rolled axis stack:
 **Analytical charts are column-role presets over SQL the user owns**, not engine computations:
 a candlestick maps open/high/low/close columns; a box plot maps p25/p50/p75 (the user writes
 `percentile_cont(…) WITHIN GROUP`); error bands map `y`, `y_lo`, `y_hi`. Each preset is a role
-mapping plus a scaffold/snippet template that writes the SQL producing those columns —
+mapping plus a snippet template that writes the SQL producing those columns —
 `docs/CHART_FUNCTIONS.md` is the survey of what SQL can express and which roles each preset
 consumes. A scatter trendline (`regr_slope`/`regr_intercept`/`regr_r2` in one engine call) is
 the one candidate for a computed overlay, weighed when 05 is picked up.
@@ -245,8 +268,8 @@ the one candidate for a computed overlay, weighed when 05 is picked up.
       mark type is a repaint, never a re-query.
 - [ ] Rows draw in result order; the sort toggle re-orders as a view transform; multiple Y
       columns and/or a series column split series correctly; NULL Y cells render as gaps.
-- [ ] The pivot refuses duplicates with a working **Aggregate in SQL** CTA; over-cap results
-      refuse the same way; the scaffold opens an editable new tab and never runs it.
+- [ ] The pivot refuses duplicates rather than conflating them, over-cap results refuse rather
+      than truncating, and each refusal states the fix. Nothing is sampled or aggregated.
 - [ ] Paging, charting and export of the same snapshot agree on row order (the ordinal,
       `SNAPSHOT_SPEC.md` §9); the ordinal never appears in any user-visible schema or file.
 - [ ] Chart re-themes with the app theme and redraws on resize; config persists per tab; the

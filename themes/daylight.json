@@ -334,6 +334,12 @@
       "note_color": {
         "reference": "text_muted"
       },
+      "warning_background": {
+        "reference": "warning_soft"
+      },
+      "warning_border_fill": {
+        "reference": "warning_soft_border"
+      },
       "series_1": {
         "reference": "chart_1"
       },

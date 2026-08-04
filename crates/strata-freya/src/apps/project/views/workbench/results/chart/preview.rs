@@ -142,13 +142,12 @@ fn body(data: ChartData, mark: ChartMark, schema: Vec<ColumnInfo>) -> impl IntoE
             ControlStrip::new(TabId::new(), config, encoding, roles)
                 .legend(legend(&data, mark, &dress)),
         )
-        .child(
-            rect()
-                .width(Size::flex(1.))
-                .height(Size::fill())
-                .padding((8., 12.))
-                .child(ChartCanvas::new(Frame { data, mark, dress })),
-        )
+        // The body's own pane, floor and all — not a second copy of it (see `canvas_pane`).
+        .child(super::canvas_pane(ChartCanvas::new(Frame {
+            data,
+            mark,
+            dress,
+        })))
 }
 
 /// Render one mark to `target/chart-<name>.png`.
@@ -253,4 +252,50 @@ fn chart_preview() {
         ChartMark::Histogram,
         None,
     );
+}
+
+/// A guardrail notice in a **collapsed** pane — the state the min-width fix got wrong. What to
+/// look for: the copy cut off by the pane edge, not reflowed into a column of letters, and
+/// nothing painted over the strip.
+#[test]
+#[ignore = "writes target/chart-*.png for eyeballing; run explicitly"]
+fn narrow_notice_preview() {
+    for (name, width) in [("notice-narrow", 300.), ("notice-wide", 900.)] {
+        let app = || {
+            use_init_theme(|| strata_theme(&load("midnight")));
+            let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
+            let config = ChartConfig::default();
+            let roles = Roles::of(&columns());
+            let encoding = resolve(&config, &roles);
+            rect()
+                .width(Size::fill())
+                .height(Size::fill())
+                .horizontal()
+                .content(Content::Flex)
+                .background(theme.background)
+                .child(ControlStrip::new(TabId::new(), config, encoding, roles))
+                .child(super::canvas_pane(super::Notice::new(
+                    "Too much data to chart honestly",
+                    "This result has more than 24 rows. Aggregate it in SQL so the chart draws \
+                     a compact result."
+                        .to_string(),
+                    theme.note_color,
+                )))
+        };
+        let (mut runner, _) = TestingRunner::new(
+            app,
+            (width, 420.).into(),
+            |r| {
+                r.provide_root_context(|| {
+                    RadioStation::<SessionState, Chan>::create(SessionState::default())
+                });
+            },
+            1.,
+        );
+        runner.sync_and_update();
+        runner.render_to_file(format!(
+            "{}/../../target/chart-{name}.png",
+            env!("CARGO_MANIFEST_DIR")
+        ));
+    }
 }

@@ -23,9 +23,13 @@
 //! from a bug. [`notice`] is the one place that decides, so a state cannot be drawable in one
 //! reading and blank in another.
 //!
-//! The two engine refusals are stated but not yet *offered a way out*: the *Aggregate in SQL*
-//! scaffold that turns them into an editable `GROUP BY` tab is Chart 04's, and it lands as the
-//! CTA under these same messages (AGENTS.md §5).
+//! Every one of those is a [`Notice`] and nothing more — a glyph tile, the condition, and where
+//! there is a fix, the fix in prose. The two engine refusals name aggregating in SQL, which is
+//! the user's own `GROUP BY`; V1 does not write it for them (spec §8).
+//!
+//! A drawable answer can still be *unreadable*, which is a third thing again: past
+//! [`CROWDED`] categories the axis has more labels than it can draw, so the canvas takes a
+//! non-blocking [`Banner`] above it and renders underneath, unaltered.
 
 mod axis;
 mod config;
@@ -55,6 +59,7 @@ use crate::apps::export::ExportLaunch;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::ChartSpec;
 use crate::apps::project::state::{Chan, SessionState};
+use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{scale, Prose, Title};
 use crate::state::{use_config, ConfigChan};
 
@@ -83,6 +88,10 @@ define_theme!(
         legend_color: Color,
         /// The prose that stands in for a plot the data cannot support.
         note_color: Color,
+        /// The tinted box a non-blocking warning sits in — the Export window's banner, same
+        /// tone (its glyph and text take the sheet's semantic `warning`, which is app-wide).
+        warning_background: Color,
+        warning_border_fill: Color,
         /// The categorical ramp, in order (spec §4 — a series is named by column or by value,
         /// and coloured by position).
         series_1: Color,
@@ -200,13 +209,31 @@ impl Component for ChartView {
                     match notice(&data, mark_now) {
                         Some((title, body)) => Notice::new(title, body, theme.note_color).into(),
                         None => {
+                            // Both read the settled answer before it is moved into the frame —
+                            // the frame is cloned once per render and that is the budget.
                             key = legend(&data, mark_now, &dress);
-                            ChartCanvas::new(Frame {
+                            let banner = crowded(&data);
+                            let plot = ChartCanvas::new(Frame {
                                 data,
                                 mark: mark_now,
                                 dress: dress.clone(),
-                            })
-                            .into()
+                            });
+                            // The banner sits *over* the plot, never instead of it: a crowded
+                            // axis is still the user's data, drawn honestly.
+                            rect()
+                                .width(Size::fill())
+                                .height(Size::fill())
+                                .vertical()
+                                .content(Content::Flex)
+                                .spacing(8.)
+                                .maybe_child(banner.map(Banner::new))
+                                .child(
+                                    rect()
+                                        .width(Size::fill())
+                                        .height(Size::flex(1.))
+                                        .child(plot),
+                                )
+                                .into()
                         }
                     }
                 }
@@ -230,15 +257,28 @@ impl Component for ChartView {
                     .content(Content::Flex)
                     .background(theme.background)
                     .child(ControlStrip::new(self.tab, config, encoding, roles).legend(key))
-                    .child(
-                        rect()
-                            .width(Size::flex(1.))
-                            .height(Size::fill())
-                            .padding((8., 12.))
-                            .child(body),
-                    ),
+                    .child(canvas_pane(body)),
             )
     }
+}
+
+/// The pane the plot — or the notice standing in for it — is laid out in: everything the strip
+/// leaves, down to nothing.
+///
+/// **No floor.** This is the middle pane, and the middle pane collapses to nothing and clips —
+/// `PANE_BODY_MIN_W` is the *side* panels' rule (`views::shell`), where a floor keeps the
+/// resize handle grabbable. Nothing here needs grabbing. What the collapse must not do is let
+/// the content reflow into the gap, which is what [`Notice`] sizes against.
+///
+/// It lives here rather than inline because the preview harness lays out this same pane, and a
+/// second copy of it is a copy that goes stale.
+fn canvas_pane(body: impl IntoElement) -> impl IntoElement {
+    rect()
+        .width(Size::flex(1.))
+        .height(Size::fill())
+        .padding((8., 12.))
+        .overflow(Overflow::Clip)
+        .child(body)
 }
 
 /// Why this answer is not a chart, or `None` when it is one.
@@ -248,6 +288,13 @@ impl Component for ChartView {
 /// message beside), a shape a mark cannot honestly draw, and an answer that simply has nothing
 /// in it. The last group matters because the alternative is not a worse chart, it is a *blank
 /// pane* — no axes, no message, indistinguishable from a bug.
+///
+/// **The refusals name the fix in prose, and there is no control behind it.** Aggregating is
+/// the answer to both of them, and it is the user's own `GROUP BY` — V1 says so and stops
+/// there. Writing that query *for* the user was built and cut (spec §8): the capability is
+/// well precedented, but every tool that has it puts it in a menu or a surface of its own
+/// rather than beside the encoders, and the chart-side aggregation it was standing in for is
+/// the thing actually worth revisiting.
 fn notice(data: &ChartData, mark: ChartMark) -> Option<(&'static str, String)> {
     const NOTHING: &str = "Nothing to chart";
     match data {
@@ -301,6 +348,27 @@ fn notice(data: &ChartData, mark: ChartMark) -> Option<(&'static str, String)> {
         ChartData::Table { series, .. } if mark == ChartMark::Pie => pie_notice(series),
         _ => None,
     }
+}
+
+/// How many categories an axis draws before its labels stop being readable (spec §7).
+const CROWDED: usize = 60;
+
+/// What the banner says over a crowded axis, or `None` while the axis is readable.
+///
+/// **`axis.labels.len()`, not a distinct count**: the number is already in hand, so the nudge
+/// costs no second query — and it is the honest figure anyway, because the categories on the
+/// axis are exactly what the chart drew. Only a table has an axis; a scatter and a histogram
+/// have nothing this could count.
+fn crowded(data: &ChartData) -> Option<String> {
+    let ChartData::Table { axis, .. } = data else {
+        return None;
+    };
+    (axis.labels.len() > CROWDED).then(|| {
+        format!(
+            "{} categories on the axis. Only some labels are drawn.",
+            fmt_int(axis.labels.len() as u64)
+        )
+    })
 }
 
 /// What each colour on the plot means, in the order the plot draws them — the strip's legend.
@@ -371,7 +439,15 @@ fn pie_notice(series: &[ChartSeries]) -> Option<(&'static str, String)> {
     None
 }
 
-/// What stands in for the plot when there is nothing honest to draw.
+/// The tile a notice leads with, the width its copy wraps at, and its inset (canvas
+/// `Strata.dc.html`, the chart pane's guardrail overlay).
+const TILE: f32 = 46.;
+const TILE_RADIUS: f32 = 10.;
+const COPY_WIDTH: f32 = 380.;
+const NOTICE_PAD: f32 = 24.;
+
+/// What stands in for the plot when there is nothing honest to draw: a glyph tile over the
+/// condition, centred in the pane the plot would have filled.
 #[derive(PartialEq)]
 struct Notice {
     title: &'static str,
@@ -387,31 +463,92 @@ impl Notice {
 
 impl Component for Notice {
     fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
+        // **A fixed block, centred — not a filling one.** The pane it sits in is the middle
+        // pane, which collapses to nothing and clips (`canvas_pane`); a block that took the
+        // pane's width verbatim would instead *reflow* into whatever is left, and prose given
+        // less room than a word wraps one character per line — a column of letters down the
+        // pane, which reads as a rendering fault rather than a narrow window. Sized here, the
+        // copy wraps where it always wraps and the pane cuts it off. Measured: 10px per text
+        // run when it reflowed, its full 380 now.
         rect()
             .width(Size::fill())
             .height(Size::fill())
-            .vertical()
             .main_align(Alignment::Center)
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding(24.)
-            .child(Title::new(self.title).color(self.color))
             .child(
-                Prose::new(self.body.clone())
-                    .color(self.color)
-                    .max_width(Size::px(380.))
-                    .wrap()
-                    .align(TextAlign::Center),
+                rect()
+                    .width(Size::px(COPY_WIDTH + 2. * NOTICE_PAD))
+                    .vertical()
+                    .cross_align(Alignment::Center)
+                    .spacing(8.)
+                    .padding(NOTICE_PAD)
+                    .child(
+                        rect()
+                            .width(Size::px(TILE))
+                            .height(Size::px(TILE))
+                            .corner_radius(TILE_RADIUS)
+                            .center()
+                            .background(theme.panel_background)
+                            .border(Border::new().width(1.).fill(theme.tile_border_fill))
+                            .child(Icon::new(IconName::MarkBar).color(self.color).size(22.)),
+                    )
+                    .child(Title::new(self.title).color(self.color))
+                    .child(
+                        Prose::new(self.body.clone())
+                            .color(self.color)
+                            .width(Size::fill())
+                            .wrap()
+                            .align(TextAlign::Center),
+                    ),
             )
+    }
+}
+
+/// A **non-blocking** warning across the top of the canvas: the chart still renders beneath it,
+/// because what it says is that the plot is crowded, not that it is wrong.
+///
+/// It wears the Export window's banner rather than a second warning tone — the tinted box from
+/// the `chart` theme, the glyph and text from the sheet's semantic `warning`, which is app-wide
+/// and must stay so.
+#[derive(PartialEq)]
+struct Banner {
+    message: String,
+}
+
+impl Banner {
+    fn new(message: String) -> Self {
+        Self { message }
+    }
+}
+
+impl Component for Banner {
+    fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
+        let warning = use_theme().read().colors().warning;
+        rect()
+            .width(Size::fill())
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .spacing(8.)
+            .padding((8., 12.))
+            .corner_radius(6.)
+            .background(theme.warning_background)
+            .border(Border::new().width(1.).fill(theme.warning_border_fill))
+            .child(Icon::new(IconName::Warning).size(14.).color(warning))
+            .child(Prose::new(self.message.clone()).color(warning).wrap())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use freya_testing::TestingRunner;
+    use strata_core::theme::load;
     use strata_model::Axis;
 
     use super::config::ROWS_CAP;
     use super::*;
+    use crate::theme::strata_theme;
 
     fn series(name: &str, values: &[Option<f64>]) -> ChartSeries {
         ChartSeries {
@@ -430,7 +567,8 @@ mod tests {
         }
     }
 
-    /// The refusals say what they counted, in the app's own figures.
+    /// The refusals say what they counted, in the app's own figures, and they name the fix —
+    /// which is the user's own `GROUP BY`, in prose, because V1 offers no control behind it.
     #[test]
     fn the_over_cap_refusal_names_the_cap_the_way_every_other_count_is_written() {
         let (title, body) = notice(
@@ -443,6 +581,81 @@ mod tests {
         .expect("over cap refuses");
         assert_eq!(title, "Too much data to chart honestly");
         assert!(body.contains("1,000 rows"), "{body}");
+        assert!(body.contains("Aggregate it in SQL"), "{body}");
+    }
+
+    /// **The banner counts the labels already in hand, and only a table has any.** It is a
+    /// nudge over a chart that still draws, so it never becomes a reason not to draw one.
+    #[test]
+    fn a_crowded_axis_is_a_banner_and_an_uncrowded_one_is_nothing() {
+        let axis_of = |n: usize| ChartData::Table {
+            axis: Axis {
+                labels: (0..n).map(|i| i.to_string()).collect(),
+                positions: None,
+            },
+            series: vec![series("v", &vec![Some(1.); n])],
+        };
+        assert_eq!(crowded(&axis_of(CROWDED)), None, "at the threshold");
+        assert_eq!(
+            crowded(&axis_of(CROWDED + 1)).as_deref(),
+            Some("61 categories on the axis. Only some labels are drawn.")
+        );
+        // Neither of the other two shapes has a category axis to crowd.
+        assert_eq!(crowded(&ChartData::Bins(Vec::new())), None);
+        assert_eq!(crowded(&ChartData::Points(Vec::new())), None);
+    }
+
+    /// **A collapsed pane clips the notice; it never reflows it.** The middle pane gives its
+    /// width away entirely and goes to nothing — that is the shell's collapse model, and it is
+    /// deliberately *not* the side panels' floored one (`PANE_BODY_MIN_W` is theirs, and it
+    /// exists to keep a resize handle grabbable; nothing here needs grabbing). What the
+    /// collapse must not do is squeeze the copy: prose with less room than a word wraps **one
+    /// character per line**, a column of letters down the pane, which reads as a rendering
+    /// fault rather than a narrow window. So the notice is a fixed block and the pane cuts it
+    /// off.
+    ///
+    /// Laid out for real rather than asserted on the builder — the reflow this guards against
+    /// is a parent's doing, so only a parent can prove it gone.
+    #[test]
+    fn a_collapsed_pane_clips_the_notice_rather_than_reflowing_it() {
+        // Narrower than the strip alone, which is the state the screenshot caught.
+        let app = || {
+            use_init_theme(|| strata_theme(&load("midnight")));
+            rect()
+                .width(Size::fill())
+                .height(Size::fill())
+                .horizontal()
+                .content(Content::Flex)
+                .child(
+                    rect()
+                        .width(Size::px(strip::STRIP_WIDTH))
+                        .height(Size::fill()),
+                )
+                .child(canvas_pane(Notice::new(
+                    "Too much data to chart honestly",
+                    "This result has more than 24 rows. Aggregate it in SQL so the chart draws \
+                     a compact result."
+                        .to_string(),
+                    Color::WHITE,
+                )))
+        };
+        let (mut runner, ()) = TestingRunner::new(app, (260., 600.).into(), |_| {}, 1.);
+        for _ in 0..4 {
+            runner.sync_and_update();
+        }
+
+        // The copy keeps the width it wraps at everywhere else — it is laid out whole, then
+        // cut off. Before this it was handed the 28px the strip left over and wrapped at
+        // roughly one 7px character (measured: 10.4px per run).
+        let widths: Vec<f32> = runner.find_many(|node: freya_testing::TestingNode, element| {
+            Label::try_downcast(element).map(|_| node.layout().area.width())
+        });
+        assert!(!widths.is_empty(), "the notice rendered no text at all");
+        assert!(
+            widths.iter().any(|w| *w == COPY_WIDTH),
+            "no text run kept the copy width — the pane reflowed the notice instead of \
+             clipping it: {widths:?}"
+        );
     }
 
     /// **An answer with nothing in it is a message, never a blank pane.** Each of these draws

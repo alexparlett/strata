@@ -715,8 +715,10 @@ fn stat_of(key: StatKey, p: &Precision<ScalarValue>) -> Option<Stat> {
 ///
 /// The measure arm is [`DataType::is_numeric`] rather than a list of variants, because that is
 /// the very predicate [`super::chart`]'s read gates a Y on — so the encoder cannot offer a
-/// measure the read would then refuse. The temporal arm mirrors the same module's `positions`,
-/// which is what gives those columns a place on an axis. A dictionary is a **dimension**
+/// measure the read would then refuse. The two time arms together mirror the same module's
+/// `positions`, which is what gives those columns a place on an axis; they are *two* because a
+/// date stride bins a calendar instant and means nothing to a time of day (see
+/// [`ChartRole::Instant`]). A dictionary is a **dimension**
 /// whatever it encodes: it is a category by construction, and a dictionary of numbers is not a
 /// measure the read accepts. Anything else — nested, binary, interval, a variant Arrow grows
 /// later — is [`ChartRole::Other`] and is offered nowhere, which is the safe default in the
@@ -726,11 +728,8 @@ pub fn chart_role(dt: &DataType) -> ChartRole {
         return ChartRole::Measure;
     }
     match dt {
-        DataType::Date32
-        | DataType::Date64
-        | DataType::Timestamp(_, _)
-        | DataType::Time32(_)
-        | DataType::Time64(_) => ChartRole::Temporal,
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => ChartRole::Instant,
+        DataType::Time32(_) | DataType::Time64(_) => ChartRole::Clock,
         DataType::Utf8
         | DataType::LargeUtf8
         | DataType::Utf8View

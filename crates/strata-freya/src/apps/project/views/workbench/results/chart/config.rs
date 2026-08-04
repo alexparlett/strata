@@ -84,13 +84,18 @@ impl Roles {
         self.columns.iter().map(|(name, _)| name.clone()).collect()
     }
 
-    /// The default category axis (spec §6): the first temporal column, else the first
+    /// The default category axis (spec §6): the first time-like column, else the first
     /// dimension, else none — which charts against the row index.
     fn x(&self) -> Option<String> {
-        self.with_role(ChartRole::Temporal)
-            .into_iter()
-            .next()
-            .or_else(|| self.with_role(ChartRole::Dimension).into_iter().next())
+        self.columns
+            .iter()
+            .find(|(_, role)| is_time(*role))
+            .or_else(|| {
+                self.columns
+                    .iter()
+                    .find(|(_, role)| *role == ChartRole::Dimension)
+            })
+            .map(|(name, _)| name.clone())
     }
 
     /// The role this result gives `name`, or `None` for a column it does not have.
@@ -102,6 +107,18 @@ impl Roles {
     }
 }
 
+/// Whether this role puts a column on a **time** axis — an instant or a clock time.
+///
+/// On an axis the two are one thing, which is all this surface reads: the same default X, the
+/// same default mark, offered in the same menus. They are separate roles because they differ
+/// in **SQL**, where a day-wide `date_bin` stride is meaningful over a calendar instant and
+/// refused outright over a time of day — the distinction chart-side bucketing will need, kept
+/// where the Arrow `DataType` still is rather than re-derived later from a type's spelling
+/// (`ChartRole::Instant`).
+fn is_time(role: ChartRole) -> bool {
+    matches!(role, ChartRole::Instant | ChartRole::Clock)
+}
+
 /// The default mark (spec §6): a line over a **temporal X**, a bar otherwise.
 ///
 /// It reads the X actually being charted, not the result's column list: a user who put a
@@ -109,7 +126,7 @@ impl Roles {
 /// across an unordered category. Charting against the row index is a bar for the same reason.
 fn default_mark(x: Option<&str>, roles: &Roles) -> ChartMark {
     match x.and_then(|name| roles.role(name)) {
-        Some(ChartRole::Temporal) => ChartMark::Line,
+        Some(role) if is_time(role) => ChartMark::Line,
         _ => ChartMark::Bar,
     }
 }

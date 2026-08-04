@@ -2035,6 +2035,12 @@
             "note_color": {
               "$ref": "#/$defs/colorPref"
             },
+            "warning_background": {
+              "$ref": "#/$defs/colorPref"
+            },
+            "warning_border_fill": {
+              "$ref": "#/$defs/colorPref"
+            },
             "series_1": {
               "$ref": "#/$defs/colorPref"
             },

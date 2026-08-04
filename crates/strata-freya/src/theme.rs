@@ -595,7 +595,10 @@ strata_components! {
     // The results Chart body (Rz2): the canvas pane and the control strip either side of their
     // rule, the strip's section eyebrows, a mark tile's resting and selected dress, the plot's
     // own furniture (gridlines, the zero baseline, tick labels, legend entries) and the note a
-    // non-drawable encoding leaves in place of the plot. Then the **categorical ramp**: ten
+    // non-drawable encoding leaves in place of the plot. The `warning_*` pair is the
+    // high-cardinality banner's tinted box — the Export window's banner, same two slots, and
+    // like it the glyph and text take the sheet's semantic `warning` rather than a field here.
+    // Then the **categorical ramp**: ten
     // ordered series colours, `reference`d out of each theme's `chart_*` palette slots so a
     // theme retunes the ramp as a set rather than ten unrelated fields. Ten because that is how
     // many distinguishable hues a legend can carry; a series past the tenth wraps around.
@@ -604,6 +607,7 @@ strata_components! {
         tile_color, tile_border_fill, tile_active_background, tile_active_border_fill,
         tile_active_color,
         grid_fill, axis_fill, tick_color, legend_color, note_color,
+        warning_background, warning_border_fill,
         series_1, series_2, series_3, series_4, series_5,
         series_6, series_7, series_8, series_9, series_10,
     },

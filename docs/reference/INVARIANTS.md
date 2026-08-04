@@ -139,7 +139,15 @@ Things that must not regress. Each was fought for once already.
     and `Kind` is the **display** taxonomy — deliberately coarser, and it reads a union as a
     string, which is harmless for a swatch and wrong for an axis. Every `ColumnInfo` fixture in
     the workspace is built through `column_info` for the same reason: a hand-written row states
-    the type three times and lets the three disagree.
+    the type three times and lets the three disagree. **A time column is two roles, not one**
+    (04): `Instant` (Date32/Date64/Timestamp) and `Clock` (Time32/Time64) are identical on an
+    axis — same default X, same default mark, read together by `config::is_time` — and differ
+    wherever a **stride** does. Measured: DataFusion refuses a day-wide `date_bin` over a `Time`
+    column ("DATE_BIN stride for TIME input must be less than 1 day"), so any SQL the chart
+    generates over a time axis has to know which it has. Nothing in V1 generates such SQL — the
+    split arrived with the cut scaffold below and was kept anyway, because the only other way to
+    recover the distinction later is the type's spelling, which this same entry rules out, and
+    the `DataType` is here and gone.
   - **A chart read's cache identity is `(snapshot, query, display config)`.** Axis labels render
     through `CellFormat` — the engine's live `datafusion.format.*` — which `set_config` changes
     with **no restart and no new snapshot**, so an entry keyed on the pair alone serves labels
@@ -176,6 +184,22 @@ Things that must not regress. Each was fought for once already.
     reverses where the **gaps** go, which put every NULL and NaN at the head of a value-descending
     chart the first time it was written. A gap is not a small value; `total_cmp` and a stated place
     for the missing ones are what keep the withdrawn pipeline's `sort_by` panic from coming back.
+
+  And one the **guardrails** settled (Rz2/04):
+
+  - **A refusal names its fix in prose, and V1 puts no control behind it.** The chart aggregates
+    nothing, so over-cap and pivot-duplicates are both fixed by changing the query; the overlay
+    says so and stops. An *Aggregate in SQL* press — a `GROUP BY` composed from the resolved
+    encoding over the run's SQL, opened unrun in a new tab — was **built and cut**, and the
+    reasons are worth keeping because the capability will come back up. The mechanism was sound
+    and the placement was not: the same capability exists in DBeaver's Grouping panel and as
+    "eject to SQL" in Metabase, Superset and Looker, and every one of them puts it in a menu or
+    a surface of its own, never among the encoders — which is where it landed here, the one
+    control in the strip that *left* the chart rather than changing it. It was also standing in
+    for the chart having no aggregation of its own (`CHART_SPEC.md` §10), and a shortcut that
+    makes that gap tolerable is a reason not to close it. What survives is the role split above.
+    Re-litigate the *placement* only with a surface that isn't the strip.
+
 - **A snapshot read has no order of its own; order is the ordinal column.** (`SNAPSHOT_SPEC.md`
   §9; lands with the workstream re-cut.) Above 10 MB an Arrow File scan range-splits and a bare
   `LIMIT/OFFSET` read sits over a `CoalescePartitionsExec` — measured: at 3M rows the *same page
