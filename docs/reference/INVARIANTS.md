@@ -112,7 +112,7 @@ Things that must not regress. Each was fought for once already.
   is a projected, ordinal-ordered, capped read of `__snap_{id}` plus a long→wide pivot: columns
   map onto marks, multiple Y columns are multiple series, a series column pivots — and the pivot
   is the only operation that can conflate rows, so it is the only thing that refuses on
-  duplicates (`ChartData::Duplicates`, CTA into the SQL scaffold). Over a cap it answers
+  duplicates (`ChartData::Duplicates`, refused in favour of the user's own `GROUP BY`). Over a cap it answers
   `ChartData::OverCap`, which carries no data at all — a truncated chart is not a state that can
   exist. The histogram's binning is the one engine computation (no `width_bucket` in DataFusion
   54). What was **built and withdrawn** is the first design's engine-side aggregation pipeline —

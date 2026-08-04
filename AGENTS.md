@@ -85,7 +85,7 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **A chart renders the result in result order; it computes nothing SQL can say.** `Engine::chart`
   is a projected, ordinal-ordered, capped read plus a long→wide pivot — no aggregation, no
   bucketing, no imposed order (the histogram's binning is the one exception). Over a cap, or two
-  rows in one pivot cell, it refuses **to the SQL scaffold**. An engine-side aggregation pipeline
+  rows in one pivot cell, it refuses, naming the user's own `GROUP BY` as the fix. An engine-side aggregation pipeline
   was built and withdrawn; the reasons and the scan-order measurements are the full entry —
   re-litigate neither. A column's **chart role** comes from the Arrow `DataType` in `column_info`
   (its measure arm *is* the read's own `is_numeric` gate), never from a type's spelling or from
