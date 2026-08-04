@@ -24,7 +24,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use freya::components::{define_theme, get_theme, use_theme, Button, ScrollView};
+use freya::components::{define_theme, get_theme, Button, ScrollView};
 use freya::prelude::*;
 
 use strata_core::engine::serialize::cell_preview_json;
@@ -37,6 +37,7 @@ use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue, Path, Readout};
+use crate::theme::{use_roles, Role};
 use strata_core::util::fmt_int;
 
 define_theme!(
@@ -161,8 +162,7 @@ impl Component for RecordView {
         let theme = get_theme!(&self.theme, RecordViewThemePreference, "record_view");
         // The shared type palette dresses the field gutter's dtype labels.
         let palette = type_palette();
-        let sheet = use_theme();
-        let shadow = sheet.read().colors().shadow;
+        let shadow = use_roles().get(Role::Shadow);
         let mut open = self.open;
         let row = self.row;
         let len = self.data.rows.len();

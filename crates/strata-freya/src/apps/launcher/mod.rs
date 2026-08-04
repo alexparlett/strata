@@ -26,7 +26,7 @@ use crate::keymap::on_commands;
 use crate::menu::MenuScope;
 use crate::platform::{self, WindowKind};
 use crate::state::{use_share_config, AppCtx};
-use crate::theme::{peek_selection, use_strata_theme, window_background};
+use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
 // `%[no_ext]`: the window's dress is read by four sibling views (title bar · rail · pane ·
 // row) rather than by one `Launcher` component, so there's no type for the generated
@@ -131,8 +131,8 @@ impl App for LauncherApp {
             .background(theme.background)
             // The window's ambient text colour. Every run that doesn't name one — the
             // wordmark, the nav pill's label and its glyph — inherits it; without it they
-            // fall back to Freya's base-theme default rather than this sheet's ramp.
-            .color(use_theme().read().colors().text_primary)
+            // fall back to Freya's base-theme default rather than this theme's ramp.
+            .color(use_roles().get(Role::Text))
             .child(TitleBar)
             .child(
                 rect()

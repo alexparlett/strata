@@ -21,6 +21,7 @@ use crate::apps::export::{
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{log_event, LogCtx, LogLevel};
 use crate::components::divider::Divider;
+use crate::components::tones::tones;
 use crate::components::typography::{Control, Path};
 use crate::components::ACTION_HEIGHT;
 use strata_core::engine::stopped_on_purpose;
@@ -34,7 +35,7 @@ pub struct Footer;
 impl Component for Footer {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
-        let error = use_theme().read().colors().error;
+        let error = tones().error;
         let ctx = use_consume::<ExportCtx>();
         let engine = use_consume::<EngineCtx>();
         let log = use_consume::<LogCtx>();

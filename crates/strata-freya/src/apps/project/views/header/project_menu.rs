@@ -20,8 +20,6 @@ use freya::radio::use_radio;
 use strata_core::config::AppConfig;
 use strata_core::util::folder_name;
 
-use freya::components::use_theme;
-
 use crate::apps::project::state::{ProjChan, ProjectState};
 use crate::components::avatar::Avatar;
 use crate::components::divider::Divider;
@@ -30,6 +28,7 @@ use crate::components::typography::{Body, Control, Eyebrow, Path, Prose};
 use crate::platform::{self, OpenCtx};
 use crate::state::AppCtx;
 use crate::state::{use_config, ConfigChan};
+use crate::theme::{use_roles, Role, RoleColors};
 
 /// The dropdown's width — the comp's 328px card, so a long project path has room to read.
 const MENU_WIDTH: f32 = 328.;
@@ -80,10 +79,10 @@ impl Component for ProjectMenu {
         let opener = consume_context::<OpenCtx>();
         let platform_handle = use_hook(Platform::get);
         // Everything the dropdown paints is a root colour — the accent, and the text ramp — so
-        // it reads the sheet through the normal hook rather than inventing header-only theme
+        // it reads the roles through the normal hook rather than inventing header-only theme
         // fields for colours the palette already names. The rows' tiles are `Avatar`'s theme and
         // the separators are `Divider::menu`'s.
-        let colors = use_theme().read().colors().clone();
+        let roles = use_roles();
 
         // This window's project — `ProjChan::Meta` is exactly "the identity changed".
         let project = use_radio::<ProjectState, ProjChan>(ProjChan::Meta);
@@ -143,14 +142,17 @@ impl Component for ProjectMenu {
                     ),
             )
             .child(Divider::menu())
-            .child(section_label("OPEN PROJECTS", colors.text_placeholder));
+            .child(section_label(
+                "OPEN PROJECTS",
+                roles.get(Role::TextPlaceholder),
+            ));
         let menu = open_rows.iter().fold(menu, |menu, row| {
             let current = row.path == active_path;
             menu.child(project_row(
                 row,
                 true,
                 current,
-                &colors,
+                roles,
                 open,
                 &app,
                 opener,
@@ -161,14 +163,16 @@ impl Component for ProjectMenu {
             menu
         } else {
             recent_rows.iter().fold(
-                menu.child(Divider::menu())
-                    .child(section_label("RECENT PROJECTS", colors.text_placeholder)),
+                menu.child(Divider::menu()).child(section_label(
+                    "RECENT PROJECTS",
+                    roles.get(Role::TextPlaceholder),
+                )),
                 |menu, row| {
                     menu.child(project_row(
                         row,
                         false,
                         false,
-                        &colors,
+                        roles,
                         open,
                         &app,
                         opener,
@@ -191,10 +195,14 @@ impl Component for ProjectMenu {
                     .horizontal()
                     .cross_align(Alignment::Center)
                     .spacing(8.)
-                    .child(Icon::new(IconName::Folder).color(colors.primary).size(14.))
+                    .child(
+                        Icon::new(IconName::Folder)
+                            .color(roles.get(Role::Accent))
+                            .size(14.),
+                    )
                     .child(
                         Control::new(active_name)
-                            .color(colors.text_primary)
+                            .color(roles.get(Role::Text))
                             .max_width(Size::px(220.))
                             .text_overflow(TextOverflow::Ellipsis),
                     )
@@ -231,7 +239,7 @@ fn project_row(
     row: &ProjectRow,
     is_open: bool,
     current: bool,
-    colors: &ColorsSheet,
+    roles: RoleColors,
     mut open: State<bool>,
     app: &AppCtx,
     opener: OpenCtx,
@@ -271,13 +279,13 @@ fn project_row(
                         .spacing(2.)
                         .child(
                             Body::new(row.name.as_str())
-                                .color(colors.text_primary)
+                                .color(roles.get(Role::Text))
                                 .width(Size::fill())
                                 .text_overflow(TextOverflow::Ellipsis),
                         )
                         .child(
                             Path::new(row.path.as_str())
-                                .color(colors.text_placeholder)
+                                .color(roles.get(Role::TextPlaceholder))
                                 .width(Size::fill())
                                 .text_overflow(TextOverflow::Ellipsis),
                         ),

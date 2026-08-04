@@ -58,7 +58,7 @@ use crate::keymap::on_commands;
 use crate::menu::MenuScope;
 use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowKind};
 use crate::state::{use_share_config, AppCtx};
-use crate::theme::{peek_selection, use_strata_theme, window_background};
+use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
 pub use model::{ConfigureDraft, ConfigureTarget};
 
@@ -333,7 +333,7 @@ impl App for ConfigureApp {
         use_watch_registration(ctx);
 
         let win = window_theme();
-        let text = use_theme().read().colors().text_primary;
+        let text = use_roles().get(Role::Text);
         let config = self.app.config;
         let platform = use_hook(Platform::get);
 

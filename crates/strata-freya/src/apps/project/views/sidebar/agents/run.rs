@@ -25,7 +25,6 @@
 //! the way in rather than leaving a string for this to read: a supersede painted red is a fault
 //! the user never had.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::Radio;
 use strata_core::util::{ago, collapse_sql, fmt_int, now_secs, plural};
@@ -35,7 +34,9 @@ use crate::agent::RunOutcome;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::dot::Dot;
+use crate::components::tones::tones;
 use crate::components::typography::{Meta, Path};
+use crate::theme::{use_roles, Role};
 
 /// A card's inner padding (canvas `--sp-3` / `--sp-4`), its radius (`--r-2`) and the gap under
 /// it (`--sp-1`).
@@ -77,14 +78,15 @@ impl Component for RunCard {
         let session = self.session;
         let sql = self.sql.clone();
         // Semantic (and the accent for "working"), so the outcome tones follow the app-wide ramp
-        // wherever they appear — the one place this surface reads the sheet rather than its own
-        // theme (AGENTS.md §3).
-        let theme = use_theme();
-        let (success, warning, error, accent) = {
-            let t = theme.read();
-            let c = t.colors();
-            (c.success, c.warning, c.error, c.primary)
-        };
+        // wherever they appear — the one place this surface reads the shared ramp rather than its
+        // own theme (AGENTS.md §3).
+        let tones = tones();
+        let (success, warning, error, accent) = (
+            tones.ok,
+            tones.warning,
+            tones.error,
+            use_roles().get(Role::Accent),
+        );
         let figures_color = self.theme.figures_color;
         let (dot, figures, figures_color) = match &self.outcome {
             RunOutcome::Running => (accent, "running…".to_string(), figures_color),

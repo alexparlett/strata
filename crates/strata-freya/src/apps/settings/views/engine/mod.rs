@@ -30,8 +30,10 @@ use crate::apps::settings::views::engine::table::PropTable;
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{SettingsCtx, SettingsThemePartial, SettingsThemePreference};
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{Control, Prose};
+use crate::theme::{use_roles, Role};
 
 pub use model::PropRows;
 
@@ -73,8 +75,8 @@ impl Component for EnginePane {
         let saved = ctx.seed_engine();
         let revertable = rows.read().to_map() != saved || !rows.read().is_empty();
         let selected = rows.read().selected.is_some();
-        let theme_colors = use_theme();
-        let colors = theme_colors.read().colors().clone();
+        let tones = tones();
+        let roles = use_roles();
 
         Pane::new(
             rect()
@@ -95,14 +97,14 @@ impl Component for EnginePane {
                         .spacing(TOOLBAR_GAP)
                         .child(
                             ToolButton::new(IconName::Plus, "Add property")
-                                .color(colors.primary)
+                                .color(roles.get(Role::Accent))
                                 .on_press(EventHandler::new(move |_: Event<PressEventData>| {
                                     rows.write().add();
                                 })),
                         )
                         .child(
                             ToolButton::new(IconName::Minus, "Remove property")
-                                .color(colors.error)
+                                .color(tones.error)
                                 .enabled(selected)
                                 .on_press(EventHandler::new(move |_: Event<PressEventData>| {
                                     rows.write().remove_selected();
@@ -110,7 +112,7 @@ impl Component for EnginePane {
                         )
                         .child(
                             ToolButton::new(IconName::Copy, "Duplicate property")
-                                .color(colors.text_secondary)
+                                .color(roles.get(Role::TextMuted))
                                 .enabled(selected)
                                 .on_press(EventHandler::new(move |_: Event<PressEventData>| {
                                     rows.write().duplicate_selected();
@@ -118,7 +120,7 @@ impl Component for EnginePane {
                         )
                         .child(
                             ToolButton::new(IconName::Clipboard, "Paste properties")
-                                .color(colors.text_secondary)
+                                .color(roles.get(Role::TextMuted))
                                 .on_press(EventHandler::new(move |_: Event<PressEventData>| {
                                     if let Ok(text) = Clipboard::get() {
                                         rows.write().paste(&text);

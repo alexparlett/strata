@@ -31,8 +31,10 @@ use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::IconName;
 use crate::components::keycap::KeyCap;
+use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{Control, Prose};
+use crate::theme::{use_roles, Role};
 
 /// The header strip and a row, matching the Engine pane's grid — one height across the window's
 /// two tables. The canvas states a 30px floor for a keymap row and then fills it with 24px caps
@@ -68,7 +70,7 @@ pub struct KeyTable {
 impl Component for KeyTable {
     fn render(&self) -> impl IntoElement {
         let editing = self.editing;
-        let warning = use_theme().read().colors().warning;
+        let warning = tones().warning;
 
         // One snapshot for the whole list: at most one row is blocked, and nothing in the loop can
         // change which.
@@ -110,7 +112,7 @@ struct HeadRow;
 impl Component for HeadRow {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
-        let rule = use_theme().read().colors().border;
+        let rule = use_roles().get(Role::Border);
         let head = theme.table_head_background;
 
         TableRow::new()
@@ -176,7 +178,7 @@ impl KeyExt for KeyTableRow {
 
 impl Component for KeyTableRow {
     fn render(&self) -> impl IntoElement {
-        let rule = use_theme().read().colors().border;
+        let rule = use_roles().get(Role::Border);
         let mut editing = self.editing;
         let row = &self.row;
         let command = row.command;
@@ -255,7 +257,7 @@ struct CustomBadge;
 
 impl Component for CustomBadge {
     fn render(&self) -> impl IntoElement {
-        let accent = use_theme().read().colors().primary;
+        let accent = use_roles().get(Role::Accent);
 
         Badge::tag("CUSTOM", accent).padding((0., 4.))
     }
@@ -345,7 +347,7 @@ struct CapturePill;
 
 impl Component for CapturePill {
     fn render(&self) -> impl IntoElement {
-        let accent = use_theme().read().colors().primary;
+        let accent = use_roles().get(Role::Accent);
 
         rect()
             .height(Size::px(PILL_HEIGHT))
@@ -368,7 +370,7 @@ struct AddShortcut {
 impl Component for AddShortcut {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
-        let accent = use_theme().read().colors().primary;
+        let accent = use_roles().get(Role::Accent);
         let mut editing = self.editing;
         let command = self.command;
 

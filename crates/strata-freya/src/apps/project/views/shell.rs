@@ -53,7 +53,6 @@
 //! never measured negative (a torin fix this task carried), and each chrome row folds or
 //! ellipsizes inside its own box.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::use_radio;
 
@@ -65,6 +64,7 @@ use super::workbench::WORKBENCH_STUB_H;
 use super::Workbench;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::divider::Divider;
+use crate::theme::{use_roles, Role};
 
 /// The narrowest a side panel may become: enough for its collapse × plus the header's padding,
 /// and enough that the resize handle beside it is still there to drag back out with.
@@ -102,7 +102,7 @@ impl Component for Shell {
         // deriving only `Persist` — never wakes it, so the drag runs churn-free.
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let layout = radio.read().layout;
-        let border = use_theme().read().colors().border;
+        let border = use_roles().get(Role::Border);
 
         // The vertical container's controller (see the module note). Supplying one means its
         // `direction` / `handle_size` come from here rather than the builder — the builder's

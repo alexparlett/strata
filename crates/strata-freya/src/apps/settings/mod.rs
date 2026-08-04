@@ -52,7 +52,7 @@ use crate::platform::{self, WindowKind};
 use crate::state::{
     use_share_config, write_config, AppCtx, ConfigChan, ConfigStation, ThemePreview, ThemeSel,
 };
-use crate::theme::{peek_selection, use_strata_theme, window_background};
+use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
 pub use model::{category, Category, NavGroup, CATEGORIES};
 pub use search::{search, Anchor, Hit};
@@ -427,7 +427,7 @@ impl App for SettingsApp {
             .vertical()
             // The window's ambient text colour, like the launcher's: runs that don't name one
             // inherit it rather than Freya's base-theme default.
-            .color(use_theme().read().colors().text_primary)
+            .color(use_roles().get(Role::Text))
             .child(Router::<Route>::new(|| {
                 RouterConfig::default().with_initial_path(Route::Theme)
             }))

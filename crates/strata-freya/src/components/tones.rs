@@ -1,12 +1,15 @@
-//! The **semantic tones** — `success` / `info` / `warning` / `error`, read off the sheet as one
-//! shared hook. A severity's colour follows the app-wide ramp wherever it appears (AGENTS.md §3):
-//! Problems' glyphs, Events' dots, the status bar's state dot all paint from these four, never
-//! from a surface's own theme. This is the one place that reads them — three surfaces had grown
-//! three copies of the same four-slot read, with the fields in different orders.
+//! The **semantic tones** — `success` / `info` / `warning` / `error`, read off the role
+//! vocabulary as one shared hook. A severity's colour follows the app-wide ramp wherever it
+//! appears (AGENTS.md §3): Problems' glyphs, Events' dots, the status bar's state dot all paint
+//! from these four, never from a surface's own theme. This is the one place that reads them —
+//! three surfaces had grown three copies of the same four-slot read, with the fields in
+//! different orders.
 
 use freya::prelude::*;
 
-/// The four semantic tones, plus the clean state's tick (`ok` is the sheet's `success`).
+use crate::theme::{use_roles, Role};
+
+/// The four semantic tones, plus the clean state's tick (`ok` is the `success` role).
 #[derive(Clone, Copy, PartialEq)]
 pub struct Tones {
     pub error: Color,
@@ -18,13 +21,11 @@ pub struct Tones {
 /// Resolve [`Tones`] from the active theme. A **hook** (one theme read), so call it exactly once
 /// per render — like `type_palette`.
 pub fn tones() -> Tones {
-    let theme = use_theme();
-    let t = theme.read();
-    let c = t.colors();
+    let roles = use_roles();
     Tones {
-        error: c.error,
-        warning: c.warning,
-        info: c.info,
-        ok: c.success,
+        error: roles.get(Role::Error),
+        warning: roles.get(Role::Warning),
+        info: roles.get(Role::Info),
+        ok: roles.get(Role::Success),
     }
 }

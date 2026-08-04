@@ -40,7 +40,7 @@ use crate::keymap::on_commands;
 use crate::menu::MenuScope;
 use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowKind};
 use crate::state::{use_share_config, AppCtx};
-use crate::theme::{peek_selection, use_strata_theme, window_background};
+use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
 pub use model::{ExportDraft, ExportTarget, FormatId, ScopeChoice};
 
@@ -301,7 +301,7 @@ impl App for ExportApp {
             .background(theme.background)
             // The window's ambient text colour, like the launcher's: runs that don't name one
             // inherit it rather than Freya's base-theme default.
-            .color(use_theme().read().colors().text_primary)
+            .color(use_roles().get(Role::Text))
             .child(TitleBar)
             .child(ExportBody)
             .child(Footer)

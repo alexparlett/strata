@@ -14,8 +14,10 @@ use crate::apps::launcher::views::open::open_and_close;
 use crate::apps::launcher::{LauncherThemePartial, LauncherThemePreference};
 use crate::components::avatar::Avatar;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Body, Path as PathText};
 use crate::state::{use_config_station, write_config, AppCtx, ConfigChan};
+use crate::theme::{use_roles, Role};
 
 #[derive(PartialEq)]
 pub struct ProjectRowView {
@@ -40,7 +42,8 @@ impl Component for ProjectRowView {
             LauncherThemePreference,
             "launcher"
         );
-        let colors = use_theme().read().colors().clone();
+        let roles = use_roles();
+        let error = tones().error;
         let mut hovered = use_state(|| false);
 
         let ProjectRow {
@@ -104,13 +107,13 @@ impl Component for ProjectRowView {
                     .spacing(2.)
                     .child(
                         Body::new(name.as_str())
-                            .color(colors.text_primary)
+                            .color(roles.get(Role::Text))
                             .width(Size::fill())
                             .text_overflow(TextOverflow::Ellipsis),
                     )
                     .child(
                         PathText::new(path.as_str())
-                            .color(colors.text_placeholder)
+                            .color(roles.get(Role::TextPlaceholder))
                             .width(Size::fill())
                             .text_overflow(TextOverflow::Ellipsis),
                     ),
@@ -126,28 +129,28 @@ impl Component for ProjectRowView {
                         // A pinned row's pin wears the accent; everything else is recessive
                         // until hovered.
                         color: if pinned {
-                            colors.primary
+                            roles.get(Role::Accent)
                         } else {
-                            colors.text_placeholder
+                            roles.get(Role::TextPlaceholder)
                         },
-                        hover_background: colors.active,
-                        hover_color: colors.text_primary,
+                        hover_background: roles.get(Role::ElementSelected),
+                        hover_color: roles.get(Role::Text),
                         on_press: EventHandler::new(move |_: Event<PressEventData>| on_pin()),
                     })
                     .child(RowAction {
                         icon: IconName::Folder,
                         title: "Reveal on disk".into(),
-                        color: colors.text_placeholder,
-                        hover_background: colors.active,
-                        hover_color: colors.text_primary,
+                        color: roles.get(Role::TextPlaceholder),
+                        hover_background: roles.get(Role::ElementSelected),
+                        hover_color: roles.get(Role::Text),
                         on_press: EventHandler::new(move |_: Event<PressEventData>| on_reveal()),
                     })
                     .child(RowAction {
                         icon: IconName::Close,
                         title: "Remove from list".into(),
-                        color: colors.text_placeholder,
+                        color: roles.get(Role::TextPlaceholder),
                         hover_background: theme.remove_hover_background,
-                        hover_color: colors.error,
+                        hover_color: error,
                         on_press: EventHandler::new(move |_: Event<PressEventData>| on_remove()),
                     }),
             )

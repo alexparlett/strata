@@ -23,11 +23,13 @@
 use std::time::Duration;
 
 use async_io::Timer;
-use freya::components::{use_theme, AttachedPosition, Tooltip, TooltipContainer};
+use freya::components::{AttachedPosition, Tooltip, TooltipContainer};
 use freya::prelude::*;
 
 use crate::components::dot::Dot;
+use crate::components::tones::tones;
 use crate::state::{use_config, ConfigChan};
+use crate::theme::{use_roles, Role};
 
 use super::AgentCtx;
 
@@ -88,17 +90,10 @@ pub struct AgentStatusDot {
 
 impl Component for AgentStatusDot {
     fn render(&self) -> impl IntoElement {
-        let theme = use_theme();
-        let (success, warning, idle) = {
-            // The sheet's semantic ramp, reached directly: a status tone follows the app-wide
-            // colours wherever it appears (AGENTS.md §3).
-            let t = theme.read();
-            (
-                t.colors().success,
-                t.colors().warning,
-                t.colors().text_placeholder,
-            )
-        };
+        // The shared semantic ramp, reached directly: a status tone follows the app-wide
+        // colours wherever it appears (AGENTS.md §3).
+        let tones = tones();
+        let idle = use_roles().get(Role::TextPlaceholder);
         let mut presence = use_state(|| Presence::Waiting);
         let agent = self.agent.clone();
         use_hook(move || {
@@ -116,9 +111,9 @@ impl Component for AgentStatusDot {
 
         let presence = *presence.read();
         let color = match presence {
-            Presence::Down => warning,
+            Presence::Down => tones.warning,
             Presence::Waiting => idle,
-            Presence::Connected(_) => success,
+            Presence::Connected(_) => tones.ok,
         };
         TooltipContainer::new(Tooltip::new_text(presence.tooltip()))
             .position(AttachedPosition::Bottom)

@@ -8,7 +8,7 @@ use crate::components::tool_button::TOOL_SIZE;
 use crate::components::toolbar::{Toolbar, ToolbarAction};
 use crate::components::typography::InputTypography;
 use crate::platform::open_export;
-use freya::components::use_theme;
+use crate::theme::{use_roles, Role};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_core::config::Command;
@@ -58,14 +58,14 @@ impl ResultsToolbar {
 
 impl Component for ResultsToolbar {
     fn render(&self) -> impl IntoElement {
-        let theme = use_theme();
+        let roles = use_roles();
         // Neither the destructive tone nor the accent is read here any more: `ToolbarAction`'s
         // `danger` and `active` own those dresses, so Clear's red hover and Find's on-state are
         // variants rather than five overrides at this call site.
-        let (bg, faint) = {
-            let t = theme.read();
-            (t.colors().background, t.colors().text_placeholder)
-        };
+        let (bg, faint) = (
+            roles.get(Role::Background),
+            roles.get(Role::TextPlaceholder),
+        );
         // The grid's shared selection (provided by the results pane) — cleared with the results so
         // a later run doesn't wake up wearing the old grid's selection.
         let mut sel = use_consume::<State<Selection>>();

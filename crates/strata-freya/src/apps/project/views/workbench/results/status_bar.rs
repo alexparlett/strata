@@ -8,7 +8,6 @@
 use std::time::{Duration, Instant};
 
 use async_io::Timer;
-use freya::components::use_theme;
 use freya::prelude::*;
 use strata_core::config::Command;
 use strata_core::engine::plan::PlanTab;
@@ -24,6 +23,7 @@ use crate::components::tones::tones;
 use crate::components::toolbar::{Toolbar, ToolbarAction, ToolbarItem};
 use crate::components::typography::{InputTypography, Meta, Path};
 use crate::keymap::use_hint;
+use crate::theme::{use_roles, Role};
 
 define_theme!(
     %[component]
@@ -156,21 +156,17 @@ impl Component for StatusBar {
         let theme = get_theme!(&self.theme, StatusBarThemePreference, "status_bar");
 
         // Dot + label tone come off the shared semantic ramp; the empty dot and the aggregate's
-        // accent are sheet reads, independent of the `status_bar` token.
+        // accent are role reads, independent of the `status_bar` token.
         let tones = tones();
-        let app_theme = use_theme();
-        let (dot_color, accent) = {
-            let theme_ref = app_theme.read();
-            let c = theme_ref.colors();
-            let dot = match self.state {
-                ResultsState::Empty => c.text_placeholder,
-                ResultsState::Running => tones.warning,
-                ResultsState::Grid | ResultsState::Chart => tones.ok,
-                ResultsState::ExplainPlan => tones.info,
-                ResultsState::Error => tones.error,
-            };
-            (dot, c.primary)
+        let roles = use_roles();
+        let dot_color = match self.state {
+            ResultsState::Empty => roles.get(Role::TextPlaceholder),
+            ResultsState::Running => tones.warning,
+            ResultsState::Grid | ResultsState::Chart => tones.ok,
+            ResultsState::ExplainPlan => tones.info,
+            ResultsState::Error => tones.error,
         };
+        let accent = roles.get(Role::Accent);
 
         // Label + sub-label per state (comp `_statusVals`): the grid state leads with the real
         // row count and trails the engine elapsed; the plan state counts operators. The empty

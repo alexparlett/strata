@@ -27,7 +27,9 @@ use crate::apps::settings::views::RowNote;
 use crate::components::divider::Divider;
 use crate::components::form::ValueField;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Caption, Control, MonoValue};
+use crate::theme::{use_roles, Role};
 
 /// The header strip (canvas `height: 32px`) and a property row (`height: 34px`).
 const HEAD_HEIGHT: f32 = 32.;
@@ -58,7 +60,7 @@ impl Component for PropTable {
         let rows = self.rows;
         let list = rows.read();
         let errors = list.errors();
-        let error_color = use_theme().read().colors().error;
+        let error_color = tones().error;
         // The body's own scroll, driven so a row can reveal itself: a property added by the toolbar
         // or named by the Settings search (P4-09) lands at the end of the list, which on a grid with
         // a screenful of overrides is off the bottom — a selection nobody can see.
@@ -110,7 +112,7 @@ struct HeadRow;
 impl Component for HeadRow {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
-        let rule = use_theme().read().colors().border;
+        let rule = use_roles().get(Role::Border);
         let head = theme.table_head_background;
 
         TableRow::new()
@@ -186,8 +188,8 @@ impl KeyExt for PropTableRow {
 impl Component for PropTableRow {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
-        let theme_colors = use_theme();
-        let colors = theme_colors.read().colors().clone();
+        let tones = tones();
+        let roles = use_roles();
         let mut rows = self.rows;
         let id = self.id;
 
@@ -226,9 +228,9 @@ impl Component for PropTableRow {
         // simply be newer than this build (warning), while a reserved one is refused outright and
         // the row is already carrying an error for it.
         let name_color = match KeyStatus::of(&key) {
-            KeyStatus::Blank | KeyStatus::Known(_) => colors.text_primary,
-            KeyStatus::Custom => colors.warning,
-            KeyStatus::Reserved => colors.error,
+            KeyStatus::Blank | KeyStatus::Known(_) => roles.get(Role::Text),
+            KeyStatus::Custom => tones.warning,
+            KeyStatus::Reserved => tones.error,
         };
 
         // Suggestions are open exactly while the box has focus and the catalogue has something
@@ -314,7 +316,7 @@ impl Component for PropTableRow {
                                     .width(Size::px(ERROR_STRIPE))
                                     .height(Size::fill())
                                     .background(match self.invalid {
-                                        true => colors.error,
+                                        true => tones.error,
                                         false => Color::TRANSPARENT,
                                     }),
                             )
@@ -336,9 +338,9 @@ impl Component for PropTableRow {
                                 .maybe_child((!suggestions.is_empty()).then_some(menu)),
                             )
                             .maybe_child(restart.then(|| RestartMarker {
-                                color: colors.warning,
+                                color: tones.warning,
                             }))
-                            .child(Divider::vertical().color(colors.border)),
+                            .child(Divider::vertical().color(roles.get(Role::Border))),
                     ),
             )
             .child(

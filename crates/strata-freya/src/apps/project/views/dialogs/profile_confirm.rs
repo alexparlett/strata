@@ -20,7 +20,6 @@
 //! "profile this" to a request on the row, and this dialog is a gate in front of it rather than
 //! a second copy of it.
 
-use freya::components::use_theme;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
 use strata_model::{CatalogKind, ColRef};
@@ -30,7 +29,9 @@ use crate::apps::project::state::{
 };
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Control, MonoValue, Prose, Title};
+use crate::theme::{use_roles, Role};
 
 /// What a profile confirm is about — a table or a view, by **name**, which is their shared
 /// engine/SQL identity. (A saved query is a stored string: there is nothing to scan.)
@@ -218,7 +219,8 @@ impl Component for ProfileConfirm {
         let mut slot = self.target;
         let target = slot.read().clone();
         let actions = use_profile_actions();
-        let theme = use_theme();
+        let roles = use_roles();
+        let warning = tones().warning;
 
         // Shared by the button and the Enter key, so it holds only `Copy` handles and shadows
         // `slot` inside — a closure that captured the outer `mut` binding would be `FnMut`, and
@@ -235,16 +237,15 @@ impl Component for ProfileConfirm {
             return rect().into_element();
         };
 
-        let c = theme.read().colors().clone();
         // The action over its subject — the close and drop confirms' shape exactly: the name is
         // mono on its own line, where it reads as the identifier it is.
         let title = rect()
             .width(Size::fill())
             .vertical()
-            .child(Title::new(ProfileTarget::verb(target.kind)).color(c.text_primary))
+            .child(Title::new(ProfileTarget::verb(target.kind)).color(roles.get(Role::Text)))
             .child(
                 MonoValue::new(target.name.clone())
-                    .color(c.primary)
+                    .color(roles.get(Role::Accent))
                     .text_overflow(TextOverflow::Ellipsis),
             );
 
@@ -253,8 +254,12 @@ impl Component for ProfileConfirm {
             .on_confirm(confirm)
             // Warning-toned, like the canvas: this is a question about work the user is about to
             // pay for, not a destructive one.
-            .header(DialogHeader::new(IconName::Warning, c.warning, title))
-            .body(Prose::new(target.body()).color(c.text_secondary).wrap())
+            .header(DialogHeader::new(IconName::Warning, warning, title))
+            .body(
+                Prose::new(target.body())
+                    .color(roles.get(Role::TextMuted))
+                    .wrap(),
+            )
             .action(
                 Button::new()
                     .flat()

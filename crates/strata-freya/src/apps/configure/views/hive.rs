@@ -22,6 +22,7 @@ use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{ProjChan, ProjectState};
 use crate::components::form::{Row, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Caption, MonoValue, Prose};
 use crate::components::window::window_theme;
 
@@ -217,9 +218,9 @@ struct Warning;
 
 impl Component for Warning {
     fn render(&self) -> impl IntoElement {
-        // The sheet directly, not this window's theme: `warning` is one of the four semantic
-        // slots and has to follow the app-wide ramp wherever it appears.
-        let warning = use_theme().read().colors().warning;
+        // The shared ramp directly, not this window's theme: `warning` is one of the four
+        // semantic tones and has to follow the app-wide ramp wherever it appears.
+        let warning = tones().warning;
         rect()
             .width(Size::fill())
             .horizontal()

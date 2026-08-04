@@ -1,8 +1,9 @@
-use freya::components::use_theme;
 use freya::prelude::*;
 
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::typography::{Readout, Title};
+use crate::theme::{use_roles, Role};
 
 /// The results pane after a query settles `Err`: the empty-state layout in error dress —
 /// a rounded icon tile over a title, then the engine's message in mono. The message is
@@ -22,19 +23,15 @@ impl ErrorState {
 
 impl Component for ErrorState {
     fn render(&self) -> impl IntoElement {
-        let theme = use_theme();
-        let (tile_bg, tile_border, icon_color, title_color, msg_color, background) = {
-            let theme_ref = theme.read();
-            let c = theme_ref.colors();
-            (
-                c.surface_tertiary,
-                c.border,
-                c.error,
-                c.text_secondary,
-                c.text_placeholder,
-                c.surface_secondary,
-            )
-        };
+        let roles = use_roles();
+        let (tile_bg, tile_border, icon_color, title_color, msg_color, background) = (
+            roles.get(Role::ElementBackground),
+            roles.get(Role::Border),
+            tones().error,
+            roles.get(Role::TextMuted),
+            roles.get(Role::TextPlaceholder),
+            roles.get(Role::SurfaceRaised),
+        );
 
         rect()
             .width(Size::fill())

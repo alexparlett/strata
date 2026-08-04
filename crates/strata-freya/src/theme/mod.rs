@@ -84,6 +84,19 @@ impl RoleColors {
 /// The `Theme` key the resolved [`RoleColors`] are installed under (see [`strata_theme`]).
 pub const ROLES_KEY: &str = "strata_roles";
 
+/// This window's resolved role colours — how a surface reads a colour its component theme has
+/// no field for. A standard theme lookup (one theme read, same subscription as `use_theme`);
+/// call it from a component's `render`. The `unwrap_or` is defensive — [`strata_theme`] always
+/// seeds the key; an unseeded theme paints all-magenta rather than panicking pre-launch.
+pub fn use_roles() -> RoleColors {
+    let theme = use_theme();
+    let theme = theme.read();
+    theme
+        .get::<RoleColors>(ROLES_KEY)
+        .copied()
+        .unwrap_or(RoleColors([MAGENTA; Role::COUNT]))
+}
+
 /// The theme's colour source. The fork resolves a `Preference::Reference` against the core
 /// sheet first (fed by [`bridge_sheet`]) and only then against [`Palette::color`], which
 /// answers the dotted role names from [`RoleColors`].

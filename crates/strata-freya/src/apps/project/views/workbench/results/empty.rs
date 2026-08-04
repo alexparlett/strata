@@ -1,8 +1,8 @@
-use freya::components::use_theme;
 use freya::prelude::*;
 
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{Prose, Title};
+use crate::theme::{use_roles, Role};
 
 /// The results pane before any rows exist: a rounded icon tile over a title + hint, centered.
 #[derive(PartialEq)]
@@ -10,19 +10,15 @@ pub struct EmptyState;
 
 impl Component for EmptyState {
     fn render(&self) -> impl IntoElement {
-        let theme = use_theme();
-        let (tile_bg, tile_border, icon_color, title_color, sub_color, background) = {
-            let theme_ref = theme.read();
-            let c = theme_ref.colors();
-            (
-                c.surface_tertiary,
-                c.border,
-                c.text_placeholder,
-                c.text_secondary,
-                c.text_placeholder,
-                c.surface_secondary,
-            )
-        };
+        let roles = use_roles();
+        let (tile_bg, tile_border, icon_color, title_color, sub_color, background) = (
+            roles.get(Role::ElementBackground),
+            roles.get(Role::Border),
+            roles.get(Role::TextPlaceholder),
+            roles.get(Role::TextMuted),
+            roles.get(Role::TextPlaceholder),
+            roles.get(Role::SurfaceRaised),
+        );
 
         rect()
             .width(Size::fill())

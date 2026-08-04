@@ -3,8 +3,9 @@
 //! width) or vertical (fills the height); the cross-axis length, thickness, colour and margin are all
 //! overridable, and the colour defaults to the sheet's `border`.
 
-use freya::components::use_theme;
 use freya::prelude::*;
+
+use crate::theme::{use_roles, Role as ThemeRole};
 
 /// Which surface a rule belongs to, and so where its default colour comes from: the sheet's
 /// `border` for a plain rule between regions, the menu card's own hairline for one inside a menu.
@@ -100,9 +101,9 @@ impl Divider {
 impl Component for Divider {
     fn render(&self) -> impl IntoElement {
         // Hooks run unconditionally and the fallback is chosen only *after* — a plain rule is
-        // the sheet's line colour, a menu's is the menu card's hairline (so it reads on that
+        // the `border` role's colour, a menu's is the menu card's hairline (so it reads on that
         // elevated surface in every theme, rather than each menu naming a colour).
-        let sheet_border = use_theme().read().colors().border;
+        let sheet_border = use_roles().get(ThemeRole::Border);
         let menu_border = get_theme!(
             &None::<MenuContainerThemePartial>,
             MenuContainerThemePreference,

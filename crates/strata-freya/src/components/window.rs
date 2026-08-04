@@ -12,8 +12,8 @@
 //! **This is also the only way to reach the tones at all.** A window's surfaces live in the
 //! theme's **palette** — `surface_overlay`, `border_control`, `line`, `accent_badge`,
 //! `accent_selection`, `text_muted` — not in the 27-slot sheet, and a `reference` in a component
-//! theme is the only thing that resolves a palette name. Reading `use_theme().colors()` and
-//! picking the nearest sheet slot instead does not merely approximate them: the body lands on
+//! theme is the only thing that resolves a palette name. Reading `use_roles()` and
+//! picking the nearest role instead does not merely approximate them: the body lands on
 //! `background`, the app's *darkest* tone, when a floating window wants `surface_overlay`, which
 //! is several steps lighter. That is what a window built without this looks like, and it is why
 //! this exists rather than each window reaching for the sheet.

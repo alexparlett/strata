@@ -6,8 +6,9 @@
 //! from the theme file's `components.toggle_button`, and the hover is the comp's soft
 //! semantic overlay (the same palette-derived recipe as `ToggleSegment`).
 
-use freya::components::use_theme;
 use freya::prelude::*;
+
+use crate::theme::{use_roles, Role};
 
 /// Data of a Change event — a stateful control reporting the value it just changed to.
 /// App-defined: `Event<D>` is generic, so the toggle maps its press event into this with
@@ -117,7 +118,7 @@ impl Component for ToggleButton {
         let theme = get_theme!(&self.theme, ToggleButtonThemePreference, "toggle_button");
         // The comp's plain-icon-button hover (semantic — read from the palette): a 7%
         // text-colour overlay under a brightened glyph. The `on` dress wins over hover.
-        let hover = use_theme().read().colors().text_primary;
+        let hover = use_roles().get(Role::Text);
         let mut hovered = use_state(|| false);
         let mut on = use_reactive(&self.toggle);
 
