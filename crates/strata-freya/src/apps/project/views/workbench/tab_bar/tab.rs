@@ -387,9 +387,7 @@ impl Component for TabChrome {
             .main_align(Alignment::Center)
             .cross_align(Alignment::Center)
             .maybe(self.dirty, |el| el.child(Dot::new(dot_color)))
-            .maybe(!self.dirty, |el| {
-                el.child(label().text("×").font_size(13.).color(x_color))
-            });
+            .maybe(!self.dirty, |el| el.child(Body::new("×").color(x_color)));
 
         rect()
             .height(Size::px(TAB_HEIGHT))

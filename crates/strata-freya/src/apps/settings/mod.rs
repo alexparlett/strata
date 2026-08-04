@@ -124,6 +124,17 @@ define_theme!(
     }
 );
 
+/// This window's resolved `settings` dress — the shared accessor for panes that read the window
+/// theme with no prop override. Call from a component's `render` (it is a theme lookup). Three
+/// panes had grown byte-identical private copies of this.
+pub fn settings_theme() -> SettingsTheme {
+    get_theme!(
+        &None::<SettingsThemePartial>,
+        SettingsThemePreference,
+        "settings"
+    )
+}
+
 /// The window's category pages. Theme is `/` because it is where the window opens.
 ///
 /// Each variant names its pane component explicitly (the derive would otherwise look for one

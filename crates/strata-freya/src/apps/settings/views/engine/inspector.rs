@@ -10,8 +10,8 @@
 
 use freya::prelude::*;
 
+use crate::apps::settings::settings_theme;
 use crate::apps::settings::views::engine::model::{KeyStatus, PropRows};
-use crate::apps::settings::{SettingsTheme, SettingsThemePartial, SettingsThemePreference};
 use crate::components::badge::Badge;
 use crate::components::typography::{Meta, Prose, Strong};
 
@@ -101,12 +101,4 @@ impl Component for Inspector {
                     )
             }))
     }
-}
-
-fn settings_theme() -> SettingsTheme {
-    get_theme!(
-        &None::<SettingsThemePartial>,
-        SettingsThemePreference,
-        "settings"
-    )
 }

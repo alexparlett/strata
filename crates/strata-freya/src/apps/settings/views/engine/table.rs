@@ -21,9 +21,9 @@
 use freya::prelude::*;
 use strata_core::engine::config::is_restart_key;
 
+use crate::apps::settings::settings_theme;
 use crate::apps::settings::views::engine::model::{KeyStatus, PropRows};
 use crate::apps::settings::views::RowNote;
-use crate::apps::settings::{SettingsTheme, SettingsThemePartial, SettingsThemePreference};
 use crate::components::divider::Divider;
 use crate::components::form::ValueField;
 use crate::components::icon::{Icon, IconName};
@@ -434,12 +434,4 @@ impl Component for EmptyGrid {
                     .color(theme.hint_color),
             )
     }
-}
-
-fn settings_theme() -> SettingsTheme {
-    get_theme!(
-        &None::<SettingsThemePartial>,
-        SettingsThemePreference,
-        "settings"
-    )
 }

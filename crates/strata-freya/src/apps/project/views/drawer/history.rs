@@ -84,10 +84,7 @@ impl Component for History {
         });
 
         if shown == 0 {
-            return DrawerEmpty::new(IconName::Clock, "No queries run yet")
-                .icon_color(self.theme.empty_color)
-                .color(self.theme.empty_color)
-                .into_element();
+            return DrawerEmpty::new(IconName::Clock, "No queries run yet").into_element();
         }
 
         // `now` once for the whole list rather than per row: the rows are one repaint, and two

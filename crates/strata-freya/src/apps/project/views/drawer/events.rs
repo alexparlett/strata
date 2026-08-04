@@ -24,6 +24,7 @@ use crate::apps::project::state::{LogCtx, LogLevel};
 use crate::components::divider::Divider;
 use crate::components::dot::Dot;
 use crate::components::icon::IconName;
+use crate::components::tones::{tones, Tones};
 use crate::components::typography::{Body, Meta};
 
 /// A row's vertical padding (canvas `--sp-3`) and the panel's horizontal one (`--sp-4`).
@@ -36,36 +37,13 @@ const DOT_OFFSET: f32 = 4.;
 /// The same idea for the timestamp, a smaller face that sits a little higher.
 const TS_OFFSET: f32 = 2.;
 
-/// The four semantic tones an event's dot can wear. Resolved by a **hook** (one theme read), so it
-/// is called exactly once per render — the same contract as Problems' `tones`.
-#[derive(Clone, Copy, PartialEq)]
-struct Tones {
-    ok: Color,
-    info: Color,
-    warning: Color,
-    error: Color,
-}
-
-impl Tones {
-    fn of(&self, level: LogLevel) -> Color {
-        match level {
-            LogLevel::Ok => self.ok,
-            LogLevel::Info => self.info,
-            LogLevel::Warning => self.warning,
-            LogLevel::Error => self.error,
-        }
-    }
-}
-
-fn tones() -> Tones {
-    let theme = use_theme();
-    let t = theme.read();
-    let c = t.colors();
-    Tones {
-        ok: c.success,
-        info: c.info,
-        warning: c.warning,
-        error: c.error,
+/// The dot's tone for a [`LogLevel`] — the shared semantic ramp keyed by the entry's level.
+fn tone_of(tones: Tones, level: LogLevel) -> Color {
+    match level {
+        LogLevel::Ok => tones.ok,
+        LogLevel::Info => tones.info,
+        LogLevel::Warning => tones.warning,
+        LogLevel::Error => tones.error,
     }
 }
 
@@ -96,12 +74,9 @@ impl Component for Events {
         });
 
         if shown == 0 {
-            // The rail's own Events glyph, in the empty copy's tone: "no events" is not a
+            // The rail's own Events glyph, in the default empty tone: "no events" is not a
             // severity, so there is no semantic colour to reach for here.
-            return DrawerEmpty::new(IconName::Lines, "No events yet")
-                .icon_color(self.theme.empty_color)
-                .color(self.theme.empty_color)
-                .into_element();
+            return DrawerEmpty::new(IconName::Lines, "No events yet").into_element();
         }
 
         // Each row keyed by its append sequence: an event arriving at the top must not hand the
@@ -111,7 +86,7 @@ impl Component for Events {
             .events()
             .map(|event| {
                 EventRow {
-                    tone: tones.of(event.level),
+                    tone: tone_of(tones, event.level),
                     // An error's message wears the error ramp too (the canvas tints the whole
                     // row): the dot alone is 6px, and a failure is the one thing worth finding
                     // by eye in a scrollback.

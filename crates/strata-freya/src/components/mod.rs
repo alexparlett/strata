@@ -59,6 +59,7 @@ pub mod run_button;
 pub mod segmented_toggle;
 pub mod sidebar_row;
 pub mod toggle_button;
+pub mod tones;
 pub mod tool_button;
 pub mod toolbar;
 pub mod type_palette;

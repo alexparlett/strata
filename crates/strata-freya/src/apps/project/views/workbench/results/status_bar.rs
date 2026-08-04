@@ -20,6 +20,7 @@ use super::selection::Selection;
 use super::ResultsState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::tones;
 use crate::components::toolbar::{Toolbar, ToolbarAction, ToolbarItem};
 use crate::components::typography::{InputTypography, Meta, Path};
 use crate::keymap::use_hint;
@@ -154,18 +155,19 @@ impl Component for StatusBar {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, StatusBarThemePreference, "status_bar");
 
-        // Dot + label tone and the aggregate's accent are semantic palette slots, independent
-        // of the `status_bar` token.
+        // Dot + label tone come off the shared semantic ramp; the empty dot and the aggregate's
+        // accent are sheet reads, independent of the `status_bar` token.
+        let tones = tones();
         let app_theme = use_theme();
         let (dot_color, accent) = {
             let theme_ref = app_theme.read();
             let c = theme_ref.colors();
             let dot = match self.state {
                 ResultsState::Empty => c.text_placeholder,
-                ResultsState::Running => c.warning,
-                ResultsState::Grid | ResultsState::Chart => c.success,
-                ResultsState::ExplainPlan => c.info,
-                ResultsState::Error => c.error,
+                ResultsState::Running => tones.warning,
+                ResultsState::Grid | ResultsState::Chart => tones.ok,
+                ResultsState::ExplainPlan => tones.info,
+                ResultsState::Error => tones.error,
             };
             (dot, c.primary)
         };

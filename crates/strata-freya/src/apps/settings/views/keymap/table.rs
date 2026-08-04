@@ -26,9 +26,7 @@ use strata_core::keymap::Rebind;
 
 use crate::apps::settings::views::keymap::model::{Blocked, Editing, KeyRow};
 use crate::apps::settings::views::RowNote;
-use crate::apps::settings::{
-    SettingsCtx, SettingsTheme, SettingsThemePartial, SettingsThemePreference,
-};
+use crate::apps::settings::{settings_theme, SettingsCtx};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::IconName;
@@ -460,12 +458,4 @@ impl Component for BlockedActions {
                     .child(Control::new("Cancel")),
             )
     }
-}
-
-fn settings_theme() -> SettingsTheme {
-    get_theme!(
-        &None::<SettingsThemePartial>,
-        SettingsThemePreference,
-        "settings"
-    )
 }

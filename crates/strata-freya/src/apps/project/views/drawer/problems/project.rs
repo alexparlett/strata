@@ -31,10 +31,11 @@ use freya::radio::use_radio;
 use strata_model::CatalogKind;
 
 use super::super::{DrawerBody, DrawerEmpty, DrawerTheme};
-use super::{Tones, PAD, ROW_HEIGHT};
+use super::{PAD, ROW_HEIGHT};
 use crate::apps::project::state::{FaultsCtx, PersistFaults, ProjChan, ProjectState};
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
+use crate::components::tones::Tones;
 use crate::components::typography::Body;
 
 /// One row of this scope, flattened from the two families so the list renders blind.
@@ -94,7 +95,6 @@ impl Component for Project {
         let el: Element = match rows.is_empty() {
             true => DrawerEmpty::new(IconName::Check, "No project problems")
                 .icon_color(self.tones.ok)
-                .color(self.theme.empty_color)
                 .into_element(),
             false => DrawerBody::new()
                 .children(rows.into_iter().map(|row| {
