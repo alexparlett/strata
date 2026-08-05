@@ -15,22 +15,34 @@
 //! are bytes, so this is exact — non-ASCII columns are approximate (acceptable v1).
 
 use std::ops::Range;
+use std::str::FromStr;
 
+use datafusion::config::Dialect as EngineDialect;
 use datafusion::sql::sqlparser::dialect::{dialect_from_str, Dialect, GenericDialect};
 use datafusion::sql::sqlparser::keywords::Keyword;
 use datafusion::sql::sqlparser::tokenizer::{Location, Token, Tokenizer};
 
-/// Resolve the dialect `name` — the engine's own `datafusion.sql_parser.dialect` — through
-/// sqlparser's own `dialect_from_str`, which is the same resolution DataFusion's planner
-/// performs, so the two cannot drift.
+/// Resolve the dialect `name` — the engine's own `datafusion.sql_parser.dialect`.
 ///
-/// A name sqlparser doesn't know falls back to `generic` rather than failing. That is not a
-/// silent fallback: DataFusion's `ConfigOptions` parses this key into a typed `Dialect` and
-/// **rejects** an unknown name at apply time, and [`policy_verdicts`](super::policy_verdicts)
-/// refuses outright on one, so the fault is already being said out loud. Degrading here keeps
-/// the editor lexing well enough to *show* the message rather than going blank alongside it.
+/// **Through DataFusion's typed `Dialect` first, and only then through sqlparser.** The two
+/// vocabularies are not the same size: sqlparser's `dialect_from_str` knows `spark`,
+/// `sparksql`, `oracle` and `teradata`, and DataFusion's `ConfigOptions` knows none of them —
+/// it parses this key with `Dialect::from_str` and `Engine::set_config` **skips** a value that
+/// fails, leaving the planner on whatever it already had. Handing the raw string straight to
+/// sqlparser would therefore tokenise the editor by rules the planner never adopted (`a#b` is
+/// one identifier under `generic` and three tokens under `spark`) — the very split this
+/// module exists to close. Parsing the way the planner parses is what keeps them in step.
+///
+/// A name neither of them knows falls back to `generic`, which is also where a fresh engine
+/// lands. That is not a silent fallback: `ConfigOptions::set` rejects it and
+/// [`policy_verdicts`](super::policy_verdicts) refuses outright, so the fault is already being
+/// said out loud. Degrading here keeps the editor lexing well enough to *show* the message
+/// rather than going blank alongside it.
 pub(crate) fn dialect(name: &str) -> Box<dyn Dialect> {
-    dialect_from_str(name).unwrap_or_else(|| Box::new(GenericDialect {}))
+    let name = EngineDialect::from_str(name).unwrap_or_default();
+    // Every name DataFusion accepts is one sqlparser accepts, so this arm is unreachable —
+    // it is here so there is exactly one fallback in the function rather than two answers.
+    dialect_from_str(name.as_ref()).unwrap_or_else(|| Box::new(GenericDialect {}))
 }
 
 /// Whether `word` is **reserved in name positions** (terminates a table/column-alias
@@ -340,6 +352,27 @@ mod tests {
         assert_eq!(
             toks.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
             ["SELECT", "a#b"]
+        );
+    }
+
+    /// **A dialect the *engine* would refuse must not reach the tokenizer either.** sqlparser
+    /// knows four dialects DataFusion's `ConfigOptions` does not, and `set` *skips* a value it
+    /// cannot parse — so resolving the config string through sqlparser alone would lex the
+    /// buffer by rules the planner never adopted, which is the split this whole module exists
+    /// to close. `spark` is the sharpest case: sqlparser has it, DataFusion doesn't, and it
+    /// disagrees with `generic` about `#`.
+    #[test]
+    fn a_dialect_datafusion_refuses_never_reaches_the_tokenizer() {
+        use datafusion::sql::sqlparser::dialect::dialect_from_str;
+        assert!(
+            dialect_from_str("spark").is_some(),
+            "the premise: sqlparser knows it"
+        );
+        let (toks, _) = lex("a#b", "spark");
+        assert_eq!(
+            toks.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
+            ["a#b"],
+            "generic, which is where the engine stays when it skips the value"
         );
     }
 

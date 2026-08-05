@@ -77,14 +77,15 @@ impl Component for EditorTab {
         });
         let editor = editor.into_writable();
         let config = use_config_station();
+        // One `Settings` subscription for the whole component — `Radio` is `Copy`, and the two
+        // effects below both want the same channel (the edit chords, and the parser dialect).
+        // The station above only peeks, inside handlers.
+        let settings = use_config(ConfigChan::Settings);
         // Keep the buffer's history chords in lockstep with the settings: freya-edit
         // matches `EditBindings` in `process_key` (no hardcoded ⌘Z/⌘Y left), so a
         // rebind in Settings retargets undo/redo live, without remounting the editor.
-        // The `Settings` channel is what the effect subscribes to — the station below
-        // only peeks, inside handlers.
         {
             let mut editor = editor.clone();
-            let settings = use_config(ConfigChan::Settings);
             use_side_effect(move || {
                 let bindings = edit_bindings(&settings.read().settings);
                 editor.write_if(|mut data| data.set_edit_bindings(bindings));
@@ -104,15 +105,15 @@ impl Component for EditorTab {
         // make the synchronous pipeline felt. The effect subscribes to the project
         // station; the provider just peeks the cached snapshot.
         //
-        // It also subscribes to the **settings**, for the parser dialect the snapshot
-        // carries: `datafusion.sql_parser.dialect` is what `lex` tokenises with, so a
-        // change to it has to re-lex rather than leave completion reading the buffer by
-        // rules the planner has already stopped using (WJ-04). Read from the config
-        // rather than back off the engine — `use_engine_config` is a *sibling* effect on
-        // the same write, and asking the engine here would make the answer depend on
-        // which of the two Freya runs first.
+        // It also reads the **settings**, for the parser dialect the snapshot carries:
+        // `datafusion.sql_parser.dialect` is what `lex` tokenises with, so a change to it has
+        // to re-lex rather than leave completion reading the buffer by rules the planner has
+        // already stopped using (WJ-04). From the config rather than back off the engine —
+        // `use_engine_config` is a *sibling* effect on the same write, and asking the engine
+        // here would make the answer depend on which of the two Freya runs first. `lex`
+        // resolves the name the way the planner does, so the two land on the same dialect
+        // even when the value is one `ConfigOptions` refuses.
         let project = use_radio_station::<ProjectState, ProjChan>();
-        let settings = use_config(ConfigChan::Settings);
         let mut catalog = use_state(sql::Catalog::default);
         {
             let engine = engine.clone();

@@ -68,12 +68,18 @@ key.
 
 The coupling, not the default.
 
-- **`engine/sql/lex.rs` no longer hardcodes a dialect.** `lex(sql, dialect)` resolves the name
-  through sqlparser's own `dialect_from_str` — the same resolution the planner performs — so the
-  tokenizer and the planner cannot drift. A new `lex::dialect(name)` is the one resolution site.
-  An unknown name falls back to `generic` rather than going blank, because `ConfigOptions::set` and
-  `policy_verdicts` are already saying that fault out loud and an editor that stopped tokenising
-  would hide the message instead of showing it.
+- **`engine/sql/lex.rs` no longer hardcodes a dialect.** `lex(sql, dialect)` resolves the name the
+  way the *planner* resolves it, so the two cannot drift: DataFusion's typed
+  `config::Dialect::from_str` **first**, then sqlparser. The order matters and review caught it —
+  the two vocabularies are different sizes. sqlparser's `dialect_from_str` knows `spark`,
+  `sparksql`, `oracle` and `teradata`; `ConfigOptions` knows none of them and `set_config`
+  **skips** a value it can't parse. Handing the raw config string to sqlparser alone would have
+  lexed the editor as Spark while the planner sat on `generic` (`a#b` is one token under one and
+  three under the other) — the exact split this task exists to close, reintroduced through the new
+  UI-side resolution path. A new `lex::dialect(name)` is the one resolution site, and an unknown
+  name falls back to `generic` — where a fresh engine also lands — rather than going blank,
+  because `ConfigOptions::set` and `policy_verdicts` are already saying that fault out loud and an
+  editor that stopped tokenising would hide the message instead of showing it.
 - **`is_word_char` is gone.** It was the second hardcode, it had no caller, and its doc claimed a
   role (completion's word boundaries) that the editor's own `is_ident_char` actually plays.
   `COMPLETION_SPEC.md` records the gap; when a provider-supplied word predicate is built it will
@@ -94,8 +100,14 @@ The coupling, not the default.
   parser message the check exists to replace.
 - `config::DIALECT_KEY` — the key is spelled once now that three layers read it.
 
-Pinned by `lex::tests::{the_dialect_comes_from_the_engine, an_unknown_dialect_lexes_as_generic}`
-and `export::tests::bare_words_are_judged_by_the_configured_dialect`.
+Pinned by `lex::tests::{the_dialect_comes_from_the_engine, an_unknown_dialect_lexes_as_generic,
+a_dialect_datafusion_refuses_never_reaches_the_tokenizer}` and
+`export::tests::bare_words_are_judged_by_the_configured_dialect`.
+
+One residual, recorded rather than fixed: `set_config` skips a value it cannot apply, so an engine
+already running `postgresql` *stays* on it when the user then types an invalid name, while the
+lexer falls back to `generic`. That is `set_config`'s general behaviour for every key, not
+something the dialect path can close on its own, and the engine warns about it.
 
 ## Note: nothing is blocked
 `json_contains` is the spelling that works in every dialect and is what the docs name. A user who
