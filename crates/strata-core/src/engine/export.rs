@@ -16,8 +16,10 @@ use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
+use datafusion::sql::sqlparser::dialect::Dialect;
 
 use super::query::snapshot_name;
+use crate::engine::sql;
 use strata_model::SnapshotId;
 
 /// Everything one export needs: where it goes, how much of the snapshot, in what order, in
@@ -229,19 +231,7 @@ pub async fn run_export(
 
     let select = select_sql(&snap, &spec, &schema, stats.ord.as_deref());
 
-    // `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option:
-    // DataFusion 54's COPY parser re-renders each one with `Ident::to_string()`, so a
-    // quoted name reaches the planner with its quotes still attached and matches no
-    // field. Bare is also case-preserving here (that parser doesn't normalise), so every
-    // name the tokenizer reads as one word round-trips — and one it doesn't simply can't
-    // be expressed, which is worth saying plainly instead of emitting a statement that
-    // fails with a parser message about a stray token.
-    if let Some(bad) = spec.partition.columns.iter().find(|c| !is_bare_word(c)) {
-        return Err(format!(
-            "Can't partition by {bad:?}: COPY takes unquoted column names, so a partition \
-             column has to be a single plain word"
-        ));
-    }
+    partition_columns_are_bare_words(&spec.partition.columns, ctx)?;
     partition_columns_have_no_nulls(&spec.partition.columns, &schema, stats)?;
 
     let part_clause = if spec.partition.is_flat() {
@@ -432,15 +422,45 @@ fn partition_columns_have_no_nulls(
     Ok(())
 }
 
+/// Refuse any partition column the engine's own parser dialect doesn't read as a single
+/// bare word.
+///
+/// `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option: DataFusion 54's
+/// COPY parser re-renders each one with `Ident::to_string()`, so a quoted name reaches the
+/// planner with its quotes still attached and matches no field. Bare is also case-preserving
+/// here (that parser doesn't normalise), so every name the tokenizer reads as one word
+/// round-trips — and one it doesn't simply can't be expressed, which is worth saying plainly
+/// instead of emitting a statement that fails with a parser message about a stray token.
+///
+/// Its own (sync) function rather than an inline check, because the resolved dialect is not
+/// `Send` and [`run_export`] is spawned onto the engine runtime — a `Box<dyn Dialect>` held
+/// across one of its awaits would not compile.
+fn partition_columns_are_bare_words(
+    columns: &[String],
+    ctx: &SessionContext,
+) -> Result<(), String> {
+    let dialect = sql::lex::dialect(ctx.state().config_options().sql_parser.dialect.as_ref());
+    match columns.iter().find(|c| !is_bare_word(dialect.as_ref(), c)) {
+        Some(bad) => Err(format!(
+            "Can't partition by {bad:?}: COPY takes unquoted column names, so a partition \
+             column has to be a single plain word"
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Whether `name` tokenises as a single **unquoted** identifier, asked of the very
-/// dialect DataFusion parses with rather than a hardcoded character set (`lex` does the
-/// same for the editor's word boundaries).
-fn is_bare_word(name: &str) -> bool {
-    use datafusion::sql::sqlparser::dialect::{Dialect, GenericDialect};
-    let d = GenericDialect {};
+/// dialect DataFusion will parse the generated `COPY` with rather than a hardcoded
+/// character set (`sql::lex` follows the same setting for the editor).
+///
+/// The dialect has to be the caller's, not a constant: `generic` reads `region#eu` as one
+/// identifier and `postgresql` does not, so a hardcoded one would wave through a partition
+/// column that then emits a `PARTITIONED BY` the planner chokes on — the exact parser
+/// message this check exists to replace (WJ-04).
+fn is_bare_word(dialect: &dyn Dialect, name: &str) -> bool {
     let mut rest = name.chars();
-    matches!(rest.next(), Some(c) if d.is_identifier_start(c))
-        && rest.all(|c| d.is_identifier_part(c))
+    matches!(rest.next(), Some(c) if dialect.is_identifier_start(c))
+        && rest.all(|c| dialect.is_identifier_part(c))
 }
 
 /// `COPY … TO` returns a single `UInt64` "count" column with the rows written.
@@ -614,9 +634,25 @@ mod tests {
 
     #[test]
     fn a_partition_column_that_isnt_one_bare_word_is_refused_before_planning() {
-        assert!(is_bare_word("year"));
-        assert!(is_bare_word("_2024"));
-        assert!(!is_bare_word("order date"));
-        assert!(!is_bare_word("2024"));
+        let d = sql::lex::dialect("generic");
+        assert!(is_bare_word(d.as_ref(), "year"));
+        assert!(is_bare_word(d.as_ref(), "_2024"));
+        assert!(!is_bare_word(d.as_ref(), "order date"));
+        assert!(!is_bare_word(d.as_ref(), "2024"));
+    }
+
+    /// **And it is the *engine's* dialect that decides.** `region#eu` is one identifier under
+    /// `generic` and three tokens under `postgresql`, so a hardcoded dialect here would emit a
+    /// `PARTITIONED BY` the planner rejects with the very parser message this check replaces.
+    #[test]
+    fn bare_words_are_judged_by_the_configured_dialect() {
+        assert!(is_bare_word(
+            sql::lex::dialect("generic").as_ref(),
+            "region#eu"
+        ));
+        assert!(!is_bare_word(
+            sql::lex::dialect("postgresql").as_ref(),
+            "region#eu"
+        ));
     }
 }

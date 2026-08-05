@@ -2,7 +2,8 @@
 //! backs both autocomplete (S7) and validation (S25). See `docs/SQL_LANGUAGE_SPEC.md`.
 //!
 //! Layers:
-//! - [`lex`] — tokenise via DataFusion's own `sqlparser` (byte spans + kinds).
+//! - [`lex`] — tokenise via DataFusion's own `sqlparser` (byte spans + kinds), under the
+//!   engine's configured `datafusion.sql_parser.dialect`.
 //! - [`context`] — split statements + classify the caret's clause context.
 //! - [`symbols`] — the [`Catalog`] (tables/views/columns from `state.project` +
 //!   registered functions) and in-statement alias resolution.
@@ -29,7 +30,6 @@ pub mod symbols;
 pub mod validate;
 
 pub use complete::{complete, Completion, CompletionKind};
-pub use lex::is_word_char;
 pub use symbols::Catalog;
 pub use validate::{policy_verdicts, validate, Blocked, PolicyRefusal};
 

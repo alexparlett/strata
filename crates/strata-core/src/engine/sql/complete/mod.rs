@@ -62,7 +62,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
     if caret_in_string_or_comment(sql, caret) {
         return Vec::new();
     }
-    let (toks, lex_err) = lex(sql);
+    let (toks, lex_err) = lex(sql, &catalog.dialect);
     // A tokenizer error empties the token stream (lex.rs) — every position would
     // masquerade as a blank statement and mis-offer. An un-tokenizable buffer is
     // mid-edit by definition: stay quiet everywhere until it lexes again.

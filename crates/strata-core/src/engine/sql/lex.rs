@@ -3,22 +3,46 @@
 //! [`Tok`] model with **byte-offset spans** — insulating the rest of `crate::sql`
 //! from sqlparser's exact types and giving squiggle ranges + token-under-caret.
 //!
+//! The dialect is an **argument**, never a constant here: `datafusion.sql_parser.dialect`
+//! is a key the user can set (W2), and the dialects disagree about tokenizing, not just
+//! about grammar — under `postgresql` every operator character is a custom-operator part,
+//! so `a>-1` lexes as one `>-` token, while `#`/`@` stop being identifier characters.
+//! A hardcoded dialect here would put autocomplete and the squiggles on different rules
+//! from the planner they are supposed to agree with (WJ-04).
+//!
 //! sqlparser reports positions as 1-based line/column (character columns). We convert
 //! to byte offsets against a line-start index; for ASCII SQL (the common case) columns
 //! are bytes, so this is exact — non-ASCII columns are approximate (acceptable v1).
 
 use std::ops::Range;
+use std::str::FromStr;
 
-use datafusion::sql::sqlparser::dialect::{Dialect, GenericDialect};
+use datafusion::config::Dialect as EngineDialect;
+use datafusion::sql::sqlparser::dialect::{dialect_from_str, Dialect, GenericDialect};
 use datafusion::sql::sqlparser::keywords::Keyword;
 use datafusion::sql::sqlparser::tokenizer::{Location, Token, Tokenizer};
 
-/// Whether `ch` continues a SQL identifier/word, per DataFusion's parser dialect
-/// (`GenericDialect` — its default; the tokeniser below uses the same one). Used for
-/// completion's word-boundary + dismiss logic so it matches the parser's notion of a
-/// word rather than a hardcoded character set.
-pub fn is_word_char(ch: char) -> bool {
-    GenericDialect {}.is_identifier_part(ch)
+/// Resolve the dialect `name` — the engine's own `datafusion.sql_parser.dialect`.
+///
+/// **Through DataFusion's typed `Dialect` first, and only then through sqlparser.** The two
+/// vocabularies are not the same size: sqlparser's `dialect_from_str` knows `spark`,
+/// `sparksql`, `oracle` and `teradata`, and DataFusion's `ConfigOptions` knows none of them —
+/// it parses this key with `Dialect::from_str` and `Engine::set_config` **skips** a value that
+/// fails, leaving the planner on whatever it already had. Handing the raw string straight to
+/// sqlparser would therefore tokenise the editor by rules the planner never adopted (`a#b` is
+/// one identifier under `generic` and three tokens under `spark`) — the very split this
+/// module exists to close. Parsing the way the planner parses is what keeps them in step.
+///
+/// A name neither of them knows falls back to `generic`, which is also where a fresh engine
+/// lands. That is not a silent fallback: `ConfigOptions::set` rejects it and
+/// [`policy_verdicts`](super::policy_verdicts) refuses outright, so the fault is already being
+/// said out loud. Degrading here keeps the editor lexing well enough to *show* the message
+/// rather than going blank alongside it.
+pub(crate) fn dialect(name: &str) -> Box<dyn Dialect> {
+    let name = EngineDialect::from_str(name).unwrap_or_default();
+    // Every name DataFusion accepts is one sqlparser accepts, so this arm is unreachable —
+    // it is here so there is exactly one fallback in the function rather than two answers.
+    dialect_from_str(name.as_ref()).unwrap_or_else(|| Box::new(GenericDialect {}))
 }
 
 /// Whether `word` is **reserved in name positions** (terminates a table/column-alias
@@ -43,7 +67,8 @@ pub(crate) fn is_reserved_in_name_position(word: &str) -> bool {
 /// **unterminated** at end-of-input (an open `'…` fails the whole tokenize, so the
 /// token stream can't answer this; comments are dropped by [`lex`] entirely). One
 /// linear scan: `'…'` strings with `''` escapes, `--` line comments, `/* … */` block
-/// comments (non-nesting, per the generic dialect). `"quoted idents"` are skipped as
+/// comments (treated as non-nesting — the outermost `*/` ends the region, which only
+/// under-suppresses). `"quoted idents"` are skipped as
 /// opaque regions (they may contain `--` etc.) but do **not** count as inside —
 /// completion may legitimately fire there.
 pub fn caret_in_string_or_comment(sql: &str, caret: usize) -> bool {
@@ -204,13 +229,13 @@ pub(crate) fn rel_offset(slice: &str, line: u64, column: u64) -> usize {
     (base + column).min(slice.len())
 }
 
-/// Tokenise `sql`, dropping whitespace/comments. On a tokenizer error returns the
-/// tokens gathered so far plus the error (so completion/validation degrade instead of
-/// bailing on mid-edit text).
-pub fn lex(sql: &str) -> (Vec<Tok>, Option<LexError>) {
+/// Tokenise `sql` under the engine's configured `dialect` (see [`dialect`]), dropping
+/// whitespace/comments. On a tokenizer error returns the tokens gathered so far plus the
+/// error (so completion/validation degrade instead of bailing on mid-edit text).
+pub fn lex(sql: &str, dialect: &str) -> (Vec<Tok>, Option<LexError>) {
     let starts = line_starts(sql);
-    let dialect = GenericDialect {};
-    let mut tokenizer = Tokenizer::new(&dialect, sql);
+    let dialect = self::dialect(dialect);
+    let mut tokenizer = Tokenizer::new(dialect.as_ref(), sql);
     match tokenizer.tokenize_with_location() {
         Ok(tokens) => (
             tokens
@@ -295,6 +320,61 @@ fn offset(starts: &[usize], loc: Location) -> usize {
 #[cfg(test)]
 mod tests {
     use super::caret_in_string_or_comment as guard;
+    use super::lex;
+
+    /// **The lexer follows the engine's dialect; it never picks one.** The dialects disagree
+    /// at the *token* level, not only about grammar, so a hardcoded dialect here would put
+    /// autocomplete and the squiggles on different rules from the planner (WJ-04). Two
+    /// measured divergences pin it: `postgresql` treats every operator character as a
+    /// custom-operator part, so `a>-1` lexes as one `>-` token, and it drops `#` from the
+    /// identifier characters `generic` allows.
+    #[test]
+    fn the_dialect_comes_from_the_engine() {
+        let text = |sql: &str, dialect: &str| {
+            let (toks, err) = lex(sql, dialect);
+            assert!(err.is_none(), "{sql} under {dialect}");
+            toks.into_iter().map(|t| t.text).collect::<Vec<_>>()
+        };
+
+        assert_eq!(text("a>-1", "generic"), ["a", ">", "-", "1"]);
+        assert_eq!(text("a>-1", "postgresql"), ["a", ">-", "1"]);
+        assert_eq!(text("a#b", "generic"), ["a#b"]);
+        assert_eq!(text("a#b", "postgresql"), ["a", "#", "b"]);
+    }
+
+    /// A dialect name sqlparser doesn't know lexes as `generic` rather than going blank —
+    /// the planner is already refusing that config out loud, and an editor that stopped
+    /// tokenising would hide the message instead of showing it.
+    #[test]
+    fn an_unknown_dialect_lexes_as_generic() {
+        let (toks, err) = lex("SELECT a#b", "not-a-dialect");
+        assert!(err.is_none());
+        assert_eq!(
+            toks.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
+            ["SELECT", "a#b"]
+        );
+    }
+
+    /// **A dialect the *engine* would refuse must not reach the tokenizer either.** sqlparser
+    /// knows four dialects DataFusion's `ConfigOptions` does not, and `set` *skips* a value it
+    /// cannot parse — so resolving the config string through sqlparser alone would lex the
+    /// buffer by rules the planner never adopted, which is the split this whole module exists
+    /// to close. `spark` is the sharpest case: sqlparser has it, DataFusion doesn't, and it
+    /// disagrees with `generic` about `#`.
+    #[test]
+    fn a_dialect_datafusion_refuses_never_reaches_the_tokenizer() {
+        use datafusion::sql::sqlparser::dialect::dialect_from_str;
+        assert!(
+            dialect_from_str("spark").is_some(),
+            "the premise: sqlparser knows it"
+        );
+        let (toks, _) = lex("a#b", "spark");
+        assert_eq!(
+            toks.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
+            ["a#b"],
+            "generic, which is where the engine stays when it skips the value"
+        );
+    }
 
     /// Caret at the `|` marker.
     fn at(sql_with_caret: &str) -> bool {

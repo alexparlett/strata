@@ -257,9 +257,10 @@ is categorically out — the provider lives in-process.
   those positions silent rather than offering the ladder; the `SHOW TABLES` statement
   phrase still completes from `Start`.
 - The editor's `is_ident_char` (trigger/anchor word test) is its own generic definition
-  and differs from the dialect's `is_word_char` (`$`/`@`/`#` are dialect word chars) —
-  a `price$usd` column dismisses the popup at the `$`. A provider-supplied word
-  predicate would close this; deferred until it bites.
+  and differs from the parser dialect's identifier characters (`$`/`@`/`#` are word chars
+  under `generic`) — a `price$usd` column dismisses the popup at the `$`. A
+  provider-supplied word predicate would close this, reaching the configured dialect the
+  way `lex` does (`lex::dialect`, WJ-04); deferred until it bites.
 - The three SELECT-list scrapers (`column_aliases`, `projection_columns`,
   `select_column_refs`) share the grammar tables and now agree on depth/literal
   policy, but remain three walks — a single parameterised scraper is a clean refactor

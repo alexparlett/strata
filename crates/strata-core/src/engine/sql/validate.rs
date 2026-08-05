@@ -99,7 +99,14 @@ pub async fn validate(
         return out;
     }
 
-    let (toks, lex_err) = lex(sql);
+    // The dialect first, because the *tokenizer* takes it too: reading it after lexing is
+    // how the two came apart in the first place (WJ-04). Off `state_ref`, not `ctx.state()` —
+    // that clones the whole `SessionState`, and the tokenizer-error arm below returns without
+    // ever needing one (an unterminated string is a constant mid-edit state, and this runs per
+    // keystroke). The dialect itself is a `Copy` enum, so nothing outlives the guard.
+    let dialect = ctx.state_ref().read().config_options().sql_parser.dialect;
+
+    let (toks, lex_err) = lex(sql, dialect.as_ref());
     if let Some(e) = lex_err {
         out.push(diag(Severity::Error, e.message, e.span, sql));
         // A tokenizer failure means splitting/planning would misread the text.
@@ -110,7 +117,6 @@ pub async fn validate(
     let hints = keyword_typo_hints(&toks, ctx, functions);
 
     let state = ctx.state();
-    let dialect = state.config_options().sql_parser.dialect;
     let ranges = statement_ranges(sql, &toks);
     let last = ranges.len().saturating_sub(1);
     for (idx, stmt_range) in ranges.into_iter().enumerate() {
