@@ -16,8 +16,11 @@ the auth variant (`S3Auth::Profile { name }`, `GcsAuth::ServiceAccount { path }`
 - Validate + save into the connection model (task 01). `components::form` is the row vocabulary
   (AGENTS.md §3 — a settings-style surface is built from it, never its own rows).
 - The store mutators the save needs: `upsert_connection` / `remove_connection` on `ProjectState`,
-  keyed by bucket at its sorted slot, persisted through `persisted_defs` like every other def
-  mutation. Connections 01 left none — nothing referenced them.
+  persisted through `persisted_defs` like every other def mutation. Connections 01 left none —
+  nothing referenced them. **Replace on `ConnectionDef::url()`, insert at the bucket-sorted
+  slot**: the two are different keys and only one of them is identity, so an upsert matching on
+  bucket would let saving a `gs://lake` connection silently replace the `s3://lake` one it sorts
+  beside.
 
 ## What Connections 01 handed over
 
