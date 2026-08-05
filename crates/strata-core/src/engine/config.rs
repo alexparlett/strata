@@ -299,11 +299,11 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
     },
     // sql_parser
     EngineKey {
-        key: "datafusion.sql_parser.dialect",
+        key: DIALECT_KEY,
         default: "generic",
         kind: Kind::Text,
-        desc:
-            "Parser dialect: generic, postgresql, mysql, sqlite, duckdb, snowflake, bigquery, ansi.",
+        desc: "Parser dialect: generic, postgresql, mysql, hive, sqlite, snowflake, redshift, \
+               mssql, clickhouse, bigquery, ansi, duckdb, databricks.",
     },
     EngineKey {
         key: "datafusion.sql_parser.default_null_ordering",
@@ -417,6 +417,12 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
         desc: "TTL of list-files cache entries. Units m/s, e.g. 2m.",
     },
 ];
+
+/// The key naming the SQL **parser dialect**, spelled once because three layers have to agree
+/// on it: the planner reads it from `ConfigOptions`, the editor's tokeniser is handed it
+/// ([`sql::lex`](crate::engine::sql::lex)), and the UI resolves it through [`effective`] to
+/// build the language service's snapshot.
+pub const DIALECT_KEY: &str = "datafusion.sql_parser.dialect";
 
 /// Look up a known key's metadata, or `None` for a custom key.
 pub fn key_def(name: &str) -> Option<&'static EngineKey> {

@@ -17,6 +17,7 @@ use strata_code_editor::prelude::{
     EditorLanguage, Rope,
 };
 use strata_core::config::Command;
+use strata_core::engine::config::{effective, DIALECT_KEY};
 use strata_core::engine::sql;
 use strata_core::keymap::resolve;
 use strata_model::TabId;
@@ -102,12 +103,23 @@ impl Component for EditorTab {
         // of columns) paying that per character would be the one thing that could
         // make the synchronous pipeline felt. The effect subscribes to the project
         // station; the provider just peeks the cached snapshot.
+        //
+        // It also subscribes to the **settings**, for the parser dialect the snapshot
+        // carries: `datafusion.sql_parser.dialect` is what `lex` tokenises with, so a
+        // change to it has to re-lex rather than leave completion reading the buffer by
+        // rules the planner has already stopped using (WJ-04). Read from the config
+        // rather than back off the engine — `use_engine_config` is a *sibling* effect on
+        // the same write, and asking the engine here would make the answer depend on
+        // which of the two Freya runs first.
         let project = use_radio_station::<ProjectState, ProjChan>();
+        let settings = use_config(ConfigChan::Settings);
         let mut catalog = use_state(sql::Catalog::default);
         {
             let engine = engine.clone();
             use_side_effect(move || {
                 let p = project.read();
+                let dialect =
+                    effective(&settings.read().settings.engine, DIALECT_KEY).unwrap_or_default();
                 *catalog.write() = sql::Catalog::build(
                     p.tables.iter().map(|t| {
                         (
@@ -122,6 +134,7 @@ impl Component for EditorTab {
                         )
                     }),
                     engine.functions().clone(),
+                    dialect,
                 );
             });
         }

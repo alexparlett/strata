@@ -41,22 +41,31 @@ impl TableSym {
     }
 }
 
-/// A snapshot of everything the analysis layer resolves against.
+/// A snapshot of everything the analysis layer resolves against, plus the engine setting it
+/// has to *read* the buffer with.
 #[derive(Clone, Default)]
 pub struct Catalog {
     /// Registered tables and saved views (both address columns).
     pub tables: Vec<TableSym>,
     pub functions: FunctionCatalog,
+    /// The engine's `datafusion.sql_parser.dialect`, for [`lex`](super::lex::lex).
+    ///
+    /// It rides here because this is already the language service's one snapshot of engine
+    /// state, rebuilt by one effect: a completion pass reached from a keystroke has no engine
+    /// to ask, and the alternative — a second value threaded to the same call — is a second
+    /// thing that can go stale on its own. Empty (the `Default`) resolves to `generic`.
+    pub dialect: String,
 }
 
 impl Catalog {
-    /// Build from the project catalog + the engine's function names. Takes
+    /// Build from the project catalog + the engine's function names and parser dialect. Takes
     /// `(name, columns)` pairs — the columns are what registration *learned* (they live
     /// on the UI project store's rows, not on the defs), so the caller projects them.
     pub fn build<'a>(
         tables: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
         views: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
         functions: FunctionCatalog,
+        dialect: String,
     ) -> Self {
         let mut out = Vec::new();
         for (name, cols) in tables {
@@ -68,6 +77,7 @@ impl Catalog {
         Catalog {
             tables: out,
             functions,
+            dialect,
         }
     }
 

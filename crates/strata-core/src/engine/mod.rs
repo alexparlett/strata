@@ -1328,8 +1328,11 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     // The crate also registers `?` as an alias for `json_contains`, and it is **unreachable from
     // SQL under our default dialect**: `GenericDialect` omits `Token::Question` from
     // `get_next_precedence`, so `doc ? 'a'` fails to parse before the operator is ever consulted.
-    // `json_contains` is the spelling that works everywhere (WJ-04 is whether to move the
-    // default to postgres, which does parse it).
+    // `json_contains` is the spelling that works everywhere, and it stays the one we name: WJ-04
+    // surveyed the move to `postgresql` and **declined** it — that dialect makes every operator
+    // character a custom-operator part, so `a>-1` tokenizes as `a >- 1`, and it cannot parse
+    // `SELECT * EXCEPT (a)`, `* EXCLUDE`, or a trailing comma in a projection. A user can still
+    // set the key; `sql::lex` follows it, so the whole language service moves with them.
     //
     // Warned rather than fatal because the failure cannot be silent — a registration that did
     // not happen surfaces as "Invalid function 'json_get'" on the first query that needs one,

@@ -861,7 +861,7 @@ mod tests {
     fn at(sql_with_caret: &str) -> CaretAnalysis {
         let caret = sql_with_caret.find('|').expect("caret marker");
         let sql = sql_with_caret.replace('|', "");
-        let (toks, _) = lex(&sql);
+        let (toks, _) = lex(&sql, "generic");
         analyze_caret(&sql, caret, &toks)
     }
 

@@ -99,7 +99,12 @@ pub async fn validate(
         return out;
     }
 
-    let (toks, lex_err) = lex(sql);
+    // The dialect first, because the *tokenizer* takes it too: reading it after lexing is
+    // how the two came apart in the first place (WJ-04).
+    let state = ctx.state();
+    let dialect = state.config_options().sql_parser.dialect;
+
+    let (toks, lex_err) = lex(sql, dialect.as_ref());
     if let Some(e) = lex_err {
         out.push(diag(Severity::Error, e.message, e.span, sql));
         // A tokenizer failure means splitting/planning would misread the text.
@@ -109,8 +114,6 @@ pub async fn validate(
     check_parens(&toks, sql, &mut out);
     let hints = keyword_typo_hints(&toks, ctx, functions);
 
-    let state = ctx.state();
-    let dialect = state.config_options().sql_parser.dialect;
     let ranges = statement_ranges(sql, &toks);
     let last = ranges.len().saturating_sub(1);
     for (idx, stmt_range) in ranges.into_iter().enumerate() {

@@ -39,6 +39,7 @@ fn catalog() -> Catalog {
             aggregate: vec!["sum".into(), "count".into()],
             window: vec!["row_number".into()],
         },
+        "generic".into(),
     )
 }
 
@@ -458,7 +459,12 @@ fn weird_identifiers_insert_quoted() {
         column_info(&Field::new(name, DataType::Utf8, true))
     }
     let cols = [col("Amount USD"), col("order"), col("plain")];
-    let cat = Catalog::build([("t", &cols[..])], [], FunctionCatalog::default());
+    let cat = Catalog::build(
+        [("t", &cols[..])],
+        [],
+        FunctionCatalog::default(),
+        "generic".into(),
+    );
     let items = complete("SELECT  FROM t", 7, &cat, false);
     let find = |l: &str| items.iter().find(|c| c.label == l).unwrap().insert.clone();
     assert_eq!(find("Amount USD"), "\"Amount USD\"");
@@ -605,7 +611,12 @@ fn grammar_vocabulary_columns_insert_quoted() {
         column_info(&Field::new(name, DataType::Utf8, true))
     }
     let cols = [col("null"), col("case"), col("asc"), col("plain")];
-    let cat = Catalog::build([("t", &cols[..])], [], FunctionCatalog::default());
+    let cat = Catalog::build(
+        [("t", &cols[..])],
+        [],
+        FunctionCatalog::default(),
+        "generic".into(),
+    );
     let items = complete("SELECT  FROM t", 7, &cat, false);
     let find = |l: &str| items.iter().find(|c| c.label == l).unwrap().insert.clone();
     assert_eq!(find("null"), "\"null\"");
