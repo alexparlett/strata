@@ -246,6 +246,7 @@ mod tests {
                 tables: vec![table("orders")],
                 views: Vec::new(),
                 saved_queries: Vec::new(),
+                ..Default::default()
             };
             ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-problems-render"))
         };

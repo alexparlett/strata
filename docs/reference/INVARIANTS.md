@@ -478,6 +478,29 @@ Things that must not regress. Each was fought for once already.
   `defs()` is a pure projection for saving. **Identity:** tables/views are keyed by **name** (their
   engine/SQL identity, one shared namespace, case-insensitive compare); saved queries by a stable
   **`Uuid`**. Renames route through the store (a view rename rewrites tab `Origin::View` keys).
+  **Connections** (W7) are the fourth def and follow the same split: `ConnectionDef` in the model,
+  a `ConnRow { def, reg: Reg<()> }` in the store on its own `ProjChan::Connections`, keyed by
+  **`ConnectionDef::url()`** — scheme *and* authority, which is what the object-store registry keys
+  on. Not the bucket: `s3://lake` and `gs://lake` share one and are two connections, so a
+  bucket-keyed fold lands both answers on whichever row comes first and leaves the other `Loading`
+  for the life of the window, with no error anywhere to say so. The `()` is not laziness — connecting *registers* an object store, it does not infer
+  anything, so there is no answer to carry and the three `Reg` states are the whole value (the
+  pane's status dot). They live in the committed `project.json` beside the rest, which
+  `CONNECTIONS_SPEC.md` §5 had left open against the gitignored session: a def carrying only a
+  profile *name* and a key *file path* holds nothing a colleague may not have, and a catalog whose
+  tables live in a bucket is not shareable if the bucket isn't.
+- **A connection registers a bucket, and it registers before anything that reads one.** A table's
+  source path resolves through the object store registered for its bucket, so `register_pass` runs
+  connections as its **first** phase — otherwise a perfectly correct table def fails with "no
+  suitable object store found" and the diagnosis lands on the wrong row. Connections need no
+  ordering among themselves and get no fixed-point retry (each registers one bucket and reads
+  nothing the pass provides). A **whole-catalog ↻ re-connects; a single table's Refresh does not** —
+  a re-connect is what fixes the case ↻ exists for (fill in the region, run `aws sso login`), and
+  putting a credential round trip behind a one-table gesture buys nothing. **Ambient and Named
+  profile are two providers, not one chain with a setting**: `aws-config`'s default chain is
+  unconditionally `Environment → Profile → …`, so naming a profile on it lets an exported
+  `AWS_ACCESS_KEY_ID` sign instead, silently, with the row still green. Full model:
+  [ENGINE.md](ENGINE.md), spec: [CONNECTIONS_SPEC.md](../CONNECTIONS_SPEC.md).
 - **A reader that outlives one Run pins the snapshot it reads.** A snapshot belongs to its
   workspace and is retired the moment that workspace dispatches another run (SNAPSHOT_SPEC §4),
   which is right for the grid and wrong for anything longer-lived. `Engine::pin_snapshot` hands

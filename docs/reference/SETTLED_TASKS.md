@@ -191,5 +191,42 @@ one `apply`. Known limitation, recorded in the task file: muda's predefined item
 accelerators (⌘H, ⌥⌘H, ⌘M) and `set_accelerator` is `MenuItem`'s alone, so those three chords are
 reserved and `suspend_accelerators` cannot reach them.
 
+**Connections 01 (model + object stores, W7)** is ✅ — the fourth project def, and the engine half
+of remote reads. No surface: 02–04 own the rail button, the pane, the editor and the Configure
+LOCATION toggle. Four things it settled, three of them decisions the spec had left open or drawn
+differently, and none worth re-opening without new information.
+
+**The whole def rides the committed `project.json`**, closing `CONNECTIONS_SPEC.md` §5's open
+question against splitting the per-machine `profile` / `saPath` into the gitignored `session.json`:
+a def carrying only a profile *name* and a key *file path* holds nothing a colleague may not have,
+and a catalog whose tables live in a bucket is not shareable if the bucket isn't. **The bucket is
+the authority alone and the scheme comes from the provider**, where the v11 canvas stored the
+scheme-qualified string — two statements of one fact can disagree, and `s3://acme-lake` under a GCS
+provider is a def that reads one way and registers another; `ConnectionDef::url()` is the derived
+registry key, and the form owns the prefix chip. **The auth reference lives inside the auth
+variant** (`S3Auth::Profile { name }`) rather than beside it, so a profile named on an Ambient
+connection is not a state that exists. **`connect` probes the credential chain before registering,
+and is all-or-nothing**: without the probe a credential-less connection registers happily and the
+diagnosis lands on every table over the bucket — one opaque signing error each, in the wrong place
+— and registering-then-failing would make a connection both refused and live, which is exactly what
+`Reg<T>` exists to make unrepresentable. The probe resolves once and discards; the installed
+provider resolves **per request**, so SSO / assumed-role credentials still refresh themselves.
+
+Two consequences worth carrying: connections are `register_pass`'s **first** phase (a table
+registered before its bucket's store fails on a def that is perfectly correct), and the new
+`aws-config` tree raised the workspace's effective MSRV to **rustc 1.94.1**.
+
+Two things the adversarial review caught, both of which had shipped as written and are now fixed —
+they are the ones most worth not rediscovering. **Ambient and Named profile are two providers, not
+one chain with a setting.** `ConfigLoader::profile_name` configures the default chain's *Profile*
+arm and does not move it in front of `Environment`, so the first version signed as the exported
+`AWS_ACCESS_KEY_ID` while the pane showed the profile the user picked — Profile and Ambient were
+the same connection wherever ambient credentials existed, and a misspelled profile name still
+registered green, defeating the probe. Named profile is now `ProfileFileCredentialsProvider` alone.
+And **a connection's identity is `url()`, never `bucket`**: `s3://lake` and `gs://lake` share a
+bucket and are two connections over two stores, so the bucket-keyed fold the first version used
+answered one row twice and left the other `Loading` for the life of the window with no error
+anywhere. Both have regression tests (`engine::store::tests`, `register::tests`).
+
 ---
 

@@ -108,6 +108,12 @@ impl HeadlessHost {
     /// `Err` only for a project that cannot be read — a missing or unparseable
     /// `project.json`. A *def* that the engine refused is not an error: it is a `failed`
     /// catalog row, exactly as in the app, and the rest of the project is queryable.
+    ///
+    /// The pass connects the project's object stores first (W7), so a table over a bucket
+    /// registers here exactly as it does in a window. A connection is not itself a catalog
+    /// entry — an agent queries data, and a bucket is not something it can name — so
+    /// [`settled`](Self::settled) does not list one; a connection the engine refused surfaces
+    /// as the `failed` rows of the tables that needed it.
     pub async fn open(root: PathBuf) -> Result<HeadlessHost, String> {
         if !exists_at(&root) {
             return Err(format!(
@@ -533,6 +539,7 @@ mod tests {
             &root,
             &ProjectDefs {
                 name: "sales".into(),
+                connections: Vec::new(),
                 tables: vec![table("people", "people.csv"), table("gone", "missing.csv")],
                 views: vec![ViewDef {
                     name: "adults".into(),

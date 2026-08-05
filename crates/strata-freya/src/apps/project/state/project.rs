@@ -32,7 +32,7 @@ use freya::radio::RadioChannel;
 use strata_core::engine::{TableMeta, ViewMeta};
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
 use strata_core::register::view_order;
-use strata_model::{CatalogKind, ColumnInfo, SavedQuery, TableDef, ViewDef};
+use strata_model::{CatalogKind, ColumnInfo, ConnectionDef, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::query::ScanId;
@@ -45,6 +45,10 @@ pub enum ProjChan {
     /// Project identity: name / root path. Subscribed by the header's project switcher (a
     /// rename / re-open re-labels the trigger); the window title joins it with P4-13.
     Meta,
+    /// The remote object stores (W7) — its own channel for the same reason the sections
+    /// have theirs: connecting a bucket must not wake the TABLES section, and the sidebar's
+    /// Connections pane is a separate pane, not a section of the catalog.
+    Connections,
     Tables,
     Views,
     /// Notified by save-as-query (⌘S on a scratch / saved-query tab); subscribed by
@@ -80,6 +84,27 @@ impl<T> Reg<T> {
         match self {
             Reg::Failed(e) => Some(e),
             _ => None,
+        }
+    }
+}
+
+/// One connection: its persisted def + whether its object store went in (W7).
+///
+/// `Reg<()>` and not `Reg<Something>` because connecting genuinely learns nothing —
+/// a store is *registered*, not inferred, so there is no answer to carry. What the
+/// three states mean is the whole value: `Loading` while the pass is out, `Ready` once
+/// the bucket is reachable, `Failed` with what to fix (no region, a profile the
+/// credential chain does not answer for). That is the sidebar pane's status dot.
+pub struct ConnRow {
+    pub def: ConnectionDef,
+    pub reg: Reg<()>,
+}
+
+impl ConnRow {
+    fn new(def: ConnectionDef) -> Self {
+        Self {
+            def,
+            reg: Reg::Loading,
         }
     }
 }
@@ -171,6 +196,12 @@ pub struct ProjectState {
     /// source paths resolve against. Always set: opening a project that can't be
     /// canonicalized is an unrecoverable error, not a rootless fallback.
     pub root: PathBuf,
+    /// The remote object stores the project reads from (W7). Kept sorted by bucket like every
+    /// other section is sorted by name; **identity is [`ConnectionDef::url`]**, which is what
+    /// the engine's registry keys on and what a landing answer is addressed by. Two
+    /// connections may share a bucket (`s3://lake`, `gs://lake`) and are then simply
+    /// neighbours in the sort.
+    pub connections: Vec<ConnRow>,
     pub tables: Vec<TableRow>,
     pub views: Vec<ViewRow>,
     pub saved_queries: Vec<SavedQuery>,
@@ -193,11 +224,17 @@ pub struct RegistrationFault {
 }
 
 impl ProjectState {
-    /// Every def the engine refused, tables before views (the order they register in, so a view
-    /// broken *by* a broken table reads below its cause).
+    /// Every **catalog** def the engine refused, tables before views (the order they register
+    /// in, so a view broken *by* a broken table reads below its cause).
     ///
     /// Saved queries can't appear: they are stored strings that are never registered, so there is
     /// no engine answer for them to have failed.
+    ///
+    /// A refused **connection** (W7) can, and deliberately does not yet: its condition is a
+    /// `Reg::Failed` on its own row exactly like these, but the surface it belongs to is the
+    /// sidebar's Connections pane, which Connections 02 builds. Whether it *also* earns a
+    /// Problems ▸ Project row is that task's call — the pass already records it in the event
+    /// log, so it is not silent in the meantime.
     pub fn registration_faults(&self) -> Vec<RegistrationFault> {
         let tables = self.tables.iter().filter_map(|r| {
             r.reg.error().map(|why| RegistrationFault {
@@ -241,6 +278,7 @@ impl ProjectState {
         Self {
             name: defs.name,
             root,
+            connections: defs.connections.into_iter().map(ConnRow::new).collect(),
             tables: defs.tables.into_iter().map(TableRow::new).collect(),
             views: defs.views.into_iter().map(ViewRow::new).collect(),
             saved_queries: defs.saved_queries,
@@ -252,6 +290,7 @@ impl ProjectState {
     pub fn defs(&self) -> ProjectDefs {
         ProjectDefs {
             name: self.name.clone(),
+            connections: self.connections.iter().map(|r| r.def.clone()).collect(),
             tables: self.tables.iter().map(|r| r.def.clone()).collect(),
             views: self.views.iter().map(|r| r.def.clone()).collect(),
             saved_queries: self.saved_queries.clone(),
@@ -300,6 +339,27 @@ impl ProjectState {
     }
 
     // --- registration landing (the engine's answers, folded onto the rows) ----------
+
+    /// Land a connected object store on its row (W7).
+    ///
+    /// Addressed by [`ConnectionDef::url`] — the scheme-qualified form — and **not** by the
+    /// bucket, for the same reason the engine registers under it: `s3://lake` and `gs://lake`
+    /// are two connections, and a bucket-keyed lookup would land both answers on whichever row
+    /// came first and leave the other `Loading` for the life of the window, with no error
+    /// anywhere to say so.
+    pub fn connection_registered(&mut self, url: &str) {
+        if let Some(c) = self.connections.iter_mut().find(|c| c.def.url() == url) {
+            c.reg = Reg::Ready(());
+        }
+    }
+
+    /// Land a connection the engine refused on its row — what to fix, in the pane's tooltip.
+    /// Addressed like [`connection_registered`](Self::connection_registered).
+    pub fn connection_failed(&mut self, url: &str, error: String) {
+        if let Some(c) = self.connections.iter_mut().find(|c| c.def.url() == url) {
+            c.reg = Reg::Failed(error);
+        }
+    }
 
     /// Land a table registration answer on its row.
     ///
@@ -595,6 +655,19 @@ impl ProjectState {
 
     // --- re-scan (P3-03) -----------------------------------------------------------
 
+    /// Reset every connection row to `Loading` — the start of a whole-catalog re-scan
+    /// (W7). Same reasoning as [`reload_tables`](Self::reload_tables): mid-pass the store
+    /// has no verdict, so keeping the old one would make `Failed` mean two things.
+    ///
+    /// Connections are re-connected on ↻ and *not* on a single table's Refresh, because a
+    /// re-connect is exactly what fixes the case ↻ exists for — the user runs `aws sso
+    /// login`, or fills in the region, and presses it.
+    pub fn reload_connections(&mut self) {
+        for c in &mut self.connections {
+            c.reg = Reg::Loading;
+        }
+    }
+
     /// Reset every table row to `Loading` — the start of a catalog re-scan. The defs are
     /// untouched; only what the engine last said is dropped, because that is the truth: mid-re-scan
     /// the store has no verdict on this row, and keeping the old error here would make `Failed`
@@ -828,6 +901,7 @@ mod tests {
                 sql: "SELECT 2".into(),
                 meta: "—".into(),
             }],
+            ..Default::default()
         };
         let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-reload-test"));
         p.table_registered(
@@ -1212,6 +1286,7 @@ mod tests {
                 },
             ],
             saved_queries: Vec::new(),
+            ..Default::default()
         };
         let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-viewdeps-fold-test"));
         // What the planner lands: the alias folded to lower case.
@@ -1532,6 +1607,7 @@ mod tests {
                 sql: "SELECT 1".into(),
             }],
             saved_queries: Vec::new(),
+            ..Default::default()
         };
         let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-validity-test"));
         p.table_registered(

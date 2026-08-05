@@ -24,6 +24,12 @@ built only the local arm of each.
   `SOURCE PATH`, and the placeholder changing to a bucket-relative one. Switching to remote keeps
   the first non-blank local path.
 - Resolve paths against the connection's object store and `register_external` over the remote store.
+  Connections 01 did the engine half: the store is already registered under
+  `ConnectionDef::url()` by the time any table registers (connections are `register_pass`'s first
+  phase), so this is **path composition only** — `format!("{}/{path}", conn.url())` into
+  `TableSpec::paths`, with nothing new on the engine. Note that `project::resolve_source` must not
+  touch a remote path: it joins relative entries onto the project folder, which would turn
+  `s3://…`-relative text into a local path.
 - The ⓘ resolution tooltip already has the sentence for this ("Object-store paths are relative to
   the selected connection's bucket"); P4-11 ships it, so nothing changes there.
 
@@ -35,6 +41,12 @@ built only the local arm of each.
 ## Freya / references
 - Design: `Configure.dc.html` LOCATION / TYPE / CONNECTION blocks + the `remote` branches of
   `SW.cfgView`. Core `register_external` + `object_store`. DEV_TASKS U14/W7.
+- The CONNECTION picker's list is `ProjectState::connections` filtered by `Provider` variant, read
+  off the Configure window's shared store. The provider's **label** (`S3` / `GCS` / `HTTP`) is a
+  name two surfaces have to agree on — this picker and 02's row badge — so it belongs in one place;
+  Connections 01 deliberately left it unwritten rather than shipping an accessor nothing called. The
+  **S3 region check** the spec keeps (§4) is the connection's, not the table's — a connection with
+  no region never registers a store, so a table over it fails on its own row.
 - **P4-11** owns the window itself (`apps/configure/`, `platform/configure.rs`), the path list, the
   import options and the Save path — this task adds a section and a branch, and changes nothing
   about how Save works.

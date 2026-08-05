@@ -175,7 +175,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog` capability.
 - **Def/runtime split.** Pure serde defs in `strata-model`; `Reg<T>` rows in the store. Tables/views
-  keyed by **name**, saved queries by **`Uuid`**.
+  keyed by **name**, saved queries by **`Uuid`**, connections by **`url()`** (scheme *and*
+  authority — never the bucket, which two providers can share) — and a connection's `Reg<()>` is
+  honest, because connecting registers a store rather than learning anything.
+- **A connection registers a bucket, and it registers before anything that reads one.** Connections
+  are `register_pass`'s first phase; a whole-catalog ↻ re-connects and a single table's Refresh
+  does not. The def stores the authority and derives the scheme from the provider; **Ambient and
+  Named profile are two providers**, because naming a profile on `aws-config`'s default chain
+  leaves `Environment` in front of it; and **no arm of `engine::store` takes a secret** — a profile
+  name and a key file path, never a key.
 - **History is a satellite** (`.strata/history.jsonl`), never a store field. Only successful data
   runs; Clear unwrites the file and keeps the `seen` guard.
 - **History is a list of queries, not of presses — and dedupe comes before the cap**, keyed by the

@@ -37,6 +37,7 @@ pub mod profile;
 mod query;
 pub mod serialize;
 pub mod sql;
+mod store;
 pub mod value_tree;
 
 /// [`column_info`] and [`chart_role`] are `pub` because a column's vocabulary row is derived
@@ -98,7 +99,9 @@ use query::{
     claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
 };
 use sql::FunctionCatalog;
-use strata_model::{Cell, ChartData, ChartQuery, Diagnostic, QueryOutput, SnapshotId, TabId};
+use strata_model::{
+    Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, QueryOutput, SnapshotId, TabId,
+};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
 /// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
@@ -980,6 +983,25 @@ impl Engine {
     }
 
     // --- catalog ----------------------------------------------------------
+
+    /// Register the object store one [`ConnectionDef`] describes, so tables can be
+    /// registered over its bucket (W7).
+    ///
+    /// **Before any table that reads it.** DataFusion resolves no remote scheme on its own:
+    /// without this, a source path under `s3://acme-lake` fails its registration with "No
+    /// suitable object store found" no matter how well-formed the def is. That ordering is
+    /// [`register_pass`](crate::register::register_pass)'s, so every replay of a project gets
+    /// it.
+    ///
+    /// `Err` means nothing was registered, and carries what to fix — a missing region, a
+    /// profile the credential chain does not answer for. See [`store::connect`].
+    pub async fn connect(&self, conn: ConnectionDef) -> Result<(), String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { store::connect(&ctx, &conn).await })
+            .await
+            .map_err(|e| format!("connect task failed: {e}"))?
+    }
 
     /// (Re)register one external table from its spec, returning its inferred schema +
     /// free row count.

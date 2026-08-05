@@ -32,8 +32,7 @@ pub mod prelude {
         editor_theme::{
             CodeEditorThemeExt, EditorSyntaxTheme, EditorSyntaxThemePartial,
             EditorSyntaxThemePartialExt, EditorSyntaxThemePreference, EditorTheme,
-            EditorThemePartial, EditorThemePartialExt, EditorThemePreference,
-            SYNTAX_SCOPES,
+            EditorThemePartial, EditorThemePartialExt, EditorThemePreference, SYNTAX_SCOPES,
         },
         editor_ui::CodeEditor,
         languages::EditorLanguage,

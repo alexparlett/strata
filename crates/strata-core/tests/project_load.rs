@@ -41,14 +41,19 @@ async fn fixture_project_registers_and_queries() {
     register_project(&eng, root, &defs, |o| outcomes.push(o)).await;
     assert_eq!(
         outcomes.len(),
-        defs.tables.len() + defs.views.len(),
+        defs.connections.len() + defs.tables.len() + defs.views.len(),
         "one outcome per def: {outcomes:?}"
     );
 
-    // Tables first (views read them), relative sources resolved against the folder.
+    // Connections first (a table's bucket has to be registered before its source path can
+    // resolve). The fixture is all local files, so this is an empty phase here — counted
+    // rather than assumed away, so the offsets below stay right if it ever gains one.
+    let after_connections = defs.connections.len();
+
+    // Then tables (views read them), relative sources resolved against the folder.
     let mut failed = Vec::new();
     for (i, t) in defs.tables.iter().enumerate() {
-        match &outcomes[i] {
+        match &outcomes[after_connections + i] {
             RegOutcome::Table { name, result } => {
                 assert_eq!(name, &t.name, "tables settle in defs order");
                 match result {
@@ -76,7 +81,7 @@ async fn fixture_project_registers_and_queries() {
     assert_eq!(events.partition_cols.len(), 2);
 
     // Views: created over the registered tables, deps resolved by the planner.
-    for outcome in &outcomes[defs.tables.len()..] {
+    for outcome in &outcomes[after_connections + defs.tables.len()..] {
         let RegOutcome::View { name, result } = outcome else {
             panic!("a table settled after a view: {outcome:?}");
         };

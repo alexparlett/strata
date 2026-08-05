@@ -402,6 +402,7 @@ mod tests {
                     sql: "SELECT 1".into(),
                     meta: "—".into(),
                 }],
+                ..Default::default()
             },
             PathBuf::from("/w/sales"),
         );

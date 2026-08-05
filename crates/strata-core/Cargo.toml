@@ -18,6 +18,20 @@ datafusion = "54"
 # (`?` is registered as well but does not parse under our default `GenericDialect` — use
 # `json_contains`; see the note in `engine::build_context`.)
 datafusion-functions-json = "0.54"
+# `engine::store`: the object stores a connection registers (W7). DataFusion already carries
+# `object_store` with only its local-filesystem feature on; naming it here with `aws`/`gcp`/`http`
+# is what turns those three on — Cargo unifies features, so this is the *same* crate DataFusion
+# resolves a `s3://` URL through, not a second copy.
+object_store = { version = "0.13", features = ["aws", "gcp", "http"] }
+# The AWS credential chain `object_store` does not have. `AmazonS3Builder::from_env` reads the
+# `AWS_*` environment plus IMDS/ECS/web-identity and stops there — it does not read `~/.aws`
+# profiles and does not do SSO, so `AWS_PROFILE` alone is ignored. `aws-config` is the crate that
+# resolves the whole normal chain; `engine::store` wraps what it resolves in an
+# `object_store::CredentialProvider` (the datafusion-cli bridge). Needed only for the profile /
+# SSO arms — anonymous and the env/IMDS half of Ambient would work without it.
+# `behavior-version-latest` is what makes `BehaviorVersion::latest()` callable.
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-credential-types = "1"
 # `engine` worker: dedicated thread + tokio runtime + mpsc command/event channels.
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"

@@ -1,9 +1,9 @@
 //! The **project registration pass** (AA-01) — one implementation of "register the
-//! defs on the engine": register each table, then create each view, and report what
-//! the engine answered per def. Extracted from the Freya app's project-open hook so a
-//! headless host (AA-05) can run the same sequence with no store to fold into; the
-//! app's hook consumes [`register_pass`] and keeps only what is genuinely the store's
-//! (`Reg<T>` rows, epochs, log entries).
+//! defs on the engine": connect each object store, register each table, then create each
+//! view, and report what the engine answered per def. Extracted from the Freya app's
+//! project-open hook so a headless host (AA-05) can run the same sequence with no store
+//! to fold into; the app's hook consumes [`register_pass`] and keeps only what is
+//! genuinely the store's (`Reg<T>` rows, epochs, log entries).
 //!
 //! Three things stay the caller's, and each is named because the headless replayer is
 //! the caller this module was cut for:
@@ -17,7 +17,10 @@
 //!   a host replaying a defs file that may have shrunk since its last pass diffs the
 //!   names it registered against the new defs and deregisters the difference first —
 //!   or a removed table stays silently queryable, the exact inverse of the
-//!   catalog-is-the-store rule above.
+//!   catalog-is-the-store rule above. A **connection** is the same case with a
+//!   different call (`SessionContext::deregister_object_store`) and no owner yet:
+//!   Forget is Connections 02's gesture, and until it exists a forgotten bucket stays
+//!   registered for the life of the engine.
 //! - **The registration window.** [`Engine::register`] deregisters before it
 //!   re-infers, so for the duration of a pass every table being rebuilt is absent from
 //!   the catalog. The app gates validation behind its scan claim
@@ -28,7 +31,7 @@
 
 use std::path::Path;
 
-use strata_model::TableDef;
+use strata_model::{ConnectionDef, TableDef};
 
 use crate::engine::{Engine, TableMeta, TableSpec, ViewMeta};
 use crate::project::{resolve_source, ProjectDefs};
@@ -37,6 +40,17 @@ use crate::project::{resolve_source, ProjectDefs};
 /// does not abort the pass; its outcome is the row.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RegOutcome {
+    /// A connection's object store went in, or the connection could not describe one
+    /// ([`Engine::connect`]). Nothing is *learned* by connecting — a store is registered,
+    /// not inferred — so the payload is the answer itself.
+    Connection {
+        /// The connection's identity: [`ConnectionDef::url`], **not** its bucket. The bucket
+        /// alone is not unique — `s3://lake` and `gs://lake` are two connections and two
+        /// registry keys — so a caller folding these answers onto rows by bucket would land
+        /// both on whichever it found first and leave the other unanswered forever.
+        url: String,
+        result: Result<(), String>,
+    },
     Table {
         name: String,
         result: Result<TableMeta, String>,
@@ -102,9 +116,11 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
     ordered
 }
 
-/// Register `tables` then create `views` on `engine`, handing `settled` what it
-/// answered for each. **Ordering is the contract**: tables first (a view's SQL reads
-/// tables), each in the order given; then views by fixed-point rounds — DataFusion
+/// Connect `connections`, register `tables`, then create `views` on `engine`, handing
+/// `settled` what it answered for each. **Ordering is the contract**: connections first
+/// (a table's source path cannot resolve to an object store that isn't registered — see
+/// [`Engine::connect`]); then tables (a view's SQL reads tables), each in the order given;
+/// then views by fixed-point rounds — DataFusion
 /// requires a view's dependencies to exist when its `CREATE VIEW` plans, so from cold,
 /// each round creates what it can and a view whose dependency landed last round
 /// succeeds this round. A round without progress means the remainder are genuinely
@@ -113,6 +129,11 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 /// `CREATE OR REPLACE` succeeds round one) — hand `views` in dependency order
 /// ([`view_order`]) or an outer view inlines a stale inner plan.
 ///
+/// Connections need no ordering among themselves and are not retried: each registers one
+/// bucket and reads nothing the pass provides, so a failure is final for this pass and its
+/// only consequence is that tables over that bucket fail too — which they then report on
+/// their own rows, saying no object store was found.
+///
 /// `settled` is called with each outcome as the engine answers it — the app folds
 /// catalog rows and log entries per answer rather than after the whole pass, and a
 /// caller that wants the collected list writes `|o| out.push(o)`. A failed entry never
@@ -120,10 +141,17 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 /// answer — never once per attempt, which would report failures that never happened.
 pub async fn register_pass(
     engine: &Engine,
+    connections: Vec<ConnectionDef>,
     tables: Vec<TableSpec>,
     views: Vec<(String, String)>,
     mut settled: impl FnMut(RegOutcome),
 ) {
+    for conn in connections {
+        let url = conn.url();
+        let result = engine.connect(conn).await;
+        settled(RegOutcome::Connection { url, result });
+    }
+
     for spec in tables {
         let name = spec.name.clone();
         let result = engine.register(spec).await;
@@ -159,9 +187,9 @@ pub async fn register_pass(
     }
 }
 
-/// The whole-project pass **from cold**: every table and view in `defs`, sources
-/// resolved against `root`, views in defs order — right for an engine that holds none
-/// of them yet, where the fixed-point retry finds the dependency order by creating
+/// The whole-project pass **from cold**: every connection, table and view in `defs`,
+/// sources resolved against `root`, views in defs order — right for an engine that holds
+/// none of them yet, where the fixed-point retry finds the dependency order by creating
 /// what it can. It is *not* the re-run: against an engine that already holds these
 /// views (the second pass of a long-lived host), defs order silently inlines stale
 /// plans — order the views with [`view_order`] over the previous pass's answers and
@@ -173,6 +201,7 @@ pub async fn register_project(
     defs: &ProjectDefs,
     settled: impl FnMut(RegOutcome),
 ) {
+    let connections = defs.connections.clone();
     let tables = defs
         .tables
         .iter()
@@ -183,7 +212,7 @@ pub async fn register_project(
         .iter()
         .map(|v| (v.name.clone(), v.sql.clone()))
         .collect();
-    register_pass(engine, tables, views, settled).await
+    register_pass(engine, connections, tables, views, settled).await
 }
 
 #[cfg(test)]
@@ -193,7 +222,7 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, process};
 
-    use strata_model::{SourceFormat, ViewDef};
+    use strata_model::{GcsAuth, GcsStore, Provider, S3Auth, S3Store, SourceFormat, ViewDef};
 
     use super::*;
 
@@ -228,6 +257,17 @@ mod tests {
         let mut out = Vec::new();
         register_project(&engine, root, defs, |o| out.push(o)).await;
         out
+    }
+
+    /// Each outcome as `(identity, did it settle Ok)`, in the order the pass answered.
+    fn names(out: &[RegOutcome]) -> Vec<(&str, bool)> {
+        out.iter()
+            .map(|o| match o {
+                RegOutcome::Connection { url, result } => (url.as_str(), result.is_ok()),
+                RegOutcome::Table { name, result } => (name.as_str(), result.is_ok()),
+                RegOutcome::View { name, result } => (name.as_str(), result.is_ok()),
+            })
+            .collect()
     }
 
     /// The happy path: the table settles first, then the view.
@@ -331,16 +371,67 @@ mod tests {
 
         let out = run(&root, &defs).await;
 
-        let settled: Vec<(&str, bool)> = out
-            .iter()
-            .map(|o| match o {
-                RegOutcome::Table { name, result } => (name.as_str(), result.is_ok()),
-                RegOutcome::View { name, result } => (name.as_str(), result.is_ok()),
-            })
-            .collect();
         assert_eq!(
-            settled,
+            names(&out),
             vec![("t", true), ("base_v", true), ("top_v", true)],
+            "{out:?}"
+        );
+    }
+
+    /// **Connections come first, before any table** — and each is answered under its own
+    /// **URL**, not its bucket.
+    ///
+    /// Both halves are load-bearing. A source path under a bucket resolves through the object
+    /// store registered for it, so a table that registers before its connection fails on a def
+    /// that is perfectly correct — an ordering bug that would look exactly like a broken table.
+    /// And a bucket is not unique across providers: the two `lake` defs below are two
+    /// connections and two registry keys, so an outcome carrying only `"lake"` would be
+    /// indistinguishable between them, and a caller folding by it would answer one row twice
+    /// and leave the other waiting forever.
+    #[tokio::test]
+    async fn connections_settle_first_and_each_under_its_own_url() {
+        let root = scratch("connections");
+        fs::write(root.join("local.csv"), "id\n1\n").unwrap();
+        let defs = ProjectDefs {
+            connections: vec![
+                ConnectionDef {
+                    bucket: "lake".into(),
+                    provider: Provider::S3(S3Store {
+                        region: "eu-west-2".into(),
+                        auth: S3Auth::Anonymous,
+                        ..Default::default()
+                    }),
+                },
+                // The same authority under another provider: a different connection entirely.
+                ConnectionDef {
+                    bucket: "lake".into(),
+                    provider: Provider::Gcs(GcsStore {
+                        auth: GcsAuth::Anonymous,
+                    }),
+                },
+                // A def that cannot describe a store: refused, and the pass carries on.
+                ConnectionDef {
+                    bucket: "no-region".into(),
+                    provider: Provider::S3(S3Store {
+                        auth: S3Auth::Anonymous,
+                        ..Default::default()
+                    }),
+                },
+            ],
+            tables: vec![table("local", "local.csv")],
+            ..Default::default()
+        };
+
+        let out = run(&root, &defs).await;
+
+        assert_eq!(
+            names(&out),
+            vec![
+                ("s3://lake", true),
+                ("gs://lake", true),
+                ("s3://no-region", false),
+                ("local", true)
+            ],
             "{out:?}"
         );
     }
