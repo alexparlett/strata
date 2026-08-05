@@ -35,6 +35,7 @@ use crate::components::toggle_button::ToggleButtonThemePreference;
 use crate::components::type_palette::TypePaletteThemePreference;
 use crate::components::window::WindowThemePreference;
 use strata_code_editor::prelude::EditorThemePreference;
+use strata_core::engine::sql::context::Role;
 
 /// The one way the table states a colour: a [`Role`] reference, resolved at read time.
 fn role(r: Role) -> Preference<Color> {

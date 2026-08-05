@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use freya::prelude::*;
 use strata_code_editor::editor_theme::{EditorSyntaxThemePreference, SYNTAX_SCOPES};
+use strata_core::engine::sql::context::Role;
 use strata_core::theme::{generate_schema as core_schema, ThemeRegistry};
 
 use crate::state::{use_config_channel, ConfigChan, ConfigStation, ThemePreview, ThemeSel};

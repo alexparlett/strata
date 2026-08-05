@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use freya::components::Disclosure;
-use strata_core::engine::value_tree::{cell_children, cell_len, cell_root, NodeValue, ValueNode};
+use strata_core::engine::value_tree::{cell_children, cell_len, NodeValue, ValueNode};
 use strata_core::engine::RecordBatch;
 use strata_core::util::{fmt_int, plural_noun};
 

@@ -10,7 +10,7 @@
         "compression": "none"
       },
       "sources": [
-        "nba-config.json"
+        "config.json"
       ],
       "partition_cols": []
     },
