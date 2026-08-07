@@ -32,8 +32,11 @@ After **any theme change**, regenerate + verify the schema:
 (`strata-core/tests/object_store_minio.rs`, W7) drives a real MinIO through testcontainers and is
 deliberately **not** `#[ignore]`d — an ignored test is one nobody runs, and this is the only thing
 that would catch a regression in the S3 credential bridge. Testcontainers Cloud, Docker or colima
-all serve; if the runtime is not on the default socket, point `DOCKER_HOST` at it. Without one that
-test **fails** rather than skipping, on purpose: "no runtime" must not look like "the code is fine".
+all serve — the runtime is found from `~/.testcontainers.properties` (which a Testcontainers Cloud
+agent writes) or `DOCKER_HOST`, which is why `testcontainers` carries the **`properties-config`**
+feature: without it that file is `#[cfg]`'d out and a perfectly good runtime reads as absent.
+Without any runtime the test **fails** rather than skipping, on purpose: "no runtime" must not look
+like "the code is fine".
 
 To build something you can hand to a tester — a universal `.app` + DMG in `target/dist/`:
 

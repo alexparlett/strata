@@ -23,9 +23,11 @@
 //! notice a regression in the credential bridge or the registration order. So a **container
 //! runtime is a development prerequisite** for this repo — Testcontainers Cloud, Docker,
 //! colima, whichever. Without one this fails rather than quietly passing, which is the point:
-//! "no runtime" and "the code is fine" must not look the same. (If the runtime is not on the
-//! default socket — Testcontainers Desktop without Docker Desktop, say — `DOCKER_HOST` points
-//! at it; CI's `atomicjar/testcontainers-cloud-setup-action` sets that itself.)
+//! "no runtime" and "the code is fine" must not look the same. The runtime is discovered from
+//! `~/.testcontainers.properties` or `DOCKER_HOST` — the former only because `testcontainers`
+//! is built with **`properties-config`**, without which that file is `#[cfg]`'d out and a
+//! Testcontainers Cloud agent (which advertises itself only through that file) reads as no
+//! runtime at all. That is not hypothetical: it is how this first failed on CI.
 //!
 //! **S3 only, and GCS is not an oversight** — it was tried, and the gap is *listing*.
 //! `object_store`'s GCS client speaks the **XML** API and needs two halves of it:

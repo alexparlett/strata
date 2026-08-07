@@ -59,7 +59,14 @@ tracing = "0.1.44"
 # one nobody runs, and this is the only thing covering SigV4 through the `aws-config` bridge.
 # Pinned to the major `testcontainers-modules` itself depends on: the two share a `bollard`,
 # and a newer `testcontainers` here resolves a second one that conflicts outright.
-testcontainers = "0.27"
+#
+# `properties-config` is **not** optional for us: without it, reading
+# `~/.testcontainers.properties` is `#[cfg]`'d out and the only Docker endpoint the crate will
+# consider is `DOCKER_HOST`, falling back to `/var/run/docker.sock`. That file is exactly how a
+# Testcontainers Cloud agent advertises itself (`tc.host` / `docker.host`), locally and on CI —
+# so without the feature the runtime is up, configured, and invisible, and the failure reads as
+# `SocketNotFoundError("/var/run/docker.sock")` as if no runtime existed at all.
+testcontainers = { version = "0.27", features = ["properties-config"] }
 testcontainers-modules = { version = "0.15", features = ["minio"] }
 # Seeds the bucket the test then reads. Deliberately a *different* client from the one under
 # test: `object_store` cannot create a bucket at all, and having the write side be an
