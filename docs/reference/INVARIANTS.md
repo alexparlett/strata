@@ -522,9 +522,11 @@ Things that must not regress. Each was fought for once already.
   is why `snapshot_writer_props` sets `EnabledStatistics::Chunk` explicitly rather than trusting a
   default — a gate is only as good as the footer it reads.
 - **History is a satellite**, persisted to `.strata/history.jsonl` — never a field on
-  `ProjectState`/`SessionState`. It records **only successful data runs**, which is a claim the
-  surface has to keep: the History drawer shows no status mark, because the canvas's
-  ok/cancelled/failed dot would have exactly one value. Its **Clear** unwrites the file as well as
+  `ProjectState`/`SessionState`. It records **only successful runs** — rows or an intercepted
+  statement (ED-02: a typed `CREATE TABLE` is as much a query you may want back as the `SELECT`
+  inside it, and its `count` is the rows it moved, `0` where it counts nothing). *Successful* is
+  the load-bearing half, and a claim the surface keeps: the History drawer shows no status mark,
+  because the canvas's ok/cancelled/failed dot would have exactly one value. Its **Clear** unwrites the file as well as
   emptying the satellite (an emptied list that refills on the next open is a surface disagreeing
   with its store), and keeps the `seen` dedup guard — that guard is about *runs*, and the pin
   holding a cleared run is still mounted, so forgetting it would put the entry straight back.
@@ -728,9 +730,38 @@ Things that must not regress. Each was fought for once already.
   Every interception is a **second gesture into a funnel that already exists**, never a second
   implementation: typed view DDL onto `Engine::create_view` (what ⌘S already wraps the buffer's
   plain query in), typed `CREATE EXTERNAL TABLE` onto Table Config's own def-first registration.
-  (ED-01 landed classification; `Engine::run`'s dispatch is ED-02, and each `StmtKind`'s
-  implementation its own ED task. Until a kind's dispatch lands, an intercepted statement draws no
-  squiggle and fails at Run against the read path's `SQLOptions`.)
+  (ED-01 landed classification, ED-02 the dispatch below; each `StmtKind`'s implementation is its
+  own ED task, and until one lands its statement classifies, draws no squiggle, and fails at Run
+  with `ddl::execute`'s stub refusal naming the statement.)
+- **`Engine::run` routes, and only its query arm touches the snapshot lifecycle.** The Run press
+  is one statement of unknown kind, so the app stops choosing a method and the engine classifies:
+  `sql::classify_one` parses through the **one** parse funnel `policy_verdicts` uses (a dialect
+  the two gates resolved differently would be a statement judged as one form and executed as
+  another), then `Verdict::Query` delegates to `query()` byte-for-byte, `Intercept(kind)` goes to
+  `engine::ddl::execute`, and `Refuse(b)` returns `b.editor_message()` — the words the squiggle
+  showed, and returned *before* anything reaches `ctx.sql`, because DataFusion executes DDL
+  eagerly inside it. **One statement per Run**, refused here with a policy sentence rather than
+  left to DataFusion complaining about its own parser. The `SQLOptions` triple in
+  `query::materialize` stays all-false and is now defense in depth behind the classification, not
+  the gate: it can refuse a class of plan, never name the surface that owns the capability.
+  Because only the query arm spools, "DDL does not retire snapshots" is true **by construction** —
+  an intercepted statement rides `Engine::bookkeep`, the in-flight bracket `explain` shares
+  (supersede, abort handle, `DispatchGuard`, settle by `dispatch` and never by `tag`), which
+  never touches `Lifecycle::current`. That bracket is what keeps `cancel` / `is_running` / the
+  close-while-running confirm honest over a CTAS, which is a full scan.
+- **A statement's outcome is a value the app folds, and one fold serves every effect.** An
+  intercepted statement returns `StatementReport { kind, message, count, elapsed_ms, effect }`;
+  `StoreEffect` is applied by `state::statement` in exactly the `save_view` shape — store upsert
+  on the matching `ProjChan` → `persisted_defs` at the mutation point → `catalog_settled` (a
+  `RescanTable` asks the scan driver instead, which bumps the epoch on its own way out) → the
+  event log. Never introspection and never a refetch: the store is the catalog authority, which
+  is the whole reason lifecycle is intercepted rather than left to DF's provider traits. Adding a
+  capability is a `StoreEffect` arm, never a second persist path. There is no `StoreEffect::None`
+  beside the `Option` — one way to say "nothing changed", not two. The fold is driven from the
+  tab's **request keeper**, beside history and the log and for the same reason (a backgrounded
+  tab's `CREATE TABLE` still has to reach the sidebar and `project.json`), and it **owns the log
+  entry**: `run_event` returns `None` for a statement, because a message claiming something
+  durable must not be logged over a `project.json` write that failed — the `save_view` lesson.
 - **One app-global config store.** `RadioStation<AppConfig, ConfigChan>` created once in `main`,
   shared into every window (`use_share_config`). Disk is a startup input, read **once** — no file
   watching, ever; after launch only the UI writes. `write_config` (src/state/config.rs) is the

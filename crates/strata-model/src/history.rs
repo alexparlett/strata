@@ -14,6 +14,7 @@ pub struct HistoryEntry {
     pub ts_ms: u64,
     /// Wall-clock the run took.
     pub elapsed_ms: u64,
-    /// Rows the run produced.
+    /// Rows the run moved — a query's result size, or the rows an intercepted statement
+    /// created / inserted / exported. `0` where a statement counts nothing (a `DROP`, a `SET`).
     pub rows: u64,
 }

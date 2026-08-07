@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use freya::query::{Captured, Query, QueryCapability};
 use strata_core::engine::plan::{as_explain, QueryPlan};
-use strata_core::engine::{RecordBatch, RunTag};
+use strata_core::engine::{RecordBatch, RunOutcome, RunTag, StatementReport};
 use strata_model::{Cell, QueryOutput, SnapshotId};
 use uuid::Uuid;
 
@@ -90,10 +90,18 @@ pub struct QueryPage {
     pub batch: RecordBatch,
 }
 
-/// What a Run press settled to, by mode.
+/// What a Run press settled to.
+///
+/// Three, not two, and the third is not a mode: `Explain` is something the *press* asked for,
+/// while whether a Run produces rows or performs a statement is a property of what was typed
+/// — the engine's router decides it (ED-02), and this enum carries its answer through.
 pub enum QueryOutcome {
     Rows(QueryPage),
     Plan(QueryPlan),
+    /// An intercepted statement's report — no rows and no snapshot handle, so the tab's
+    /// previous result stays readable. The keeper folds its `StoreEffect` into the project
+    /// (`state::statement`); the results pane renders the sentence.
+    Statement(StatementReport),
 }
 
 /// The Run capability. The engine handle rides as [`Captured`] — invisible to cache
@@ -109,15 +117,23 @@ impl QueryCapability for RunQuery {
     async fn run(&self, spec: &QuerySpec) -> Result<QueryOutcome, String> {
         let engine = &self.0;
         match spec.mode {
+            // `run`, not `query`: the press is one statement of unknown kind, and classifying
+            // it is the engine's (ED-02). A `SELECT` reaches the same `query` call it always
+            // did, one match arm further in.
             QueryMode::Run => engine
-                .query(
+                .run(
                     spec.tab.into(),
                     spec.run.into(),
                     spec.sql.clone(),
                     spec.page_size,
                 )
                 .await
-                .map(|(output, batch)| QueryOutcome::Rows(QueryPage { output, batch })),
+                .map(|outcome| match outcome {
+                    RunOutcome::Rows(output, batch) => {
+                        QueryOutcome::Rows(QueryPage { output, batch })
+                    }
+                    RunOutcome::Statement(report) => QueryOutcome::Statement(report),
+                }),
             QueryMode::Explain { analyze } => engine
                 .explain(
                     spec.tab.into(),
@@ -183,6 +199,7 @@ impl QueryCapability for FetchSnapshotPage {
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
+    use strata_core::engine::sql::Blocked;
 
     use super::*;
 
@@ -232,6 +249,21 @@ mod tests {
         };
         let sorted = block_on(pages.run(&sorted)).expect("sorted page");
         assert_eq!(sorted.rows[0][0].text, "3");
+    }
+
+    /// A Run press now goes through the **router** (ED-02), so a statement the editor refuses
+    /// settles the capability `Err` with the words the squiggle showed — not a DataFusion
+    /// error about a policy that is ours, and not rows.
+    #[test]
+    fn a_refused_statement_settles_err_through_the_capability() {
+        let engine = EngineCtx::default();
+        let (run, mut spec) = spec(&engine, QueryMode::Run);
+        spec.sql = "CREATE DATABASE d".into();
+
+        // `.err().expect(…)` rather than `expect_err`, which would need `Debug` on the outcome
+        // — and a derived one would put a whole `RecordBatch` behind a `{:?}`.
+        let err = block_on(run.run(&spec)).err().expect("refused");
+        assert_eq!(err, Blocked::CreateDatabase.editor_message());
     }
 
     #[test]
