@@ -52,6 +52,15 @@ Decisions worth not re-deriving:
 then fails at Run — `Engine::query`'s `SQLOptions::with_allow_ddl(false)` refuses it with
 DataFusion's own wording. ED-02's `Engine::run` is what closes that.
 
+**Handoff for ED-08 — `EXECUTE` is the one `Verdict::Query` the query path cannot run.** It is
+`Query` rather than `Intercept` (spec §6.5), so the interim note above does not cover it and no
+new dispatch arm will: `run_and_snapshot` sets `with_allow_statements(false)`
+(`engine/query.rs`), so `verify_plan` rejects `LogicalPlan::Statement(Execute)` with DataFusion's
+wording. ED-08 must widen that triple **per dispatch** for this arm — the read path's all-false
+default is deliberate, and flipping it wholesale would let `SET`/`PREPARE` through the query arm
+behind the router's back. (`EXECUTE IMMEDIATE` is not a dynamic-SQL hole: DataFusion 54 answers
+`not_impl_err` at `statement.rs:871` before any string is planned.)
+
 ## Goal
 
 Grow the managed-DDL predicate into the statement router: one classification, a capability axis,

@@ -500,6 +500,13 @@ fn classify_form(stmt: &DFStatement) -> (Verdict, Option<Blocked>) {
         // `EXECUTE` rides the snapshot pipeline whole — safe because `PREPARE` fenced
         // the inner plan. The agent surface cannot `PREPARE`, so `EXECUTE` is nothing
         // it can name, and it keeps the wildcard answer it shipped with.
+        //
+        // The one `Verdict::Query` the query path cannot run **yet**: `run_and_snapshot`
+        // sets `with_allow_statements(false)` (`query.rs`), so `verify_plan` rejects
+        // `LogicalPlan::Statement(Execute)` with DataFusion's wording. Widening that to
+        // statements-only for this arm is ED-08's, and it must stay per-dispatch — the
+        // read path's triple is all-false on purpose. (`EXECUTE IMMEDIATE` is not a hole:
+        // DataFusion answers `not_impl` before any string is planned.)
         SqlStatement::Execute { .. } => (Verdict::Query, Some(Blocked::Unsupported)),
         SqlStatement::CreateView(_) => intercept(StmtKind::CreateView, Blocked::CreateView),
         SqlStatement::Drop { object_type, .. } => match object_type {
@@ -596,14 +603,16 @@ fn reads_reserved<V: Visit>(node: &V) -> bool {
 }
 
 /// Whether any part of `name` carries the snapshot prefix. Case-folded, because the
-/// one namespace is case-insensitive and `__SNAP_2` is the same table.
+/// one namespace is case-insensitive and `__SNAP_2` is the same table — compared in
+/// place rather than through `to_ascii_lowercase`, because this runs per identifier
+/// per statement on every keystroke and the whole answer is seven bytes wide.
 fn is_reserved(name: &ObjectName) -> bool {
     name.0.iter().any(|part| {
         part.as_ident().is_some_and(|ident| {
             ident
                 .value
-                .to_ascii_lowercase()
-                .starts_with(SNAPSHOT_PREFIX)
+                .get(..SNAPSHOT_PREFIX.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(SNAPSHOT_PREFIX))
         })
     })
 }
@@ -1445,7 +1454,8 @@ mod tests {
             "PREPARE p AS SELECT id FROM t",
             "DEALLOCATE p",
         ] {
-            assert!(run(sql).is_empty(), "{sql}: {:?}", run(sql));
+            let out = run(sql);
+            assert!(out.is_empty(), "{sql}: {out:?}");
         }
     }
 
@@ -1646,6 +1656,67 @@ mod tests {
             let stmt = parse_one(sql);
             assert_eq!(classify(&stmt, Capability::Editor), editor, "{sql}");
             assert_eq!(classify(&stmt, Capability::Agent), agent, "{sql}");
+        }
+    }
+
+    /// "Not one byte" said in bytes. The matrix above pins the agent's *variants*, and
+    /// a variant only implies a message while the wording behind it holds still — but
+    /// these variants are now unreachable from the editor, so a future ED task
+    /// rewording one (say `Insert`, toward the internal-table story) would silently
+    /// change the agent surface with every other test green. `strata-agent`'s own
+    /// parity tests cannot catch it either: they compare `AgentError`'s rendering
+    /// against `editor_message()`, so both sides move together. These are the literals.
+    #[test]
+    fn the_agent_paths_messages_are_pinned_verbatim() {
+        for (blocked, message) in [
+            (
+                Blocked::CreateExternalTable,
+                "CREATE EXTERNAL TABLE is not supported in the editor. Register tables in \
+                 Table Config",
+            ),
+            (
+                Blocked::CopyTo,
+                "COPY TO is not supported in the editor. Use Export",
+            ),
+            (
+                Blocked::Reset,
+                "RESET is not supported in the editor. Engine options are set in Settings",
+            ),
+            (
+                Blocked::CreateView,
+                "CREATE VIEW is not supported in the editor. Write the query and use Save as view",
+            ),
+            (
+                Blocked::DropView,
+                "DROP VIEW is not supported in the editor. Drop views from the catalog",
+            ),
+            (
+                Blocked::Drop,
+                "DROP is not supported in the editor. Deregister tables from the catalog",
+            ),
+            (
+                Blocked::CreateTable,
+                "CREATE TABLE is not supported in the editor. Register tables in Table Config",
+            ),
+            (
+                Blocked::Insert,
+                "INSERT is not supported in the editor. Load data through Table Config",
+            ),
+            (
+                Blocked::CreateDatabase,
+                "CREATE DATABASE and CREATE SCHEMA are not supported",
+            ),
+            (
+                Blocked::Set,
+                "SET is not supported in the editor. Engine options are set in Settings",
+            ),
+            (
+                Blocked::Unsupported,
+                "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and \
+                 DESCRIBE can run here",
+            ),
+        ] {
+            assert_eq!(blocked.editor_message(), message, "{blocked:?}");
         }
     }
 
