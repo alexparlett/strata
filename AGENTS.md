@@ -445,6 +445,10 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   rather than cancels.** A job-level, constant-named concurrency group with `queue: max`; the
   per-ref workflow group keeps the superseding. Never `queue: single` here — a silently cancelled
   run on main is no coverage of main.
+- **A cloud session outlives the job that opened it, so the job releases it — and the test still
+  waits out a handover it cannot watch.** `action: terminate` with `if: always()` (a *cancelled*
+  job is the worst case), plus a bounded retry in `object_store_minio.rs` on the capacity refusal
+  **only**. Serialization alone was shipped once and was not enough. Anything else still panics.
 - **The release path is a script CI calls, never a pipeline written in YAML.** Signing degrades
   honestly and says which rung it took; the tag is created **after** the build.
 - **The version lives in one file and is reached through one script** (`scripts/version.sh`, which

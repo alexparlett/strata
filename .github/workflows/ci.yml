@@ -108,3 +108,25 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace --locked
+
+      # **Release the cloud session at the end of the job, always.** The agent above is
+      # started in the background and nothing ever tells it to stop: the runner VM is
+      # torn down under it, so the session - and the worker assigned to it - stays
+      # checked out on Testcontainers Cloud's side until it times out there. With one
+      # worker on this account that strands the *next* run, which is how a fully
+      # serialized main run still got `Failed to get a worker: ErrValidator: too many
+      # concurrent requests` five minutes after the only other job had finished. The
+      # job-level concurrency group above stops two live jobs colliding; it cannot do
+      # anything about a session outliving the job that opened it. This step is the
+      # other half, and the two are only sufficient together.
+      #
+      # `always()`, not `success()` or the default: a **cancelled** job is the case that
+      # matters most - `cancel-in-progress` on the per-ref group above means we generate
+      # those deliberately, and a cancelled run kills the agent in the way least likely
+      # to release anything. `always()` is the only condition that still runs then.
+      - name: Release the Testcontainers Cloud session
+        if: always()
+        uses: atomicjar/testcontainers-cloud-setup-action@v1
+        with:
+          token: ${{ secrets.TC_CLOUD_TOKEN }}
+          action: terminate

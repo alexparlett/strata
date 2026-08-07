@@ -42,6 +42,8 @@
 //! — it means GCS coverage needs a real bucket rather than a container.
 
 use std::collections::BTreeMap;
+use std::fmt::Display;
+use std::time::{Duration, Instant};
 
 use strata_core::engine::{Engine, RunTag, TableSpec, WsId};
 use strata_model::{ConnectionDef, CsvRead, Provider, S3Auth, S3Store, SourceFormat};
@@ -63,15 +65,55 @@ const REGION: &str = "us-east-1";
 /// Two rows the query at the end can count.
 const REGIONS_CSV: &str = "id,region\n1,emea\n2,apac\n3,amer\n";
 
+/// How long to keep asking for a container while the *provider* says it is at capacity, and
+/// how long to wait between asks. Sized for a hosted runtime handing out one worker at a time:
+/// the previous holder's session is released at its job's end, so the wait is a handover, not a
+/// queue — a minute and a half of asking is generous for that and still fails inside the run.
+const CAPACITY_RETRY_BUDGET: Duration = Duration::from_secs(90);
+const CAPACITY_RETRY_GAP: Duration = Duration::from_secs(10);
+
+/// Is this failure the runtime saying **busy**, rather than saying no?
+///
+/// The distinction is the whole reason this test is not `#[ignore]`d: "no runtime" must keep
+/// failing loudly, because it must never look like "the code is fine". But a provider that
+/// hands out a fixed number of workers and is currently out of them has not told us anything
+/// about the code at all, and retrying is the honest response to it rather than a way of
+/// hiding a red run.
+///
+/// Matched on the message because that is where the provider puts it — the refusal arrives as
+/// a generic `CreateContainer` either way. Two spellings, one fault: Testcontainers Cloud
+/// answers `Failed to get a worker: ErrValidator: too many concurrent requests` when it can
+/// answer at all, and drops the response mid-flight (`hyper` calls that `IncompleteMessage`)
+/// when it cannot. Anything else — no endpoint, a bad image, a refused connection — is not a
+/// capacity signal and falls straight through to the panic.
+fn at_capacity(err: &impl Display) -> bool {
+    let msg = err.to_string();
+    msg.contains("too many concurrent requests") || msg.contains("IncompleteMessage")
+}
+
 /// A running MinIO, and the `http://` endpoint an S3 connection reaches it on.
 ///
 /// The container is returned alongside the endpoint and must be held for the test's duration —
 /// dropping it stops the server.
+///
+/// **Retries a capacity refusal, and only that** — see [`at_capacity`]. CI runs against a
+/// hosted runtime with a single worker, and a worker is held by whoever has it until their
+/// session is released, so an overlap is a wait rather than a fault. Serializing the CI job
+/// covers two *live* jobs colliding and cannot cover the handover itself, which happens on the
+/// provider's side where nothing here can watch it. Every other failure, and this one past its
+/// budget, panics with the message it always did.
 async fn minio() -> (ContainerAsync<MinIO>, String) {
-    let container = MinIO::default()
-        .start()
-        .await
-        .expect("MinIO starts (is a Docker runtime available?)");
+    let deadline = Instant::now() + CAPACITY_RETRY_BUDGET;
+    let container = loop {
+        match MinIO::default().start().await {
+            Ok(container) => break container,
+            Err(err) if at_capacity(&err) && Instant::now() < deadline => {
+                eprintln!("container runtime is at capacity, retrying: {err}");
+                tokio::time::sleep(CAPACITY_RETRY_GAP).await;
+            }
+            Err(err) => panic!("MinIO starts (is a Docker runtime available?): {err}"),
+        }
+    };
     let port = container
         .get_host_port_ipv4(9000)
         .await

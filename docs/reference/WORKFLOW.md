@@ -196,6 +196,22 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   serialization exists to stop. `queue: max` cannot be combined with `cancel-in-progress: true`,
   which is the other reason superseding stays at the workflow level. Raising the limit instead is a
   billing decision, not an engineering one.
+- **A cloud session outlives the job that opened it, so the job releases it — and the test still
+  waits out a handover it cannot watch.** Serializing the job was shipped first as the whole fix
+  and was not: it stops two *live* jobs colliding and does nothing about a session left behind by a
+  job that has ended. The agent is started as a background process and nothing ever stops it — the
+  runner VM is torn down under it — so the session, and the worker assigned to it, stays checked out
+  on the provider's side until it times out there. That is how a fully serialized run on main was
+  still refused a worker **five minutes after the only other job had finished**. Hence the
+  `action: terminate` step, and `if: always()` rather than the default: a **cancelled** job is the
+  case that matters most, because `cancel-in-progress` means we generate those deliberately and a
+  cancelled run kills the agent in the way least likely to release anything. Even then the release
+  happens where nothing on our side can observe it finishing, which is why
+  `object_store_minio.rs` also **retries a capacity refusal, and only that** — the two spellings of
+  one fault (`too many concurrent requests`, or the truncated response `hyper` calls
+  `IncompleteMessage`), on a bounded budget. Every other failure panics with the message it always
+  had: "no runtime" must keep failing loudly, or it reads as "the code is fine". Do not collapse
+  these three into one mechanism — each covers a hole the others cannot reach.
 - **The release path is a script CI calls, never a pipeline written in YAML.**
   `scripts/bundle-macos.sh` builds the universal binary, assembles the `.app`, signs, notarizes and
   makes the DMG; `.github/workflows/release.yml` sets up secrets and runs it. So the build a
