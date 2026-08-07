@@ -28,7 +28,6 @@
 
 use freya::prelude::*;
 use freya::radio::use_radio;
-use strata_model::CatalogKind;
 
 use super::super::{DrawerBody, DrawerEmpty, DrawerTheme};
 use super::{PAD, ROW_HEIGHT};
@@ -45,7 +44,8 @@ pub struct ProjectProblem {
     pub subject: String,
     /// What is wrong with it — the engine's words, or the write's error.
     pub why: String,
-    /// The trailing tag: `table` / `view`, or `not saved`.
+    /// The trailing tag: the refused def's own noun (`connection` / `table` / `view`), or
+    /// `not saved`.
     pub tag: String,
 }
 
@@ -66,10 +66,7 @@ pub fn project_problems(project: &ProjectState, faults: &PersistFaults) -> Vec<P
         .map(|f| ProjectProblem {
             subject: f.name,
             why: f.why,
-            tag: match f.kind {
-                CatalogKind::View => "view".into(),
-                _ => "table".into(),
-            },
+            tag: f.noun.into(),
         });
     writes.chain(regs).collect()
 }
@@ -82,13 +79,15 @@ pub struct Project {
 
 impl Component for Project {
     fn render(&self) -> impl IntoElement {
-        // `ProjChan::Tables` and `Views` are the two channels a registration answer lands on;
-        // the catalog rows already subscribe to exactly these, so a def flipping to `Failed`
-        // wakes this list at the same moment it wakes its row.
+        // `ProjChan::Connections`, `Tables` and `Views` are the three channels a registration
+        // answer lands on; the pane and catalog rows already subscribe to exactly these, so a
+        // def flipping to `Failed` wakes this list at the same moment it wakes its row.
+        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let faults = use_consume::<FaultsCtx>();
 
+        let _ = connections.read();
         let _ = views.read();
         let rows = project_problems(&tables.read(), &faults.read());
 

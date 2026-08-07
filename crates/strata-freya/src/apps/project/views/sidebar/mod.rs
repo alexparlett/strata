@@ -1,13 +1,15 @@
-//! The left **sidebar**: the frame (P3-01), the catalog pane that fills it (P3-02) and the
-//! Agents pane beside it (AA-03b).
+//! The left **sidebar**: the frame (P3-01), the catalog pane that fills it (P3-02), and the
+//! Connections (W7) and Agents (AA-03b) panes beside it.
 //!
 //! The shell owns the header row and the collapse (×); what sits to the left of the × is the
 //! active pane's, per the design canvas — the catalog puts its **filter + refresh** there (there
-//! is no "CATALOG" label; the filter field is the header), while Connections (W7) and Agents
-//! keep a plain section label. The body below the divider is the pane itself.
+//! is no "CATALOG" label; the filter field is the header), while Connections and Agents keep a
+//! section label with an ⓘ beside it, and Connections adds its own `+`. The body below the
+//! divider is the pane itself.
 
 mod agents;
 mod catalog;
+mod connections;
 
 use freya::components::{CircularLoader, Input};
 use freya::prelude::*;
@@ -20,6 +22,8 @@ use self::catalog::Catalog;
 pub use self::catalog::CatalogThemePreference;
 /// The catalog's actions, on through to the command palette — see the catalog's own module.
 pub use self::catalog::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
+pub use self::connections::ConnectionsThemePreference;
+use self::connections::{AddConnectionButton, Connections, ConnectionsHint};
 use crate::apps::project::state::{
     refresh_catalog, use_catalog, use_catalog_rescan, Chan, SessionState,
 };
@@ -130,10 +134,15 @@ impl Component for Sidebar {
                     .width(Size::flex(1.)),
                 )
                 .into_element(),
-            SidebarPane::Connections => label("CONNECTIONS", label_color).into_element(),
-            // The one pane header with something beside its name: the query-session model is
-            // the single concept here a user has no other way to learn, so the canvas puts it
-            // behind an ⓘ rather than in a line of pane copy nobody reads twice.
+            // Beside its name, the same ⓘ affordance the Agents pane uses and for the same
+            // reason: what a connection *is* has no other place to be said (W7).
+            SidebarPane::Connections => label("CONNECTIONS", label_color)
+                .spacing(6.)
+                .child(ConnectionsHint)
+                .into_element(),
+            // The same ⓘ, for the same reason: the query-session model is the one concept
+            // here a user has no other way to learn, so the canvas puts it behind a mark
+            // rather than in a line of pane copy nobody reads twice.
             SidebarPane::Agents => label("AGENTS", label_color)
                 .spacing(6.)
                 .child(AgentsHint)
@@ -142,9 +151,7 @@ impl Component for Sidebar {
 
         let body = match pane {
             SidebarPane::Catalog => Catalog::new(filter).into_element(),
-            // The connections pane is W7's; the frame is here so the rail's toggle has somewhere
-            // to land.
-            SidebarPane::Connections => rect().expanded().into_element(),
+            SidebarPane::Connections => Connections::new().into_element(),
             SidebarPane::Agents => Agents::new().into_element(),
         };
 
@@ -178,6 +185,15 @@ impl Component for Sidebar {
                         bar.item(ToolbarItem::Custom {
                             width: HEADER_CONTROL,
                             inline: RefreshButton.into_element(),
+                            folded: None,
+                        })
+                    })
+                    // Add connection — the Connections pane's own header action, folding on the
+                    // same terms as the catalog's ↻.
+                    .maybe(pane == SidebarPane::Connections, |bar| {
+                        bar.item(ToolbarItem::Custom {
+                            width: HEADER_CONTROL,
+                            inline: AddConnectionButton.into_element(),
                             folded: None,
                         })
                     })
@@ -301,10 +317,16 @@ mod tests {
     /// anything: there is no scan *driver* here — that lives at the window root — so pressing ↻
     /// raises a request and nothing else, which is exactly the button's whole contract.
     fn runner() -> (TestingRunner, State<ScanRequest>) {
+        runner_on(SidebarPane::Catalog)
+    }
+
+    /// The same shell with `pane` already selected — the state the rail's toggle leaves behind,
+    /// seeded rather than clicked so a header test measures one layout and not a transition.
+    fn runner_on(pane: SidebarPane) -> (TestingRunner, State<ScanRequest>) {
         TestingRunner::new(
             app,
             (PANEL_WIDTH, 700.).into(),
-            |r| {
+            move |r| {
                 r.provide_root_context(EngineCtx::default);
                 // Catalog · CatalogRescan · CatalogSelection — the three context signals
                 // the pane's header and rows consume (`state/catalog.rs`).
@@ -324,8 +346,12 @@ mod tests {
                 // `project.json` inline (the saved-query rename, P4-15).
                 r.provide_root_context(|| State::create(Log::default()));
                 r.provide_root_context(|| State::create(PersistFaults::default()));
-                r.provide_root_context(|| {
-                    RadioStation::<SessionState, Chan>::create(SessionState::default())
+                r.provide_root_context(move || {
+                    RadioStation::<SessionState, Chan>::create({
+                        let mut s = SessionState::default();
+                        s.toggle_pane(pane);
+                        s
+                    })
                 });
                 r.provide_root_context(|| {
                     RadioStation::<ProjectState, ProjChan>::create(ProjectState::from_defs(
@@ -457,6 +483,47 @@ mod tests {
             "the filter run ({widest}px) must leave the {CONTROL}px ↻ room inside the {content}px \
              content box"
         );
+    }
+
+    /// The **Connections** header lays out inside the panel too — its own arm, its own controls
+    /// (the label, the ⓘ beside it, the `+`, and the pinned ×), and until now no coverage at all.
+    ///
+    /// Worth its own test rather than trusting the catalog's: these tests exist because the
+    /// catalog's ↻ shipped laid out past the panel edge and stayed invisible for a whole task,
+    /// and the `+` added beside this label is the same kind of fixed control in the same row.
+    #[test]
+    fn the_connections_header_is_laid_out_inside_the_panel() {
+        let (mut runner, _) = runner_on(SidebarPane::Connections);
+        runner.sync_and_update();
+        runner.sync_and_update();
+
+        let overflowing: Vec<_> = areas(&runner)
+            .into_iter()
+            .filter(|b| b.width > 0. && b.max_x > PANEL_WIDTH + 0.5)
+            .collect();
+        assert!(
+            overflowing.is_empty(),
+            "laid out past the {PANEL_WIDTH}px panel edge: {overflowing:?}"
+        );
+
+        // Both fixed 24×24 controls — the `+` then the pinned × — at full size and on screen.
+        // Counted by **position**, not by node: the `+` carries a `TooltipContainer`, which
+        // nests several boxes of its own at the same origin, where the catalog's bare ↻ does not.
+        let mut controls = header_controls(&runner);
+        controls.dedup_by(|a, b| (a.min_x - b.min_x).abs() < 0.5);
+        assert_eq!(
+            controls.len(),
+            2,
+            "expected the + and × controls at their full 24×24: {controls:?}"
+        );
+        for b in &controls {
+            assert!(
+                b.min_x >= 0. && b.max_x <= PANEL_WIDTH,
+                "control at {}..{} is outside 0..{PANEL_WIDTH}",
+                b.min_x,
+                b.max_x
+            );
+        }
     }
 
     /// Pressing ↻ raises a re-scan **request** — and that is all it does. The pass belongs to the

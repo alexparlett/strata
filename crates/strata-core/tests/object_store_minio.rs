@@ -208,6 +208,28 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the failure names the missing store: {refused}"
     );
 
+    // --- and Forget takes it back out ----------------------------------------------------
+    //
+    // **`disconnect` is the only thing that can un-register a bucket**, which is why it is
+    // pinned against a real store rather than asserted on a return value it does not have:
+    // `connect` is additive by contract and never sees the def it replaced, so without this
+    // call a forgotten connection stays queryable for the life of the window and the pane says
+    // it is gone. The failure it must produce is the orphan's above, on the bucket that worked
+    // two lines ago.
+    engine.disconnect(&connection(&endpoint, S3Auth::Ambient).url());
+    let forgotten = TableSpec {
+        name: "forgotten".into(),
+        ..table()
+    };
+    let refused = engine
+        .register(forgotten)
+        .await
+        .expect_err("the store is gone");
+    assert!(
+        refused.to_lowercase().contains("object store"),
+        "a forgotten bucket is unreachable, exactly as one that was never connected: {refused}"
+    );
+
     // --- and now the same connection with credentials the server refuses -----------------
     //
     // **A connection whose credentials the server rejects fails at the table, not at the
@@ -222,9 +244,9 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     std::env::set_var("AWS_ACCESS_KEY_ID", "AKIAWRONGKEY");
     std::env::set_var("AWS_SECRET_ACCESS_KEY", "wrong-secret");
 
-    // A fresh engine: the one above has a store registered from the good credentials, and
-    // `connect` replacing it is precisely what is being exercised — but on its own context, so
-    // a pass here cannot be an artefact of the earlier registration.
+    // A fresh engine, so this phase starts from nothing: the one above has had its store
+    // disconnected by the block before this, and even before that its registration came from
+    // the good credentials. Either way a pass here cannot be an artefact of the earlier one.
     let engine = Engine::new(BTreeMap::new());
     engine
         .connect(connection(&endpoint, S3Auth::Ambient))

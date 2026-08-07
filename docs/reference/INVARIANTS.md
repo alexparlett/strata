@@ -62,7 +62,9 @@ Things that must not regress. Each was fought for once already.
   for admission is not "is it about SQL" but **"is it true right now, and does it retract itself
   when it stops being true"** — which is why the drawer's header carries a scope strip
   (`Queries` · `Project`, P4-15) rather than one list. Queries holds the SQL diagnostics; Project
-  holds defs the engine refused and `.strata` files a failed write left behind. Three kinds of
+  holds connections and defs the engine refused and `.strata` files a failed write left behind —
+  in **registration order** (connections → tables → views), so a table broken *by* a bucket with
+  no credentials reads below its cause rather than being the only thing said (W7). Three kinds of
   state sort themselves on that test: a **reconciliation** is re-derived from live inputs (a
   diagnostic, a `Reg::Failed` row), a **remembered condition** cannot be re-derived but still
   retracts (a write fault — an observer records it, a later successful write clears it), and an

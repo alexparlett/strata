@@ -43,7 +43,7 @@ pub use state::{
 pub use views::{
     AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
     CellViewThemePreference, ChartThemePreference, CommandPaletteThemePreference,
-    DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,
-    HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
-    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    ConnectionsThemePreference, DataGridThemePreference, DrawerThemePreference,
+    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
+    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };

@@ -21,9 +21,9 @@ use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
     AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
     CellViewThemePreference, ChartThemePreference, CommandPaletteThemePreference,
-    DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,
-    HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
-    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    ConnectionsThemePreference, DataGridThemePreference, DrawerThemePreference,
+    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
+    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
@@ -570,6 +570,17 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             figures_color: role(Role::TextDim),
             sql_color: role(Role::TextMuted),
             card_hover_fill: role(Role::GhostElementHover),
+            empty_background: role(Role::SurfaceBackground),
+            empty_border_fill: role(Role::BorderControl),
+            empty_color: role(Role::TextPlaceholder),
+        },
+    );
+    th.set(
+        "connections",
+        ConnectionsThemePreference {
+            provider_color: role(Role::Accent),
+            bucket_color: role(Role::Text),
+            hint_color: role(Role::TextDisabled),
             empty_background: role(Role::SurfaceBackground),
             empty_border_fill: role(Role::BorderControl),
             empty_color: role(Role::TextPlaceholder),

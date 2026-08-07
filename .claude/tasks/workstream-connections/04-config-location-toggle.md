@@ -33,6 +33,19 @@ built only the local arm of each.
 - The ⓘ resolution tooltip already has the sentence for this ("Object-store paths are relative to
   the selected connection's bucket"); P4-11 ships it, so nothing changes there.
 
+## What Connections 02 handed over
+
+- **`provider_label`** is written now, in `views/sidebar/connections/mod.rs` — the `S3` / `GCS` /
+  `HTTP` names the pane's badge wears. This picker is the second surface that has to agree with it,
+  so **move it** somewhere both can read (`strata_model::Provider` is the obvious home) rather than
+  typing the three strings again.
+- **Forget's confirm makes no consequence claim**, because today nothing can read a bucket: the
+  body is "Removes the object store from this project. Nothing in the bucket is deleted." The
+  moment a table's sources can name a connection, that stops being the whole truth — give
+  `DropTarget::Connection` a **consequence line** listing the tables over the forgotten bucket, the
+  way a table drop lists the views over it (`consequence` + `dependent_views` in
+  `dialogs/drop_confirm.rs`, and the same shape `registration_faults` already uses).
+
 ## Acceptance
 - [ ] A table can be registered over a remote connection (paths resolve against its object store).
 - [ ] With Object store selected and no connection for the provider, Save is blocked and the empty
