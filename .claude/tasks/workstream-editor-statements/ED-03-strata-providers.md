@@ -1,6 +1,6 @@
 # ED-03 · Strata providers: catalog/schema identity + snapshot hiding
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** E5 · **Depends on:** — (land before or with ED-04)
+**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** — (land before or with ED-04)
 
 ## Goal
 

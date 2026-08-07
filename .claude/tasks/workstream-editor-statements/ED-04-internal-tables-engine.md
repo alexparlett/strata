@@ -1,6 +1,6 @@
 # ED-04 · Internal tables, engine half: def shape, CTAS spool, replay
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** E5 · **Depends on:** ED-02 (ED-03 should land before or with this)
+**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-02 (ED-03 should land before or with this)
 
 ## Goal
 

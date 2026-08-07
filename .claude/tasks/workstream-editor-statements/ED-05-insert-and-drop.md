@@ -1,6 +1,6 @@
 # ED-05 · INSERT (native, target-gated) + DROP TABLE (both origins)
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** E5 · **Depends on:** ED-04
+**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-04
 
 ## Goal
 

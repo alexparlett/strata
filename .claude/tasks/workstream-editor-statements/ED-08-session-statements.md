@@ -1,6 +1,6 @@
 # ED-08 · Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** E5 · **Depends on:** ED-02
+**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-02
 
 ## Goal
 

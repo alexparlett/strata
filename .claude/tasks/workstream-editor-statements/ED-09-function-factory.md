@@ -1,6 +1,6 @@
 # ED-09 · `StrataFunctionFactory` + swappable function catalog
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** E5 · **Depends on:** ED-02
+**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-02
 
 ## Goal
 

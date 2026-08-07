@@ -2,7 +2,8 @@
 
 Lifting the managed-DDL policy into a **full-statement editor**: internal tables persisted under
 `.strata/tables/` (`CREATE TABLE` / CTAS, `INSERT`, `DROP TABLE`), typed `CREATE`/`DROP VIEW`,
-editor `COPY … TO`, session statements (`SET`/`RESET`, `PREPARE`/`EXECUTE`/`DEALLOCATE`) and
+typed `CREATE EXTERNAL TABLE`, editor `COPY … TO`, session statements (`SET`/`RESET`,
+`PREPARE`/`EXECUTE`/`DEALLOCATE`) and
 `CREATE FUNCTION` — while the agent surface stays read-only and every settled funnel (the catalog
 store, the persist path, the epoch discipline, the snapshot lifecycle) stays exactly where it is.
 
@@ -21,15 +22,16 @@ replayed by the existing registration pass (headless host free).
 
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
-| 01 | Policy router: `classify(stmt, Capability)` + `Verdict`; agent wrapper unchanged | ⬜ | E5 | — |
-| 02 | `Engine::run` + statement results: `RunOutcome`/`StatementReport`/`StoreEffect`, app folds, history | ⬜ | E5 | 01 |
-| 03 | Strata providers: `StrataCatalogProvider` + `StrataSchemaProvider`, information_schema on | ⬜ | E5 | — |
-| 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ⬜ | E5 | 02 |
-| 05 | INSERT (native, target-gated) + DROP TABLE (both origins) | ⬜ | E5 | 04 |
-| 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ⬜ | E5 | 02 |
-| 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ⬜ | E5 | 02 |
-| 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ⬜ | E5 | 02 |
-| 09 | `StrataFunctionFactory` + swappable function catalog | ⬜ | E5 | 02 |
+| 01 | Policy router: `classify(stmt, Capability)` + `Verdict`; agent wrapper unchanged | ⬜ | — | — |
+| 02 | `Engine::run` + statement results: `RunOutcome`/`StatementReport`/`StoreEffect`, app folds, history | ⬜ | — | 01 |
+| 03 | Strata providers: `StrataCatalogProvider` + `StrataSchemaProvider`, information_schema on | ⬜ | — | — |
+| 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ⬜ | — | 02 |
+| 05 | INSERT (native, target-gated) + DROP TABLE (both origins) | ⬜ | — | 04 |
+| 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ⬜ | — | 02 |
+| 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ⬜ | — | 02 |
+| 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ⬜ | — | 02 |
+| 09 | `StrataFunctionFactory` + swappable function catalog | ⬜ | — | 02 |
+| 10 | Typed CREATE EXTERNAL TABLE onto the Table Config funnel | ⬜ | — | 02 |
 
 ## Why the order
 
@@ -39,8 +41,9 @@ fold — every later task returns a `StatementReport` through it, so it must exi
 capability lands. 03 is independent of the chain (it changes enumeration, not dispatch) but
 should land before or with 04, so `SHOW TABLES` works — and hides snapshots — by the time the
 first internal table exists. 04 → 05 is the only hard chain: INSERT and DROP gate on the
-internal-name set and the data-dir layout 04 establishes. 06/07/08/09 are parallel after 02 —
-each is one `StmtKind` arm plus its engine method(s).
+internal-name set and the data-dir layout 04 establishes. 06/07/08/09/10 are parallel after 02 —
+each is one `StmtKind` arm plus its engine method(s); 10 maps the parsed statement onto a def and
+reuses the registration funnel outright, so it is the smallest of the arms.
 
 ## Standing rules this workstream inherits (AGENTS.md §2)
 
