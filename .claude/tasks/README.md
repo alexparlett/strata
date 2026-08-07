@@ -81,11 +81,11 @@ Read this index first, then open only the phase/workstream file you're working i
   ordinary press → snapshot machinery), a native chat pane as the flagship follow-on, a headless
   `strata mcp <project>` stdio host third. Spec: `docs/AGENT_ACCESS_SPEC.md` (+
   `docs/agent-access-dataflow.mermaid`).
-- **Editor statements** (`workstream-editor-statements/`, ED, DEV_TASKS **E5**) — lifting the
+- **Editor statements** (`workstream-editor-statements/`, ED) — lifting the
   managed-DDL policy into a full-statement editor: internal tables persisted under
-  `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, editor `COPY TO`, session statements +
-  `CREATE FUNCTION`. Providers for identity/visibility, interception for lifecycle; the agent
-  surface stays read-only. Spec: `docs/STATEMENTS_SPEC.md`.
+  `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`, editor
+  `COPY TO`, session statements + `CREATE FUNCTION`. Providers for identity/visibility,
+  interception for lifecycle; the agent surface stays read-only. Spec: `docs/STATEMENTS_SPEC.md`.
 
 ## Known bugs (carried from DEV_TASKS; re-verify under Freya)
 

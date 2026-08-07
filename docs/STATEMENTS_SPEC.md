@@ -1,8 +1,9 @@
 # Full-statement editor — lifting the managed-DDL policy (ED)
 
 Spec for the **full SQL statement surface** in Strata's editor: internal tables persisted to disk
-(`CREATE TABLE` / CTAS, `INSERT`, `DROP TABLE`), typed view DDL, `COPY … TO`, session statements
-(`SET`/`RESET`, `PREPARE`/`EXECUTE`/`DEALLOCATE`) and `CREATE FUNCTION` — replacing the managed-DDL
+(`CREATE TABLE` / CTAS, `INSERT`, `DROP TABLE`), typed view DDL, typed `CREATE EXTERNAL TABLE`,
+`COPY … TO`, session statements (`SET`/`RESET`, `PREPARE`/`EXECUTE`/`DEALLOCATE`) and
+`CREATE FUNCTION` — replacing the managed-DDL
 policy's blanket refusal with a per-statement router while keeping every settled funnel (the
 catalog store, the persist path, the epoch discipline, the snapshot lifecycle) exactly where it is.
 Design settled 2026-08-04 with Alex; workstream: `.claude/tasks/workstream-editor-statements/`.
@@ -23,8 +24,10 @@ AGENTS.md upkeep rule; until then the code enforces the old policy and the old t
 
 ## 1. Direction (decided)
 
-- **Scope is all four capability groups**: internal tables; typed `CREATE`/`DROP VIEW`; editor
-  `COPY TO`; session statements + `CREATE FUNCTION`. Everything else stays refused, default-deny.
+- **Scope**: internal tables (CTAS / `CREATE TABLE` / `INSERT` / `DROP`); typed `CREATE`/`DROP
+  VIEW`; typed `CREATE EXTERNAL TABLE` onto the Table Config funnel; editor `COPY TO`; session
+  statements + `CREATE FUNCTION`. The editor runs the full statement surface — the only remaining
+  editor refusals are the short list in §4; unknown statement kinds stay default-deny.
 - **Internal-table data is Arrow IPC under `.strata/tables/`** — type fidelity, the same rationale
   as snapshots (parquet cannot write a union or a zero-field struct, so some query results could
   not become tables). Data files are gitignored; the defs in `project.json` are the shareable half.
@@ -111,8 +114,9 @@ pub enum Verdict {
 pub fn classify(stmt: &DFStatement, cap: Capability) -> Verdict;
 ```
 
-with `StmtKind` covering `CreateTable`, `Ctas`, `Insert`, `DropTable`, `CreateView`, `DropView`,
-`Copy`, `Set`, `Reset`, `Prepare`, `Deallocate`, `CreateFunction`, `DropFunction`.
+with `StmtKind` covering `CreateExternalTable`, `CreateTable`, `Ctas`, `Insert`, `DropTable`,
+`CreateView`, `DropView`, `Copy`, `Set`, `Reset`, `Prepare`, `Deallocate`, `CreateFunction`,
+`DropFunction`.
 
 - **One predicate, one new axis, zero copies.** `Capability::Agent` returns exactly today's
   answers — every non-query a `Refuse` carrying the same `Blocked` variant — so
@@ -122,15 +126,20 @@ with `StmtKind` covering `CreateTable`, `Ctas`, `Insert`, `DropTable`, `CreateVi
 - **Fail closed, default deny.** Parse failure is still `Err` ("could not judge"); the sqlparser
   wildcard still lands `Refuse(Unsupported)`; the DFParser match stays wildcard-free so a new DF
   variant is a compile error.
-- `Blocked` grows and never shrinks: **every existing variant and its rendered message stay
-  verbatim**, because `Capability::Agent` must refuse `CREATE TABLE`/`INSERT`/`CREATE VIEW`/
-  `DROP VIEW`/`DROP`/`COPY`/`SET`/`RESET` message-identically — the agent error path renders
-  `editor_message()` and `strata-agent`'s parity tests name `Blocked::CreateTable`/`Insert`/
-  `CreateDatabase` directly (`error.rs:145`, `tools.rs:1762`), so deleting a variant is a
-  compile break, not just a wording change. On the Editor path the kept variants simply become
-  unreachable for intercepted kinds. New refusals join them: INSERT into a non-internal target,
-  `INSERT OVERWRITE`, owned/runtime/format-key `SET`, non-query `PREPARE`, reserved names — in
-  the same register (terse sentences, single-quoted identifiers).
+- **The editor's refusal set shrinks to almost nothing; `Blocked`'s existing variants stay
+  defined as the agent path's error messages.** `Capability::Agent` refuses
+  `CREATE EXTERNAL TABLE`/`CREATE TABLE`/`INSERT`/`CREATE VIEW`/`DROP VIEW`/`DROP`/`COPY`/`SET`/
+  `RESET` exactly as today — the agent error path renders `editor_message()` and `strata-agent`'s
+  parity tests name `Blocked::CreateTable`/`Insert`/`CreateDatabase` directly (`error.rs:145`,
+  `tools.rs:1762`) — while on the Editor path every one of those statements classifies
+  `Intercept` and runs, so those variants are unreachable there. New refusals join the vocabulary
+  for the cases with no sane meaning: INSERT into a non-internal target, `INSERT OVERWRITE`,
+  owned/runtime/format-key `SET`, non-query `PREPARE`, reserved names — same register (terse
+  sentences, single-quoted identifiers).
+- **What the editor still refuses, in full**: `CREATE DATABASE`/`SCHEMA` (structurally impossible
+  — §5), transactions and unknown statement kinds (default deny), the context-dependent refusals
+  above, and unsupported clauses inside accepted statements (constraints, `TEMPORARY`,
+  data-column lists on external tables). Everything else runs.
 - **One statement per Run** (today's behavior, kept): a multi-statement buffer is judged per
   statement by diagnostics as now, and Run refuses a mixed batch with a policy message.
 - **Reserved names, read and write**: an intercepted statement that references a
@@ -344,6 +353,31 @@ the change on the next keystroke — the live-registry invariant kept honest. Se
 persisted; if persistence is ever wanted it is a `FunctionDef` list in `project.json` replayed by
 the pass — deferring costs nothing.
 
+### 6.7 Typed CREATE EXTERNAL TABLE
+
+`Intercept(CreateExternalTable)` — the typed form of Table Config: the parsed statement maps onto
+an ordinary external `TableDef` and rides the same funnel, so Table Config and typed DDL are two
+gestures into one registration path, exactly as ⌘S and typed `CREATE VIEW` are for views. DF's
+native path (`TableProviderFactory` → registration behind the store's back) is never used — the
+def, not the engine registration, is the durable artifact.
+
+- **Mapping**: `STORED AS` → `SourceFormat` (`PARQUET`/`CSV`/`JSON`/`ARROW`; anything else
+  refused by name — the Avro-fallthrough rule, P4-11); `LOCATION` → one source, relativized when
+  under the project root (Configure's own rule); `PARTITIONED BY` → `partition_cols`;
+  `OPTIONS(…)` → the matching `CsvRead`/`JsonRead` fields (`format.has_header`,
+  `format.delimiter`, quote/escape/comment/compression/newlines-in-values/infer-rows). **Any
+  OPTIONS key with no def field is refused by name** — a silently dropped option is a def that
+  lies about how the table reads.
+- **Column lists**: accepted only where every listed column is a partition column (its declared
+  type carries into the def, checked against the supported partition types —
+  Utf8/Int32/Int64/Date32). Data columns refuse: "Schemas are inferred. Remove the column list."
+- Also refused, loudly: constraints, `ORDER BY` clauses, `UNBOUNDED`, `TEMPORARY`, a reserved
+  `__snap_` name (§4). `IF NOT EXISTS` honored against the store's namespace.
+- **Outcome**: `register_external` from the built def → `TableMeta` →
+  `StoreEffect::TableUpserted { def (origin External), meta }` — the identical fold, persist and
+  epoch bump as CTAS's (§7). `Blocked::CreateExternalTable` and its message stay as the agent
+  path's refusal.
+
 ## 7. Integration dataflow (CTAS end to end)
 
 At Run: `Engine::run` classifies → `Intercept(Ctas)` → spool the inner SELECT to
@@ -407,12 +441,13 @@ Data is managed by Strata; drop and re-create to change it").
 | "History is a list of queries… only successful data runs" | Successful statements enter history too; dedupe/cap unchanged | ED-02 |
 | "DROP is not supported in the editor. Deregister tables from the catalog" (message + routing) | DROP TABLE works on both origins from the editor; catalog confirm remains for the pointer gesture | ED-05 |
 | "COPY TO is not supported in the editor. Use Export" | Editor COPY dispatches natively behind the pre-flight NULL gate; Export window unchanged | ED-07 |
+| "CREATE EXTERNAL TABLE is not supported in the editor. Register tables in Table Config" | The typed form intercepts onto the Table Config funnel (def-first); message stays as the agent refusal | ED-10 |
 | "SET is not supported in the editor. Engine options are set in Settings" | Session overlay for non-owned, non-runtime, non-format keys; Settings stays the durable authority | ED-08 |
 | Agent access "Read-only v1" (AGENT_ACCESS_SPEC §1) | **Unchanged** — restated with the capability parameter | ED-01 |
 | Snapshot lifecycle ("DDL does not retire snapshots", no epoch in the query key) | **Unchanged** — the query arm is byte-for-byte today's path | — |
 
 ## 11. Workstream
 
-`.claude/tasks/workstream-editor-statements/` — ED-01…ED-09, ordering and dependencies in its
+`.claude/tasks/workstream-editor-statements/` — ED-01…ED-10, ordering and dependencies in its
 README. ED-01 (router) and ED-02 (`Engine::run` + statement results) unblock everything;
-ED-04 → ED-05 is the only hard chain; ED-03/06/07/08/09 parallelize after ED-02.
+ED-04 → ED-05 is the only hard chain; ED-03/06/07/08/09/10 parallelize after ED-02.

@@ -1,6 +1,6 @@
 # ED-01 · Policy router: `classify(stmt, Capability)` + `Verdict`
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** E5 · **Depends on:** —
+**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** —
 
 ## Goal
 
@@ -23,8 +23,8 @@ The agent surface's answers do not change by one byte.
 Per `docs/STATEMENTS_SPEC.md` §4:
 
 - `Capability { Editor, Agent }`, `Verdict { Query, Intercept(StmtKind), Refuse(Blocked) }`,
-  `StmtKind { CreateTable, Ctas, Insert, DropTable, CreateView, DropView, Copy, Set, Reset,
-  Prepare, Deallocate, CreateFunction, DropFunction }`, and
+  `StmtKind { CreateExternalTable, CreateTable, Ctas, Insert, DropTable, CreateView, DropView,
+  Copy, Set, Reset, Prepare, Deallocate, CreateFunction, DropFunction }`, and
   `classify(stmt: &DFStatement, cap: Capability) -> Verdict` replacing `policy_block`'s match.
 - **`Capability::Agent` returns exactly today's answers** — every non-query a `Refuse` with the
   same `Blocked` variant and the same rendered message. `policy_verdicts` becomes a thin wrapper
@@ -33,13 +33,15 @@ Per `docs/STATEMENTS_SPEC.md` §4:
 - **Fail closed, default deny**: parse failure stays the caller-side `Err`; the sqlparser
   wildcard stays `Refuse(Unsupported)`; the DFParser five-variant match stays wildcard-free (a
   new DF variant must be a compile error).
-- `Blocked` grows, never shrinks: **every existing variant and its `editor_message` stay
-  verbatim** — `Capability::Agent` still refuses `CREATE TABLE`/`INSERT`/`CREATE VIEW`/`DROP
-  VIEW`/`DROP`/`COPY`/`SET`/`RESET` with today's exact variant and words, and `strata-agent`'s
-  tests name `Blocked::CreateTable`/`Insert`/`CreateDatabase` directly
+- **The editor's refusal set shrinks to the short list in spec §4; `Blocked`'s existing variants
+  stay defined as the agent path's error messages.** `Capability::Agent` still refuses
+  `CREATE EXTERNAL TABLE`/`CREATE TABLE`/`INSERT`/`CREATE VIEW`/`DROP VIEW`/`DROP`/`COPY`/`SET`/
+  `RESET` with today's exact variant and words, and `strata-agent`'s tests name
+  `Blocked::CreateTable`/`Insert`/`CreateDatabase` directly
   (`crates/strata-agent/src/error.rs:145`, `:159`, `tools.rs:1762`), so a deleted variant is a
-  compile break. On the Editor path the kept variants simply become unreachable for intercepted
-  kinds. Add `InsertExternal`, `InsertOverwrite`, `SetOwned`, `SetRuntime`, `SetFormat`,
+  compile break. On the Editor path those variants are unreachable — every one of those
+  statements classifies `Intercept` and runs. Add `InsertExternal`, `InsertOverwrite`,
+  `SetOwned`, `SetRuntime`, `SetFormat`,
   `PrepareNonQuery`, `ReservedName` — the last for a `__snap_`-prefixed identifier anywhere in
   an intercepted statement, **target names included** (`CREATE TABLE __snap_2` / CTAS /
   `CREATE VIEW __snap_2` / `INSERT`/`DROP` onto the prefix must refuse before they can collide
