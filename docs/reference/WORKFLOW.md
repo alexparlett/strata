@@ -178,6 +178,24 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `cargo test`, which `default-members` would narrow to `strata-freya` alone. It asserts the
   submodule sits at the recorded gitlink **before** compiling, so §6's unpushed-fork-commit trap
   fails in seconds with that named as the cause instead of as a missing method 40 minutes in.
+- **The container runtime is a single shared worker, so CI serializes repo-wide — and it queues
+  rather than cancels.** Testcontainers Cloud gives this account one worker at a time and the
+  connections test (W7) drives a real MinIO through it, so a second overlapping run is refused
+  with `Failed to get a worker: ErrValidator: too many concurrent requests` — or that same refusal
+  arriving as a truncated response, `hyper::Error(IncompleteMessage)`, which is the same fault and
+  not a second one. The test then fails loud, correctly: it cannot tell a busy provider from a
+  missing one, and it must never call the latter fine. Merging a PR is exactly when the overlap
+  happens — the merge commit pushes to main while other branches are still building — which is why
+  **main** was the ref that kept failing while its own PR had just passed. So the `test` job carries
+  a second, **job-level** concurrency group with a constant name: the workflow-level group is
+  per-ref and supersedes within a branch, this one is repo-wide and only ever waits. Waiting is
+  free — a pending job holds no runner and `timeout-minutes` does not start until it runs. The
+  `queue: max` is load-bearing rather than decoration: the default, `single`, keeps **one** pending
+  job per group and cancels any previously pending one, so a third concurrent run would be silently
+  cancelled — and a cancelled run on main is no coverage of main at all, which is the failure the
+  serialization exists to stop. `queue: max` cannot be combined with `cancel-in-progress: true`,
+  which is the other reason superseding stays at the workflow level. Raising the limit instead is a
+  billing decision, not an engineering one.
 - **The release path is a script CI calls, never a pipeline written in YAML.**
   `scripts/bundle-macos.sh` builds the universal binary, assembles the `.app`, signs, notarizes and
   makes the DMG; `.github/workflows/release.yml` sets up secrets and runs it. So the build a

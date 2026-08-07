@@ -437,6 +437,10 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   go in prose beneath the card, which has no field for either. Never print the list twice.
 - **CI runs that same check on every PR** — `cargo test --workspace --locked` on **macOS**, with
   `submodules: true`, asserting the gitlink **before** compiling.
+- **The container runtime is a single shared worker, so CI serializes repo-wide — and it queues
+  rather than cancels.** A job-level, constant-named concurrency group with `queue: max`; the
+  per-ref workflow group keeps the superseding. Never `queue: single` here — a silently cancelled
+  run on main is no coverage of main.
 - **The release path is a script CI calls, never a pipeline written in YAML.** Signing degrades
   honestly and says which rung it took; the tag is created **after** the build.
 - **The version lives in one file and is reached through one script** (`scripts/version.sh`, which

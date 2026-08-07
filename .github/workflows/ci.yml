@@ -6,7 +6,9 @@ on:
   pull_request:
 
 # One test run per branch. A new push supersedes the in-flight run rather than
-# holding a macOS runner for a diff nobody is waiting on any more.
+# holding a macOS runner for a diff nobody is waiting on any more. This group only
+# ever supersedes *within* a branch; serializing across branches is the job-level
+# group below, and the two do different jobs.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -16,6 +18,28 @@ env:
 
 jobs:
   test:
+    # Serialized across the whole repository, not per branch: Testcontainers Cloud gives
+    # this account **one** worker at a time, and the connections test (W7) drives a real
+    # MinIO through it. Two runs overlapping means the second is refused - `Failed to get
+    # a worker: ErrValidator: too many concurrent requests`, or the same refusal arriving
+    # as a truncated response (`hyper::Error(IncompleteMessage)`) - and the test fails
+    # loud exactly as it is built to. Merging a PR is precisely when that overlap
+    # happens: the merge commit pushes to main while other PR branches are still
+    # building, which is why main was the ref that kept failing. Raising the limit is a
+    # billing decision; waiting for the worker costs nothing, because a queued job holds
+    # no runner and `timeout-minutes` does not start until it runs.
+    #
+    # `queue: max` is load-bearing. The default (`single`) keeps one pending job per
+    # group and cancels any previously pending one, so a third concurrent run would be
+    # silently *cancelled* rather than queued - and a cancelled run on main is no
+    # coverage of main at all, which is the failure this whole change exists to stop.
+    # `max` queues up to 100. It cannot be combined with `cancel-in-progress: true`;
+    # superseding belongs to the per-ref group above, which still drops a stale
+    # same-branch run before it ever reaches this queue, so this level only ever waits.
+    concurrency:
+      group: ci-testcontainers-worker
+      cancel-in-progress: false
+      queue: max
     # macOS, not ubuntu: the app is macOS-first (the muda menubar, the traffic-light
     # gutter, `set_window_parent`), so a green Linux build would not be evidence the
     # thing we ship compiles. It also skips the gtk/webkit apt dance the fork's own
