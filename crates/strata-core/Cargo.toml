@@ -53,8 +53,10 @@ tracing = "0.1.44"
 # A real S3 server for the connections integration test (W7): `tests/object_store_minio.rs`
 # starts MinIO in a container rather than hand-rolling an S3 mock, because a mock is written
 # by the same understanding of the protocol it is meant to check — it can be shaped to pass
-# without anyone noticing. Needs a Docker runtime, which the macOS CI job does not have, so
-# those tests are `#[ignore]`d and run by a Linux job (see .github/workflows/ci.yml).
+# without anyone noticing. Needs a Docker runtime, which the macOS CI job does not have on its
+# own — CI supplies one via `atomicjar/testcontainers-cloud-setup-action` (see
+# .github/workflows/ci.yml). The test is deliberately *not* `#[ignore]`d: an ignored test is
+# one nobody runs, and this is the only thing covering SigV4 through the `aws-config` bridge.
 # Pinned to the major `testcontainers-modules` itself depends on: the two share a `bollard`,
 # and a newer `testcontainers` here resolves a second one that conflicts outright.
 testcontainers = "0.27"
