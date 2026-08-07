@@ -156,9 +156,11 @@ so Freya's non-Tokio UI executor awaits engine methods like any async fn. No UI-
 channels, no request ids. In Freya the handle is `EngineCtx` (`Arc<Engine>` + Deref) held in
 context. Snapshots are **Arrow IPC**; lifecycle is the facade's own bookkeeping
 (`docs/SNAPSHOT_SPEC.md`). The SQL function set is the **live registry**, not a list we keep.
-Managed DDL policy: the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` only.
+Statement policy is one router in front of dispatch: `Engine::run` classifies, then runs a query,
+intercepts a statement, or refuses it — the editor is a full-statement surface, the agent stays
+read-only.
 
-Full model — the snapshot format argument, the function registry, the DDL policy and its
+Full model — the snapshot format argument, the function registry, the statement router and its
 surfaces: [docs/reference/ENGINE.md](docs/reference/ENGINE.md).
 
 ---

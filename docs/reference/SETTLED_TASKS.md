@@ -54,7 +54,8 @@ otherwise re-record it. The rows are *actionable*, which is the one thing that s
 a press loads into the active tab, a double-press loads and runs, both through the editor's own
 `actions::load_sql` / `actions::press_query`, so a re-run from the drawer is an ordinary press with
 its own nonce and cache entry. And there is deliberately **no status dot** — the satellite records
-only successful data runs, so the canvas's ok/cancelled/failed mark would have exactly one value
+only successful runs (rows or a statement, ED-02), so the canvas's ok/cancelled/failed mark
+would have exactly one value
 (P3-08's "only real facts", applied to a glyph).
 
 History is a list of **queries, not presses**: a re-run moves its entry to the top with the newest

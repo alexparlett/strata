@@ -327,7 +327,7 @@ where
 
 /// One logical table definition (a DataFusion `ListingTable` over many source paths).
 /// `sources` are stored project-relative where they sit inside the project folder.
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct TableDef {
     pub name: String,
     /// The reader and its options — see [`SourceFormat`].
@@ -439,7 +439,7 @@ mod format_tests {
 
 /// A saved, query-backed catalog view definition (a real DataFusion `CREATE VIEW`).
 /// Views are addressed by `name` — that *is* their engine/SQL identity.
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct ViewDef {
     pub name: String,
     pub sql: String,

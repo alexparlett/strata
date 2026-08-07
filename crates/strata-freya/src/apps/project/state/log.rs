@@ -11,7 +11,9 @@
 //! anything, so the only layer that can honestly record it is the one that watched it happen: the
 //! catalog scan records what the engine answered for each def (`state::hooks`), Save and the drop
 //! confirm record their own mutations, and a Run's outcome is recorded by the tab's request keeper
-//! ([`use_run_logging`]), which is already mounted for the press's whole life. That is the opposite
+//! ([`use_run_logging`] — or, for an intercepted statement, by the fold that applies its effect,
+//! `state::statement`, since only that knows whether the def was written), which is already
+//! mounted for the press's whole life. That is the opposite
 //! of the diagnostics driver (AGENTS.md §2) and for the opposite reason: diagnostics are a pure
 //! function of the buffer and the catalog, so a reconciliation can re-derive them; a log is a
 //! history of things that no longer exist to be re-read.
@@ -155,13 +157,18 @@ pub fn use_run_logging(query: UseQuery<RunQuery>) {
             return;
         }
         // Resolved while the query's borrow is held, released before the append (the same shape
-        // `use_history_recording` uses).
+        // `use_history_recording` uses). Two `Option`s deep on purpose: the outer says whether it
+        // settled, the inner whether this settle is *this* observer's to record — collapsing them
+        // would leave a statement's settle re-asking on every later render.
         let settled = match &*query.read().state() {
             QueryStateData::Settled { res, .. } => Some(run_event(res)),
             _ => None,
         };
-        if let Some((level, message)) = settled {
-            logged.set(true);
+        let Some(event) = settled else {
+            return;
+        };
+        logged.set(true);
+        if let Some((level, message)) = event {
             log_event(log, level, message);
         }
     });
@@ -177,8 +184,15 @@ pub fn use_run_logging(query: UseQuery<RunQuery>) {
 /// reading "superseded by a newer run" — a fault the user never had, and precisely the string
 /// AGENTS.md §2 says must never read as a problem. Everything else `Err` is the engine's own
 /// message, the same text the results pane frames.
-fn run_event(res: &Result<QueryOutcome, String>) -> (LogLevel, String) {
-    match res {
+///
+/// `None` means **somebody else records this settle**, which today is exactly one case: an
+/// intercepted statement (ED-02) is logged by `state::statement`'s fold, because its message
+/// claims something durable ("Table 't' created") and only the fold knows whether the def
+/// reached `project.json`. Logging it here as well would be two rows arguing about one action —
+/// the `save_view` lesson, which is where that gate came from.
+fn run_event(res: &Result<QueryOutcome, String>) -> Option<(LogLevel, String)> {
+    let event = match res {
+        Ok(QueryOutcome::Statement(_)) => return None,
         Ok(QueryOutcome::Rows(page)) => (
             LogLevel::Ok,
             format!(
@@ -206,7 +220,8 @@ fn run_event(res: &Result<QueryOutcome, String>) -> (LogLevel, String) {
             },
         ),
         Err(e) => (LogLevel::Error, e.clone()),
-    }
+    };
+    Some(event)
 }
 
 #[cfg(test)]
@@ -260,7 +275,7 @@ mod tests {
     /// A cancel is a warning, not a failure — the distinction the results pane also makes.
     #[test]
     fn a_cancelled_run_logs_as_a_warning() {
-        let (level, message) = run_event(&Err(CANCELLED.to_string()));
+        let (level, message) = run_event(&Err(CANCELLED.to_string())).expect("logged here");
         assert_eq!(level, LogLevel::Warning);
         assert_eq!(message, "Query cancelled");
     }
@@ -274,7 +289,7 @@ mod tests {
     #[test]
     fn a_superseded_run_logs_as_a_warning_too() {
         for stopped in [SUPERSEDED_RUN, SUPERSEDED_SCAN] {
-            let (level, message) = run_event(&Err(stopped.to_string()));
+            let (level, message) = run_event(&Err(stopped.to_string())).expect("logged here");
             assert_eq!(level, LogLevel::Warning, "{stopped}");
             assert_eq!(message, format!("Query {stopped}"));
         }
@@ -284,7 +299,8 @@ mod tests {
     /// frames, so the two can't describe one run differently.
     #[test]
     fn a_failed_run_logs_the_engines_message() {
-        let (level, message) = run_event(&Err("Schema error: No field named 'amont'".to_string()));
+        let (level, message) = run_event(&Err("Schema error: No field named 'amont'".to_string()))
+            .expect("logged here");
         assert_eq!(level, LogLevel::Error);
         assert_eq!(message, "Schema error: No field named 'amont'");
     }

@@ -86,6 +86,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   editor's refusals shrink to a short list and the older `Blocked` variants stay as the agent
   path's messages; default stays deny; a `__snap_` name in an intercepted statement is refused.
   Every interception is a second gesture into a funnel that already exists.
+- **`Engine::run` routes; only its query arm touches the snapshot lifecycle.** One statement per
+  Run, `Query` delegating to `query()` byte-for-byte, `Intercept` to `ddl::execute` under the
+  in-flight bracket `explain` shares, `Refuse` to the squiggle's own message before DataFusion
+  can plan it. A statement's outcome is a **value the app folds** (`StoreEffect` → store channel
+  → `persisted_defs` → `catalog_settled`), one fold for every effect, and its log entry belongs
+  to that fold because only the fold knows whether the def was written.
 - **A chart renders the result in result order; it computes nothing SQL can say.** `Engine::chart`
   is a projected, ordinal-ordered, capped read plus a long→wide pivot — no aggregation, no
   bucketing, no imposed order (the histogram's binning is the one exception). Over a cap, or two
@@ -188,8 +194,8 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   Named profile are two providers**, because naming a profile on `aws-config`'s default chain
   leaves `Environment` in front of it; and **no arm of `engine::store` takes a secret** — a profile
   name and a key file path, never a key.
-- **History is a satellite** (`.strata/history.jsonl`), never a store field. Only successful data
-  runs; Clear unwrites the file and keeps the `seen` guard.
+- **History is a satellite** (`.strata/history.jsonl`), never a store field. Only successful runs —
+  rows *or* an intercepted statement; Clear unwrites the file and keeps the `seen` guard.
 - **History is a list of queries, not of presses — and dedupe comes before the cap**, keyed by the
   same `util::collapse_sql` that renders the preview.
 - **Silent corruption is refused, never warned about — and the refusal is checked against read data,

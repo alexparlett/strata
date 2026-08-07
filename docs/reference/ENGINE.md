@@ -22,10 +22,16 @@ introspection and **intercepts** the rest — internal tables, typed view DDL on
 `COPY`, `SET`/`RESET`, `PREPARE`/`DEALLOCATE`, `CREATE`/`DROP FUNCTION` — leaving a short refusal
 list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`, unknown kinds, and the context-dependent cases.
 `Capability::Agent` is read-only and refuses every non-query with the words AA-01 shipped.
-See `docs/STATEMENTS_SPEC.md` and the invariant in `reference/INVARIANTS.md` for the full rule
+`Engine::run` is where that classification is *spent*: `Query` delegates to `query()`
+byte-for-byte (the only arm that touches the snapshot lifecycle, so "DDL does not retire
+snapshots" holds by construction), `Intercept(kind)` goes to `engine/ddl.rs` under the same
+in-flight bracket `explain` uses, and `Refuse` returns the editor's own message before anything
+can plan. A statement comes back as a `StatementReport` carrying a `StoreEffect` the app folds —
+never something to read back out of DataFusion. One statement per Run.
+See `docs/STATEMENTS_SPEC.md` and the invariants in `reference/INVARIANTS.md` for the full rule
 (default-deny, reserved `__snap_` names, `Blocked` grows and never shrinks); ED-01 landed the
-classification, `Engine::run`'s dispatch and each `StmtKind`'s implementation are the ED tasks after
-it.
+classification and ED-02 the dispatch, and each `StmtKind`'s implementation is the ED task that
+owns its capability — until then an intercepted statement runs into `ddl::execute`'s stub refusal.
 
 **A remote scheme is something we register, and a connection is what registers it.** DataFusion
 core resolves nothing: there is no built-in "read `s3://…`", so an embedder builds an

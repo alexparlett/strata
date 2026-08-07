@@ -398,6 +398,11 @@ src/apps/project/                the project window (Valin-shaped)
                                  Here rather than beside a caller because every writer that was
                                  added *away* from the old home grew its own silent
                                  `tracing::error!` instead of finding it
+                                 statement.rs = ED-02's **statement settle**: one fold applying an
+                                 intercepted statement's `StoreEffect` — store channel →
+                                 `persisted_defs` → `catalog_settled` → the event log. Driven
+                                 from the request keeper, and it owns the log row because only
+                                 the fold knows whether the def was written
   model/                         window-local view models
   views/
     dialogs/                     the window's modal dialogs, mounted early so their key barrier
@@ -479,7 +484,7 @@ src/apps/project/                the project window (Valin-shaped)
                                  tab, double-press loads and runs — both through the editor's own
                                  `actions`, so a re-run is an ordinary press. Its **Clear**
                                  unwrites `history.jsonl` as well as emptying the satellite. No
-                                 status dot: only successful data runs are ever recorded
+                                 status dot: only successful runs are ever recorded
     palette/                     P6-01 — the **command palette** (⌘K), the window's one discovery
                                  surface. mod.rs is the `command_palette` theme, the
                                  always-mounted node (drawing nothing but its ⌘K listener) and
@@ -531,4 +536,8 @@ src/apps/project/                the project window (Valin-shaped)
                                  requested); axis.rs the plotters `Ranged` category coord +
                                  nice max + abbreviated tick; marks.rs a render fn per mark
         toolbar.rs, status_bar.rs, running.rs, explain_plan.rs, empty.rs, error.rs
+        statement.rs             ED-02's **statement state**: an intercepted statement's report,
+                                 in the empty-state layout in success dress. No grid, no pager,
+                                 no snapshot handle — the tab keeps the one it had, because DDL
+                                 retires nothing
 ```

@@ -845,7 +845,6 @@ impl ProjectState {
     /// Insert-or-replace a table def by name (registration / config save), at its
     /// alphabetical slot. Resets the row to `Loading`, and dedups by
     /// [`same_name`](Self::same_name), like `upsert_view`.
-    #[allow(dead_code)]
     pub fn upsert_table(&mut self, def: TableDef) {
         self.tables
             .retain(|x| !Self::same_name(&x.def.name, &def.name));

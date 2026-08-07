@@ -436,9 +436,9 @@ Data is managed by Strata; drop and re-create to change it").
 
 | Settled text (AGENTS.md §2 / reference file) | Amendment | Lands with |
 |---|---|---|
-| "Managed DDL policy. The editor runs SELECT/EXPLAIN/SHOW/DESCRIBE only…" (INVARIANTS.md, ENGINE.md) | Becomes the router invariant: one classification with a capability axis; editor intercepts, agent keeps read-only; default-deny survives | ED-01/ED-02 |
+| "Managed DDL policy. The editor runs SELECT/EXPLAIN/SHOW/DESCRIBE only…" (INVARIANTS.md, ENGINE.md) | ✅ **Landed.** Became the router invariant (classification, ED-01) plus the dispatch invariant (`Engine::run` routes, only its query arm touches the snapshot lifecycle; a statement's outcome is a value one fold applies — ED-02) | ED-01/ED-02 |
 | "Views are Save's artifact… typed DDL is blocked" | Typed view DDL is a second gesture into the same funnel | ED-06 |
-| "History is a list of queries… only successful data runs" | Successful statements enter history too; dedupe/cap unchanged | ED-02 |
+| "History is a list of queries… only successful data runs" | ✅ **Landed.** Successful statements enter history too, `count` as the rows moved; dedupe/cap and the success-only rule unchanged | ED-02 |
 | "DROP is not supported in the editor. Deregister tables from the catalog" (message + routing) | DROP TABLE works on both origins from the editor; catalog confirm remains for the pointer gesture | ED-05 |
 | "COPY TO is not supported in the editor. Use Export" | Editor COPY dispatches natively behind the pre-flight NULL gate; Export window unchanged | ED-07 |
 | "CREATE EXTERNAL TABLE is not supported in the editor. Register tables in Table Config" | The typed form intercepts onto the Table Config funnel (def-first); message stays as the agent refusal | ED-10 |

@@ -32,7 +32,8 @@ pub mod validate;
 pub use complete::{complete, Completion, CompletionKind};
 pub use symbols::Catalog;
 pub use validate::{
-    classify, policy_verdicts, validate, Blocked, Capability, PolicyRefusal, StmtKind, Verdict,
+    classify, classify_one, policy_verdicts, validate, Blocked, Capability, PolicyRefusal,
+    StmtKind, Verdict,
 };
 
 /// Which registry a function came from — the docs-panel header word, and (for the

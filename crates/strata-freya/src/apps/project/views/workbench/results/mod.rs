@@ -1,9 +1,9 @@
 //! The query output surface below the editor. The body is **freya-query off the tab's SQL**
 //! (state-arch §6): the pane reads the workbench's Run trigger and derives its state from
 //! that query's own lifecycle — no press for this tab → **empty**; `Pending`/`Loading` →
-//! **running**; settled rows → **grid**; a settled plan → **explain**; a settled `Err` →
-//! **error**. Every state sits over the same **status bar** footer (the results-pane footer,
-//! themed by `status_bar`).
+//! **running**; settled rows → **grid**; a settled plan → **explain**; a settled statement
+//! report → **statement**; a settled `Err` → **error**. Every state sits over the same **status
+//! bar** footer (the results-pane footer, themed by `status_bar`).
 
 use std::rc::Rc;
 
@@ -25,6 +25,7 @@ mod record_view;
 mod running;
 mod selection;
 mod sort;
+mod statement;
 mod status_bar;
 mod toolbar;
 mod value_tree;
@@ -36,6 +37,7 @@ use error::ErrorState;
 use find::{FindState, PageKey};
 use running::Running;
 use sort::SortState;
+use statement::StatementState;
 use status_bar::StatusBar;
 
 use crate::apps::export::{ExportLaunch, ExportTarget};
@@ -69,6 +71,8 @@ pub enum ResultsState {
     Chart,
     /// Explain plan is available.
     ExplainPlan,
+    /// An intercepted statement ran — a status row, no rows (ED-02).
+    Statement,
     /// The last run settled `Err`.
     Error,
 }
@@ -442,6 +446,15 @@ impl Component for ResultsBody {
                     StatusBar::new(ResultsState::ExplainPlan).plan(ops, tab),
                 )
             }
+            // A statement that ran (ED-02): what it was and what it did, over the same footer.
+            // Nothing is paged and no snapshot handle is held — the tab keeps the one it had.
+            QueryStateData::Settled {
+                res: Ok(QueryOutcome::Statement(report)),
+                ..
+            } => (
+                StatementState::new(report.kind, report.message.clone()).into(),
+                StatusBar::new(ResultsState::Statement).statement(report.kind, report.elapsed_ms),
+            ),
             QueryStateData::Settled { res: Err(err), .. } => (
                 ErrorState::new(err.clone()).into(),
                 StatusBar::new(ResultsState::Error),

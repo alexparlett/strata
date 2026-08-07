@@ -16,6 +16,7 @@ mod log;
 mod persist;
 mod project;
 mod session;
+mod statement;
 
 /// The window's half of agent access: the ask/notice driver (AA-03, re-pointed by AA-03b),
 /// and the satellite it records into.
@@ -66,3 +67,4 @@ pub use project::{ProjChan, ProjectState, Reg};
 #[cfg(test)]
 pub use project::{TableRow, ViewInfo, ViewRow};
 pub use session::{ProblemGroup, SessionState, Stamp};
+pub use statement::use_statement_settle;

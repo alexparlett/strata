@@ -29,6 +29,7 @@
 //! statement never hides the others' diagnostics.
 
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 use std::ops::{ControlFlow, Range};
 use std::slice;
 
@@ -301,8 +302,9 @@ pub enum Capability {
 }
 
 /// What an intercepted statement *is* — [`Verdict::Intercept`]'s payload, and the arm
-/// the dispatcher (ED-02) switches on. Each kind is an engine method rather than a
-/// `ctx.sql` passthrough because each has an outcome the catalog store has to fold.
+/// the dispatcher (`engine::ddl::execute`) switches on. Each kind is
+/// an engine method rather than a `ctx.sql` passthrough because each has an outcome the
+/// catalog store has to fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StmtKind {
     CreateExternalTable,
@@ -319,6 +321,30 @@ pub enum StmtKind {
     Deallocate,
     CreateFunction,
     DropFunction,
+}
+
+impl StmtKind {
+    /// The statement's SQL name — what a stub refusal, a report and the results pane's
+    /// statement row all call it. One table, because three surfaces naming the same kind in
+    /// three spellings is the drift a shared vocabulary exists to prevent.
+    pub fn label(self) -> &'static str {
+        match self {
+            StmtKind::CreateExternalTable => "CREATE EXTERNAL TABLE",
+            StmtKind::CreateTable => "CREATE TABLE",
+            StmtKind::Ctas => "CREATE TABLE AS",
+            StmtKind::Insert => "INSERT",
+            StmtKind::DropTable => "DROP TABLE",
+            StmtKind::CreateView => "CREATE VIEW",
+            StmtKind::DropView => "DROP VIEW",
+            StmtKind::Copy => "COPY",
+            StmtKind::Set => "SET",
+            StmtKind::Reset => "RESET",
+            StmtKind::Prepare => "PREPARE",
+            StmtKind::Deallocate => "DEALLOCATE",
+            StmtKind::CreateFunction => "CREATE FUNCTION",
+            StmtKind::DropFunction => "DROP FUNCTION",
+        }
+    }
 }
 
 /// The router's answer for one parsed statement.
@@ -648,17 +674,7 @@ pub struct PolicyRefusal {
 /// never silently approves its neighbours: `Ok(vec![])` is only ever said about input
 /// that parsed whole.
 pub fn policy_verdicts(ctx: &SessionContext, sql: &str) -> Result<Vec<PolicyRefusal>, String> {
-    let state = ctx.state();
-    let options = state.config_options();
-    let dialect = dialect_from_str(&options.sql_parser.dialect)
-        .ok_or_else(|| format!("Unsupported SQL dialect: {}", options.sql_parser.dialect))?;
-    let statements = DFParserBuilder::new(sql)
-        .with_dialect(dialect.as_ref())
-        .with_recursion_limit(options.sql_parser.recursion_limit)
-        .build()
-        .and_then(|mut parser| parser.parse_statements())
-        .map_err(|e| e.to_string())?;
-    Ok(statements
+    Ok(parse(ctx, sql)?
         .into_iter()
         .enumerate()
         .filter_map(|(index, stmt)| match classify(&stmt, Capability::Agent) {
@@ -670,6 +686,49 @@ pub fn policy_verdicts(ctx: &SessionContext, sql: &str) -> Result<Vec<PolicyRefu
             Verdict::Query | Verdict::Intercept(_) => None,
         })
         .collect())
+}
+
+/// The router's answer for a **Run** (ED-02): `sql` parsed as exactly one statement, and what
+/// [`Capability::Editor`] does with it.
+///
+/// **One statement per Run**, which is today's behaviour kept rather than a new rule: a buffer
+/// holding several statements is still judged per statement by [`validate`], and Run refuses the
+/// batch here with a policy sentence instead of letting DataFusion answer for a limit that is
+/// ours. (`SessionContext::sql` refuses a batch too, in its own words about its own parser —
+/// which tells the user nothing about what to do next.)
+///
+/// `Err` is the same fail-closed contract [`policy_verdicts`] has: input that could not be
+/// judged is never dispatched.
+pub fn classify_one(ctx: &SessionContext, sql: &str) -> Result<(DFStatement, Verdict), String> {
+    let mut statements = parse(ctx, sql)?;
+    if statements.len() > 1 {
+        return Err("Run executes one statement at a time".into());
+    }
+    // Not unreachable: a buffer of only comments tokenizes fine and parses to nothing, and the
+    // blank-buffer gate upstream (`press_query`) does not catch it.
+    let stmt = statements.pop_front().ok_or("Nothing to run")?;
+    let verdict = classify(&stmt, Capability::Editor);
+    Ok((stmt, verdict))
+}
+
+/// Parse `sql` with **this session's own** dialect and recursion limit — the same resolution
+/// `SessionState::sql_to_statement` performs, and the one parse in front of the router.
+///
+/// One funnel, because the two gates that call it ([`policy_verdicts`] for the agent,
+/// [`classify_one`] for a Run) must not be able to read the same buffer differently: a dialect
+/// the agent gate resolved and the Run gate did not would be a statement judged as one form and
+/// executed as another.
+fn parse(ctx: &SessionContext, sql: &str) -> Result<VecDeque<DFStatement>, String> {
+    let state = ctx.state();
+    let options = state.config_options();
+    let dialect = dialect_from_str(&options.sql_parser.dialect)
+        .ok_or_else(|| format!("Unsupported SQL dialect: {}", options.sql_parser.dialect))?;
+    DFParserBuilder::new(sql)
+        .with_dialect(dialect.as_ref())
+        .with_recursion_limit(options.sql_parser.recursion_limit)
+        .build()
+        .and_then(|mut parser| parser.parse_statements())
+        .map_err(|e| e.to_string())
 }
 
 /// The span of a statement's leading keyword run (`CREATE EXTERNAL TABLE`,

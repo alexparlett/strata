@@ -11,6 +11,7 @@ use async_io::Timer;
 use freya::prelude::*;
 use strata_core::config::Command;
 use strata_core::engine::plan::PlanTab;
+use strata_core::engine::sql::StmtKind;
 use strata_core::util::fmt_int;
 use strata_model::Kind;
 
@@ -96,7 +97,8 @@ pub struct RunInfo {
     pub settled: Instant,
 }
 
-/// The results-pane footer — present in *every* state (empty · running · grid · plan · error).
+/// The results-pane footer — present in *every* state (empty · running · grid · plan ·
+/// statement · error).
 ///
 /// Themed by `status_bar`. The state-dot / label colour is **semantic** — read from the palette,
 /// not the component token — so it tracks the same success/warning/error slots the rest of the
@@ -108,6 +110,8 @@ pub struct StatusBar {
     info: Option<RunInfo>,
     /// The plan state's sub-label: operator count of the shown tree + which tree it is.
     plan: Option<(usize, PlanTab)>,
+    /// The statement state's readouts: what ran, and how long the engine took (ED-02).
+    statement: Option<(StmtKind, u128)>,
     /// The resolved current page (grid state) — the selection aggregate reads its real cells.
     view: Option<PageRead>,
     pub theme: Option<StatusBarThemePartial>,
@@ -120,6 +124,7 @@ impl StatusBar {
             pager: None,
             info: None,
             plan: None,
+            statement: None,
             view: None,
             theme: None,
         }
@@ -144,6 +149,13 @@ impl StatusBar {
         self
     }
 
+    /// The statement state's readouts (ED-02): the statement's own SQL name, off the same
+    /// `StmtKind::label` table the body's title reads, and the engine's elapsed.
+    pub fn statement(mut self, kind: StmtKind, elapsed_ms: u128) -> Self {
+        self.statement = Some((kind, elapsed_ms));
+        self
+    }
+
     /// The resolved page the selection aggregate reads (grid state).
     pub fn view(mut self, view: PageRead) -> Self {
         self.view = Some(view);
@@ -162,7 +174,7 @@ impl Component for StatusBar {
         let dot_color = match self.state {
             ResultsState::Empty => roles.get(Role::TextPlaceholder),
             ResultsState::Running => tones.warning,
-            ResultsState::Grid | ResultsState::Chart => tones.ok,
+            ResultsState::Grid | ResultsState::Chart | ResultsState::Statement => tones.ok,
             ResultsState::ExplainPlan => tones.info,
             ResultsState::Error => tones.error,
         };
@@ -205,6 +217,15 @@ impl Component for StatusBar {
                     format!("{n} operator{} · {tree}", if n == 1 { "" } else { "s" })
                 }),
             ),
+            // The statement names itself — "CREATE TABLE · 12 ms" — because unlike a query
+            // there is no row count to lead with, and the sentence in the body already says
+            // what it did.
+            ResultsState::Statement => match self.statement {
+                Some((kind, elapsed_ms)) => {
+                    (kind.label().into(), Some(format!("· {elapsed_ms} ms")))
+                }
+                None => ("Statement executed".into(), None),
+            },
             ResultsState::Error => ("Query failed".into(), None),
         };
 

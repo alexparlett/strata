@@ -15,9 +15,12 @@
 //! is one `O_APPEND` line, and only a run that *replaced* an entry rewrites the file, since an
 //! append can add a line but not move one (see [`record_run`]).
 //!
-//! **Only successful data runs are recorded**, captured when the run *settles* `Ok(Rows)` —
-//! a failed / cancelled run (settles `Err`) and an Explain (settles `Plan`) never reach
-//! here, so history stays a log of queries that actually returned data. The recorder is the
+//! **Only successful runs are recorded** — a run that settled `Ok`, whether it returned rows or
+//! performed a statement (ED-02: a typed `CREATE TABLE` is as much a query you may want back as
+//! the `SELECT` inside it). A failed / cancelled run (settles `Err`) and an Explain (settles
+//! `Plan`) never reach here, so history stays a log of queries that actually did something. The
+//! success-only rule is what the drawer's *absence* of a status mark rests on, and it is
+//! unchanged. The recorder is the
 //! tab's request keeper (`views::keeper`), not the results pane: the keeper stays
 //! mounted while the tab is backgrounded, so the settle is observed — and timestamped — at
 //! real completion time, and a run whose tab is never revisited still records. (A settle
@@ -132,8 +135,8 @@ impl History {
 /// The history satellite in context.
 pub type HistoryCtx = State<History>;
 
-/// Drive history recording for a press: record it once when it settles `Ok(Rows)` — a
-/// successful *data* run. A failed / cancelled `Err` or an Explain `Plan` never records,
+/// Drive history recording for a press: record it once when it settles `Ok` — rows, or an
+/// intercepted statement. A failed / cancelled `Err` or an Explain `Plan` never records,
 /// so bad queries stay out of history; the local `recorded` flag stops a re-record on
 /// later re-renders of the same mount, and cross-mount dedup lives in the store, keyed by
 /// `run`. Call once per `RequestPin` (`views::keeper` — keyed by the press's nonce, and
@@ -160,6 +163,14 @@ pub fn use_history_recording(query: UseQuery<RunQuery>, run: RunId, sql: String)
                 res: Ok(QueryOutcome::Rows(rows)),
                 ..
             } => Some((rows.output.elapsed_ms as u64, rows.output.total as u64)),
+            // A statement that ran is a query the user may want back (ED-02) — a typed
+            // `CREATE TABLE` no less than the `SELECT` it wraps. Its `count` is the rows it
+            // moved; a statement that counts nothing records `0`, which is what the drawer's
+            // "N rows" then honestly says about it.
+            QueryStateData::Settled {
+                res: Ok(QueryOutcome::Statement(report)),
+                ..
+            } => Some((report.elapsed_ms as u64, report.count.unwrap_or(0))),
             _ => None,
         };
         if let Some((elapsed_ms, rows)) = settled {

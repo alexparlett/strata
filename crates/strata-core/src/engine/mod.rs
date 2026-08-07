@@ -28,6 +28,7 @@
 mod catalog;
 mod chart;
 pub mod config;
+mod ddl;
 mod explain;
 pub mod export;
 mod functions;
@@ -45,9 +46,11 @@ pub mod value_tree;
 /// included — should go through it rather than hand-writing a row whose `kind` and `role` are
 /// then a second opinion about the same type.
 pub use catalog::{chart_role, column_info, TableMeta, TableSpec, ViewMeta};
+/// The intercepted-statement vocabulary (ED-02): what an arm answers with, what the app folds.
+pub use ddl::{StatementOutcome, StatementReport, StoreEffect};
 pub use query::purge_snapshot_root;
 
-use sql::PolicyRefusal;
+use sql::{PolicyRefusal, Verdict};
 
 /// The Arrow batch type engine results carry (the type-aware source for Copy/Export),
 /// re-exported so frontends can name it without their own DataFusion dependency (this
@@ -84,6 +87,7 @@ pub fn stopped_on_purpose(error: &str) -> bool {
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -127,6 +131,20 @@ impl From<TabId> for WsId {
 /// this — see [`Engine::query`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RunTag(pub u128);
+
+/// What a **Run** settled to ([`Engine::run`], ED-02) — the two things a press can produce.
+///
+/// The split is the router's, not a mode the caller picks: a Run is one press, and whether it
+/// produces rows or performs a statement is a property of what was typed.
+pub enum RunOutcome {
+    /// Exactly [`Engine::query`]'s answer — the snapshot handle + page 1. Byte-for-byte the
+    /// path that shipped: same supersede, same retire-on-dispatch, same pins.
+    Rows(QueryOutput, RecordBatch),
+    /// An intercepted statement's report. **No snapshot**, and none retired: a tab that
+    /// creates a table can still page the result it already had
+    /// (`docs/SNAPSHOT_SPEC.md` §4 — DDL does not retire snapshots).
+    Statement(StatementReport),
+}
 
 /// Process-unique id per engine (one per project window), scoping snapshot files so
 /// windows never collide.
@@ -501,6 +519,124 @@ impl Engine {
 
     // --- run / read -------------------------------------------------------
 
+    /// **The editor's Run** (ED-02): classify `sql`, then route it.
+    ///
+    /// One classification in front of dispatch, and it is the same one the squiggles came from
+    /// ([`sql::classify_one`], `Capability::Editor`) — so a statement the editor did not
+    /// underline is a statement Run is prepared to perform, and a refusal fails the run with
+    /// the words the squiggle showed rather than a DataFusion error about a rule that is ours.
+    ///
+    /// - `Query` delegates to [`query`](Engine::query) **byte-for-byte**. It is the only arm
+    ///   that touches the snapshot lifecycle, which is what keeps "DDL does not retire
+    ///   snapshots" true by construction rather than by care.
+    /// - `Intercept(kind)` goes to `ddl::execute`, bracketed by
+    ///   [`bookkeep`](Engine::bookkeep) so `cancel` / `is_running` / the close-while-running
+    ///   confirm see it like any other work — a CTAS is a full scan, and a window closing over
+    ///   one has to ask.
+    /// - `Refuse(b)` never reaches DataFusion at all: classification is in front of `ctx.sql`
+    ///   precisely because DDL executes *eagerly* inside it (spec §2), so anything that must
+    ///   not run cannot be allowed to plan.
+    ///
+    /// The `SQLOptions` triple the read path carries (`query::materialize`) stays all-false and
+    /// becomes defense in depth behind this: it is no longer the gate, and it never had the
+    /// vocabulary to be one — it can refuse a class of plan, not name the surface that owns the
+    /// capability.
+    pub async fn run(
+        &self,
+        ws: WsId,
+        tag: RunTag,
+        sql: String,
+        page_size: usize,
+    ) -> Result<RunOutcome, String> {
+        // On the engine runtime, like `policy_verdicts`: parsing is the caller's whole answer
+        // here, and the caller is a UI task on the render thread.
+        let (stmt, verdict) = {
+            let ctx = self.ctx.clone();
+            let text = sql.clone();
+            self.rt()
+                .spawn(async move { sql::classify_one(&ctx, &text) })
+                .await
+                .map_err(|e| format!("policy task failed: {e}"))??
+        };
+        match verdict {
+            Verdict::Query => self
+                .query(ws, tag, sql, page_size)
+                .await
+                .map(|(output, batch)| RunOutcome::Rows(output, batch)),
+            Verdict::Intercept(kind) => {
+                let ctx = self.ctx.clone();
+                self.bookkeep(ws, tag, "statement", async move {
+                    ddl::execute(&ctx, kind, stmt, sql).await
+                })
+                .await
+                .map(RunOutcome::Statement)
+            }
+            Verdict::Refuse(blocked) => Err(blocked.editor_message()),
+        }
+    }
+
+    /// Bracket `work` as workspace `ws`'s in-flight call — the lifecycle every dispatch that
+    /// materializes **nothing** shares: [`explain`](Engine::explain), and every intercepted
+    /// statement.
+    ///
+    /// Supersedes whatever `ws` was running (a tab runs one thing at a time, exactly as a
+    /// re-press does), registers the abort handle so [`cancel`](Engine::cancel),
+    /// [`is_running`](Engine::is_running) and the close-while-running flag can all see it, and
+    /// removes the entry on the way out **iff** this is still the latest dispatch — by
+    /// `dispatch`, never by `tag`, for the reason [`InFlight::dispatch`] exists.
+    ///
+    /// `Lifecycle::current` is deliberately untouched: nothing routed through here spools a
+    /// snapshot, so there is none to settle and none to retire.
+    ///
+    /// `what` names the call in the one message a *runtime* failure can produce — a task that
+    /// panicked or was dropped by the runtime, which is a different fault from the call's own
+    /// `Err` and reads as one.
+    async fn bookkeep<F, T>(&self, ws: WsId, tag: RunTag, what: &str, work: F) -> Result<T, String>
+    where
+        F: Future<Output = Result<T, String>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
+        let task = {
+            let mut lc = self.lifecycle.lock().unwrap();
+            if let Some(prev) = lc.inflight.remove(&ws) {
+                self.abort_inflight(prev);
+            }
+            let task = self.rt().spawn(work);
+            lc.inflight.insert(
+                ws,
+                InFlight {
+                    dispatch,
+                    tag,
+                    snapshot: None,
+                    abort: task.abort_handle(),
+                    start: Instant::now(),
+                },
+            );
+            self.publish_inflight(&lc);
+            task
+        };
+
+        // Armed for the await, disarmed the moment it returns — see [`DispatchGuard`]. An
+        // agent reaches this through `mode: "explain"`, and a dropped MCP request future is
+        // exactly the caller that goes away mid-await.
+        let mut guard = DispatchGuard::arm(self, ws, dispatch);
+        let joined = task.await;
+        guard.disarm();
+
+        let mut lc = self.lifecycle.lock().unwrap();
+        if lc.inflight.get(&ws).map(|f| f.dispatch) == Some(dispatch) {
+            lc.inflight.remove(&ws);
+        }
+        self.publish_inflight(&lc);
+        match joined {
+            Ok(res) => res,
+            // The shared vocabulary, never the prose: a stopped call must not read as a fault.
+            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
+            Err(join) => Err(format!("{what} task failed: {join}")),
+        }
+    }
+
     /// Run `sql` **once** for workspace `ws`: materialize a fresh immutable snapshot
     /// and return its handle + page 1 (`docs/SNAPSHOT_SPEC.md` §3). Dispatch retires
     /// the workspace's previous snapshot and aborts its in-flight run (§4); `tag` is
@@ -699,49 +835,11 @@ impl Engine {
     /// Supersedes the workspace's in-flight run (mutually exclusive, like a re-run) but
     /// leaves its settled snapshot alone (spec §4: explains materialize nothing).
     pub async fn explain(&self, ws: WsId, tag: RunTag, sql: String) -> Result<QueryPlan, String> {
-        let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
-        let task = {
-            let mut lc = self.lifecycle.lock().unwrap();
-            if let Some(prev) = lc.inflight.remove(&ws) {
-                self.abort_inflight(prev);
-            }
-            let ctx = self.ctx.clone();
-            let task = self
-                .rt()
-                .spawn(async move { explain::run_explain(&ctx, &sql).await });
-            lc.inflight.insert(
-                ws,
-                InFlight {
-                    dispatch,
-                    tag,
-                    snapshot: None,
-                    abort: task.abort_handle(),
-                    start: Instant::now(),
-                },
-            );
-            self.publish_inflight(&lc);
-            task
-        };
-
-        // Same cancellation hazard as `query`'s — an agent reaches this through
-        // `mode: "explain"`. See [`DispatchGuard`].
-        let mut guard = DispatchGuard::arm(self, ws, dispatch);
-        let joined = task.await;
-        guard.disarm();
-
-        let mut lc = self.lifecycle.lock().unwrap();
-        // By dispatch, not by tag — a repeat dispatch of the same tag owns the entry now
-        // (see `query`). An explain materializes nothing, so there is no snapshot to
-        // settle either way.
-        if lc.inflight.get(&ws).map(|f| f.dispatch) == Some(dispatch) {
-            lc.inflight.remove(&ws);
-        }
-        self.publish_inflight(&lc);
-        match joined {
-            Ok(res) => res,
-            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
-            Err(join) => Err(format!("explain task failed: {join}")),
-        }
+        let ctx = self.ctx.clone();
+        self.bookkeep(ws, tag, "explain", async move {
+            explain::run_explain(&ctx, &sql).await
+        })
+        .await
     }
 
     /// Cancel `ws`'s in-flight run/explain **iff** it is still run `tag` (S14 — a stale
@@ -1454,10 +1552,10 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
     use std::pin::Pin;
     use std::task::{Context, Waker};
 
+    use crate::engine::sql::Blocked;
     use strata_model::{SourceFormat, StatKey};
 
     use super::*;
@@ -2247,6 +2345,146 @@ mod tests {
             eng.cancel(ws, tag).is_none(),
             "both settled — nothing left in flight"
         );
+    }
+
+    // ---- the Run router (ED-02) -----------------------------------------------------
+
+    /// **A query through `run` is a query through `query`.** The whole promise of routing is
+    /// that the read path did not move: same snapshot handle, same page 1, same totals — so a
+    /// regression here is the router having grown an opinion it has no business having.
+    #[tokio::test]
+    async fn a_query_routed_through_run_is_the_query_path_unchanged() {
+        let eng = Engine::new(Default::default());
+        let sql = "SELECT * FROM (VALUES (2), (1), (3)) AS t";
+
+        let RunOutcome::Rows(routed, _) = eng
+            .run(WsId(1), RunTag(1), sql.into(), 2)
+            .await
+            .expect("a SELECT runs")
+        else {
+            panic!("a SELECT settles rows");
+        };
+        let (direct, _) = eng
+            .query(WsId(2), RunTag(2), sql.into(), 2)
+            .await
+            .expect("…as it always did");
+
+        assert_eq!(routed.total, direct.total);
+        assert_eq!(routed.rows, direct.rows);
+        assert_eq!(routed.columns.len(), direct.columns.len());
+        // And it really materialized: the handle pages, which is the half a report cannot fake.
+        let snap = routed.snapshot.expect("a snapshot handle");
+        let (page2, _) = eng.fetch_page(snap, 2, 2, None).await.expect("page 2");
+        assert_eq!(page2.len(), 1);
+    }
+
+    /// A refused statement fails with **the squiggle's own words** — `Blocked::editor_message`,
+    /// not DataFusion's account of a rule that is ours. `CREATE DATABASE` is the refusal that
+    /// stays refused: it is structurally impossible, not merely unimplemented.
+    #[tokio::test]
+    async fn a_refused_statement_fails_with_the_editors_message() {
+        let eng = Engine::new(Default::default());
+        let err = eng
+            .run(WsId(1), RunTag(1), "CREATE DATABASE d".into(), 10)
+            .await
+            .err()
+            .expect("refused");
+        assert_eq!(err, Blocked::CreateDatabase.editor_message());
+    }
+
+    /// An intercepted kind whose task has not landed fails with its **stub** refusal, naming
+    /// the statement. The distinction matters: it classified, so the editor drew no squiggle,
+    /// and the run has to say plainly why nothing happened.
+    #[tokio::test]
+    async fn an_unimplemented_interception_names_the_statement() {
+        let eng = Engine::new(Default::default());
+        let err = eng
+            .run(WsId(1), RunTag(1), "CREATE TABLE t AS SELECT 1".into(), 10)
+            .await
+            .err()
+            .expect("not implemented yet");
+        assert_eq!(err, "CREATE TABLE AS is not implemented yet");
+    }
+
+    /// **Neither refusal touches the snapshot lifecycle.** DDL does not retire a snapshot
+    /// (SNAPSHOT_SPEC §4), so the workspace's settled result is still there to page after a
+    /// statement runs in the same tab — which is also what makes the results pane's "previous
+    /// snapshot survives" claim true rather than hopeful.
+    #[tokio::test]
+    async fn a_statement_leaves_the_workspaces_snapshot_alone() {
+        let eng = Engine::new(Default::default());
+        let (ws, sql) = (WsId(1), "SELECT * FROM (VALUES (1), (2)) AS t");
+
+        let (out, _) = eng
+            .query(ws, RunTag(1), sql.into(), 10)
+            .await
+            .expect("rows");
+        let snap = out.snapshot.expect("a snapshot handle");
+
+        for stmt in ["CREATE DATABASE d", "DROP TABLE t"] {
+            eng.run(ws, RunTag(2), stmt.into(), 10)
+                .await
+                .err()
+                .expect("refused or stubbed");
+            assert!(eng.snapshot_live(snap), "{stmt} retired the snapshot");
+        }
+        eng.fetch_page(snap, 1, 10, None)
+            .await
+            .expect("…and it still reads");
+        assert!(!eng.is_running(ws), "nothing left in flight either");
+    }
+
+    /// **One statement per Run**, refused with a policy sentence. Left to DataFusion this is
+    /// its parser complaining about its own limit, which tells the user nothing about what to
+    /// do next; the buffer is still validated per statement, so the squiggles are unaffected.
+    #[tokio::test]
+    async fn a_multi_statement_run_is_refused_as_a_batch() {
+        let eng = Engine::new(Default::default());
+        let err = eng
+            .run(WsId(1), RunTag(1), "SELECT 1; SELECT 2".into(), 10)
+            .await
+            .err()
+            .expect("a batch");
+        assert_eq!(err, "Run executes one statement at a time");
+    }
+
+    /// **…and a terminated statement is one statement.** This is the gate's blast radius, not a
+    /// corner: people end statements with `;`, and if `parse_statements` ever counted the
+    /// trailing delimiter as a second (empty) statement, *every* such Run would refuse as a
+    /// batch — a total regression of Run, reported as a policy message so it would read like a
+    /// deliberate rule. Pinned here rather than trusted, because it is DataFusion's behaviour
+    /// and not ours. A `;` inside a string literal rides along for the same reason: the split
+    /// is the tokenizer's, so it must not be a text split.
+    #[tokio::test]
+    async fn a_terminated_statement_is_still_one_statement() {
+        let eng = Engine::new(Default::default());
+        for sql in [
+            "SELECT 1 AS n;",
+            "SELECT 1 AS n;\n",
+            "SELECT 1 AS n ;;",
+            "-- a note\nSELECT 1 AS n;",
+            "SELECT ';' AS n;",
+            "WITH t AS (SELECT 1 AS n) SELECT * FROM t;",
+        ] {
+            let outcome = eng.run(WsId(1), RunTag(1), sql.into(), 10).await;
+            assert!(
+                matches!(outcome, Ok(RunOutcome::Rows(_, _))),
+                "{sql:?} must run, not refuse as a batch"
+            );
+        }
+    }
+
+    /// A buffer with nothing to run in it says so. Not unreachable from the app: the blank-buffer
+    /// gate upstream (`press_query`) trims whitespace, and a comment is not whitespace.
+    #[tokio::test]
+    async fn a_buffer_of_only_comments_has_nothing_to_run() {
+        let eng = Engine::new(Default::default());
+        let err = eng
+            .run(WsId(1), RunTag(1), "-- just thinking out loud\n".into(), 10)
+            .await
+            .err()
+            .expect("nothing to run");
+        assert_eq!(err, "Nothing to run");
     }
 }
 
