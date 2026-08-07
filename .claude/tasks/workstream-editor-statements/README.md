@@ -14,9 +14,9 @@ DROP on both origins; statements in history; session-scoped SET/PREPARE/function
 do not re-litigate §3 (why lifecycle cannot live in the provider traits).
 
 The architecture in one line: **classify in front of dispatch, execute through funnels that
-already exist** — `policy_block` grows a capability axis and a three-way verdict, `Engine::run`
-routes, and an internal table is a `TableDef` over `.strata/tables/<name>/` with `format: Arrow`,
-replayed by the existing registration pass (headless host free).
+already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Refuse` (ED-01, done),
+`Engine::run` routes, and an internal table is a `TableDef` over `.strata/tables/<name>/` with
+`format: Arrow`, replayed by the existing registration pass (headless host free).
 
 ## Tasks
 

@@ -283,9 +283,10 @@ Notes that are rules, not details:
 
 ## 6. Policy & safety
 
-- **The DDL gate is the editor's, through one funnel.** The managed-DDL policy currently lives
-  as a private classification inside `strata-core`'s validation
-  (`engine/sql/validate.rs::policy_block`) — **`Engine::query` itself does not enforce it**, the
+- **The DDL gate is the editor's, through one funnel.** The policy lives as a classification
+  inside `strata-core`'s validation — since ED-01 the statement router,
+  `engine/sql/validate.rs::classify`, read at `Capability::Agent` — **`Engine::query` itself does
+  not enforce it**, the
   editor simply never dispatches what validation flagged. The agent path cannot rely on caller
   discipline: AA-01 exports the verdict from `strata-core`, and the tool layer refuses any
   flagged statement **before dispatch**, with the same message text the editor shows ("CREATE

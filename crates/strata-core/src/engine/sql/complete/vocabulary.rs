@@ -1,13 +1,16 @@
 //! The **declared grammar tables** — the knowledge no parser table encodes,
 //! each one a named, documented policy: the clause ladder and its derived
-//! continuations, the statement leads the managed-DDL policy allows, the
-//! curated common vocabulary, the presentation phrases, and the blocked
-//! DDL/DML set (kept honest against `validate::policy_block` by test).
+//! continuations, the statement leads offered first, the curated common
+//! vocabulary, the presentation phrases, and the blocked DDL/DML set (kept
+//! honest against the statement router, `validate::classify`, by test).
 
 use crate::engine::sql::context::Clause;
 
-/// Statement-lead keywords — the editor's managed-DDL policy allows exactly the
-/// query/inspection statements (SELECT/EXPLAIN/SHOW/DESCRIBE + WITH).
+/// Statement-lead keywords offered **first** at a blank statement: the
+/// query/inspection leads (SELECT/EXPLAIN/SHOW/DESCRIBE + WITH). Not the router's
+/// whole allowance — since ED-01 the editor also intercepts typed DDL, `COPY` and
+/// the session statements — but a lead only earns promotion here once the statement
+/// behind it runs, so each arrives with the ED task that implements it.
 pub(super) const STATEMENT_KEYWORDS: &[&str] = &[
     "SELECT",
     "WITH",
