@@ -50,6 +50,20 @@ chrono = "0.4"
 tracing = "0.1.44"
 
 [dev-dependencies]
+# A real S3 server for the connections integration test (W7): `tests/object_store_minio.rs`
+# starts MinIO in a container rather than hand-rolling an S3 mock, because a mock is written
+# by the same understanding of the protocol it is meant to check — it can be shaped to pass
+# without anyone noticing. Needs a Docker runtime, which the macOS CI job does not have, so
+# those tests are `#[ignore]`d and run by a Linux job (see .github/workflows/ci.yml).
+# Pinned to the major `testcontainers-modules` itself depends on: the two share a `bollard`,
+# and a newer `testcontainers` here resolves a second one that conflicts outright.
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["minio"] }
+# Seeds the bucket the test then reads. Deliberately a *different* client from the one under
+# test: `object_store` cannot create a bucket at all, and having the write side be an
+# independent implementation is what stops the fixture and the code under test agreeing on a
+# shared misunderstanding of the protocol.
+aws-sdk-s3 = "1"
 # Tests mint saved-query ids (the type itself reaches the API via strata-model).
 uuid = { version = "1", features = ["v4"] }
 # The read-options round-trips write their own fixtures, and a compression option can only be

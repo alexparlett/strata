@@ -55,9 +55,47 @@ surfaces (rail button, pane, editor forms, the Configure LOCATION toggle) are 02
   DataFusion's own copy, not a second one), `aws-config` + `aws-credential-types`. These raise the
   workspace's effective MSRV to **rustc 1.94.1**.
 
+- **An integration test against a real S3 server** —
+  `crates/strata-core/tests/object_store_minio.rs` drives MinIO through testcontainers and
+  asserts the whole chain: connection → registered store → `register_external`'s listing and
+  schema inference → a query returning rows, plus the unregistered-bucket and
+  rejected-credentials arms. It is the **only** thing that exercises SigV4 signing through the
+  `aws-config` bridge; every unit test either skips signing or resolves a credential without
+  ever signing with it. An ordinary test, not `#[ignore]`d — so a container runtime is now a
+  development prerequisite, and CI gets one from
+  `atomicjar/testcontainers-cloud-setup-action` (needs the `TC_CLOUD_TOKEN` secret).
+
 ## Acceptance
 - [x] A connection can be defined + persisted with no secret material stored; the engine can build
       an object store from it.
+- [x] A table over that connection registers and queries against a real S3 server.
+
+## GCS cannot be emulated — measured, not assumed
+
+Worth recording so nobody spends the afternoon again. **`object_store`'s GCS client speaks the
+XML API** — `{base}/{bucket}?list-type=2` for list and `{base}/{bucket}/{key}` for get
+(`gcp/client.rs:156,670`) — and it needs **both**, because DataFusion's `ListingTable` lists a
+prefix to discover files before it reads any.
+
+The emulators, checked one at a time:
+
+- **MiniSky** — JSON API only (`/b/{bucket}/o`, `/upload/storage/v1/…`), no XML.
+- **localgcp** — implements XML for **object downloads** (`handleDefault`, `service.go:592`:
+  `GET /{bucket}/{object}`), which is half of what we need. It has no XML **list**: a
+  `GET /{bucket}?list-type=2` has no slash after the bucket, so the handler's `idx > 0` guard
+  fails and it 404s. Adding `ListBucketResult` there looks like a contained upstream change.
+- **fake-gcs-server** — JSON, same story as MiniSky.
+
+MinIO *is* the full XML API, so it was tried directly: the GCS arm reaches it and gets a
+**403 even against a world-readable bucket policy**, because a service-account file carrying
+`disable_oauth` makes `object_store` send an empty `Authorization: Bearer` header, which MinIO
+rejects rather than reading as anonymous.
+
+None of that is evidence against the GCS provider — real GCS authenticates with OAuth bearer
+tokens, the path no emulator exercises. It means GCS coverage needs a **real bucket**, and is
+therefore not a hermetic test. Left uncovered rather than faked. Note also that a custom GCS
+endpoint is already expressible without touching the def (`gcs_base_url` inside the
+service-account JSON), so no `endpoint` field was added to `GcsStore`.
 
 ## What this left the other tasks
 

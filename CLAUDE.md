@@ -28,6 +28,13 @@ After **any theme change**, regenerate + verify the schema:
 `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
 `themes/theme.schema.json` must match the `Role` vocabulary + the editor's syntax scopes).
 
+**`cargo test` needs a container runtime.** The connections integration test
+(`strata-core/tests/object_store_minio.rs`, W7) drives a real MinIO through testcontainers and is
+deliberately **not** `#[ignore]`d — an ignored test is one nobody runs, and this is the only thing
+that would catch a regression in the S3 credential bridge. Testcontainers Cloud, Docker or colima
+all serve; if the runtime is not on the default socket, point `DOCKER_HOST` at it. Without one that
+test **fails** rather than skipping, on purpose: "no runtime" must not look like "the code is fine".
+
 To build something you can hand to a tester — a universal `.app` + DMG in `target/dist/`:
 
 ```bash

@@ -385,6 +385,10 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   `git submodule status`).
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`.
+- **`cargo test` needs a container runtime**, because the connections integration test drives a
+  real MinIO and is deliberately not `#[ignore]`d — an ignored test is one nobody runs. Point
+  `DOCKER_HOST` at it if it is not on the default socket; CI gets one from
+  `atomicjar/testcontainers-cloud-setup-action`.
 - **A change you wrote is reviewed by critics who cannot see why you wrote it** — the
   `adversarial-review` skill: isolated read-only lenses handed artifacts and the contract but never
   the intent, then a refutation gate that defaults to killing a finding. In front of the build
