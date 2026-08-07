@@ -695,10 +695,42 @@ Things that must not regress. Each was fought for once already.
   pane, for two reasons that generalise: navigating away and back must not discard a half-finished
   edit, and the footer has to answer "what is blocking Apply?" (`blocker()`) without the pane being
   mounted to answer it — a button disabled for a reason the user cannot see reads as broken.
-- **Managed DDL policy.** The editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` only. Views are
-  Save's artifact: ⌘S wraps the buffer's plain query in `CREATE OR REPLACE VIEW`
-  (`Engine::create_view`); typed DDL is blocked with validation pointing at the owning surface
-  (Save / the catalog / Table Config).
+- **One classification with a capability axis, in front of dispatch.**
+  `sql::validate::classify(stmt, Capability) -> Verdict` is the whole statement policy:
+  `Query` (the snapshot pipeline, unchanged), `Intercept(StmtKind)` (the editor implements it as an
+  engine method and the store folds the outcome), `Refuse(Blocked)` (rendered per surface). It
+  matches the *parsed* statement, so it is a classification and not a leading-keyword sniff, and it
+  is **a pure function of that statement** — a refusal needing context the statement does not carry
+  (an INSERT target's origin, a SET key's class) belongs to dispatch, decided with the same
+  `Blocked` vocabulary so the wording still has one home.
+  The two answers are **columns of the same match arm** (`classify_form` returns
+  `(Verdict, Option<Blocked>)`), not two functions kept in step: an arm cannot answer one surface
+  and forget the other, and the agent column is AA-01's shipped answer written beside the editor's
+  new one. That is what makes parity a test of a table (`the_capability_axis_keeps_the_agent_surfaces_answers`)
+  rather than of discipline. `Capability::Agent` is still **read-only v1** — every non-query a
+  refusal, message-identical, including the two forms where the editor now diverges
+  (`INSERT OVERWRITE` refuses as `InsertOverwrite` in the editor and `Insert` for the agent;
+  `EXECUTE` is a query for the editor and stays `Unsupported` for an agent that cannot `PREPARE`).
+  **The editor's refusal set is a short list** — `CREATE DATABASE`/`SCHEMA`, the context-dependent
+  refusals, unsupported clauses inside accepted statements, and unknown kinds. `Blocked`'s older
+  variants (`CreateExternalTable`, `CreateTable`, `Insert`, `CreateView`, `DropView`, `Drop`,
+  `CopyTo`, `Set`, `Reset`) stay defined as **the agent path's error messages**, unreachable from
+  the editor: `strata-agent` names them directly, so a deletion is a compile break rather than a
+  silent rewording. Default stays deny — a parse failure is the caller-side `Err`, the sqlparser
+  wildcard is `Refuse(Unsupported)`, and the five-variant DFParser match is wildcard-free so a new
+  DataFusion statement is a compile error.
+  **Reserved names, read and write**: a `__snap_`-prefixed identifier anywhere in an *intercepted*
+  statement — targets included — is refused, because `register_table` is last-write-wins and the
+  same prefix hides the collision from every catalog reader. The prefix is one constant
+  (`engine::query::SNAPSHOT_PREFIX`) so the naming rule and the hiding rule cannot drift; the write
+  targets sqlparser does not annotate for `visit_relations` (`CREATE VIEW`'s name, `DROP`'s name
+  list) are named explicitly rather than assumed.
+  Every interception is a **second gesture into a funnel that already exists**, never a second
+  implementation: typed view DDL onto `Engine::create_view` (what ⌘S already wraps the buffer's
+  plain query in), typed `CREATE EXTERNAL TABLE` onto Table Config's own def-first registration.
+  (ED-01 landed classification; `Engine::run`'s dispatch is ED-02, and each `StmtKind`'s
+  implementation its own ED task. Until a kind's dispatch lands, an intercepted statement draws no
+  squiggle and fails at Run against the read path's `SQLOptions`.)
 - **One app-global config store.** `RadioStation<AppConfig, ConfigChan>` created once in `main`,
   shared into every window (`use_share_config`). Disk is a startup input, read **once** — no file
   watching, ever; after launch only the UI writes. `write_config` (src/state/config.rs) is the

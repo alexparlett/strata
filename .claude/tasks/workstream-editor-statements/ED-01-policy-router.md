@@ -1,6 +1,65 @@
 # ED-01 · Policy router: `classify(stmt, Capability)` + `Verdict`
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** —
+**Workstream:** Editor statements · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** —
+
+## As built
+
+`crates/strata-core/src/engine/sql/validate.rs`. `classify(stmt, Capability) -> Verdict` replaces
+`policy_block`; `policy_verdicts` is a thin filter over `classify(_, Agent)` and neither its
+signature nor the agent gate's call site moved. `strata-agent` builds and tests unchanged.
+
+Decisions worth not re-deriving:
+
+- **The capability axis is a column of one match arm, not a second function.** `classify_form`
+  returns `(Verdict, Option<Blocked>)` — the editor's answer and the agent's refusal (`None` = the
+  read-only pass, so "the agent never intercepts" is a type and not a convention). An arm cannot
+  answer one surface and forget the other. `classify` then applies the reserved-name check to the
+  editor column only.
+- **Two forms diverge on purpose, and the divergence is at the arm.** `INSERT OVERWRITE` refuses as
+  `InsertOverwrite` for the editor and as `Insert` for the agent (today's answer); `EXECUTE` is
+  `Verdict::Query` for the editor and stays `Unsupported` for an agent that cannot `PREPARE`.
+  Deriving the agent column from the editor's verdict would have silently changed both.
+- **`PrepareNonQuery` is decided at classification**, not only at plan time: a `PREPARE` body is
+  right there in the parse, so the fence is pure. The read-path `SQLOptions` at dispatch stays as
+  defence in depth (`verify_plan` cannot see through the later `EXECUTE`).
+- **`InsertExternal` / `SetOwned` / `SetRuntime` / `SetFormat` have no producer yet** — they are the
+  vocabulary for the dispatcher's context-dependent refusals (ED-05, ED-08), and they carry no name
+  payload: `Blocked` stays `Copy`. If ED-05 wants "'events' is an external table" it adds the
+  payload then, with a producer in the same change. Likewise the unsupported-clause refusals
+  (constraints, `TEMPORARY`, external-table data-column lists, bad `OPTIONS` keys) belong to the
+  owning arm's task — they need more than the statement's shape to word well.
+- **Reserved names**: `engine::query::SNAPSHOT_PREFIX` is the one constant (spec §5's move, done
+  early because ED-01 needs it). sqlparser's `visit_relations` covers the reads and the sqlparser
+  targets upstream annotates (`CREATE TABLE`'s name, `INSERT`'s), but `CREATE VIEW`'s name and
+  `DROP`'s name list carry **no** `visit_relation` annotation, and DataFusion's own extension
+  statements (`CREATE EXTERNAL TABLE`, `COPY`) are outside the visitor entirely — those targets are
+  named explicitly in `names_reserved` rather than trusted to it. A plain query may still read
+  `__snap_N`; only intercepted forms are gated.
+- **`SET` is one `StmtKind` for every sqlparser `Set` variant** (`SET ROLE`, `SET NAMES` included).
+  Classification stays a pure function of the form; ED-08 refuses the nonsense variants at dispatch.
+- **An `Intercept` falls through to tiers 3 and 4**, it does not `continue`. That is what gives
+  typed DDL its name-resolution squiggles for free, and `validation_never_mutates_the_session` now
+  pins the stronger claim: the dry-plan reaches `CREATE VIEW` / CTAS / `DROP TABLE`, reports
+  nothing, and creates nothing.
+- **`BLOCKED_KEYWORDS` is now words that appear only in refused forms.** `CREATE` leads
+  `CREATE TABLE` and `CREATE EXTERNAL TABLE` as well as `CREATE DATABASE`, so the refusal there is
+  carried by `DATABASE`/`SCHEMA` alone. `CREATE`/`DROP`/`INSERT`/`INTO`/`COPY`/`SET`/`RESET`/
+  `TABLE`/`VIEW`/`EXTERNAL`/`REPLACE`/`STORED` left the list; most were never in sqlparser's
+  `ALL_KEYWORDS` filter path anyway, but `EXTERNAL` and `STORED` were (and both are needed, for
+  `CREATE EXTERNAL TABLE` and `COPY … STORED AS`).
+
+**Known interim state:** between ED-01 and ED-02 an intercepted statement draws no squiggle and
+then fails at Run — `Engine::query`'s `SQLOptions::with_allow_ddl(false)` refuses it with
+DataFusion's own wording. ED-02's `Engine::run` is what closes that.
+
+**Handoff for ED-08 — `EXECUTE` is the one `Verdict::Query` the query path cannot run.** It is
+`Query` rather than `Intercept` (spec §6.5), so the interim note above does not cover it and no
+new dispatch arm will: `run_and_snapshot` sets `with_allow_statements(false)`
+(`engine/query.rs`), so `verify_plan` rejects `LogicalPlan::Statement(Execute)` with DataFusion's
+wording. ED-08 must widen that triple **per dispatch** for this arm — the read path's all-false
+default is deliberate, and flipping it wholesale would let `SET`/`PREPARE` through the query arm
+behind the router's back. (`EXECUTE IMMEDIATE` is not a dynamic-SQL hole: DataFusion 54 answers
+`not_impl_err` at `statement.rs:871` before any string is planned.)
 
 ## Goal
 

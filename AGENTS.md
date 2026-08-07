@@ -80,8 +80,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **An engine's config is a launch value; a live change is `set_config`, and a runtime key is a
   restart** — which is the `ProjectRoot` remount, not a second path. A **removed** key goes back to
   its `ENGINE_KEYS` default; `restart_owed` measures against `built_runtime`.
-- **Managed DDL policy.** The editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` only. Views are
-  Save's artifact; typed DDL is blocked with validation pointing at the owning surface.
+- **One classification with a capability axis, in front of dispatch.** `classify(stmt, Capability)`
+  answers `Query` / `Intercept(StmtKind)` / `Refuse(Blocked)` off the parsed statement, both
+  surfaces in one match arm. `Capability::Agent` stays read-only and message-identical; the
+  editor's refusals shrink to a short list and the older `Blocked` variants stay as the agent
+  path's messages; default stays deny; a `__snap_` name in an intercepted statement is refused.
+  Every interception is a second gesture into a funnel that already exists.
 - **A chart renders the result in result order; it computes nothing SQL can say.** `Engine::chart`
   is a projected, ordinal-ordered, capped read plus a long→wide pivot — no aggregation, no
   bucketing, no imposed order (the histogram's binning is the one exception). Over a cap, or two

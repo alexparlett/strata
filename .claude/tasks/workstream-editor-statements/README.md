@@ -14,15 +14,15 @@ DROP on both origins; statements in history; session-scoped SET/PREPARE/function
 do not re-litigate §3 (why lifecycle cannot live in the provider traits).
 
 The architecture in one line: **classify in front of dispatch, execute through funnels that
-already exist** — `policy_block` grows a capability axis and a three-way verdict, `Engine::run`
-routes, and an internal table is a `TableDef` over `.strata/tables/<name>/` with `format: Arrow`,
-replayed by the existing registration pass (headless host free).
+already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Refuse` (ED-01, done),
+`Engine::run` routes, and an internal table is a `TableDef` over `.strata/tables/<name>/` with
+`format: Arrow`, replayed by the existing registration pass (headless host free).
 
 ## Tasks
 
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
-| 01 | Policy router: `classify(stmt, Capability)` + `Verdict`; agent wrapper unchanged | ⬜ | — | — |
+| 01 | Policy router: `classify(stmt, Capability)` + `Verdict`; agent wrapper unchanged | ✅ | — | — |
 | 02 | `Engine::run` + statement results: `RunOutcome`/`StatementReport`/`StoreEffect`, app folds, history | ⬜ | — | 01 |
 | 03 | Strata providers: `StrataCatalogProvider` + `StrataSchemaProvider`, information_schema on | ⬜ | — | — |
 | 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ⬜ | — | 02 |

@@ -8,7 +8,7 @@
 //! - [`symbols`] — the [`Catalog`] (tables/views/columns from `state.project` +
 //!   registered functions) and in-statement alias resolution.
 //! - [`validate`] — [`validate::validate`] the full diagnostics pass: lexical lints +
-//!   managed-DDL policy + the native name [`resolve`]r + the engine **dry-plan**
+//!   the statement router ([`validate::classify`]) + the native name [`resolve`]r + the engine **dry-plan**
 //!   (parse → resolve → analyze against the live `SessionContext`, never
 //!   executing). Byte-spanned for squiggles.
 //! - [`resolve`] — the AST name resolver behind validation: every unknown
@@ -31,7 +31,9 @@ pub mod validate;
 
 pub use complete::{complete, Completion, CompletionKind};
 pub use symbols::Catalog;
-pub use validate::{policy_verdicts, validate, Blocked, PolicyRefusal};
+pub use validate::{
+    classify, policy_verdicts, validate, Blocked, Capability, PolicyRefusal, StmtKind, Verdict,
+};
 
 /// Which registry a function came from — the docs-panel header word, and (for the
 /// caller) a coarse category. `Default` is `Scalar` so a name-only [`FunctionSym`]
