@@ -98,6 +98,7 @@ fn project() -> ProjectState {
             sql: "SELECT 1".into(),
         }],
         saved_queries: Vec::new(),
+        ..Default::default()
     };
     let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-inspector-view-test"));
     p.table_registered(

@@ -16,6 +16,7 @@
 
 mod catalog;
 mod chart;
+mod connection;
 mod diagnostics;
 mod history;
 mod profile;
@@ -32,6 +33,7 @@ pub use chart::{
     Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,
     ChartSeries, ChartSort, ChartX,
 };
+pub use connection::{ConnectionDef, GcsAuth, GcsStore, Provider, S3Auth, S3Store};
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;

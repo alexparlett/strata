@@ -21,7 +21,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use freya::prelude::*;
-use strata_code_editor::editor_theme::{EditorSyntaxThemePreference};
+use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
 use strata_code_editor::prelude::SYNTAX_SCOPES;
 use strata_core::theme::{generate_schema as core_schema, ThemeRegistry};
 

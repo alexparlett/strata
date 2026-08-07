@@ -100,6 +100,7 @@ fn defs() -> ProjectDefs {
                 meta: "—".into(),
             },
         ],
+        ..Default::default()
     }
 }
 

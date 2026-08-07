@@ -57,6 +57,7 @@ fn project(tag: &str) -> PathBuf {
                 sql: "SELECT id FROM people".into(),
             }],
             saved_queries: Vec::new(),
+            ..Default::default()
         },
     )
     .unwrap();

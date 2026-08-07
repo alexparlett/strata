@@ -18,6 +18,20 @@ datafusion = "54"
 # (`?` is registered as well but does not parse under our default `GenericDialect` — use
 # `json_contains`; see the note in `engine::build_context`.)
 datafusion-functions-json = "0.54"
+# `engine::store`: the object stores a connection registers (W7). DataFusion already carries
+# `object_store` with only its local-filesystem feature on; naming it here with `aws`/`gcp`/`http`
+# is what turns those three on — Cargo unifies features, so this is the *same* crate DataFusion
+# resolves a `s3://` URL through, not a second copy.
+object_store = { version = "0.13", features = ["aws", "gcp", "http"] }
+# The AWS credential chain `object_store` does not have. `AmazonS3Builder::from_env` reads the
+# `AWS_*` environment plus IMDS/ECS/web-identity and stops there — it does not read `~/.aws`
+# profiles and does not do SSO, so `AWS_PROFILE` alone is ignored. `aws-config` is the crate that
+# resolves the whole normal chain; `engine::store` wraps what it resolves in an
+# `object_store::CredentialProvider` (the datafusion-cli bridge). Needed only for the profile /
+# SSO arms — anonymous and the env/IMDS half of Ambient would work without it.
+# `behavior-version-latest` is what makes `BehaviorVersion::latest()` callable.
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-credential-types = "1"
 # `engine` worker: dedicated thread + tokio runtime + mpsc command/event channels.
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
@@ -36,6 +50,29 @@ chrono = "0.4"
 tracing = "0.1.44"
 
 [dev-dependencies]
+# A real S3 server for the connections integration test (W7): `tests/object_store_minio.rs`
+# starts MinIO in a container rather than hand-rolling an S3 mock, because a mock is written
+# by the same understanding of the protocol it is meant to check — it can be shaped to pass
+# without anyone noticing. Needs a Docker runtime, which the macOS CI job does not have on its
+# own — CI supplies one via `atomicjar/testcontainers-cloud-setup-action` (see
+# .github/workflows/ci.yml). The test is deliberately *not* `#[ignore]`d: an ignored test is
+# one nobody runs, and this is the only thing covering SigV4 through the `aws-config` bridge.
+# Pinned to the major `testcontainers-modules` itself depends on: the two share a `bollard`,
+# and a newer `testcontainers` here resolves a second one that conflicts outright.
+#
+# `properties-config` is **not** optional for us: without it, reading
+# `~/.testcontainers.properties` is `#[cfg]`'d out and the only Docker endpoint the crate will
+# consider is `DOCKER_HOST`, falling back to `/var/run/docker.sock`. That file is exactly how a
+# Testcontainers Cloud agent advertises itself (`tc.host` / `docker.host`), locally and on CI —
+# so without the feature the runtime is up, configured, and invisible, and the failure reads as
+# `SocketNotFoundError("/var/run/docker.sock")` as if no runtime existed at all.
+testcontainers = { version = "0.27", features = ["properties-config"] }
+testcontainers-modules = { version = "0.15", features = ["minio"] }
+# Seeds the bucket the test then reads. Deliberately a *different* client from the one under
+# test: `object_store` cannot create a bucket at all, and having the write side be an
+# independent implementation is what stops the fixture and the code under test agreeing on a
+# shared misunderstanding of the protocol.
+aws-sdk-s3 = "1"
 # Tests mint saved-query ids (the type itself reaches the API via strata-model).
 uuid = { version = "1", features = ["v4"] }
 # The read-options round-trips write their own fixtures, and a compression option can only be

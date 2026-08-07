@@ -18,7 +18,7 @@ use strata_core::engine::TableSpec;
 use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
 use strata_core::register::{register_pass, table_spec, RegOutcome};
 use strata_core::util::{fmt_int, plural};
-use strata_model::{SessionSnapshot, WindowGeom};
+use strata_model::{ConnectionDef, SessionSnapshot, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::state::ConfigStation;
@@ -128,10 +128,10 @@ fn new_session() -> SessionState {
 }
 
 /// Initialise this window's Project store from the `defs` [`open_project`] already loaded,
-/// and drive engine registration of them (tables, then views). Also provides the window's
-/// [`Catalog`](super::catalog::Catalog) state and [`CatalogRescan`] counter, since
-/// this is where the scans run. Call once in the window root, after the engine is in
-/// context.
+/// and drive engine registration of them (connections, then tables, then views). Also
+/// provides the window's [`Catalog`](super::catalog::Catalog) state and [`CatalogRescan`]
+/// counter, since this is where the scans run. Call once in the window root, after the
+/// engine is in context.
 ///
 /// Registration is IO-heavy (schema inference reads file footers)
 /// and runs as a spawned task, landing results row by row through [`ProjChan::Tables`] /
@@ -183,49 +183,74 @@ pub fn use_init_project(
         // The work list is read **before** any row is reset, because resetting is what discards
         // the information it is derived from: a `Loading` view has no `view_deps` to order by,
         // and none to say which table it reads.
-        let (tables, views) = plan_scan(station, &request.scope);
+        let work = plan_scan(station, &request.scope);
         // Rows drop to `Loading` so the pane reads as re-scanning rather than as settled
         // data. Only for a real request: at mount every row is already `Loading`, and writing
         // them again would wake the catalog's subscribers for nothing.
         if request.seq > 0 {
-            reset_rows(station, &request.scope, &views);
+            reset_rows(station, &request.scope, &work.views);
         }
-        spawn(scan_catalog(
-            engine.clone(),
-            station,
-            log,
-            guard,
-            tables,
-            views,
-        ));
+        spawn(scan_catalog(engine.clone(), station, log, guard, work));
     });
     station
 }
 
-/// A scan's work list: the tables to re-register, then the views to re-create **in dependency
-/// order**. Read before any row is reset (see the driver).
+/// What one scan will re-register, by def name — connections, then tables, then views **in
+/// dependency order**, which is also the order the pass settles them in.
+///
+/// A struct and not the three `Vec<String>`s it holds: they are the same type, they travel
+/// together through the driver and the fold, and positional arguments would let two of them
+/// swap with nothing to notice.
+struct ScanWork {
+    /// `ConnectionDef::url()`s — a connection's identity, and what the engine registers
+    /// under. Not buckets: `s3://lake` and `gs://lake` are two connections sharing one.
+    connections: Vec<String>,
+    tables: Vec<String>,
+    views: Vec<String>,
+}
+
+impl ScanWork {
+    /// Nothing to do — the row a scoped request named went between the request and the
+    /// driver serving it.
+    fn none() -> Self {
+        Self {
+            connections: Vec::new(),
+            tables: Vec::new(),
+            views: Vec::new(),
+        }
+    }
+}
+
+/// A scan's work list. Read before any row is reset (see the driver).
 ///
 /// The two scopes differ only in reach. `All` is every def. `Table` is the one row plus
 /// [`ProjectState::views_to_refresh`] — the views that read it (transitively) and every view
 /// currently failing, because re-registering a table does not re-plan the views above it: their
 /// plans captured the old provider by `Arc` and would go on scanning the files the pass just
 /// replaced, with the old schema.
-fn plan_scan(
-    station: RadioStation<ProjectState, ProjChan>,
-    scope: &ScanScope,
-) -> (Vec<String>, Vec<String>) {
+///
+/// **Connections belong to `All` only** (W7). A table's Refresh does not re-connect: the store
+/// its bucket needs is already registered from the open, and re-resolving a credential chain
+/// per row Refresh would put a network round trip behind a gesture that is about one table's
+/// files. The case that needs a re-connect — the user fixes a region, or runs `aws sso login`
+/// — is exactly what ↻ is for.
+fn plan_scan(station: RadioStation<ProjectState, ProjChan>, scope: &ScanScope) -> ScanWork {
     let p = station.peek();
     match scope {
-        ScanScope::All => {
-            let tables = p.tables.iter().map(|t| t.def.name.clone()).collect();
-            let views = p.refresh_order(p.views.iter().map(|v| v.def.name.clone()).collect());
-            (tables, views)
-        }
+        ScanScope::All => ScanWork {
+            connections: p.connections.iter().map(|c| c.def.url()).collect(),
+            tables: p.tables.iter().map(|t| t.def.name.clone()).collect(),
+            views: p.refresh_order(p.views.iter().map(|v| v.def.name.clone()).collect()),
+        },
         // A name with no row left is planned as an empty pass rather than a whole-catalog one:
         // the table went between the request and the driver serving it.
         ScanScope::Table(name) => match p.tables.iter().any(|t| t.def.name == *name) {
-            true => (vec![name.clone()], p.views_to_refresh(name)),
-            false => (Vec::new(), Vec::new()),
+            true => ScanWork {
+                connections: Vec::new(),
+                tables: vec![name.clone()],
+                views: p.views_to_refresh(name),
+            },
+            false => ScanWork::none(),
         },
     }
 }
@@ -240,6 +265,9 @@ fn reset_rows(
 ) {
     match scope {
         ScanScope::All => {
+            station
+                .write_channel(ProjChan::Connections)
+                .reload_connections();
             station.write_channel(ProjChan::Tables).reload_tables();
             station.write_channel(ProjChan::Views).reload_views();
         }
@@ -304,10 +332,9 @@ async fn scan_catalog(
     station: RadioStation<ProjectState, ProjChan>,
     log: LogCtx,
     _scan: ScanGuard,
-    tables: Vec<String>,
-    views: Vec<String>,
+    work: ScanWork,
 ) {
-    register_defs(engine, station, log, tables, views).await;
+    register_defs(engine, station, log, work).await;
 }
 
 /// What the project subtree needs off disk before it can mount: the defs and the persisted
@@ -374,10 +401,10 @@ pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
 /// pass, shared by project open, the sidebar's ↻ re-scan ([`refresh_catalog`]) and a
 /// row's Refresh ([`refresh_table`]) — a re-scan *is* a re-registration, so there is one
 /// implementation of "make the engine match the defs", not several that can drift. The
-/// three differ only in the work list they hand in. The engine-facing half — tables
-/// first, then views by fixed-point rounds — is `strata-core`'s [`register_pass`]
-/// (AA-01, so a headless host runs the same sequence); this keeps what is genuinely the
-/// store's: `Reg<T>` rows and log entries, folded per outcome as each settles.
+/// three differ only in the work list they hand in. The engine-facing half — connections
+/// first, then tables, then views by fixed-point rounds — is `strata-core`'s
+/// [`register_pass`] (AA-01, so a headless host runs the same sequence); this keeps what is
+/// genuinely the store's: `Reg<T>` rows and log entries, folded per outcome as each settles.
 ///
 /// `views` is taken **in order**, which the caller has already sorted so a view is
 /// re-created after everything it reads ([`ProjectState::refresh_order`]). That ordering
@@ -395,88 +422,127 @@ async fn register_defs(
     engine: EngineCtx,
     mut station: RadioStation<ProjectState, ProjChan>,
     log: LogCtx,
-    tables: Vec<String>,
-    views: Vec<String>,
+    work: ScanWork,
 ) {
     // Snapshot the work up front (peek — a task has no reactive context): results land
     // by name, so concurrent def edits can't be clobbered by a stale row write.
-    let (tables, views) = {
+    let (connections, tables, views) = {
         let p = station.peek();
         let root = p.root.clone();
-        let tables: Vec<TableSpec> = tables
+        let connections: Vec<ConnectionDef> = work
+            .connections
+            .into_iter()
+            .filter_map(|url| {
+                Some(
+                    p.connections
+                        .iter()
+                        .find(|c| c.def.url() == url)?
+                        .def
+                        .clone(),
+                )
+            })
+            .collect();
+        let tables: Vec<TableSpec> = work
+            .tables
             .into_iter()
             .filter_map(|name| {
                 let def = &p.tables.iter().find(|t| t.def.name == name)?.def;
                 Some(table_spec(&root, def))
             })
             .collect();
-        let views: Vec<(String, String)> = views
+        let views: Vec<(String, String)> = work
+            .views
             .into_iter()
             .filter_map(|name| {
                 let sql = p.views.iter().find(|v| v.def.name == name)?.def.sql.clone();
                 Some((name, sql))
             })
             .collect();
-        (tables, views)
+        (connections, tables, views)
     };
 
-    register_pass(&engine, tables, views, |outcome| match outcome {
-        RegOutcome::Table { name, result } => match result {
-            Ok(meta) => {
-                log_event(
-                    log,
-                    LogLevel::Ok,
-                    format!(
-                        "Registered table '{name}' · {}{}",
-                        plural(meta.columns.len(), "column"),
-                        // Only if the source reported one (P3-08's rule) — a CSV table has no
-                        // row count until something counts it.
-                        meta.rows
-                            .map(|rows| format!(" · {} rows", fmt_int(rows)))
-                            .unwrap_or_default()
-                    ),
-                );
-                station
-                    .write_channel(ProjChan::Tables)
-                    .table_registered(&name, meta);
-            }
-            Err(e) => {
-                tracing::error!("register table '{name}' failed: {e}");
-                log_event(
-                    log,
-                    LogLevel::Error,
-                    format!("Table '{name}' failed to register: {e}"),
-                );
-                station
-                    .write_channel(ProjChan::Tables)
-                    .table_failed(&name, e);
-            }
+    register_pass(
+        &engine,
+        connections,
+        tables,
+        views,
+        |outcome| match outcome {
+            RegOutcome::Connection { url, result } => match result {
+                Ok(()) => {
+                    log_event(log, LogLevel::Ok, format!("Connected '{url}'"));
+                    station
+                        .write_channel(ProjChan::Connections)
+                        .connection_registered(&url);
+                }
+                Err(e) => {
+                    tracing::error!("connect '{url}' failed: {e}");
+                    log_event(
+                        log,
+                        LogLevel::Error,
+                        format!("Connection '{url}' failed: {e}"),
+                    );
+                    station
+                        .write_channel(ProjChan::Connections)
+                        .connection_failed(&url, e);
+                }
+            },
+            RegOutcome::Table { name, result } => match result {
+                Ok(meta) => {
+                    log_event(
+                        log,
+                        LogLevel::Ok,
+                        format!(
+                            "Registered table '{name}' · {}{}",
+                            plural(meta.columns.len(), "column"),
+                            // Only if the source reported one (P3-08's rule) — a CSV table has no
+                            // row count until something counts it.
+                            meta.rows
+                                .map(|rows| format!(" · {} rows", fmt_int(rows)))
+                                .unwrap_or_default()
+                        ),
+                    );
+                    station
+                        .write_channel(ProjChan::Tables)
+                        .table_registered(&name, meta);
+                }
+                Err(e) => {
+                    tracing::error!("register table '{name}' failed: {e}");
+                    log_event(
+                        log,
+                        LogLevel::Error,
+                        format!("Table '{name}' failed to register: {e}"),
+                    );
+                    station
+                        .write_channel(ProjChan::Tables)
+                        .table_failed(&name, e);
+                }
+            },
+            RegOutcome::View { name, result } => match result {
+                Ok(meta) => {
+                    log_event(
+                        log,
+                        LogLevel::Ok,
+                        format!(
+                            "Registered view '{name}' · {}",
+                            plural(meta.columns.len(), "column")
+                        ),
+                    );
+                    station
+                        .write_channel(ProjChan::Views)
+                        .view_registered(&name, meta);
+                }
+                Err(e) => {
+                    tracing::error!("create view '{name}' failed: {e}");
+                    log_event(
+                        log,
+                        LogLevel::Error,
+                        format!("View '{name}' failed to register: {e}"),
+                    );
+                    station.write_channel(ProjChan::Views).view_failed(&name, e);
+                }
+            },
         },
-        RegOutcome::View { name, result } => match result {
-            Ok(meta) => {
-                log_event(
-                    log,
-                    LogLevel::Ok,
-                    format!(
-                        "Registered view '{name}' · {}",
-                        plural(meta.columns.len(), "column")
-                    ),
-                );
-                station
-                    .write_channel(ProjChan::Views)
-                    .view_registered(&name, meta);
-            }
-            Err(e) => {
-                tracing::error!("create view '{name}' failed: {e}");
-                log_event(
-                    log,
-                    LogLevel::Error,
-                    format!("View '{name}' failed to register: {e}"),
-                );
-                station.write_channel(ProjChan::Views).view_failed(&name, e);
-            }
-        },
-    })
+    )
     .await;
 }
 

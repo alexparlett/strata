@@ -74,5 +74,13 @@ jobs:
       # This is also the theme guard: strata-freya's `schema_in_sync` test fails when
       # `themes/theme.schema.json` no longer matches `theme.rs`'s REGISTRY (regenerate
       # with `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`).
+      # Before `cargo test`, not after: the connections integration tests (W7) drive a real
+      # MinIO in a container and are ordinary tests, so the run below executes them. GitHub's
+      # macOS images have no Docker daemon; Testcontainers Cloud supplies the runtime.
+      - name: Setup Testcontainers Cloud Client
+        uses: atomicjar/testcontainers-cloud-setup-action@v1
+        with:
+          token: ${{ secrets.TC_CLOUD_TOKEN }}
+
       - name: cargo test
         run: cargo test --workspace --locked

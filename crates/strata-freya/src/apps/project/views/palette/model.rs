@@ -384,6 +384,9 @@ mod tests {
         ProjectState {
             name: "sales".to_string(),
             root: PathBuf::from("/data/sales"),
+            // The palette offers no connection rows: a bucket is not something you can run,
+            // open or jump to.
+            connections: Vec::new(),
             tables: vec![
                 table(
                     "orders",

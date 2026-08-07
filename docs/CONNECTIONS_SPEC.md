@@ -72,9 +72,30 @@ chains; the app never takes or stores keys.
   `object_store::CredentialProvider` and feed `AmazonS3Builder` — the datafusion-cli pattern. Needs `aws-config` +
   `aws-credential-types`; vendor datafusion-cli's
   ~200-line bridge (it's a binary crate, not a stable API).
+  **Built** as `strata_core::engine::store::SdkCredentials` — and it resolves **per request**, not once at build,
+  because that is the whole reason to wrap the SDK's provider instead of copying a key out of it: SSO / assumed-role
+  / IMDS credentials expire in minutes and the SDK's provider is what knows how to refresh them.
+- **Ambient and Named profile are two different providers, not one chain with a setting.** `aws-config`'s
+  `ConfigLoader::profile_name` configures the default chain's *Profile arm*; it does not move that arm to the front,
+  and `DefaultCredentialsChain::build` is unconditionally `Environment → Profile → WebIdentity → ECS → IMDS`. Built
+  that way (as it was first time), a Strata launched from a shell exporting `AWS_ACCESS_KEY_ID` signs as the
+  *environment* identity while the pane shows the profile the user chose — Ambient and Profile become the same
+  connection wherever ambient credentials exist, and a misspelled profile name still shows green. So **Ambient** is
+  `aws_config::defaults(...)` (the whole chain, whatever answers) and **Named profile** is
+  `ProfileFileCredentialsProvider` alone (that profile's own mechanism — `source_profile`, `role_arn`,
+  `sso_session`, `credential_process` — and no fallback to anyone else's identity).
 - **Region must be set explicitly** (arrow-rs#2795 — not reliably auto-derived), so the S3 connection's Region field is
-  load-bearing.
-- **GCS** resolves via `from_env` / a service-account file (ADC path) — no extra SDK.
+  load-bearing. `AmazonS3Builder` silently defaults it to `us-east-1`, so `engine::store` **refuses** a blank one
+  rather than letting that default stand.
+- **GCS** resolves via `from_env` / a service-account file (ADC path) — no extra SDK. One consequence worth stating:
+  an ambient GCS connection with no credentials at all still *builds* (the builder installs the GCE metadata
+  provider without asking anything), so it is the one arm whose status cannot be known without a request to the
+  bucket — and that request is not worth making.
+- **The status dot is the connect outcome, not a separate probe.** `engine::store::connect` resolves the credential
+  chain once and throws the answer away, *before* registering: green is a connection that registered, amber is the
+  `Err` it reported, with what to fix. Without that probe a credential-less connection registers happily and the
+  diagnosis lands on every table over the bucket instead — one opaque signing error each, in the wrong place.
+  Registration is therefore all-or-nothing: a connection is never both refused and live.
 
 ## 4. Configure-table: local vs object store (FEATURES §6)
 
@@ -92,17 +113,40 @@ chains; the app never takes or stores keys.
 - Validation blocks Register when object-store mode has **no connection** selected, and keeps the **S3 region** check
   via the connection.
 
-## 5. Persistence
+## 5. Persistence — as built (Connections 01)
 
 Connections carry **no secrets**. The per-provider **non-secret def** persists in the project's `.strata/` and reloads
-on open (hydrating the pane + the Configure-table connection list); saved on add / edit / forget:
+on open (hydrating the pane + the Configure-table connection list); saved on add / edit / forget.
 
-- **S3** — `{ provider, region, auth, profile, endpoint, allowHttp }`
-- **GCS** — `{ provider, auth, saPath }`  (auth ∈ ambient / sa-file / anonymous)
-- **HTTP** — `{ provider, auth: "anonymous" }`
+**Settled: the whole def rides the committed `project.json`**, beside the tables and views —
+`ProjectDefs::connections`, sorted by bucket like every other section. The open question below (split the
+per-machine `profile` / `saPath` into the gitignored `session.json`) is **closed against splitting**: a def carrying
+only a profile *name* and a key *file path* holds nothing a colleague may not have, and a catalog whose tables live
+in a bucket is not shareable if the bucket isn't. **No key/secret ever touches disk via the app** either way.
 
-Open question: bucket/provider is a shareable **def** (→ committed `project.json`), while a per-machine `profile` /
-`saPath` may fit the gitignored `session.json`. Either way **no key/secret ever touches disk via the app**.
+The shape is `strata_model::ConnectionDef` — a **bucket plus a tagged provider**, where the provider *is* its own
+settings (the same argument as `SourceFormat`: a region means nothing to the HTTP store, and a def carrying every
+provider's fields has states where they disagree):
+
+```json
+{ "bucket": "acme-lake",
+  "provider": { "provider": "s3", "region": "eu-west-2",
+                "auth": { "mode": "profile", "name": "analytics" },
+                "endpoint": "", "allow_http": false } }
+{ "bucket": "lake",        "provider": { "provider": "gcs", "auth": { "mode": "service-account", "path": "…" } } }
+{ "bucket": "example.com", "provider": { "provider": "http" } }
+```
+
+Two deliberate differences from the v11 canvas's flat object, both of them states being removed rather than fields
+being renamed:
+
+- **The bucket is the authority alone**, not the scheme-qualified string. The scheme comes from the provider
+  (`ConnectionDef::url()` → `s3://acme-lake`), so an `s3://` bucket under a GCS provider cannot be written down.
+  The form adds and strips the prefix; `url()` is the registry key.
+- **`profile` / `saPath` live inside `auth`**, not beside it — `{"mode":"profile","name":…}`. A profile named on an
+  Ambient connection is not a state worth having.
+
+Every provider's settings are `#[serde(default)]`, so a def written before a setting existed still loads.
 
 ## 6. Provider auth options
 

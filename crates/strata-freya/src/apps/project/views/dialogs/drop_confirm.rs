@@ -491,6 +491,7 @@ mod tests {
                 sql: "SELECT 1".into(),
                 meta: "—".into(),
             }],
+            ..Default::default()
         };
         let mut p = ProjectState::from_defs(defs, root.to_path_buf());
         for name in ["orders", "users"] {

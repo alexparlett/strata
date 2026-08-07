@@ -67,6 +67,10 @@ Read this index first, then open only the phase/workstream file you're working i
 - **Connections + remote object stores** (`workstream-connections/`, DEV_TASKS **W7**) — the
   activity-rail button, the sidebar connections pane, and the config-table LOCATION toggle +
   S3/GCS/HTTP object stores. Touches Phase 2/3/4 surfaces. Spec: `docs/CONNECTIONS_SPEC.md`.
+  **W7-01 is done** — the `ConnectionDef` model, its place in the committed `project.json`, the
+  object stores (`engine::store`, with the `aws-config` credential bridge) and the registration
+  pass's connections-first phase. No surface yet: 02–04. It raised the workspace's effective MSRV
+  to **rustc 1.94.1**.
 - **Chart view** (`workstream-chart-view/`, DEV_TASKS **Rz2**) — the results Chart surface:
   engine-side chart data (`Engine::chart` over the snapshot), a plotters/Skia renderer, encoder
   strip, guardrails. A whole feature surface, not drift. Spec: `docs/CHART_SPEC.md`.

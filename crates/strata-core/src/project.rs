@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string, to_string_pretty};
-use strata_model::{HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef};
+use strata_model::{ConnectionDef, HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef};
 
 use crate::util::{collapse_sql, sweep_stale_temps, write_atomic, TEMP_GLOB};
 
@@ -44,6 +44,14 @@ const HISTORY_JSONL: &str = "history.jsonl";
 pub struct ProjectDefs {
     #[serde(default)]
     pub name: String,
+    /// The remote object stores this project reads from (W7). **Committed with the rest**,
+    /// which `docs/CONNECTIONS_SPEC.md` §5 had left open between here and the gitignored
+    /// session: a connection carries no secret material at all — a profile *name* and a key
+    /// **file path** are references to the reader's own machine, not credentials — so there
+    /// is nothing here a colleague may not have, and a catalog whose tables live in a bucket
+    /// is not shareable if the bucket isn't.
+    #[serde(default)]
+    pub connections: Vec<ConnectionDef>,
     #[serde(default)]
     pub tables: Vec<TableDef>,
     #[serde(default)]
@@ -75,6 +83,10 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     let path = strata_dir(root).join(PROJECT_JSON);
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut defs: ProjectDefs = from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Connections sort on the bucket, which *is* their name (`ConnectionDef`): the same
+    // ordering rule, over the field that carries identity here.
+    defs.connections
+        .sort_by(|a, b| name_ord(&a.bucket, &b.bucket));
     defs.tables.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.views.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.saved_queries

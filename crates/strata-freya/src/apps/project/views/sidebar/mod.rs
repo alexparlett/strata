@@ -287,6 +287,7 @@ mod tests {
             }],
             views: Vec::new(),
             saved_queries: Vec::new(),
+            ..Default::default()
         }
     }
 

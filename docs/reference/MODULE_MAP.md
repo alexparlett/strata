@@ -379,7 +379,13 @@ src/apps/project/                the project window (Valin-shaped)
                                  CodeEditorData, keyed on Chan::{Tabs, Tab(id)}); Layout too
                                  project.rs = ProjectState — **the catalog**: persisted defs +
                                  `Reg<T>` (Loading/Ready/Failed), per-section ProjChan channels,
-                                 and each row's profile *request* (never its numbers)
+                                 and each row's profile *request* (never its numbers). W7's
+                                 connections are a fourth section here, on
+                                 `ProjChan::Connections` and keyed by `ConnectionDef::url()`
+                                 (scheme + authority — never the bucket, which two providers
+                                 can share) — a `ConnRow`'s `Reg<()>` carries no payload
+                                 because connecting *registers* an object store rather than
+                                 inferring anything, so the three states are the whole value
                                  catalog.rs = CatalogSelection, the inspected column (context)
                                  log.rs = P3-13's **event log** satellite (`LogCtx`, ephemeral,
                                  capped): the record behind the drawer's Events tab. No producer
