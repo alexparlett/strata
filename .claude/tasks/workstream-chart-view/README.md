@@ -47,7 +47,13 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
 | 02 | Chart body + plotters renderer | ✅ | Rz2 | 01 |
 | 03 | Encoder strip + `ChartConfig` state | ✅ | Rz2 | 02 |
 | 04 | Guardrails (overlays + banner) | ✅ | Rz2 | 02, 03 |
-| 05 | Analytical presets — role mappings + templates (follow-on) | ⬜ | Rz2 | 01–04 |
+| 05 | Analytical presets — the remaining menu (follow-on) | ⬜ | Rz2 | 07, 10 |
+| 06 | Interactivity — bins, legend toggle, log axis, crosshair | ⬜ | Rz2 | 01–04 |
+| 07 | Tier A templates — palette commands that write the SQL | ⬜ | Rz2 | 01–04 |
+| 08 | Copy chart as image — fork clipboard + offscreen capture | ⬜ | Rz2 | 02 |
+| 09 | Shape panel — the aggregation composer, its own surface | ⬜ | Rz2 | 01–04 |
+| 10 | Tier B marks — heatmap, error bands, box plot | ⬜ | Rz2 | 01–04 |
+| 11 | Scatter trendline `[core]` | ⬜ | Rz2 | 01–04 (10 for strip layout) |
 
 ## Why the order
 
@@ -56,9 +62,16 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
 renderer-first shape — the branch holds the withdrawn pipeline's implementation, and its
 salvageable parts (caps, `CellFormat` labels, `(null)` handling, pivot collision refusal,
 histogram, pin, most tests) carry over. 02 makes the surface real over schema-derived defaults;
-03 adds the strip and persisted config; 04 adds the refusal surfaces. 05 is
-deliberately last and optional-shaped: presets are role mappings + SQL templates over the same
-`Rows` read, so nothing earlier pre-builds for them (AGENTS.md §5).
+03 adds the strip and persisted config; 04 adds the refusal surfaces.
+
+06–11 are the 2026-08 redesign (planned with Alex; the decisions each file marks "settled in
+planning" are his — do not re-ask them). 06/07/08 are mutually independent quick wins — pick
+up in any order, one session each. 09 is independent of all of them (it re-promotes
+`quote_col`, nothing else shared) and ships the INVARIANTS/CHART_SPEC §8 amendment. 10 comes
+before 11 only because both touch the strip's layout. 07 and 10 both grow
+`chart/templates.rs` — whichever lands second merges. 05 is what remains of the presets menu
+after the split (candlestick, ECDF/Pareto-as-templates, Tier C) and stays last and
+optional-shaped: nothing earlier pre-builds for it (AGENTS.md §5).
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core]` logic in `strata-core`.
