@@ -220,26 +220,21 @@ pub(super) const MULTI_WORD: &[&str] = &[
     "IS NOT DISTINCT FROM",
 ];
 
-/// DDL/DML keywords excluded from completion — the statements `validate.rs`'s
-/// `policy_block` rejects (managed-DDL policy: the editor runs queries +
-/// inspection only; views via Save, tables via Table Config, settings via
-/// Settings — which is why SET/RESET are here too). Offering what validation
+/// DDL/DML keywords excluded from completion — the words that appear **only** in
+/// statement forms `validate.rs`'s router still refuses for
+/// [`Capability::Editor`](crate::engine::sql::Capability). Offering what validation
 /// squiggles would mislead. Filtered (case-insensitively) out of `ALL_KEYWORDS`;
 /// `policy_and_completion_agree` keeps the two encodings from drifting. (Scalar
 /// fns like `replace` still come from the engine registry, so blocking the
 /// *keyword* doesn't hide the function.)
+///
+/// A word that leads both an intercepted form and a refused one is **not** here:
+/// `CREATE` leads `CREATE TABLE` and `CREATE EXTERNAL TABLE` as well as
+/// `CREATE DATABASE`, so the refusal is carried by `DATABASE`/`SCHEMA` alone.
 pub(super) const BLOCKED_KEYWORDS: &[&str] = &[
-    // settings surface
-    "SET",
-    "RESET",
     // create / drop / alter surface
-    "CREATE",
-    "TABLE",
-    "VIEW",
-    "EXTERNAL",
     "DATABASE",
     "SCHEMA",
-    "DROP",
     "ALTER",
     "TRUNCATE",
     "RENAME",
@@ -249,14 +244,10 @@ pub(super) const BLOCKED_KEYWORDS: &[&str] = &[
     "TEMP",
     "UNLOGGED",
     // data mutation
-    "INSERT",
-    "INTO",
     "UPDATE",
     "DELETE",
-    "COPY",
     "MERGE",
     "UPSERT",
-    "REPLACE",
     "OVERWRITE",
     "VACUUM",
     // transactions / permissions
@@ -277,5 +268,4 @@ pub(super) const BLOCKED_KEYWORDS: &[&str] = &[
     "SEQUENCE",
     "TRIGGER",
     "PROCEDURE",
-    "STORED",
 ];

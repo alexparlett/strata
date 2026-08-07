@@ -22,7 +22,7 @@ replayed by the existing registration pass (headless host free).
 
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
-| 01 | Policy router: `classify(stmt, Capability)` + `Verdict`; agent wrapper unchanged | ⬜ | — | — |
+| 01 | Policy router: `classify(stmt, Capability)` + `Verdict`; agent wrapper unchanged | ✅ | — | — |
 | 02 | `Engine::run` + statement results: `RunOutcome`/`StatementReport`/`StoreEffect`, app folds, history | ⬜ | — | 01 |
 | 03 | Strata providers: `StrataCatalogProvider` + `StrataSchemaProvider`, information_schema on | ⬜ | — | — |
 | 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ⬜ | — | 02 |

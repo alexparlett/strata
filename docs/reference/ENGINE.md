@@ -14,12 +14,18 @@ the facade's own bookkeeping — see **`docs/SNAPSHOT_SPEC.md`**. Snapshots are 
 parquet, so a result's type survives the round trip (parquet cannot write a union or a zero-field
 struct at all); compressed they are the same size on disk. The export null-gate's exact counts come
 from the write pass (`query::SnapshotStats`), not a footer. In Freya the handle is `EngineCtx`
-(an `Arc<Engine>` + Deref) held in context — not stored in any god-object `AppState`. Managed DDL
-policy: the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` **only**. Views are Save's artifact,
-never typed DDL — ⌘S / Save-as-view wraps the buffer's *plain query* in `CREATE OR REPLACE VIEW`
-itself (`Engine::create_view`), so typed `CREATE`/`DROP VIEW` is blocked (validation points at
-Save / the catalog), like `CREATE EXTERNAL TABLE` / CTAS / `INSERT` (use Table Config) and the
-hard-blocked `CREATE DATABASE`/`SCHEMA`.
+(an `Arc<Engine>` + Deref) held in context — not stored in any god-object `AppState`. Statement
+policy is one router in front of dispatch: `sql::validate::classify(stmt, Capability)` answers
+`Query` / `Intercept(StmtKind)` / `Refuse(Blocked)`. `Capability::Editor` runs queries and
+introspection and **intercepts** the rest — internal tables, typed view DDL onto `Engine::create_view`
+(the same funnel ⌘S uses), typed `CREATE EXTERNAL TABLE` onto Table Config's own registration path,
+`COPY`, `SET`/`RESET`, `PREPARE`/`DEALLOCATE`, `CREATE`/`DROP FUNCTION` — leaving a short refusal
+list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`, unknown kinds, and the context-dependent cases.
+`Capability::Agent` is read-only and refuses every non-query with the words AA-01 shipped.
+See `docs/STATEMENTS_SPEC.md` and the invariant in `reference/INVARIANTS.md` for the full rule
+(default-deny, reserved `__snap_` names, `Blocked` grows and never shrinks); ED-01 landed the
+classification, `Engine::run`'s dispatch and each `StmtKind`'s implementation are the ED tasks after
+it.
 
 **A remote scheme is something we register, and a connection is what registers it.** DataFusion
 core resolves nothing: there is no built-in "read `s3://…`", so an embedder builds an

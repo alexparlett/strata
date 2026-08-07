@@ -51,8 +51,15 @@ use strata_model::{Cell, ColumnInfo, QueryOutput, SnapshotId};
 
 // ---- query → snapshot → page ----
 
+/// The prefix every result snapshot is registered under. Named here, next to the
+/// only thing that mints one, because two other rules key off it: the statement
+/// router refuses an intercepted statement that names a table with this prefix
+/// (`sql::validate::classify`), and the catalog's readers hide such tables — the
+/// naming rule and the hiding rule must not be able to drift apart.
+pub const SNAPSHOT_PREFIX: &str = "__snap_";
+
 pub fn snapshot_name(snapshot: SnapshotId) -> String {
-    format!("__snap_{snapshot}")
+    format!("{SNAPSHOT_PREFIX}{snapshot}")
 }
 
 fn snapshots_root() -> String {

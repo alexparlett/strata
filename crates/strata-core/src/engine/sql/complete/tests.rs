@@ -359,10 +359,13 @@ fn rare_keywords_need_a_two_char_prefix() {
 
 #[test]
 fn blocked_ddl_keywords_are_never_offered() {
-    for sql in ["|", "SELECT cre| FROM events", "SELECT * FROM events ins|"] {
+    // The words that appear only in forms the router still refuses. `CREATE`/`INSERT`
+    // left this set with ED-01 — the editor runs those statements now.
+    for sql in ["|", "SELECT upd| FROM events", "SELECT * FROM events alt|"] {
         let items = at(sql);
-        absent(&items, "CREATE");
-        absent(&items, "INSERT");
+        absent(&items, "UPDATE");
+        absent(&items, "ALTER");
+        absent(&items, "DELETE");
     }
 }
 
@@ -690,11 +693,21 @@ fn manual_trigger_lifts_the_tail_gate() {
 
 #[test]
 fn policy_and_completion_agree_on_statement_leads() {
-    // Spot contract with `validate::policy_block`: blocked statements' lead
-    // keywords are never offered; allowed leads are never blocked. (The full
-    // derivation is P2-23's resolver's job.)
+    // Spot contract with `validate::classify(_, Editor)`: a word that appears only in
+    // refused forms is never offered; a word that leads something the editor runs — a
+    // query, or a statement it intercepts — is never blocked. Words, not statements:
+    // `CREATE` leads `CREATE TABLE` and `CREATE EXTERNAL TABLE` as well as
+    // `CREATE DATABASE`, so the refusal there is carried by `DATABASE`/`SCHEMA`.
+    // (The full derivation is P2-23's job.)
     for blocked in [
-        "CREATE", "INSERT", "UPDATE", "DELETE", "COPY", "SET", "RESET",
+        "UPDATE",
+        "DELETE",
+        "MERGE",
+        "ALTER",
+        "TRUNCATE",
+        "GRANT",
+        "DATABASE",
+        "OVERWRITE",
     ] {
         assert!(
             BLOCKED_KEYWORDS
@@ -703,7 +716,10 @@ fn policy_and_completion_agree_on_statement_leads() {
             "{blocked} must be blocked"
         );
     }
-    for allowed in ["SELECT", "WITH", "EXPLAIN", "SHOW", "DESCRIBE"] {
+    for allowed in [
+        "SELECT", "WITH", "EXPLAIN", "SHOW", "DESCRIBE", "CREATE", "DROP", "TABLE", "VIEW",
+        "EXTERNAL", "INSERT", "INTO", "COPY", "STORED", "SET", "RESET",
+    ] {
         assert!(
             !BLOCKED_KEYWORDS
                 .iter()

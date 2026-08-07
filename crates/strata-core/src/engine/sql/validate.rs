@@ -5,11 +5,12 @@
 //! 1. **Lexical** — the tokenizer's own faults (unterminated string / quoted ident),
 //!    unbalanced parentheses, and the keyword-typo lint (`FORM` → `FROM`).
 //! 2. **Policy** — each statement is parsed with DataFusion's own `DFParser` (via
-//!    [`SessionState::sql_to_statement`]) and classified against the managed-DDL
-//!    policy: only queries / `EXPLAIN` / `SHOW` / `DESCRIBE` pass. Everything else —
-//!    `CREATE`/`DROP VIEW` (views are Save's artifact: ⌘S wraps the plain query in
-//!    `CREATE OR REPLACE VIEW` itself), `CREATE EXTERNAL TABLE`, CTAS, `INSERT`,
-//!    `COPY`, `SET`, `CREATE DATABASE`/`SCHEMA` and other DDL/DML — gets a policy
+//!    [`SessionState::sql_to_statement`]) and put through the statement router,
+//!    [`classify`], as [`Capability::Editor`]. Queries and introspection run; the
+//!    statements the editor implements itself ([`Verdict::Intercept`] — typed table
+//!    and view DDL, internal tables, `COPY`, `SET`) draw no squiggle and go on to the
+//!    tiers below; the short list still refused ([`Verdict::Refuse`] —
+//!    `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`, unknown kinds) gets a policy
 //!    diagnostic pointing at the right surface instead of a confusing engine error.
 //! 3. **Names** — the native [`resolve`](crate::engine::sql::resolve)r walks the
 //!    parsed AST and reports **every** unknown table/column with a span (the planner
@@ -28,16 +29,20 @@
 //! statement never hides the others' diagnostics.
 
 use std::cmp::Ordering;
-use std::ops::Range;
+use std::ops::{ControlFlow, Range};
+use std::slice;
 
 use datafusion::common::diagnostic::DiagnosticKind;
 use datafusion::common::{DataFusionError, SchemaError, TableReference};
 use datafusion::prelude::SessionContext;
-use datafusion::sql::parser::{DFParserBuilder, Statement as DFStatement};
-use datafusion::sql::sqlparser::ast::{ObjectType, Statement as SqlStatement};
+use datafusion::sql::parser::{CopyToSource, DFParserBuilder, Statement as DFStatement};
+use datafusion::sql::sqlparser::ast::{
+    visit_relations, ObjectName, ObjectType, Statement as SqlStatement, Visit,
+};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion::sql::sqlparser::parser::ParserError;
 
+use crate::engine::query::SNAPSHOT_PREFIX;
 use crate::engine::sql::lex::{
     is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
 };
@@ -151,14 +156,22 @@ pub async fn validate(
                 continue;
             }
         };
-        if let Some(policy) = policy_block(&stmt) {
-            out.push(diag(
-                Severity::Error,
-                policy.editor_message(),
-                leading_keywords_span(&toks, &stmt_range),
-                sql,
-            ));
-            continue;
+        match classify(&stmt, Capability::Editor) {
+            Verdict::Refuse(blocked) => {
+                out.push(diag(
+                    Severity::Error,
+                    blocked.editor_message(),
+                    leading_keywords_span(&toks, &stmt_range),
+                    sql,
+                ));
+                continue;
+            }
+            // An intercepted statement is one the editor *runs*, through an engine
+            // method — so no squiggle, and it falls through to the same name and
+            // semantic tiers a query gets. Planning a DDL statement builds its node
+            // without executing it (execution lives in `execute_logical_plan`), so
+            // typed DDL earns its name-resolution diagnostics for free.
+            Verdict::Intercept(_) | Verdict::Query => {}
         }
         // The native name resolver first: every unknown table/column in the
         // statement, not just the one the planner would fail-fast on. When it
@@ -273,21 +286,71 @@ fn trim_range(sql: &str, range: Range<usize>) -> Option<Range<usize>> {
     (start < end).then_some(start..end)
 }
 
-// ---- managed-DDL policy ----------------------------------------------------
+// ---- the statement router --------------------------------------------------
 
-/// Why the managed-DDL policy refuses a statement — the **classification alone**, so
+/// Which surface is asking — the router's second axis (ED-01).
+///
+/// The **editor** is a full-statement surface: what it cannot run natively it
+/// *intercepts*, implementing the statement as an engine method whose outcome the
+/// store folds. The **agent** surface is read-only, and refuses every non-query with
+/// the classification AA-01 shipped. One classification, two answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Capability {
+    Editor,
+    Agent,
+}
+
+/// What an intercepted statement *is* — [`Verdict::Intercept`]'s payload, and the arm
+/// the dispatcher (ED-02) switches on. Each kind is an engine method rather than a
+/// `ctx.sql` passthrough because each has an outcome the catalog store has to fold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StmtKind {
+    CreateExternalTable,
+    CreateTable,
+    Ctas,
+    Insert,
+    DropTable,
+    CreateView,
+    DropView,
+    Copy,
+    Set,
+    Reset,
+    Prepare,
+    Deallocate,
+    CreateFunction,
+    DropFunction,
+}
+
+/// The router's answer for one parsed statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Runs the snapshot pipeline unchanged.
+    Query,
+    /// The engine implements it; the store folds the outcome.
+    Intercept(StmtKind),
+    /// Refused, with the classification each surface renders its own way.
+    Refuse(Blocked),
+}
+
+/// Why a statement is refused — the **classification alone**, so
 /// each consumer names its own owning surface. The zero-copies rule only needs the
 /// predicate shared: the editor's rendering is [`editor_message`](Blocked::editor_message),
 /// and a headless consumer (the agent tool layer, AA-02) renders the same variant in
 /// its own words — over stdio there is no Table Config pane to be pointed at.
+/// The variants above the split were the whole managed-DDL policy. They stay defined
+/// as **the agent path's error messages** — [`Capability::Agent`] still answers with
+/// each of them verbatim — and are unreachable from the editor, which intercepts every
+/// one of those statements and runs it. They are kept, not pruned: `strata-agent` names
+/// them directly, so a deletion is a compile break rather than a silent rewording.
+/// What the editor still refuses is the short list below them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Blocked {
     CreateExternalTable,
     CopyTo,
     Reset,
-    /// Views are Save's artifact, not the editor's: ⌘S / Save-as-view wraps the
-    /// *plain query* in `CREATE OR REPLACE VIEW` itself, so typed view DDL would
-    /// nest DDL inside the wrapper — blocked toward the real flow.
+    /// Views are Save's artifact on a read-only surface: ⌘S / Save-as-view wraps the
+    /// *plain query* in `CREATE OR REPLACE VIEW` itself. (The editor intercepts typed
+    /// view DDL onto that same funnel; the agent surface keeps the refusal.)
     CreateView,
     DropView,
     /// `DROP` of anything that is not a view.
@@ -299,6 +362,30 @@ pub enum Blocked {
     Set,
     /// Every other DDL/DML form.
     Unsupported,
+
+    // ---- what the editor still refuses (ED-01) ----
+    // `CreateDatabase` and `Unsupported` above are the rest of that list.
+    // Some are a pure function of the parsed statement and are produced by
+    // `classify`; the rest need context the bare statement lacks (an INSERT
+    // target's origin, a SET key's class) and are produced at dispatch. Either
+    // way the wording lives here, so a refusal reads the same wherever it is
+    // decided.
+    /// `INSERT` into an external table or a view — only internal tables take writes.
+    InsertExternal,
+    /// `INSERT OVERWRITE` — no internal-table implementation, and the Arrow sink has none.
+    InsertOverwrite,
+    /// `SET` of a key Strata owns (`is_owned_key`).
+    SetOwned,
+    /// `SET datafusion.runtime.*` — a restart-scoped key, so Settings owns it.
+    SetRuntime,
+    /// `SET datafusion.format.*` — display keys, which the grid and the chart read
+    /// from the Settings store.
+    SetFormat,
+    /// `PREPARE` of a non-query body: `verify_plan` cannot see through the later
+    /// `EXECUTE`, so the fence is here.
+    PrepareNonQuery,
+    /// A `__snap_`-prefixed identifier in an intercepted statement, read or written.
+    ReservedName,
 }
 
 impl Blocked {
@@ -337,21 +424,65 @@ impl Blocked {
                 "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and \
                  DESCRIBE can run here"
             }
+            Blocked::InsertExternal => {
+                "INSERT targets internal tables. Load external table data through Table Config"
+            }
+            Blocked::InsertOverwrite => {
+                "INSERT OVERWRITE is not supported. Drop the table and recreate it with \
+                 CREATE TABLE AS"
+            }
+            Blocked::SetOwned => "This option is managed by Strata and cannot be set",
+            Blocked::SetRuntime => "Engine runtime options are set in Settings",
+            Blocked::SetFormat => "Display options are set in Settings",
+            Blocked::PrepareNonQuery => "PREPARE supports queries only",
+            Blocked::ReservedName => "Names starting with '__snap_' are reserved for query results",
         }
         .into()
     }
 }
 
-/// The managed-DDL policy verdict for one parsed statement: `None` = the editor may
-/// run (or Save may capture) it; `Some(blocked)` = refused, with the classification
-/// each surface renders its own way. Matching the *parsed* statement keeps this a
-/// general classification, not a leading-keyword sniff.
-fn policy_block(stmt: &DFStatement) -> Option<Blocked> {
+/// The router: how `cap` should treat one parsed statement.
+///
+/// Matching the *parsed* statement keeps this a general classification, not a
+/// leading-keyword sniff, and it is a pure function of that statement — a refusal
+/// needing context the statement does not carry (an INSERT target's origin, a SET
+/// key's class) is the dispatcher's, decided with the same [`Blocked`] vocabulary.
+pub fn classify(stmt: &DFStatement, cap: Capability) -> Verdict {
+    let (editor, agent) = classify_form(stmt);
+    match cap {
+        // Reserved names, read and write: a `__snap_` identifier anywhere in a
+        // statement the editor would run itself is refused before it can collide with
+        // a live snapshot registration (`register_table` is last-write-wins, and the
+        // same prefix hides the collision from every catalog reader). The agent column
+        // is untouched — it already refuses every intercepted form, with its own words.
+        Capability::Editor => match editor {
+            Verdict::Intercept(_) if names_reserved(stmt) => Verdict::Refuse(Blocked::ReservedName),
+            verdict => verdict,
+        },
+        Capability::Agent => match agent {
+            Some(blocked) => Verdict::Refuse(blocked),
+            None => Verdict::Query,
+        },
+    }
+}
+
+/// One statement form's two answers: `(what the editor does, what the agent surface
+/// refuses it as)`, where `None` is the agent's read-only pass.
+///
+/// The capability axis is a **column of the same match arm**, never a second
+/// traversal: an arm cannot answer one surface and forget the other, and the agent
+/// column is AA-01's shipped answer written beside the editor's new one — which is
+/// what makes the parity matrix a test of a table rather than of two functions
+/// staying in step. The agent never intercepts, and the type says so.
+fn classify_form(stmt: &DFStatement) -> (Verdict, Option<Blocked>) {
     let s = match stmt {
-        DFStatement::CreateExternalTable(_) => return Some(Blocked::CreateExternalTable),
-        DFStatement::CopyTo(_) => return Some(Blocked::CopyTo),
-        DFStatement::Reset(_) => return Some(Blocked::Reset),
-        DFStatement::Explain(_) => return None,
+        // Typed registration is the second gesture into Table Config's own funnel.
+        DFStatement::CreateExternalTable(_) => {
+            return intercept(StmtKind::CreateExternalTable, Blocked::CreateExternalTable)
+        }
+        DFStatement::CopyTo(_) => return intercept(StmtKind::Copy, Blocked::CopyTo),
+        DFStatement::Reset(_) => return intercept(StmtKind::Reset, Blocked::Reset),
+        DFStatement::Explain(_) => return runnable(),
         DFStatement::Statement(s) => s.as_ref(),
     };
     match s {
@@ -365,20 +496,116 @@ fn policy_block(stmt: &DFStatement) -> Option<Blocked> {
         | SqlStatement::ShowVariable { .. }
         | SqlStatement::ShowVariables { .. }
         | SqlStatement::ShowDatabases { .. }
-        | SqlStatement::ShowSchemas { .. } => None,
-        SqlStatement::CreateView(_) => Some(Blocked::CreateView),
+        | SqlStatement::ShowSchemas { .. } => runnable(),
+        // `EXECUTE` rides the snapshot pipeline whole — safe because `PREPARE` fenced
+        // the inner plan. The agent surface cannot `PREPARE`, so `EXECUTE` is nothing
+        // it can name, and it keeps the wildcard answer it shipped with.
+        SqlStatement::Execute { .. } => (Verdict::Query, Some(Blocked::Unsupported)),
+        SqlStatement::CreateView(_) => intercept(StmtKind::CreateView, Blocked::CreateView),
         SqlStatement::Drop { object_type, .. } => match object_type {
-            ObjectType::View => Some(Blocked::DropView),
-            _ => Some(Blocked::Drop),
+            ObjectType::View => intercept(StmtKind::DropView, Blocked::DropView),
+            ObjectType::Table => intercept(StmtKind::DropTable, Blocked::Drop),
+            _ => refuse(Blocked::Drop),
         },
-        SqlStatement::CreateTable(_) => Some(Blocked::CreateTable),
-        SqlStatement::Insert(_) => Some(Blocked::Insert),
-        SqlStatement::CreateDatabase { .. } | SqlStatement::CreateSchema { .. } => {
-            Some(Blocked::CreateDatabase)
+        // CTAS and a bare column list are different engine methods — one spools a
+        // query, the other writes an empty schema-carrying file — so they are named
+        // apart here rather than re-derived at dispatch.
+        SqlStatement::CreateTable(create) if create.query.is_some() => {
+            intercept(StmtKind::Ctas, Blocked::CreateTable)
         }
-        SqlStatement::Set(_) => Some(Blocked::Set),
-        _ => Some(Blocked::Unsupported),
+        SqlStatement::CreateTable(_) => intercept(StmtKind::CreateTable, Blocked::CreateTable),
+        SqlStatement::Insert(insert) if insert.overwrite => (
+            Verdict::Refuse(Blocked::InsertOverwrite),
+            Some(Blocked::Insert),
+        ),
+        SqlStatement::Insert(_) => intercept(StmtKind::Insert, Blocked::Insert),
+        SqlStatement::CreateDatabase { .. } | SqlStatement::CreateSchema { .. } => {
+            refuse(Blocked::CreateDatabase)
+        }
+        SqlStatement::Set(_) => intercept(StmtKind::Set, Blocked::Set),
+        SqlStatement::Prepare { statement, .. } => match statement.as_ref() {
+            SqlStatement::Query(_) => intercept(StmtKind::Prepare, Blocked::Unsupported),
+            _ => (
+                Verdict::Refuse(Blocked::PrepareNonQuery),
+                Some(Blocked::Unsupported),
+            ),
+        },
+        SqlStatement::Deallocate { .. } => intercept(StmtKind::Deallocate, Blocked::Unsupported),
+        SqlStatement::CreateFunction(_) => {
+            intercept(StmtKind::CreateFunction, Blocked::Unsupported)
+        }
+        SqlStatement::DropFunction(_) => intercept(StmtKind::DropFunction, Blocked::Unsupported),
+        _ => refuse(Blocked::Unsupported),
     }
+}
+
+/// A form both surfaces run.
+fn runnable() -> (Verdict, Option<Blocked>) {
+    (Verdict::Query, None)
+}
+
+/// A form the editor implements as `kind` and the agent surface refuses as `agent`.
+fn intercept(kind: StmtKind, agent: Blocked) -> (Verdict, Option<Blocked>) {
+    (Verdict::Intercept(kind), Some(agent))
+}
+
+/// A form both surfaces refuse, identically.
+fn refuse(blocked: Blocked) -> (Verdict, Option<Blocked>) {
+    (Verdict::Refuse(blocked), Some(blocked))
+}
+
+/// Whether `stmt` names a snapshot-reserved table — one it reads, or one it writes.
+///
+/// The read half keeps a typed `COPY (SELECT * FROM __snap_3) TO …` from writing
+/// `__strata_ord` into a user's file; the write half keeps `CREATE TABLE __snap_2` and
+/// friends off the namespace a Run mints into. sqlparser's own `visit_relations` covers
+/// the reads and the two sqlparser targets upstream annotates (`CREATE TABLE`'s name
+/// and `INSERT`'s), but `CREATE VIEW`'s name and `DROP`'s name list carry no
+/// annotation — and DataFusion's own extension statements are outside the visitor
+/// entirely — so those targets are named here rather than assumed.
+fn names_reserved(stmt: &DFStatement) -> bool {
+    match stmt {
+        DFStatement::CreateExternalTable(create) => is_reserved(&create.name),
+        DFStatement::CopyTo(copy) => match &copy.source {
+            CopyToSource::Relation(name) => is_reserved(name),
+            CopyToSource::Query(query) => reads_reserved(query.as_ref()),
+        },
+        DFStatement::Statement(s) => {
+            let targets: &[ObjectName] = match s.as_ref() {
+                SqlStatement::CreateView(view) => slice::from_ref(&view.name),
+                SqlStatement::Drop { names, .. } => names,
+                _ => &[],
+            };
+            targets.iter().any(is_reserved) || reads_reserved(s.as_ref())
+        }
+        // Never intercepted (`EXPLAIN`), or naming nothing (`RESET`).
+        DFStatement::Explain(_) | DFStatement::Reset(_) => false,
+    }
+}
+
+/// Whether any relation `node` reads carries the snapshot prefix.
+fn reads_reserved<V: Visit>(node: &V) -> bool {
+    visit_relations(node, |name| {
+        if is_reserved(name) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .is_break()
+}
+
+/// Whether any part of `name` carries the snapshot prefix. Case-folded, because the
+/// one namespace is case-insensitive and `__SNAP_2` is the same table.
+fn is_reserved(name: &ObjectName) -> bool {
+    name.0.iter().any(|part| {
+        part.as_ident().is_some_and(|ident| {
+            ident
+                .value
+                .to_ascii_lowercase()
+                .starts_with(SNAPSHOT_PREFIX)
+        })
+    })
 }
 
 /// One statement the managed-DDL policy refuses — [`policy_verdicts`]' per-statement
@@ -400,9 +627,10 @@ pub struct PolicyRefusal {
 /// The managed-DDL policy over `sql`, standing alone: parse the input with this
 /// session's own dialect and recursion limit (the same resolution
 /// `SessionState::sql_to_statement` performs) and return a [`PolicyRefusal`] for every
-/// statement the policy blocks. This and [`validate`] consume the same [`policy_block`],
-/// so a pre-dispatch gate (the agent tool layer, AA-01) and the editor's diagnostics can
-/// never disagree — one predicate, two consumers, zero copies.
+/// statement [`Capability::Agent`] refuses. The agent gate's whole reading of the
+/// policy, and a thin one: this and [`validate`] consume the same [`classify`], one
+/// capability apart, so the two surfaces can never disagree about a form — one
+/// predicate, two consumers, zero copies.
 ///
 /// **`Err` means the input could not be judged, and the gate fails closed.** The input
 /// does not parse (or the configured dialect is unknown), so the caller refuses dispatch
@@ -424,12 +652,13 @@ pub fn policy_verdicts(ctx: &SessionContext, sql: &str) -> Result<Vec<PolicyRefu
     Ok(statements
         .into_iter()
         .enumerate()
-        .filter_map(|(index, stmt)| {
-            policy_block(&stmt).map(|blocked| PolicyRefusal {
+        .filter_map(|(index, stmt)| match classify(&stmt, Capability::Agent) {
+            Verdict::Refuse(blocked) => Some(PolicyRefusal {
                 index,
                 statement: stmt.to_string(),
                 blocked,
-            })
+            }),
+            Verdict::Query | Verdict::Intercept(_) => None,
         })
         .collect())
 }
@@ -822,6 +1051,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionConfig;
+    use datafusion::sql::sqlparser::dialect::GenericDialect;
     use futures::executor::block_on;
     use std::sync::Arc;
 
@@ -1175,69 +1405,299 @@ mod tests {
     }
 
     #[test]
-    fn policy_blocks_managed_ddl_with_guidance() {
-        let sql = "CREATE EXTERNAL TABLE x STORED AS PARQUET LOCATION 'f.parquet'";
-        let out = run(sql);
-        assert_eq!(out.len(), 1);
-        assert!(
-            out[0].message.contains("Table Config"),
-            "{}",
-            out[0].message
-        );
-        assert_eq!(spanned(sql, &out[0]), "CREATE EXTERNAL TABLE");
-
-        let out = run("INSERT INTO t VALUES (3, 'c')");
-        assert_eq!(out.len(), 1);
-        assert!(out[0].message.contains("INSERT"), "{}", out[0].message);
-
-        let out = run("CREATE TABLE copy_t AS SELECT * FROM t");
-        assert_eq!(out.len(), 1);
-        assert!(
-            out[0].message.contains("Table Config"),
-            "{}",
-            out[0].message
-        );
-
+    fn the_editor_squiggles_what_the_router_still_refuses() {
         let out = run("CREATE DATABASE other");
         assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, Blocked::CreateDatabase.editor_message());
 
-        let out = run("SET datafusion.execution.batch_size = 1024");
-        assert_eq!(out.len(), 1);
-        assert!(out[0].message.contains("Settings"), "{}", out[0].message);
+        // A refusal underlines the statement's leading keyword run, not the statement.
+        let sql = "DELETE FROM t";
+        let out = run(sql);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].message, Blocked::Unsupported.editor_message());
+        assert_eq!(spanned(sql, &out[0]), "DELETE FROM");
+
+        // The refusals inside otherwise-intercepted forms.
+        let out = run("INSERT OVERWRITE INTO t VALUES (3, 'c')");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].message, Blocked::InsertOverwrite.editor_message());
+
+        let out = run("PREPARE p AS INSERT INTO t VALUES (3, 'c')");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].message, Blocked::PrepareNonQuery.editor_message());
     }
 
+    /// The statements the editor now runs itself draw no policy squiggle — the whole
+    /// point of the `Intercept` verdict, and the thing a `Refuse` used to hide.
     #[test]
-    fn view_ddl_is_blocked_toward_the_save_flow() {
-        // Views are Save's artifact: ⌘S wraps the *plain query* in CREATE OR REPLACE
-        // VIEW itself, so typed view DDL is blocked like the rest of the managed DDL.
-        let sql = "CREATE VIEW v AS SELECT id FROM t";
-        let out = run(sql);
-        assert_eq!(out.len(), 1);
-        assert!(out[0].message.contains("Save"), "{}", out[0].message);
-        assert_eq!(spanned(sql, &out[0]), "CREATE VIEW");
+    fn an_intercepted_statement_gets_no_squiggle() {
+        for sql in [
+            "CREATE EXTERNAL TABLE x STORED AS PARQUET LOCATION 'f.parquet'",
+            "CREATE TABLE copy_t AS SELECT * FROM t",
+            "CREATE TABLE cols (id BIGINT)",
+            "INSERT INTO t VALUES (3, 'c')",
+            "DROP TABLE t",
+            "CREATE VIEW v AS SELECT id FROM t",
+            "DROP VIEW IF EXISTS v",
+            "COPY t TO 'out.parquet'",
+            "SET datafusion.execution.batch_size = 1024",
+            "RESET datafusion.execution.batch_size",
+            "PREPARE p AS SELECT id FROM t",
+            "DEALLOCATE p",
+        ] {
+            assert!(run(sql).is_empty(), "{sql}: {:?}", run(sql));
+        }
+    }
 
-        let out = run("DROP VIEW IF EXISTS v");
-        assert_eq!(out.len(), 1);
-        assert!(out[0].message.contains("catalog"), "{}", out[0].message);
+    /// Interception is not a bypass: an intercepted statement falls through to the
+    /// name and semantic tiers exactly as a query does, so typed DDL gets the same
+    /// unknown-table diagnostic a `SELECT` would.
+    #[test]
+    fn an_intercepted_statement_still_gets_name_diagnostics() {
+        let out = run("CREATE TABLE copy_t AS SELECT * FROM nope");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].is_error());
+        assert!(
+            out[0].message.to_lowercase().contains("nope"),
+            "{}",
+            out[0].message
+        );
+    }
+
+    /// Reserved names, both halves: a `__snap_` identifier in a statement the editor
+    /// would run itself is refused before it can collide with a live snapshot
+    /// registration (which is last-write-wins, and invisible behind the same prefix).
+    #[test]
+    fn a_snapshot_name_is_refused_in_an_intercepted_statement() {
+        for sql in [
+            // Written.
+            "CREATE EXTERNAL TABLE __snap_2 STORED AS PARQUET LOCATION 'f.parquet'",
+            "CREATE TABLE __snap_2 AS SELECT * FROM t",
+            "CREATE TABLE __SNAP_2 (id BIGINT)",
+            "CREATE VIEW __snap_2 AS SELECT id FROM t",
+            "INSERT INTO __snap_2 VALUES (3, 'c')",
+            "DROP TABLE __snap_2",
+            "DROP VIEW __snap_2",
+            // Read.
+            "CREATE TABLE mine AS SELECT * FROM __snap_3",
+            "COPY (SELECT * FROM __snap_3) TO 'out.parquet'",
+            "COPY __snap_3 TO 'out.parquet'",
+        ] {
+            let out = run(sql);
+            assert_eq!(out.len(), 1, "{sql}: {out:?}");
+            assert_eq!(
+                out[0].message,
+                Blocked::ReservedName.editor_message(),
+                "{sql}"
+            );
+        }
+        // A query may still read one — snapshots are how results are addressed at all,
+        // and only the intercepted forms can write or export through the prefix.
+        assert!(run("SELECT 1 FROM __snap_3")
+            .iter()
+            .all(|d| d.message != Blocked::ReservedName.editor_message()));
+    }
+
+    // ---- the capability axis (ED-01) ---------------------------------------
+
+    /// The one parsed statement in `sql`.
+    fn parse_one(sql: &str) -> DFStatement {
+        let mut stmts = DFParserBuilder::new(sql)
+            .with_dialect(&GenericDialect {})
+            .build()
+            .expect("builds")
+            .parse_statements()
+            .expect("parses");
+        assert_eq!(stmts.len(), 1, "{sql}");
+        stmts.pop_back().unwrap()
+    }
+
+    /// The parity matrix: for every statement form, `Capability::Agent` is the answer
+    /// AA-01 shipped — same variant, so same rendered message — beside the editor's
+    /// new one. This table *is* the claim that adding the axis changed the agent
+    /// surface by not one byte.
+    #[test]
+    fn the_capability_axis_keeps_the_agent_surfaces_answers() {
+        for (sql, editor, agent) in [
+            ("SELECT * FROM t", Verdict::Query, Verdict::Query),
+            ("EXPLAIN SELECT * FROM t", Verdict::Query, Verdict::Query),
+            ("SHOW TABLES", Verdict::Query, Verdict::Query),
+            ("DESCRIBE t", Verdict::Query, Verdict::Query),
+            (
+                "CREATE EXTERNAL TABLE x STORED AS PARQUET LOCATION 'f.parquet'",
+                Verdict::Intercept(StmtKind::CreateExternalTable),
+                Verdict::Refuse(Blocked::CreateExternalTable),
+            ),
+            (
+                "CREATE TABLE copy_t AS SELECT * FROM t",
+                Verdict::Intercept(StmtKind::Ctas),
+                Verdict::Refuse(Blocked::CreateTable),
+            ),
+            (
+                "CREATE TABLE cols (id BIGINT)",
+                Verdict::Intercept(StmtKind::CreateTable),
+                Verdict::Refuse(Blocked::CreateTable),
+            ),
+            (
+                "INSERT INTO t VALUES (3, 'c')",
+                Verdict::Intercept(StmtKind::Insert),
+                Verdict::Refuse(Blocked::Insert),
+            ),
+            (
+                "INSERT OVERWRITE INTO t VALUES (3, 'c')",
+                Verdict::Refuse(Blocked::InsertOverwrite),
+                Verdict::Refuse(Blocked::Insert),
+            ),
+            (
+                "DROP TABLE t",
+                Verdict::Intercept(StmtKind::DropTable),
+                Verdict::Refuse(Blocked::Drop),
+            ),
+            (
+                "DROP SCHEMA s",
+                Verdict::Refuse(Blocked::Drop),
+                Verdict::Refuse(Blocked::Drop),
+            ),
+            (
+                "CREATE VIEW v AS SELECT id FROM t",
+                Verdict::Intercept(StmtKind::CreateView),
+                Verdict::Refuse(Blocked::CreateView),
+            ),
+            (
+                "DROP VIEW IF EXISTS v",
+                Verdict::Intercept(StmtKind::DropView),
+                Verdict::Refuse(Blocked::DropView),
+            ),
+            (
+                "COPY t TO 'out.parquet'",
+                Verdict::Intercept(StmtKind::Copy),
+                Verdict::Refuse(Blocked::CopyTo),
+            ),
+            (
+                "SET datafusion.execution.batch_size = 1024",
+                Verdict::Intercept(StmtKind::Set),
+                Verdict::Refuse(Blocked::Set),
+            ),
+            (
+                "RESET datafusion.execution.batch_size",
+                Verdict::Intercept(StmtKind::Reset),
+                Verdict::Refuse(Blocked::Reset),
+            ),
+            (
+                "PREPARE p AS SELECT id FROM t",
+                Verdict::Intercept(StmtKind::Prepare),
+                Verdict::Refuse(Blocked::Unsupported),
+            ),
+            (
+                "PREPARE p AS INSERT INTO t VALUES (3, 'c')",
+                Verdict::Refuse(Blocked::PrepareNonQuery),
+                Verdict::Refuse(Blocked::Unsupported),
+            ),
+            // EXECUTE rides the snapshot pipeline for the editor; the agent surface
+            // cannot PREPARE, so it keeps the wildcard refusal it shipped with.
+            (
+                "EXECUTE p",
+                Verdict::Query,
+                Verdict::Refuse(Blocked::Unsupported),
+            ),
+            (
+                "DEALLOCATE p",
+                Verdict::Intercept(StmtKind::Deallocate),
+                Verdict::Refuse(Blocked::Unsupported),
+            ),
+            (
+                "CREATE FUNCTION f(BIGINT) RETURNS BIGINT RETURN $1 + 1",
+                Verdict::Intercept(StmtKind::CreateFunction),
+                Verdict::Refuse(Blocked::Unsupported),
+            ),
+            (
+                "DROP FUNCTION f",
+                Verdict::Intercept(StmtKind::DropFunction),
+                Verdict::Refuse(Blocked::Unsupported),
+            ),
+            (
+                "CREATE DATABASE other",
+                Verdict::Refuse(Blocked::CreateDatabase),
+                Verdict::Refuse(Blocked::CreateDatabase),
+            ),
+            (
+                "CREATE SCHEMA other",
+                Verdict::Refuse(Blocked::CreateDatabase),
+                Verdict::Refuse(Blocked::CreateDatabase),
+            ),
+            (
+                "UPDATE t SET name = 'x'",
+                Verdict::Refuse(Blocked::Unsupported),
+                Verdict::Refuse(Blocked::Unsupported),
+            ),
+            (
+                "DELETE FROM t",
+                Verdict::Refuse(Blocked::Unsupported),
+                Verdict::Refuse(Blocked::Unsupported),
+            ),
+            // A reserved name is the editor's refusal alone: the agent already refuses
+            // the form, and with the words it has always used.
+            (
+                "CREATE TABLE __snap_2 AS SELECT * FROM t",
+                Verdict::Refuse(Blocked::ReservedName),
+                Verdict::Refuse(Blocked::CreateTable),
+            ),
+        ] {
+            let stmt = parse_one(sql);
+            assert_eq!(classify(&stmt, Capability::Editor), editor, "{sql}");
+            assert_eq!(classify(&stmt, Capability::Agent), agent, "{sql}");
+        }
+    }
+
+    /// The read-only claim, structurally: whatever the editor implements itself, the
+    /// agent surface refuses. No form may become runnable there by growing an
+    /// interception.
+    #[test]
+    fn the_agent_surface_refuses_everything_the_editor_intercepts() {
+        for sql in [
+            "CREATE EXTERNAL TABLE x STORED AS PARQUET LOCATION 'f.parquet'",
+            "CREATE TABLE copy_t AS SELECT * FROM t",
+            "CREATE TABLE cols (id BIGINT)",
+            "INSERT INTO t VALUES (3, 'c')",
+            "DROP TABLE t",
+            "CREATE VIEW v AS SELECT id FROM t",
+            "DROP VIEW IF EXISTS v",
+            "COPY t TO 'out.parquet'",
+            "SET datafusion.execution.batch_size = 1024",
+            "RESET datafusion.execution.batch_size",
+            "PREPARE p AS SELECT id FROM t",
+            "DEALLOCATE p",
+            "CREATE FUNCTION f(BIGINT) RETURNS BIGINT RETURN $1 + 1",
+            "DROP FUNCTION f",
+        ] {
+            let stmt = parse_one(sql);
+            assert!(
+                matches!(classify(&stmt, Capability::Editor), Verdict::Intercept(_)),
+                "{sql} must be intercepted"
+            );
+            assert!(
+                matches!(classify(&stmt, Capability::Agent), Verdict::Refuse(_)),
+                "{sql} must be refused for the agent"
+            );
+        }
     }
 
     // ---- the standalone policy gate (AA-01) --------------------------------
 
-    /// The zero-copies claim, made executable: for every blocked form, the gate's
-    /// classification renders byte-for-byte the message the editor's diagnostic shows
-    /// for the same SQL — one `policy_block`, one `editor_message`, two consumers.
+    /// The zero-copies claim, made executable: for every form **both** surfaces
+    /// refuse, the gate's classification renders byte-for-byte the message the
+    /// editor's diagnostic shows for the same SQL — one `classify`, one
+    /// `editor_message`, two consumers. (Where the two now diverge, the divergence
+    /// itself is pinned by `the_capability_axis_keeps_the_agent_surfaces_answers`.)
     #[test]
     fn the_gate_and_the_editor_refuse_with_the_same_words() {
         let ctx = ctx();
         for sql in [
-            "CREATE EXTERNAL TABLE x STORED AS PARQUET LOCATION 'f.parquet'",
-            "CREATE TABLE copy_t AS SELECT * FROM t",
-            "INSERT INTO t VALUES (3, 'c')",
-            "COPY t TO 'out.parquet'",
-            "SET datafusion.execution.batch_size = 1024",
-            "CREATE VIEW v AS SELECT id FROM t",
-            "DROP VIEW IF EXISTS v",
             "CREATE DATABASE other",
+            "CREATE SCHEMA other",
+            "DROP SCHEMA s",
+            "UPDATE t SET name = 'x'",
+            "DELETE FROM t",
         ] {
             let verdicts = policy_verdicts(&ctx, sql).expect("parses");
             assert_eq!(verdicts.len(), 1, "{sql}");
@@ -1309,17 +1769,24 @@ mod tests {
         assert_eq!(out[0].blocked, Blocked::Insert);
     }
 
+    /// The dry-plan reaches typed DDL now that the editor intercepts it rather than
+    /// refusing it — and planning a DDL statement must still build its node without
+    /// executing it (execution lives only in `execute_logical_plan`). This is the
+    /// pin on that: the tier-4 pass runs, reports nothing, and creates nothing.
     #[test]
     fn validation_never_mutates_the_session() {
         let ctx = ctx();
-        let out = block_on(validate(
-            &ctx,
-            &FunctionCatalog::default(),
+        for sql in [
             "CREATE VIEW v AS SELECT id FROM t",
-        ));
-        assert_eq!(out.len(), 1);
-        // Validating the CREATE VIEW must not have created it.
+            "CREATE TABLE made AS SELECT id FROM t",
+            "DROP TABLE t",
+        ] {
+            let out = block_on(validate(&ctx, &FunctionCatalog::default(), sql));
+            assert!(out.is_empty(), "{sql}: {out:?}");
+        }
         assert!(!ctx.table_exist("v").unwrap());
+        assert!(!ctx.table_exist("made").unwrap());
+        assert!(ctx.table_exist("t").unwrap());
     }
 
     #[test]
