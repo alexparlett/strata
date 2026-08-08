@@ -35,10 +35,10 @@ built only the local arm of each.
 
 ## What Connections 02 handed over
 
-- **`provider_label`** is written now, in `views/sidebar/connections/mod.rs` — the `S3` / `GCS` /
-  `HTTP` names the pane's badge wears. This picker is the second surface that has to agree with it,
-  so **move it** somewhere both can read (`strata_model::Provider` is the obvious home) rather than
-  typing the three strings again.
+- **The provider's name is `impl Display for Provider`** (`strata-model`) — `S3` / `GCS` / `HTTP`,
+  which the pane's badge already reads. This picker is the second surface that has to agree, so
+  read it there rather than typing the three strings again. Not `Provider::scheme`, which is the
+  URL's word (`gs`, `https`) and belongs to the registry.
 - **Forget's confirm makes no consequence claim**, because today nothing can read a bucket: the
   body is "Removes the object store from this project. Nothing in the bucket is deleted." The
   moment a table's sources can name a connection, that stops being the whole truth — give

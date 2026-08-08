@@ -63,7 +63,7 @@ use freya::components::{
 };
 use freya::prelude::*;
 use freya::radio::use_radio;
-use strata_model::{ConnectionDef, Provider};
+use strata_model::ConnectionDef;
 
 use crate::apps::project::state::{ProjChan, ProjectState, Reg};
 use crate::apps::project::views::DropTarget;
@@ -134,17 +134,6 @@ impl Status {
             Reg::Ready(()) => Self::Connected,
             Reg::Failed(why) => Self::Refused(why.clone()),
         }
-    }
-}
-
-/// The provider badge's label — `S3` / `GCS` / `HTTP`, per the spec's "labelled outline, not one
-/// shared cloud glyph". Deliberately not [`Provider::scheme`]: that is the URL's word (`gs`,
-/// `https`) and this is the product's.
-fn provider_label(provider: &Provider) -> &'static str {
-    match provider {
-        Provider::S3(_) => "S3",
-        Provider::Gcs(_) => "GCS",
-        Provider::Http => "HTTP",
     }
 }
 
@@ -326,12 +315,13 @@ impl Component for ConnectionRow {
                 ContextMenu::open(menu_for_row());
             })
             .child(
-                Badge::tag(
-                    provider_label(&self.def.provider),
-                    self.theme.provider_color,
-                )
-                .outlined()
-                .height(16.),
+                // `Display`, not a label function here: the Configure window's connection
+                // picker (W7 · 04) has to name providers the same way, and the badge is only
+                // the first surface to ask. `S3` / `GCS` / `HTTP` — the product's name, never
+                // `Provider::scheme`'s URL word.
+                Badge::tag(self.def.provider.to_string(), self.theme.provider_color)
+                    .outlined()
+                    .height(16.),
             )
             // The bucket absorbs the slack and truncates, so the status run and the ⋮ stay
             // visible however long it is named — the catalog entry row's arrangement exactly.

@@ -13,6 +13,8 @@
 //! There is no arm for a secret, anywhere in this module. That is the enforcement: an
 //! access-key field cannot be added without adding a variant that says so out loud.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// One project-scoped connection: the bucket it names, and the provider that serves it.
@@ -75,6 +77,24 @@ impl Provider {
             Self::Gcs(_) => "gs",
             Self::Http => "https",
         }
+    }
+}
+
+/// How a provider is **named to the user** — `S3` / `GCS` / `HTTP`.
+///
+/// Deliberately not [`scheme`](Provider::scheme), which is the URL's word (`gs`, `https`) and
+/// belongs to the registry rather than to a reader. The two say different things about the same
+/// value and both are needed, which is why the product's name lives here and not at whichever
+/// surface happened to want it first: the Connections pane's row badge and the Configure
+/// window's connection picker (W7 · 04) have to agree, and a name typed twice is a name that
+/// can disagree.
+impl fmt::Display for Provider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::S3(_) => "S3",
+            Self::Gcs(_) => "GCS",
+            Self::Http => "HTTP",
+        })
     }
 }
 
@@ -166,6 +186,21 @@ mod tests {
             .url(),
             "https://example.com:8080"
         );
+    }
+
+    /// The product's name and the URL's word are different strings for the same provider, and
+    /// both are load-bearing: the badge says `GCS` where the registry key says `gs`. Pinned so a
+    /// later edit cannot quietly collapse one into the other.
+    #[test]
+    fn a_provider_is_named_for_the_reader_and_schemed_for_the_registry() {
+        for (provider, name, scheme) in [
+            (Provider::S3(S3Store::default()), "S3", "s3"),
+            (Provider::Gcs(GcsStore::default()), "GCS", "gs"),
+            (Provider::Http, "HTTP", "https"),
+        ] {
+            assert_eq!(provider.to_string(), name);
+            assert_eq!(provider.scheme(), scheme);
+        }
     }
 
     #[test]

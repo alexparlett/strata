@@ -215,16 +215,41 @@ pub struct ProjectState {
 /// diagnostics have, reached a different way.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RegistrationFault {
-    /// What kind of def it is — the row says "connection", "table" or "view" rather than
-    /// making the user infer it from the name.
-    ///
-    /// A plain noun and not a [`CatalogKind`], because a connection is not one: it registers
-    /// beside the catalog and fails exactly like it, but it is an object store rather than a
-    /// member of the SQL namespace, and there is no third thing this field is used for.
-    pub noun: &'static str,
+    /// What kind of def it is — the row says which rather than making the user infer it from
+    /// the name.
+    pub kind: FaultKind,
     pub name: String,
     /// What the engine said. P3-07's wording, the same text the catalog row's triangle carries.
     pub why: String,
+}
+
+/// What kind of def a [`RegistrationFault`] is about.
+///
+/// Its own closed vocabulary rather than [`CatalogKind`], because a **connection** is not one:
+/// it registers beside the catalog and fails in exactly the same shape, but it is an object
+/// store rather than a member of the SQL namespace, so it has no place in the enum that
+/// `dependent_views` and `name_in_use` dispatch on. Saved queries go the other way — they are
+/// a `CatalogKind` and can never be a fault, because a stored string is never registered.
+///
+/// A type and not a noun string: the set is closed, the drawer dispatches on it, and a
+/// `&'static str` would put the rendering of these three words at whichever call site got there
+/// first.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FaultKind {
+    Connection,
+    Table,
+    View,
+}
+
+impl FaultKind {
+    /// How a row refers to it — the Problems drawer's trailing tag.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Connection => "connection",
+            Self::Table => "table",
+            Self::View => "view",
+        }
+    }
 }
 
 impl ProjectState {
@@ -243,21 +268,21 @@ impl ProjectState {
     pub fn registration_faults(&self) -> Vec<RegistrationFault> {
         let connections = self.connections.iter().filter_map(|r| {
             r.reg.error().map(|why| RegistrationFault {
-                noun: "connection",
+                kind: FaultKind::Connection,
                 name: r.def.url(),
                 why: why.to_string(),
             })
         });
         let tables = self.tables.iter().filter_map(|r| {
             r.reg.error().map(|why| RegistrationFault {
-                noun: "table",
+                kind: FaultKind::Table,
                 name: r.def.name.clone(),
                 why: why.to_string(),
             })
         });
         let views = self.views.iter().filter_map(|r| {
             r.reg.error().map(|why| RegistrationFault {
-                noun: "view",
+                kind: FaultKind::View,
                 name: r.def.name.clone(),
                 why: why.to_string(),
             })
@@ -1732,9 +1757,12 @@ mod tests {
         assert_eq!(
             faults
                 .iter()
-                .map(|f| (f.noun, f.name.as_str()))
+                .map(|f| (f.kind, f.name.as_str()))
                 .collect::<Vec<_>>(),
-            [("connection", "s3://lake"), ("table", "orders")]
+            [
+                (FaultKind::Connection, "s3://lake"),
+                (FaultKind::Table, "orders")
+            ]
         );
         assert_eq!(faults[0].why, "This S3 connection needs a region.");
         assert_eq!(

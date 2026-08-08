@@ -28,9 +28,12 @@ The rail entry point + the sidebar pane to manage connections.
   connections → tables → views, which is registration order, so anything broken *by* a connection
   reads below its cause. This is the other half of the probe in `engine::store::connect`: without
   the row, a bucket with no credentials fills the drawer with signing failures on its *tables* and
-  says nothing about the one thing that is wrong. `RegistrationFault::kind: CatalogKind` became
-  `noun: &'static str` — a connection is not a `CatalogKind`, and the field's only use was the
-  drawer's tag.
+  says nothing about the one thing that is wrong. `RegistrationFault::kind` is now a
+  **`FaultKind`** (`Connection` / `Table` / `View`) rather than a `CatalogKind`: a connection
+  registers beside the catalog and fails in the same shape, but it is an object store and has no
+  place in the enum `dependent_views` and `name_in_use` dispatch on. The drawer carries it
+  through as `ProblemTag::{NotSaved, Refused(FaultKind)}`, so both families stay a type all the
+  way to the badge rather than becoming a rendered word early.
 - **Forget is the shared confirm's fourth `DropTarget`, not a dialog of its own.** `kind()` is now
   `Option<CatalogKind>`; a connection returns `None`, so no dependency list is asked for. Nothing
   can read an object store *by name*, so there is no consequence line — see the note in 04.
