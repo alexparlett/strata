@@ -18,7 +18,7 @@ use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_model::{ConnectionDef, Provider, ProviderId, S3Store};
 
-use super::views::{ConnectionBody, Footer};
+use super::views::{ConnectionBody, Footer, OPTION_KEY_WIDTH};
 use super::{ConnectionCtx, ConnectionDraft, ConnectionTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{CatalogState, Log, PersistFaults, ProjChan, ProjectState, ScanRequest};
@@ -116,6 +116,18 @@ fn texts(runner: &TestingRunner) -> Vec<String> {
 
 fn shows(runner: &TestingRunner, text: &str) -> bool {
     texts(runner).iter().any(|t| t == text)
+}
+
+/// The laid-out box of the text run `text` — for the assertions that are about *geometry* rather
+/// than about which element is in the tree.
+fn text_area(runner: &TestingRunner, text: &str) -> Area {
+    runner
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|l| l.text == text)
+                .map(|_| node.layout().area)
+        })
+        .unwrap_or_else(|| panic!("no text run {text:?} in the tree: {:?}", texts(runner)))
 }
 
 /// Press the **lowest** run of `text` — the footer's buttons sit under everything, and a label in
@@ -278,6 +290,65 @@ fn an_edit_that_moves_the_bucket_leaves_no_row_behind() {
         .map(|c| c.def.url())
         .collect();
     assert_eq!(urls, ["s3://new-lake"], "the old URL's row is gone");
+}
+
+/// **The client-options header stands at the split it declares, empty or not.**
+///
+/// This is the bug a first attempt at the test missed, and the miss is worth recording. The
+/// empty-state `Table` carried no `column_widths`, so `TableRow` fell back to an equal share per
+/// cell — and because `Table` hands its config down through a plain `provide_context` that
+/// `use_try_consume` reads **once per render**, the header did not re-read it when rows arrived and
+/// changed the Table's props. So the strip laid out 50/50 in the empty state and *stayed* 50/50
+/// over rows that were 210px/flex.
+///
+/// A test comparing the two states therefore passed on the broken code: they agreed, at the wrong
+/// number. What has to be asserted is the **declared** split, which is why this reads
+/// `OPTION_KEY_WIDTH` rather than the other state.
+///
+/// On laid-out geometry, because that *is* the bug — the element tree was right in both states.
+#[test]
+fn the_client_options_header_stands_at_the_split_it_declares() {
+    let (mut runner, (ctx, ..)) = runner("options-header", ConnectionTarget::New, s3_draft());
+    settle(&mut runner);
+
+    let split = |runner: &TestingRunner| {
+        let option = text_area(runner, "Option");
+        let value = text_area(runner, "Value");
+        // The gap between the two header labels is what the column split decides.
+        (value.min_x() - option.min_x()).round()
+    };
+
+    // The empty branch renders the header too, which is what makes the shift visible at all.
+    assert!(
+        shows(
+            &runner,
+            "No client options. The defaults suit most connections."
+        ),
+        "{:?}",
+        texts(&runner)
+    );
+    assert_eq!(
+        split(&runner),
+        OPTION_KEY_WIDTH,
+        "empty, and already correct"
+    );
+
+    // Added through `ctx.edit`, the same funnel the toolbar's press goes through — the bug is in
+    // the table's two branches, not in the button.
+    ctx.edit(|draft| {
+        draft.client_config.add("timeout".into(), "30s".into());
+    });
+    settle(&mut runner);
+    assert!(!shows(
+        &runner,
+        "No client options. The defaults suit most connections."
+    ));
+
+    assert_eq!(
+        split(&runner),
+        OPTION_KEY_WIDTH,
+        "and unmoved once a row exists, at the split it declares"
+    );
 }
 
 /// A URL another connection already holds is refused, because `upsert_connection` replaces on it

@@ -48,7 +48,7 @@ const PROFILE_WIDTH: f32 = 220.;
 const HEAD_HEIGHT: f32 = 32.;
 const CELL_INSET: f32 = 12.;
 const OPTION_ROW: f32 = 38.;
-const OPTION_KEY_WIDTH: f32 = 210.;
+pub const OPTION_KEY_WIDTH: f32 = 210.;
 const EMPTY_HEIGHT: f32 = 88.;
 const TOOL_GAP: f32 = 6.;
 const STACK_GAP: f32 = 8.;
@@ -602,18 +602,16 @@ impl Component for OptionTable {
         if rows.is_empty() {
             // **Inside the table**, the path list's rule: an empty list still reads as the thing
             // it is, where hiding the frame reads as a section that failed to load.
-            return Table::new()
-                .child(TableHead::new().child(OptionHead))
-                .child(
-                    rect()
-                        .width(Size::fill())
-                        .height(Size::px(EMPTY_HEIGHT))
-                        .center()
-                        .child(
-                            Prose::new("No client options. The defaults suit most connections.")
-                                .color(form.hint_color),
-                        ),
-                );
+            return option_table().child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(EMPTY_HEIGHT))
+                    .center()
+                    .child(
+                        Prose::new("No client options. The defaults suit most connections.")
+                            .color(form.hint_color),
+                    ),
+            );
         }
 
         let mut body = TableBody::new();
@@ -630,11 +628,22 @@ impl Component for OptionTable {
             );
         }
 
-        Table::new()
-            .column_widths(vec![Size::px(OPTION_KEY_WIDTH), Size::flex(1.)])
-            .child(TableHead::new().child(OptionHead))
-            .child(body)
+        option_table().child(body)
     }
+}
+
+/// The framed table and its header, **column split included** — one construction site, because
+/// both of this section's branches need it and only one of them used to have it.
+///
+/// `TableRow` reads its split from the `TableConfig` its `Table` provides and falls back to an
+/// equal share per cell, so an empty-state table built without `column_widths` laid the header out
+/// 50/50 and then jumped to this split the instant the first row was added. A shared constructor
+/// is the fix rather than a second `column_widths` call: the two branches cannot disagree about a
+/// value neither of them writes.
+fn option_table() -> Table {
+    Table::new()
+        .column_widths(vec![Size::px(OPTION_KEY_WIDTH), Size::flex(1.)])
+        .child(TableHead::new().child(OptionHead))
 }
 
 /// The `Option` / `Value` strip. A `TableRow` so it shares the column widths and the rule under
