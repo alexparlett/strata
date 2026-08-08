@@ -223,6 +223,7 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::Parquet,
+            connection: None,
             sources: vec![format!("{name}.parquet")],
             partition_cols: vec![],
             origin: TableOrigin::External,

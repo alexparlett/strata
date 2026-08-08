@@ -129,21 +129,61 @@ chains; the app never takes or stores keys.
   diagnosis lands on every table over the bucket instead — one opaque signing error each, in the wrong place.
   Registration is therefore all-or-nothing: a connection is never both refused and live.
 
-## 4. Configure-table: local vs object store (FEATURES §6)
+## 4. Configure-table: local vs object store (FEATURES §6) — as built (Connections 04)
 
-- A **LOCATION** segmented control at the top — **Local disk** / **Object store** — makes the choice **explicit** (not
+- A **LOCATION** segmented control at the top — **Local** / **Remote** (the canvas's *Local disk* / *Object store*) — makes the choice **explicit** (not
   inferred from the first path's scheme). Both modes share name, format, and Hive partitioning.
-- **Local disk:** the multi-path source list + per-row **Browse** (unchanged).
+- **Local:** the multi-path source list + per-row **Browse** (unchanged).
 - **Object store:** a **single SOURCE PATH** (no add/remove, **no Browse** — object-store paths are text-only), entered
   **relative to the connection's bucket**
-  (rendered with a non-editable bucket-prefix chip). Plus a **TYPE** segmented (S3/GCS/HTTP) filtering a **CONNECTION**
-  custom dropdown (matches the FORMAT control) with a **＋ New connection…** entry; switching provider auto-selects its
-  first connection, empty-provider shows an inline hint.
+  (rendered with a non-editable bucket prefix). Plus a **TYPE** segmented (S3/GCS/HTTP) filtering a **CONNECTION**
+  dropdown (the same `Select` the FORMAT control is) with a **New connection…** entry; switching provider auto-selects
+  its first connection, empty-provider shows an inline hint.
 - **Removed** vs earlier drafts: the inline Manage/auth form (auth lives solely on the connection now), the
   **Public-bucket** toggle, the Disconnect action, and the **first-path-wins store-mismatch guard** (a table's store is
   the selected connection by construction).
 - Validation blocks Register when object-store mode has **no connection** selected, and keeps the **S3 region** check
   via the connection.
+
+**What the def stores, and where the two halves meet.** `TableDef::connection` is the chosen connection's
+`url()` — a *reference*, never a copy of the bucket, the provider or the auth — and it is the one field that says a
+table is remote: its sources are bucket-relative exactly when it is `Some`, stored as typed (never `relativize`d, which
+measures against the project folder). `strata_core::project::resolve_source` takes the connection and is the single
+place the two are composed; `register::table_spec` calls it, and so does the window's own Hive detection, so a remote
+path is never resolved by the local rule. The engine half needs nothing: the store went in under that URL in
+`register_pass`'s first phase.
+
+**Four departures from the canvas:**
+
+- **The toggle's second answer is `Remote`, not `Object store`.** That is the implementation's word — the thing
+  DataFusion registers and this app calls a connection — and a reader who has never met it cannot tell which of the two
+  answers is theirs. `Remote` is the question the row is actually asking; TYPE, CONNECTION and a bucket-relative path
+  explain themselves from there. The concept keeps its name everywhere it is not a label (the pane, the spec, the code).
+- **The LOCATION and TYPE pills are text-only** — no leading glyphs — because the connection editor's PROVIDER pill next
+  door is, and the two windows' pills should read as one control.
+- **New connection… does not open an editor**; it sets the project window's `ConnectionRequest`, the same slot the
+  pane's `+`, its empty-state CTA and a row's *Edit connection* set. The editor is that window's child, so it survives a
+  Configure window closed while it is up, and the connection it saves appears in this picker without a reopen. It opens
+  on the editor's **own** default provider rather than the TYPE currently picked: the target is that window's identity,
+  and a provider seed would make two *New connection* windows possible at once.
+- **A def naming a connection this project no longer has keeps naming it**, and Save is blocked with
+  `'s3://gone' is not a connection in this project.` Rewriting it to "local disk" would silently re-point the table at a
+  relative path on the user's own machine — the same treatment a format with no reader gets.
+
+**A forget now has a consequence**, since a table's sources can name a connection: the confirm lists the tables whose
+def reads through it and the views behind those, in the sentence a table drop already uses.
+
+**Hive partitioning works over a bucket, and needed nothing.** DataFusion's partitioning is entirely at the
+`ObjectStore` level (`list_partitions` over `list_with_delimiter`'s common prefixes, `parse_partitions_for_path` over
+the object path), and `engine::catalog::detect_partitions` already listed through the session's registered store rather
+than `read_dir`. The MinIO test proves the whole arm: the keys are **found** by listing the bucket, the folder levels
+register as the typed columns the def declares, every partition's rows come back carrying its folder's values, and a
+filter on a partition column takes the pruning path through the same store. The one thing that changed is the
+**failure** message: a partitioned source whose location came back empty is now *listed* — `std::fs` for a local
+directory as before, `ObjectStore::list` for a bucket (`store_holds_ext`, the client `detect_partitions` already uses)
+— so a remote lake under plain `2024/` folders gets the same "No .csv files under 'x' match the partition columns
+'year'." a local one does, and a prefix that really is empty is not blamed on the columns. One bounded listing, only
+on a failure, only for a partitioned source; a glob brings none, because a pattern is not a place to list.
 
 ## 5. Persistence — as built (Connections 01)
 

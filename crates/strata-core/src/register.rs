@@ -63,17 +63,22 @@ pub enum RegOutcome {
     },
 }
 
-/// The engine-facing projection of one table def: sources resolved against the project
-/// folder (`resolve_source` — relative entries join onto `root`), everything else
-/// carried as stored. One copy of the mapping, shared by the app's catalog passes and
-/// [`register_project`].
+/// The engine-facing projection of one table def: sources resolved through
+/// [`resolve_source`] — composed onto the def's **connection** where it names one (W7 · 04),
+/// and otherwise joined onto the project folder — with everything else carried as stored. One
+/// copy of the mapping, shared by the app's catalog passes and [`register_project`].
+///
+/// A remote path needs **nothing** of the engine beyond this: the connection's object store is
+/// already registered under that same URL by the time any table registers (connections are
+/// [`register_pass`]'s first phase), so `s3://acme-lake/events/` is a `ListingTableUrl` the
+/// session can already resolve.
 pub fn table_spec(root: &Path, def: &TableDef) -> TableSpec {
     TableSpec {
         name: def.name.clone(),
         paths: def
             .sources
             .iter()
-            .map(|s| resolve_source(root, s))
+            .map(|s| resolve_source(root, def.connection.as_deref(), s))
             .collect(),
         format: def.format.clone(),
         partitions: def.partition_cols.clone(),
@@ -245,6 +250,7 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::from_name("csv"),
+            connection: None,
             sources: vec![source.into()],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
@@ -442,6 +448,39 @@ mod tests {
                 ("local", true)
             ],
             "{out:?}"
+        );
+    }
+
+    /// **A def that names a connection is composed onto that bucket, never onto the project
+    /// folder** (W7 · 04). The engine half needs nothing: the store went in under this very URL
+    /// in the pass's first phase, so what reaches `register` is an address that session can
+    /// already resolve.
+    ///
+    /// The failure this pins is silent rather than loud — `s3://` is not an absolute path, so
+    /// the local rule turns a bucket-relative source into `<project>/events/2024/`, which
+    /// registers as a missing folder on the user's own disk and says nothing about a bucket.
+    #[test]
+    fn a_table_over_a_connection_resolves_against_its_bucket() {
+        let def = TableDef {
+            name: "events".into(),
+            format: SourceFormat::from_name("parquet"),
+            connection: Some("s3://acme-lake".into()),
+            sources: vec!["events/2024/**/*.parquet".into()],
+            partition_cols: Vec::new(),
+            origin: TableOrigin::External,
+        };
+        assert_eq!(
+            table_spec(Path::new("/proj"), &def).paths,
+            ["s3://acme-lake/events/2024/**/*.parquet"]
+        );
+        // …and the same def on the local disk still joins onto the project folder.
+        let local = TableDef {
+            connection: None,
+            ..def
+        };
+        assert_eq!(
+            table_spec(Path::new("/proj"), &local).paths,
+            ["/proj/events/2024/**/*.parquet"]
         );
     }
 

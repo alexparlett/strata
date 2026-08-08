@@ -7,6 +7,19 @@
 //! canvas's single "Browse… (file or folder)" button becomes one button with two ways to answer
 //! it. Picking files is multi-select — a table *is* many paths, and five files one dialog at a
 //! time is the same five rows with four more dialogs.
+//!
+//! ## An object-store table is **one** path, in the same list
+//!
+//! On a connection (W7 · 04) the section is singular throughout — `SOURCE PATH`, no toolbar, one
+//! row wearing the bucket as a non-editable prefix — because a remote source is written against
+//! the connection's bucket and there is nothing to browse: an object store has no file dialog,
+//! and its paths are text.
+//!
+//! It is still this list, one row long, rather than a second control drawn beside it. The row is
+//! where the two-way sync between the box and the draft lives, and a canvas that draws a framed
+//! box in place of a one-row framed table is drawing the same thing: what actually goes is the
+//! toolbar (a control that would add rows the def cannot carry) and the empty state (a list that
+//! always holds exactly one row has none).
 
 use freya::prelude::*;
 
@@ -15,7 +28,7 @@ use crate::components::form::{form_theme, Row, ValueField, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
 use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
-use crate::components::typography::Prose;
+use crate::components::typography::{MonoValue, Prose};
 use crate::components::window::window_theme;
 
 /// The gap between the toolbar's buttons (their size is the shared control's).
@@ -30,6 +43,9 @@ const CELL_INSET: f32 = 12.;
 const STACK_GAP: f32 = 8.;
 /// The browse dropdown's width — enough for its two labels without the card hugging them.
 const MENU_WIDTH: f32 = 180.;
+/// The most of a source row the **bucket prefix** may take before it ellipsizes. Half, so the
+/// path always keeps at least half the box it is typed into however long the connection's URL is.
+const PREFIX_MAX_PERCENT: f32 = 50.;
 
 /// What each shape of path resolves to — the canvas's ⓘ, verbatim in substance.
 const RESOLUTION_HINT: &str = "Each path resolves to one or more data files in the format chosen \
@@ -37,24 +53,44 @@ const RESOLUTION_HINT: &str = "Each path resolves to one or more data files in t
                                every file in it; a glob such as **/*.csv matches recursively. \
                                Paths are absolute.";
 
+/// The same sentence for a path written against a bucket — the canvas's other half of the ⓘ.
+///
+/// It says the trailing slash out loud, which the local hint does not have to: Browse writes one
+/// for a folder it picked, and nothing browses a bucket. Without it `events/2024` is a request
+/// for one object of that exact name, and the table registers empty.
+const STORE_HINT: &str = "The path resolves to one or more data files in the format chosen \
+                          above, relative to the connection's bucket. A folder ends with / and \
+                          is every file in it; a glob such as **/*.csv matches recursively.";
+
 #[derive(PartialEq)]
 pub struct SourcePaths;
 
 impl Component for SourcePaths {
     fn render(&self) -> impl IntoElement {
+        let ctx = use_consume::<ConfigureCtx>();
+        // One path on a connection, so the label, the explanation and the toolbar are all
+        // singular — see the module doc.
+        let remote = ctx.draft.read().remote;
+
         // The label line, its REQUIRED marker and its resolution tooltip are all the shared
         // row's; this window contributes the toolbar and the list that go under them.
-        Row::new("SOURCE PATHS")
-            .required()
-            .hint(RESOLUTION_HINT)
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .vertical()
-                    .spacing(STACK_GAP)
-                    .child(Toolbar)
-                    .child(PathList),
-            )
+        Row::new(match remote {
+            true => "SOURCE PATH",
+            false => "SOURCE PATHS",
+        })
+        .required()
+        .hint(match remote {
+            true => STORE_HINT,
+            false => RESOLUTION_HINT,
+        })
+        .child(
+            rect()
+                .width(Size::fill())
+                .vertical()
+                .spacing(STACK_GAP)
+                .maybe_child((!remote).then_some(Toolbar))
+                .child(PathList),
+        )
     }
 }
 
@@ -249,11 +285,18 @@ impl Component for PathList {
     fn render(&self) -> impl IntoElement {
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
-        let (count, selected) = {
+        // The bucket and the mode are read **here**, once, and carried to the rows as props.
+        // They are the same for every row, and a row that read them itself would subscribe to
+        // the whole draft — waking all of them on every keystroke in the name box, for a value
+        // none of them saw change. This component already subscribes; a row only re-renders
+        // when one of its props actually differs.
+        let (count, selected, prefix, remote) = {
             let draft = ctx.draft.read();
             (
                 draft.sources.len(),
                 draft.clamp_selection(*ctx.selected_path.read()),
+                draft.bucket_prefix(),
+                draft.remote,
             )
         };
 
@@ -276,6 +319,8 @@ impl Component for PathList {
                 PathRow {
                     index,
                     selected: index == selected,
+                    prefix: prefix.clone(),
+                    remote,
                     key: DiffKey::None,
                 }
                 // Keyed by position, and the row syncs both ways against the draft — see
@@ -293,6 +338,13 @@ impl Component for PathList {
 struct PathRow {
     index: usize,
     selected: bool,
+    /// The bucket this row's path is written against, or `None` on the local disk *and* while no
+    /// connection is chosen — the list's answer, carried as a prop rather than read here (see
+    /// [`PathList`]).
+    prefix: Option<String>,
+    /// Whether LOCATION is on Remote. Not `prefix.is_some()`: a remote row with no connection
+    /// picked yet has no prefix to wear and is still the row that has no Browse button behind it.
+    remote: bool,
     key: DiffKey,
 }
 
@@ -381,6 +433,15 @@ impl Component for PathRow {
             false => Color::TRANSPARENT,
         };
 
+        // The chosen bucket, standing in front of the box as text rather than in it: what the
+        // user writes is the part they can change, and a prefix inside the field would be a
+        // prefix they could delete. Absent on the local disk, where the path is the whole
+        // address — and that absence is also what says this row is local, so the two never
+        // disagree.
+        let form = form_theme();
+        let prefix = self.prefix.clone();
+        let remote = self.remote;
+
         TableRow::new()
             .theme(TableThemePartial {
                 row_background: Some(fill.into()),
@@ -394,11 +455,40 @@ impl Component for PathRow {
                     .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
                     .main_align(Alignment::Start)
                     .child(
-                        ValueField::new(text)
-                            .bare()
-                            .width(Size::fill())
-                            .height(Size::px(FIELD_HEIGHT))
-                            .a11y_id(field),
+                        // A flex row *inside* the cell, not the cell itself: a `TableCell` lays
+                        // its children out under `Content::Normal`, where a flexing box takes a
+                        // share rather than the remainder (AGENTS.md §3).
+                        rect()
+                            .expanded()
+                            .horizontal()
+                            .content(Content::Flex)
+                            .cross_align(Alignment::Center)
+                            .maybe_child(prefix.map(|prefix| {
+                                // Capped and ellipsized, because the prefix is laid out at its
+                                // natural width **before** the field divides what is left: an
+                                // HTTP connection is a whole origin, and a long host would
+                                // otherwise take the cell and leave nothing to type into. The
+                                // whole bucket is one row up in the picker either way.
+                                MonoValue::new(prefix)
+                                    .color(form.hint_color)
+                                    .max_width(Size::percent(PREFIX_MAX_PERCENT))
+                                    .max_lines(1)
+                                    .text_overflow(TextOverflow::Ellipsis)
+                            }))
+                            .child(
+                                ValueField::new(text)
+                                    .bare()
+                                    .width(Size::flex(1.))
+                                    .height(Size::px(FIELD_HEIGHT))
+                                    // Only where there is no browse button to fill the box for
+                                    // you: a bucket-relative path has no shape the user can
+                                    // infer from the label, where a local one is a path they
+                                    // already know how to write (and usually pick).
+                                    .maybe(remote, |field| {
+                                        field.placeholder("events/2024/**/*.parquet")
+                                    })
+                                    .a11y_id(field),
+                            ),
                     ),
             )
     }

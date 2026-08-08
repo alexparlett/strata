@@ -3,13 +3,11 @@
 //! The body's order is the canvas's, and one thing in it contradicts DEV_TASKS D7: the busy and
 //! failure blocks are the **last** things in the body, after Hive, not "below import-options,
 //! above Hive". The canvas is newer; it wins.
-//!
-//! The LOCATION section that opens the canvas is not here at all — see the module doc on why a
-//! one-option toggle is not shipped disabled.
 
 mod footer;
 mod hive;
 mod identity;
+mod location;
 mod options;
 mod paths;
 mod status;
@@ -23,6 +21,7 @@ pub use title_bar::TitleBar;
 
 use crate::apps::configure::views::hive::Hive;
 use crate::apps::configure::views::identity::Identity;
+use crate::apps::configure::views::location::{Location, ObjectStore};
 use crate::apps::configure::views::options::ImportOptions;
 use crate::apps::configure::views::paths::SourcePaths;
 use crate::apps::configure::views::status::StatusBlock;
@@ -51,7 +50,19 @@ impl Component for ConfigureBody {
                     // its own would be this window quietly keeping its own copy of both.
                     rect().width(Size::fill()).padding(BODY_PADDING).child(
                         Form::new()
+                            // The canvas's order: where the files are, then what the table is
+                            // called, then — on a remote table — which store.
+                            //
+                            // `ObjectStore` and the two below it are **always mounted** and draw
+                            // nothing when they have nothing to say (`views::hive`'s rule, for
+                            // the differ). The cost is that an invisible row still takes a
+                            // `Form` gap either side, so the local layout carries a doubled gap
+                            // where the store row would be. Removing it means keying every child
+                            // here — the shape `apps::connection::views::form` uses — which is a
+                            // change to five components that have no key today.
+                            .child(Location)
                             .child(Identity)
+                            .child(ObjectStore)
                             .child(SourcePaths)
                             .child(ImportOptions)
                             .child(Hive)

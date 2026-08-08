@@ -513,6 +513,22 @@ Things that must not regress. Each was fought for once already.
   additive and only ever sees the def it is given, so nothing else ever would), and the editor's
   Save asks for a **whole-catalog** pass — the width connections belong to, and the one that
   re-registers the tables that were reading the store it just replaced.
+- **A table reads through a connection by naming it, and the composition happens once, in
+  `resolve_source`.** `TableDef::connection` is the connection's `url()` and nothing else about it
+  (W7 · 04): a *reference*, because the bucket, the provider and where its credentials come from
+  all belong to the connection, and a second copy here is two statements of one fact that can
+  disagree. It is also the **one** field that says a table is remote — a source is bucket-relative
+  exactly when it is `Some` — so the two halves cannot contradict each other, and the LOCATION
+  toggle that produces it is an explicit choice rather than a scheme parsed out of a typed path
+  (spec §4). `resolve_source(root, connection, source)` takes the connection precisely so a caller
+  cannot reach for the wrong rule: `s3://` is not an absolute *path*, so the local rule silently
+  turns a bucket-relative source into `<project>/events/2024/` and reports a missing folder on the
+  user's own disk. The engine needs **nothing** for this beyond the composed string — the store
+  went in under that same URL in the pass's first phase — and `relativize` is skipped on the way
+  back out, because a bucket-relative path has nothing to do with the project folder. Forgetting
+  a connection therefore has a **consequence**, and the confirm names it: the tables whose def
+  reads through it (`tables_over`) and the views behind those (`views_over`), which is the reading
+  a table drop already reports.
 - **A connection's address is its provider's own, and every rule about it lives in one place.**
   The field is `address` rather than `bucket` because the three providers do not address the same
   thing: S3 and GCS name a bucket whose scheme the provider states, while HTTP names a **whole

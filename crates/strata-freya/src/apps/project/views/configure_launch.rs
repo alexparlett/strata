@@ -20,6 +20,7 @@ use crate::apps::configure::{ConfigureLaunch, ConfigureTarget};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{use_catalog, use_catalog_rescan, ProjChan, ProjectState};
 use crate::apps::project::use_report;
+use crate::apps::project::views::ConnectionRequest;
 use crate::platform::{open_configure, Subtree};
 use crate::state::AppCtx;
 
@@ -42,6 +43,10 @@ impl Component for ConfigureLauncher {
         // What all of the above belong to, so the window it opens closes with them rather than
         // with the window that owns them (`platform::owner`).
         let subtree = use_consume::<Subtree>();
+        // Carried into that window so its CONNECTION picker can ask for a connection editor
+        // through the one open path there is (W7 · 04) — the very slot this component's
+        // neighbour watches.
+        let connections = use_consume::<ConnectionRequest>();
         let platform = use_hook(Platform::get);
 
         use_side_effect(move || {
@@ -62,6 +67,7 @@ impl Component for ConfigureLauncher {
                     catalog,
                     engine: engine.clone(),
                     report,
+                    connections,
                 },
             );
         });
