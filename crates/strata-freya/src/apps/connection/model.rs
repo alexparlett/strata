@@ -205,7 +205,7 @@ impl ConfigRows {
             .collect()
     }
 
-    /// Append a row. Returns its id.
+    /// Append a row. Returns its id, so the toolbar can select what it just added.
     pub fn add(&mut self, key: String, value: String) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -213,8 +213,19 @@ impl ConfigRows {
         id
     }
 
-    pub fn remove(&mut self, id: u64) {
-        self.rows.retain(|row| row.id != id);
+    /// Drop the row `id`, and hand back the row that takes its place — the one below it, or the
+    /// new last row when it was last, or nothing when the list is now empty. The toolbar selects
+    /// that, exactly as the source-path list does: a Remove that left the highlight on a row that
+    /// no longer exists would arm the next press at nothing.
+    pub fn remove(&mut self, id: u64) -> Option<u64> {
+        let Some(at) = self.rows.iter().position(|row| row.id == id) else {
+            return self.rows.last().map(|row| row.id);
+        };
+        self.rows.remove(at);
+        self.rows
+            .get(at)
+            .or_else(|| self.rows.last())
+            .map(|row| row.id)
     }
 
     pub fn set_key(&mut self, id: u64, key: String) {
@@ -704,6 +715,28 @@ mod tests {
         draft.client_config.remove(first);
         assert_eq!(draft.blocker(), None);
         assert!(draft.def().client_config.is_empty());
+    }
+
+    /// **Remove hands back the row that takes the removed one's place**, because the toolbar acts
+    /// on a selection: a Remove that left the highlight on a row that no longer exists would arm
+    /// the next press at nothing. The source-path list's contract, one key along.
+    #[test]
+    fn removing_a_client_option_names_the_row_to_select_next() {
+        let mut rows = ConfigRows::default();
+        let ids: Vec<u64> = ["timeout", "user_agent", "proxy_url"]
+            .into_iter()
+            .map(|key| rows.add(key.into(), "x".into()))
+            .collect();
+
+        // A row in the middle hands over the one below it.
+        assert_eq!(rows.remove(ids[1]), Some(ids[2]));
+        // The last row hands over the new last.
+        assert_eq!(rows.remove(ids[2]), Some(ids[0]));
+        // …and the only row hands over nothing, which is what disarms the button.
+        assert_eq!(rows.remove(ids[0]), None);
+        assert!(rows.is_empty());
+        // An id the list never held selects the last row rather than reporting a removal.
+        assert_eq!(rows.remove(99), None);
     }
 
     /// A def's options survive the round trip through the rows, in the map's own order.

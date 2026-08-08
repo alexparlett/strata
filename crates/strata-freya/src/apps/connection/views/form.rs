@@ -23,10 +23,15 @@ use strata_model::ProviderId;
 
 use crate::apps::connection::model::{GcsAuthId, S3AuthId};
 use crate::apps::connection::ConnectionCtx;
-use crate::components::form::{Form, Note, PathField, Row, ValueField, FIELD_HEIGHT, LABEL_GAP};
-use crate::components::icon::{Icon, IconName};
+use crate::components::form::{
+    form_theme, Form, Note, PathField, Row, ValueField, FIELD_HEIGHT, LABEL_GAP,
+};
+use crate::components::icon::IconName;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
-use crate::components::typography::{MonoValue, Prose};
+use crate::components::tones::tones;
+use crate::components::tool_button::ToolButton;
+use crate::components::typography::{Control, MonoValue, Prose};
+use crate::components::window::window_theme;
 
 /// The gap between a control and the thing that qualifies it — an auth pill and the reference it
 /// turned on, an endpoint box and its Allow-HTTP switch (canvas `var(--sp-4)`). Inside the row,
@@ -36,11 +41,17 @@ const QUALIFIER_GAP: f32 = 12.;
 const REGION_WIDTH: f32 = 180.;
 /// The profile picker (canvas `width: 220px`).
 const PROFILE_WIDTH: f32 = 220.;
-/// A client-option row: tall enough for a field, with the ⨯ square at its end, and the gap
-/// between the table and the button that adds to it.
+/// The client-option table, in the two list editors' own numbers: the properties grid's header
+/// strip and cell inset, a row tall enough to hold a field, and the source-path list's toolbar gap
+/// and stack gap. The key column is fixed because an option name is a known width and the value is
+/// whatever the user types.
+const HEAD_HEIGHT: f32 = 32.;
+const CELL_INSET: f32 = 12.;
 const OPTION_ROW: f32 = 38.;
-const OPTION_REMOVE: f32 = 24.;
-const OPTION_GAP: f32 = 8.;
+const OPTION_KEY_WIDTH: f32 = 210.;
+const EMPTY_HEIGHT: f32 = 88.;
+const TOOL_GAP: f32 = 6.;
+const STACK_GAP: f32 = 8.;
 
 /// Every row this provider has, in canvas order.
 #[derive(PartialEq)]
@@ -480,10 +491,17 @@ impl Component for Endpoint {
 
 /// **CLIENT OPTIONS** — `object_store`'s own `ClientConfigKey` map, as a table.
 ///
-/// Every provider's store is built on one HTTP client and takes the same keys, so this is the
-/// one section that does not change with the picker. It is the escape hatch for the things a
-/// form cannot enumerate in advance: a proxy, a longer timeout, HTTP/1 against a server that
-/// mishandles HTTP/2.
+/// Every provider's store is built on the **same HTTP client**, and each builder routes a
+/// `Client(..)` key into the same `ClientOptions` (`aws/builder.rs`, `gcp/builder.rs`), so this is
+/// the one section that does not change with the picker: a proxy, a timeout or a user agent
+/// applies to a signed S3 request exactly as it does to a public HTTP one.
+///
+/// **Built the way this app's other two list editors are** — Settings ▸ Engine's properties grid
+/// and the Configure window's source paths (`apps/settings/views/engine/table.rs`,
+/// `apps/configure/views/paths.rs`): Freya's built-in `Table`, a `ToolButton` toolbar above it
+/// acting on the **selected** row, the empty state *inside* the table so it still reads as one,
+/// and bare fields in the cells. Two columns, so it carries a header — where the single-column
+/// path list does not, because its section label already names the column.
 ///
 /// **Rows here, a map in the def** (AGENTS.md §2). The option is a `Select` over
 /// [`CLIENT_KEYS`] rather than a text box, because the set is closed and small — which removes
@@ -505,100 +523,180 @@ impl Component for ClientOptions {
     }
 
     fn render(&self) -> impl IntoElement {
-        let ctx = use_consume::<ConnectionCtx>();
-        let rows = ctx.draft.read().client_config.clone();
-
         Row::new("CLIENT OPTIONS")
-            .hint("Applied to this connection's HTTP client, whichever provider serves it")
+            .hint(
+                "Applied to this connection's HTTP client, whichever provider serves it: all \
+                 three object stores are built on one client",
+            )
             .child(
                 rect()
                     .width(Size::fill())
                     .vertical()
-                    .spacing(OPTION_GAP)
-                    .maybe_child((!rows.is_empty()).then(|| {
-                        Table::new()
-                            .column_widths(vec![
-                                Size::flex(1.),
-                                Size::flex(1.),
-                                Size::px(OPTION_REMOVE),
-                            ])
-                            .child(ClientOptionRows)
-                            .into_element()
-                    }))
-                    .child(
-                        Button::new()
-                            .outline()
-                            .on_press(move |_: Event<PressEventData>| {
-                                ctx.edit(|draft| {
-                                    draft.client_config.add(String::new(), String::new());
-                                })
-                            })
-                            .child(
-                                rect()
-                                    .horizontal()
-                                    .cross_align(Alignment::Center)
-                                    .spacing(6.)
-                                    .child(Icon::new(IconName::Plus).size(12.))
-                                    .child(Prose::new("Add option")),
-                            ),
-                    ),
+                    .spacing(STACK_GAP)
+                    .child(OptionToolbar)
+                    .child(OptionTable),
             )
     }
 }
 
-/// The rows themselves. Its own component because `TableBody` is not `Clone`, so it cannot be
-/// built in one scope and handed to `Table` as a value in another.
+/// Add · remove, in the source-path toolbar's shape and at its size — a `ToolButton` pair over
+/// the table, acting on the selected row, rather than a control per row.
 #[derive(PartialEq)]
-struct ClientOptionRows;
+struct OptionToolbar;
 
-impl Component for ClientOptionRows {
+impl Component for OptionToolbar {
     fn render(&self) -> impl IntoElement {
+        let win = window_theme();
+        let error = tones().error;
+        let ctx = use_consume::<ConnectionCtx>();
+        // Subscribes: Remove is armed by a selection, which is the one thing the toolbar has to
+        // know about the table.
+        let selected = *ctx.selected_option.read();
+
+        rect()
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .spacing(TOOL_GAP)
+            .child(
+                ToolButton::new(IconName::Plus, "Add option")
+                    .outlined()
+                    .color(win.icon_color)
+                    .on_press(move |_| {
+                        // Seeded from the current selection, like the path toolbar's: an edit
+                        // refused while a connection is in flight leaves the highlight where it
+                        // was rather than pointing at a row that was never added.
+                        let mut slot = ctx.selected_option;
+                        let mut added = *slot.peek();
+                        ctx.edit(|draft| {
+                            added = Some(draft.client_config.add(String::new(), String::new()))
+                        });
+                        slot.set(added);
+                    }),
+            )
+            .child(
+                ToolButton::new(IconName::Minus, "Remove option")
+                    .outlined()
+                    .color(error)
+                    .enabled(selected.is_some())
+                    .on_press(move |_| {
+                        let Some(id) = selected else { return };
+                        let mut slot = ctx.selected_option;
+                        let mut next = selected;
+                        ctx.edit(|draft| next = draft.client_config.remove(id));
+                        slot.set(next);
+                    }),
+            )
+    }
+}
+
+/// The table: a header strip over the option rows, or the empty state in their place.
+#[derive(PartialEq)]
+struct OptionTable;
+
+impl Component for OptionTable {
+    fn render(&self) -> impl IntoElement {
+        let form = form_theme();
         let ctx = use_consume::<ConnectionCtx>();
         let rows = ctx.draft.read().client_config.clone();
+
+        if rows.is_empty() {
+            // **Inside the table**, the path list's rule: an empty list still reads as the thing
+            // it is, where hiding the frame reads as a section that failed to load.
+            return Table::new()
+                .child(TableHead::new().child(OptionHead))
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .height(Size::px(EMPTY_HEIGHT))
+                        .center()
+                        .child(
+                            Prose::new("No client options. The defaults suit most connections.")
+                                .color(form.hint_color),
+                        ),
+                );
+        }
 
         let mut body = TableBody::new();
         for row in rows.rows() {
             body = body.child(
-                ClientOptionRow {
+                OptionRow {
                     id: row.id,
                     chosen: row.key.clone(),
                     value: row.value.clone(),
+                    selected: Some(row.id) == *ctx.selected_option.read(),
                     key: DiffKey::None,
                 }
                 .key(row.id),
             );
         }
-        body
+
+        Table::new()
+            .column_widths(vec![Size::px(OPTION_KEY_WIDTH), Size::flex(1.)])
+            .child(TableHead::new().child(OptionHead))
+            .child(body)
     }
 }
 
-/// One option: the key picker, its value, and the ⨯ that drops the row.
+/// The `Option` / `Value` strip. A `TableRow` so it shares the column widths and the rule under
+/// it, with its hover fill pinned to its own background — a header is not a row you can pick.
 #[derive(PartialEq)]
-struct ClientOptionRow {
+struct OptionHead;
+
+impl Component for OptionHead {
+    fn render(&self) -> impl IntoElement {
+        let win = window_theme();
+        let form = form_theme();
+        let head = win.panel_background;
+
+        let cell = |label: &'static str| {
+            TableCell::new()
+                .height(Size::px(HEAD_HEIGHT))
+                .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
+                .main_align(Alignment::Start)
+                .child(Control::new(label).color(form.label_color))
+        };
+
+        TableRow::new()
+            .theme(TableThemePartial {
+                row_background: Some(head.into()),
+                hover_row_background: Some(head.into()),
+                ..Default::default()
+            })
+            .child(cell("Option"))
+            .child(cell("Value"))
+    }
+}
+
+/// One option: the key picker and its value, filled when it is the selected row.
+#[derive(PartialEq)]
+struct OptionRow {
     id: u64,
     chosen: String,
     value: String,
+    selected: bool,
     key: DiffKey,
 }
 
-impl KeyExt for ClientOptionRow {
+impl KeyExt for OptionRow {
     fn write_key(&mut self) -> &mut DiffKey {
         &mut self.key
     }
 }
 
-impl Component for ClientOptionRow {
+impl Component for OptionRow {
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
     }
 
     fn render(&self) -> impl IntoElement {
+        let win = window_theme();
         let ctx = use_consume::<ConnectionCtx>();
         let id = self.id;
 
-        // The box owns its buffer and reports per keystroke — the app's field contract, and the
-        // one direction of travel the Settings grid holds for the same reason: the list wakes on
-        // every keystroke, so writing it back would drag the cursor.
+        // The box owns its buffer and reports per keystroke — the app's field contract. One way
+        // only, unlike the path list's two: a row here is keyed by its **id**, so nothing above it
+        // being removed can hand this scope another row's value, and nothing but the keyboard ever
+        // writes it.
         let text = use_state({
             let seed = self.value.clone();
             move || seed
@@ -608,6 +706,18 @@ impl Component for ClientOptionRow {
             ctx.edit(move |draft| draft.client_config.set_value(id, value));
         });
 
+        // The row's press selects it, and **focus does too**: Freya's `Input` stops propagation on
+        // its focus press, so clicking into the value box would otherwise leave the toolbar
+        // pointing at whichever row was selected before — and Remove would drop that one.
+        let field = use_a11y();
+        let focus = use_focus(field);
+        let mut slot = ctx.selected_option;
+        use_side_effect(move || {
+            if focus() != Focus::Not && *slot.peek() != Some(id) {
+                slot.set(Some(id));
+            }
+        });
+
         let chosen = self.chosen.clone();
         let options: Vec<Element> = CLIENT_KEYS
             .iter()
@@ -615,6 +725,7 @@ impl Component for ClientOptionRow {
                 MenuItem::new()
                     .selected(key.name == chosen)
                     .on_press(move |_| {
+                        slot.set(Some(id));
                         ctx.edit(move |draft| draft.client_config.set_key(id, key.name.to_string()))
                     })
                     .child(
@@ -628,10 +739,22 @@ impl Component for ClientOptionRow {
             })
             .collect();
 
+        let fill = match self.selected {
+            true => win.row_selected_background,
+            false => Color::TRANSPARENT,
+        };
+
         TableRow::new()
+            .theme(TableThemePartial {
+                row_background: Some(fill.into()),
+                hover_row_background: Some(fill.into()),
+                ..Default::default()
+            })
+            .on_press(move |_: Event<PressEventData>| slot.set(Some(id)))
             .child(
                 TableCell::new()
                     .height(Size::px(OPTION_ROW))
+                    .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
                     .main_align(Alignment::Start)
                     .child(
                         rect()
@@ -650,22 +773,15 @@ impl Component for ClientOptionRow {
             .child(
                 TableCell::new()
                     .height(Size::px(OPTION_ROW))
+                    .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
                     .main_align(Alignment::Start)
-                    .child(ValueField::new(text).width(Size::fill()).placeholder("30s")),
-            )
-            .child(
-                TableCell::new()
-                    .height(Size::px(OPTION_ROW))
-                    .padding(Gaps::new_all(0.))
                     .child(
-                        Button::new()
-                            .flat()
-                            .width(Size::px(OPTION_REMOVE))
-                            .height(Size::px(OPTION_REMOVE))
-                            .on_press(move |_: Event<PressEventData>| {
-                                ctx.edit(move |draft| draft.client_config.remove(id))
-                            })
-                            .child(Icon::new(IconName::Close).size(12.)),
+                        ValueField::new(text)
+                            .bare()
+                            .width(Size::fill())
+                            .height(Size::px(FIELD_HEIGHT))
+                            .placeholder("30s")
+                            .a11y_id(field),
                     ),
             )
     }

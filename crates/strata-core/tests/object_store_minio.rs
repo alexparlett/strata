@@ -201,26 +201,35 @@ fn connection(endpoint: &str, auth: S3Auth) -> ConnectionDef {
             endpoint: endpoint.into(),
             allow_http: true,
         }),
-        client_config: BTreeMap::new(),
+        // **Client options ride the signed store too**, which is the half a reader is most likely
+        // to doubt: `AmazonS3ConfigKey::Client(..)` routes straight into the same `ClientOptions`
+        // the HTTP builder takes (`aws/builder.rs`), so this proves it against a server that
+        // verifies signatures rather than only against a store that builds.
+        client_config: client_options(),
     }
+}
+
+/// The two options both connections carry: one `object_store` must parse into a duration, and one
+/// it must accept as a header value.
+fn client_options() -> BTreeMap<String, String> {
+    [("timeout", "30s"), ("user_agent", "strata-integration")]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 /// The **same server, reached as a plain HTTP origin**: no bucket, no signing, the address is the
 /// whole URL. What an `http(s)://` connection is for — a public data drop rather than a store you
 /// hold credentials to.
 ///
-/// It carries a **client option** as well, which is the only place `with_config` is proved
-/// against a store that is then actually read through: a value `object_store` could not parse
-/// fails the build, and one it silently ignored would leave this passing for the wrong reason —
-/// so the pair is a timeout it must accept and a user agent it must send.
+/// It carries the same **client options** the S3 connection does, so `with_config` is proved
+/// through both routes into `ClientOptions`: `HttpBuilder`'s direct one here, and
+/// `AmazonS3ConfigKey::Client(..)` there.
 fn http_connection(endpoint: &str) -> ConnectionDef {
     ConnectionDef {
         address: endpoint.into(),
         provider: Provider::Http,
-        client_config: [("timeout", "30s"), ("user_agent", "strata-integration")]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
+        client_config: client_options(),
     }
 }
 

@@ -94,6 +94,7 @@ fn runner(
                 // Answered, and empty: the profile picker is not what these test, and `None`
                 // would leave it reading "still looking" for ever.
                 profiles: State::create(Some(Vec::new())),
+                selected_option: State::create(None),
             });
             (ctx, project, rescan)
         },

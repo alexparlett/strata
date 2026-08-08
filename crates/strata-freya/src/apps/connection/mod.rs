@@ -134,6 +134,13 @@ pub struct ConnectionCtx {
     /// read once at mount (`Engine::aws_profiles`). `None` until that read answers, which is
     /// what lets the picker say "looking" rather than "you have none".
     pub profiles: State<Option<Vec<String>>>,
+    /// Which client-option row the table's toolbar acts on.
+    ///
+    /// **Window state, not draft state** — `ConfigureCtx::selected_path`'s rule, and for its
+    /// reason: it is a way of looking rather than part of the def, and on the draft every click
+    /// on a row would count as an edit and clear the engine's failure message out from under a
+    /// user who was still reading it.
+    pub selected_option: State<Option<u64>>,
 }
 
 impl ConnectionCtx {
@@ -308,6 +315,7 @@ impl App for ConnectionApp {
                     target: State::create(target),
                     status: State::create(Status::Idle),
                     profiles: State::create(None),
+                    selected_option: State::create(None),
                 }
             }
         });

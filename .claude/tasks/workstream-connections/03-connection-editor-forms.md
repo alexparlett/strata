@@ -99,7 +99,20 @@ Four changes after the first review pass, all of them tightening what a connecti
   edited as a table and committed as a map. On the def rather than in a provider because all
   three stores are built on one HTTP client; offered from `CLIENT_KEYS` (a written-down table,
   since the enum cannot list itself — pinned by a test that parses every entry) and refused by
-  `check_client_config`, again one call for both sides. `ConfigRows` is deliberately **not**
+  `check_client_config`, again one call for both sides.
+  **The table is the app's two existing list editors' shape** (Settings ▸ Engine's properties grid,
+  the Configure window's source paths): Freya's built-in `Table`, a `ToolButton` toolbar above it
+  acting on the **selected** row rather than a control per row, a header strip because it has two
+  columns, the empty state *inside* the table, and bare fields in the cells. The selection lives
+  on `ConnectionCtx`, **not** on the draft — `ConfigureCtx::selected_path`'s rule, and for its
+  reason: on the draft, clicking a row would count as an edit and clear the engine's failure
+  message out from under whoever was reading it.
+  **It is offered on every provider, and that is correct rather than convenient:** each builder
+  routes a `Client(..)` key into the same `ClientOptions`
+  (`aws/builder.rs:670`, `gcp/builder.rs:326`, `HttpBuilder::with_config`), so a proxy or a
+  timeout applies to a signed S3 request exactly as to a public HTTP one. Both connections in the
+  MinIO test carry one, so both routes are proved against a real server.
+  `ConfigRows` is deliberately **not**
   Settings' `PropRows`, which is welded to `ENGINE_KEYS`, a selection, an autocomplete and an
   inspector pane; what is shared is the rule, not the code.
 
