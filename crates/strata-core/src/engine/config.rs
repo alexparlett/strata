@@ -53,9 +53,15 @@ pub struct EngineKey {
 pub const ENGINE_KEYS: &[EngineKey] = &[
     // catalog — `default_catalog` / `default_schema` are deliberately absent: the app
     // owns those names, see `is_owned_key`.
+    // `information_schema` is the one key whose default is **Strata's** rather than
+    // DataFusion's (which is `false`): `build_context` turns it on so `SHOW TABLES` works on a
+    // fresh project (it rewrites to `SELECT * FROM information_schema.tables` and errors when
+    // the key is off), and `engine::providers` is what makes that safe by hiding the result
+    // snapshots from every enumeration. Named `true` here so a *removed* override lands back
+    // on what the engine was built with rather than on DataFusion's.
     EngineKey {
         key: "datafusion.catalog.information_schema",
-        default: "false",
+        default: "true",
         kind: Kind::Bool,
         desc: "Expose information_schema virtual tables for schema introspection.",
     },

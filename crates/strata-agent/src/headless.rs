@@ -10,8 +10,8 @@
 //!
 //! - **Registration outcomes are the catalog.** In the app the catalog is `ProjectState`, and
 //!   a def the engine refused is a row carrying its error; here it is the pass's own answers,
-//!   folded once at startup into exactly that shape. Neither asks DataFusion, which would
-//!   list the `__snap_*` result snapshots and hide the failed defs (AGENTS.md §2).
+//!   folded once at startup into exactly that shape. Neither asks DataFusion, which would hide
+//!   the failed defs (AGENTS.md §2).
 //! - **A query session is an engine workspace and nothing else.** No pane, no satellite, no
 //!   tab: [`WsId`] nonces, with supersede, retire and cancel the engine's own — so an agent's
 //!   run behaves identically to one it makes against the running app.

@@ -16,8 +16,10 @@ data, external removes only the def — with dependents named in the report.
 - Verified (spec §2): `ListingTable::insert_into` for Arrow requires a directory-collection URL
   (`listing_url` already emits the trailing slash), schema-checks via
   `logically_equivalent_names_and_types`, appends one LZ4 IPC file, `Append` only.
-- The catalog surface's drop confirm (`views/sidebar/catalog/drop_confirm.rs`) keeps owning the
-  pointer gesture; the store's `ViewInfo` deps name dependents.
+- The catalog surface's drop confirm (`views/project/dialogs/drop_confirm.rs` — the path in the
+  first draft was wrong) keeps owning the pointer gesture; the store's `ViewInfo` deps name
+  dependents. **It does not know about origin, and as drafted this task left it that way** — see
+  the gap note below, found while building ED-03.
 
 ## What to build
 
@@ -46,6 +48,31 @@ data, external removes only the def — with dependents named in the report.
 - Update the drop-routing invariant text (AGENTS.md §2 + `docs/reference/INVARIANTS.md`) in this
   change, per spec §10.
 
+**The sidebar drop is the same destructive action, so it goes through the same funnel** (gap found
+while building ED-03; settled with Alex 2026-08-08). As this task was first drafted, the editor's
+`DROP TABLE` deleted `.strata/tables/<slug>/` and the sidebar's drop did not — two implementations
+of one gesture, and the divergence is silent data left on disk:
+
+- `dialogs/drop_confirm.rs`'s `DropTarget::Table` arm does `remove_table` → `persisted_defs` →
+  `engine.deregister(name)` and nothing else. On an internal table that **orphans the data
+  directory forever**: no def points at it, and `tidy_strata_dir` only sweeps `.tmp-*`.
+- Its body copy pins "files on disk are not deleted"
+  (`drop_confirm.rs`'s `a_drop_with_no_dependents_shows_no_consequence_line`). True for every
+  table today, **false** for an internal one — the dialog would be reassuring the user at exactly
+  the moment the action is destructive.
+
+So: the apply path calls `engine::ddl::drop_table`, with the existing dialog as the confirm in
+front of it — AGENTS.md §2's "one entry point per expensive action, with the confirm in front of
+it", which the editor's no-dialog path then rides behind. The dialog's copy and title read the
+def's origin: internal names the data ("'t' and its data will be deleted"), external keeps today's
+sentence. The two wordings are the report's, so state them once and let both surfaces render it
+rather than writing a second vocabulary. **Do not** add directory deletion to the store-first path
+as a second implementation.
+
+The store-first ordering the dialog has today (write the def, roll back if the persist failed,
+*then* touch the engine) is deliberate and must survive the refactor — a drop the project file
+never heard about comes back on the next open.
+
 ## Acceptance
 
 - INSERT into an internal table appends a file; the sidebar row count refreshes via the rescan;
@@ -55,6 +82,13 @@ data, external removes only the def — with dependents named in the report.
 - DROP internal removes row, def, and directory (verified on disk); DROP external removes row
   and def, source files untouched; both name dependent views when any exist; `IF EXISTS` on a
   missing name reports a no-op.
+- **The sidebar drop and the editor `DROP TABLE` leave the same state**, asserted on disk for an
+  internal table — the point of the shared funnel, and the one thing a per-surface implementation
+  would pass tests without delivering.
+- The confirm dialog names the data for an internal table and keeps "files on disk are not
+  deleted" for an external one; the existing no-dependents test moves with the wording rather
+  than being deleted.
+- A failed persist still rolls the def back and leaves the directory alone.
 - Restart after each: the store and disk agree (no orphan def, no orphan directory).
 
 ## Verification

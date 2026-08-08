@@ -24,7 +24,7 @@ already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Re
 |---|---|---|---|---|
 | 01 | Policy router: `classify(stmt, Capability)` + `Verdict`; agent wrapper unchanged | ✅ | — | — |
 | 02 | `Engine::run` + statement results: `RunOutcome`/`StatementReport`/`StoreEffect`, app folds, history | ✅ | — | 01 |
-| 03 | Strata providers: `StrataCatalogProvider` + `StrataSchemaProvider`, information_schema on | ⬜ | — | — |
+| 03 | Strata providers: `StrataCatalogProvider` + `StrataSchemaProvider`, information_schema on | ✅ | — | — |
 | 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ⬜ | — | 02 |
 | 05 | INSERT (native, target-gated) + DROP TABLE (both origins) | ⬜ | — | 04 |
 | 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ⬜ | — | 02 |
@@ -44,6 +44,22 @@ first internal table exists. 04 → 05 is the only hard chain: INSERT and DROP g
 internal-name set and the data-dir layout 04 establishes. 06/07/08/09/10 are parallel after 02 —
 each is one `StmtKind` arm plus its engine method(s); 10 maps the parsed statement onto a def and
 reuses the registration funnel outright, so it is the smallest of the arms.
+
+## The catalog pane is part of 04 and 05, not a later polish pass
+
+Found while building ED-03, settled 2026-08-08. An internal table lands in `ProjectState.tables`
+like any other def — it has to, because the store *is* the catalog — so it arrives holding the
+whole table-row affordance set, and three of those five items do not mean the same thing on a def
+whose data Strata owns. The first draft of this workstream gave the App half one line (ED-04's
+read-only Configure window) and left the rest implied.
+
+Corrected in place rather than as a new task, because splitting it out is what would let the two
+halves disagree: **ED-04** owns the row saying which origin it is and the menu treatment for an
+internal def, **ED-05** owns the drop — one destructive action, one funnel
+(`engine::ddl::drop_table`), with the existing dialog as the confirm in front of it. As drafted,
+the editor's `DROP TABLE` deleted the data directory and the sidebar's drop did not, which is
+silent data left on disk; and the dialog's fixed "files on disk are not deleted" would have been
+reassuring the user at exactly the moment the action became destructive.
 
 ## Standing rules this workstream inherits (AGENTS.md §2)
 

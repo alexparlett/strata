@@ -458,9 +458,14 @@ Things that must not regress. Each was fought for once already.
   logging is a parameter (`init_logging(Log::Stderr)`) rather than a constant: one stray log
   line on stdout is a parse error at the client.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
-  capability: introspecting DataFusion would surface the `__snap_*` result snapshots and hide defs
-  whose registration failed — precisely the rows the catalog exists to show. Mutations call the
-  engine, then the store's own method on the matching `ProjChan`; nothing refetches.
+  capability: introspecting DataFusion hides the defs whose registration **failed** — precisely
+  the rows the catalog exists to show, because a table that is merely broken has no engine
+  presence at all and so is indistinguishable from one that was never defined. (This used to be
+  argued from the `__snap_*` result snapshots surfacing too. ED-03's provider hides them, so that
+  ground is gone and the rule does not need it — a `Reg::Failed` row is something no
+  introspection can ever answer. Saved queries aren't a DataFusion concept either, and the store
+  is also the ⌘S save target, so a cached second copy would be two sources of truth.) Mutations
+  call the engine, then the store's own method on the matching `ProjChan`; nothing refetches.
 - **An expensive, opt-in *result* is freya-query keyed by the request; the store holds the
   request.** Profiling (P3-09) is the shape: the row keeps `Option<ScanId>` — a nonce minted per
   ask — and the numbers live only in the cache entry that key names, with `stale_time(MAX)` (a
@@ -699,6 +704,37 @@ Things that must not regress. Each was fought for once already.
   pane, for two reasons that generalise: navigating away and back must not discard a half-finished
   edit, and the footer has to answer "what is blocking Apply?" (`blocker()`) without the pane being
   mounted to answer it — a button disabled for a reason the user cannot see reads as broken.
+- **Strata owns the catalog and schema providers, for identity and visibility — never lifecycle.**
+  `engine::providers` installs a `StrataCatalogProvider` (one schema, `public`, `register_schema` /
+  `deregister_schema` refusing) and a `StrataSchemaProvider` (one map, keyed by `fold_ident`) in
+  `build_context`, before anything registers. Two jobs and no third: DataFusion 54's
+  `SchemaProvider::register_table` is **sync** and carries **no caller identity**, so it can neither
+  spool a CTAS result (already whole in RAM by then) nor authorize a `DROP` (`Engine::register`,
+  snapshot retirement and DF's own `CREATE OR REPLACE VIEW` all deregister routinely — a provider
+  that deleted files there would delete user data on a sidebar refresh). Lifecycle is intercepted in
+  front of `ctx.sql` instead; `STATEMENTS_SPEC.md` §3 is the full argument and it is settled.
+  What the traits *can* do is the whole reason they are ours:
+  **`table_names()` hides the `__snap_` result snapshots while `table()` still resolves them.**
+  Every `information_schema` view and every `SHOW` form enumerates through `table_names()` and
+  nothing else (`datafusion-catalog-54.0.0/src/information_schema.rs:96-216` — a separate snapshot
+  *schema* would hide nothing), so one filter covers all of them, and `__strata_ord` never reaches
+  `information_schema.columns`. Paging, chart, export and retirement address a snapshot **by name**
+  and are untouched. That is what makes it safe to default `datafusion.catalog.information_schema`
+  **on** — set in `build_context` *before* the override loop, so it is a default and not an owned
+  key, and named `true` in `ENGINE_KEYS` so a removed override lands back on it. `SHOW TABLES` and
+  `DESCRIBE` work on a fresh project; the store stays the catalog authority, so a `Reg::Failed` def
+  is absent from `SHOW` (it was never registered) exactly as it should be.
+  **`CREATE SCHEMA` is impossible by construction; `CREATE DATABASE` is not, and cannot be.** DF's
+  `create_catalog` registers into the `CatalogProviderList`, whose `register_catalog` returns an
+  `Option` — a refusing list could only lie ("already exists") or silently no-op, both worse than
+  the router's refusal. `Blocked::CreateDatabase` is the gate for it, and the first line for
+  `CREATE SCHEMA` too.
+  Everything else is `MemorySchemaProvider`'s behaviour verbatim, duplicate-name error included, so
+  every reader, `find_and_deregister`, `table_exist` and snapshot retirement work with **no**
+  call-site changes. The `fold_ident` keying is what makes the one namespace genuinely
+  case-insensitive rather than case-insensitive-if-you-came-in-through-a-`&str`: the fold-preservation
+  oracle now pins the stored **identity** (`registered()`) rather than which spellings resolve,
+  because every spelling of a name now does.
 - **One classification with a capability axis, in front of dispatch.**
   `sql::validate::classify(stmt, Capability) -> Verdict` is the whole statement policy:
   `Query` (the snapshot pipeline, unchanged), `Intercept(StmtKind)` (the editor implements it as an
@@ -724,11 +760,13 @@ Things that must not regress. Each was fought for once already.
   wildcard is `Refuse(Unsupported)`, and the five-variant DFParser match is wildcard-free so a new
   DataFusion statement is a compile error.
   **Reserved names, read and write**: a `__snap_`-prefixed identifier anywhere in an *intercepted*
-  statement — targets included — is refused, because `register_table` is last-write-wins and the
-  same prefix hides the collision from every catalog reader. The prefix is one constant
-  (`engine::query::SNAPSHOT_PREFIX`) so the naming rule and the hiding rule cannot drift; the write
-  targets sqlparser does not annotate for `visit_relations` (`CREATE VIEW`'s name, `DROP`'s name
-  list) are named explicitly rather than assumed.
+  statement — targets included — is refused, because the same prefix hides the collision from every
+  catalog reader and the collision itself is unrecoverable either way (the provider answers
+  "already exists", so it is the *Run* that fails, on a name the user cannot see). The predicate is
+  one function (`engine::query::is_snapshot_name`, beside `snapshot_name`) so the naming rule, the
+  refusal and the hiding rule cannot drift; the write targets sqlparser does not annotate for
+  `visit_relations` (`CREATE VIEW`'s name, `DROP`'s name list) are named explicitly rather than
+  assumed.
   Every interception is a **second gesture into a funnel that already exists**, never a second
   implementation: typed view DDL onto `Engine::create_view` (what ⌘S already wraps the buffer's
   plain query in), typed `CREATE EXTERNAL TABLE` onto Table Config's own def-first registration.

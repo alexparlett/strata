@@ -66,8 +66,7 @@ pub enum RegState {
 }
 
 /// One row of the catalog **as the store shows it** — never DataFusion introspection, which
-/// would list the `__snap_*` result snapshots and hide exactly the failed defs this exists
-/// to show (the P3-02 correction).
+/// would hide exactly the failed defs this exists to show (the P3-02 correction).
 #[derive(Clone, Debug, PartialEq)]
 pub enum CatalogEntry {
     Table {

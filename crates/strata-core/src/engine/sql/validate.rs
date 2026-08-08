@@ -43,7 +43,7 @@ use datafusion::sql::sqlparser::ast::{
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion::sql::sqlparser::parser::ParserError;
 
-use crate::engine::query::SNAPSHOT_PREFIX;
+use crate::engine::query::is_snapshot_name;
 use crate::engine::sql::lex::{
     is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
 };
@@ -478,9 +478,10 @@ pub fn classify(stmt: &DFStatement, cap: Capability) -> Verdict {
     match cap {
         // Reserved names, read and write: a `__snap_` identifier anywhere in a
         // statement the editor would run itself is refused before it can collide with
-        // a live snapshot registration (`register_table` is last-write-wins, and the
-        // same prefix hides the collision from every catalog reader). The agent column
-        // is untouched — it already refuses every intercepted form, with its own words.
+        // a live snapshot registration — which the provider answers "already exists"
+        // to, so the collision costs a *Run*, on a name the same prefix hides from
+        // every catalog reader. The agent column is untouched — it already refuses
+        // every intercepted form, with its own words.
         Capability::Editor => match editor {
             Verdict::Intercept(_) if names_reserved(stmt) => Verdict::Refuse(Blocked::ReservedName),
             verdict => verdict,
@@ -628,18 +629,13 @@ fn reads_reserved<V: Visit>(node: &V) -> bool {
     .is_break()
 }
 
-/// Whether any part of `name` carries the snapshot prefix. Case-folded, because the
-/// one namespace is case-insensitive and `__SNAP_2` is the same table — compared in
-/// place rather than through `to_ascii_lowercase`, because this runs per identifier
-/// per statement on every keystroke and the whole answer is seven bytes wide.
+/// Whether any part of `name` is in the snapshot namespace. The predicate itself is
+/// [`is_snapshot_name`], next to the function that mints those names, because the
+/// provider's hiding rule asks the same question and the two must not drift.
 fn is_reserved(name: &ObjectName) -> bool {
     name.0.iter().any(|part| {
-        part.as_ident().is_some_and(|ident| {
-            ident
-                .value
-                .get(..SNAPSHOT_PREFIX.len())
-                .is_some_and(|head| head.eq_ignore_ascii_case(SNAPSHOT_PREFIX))
-        })
+        part.as_ident()
+            .is_some_and(|ident| is_snapshot_name(&ident.value))
     })
 }
 
@@ -1535,7 +1531,8 @@ mod tests {
 
     /// Reserved names, both halves: a `__snap_` identifier in a statement the editor
     /// would run itself is refused before it can collide with a live snapshot
-    /// registration (which is last-write-wins, and invisible behind the same prefix).
+    /// registration — which fails as "already exists", on a name the same prefix keeps
+    /// invisible.
     #[test]
     fn a_snapshot_name_is_refused_in_an_intercepted_statement() {
         for sql in [

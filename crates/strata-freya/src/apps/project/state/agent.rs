@@ -20,9 +20,9 @@
 //! failure is a panic on an unrelated repaint.
 //!
 //! **The catalog is answered from [`ProjectState`]**, never from DataFusion introspection
-//! (AGENTS.md §2): introspection would list the `__snap_*` result snapshots and hide the defs
-//! whose registration failed — precisely the rows an agent most needs to see, because a table
-//! that is merely broken looks exactly like a table that was never registered.
+//! (AGENTS.md §2): introspection hides the defs whose registration failed — precisely the rows an
+//! agent most needs to see, because a table that is merely broken looks exactly like a table that
+//! was never registered.
 //!
 //! **An agent's query sessions are not tabs**, and nothing here touches `SessionState`. That
 //! is AA-03b's whole correction, and it is what makes the user's tab strip untouchable by

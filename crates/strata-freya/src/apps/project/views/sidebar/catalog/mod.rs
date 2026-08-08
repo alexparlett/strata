@@ -5,8 +5,7 @@
 //!
 //! The [`ProjectState`] store — the project file's defs plus what engine registration *learned*
 //! about each ([`Reg`](crate::apps::project::state::Reg)). **Not** an introspection query
-//! against DataFusion, which would be wrong in both directions: result snapshots are
-//! registered as real tables (`__snap_*`) and would show up, and a def whose registration
+//! against DataFusion, which would be wrong where it matters most: a def whose registration
 //! *failed* has no engine presence at all yet is exactly the row
 //! the catalog must keep showing. Saved queries aren't a DataFusion concept either. The store is
 //! also the ⌘S save-target store, so a second cached copy would be two sources of truth.
