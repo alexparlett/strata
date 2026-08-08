@@ -738,11 +738,14 @@ impl Component for OptionRow {
                 .value_of(id)
                 .unwrap_or_default()
         });
-        // The name box's id is ours, so the suggestions can watch it take and lose focus — and so
-        // focusing it selects the row, since `Input` stops propagation on its focus press and the
-        // row's own press never fires over the field.
+        // **Both boxes' ids are ours**, and both for the same reason: `Input` stops propagation on
+        // its focus press (`on_input_focus_press`), so a click that lands in either field never
+        // reaches `TableRow::on_press` and the row would not select itself. The name box needs its
+        // id anyway, so the suggestions can watch it take and lose focus.
         let a11y_id = use_a11y();
         let focus = use_focus(a11y_id);
+        let value_id = use_a11y();
+        let value_focus = use_focus(value_id);
 
         use_side_effect(move || {
             let typed = name.read().clone();
@@ -757,9 +760,12 @@ impl Component for OptionRow {
             }
         });
 
+        // Either field taking focus selects the row — the toolbar acts on that selection, so a
+        // value typed into a row the highlight never moved to is a Remove aimed at the wrong one.
         let mut slot = ctx.selected_option;
         use_side_effect(move || {
-            if focus() != Focus::Not && *slot.peek() != Some(id) {
+            let focused = focus() != Focus::Not || value_focus() != Focus::Not;
+            if focused && *slot.peek() != Some(id) {
                 slot.set(Some(id));
             }
         });
@@ -867,7 +873,8 @@ impl Component for OptionRow {
                             .bare()
                             .placeholder("30s")
                             .height(Size::px(OPTION_ROW))
-                            .width(Size::fill()),
+                            .width(Size::fill())
+                            .a11y_id(value_id),
                     ),
             )
     }

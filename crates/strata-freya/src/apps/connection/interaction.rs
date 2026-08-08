@@ -130,6 +130,26 @@ fn text_area(runner: &TestingRunner, text: &str) -> Area {
         .unwrap_or_else(|| panic!("no text run {text:?} in the tree: {:?}", texts(runner)))
 }
 
+/// The laid-out box of the **editable** text `text` — an `Input`'s content is a `paragraph`, not
+/// a `label`, so [`text_area`] cannot see the client-option boxes at all.
+fn field_area(runner: &TestingRunner, text: &str) -> Area {
+    runner
+        .find(|node, element| {
+            Paragraph::try_downcast(element)
+                .filter(|p| p.spans.iter().any(|span| span.text.as_ref() == text))
+                .map(|_| node.layout().area)
+        })
+        .unwrap_or_else(|| panic!("no editable text {text:?} in the tree"))
+}
+
+/// The centre of a laid-out box, in the coordinates the runner's cursor takes.
+fn centre(area: Area) -> (f64, f64) {
+    (
+        (area.min_x() + area.width() / 2.) as f64,
+        (area.min_y() + area.height() / 2.) as f64,
+    )
+}
+
 /// Press the **lowest** run of `text` — the footer's buttons sit under everything, and a label in
 /// the body can carry the same word.
 fn click_lowest(runner: &mut TestingRunner, text: &str) {
@@ -355,6 +375,62 @@ fn the_client_options_header_stands_at_the_split_it_declares() {
         OPTION_KEY_WIDTH,
         "and unmoved once a row exists, at the split it declares"
     );
+}
+
+/// **Clicking into either box of a client-option row selects that row**, because the toolbar acts
+/// on the selection: a value typed into a row the highlight never moved to is a Remove aimed at
+/// the wrong one.
+///
+/// It has to be the *field's* focus that does it, not the row's press. `Input` stops propagation
+/// on its focus press (`on_input_focus_press`), so a click that lands in a box never reaches
+/// `TableRow::on_press` — which is exactly how the value box lost its selection when the row's one
+/// a11y id moved to the name box for the suggestion panel.
+#[test]
+fn clicking_into_either_box_of_an_option_row_selects_it() {
+    let (mut runner, (ctx, ..)) = runner("options-select", ConnectionTarget::New, s3_draft());
+    settle(&mut runner);
+
+    // Two rows, so "selected" is a real answer rather than the only one available.
+    ctx.edit(|draft| {
+        draft.client_config.add("timeout".into(), "30s".into());
+        draft
+            .client_config
+            .add("user_agent".into(), "strata".into());
+    });
+    settle(&mut runner);
+    let ids: Vec<u64> = ctx
+        .draft
+        .peek()
+        .client_config
+        .rows()
+        .iter()
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(ids.len(), 2);
+
+    // Nothing is selected until something is clicked.
+    let mut slot = ctx.selected_option;
+    slot.set(None);
+    settle(&mut runner);
+
+    // The **value** box of the second row: found by its own text, which is the one thing on that
+    // line unique to it.
+    let point = centre(field_area(&runner, "strata"));
+    runner.move_cursor(point);
+    runner.click_cursor(point);
+    settle(&mut runner);
+    assert_eq!(
+        *ctx.selected_option.peek(),
+        Some(ids[1]),
+        "clicking the value box selected its own row"
+    );
+
+    // …and the name box of the first, which selects it away again.
+    let point = centre(field_area(&runner, "timeout"));
+    runner.move_cursor(point);
+    runner.click_cursor(point);
+    settle(&mut runner);
+    assert_eq!(*ctx.selected_option.peek(), Some(ids[0]));
 }
 
 /// A URL another connection already holds is refused, because `upsert_connection` replaces on it
