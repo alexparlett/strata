@@ -22,9 +22,10 @@ use strata_model::{
 use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
+use crate::apps::project::query::ScanId;
 use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
-use super::entry::{fold_plan, watches_scan, Folds, ACTIONS_SIZE};
+use super::entry::{fold_plan, watched_scan, Folds, ACTIONS_SIZE};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
@@ -1085,15 +1086,17 @@ fn a_folded_status_column_still_subscribes_to_the_scan() {
         status: false,
         ..shown
     };
+    let scan = Some(ScanId::new());
 
     // While the column is there, `ProfileStatus` in it owns the subscription.
-    assert!(!watches_scan(shown, true));
+    assert_eq!(watched_scan(shown, scan), None);
     // Once it folds, the row has to take the subscription over — this is the case that broke.
-    assert!(watches_scan(folded, true));
+    assert_eq!(watched_scan(folded, scan), scan);
     // And a row with no scan subscribes to nothing, folded or not: a sidebar full of tables must
-    // not dispatch scans nobody asked for.
-    assert!(!watches_scan(folded, false));
-    assert!(!watches_scan(shown, false));
+    // not dispatch scans nobody asked for. Both halves of the condition are in here, so both of
+    // these are the production path rather than an argument only a test ever passes.
+    assert_eq!(watched_scan(folded, None), None);
+    assert_eq!(watched_scan(shown, None), None);
 }
 
 /// The rendered half of the above: at a width where the row has folded, there really is no glyph
