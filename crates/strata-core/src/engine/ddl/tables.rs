@@ -45,7 +45,7 @@ use datafusion::sql::TableReference;
 
 use crate::engine::catalog::{register_external, TableSpec};
 use crate::engine::export::copy_row_count;
-use crate::engine::query::snapshot_ipc_options;
+use crate::engine::query::ipc_write_options;
 use crate::engine::sql::StmtKind;
 use crate::engine::{fold_ident, CATALOG, SCHEMA};
 use crate::project::{internal_source, tables_dir};
@@ -338,7 +338,7 @@ async fn write_into(
         let path = dir.join("part-0.arrow");
         let file = fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let schema = input.schema().inner().clone();
-        let mut writer = FileWriter::try_new_with_options(file, &schema, snapshot_ipc_options()?)
+        let mut writer = FileWriter::try_new_with_options(file, &schema, ipc_write_options()?)
             .map_err(|e| e.to_string())?;
         writer.finish().map_err(|e| e.to_string())?;
     }
@@ -756,6 +756,21 @@ mod tests {
         };
         assert_eq!(report.count, Some(7), "the sink's own count");
         assert_eq!(meta.rows, Some(7), "and the footers agree with it");
+
+        // **A table is a directory of files, not a file** — the Arrow sink writes one per output
+        // partition, so any table big enough to parallelise is multi-file from the first CTAS.
+        // The listing is over the directory, so the count above is a sum across every file *and*
+        // every batch inside each; a single-file assertion here would pass only by accident of
+        // `target_partitions` on the machine running it.
+        let files = fs::read_dir(tables_dir(&root).join("many"))
+            .unwrap()
+            .count();
+        assert!(files >= 1, "the spool wrote its files into the directory");
+        assert_eq!(
+            read(&eng, "SELECT count(*) AS c FROM many").await,
+            vec![vec!["7"]],
+            "and a scan reads every one of the {files} files"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

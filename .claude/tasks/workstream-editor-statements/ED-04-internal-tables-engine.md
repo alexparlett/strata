@@ -2,7 +2,7 @@
 
 **Workstream:** Editor statements · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** ED-02 (ED-03 should land before or with this)
 
-## As built — four corrections to the plan below
+## As built — five corrections to the plan below
 
 1. **The inner query is never rendered back into text.** The plan said "a `COPY (<inner query
    text, sliced verbatim>) TO …` rendered internally". As built, the *parsed statement* goes to
@@ -36,7 +36,19 @@
 3. **`register_external` backstops the reserved namespace with `Blocked::ReservedName` verbatim**,
    so a hand-edited `project.json` and a typed statement are refused in the same words.
 
-4. **A create over a `Reg::Failed` external def's name succeeds and replaces it.** The engine
+4. **`TableUpserted` asks for the dependent views to be re-created.** Found in review, and it is
+   ED-04's because this is the first task that can *produce* a `TableUpserted`. Re-registering a
+   table does not re-plan the views above it — their plans captured the old provider by `Arc`
+   (D10/D11) — so `CREATE OR REPLACE TABLE t` with a changed schema left every view over `t`
+   executing the old plan against the new files, surfacing as a raw
+   `column types must match schema types, expected Int64 but found Utf8` from a view the user
+   never touched. (A *same-schema* replace is fine on its own: the old `ListingTable` re-lists
+   the same directory.) The fold now calls `refresh_table` when `views_to_refresh` is non-empty,
+   which is the row Refresh's own funnel rather than a second copy of the rule — and it serves
+   the other direction too, since `views_to_refresh` widens to every *failing* view, so a
+   `CREATE TABLE archive AS …` brings back the view that could not plan without it.
+
+5. **A create over a `Reg::Failed` external def's name succeeds and replaces it.** The engine
    resolves the namespace against itself (`ctx.table_provider`), and a def the engine refused has
    no provider — the store's namespace is not reachable from `strata-core` and building a shadow
    copy of it would be the second catalog the invariant forbids. The end state is defensible: the
@@ -166,3 +178,19 @@ where the other origin-dependent wordings are (ED-05's report), not a second voc
 
 `cargo test -p strata-core`; run the app end to end (CTAS → sidebar → restart → still there);
 `git status` confirms data files are ignored.
+
+## Open, and deliberately not in this task
+
+- **Compression is not a dial.** A CTAS's files are written by DataFusion's `ArrowFileSink`,
+  which hardcodes `LZ4_FRAME` (`datafusion-datasource-arrow/src/file_format.rs`) and exposes no
+  `COPY … OPTIONS` for it. Ours (`query::ipc_write_options`, shared with the snapshot writer) is
+  LZ4 too, so the two agree today **by coincidence rather than by construction** — noted in that
+  function. Nothing here can choose ZSTD without giving up the sink and hand-writing the IPC, and
+  nothing can choose parquet at all: the format is IPC precisely because parquet cannot round-trip
+  a union or a zero-field struct, which is an arbitrary query result's problem exactly as it was
+  the snapshot's. A "compact this table" capability (ZSTD, or one file instead of N) is a real
+  follow-up and wants its own task alongside ED-05's no-compaction note.
+- **Hive layout.** An internal table is a flat directory of `<write_id>_<n>.arrow`, one file per
+  output partition — multi-file from the first CTAS on any result big enough to parallelise, and
+  read as a directory listing. `partition_by` is empty and `PARTITION BY` is refused by
+  DataFusion's own planner, so there is no `key=value/` tree and no `partition_cols` on the def.

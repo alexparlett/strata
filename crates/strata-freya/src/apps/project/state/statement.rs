@@ -109,10 +109,30 @@ fn apply(to: Settle, effect: &StoreEffect) -> bool {
         // A registered table: the def and the answer land together, so the sidebar row goes
         // straight to `Reg::Ready` rather than flashing `Loading` for a registration that is
         // already done.
-        StoreEffect::TableUpserted { def, meta } => mutated(to, ProjChan::Tables, |p| {
-            p.upsert_table(def.clone());
-            p.table_registered(&def.name, meta.clone());
-        }),
+        //
+        // **The views over it are a second question, and it is the scan driver's.** Re-creating
+        // a table does not re-plan the views above it — their plans captured the old provider by
+        // `Arc` (D10/D11) — so a `CREATE OR REPLACE TABLE` that changes the schema leaves every
+        // view over it executing the old one against the new files, and the user gets a raw
+        // Arrow "column types must match schema types" from a view they did not touch. The same
+        // request also serves the other direction: a `CREATE TABLE` that finally provides the
+        // name a failing view was missing brings that view back, which is exactly what
+        // `views_to_refresh` widens to. Asked through `refresh_table` rather than re-derived
+        // here — one funnel decides which views a table's arrival disturbs, and the row Refresh
+        // already is it.
+        StoreEffect::TableUpserted { def, meta } => {
+            let landed = mutated(to, ProjChan::Tables, |p| {
+                p.upsert_table(def.clone());
+                p.table_registered(&def.name, meta.clone());
+            });
+            // Only when there is something to re-create: the pass would otherwise flip this
+            // table's own row back to `Loading` for a registration that just answered, on the
+            // ordinary CTAS into a project with no views at all.
+            if !to.project.peek().views_to_refresh(&def.name).is_empty() {
+                refresh_table(to.rescan, def.name.clone());
+            }
+            landed
+        }
         // `dependents` are named in the report's own sentence and deliberately **not** cascaded:
         // a `ViewTable`'s inlined plan goes on executing until reload, so nothing here is stale
         // yet — and the epoch bump makes every tab's diagnostics re-derive at once, which is the

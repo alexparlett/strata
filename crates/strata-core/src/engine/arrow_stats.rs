@@ -235,7 +235,7 @@ mod tests {
     use datafusion::object_store::local::LocalFileSystem;
     use datafusion::object_store::path::Path as StorePath;
 
-    use crate::engine::query::snapshot_ipc_options;
+    use crate::engine::query::ipc_write_options;
 
     use super::*;
 
@@ -250,8 +250,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int32, false)]));
         let file = fs::File::create(&path).unwrap();
         let mut writer =
-            FileWriter::try_new_with_options(file, &schema, snapshot_ipc_options().unwrap())
-                .unwrap();
+            FileWriter::try_new_with_options(file, &schema, ipc_write_options().unwrap()).unwrap();
         for batch in 0..batches {
             let values: ArrayRef = Arc::new(Int32Array::from(
                 (0..rows)
