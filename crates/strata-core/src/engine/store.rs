@@ -13,18 +13,20 @@
 //! user read, or not at all (anonymous). The one place a credential value exists is inside
 //! [`SdkCredentials::get_credential`], for the length of one signed request.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use aws_config::profile::ProfileFileCredentialsProvider;
 use aws_config::provider_config::ProviderConfig;
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
+use aws_types::os_shim_internal::{Env, Fs};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::*;
-use object_store::aws::{AmazonS3Builder, AwsCredential, AwsCredentialProvider};
-use object_store::gcp::GoogleCloudStorageBuilder;
+use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, AwsCredentialProvider};
+use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
 use object_store::http::HttpBuilder;
-use object_store::{CredentialProvider, ObjectStore};
+use object_store::{ClientConfigKey, CredentialProvider, ObjectStore};
 
 use strata_model::{ConnectionDef, GcsAuth, Provider, S3Auth};
 
@@ -54,13 +56,18 @@ use strata_model::{ConnectionDef, GcsAuth, Provider, S3Auth};
 /// was edited leaves the store registered under the *old* URL. That is an edit, and the edit
 /// gesture owns it (Connections 03) — nothing here ever sees the def it replaced.
 pub async fn connect(ctx: &SessionContext, conn: &ConnectionDef) -> Result<(), String> {
-    if conn.bucket.trim().is_empty() {
-        return Err("This connection has no bucket.".into());
-    }
+    // **The provider's own naming rules, checked from the def's own module** — the same call the
+    // connection editor makes, so a name refused at the field is refused here in the same words
+    // and a name this accepts is one the editor would have let through. A blank bucket, a name
+    // carrying a path and every rule below them are all this one answer.
+    conn.provider.check_address(&conn.address)?;
+    // The client options are the def's other half, and refused on the same terms: a name
+    // `object_store` has never heard of would otherwise be dropped silently at build time.
+    check_client_config(&conn.client_config)?;
     let url = ObjectStoreUrl::parse(conn.url()).map_err(|e| {
         format!(
             "'{}' is not a bucket Strata can register: {e}",
-            conn.bucket.trim()
+            conn.address.trim()
         )
     })?;
     match build(conn).await {
@@ -94,10 +101,175 @@ pub fn disconnect(ctx: &SessionContext, url: &str) {
     }
 }
 
+/// Every profile named in this machine's own AWS configuration, sorted — what the connection
+/// editor's **Named profile** picker offers (W7 · 03, spec §6).
+///
+/// A *name*, and nothing else: this reads the section headers of `~/.aws/config` and
+/// `~/.aws/credentials` and hands back the list. Nothing in a profile's body is read, kept or
+/// shown, which is what keeps a discovery of the user's credentials free of their credentials.
+///
+/// Parsed by `aws-config` rather than by us, because the file's rules are not the ini rules they
+/// look like: a profile is `[profile x]` in one file and `[x]` in the other, `AWS_CONFIG_FILE`
+/// and `AWS_SHARED_CREDENTIALS_FILE` move both, and the two files merge. A hand-rolled reader
+/// that got any of that wrong would offer a list the credential provider then disagrees with —
+/// and this list exists precisely so the two agree.
+///
+/// **Empty means empty**, and a parse failure is empty too. There is nothing to report: the file
+/// belongs to the user's own AWS setup rather than to Strata, and the editor says so where the
+/// list would have been. What the *connection* does with a name it cannot resolve is
+/// [`profile_credentials`]'s answer, which is the one that reaches a row.
+pub async fn aws_profiles() -> Vec<String> {
+    // `Default::default()` is `EnvConfigFiles` — the standard pair of profile files, resolved
+    // through `env` so the two override variables are honoured. Named by inference rather than
+    // by path: `aws-config`'s own alias for the type is deprecated in favour of one that would
+    // cost a second direct dependency on `aws-runtime` for a word.
+    let profiles = aws_config::profile::load(&Fs::real(), &Env::real(), &Default::default(), None)
+        .await
+        .map(|set| set.profiles().map(str::to_string).collect::<Vec<_>>());
+    let mut profiles = match profiles {
+        Ok(profiles) => profiles,
+        Err(e) => {
+            tracing::debug!("no AWS profiles: {e}");
+            return Vec::new();
+        }
+    };
+    profiles.sort_unstable();
+    profiles
+}
+
+/// One tunable of the HTTP client every object store is built on — `object_store`'s
+/// [`ClientConfigKey`], with the sentence the editor's picker shows beside it.
+///
+/// The **name** is `ClientConfigKey`'s own (`AsRef<str>`), so what a connection stores is what
+/// `from_str` reads back; the description is ours, because the crate's is a doc comment and not a
+/// value.
+pub struct ClientKey {
+    pub name: &'static str,
+    pub what: &'static str,
+}
+
+/// Every client option a connection may set, in the order the picker offers them.
+///
+/// A written-down table, because `ClientConfigKey` has no enumeration of itself — the same shape
+/// and the same reason as `ENGINE_KEYS` for DataFusion's settings. It is kept honest from the
+/// other side: [`check_client_config`] parses every name through `ClientConfigKey::from_str`, so
+/// a typo here is a test failure rather than an option that silently never applies
+/// (`tests::every_offered_client_key_is_one_object_store_knows`).
+///
+/// Two of `object_store`'s keys are deliberately **absent**, and for the same reason in both
+/// halves: they are already said elsewhere, and a second control for one setting is two controls
+/// that can disagree. `allow_http` is the S3 provider's own
+/// [`S3Store::allow_http`](strata_model::S3Store::allow_http) toggle, and on an HTTP connection it
+/// is the **scheme the user typed** ([`build`] derives it); `default_content_type` describes an
+/// upload, and nothing here writes.
+pub const CLIENT_KEYS: &[ClientKey] = &[
+    ClientKey {
+        name: "timeout",
+        what: "Whole-request timeout, from connect to the last byte of the body (30s, 500ms)",
+    },
+    ClientKey {
+        name: "connect_timeout",
+        what: "Timeout for the connect phase alone",
+    },
+    ClientKey {
+        name: "pool_idle_timeout",
+        what: "How long an idle connection is kept alive",
+    },
+    ClientKey {
+        name: "pool_max_idle_per_host",
+        what: "Maximum idle connections kept per host",
+    },
+    ClientKey {
+        name: "allow_invalid_certificates",
+        what: "Trust any TLS certificate. Every site, including expired ones - a last resort",
+    },
+    ClientKey {
+        name: "proxy_url",
+        what: "HTTP proxy to send requests through",
+    },
+    ClientKey {
+        name: "proxy_ca_certificate",
+        what: "PEM certificate authority for the proxy connection",
+    },
+    ClientKey {
+        name: "proxy_excludes",
+        what: "Hosts that bypass the proxy",
+    },
+    ClientKey {
+        name: "user_agent",
+        what: "User-Agent header this connection sends",
+    },
+    ClientKey {
+        name: "http1_only",
+        what: "Use HTTP/1 only",
+    },
+    ClientKey {
+        name: "http2_only",
+        what: "Use HTTP/2 only",
+    },
+    ClientKey {
+        name: "http2_keep_alive_interval",
+        what: "How often to send an HTTP/2 keep-alive ping",
+    },
+    ClientKey {
+        name: "http2_keep_alive_timeout",
+        what: "How long to wait for a keep-alive ping to be acknowledged",
+    },
+    ClientKey {
+        name: "http2_keep_alive_while_idle",
+        what: "Keep sending HTTP/2 pings while the connection is idle",
+    },
+    ClientKey {
+        name: "http2_max_frame_size",
+        what: "Maximum HTTP/2 frame size",
+    },
+    ClientKey {
+        name: "randomize_addresses",
+        what: "Shuffle resolved addresses, spreading connections over more servers",
+    },
+];
+
+/// The catalogue entry for `name`, if this is a client option a connection may set.
+pub fn client_key(name: &str) -> Option<&'static ClientKey> {
+    CLIENT_KEYS.iter().find(|k| k.name == name)
+}
+
+/// Whether a connection's client options are ones the store will accept — **the same call the
+/// connection editor makes**, so an option refused at the field is refused here in the same words.
+///
+/// Two failures, and neither is `object_store`'s to report: a name it has never heard of would be
+/// dropped on the floor by `from_str` at build time with nothing said, and a blank value would be
+/// handed to a parser that expects a duration or a boolean. Both are told here, naming the key.
+pub fn check_client_config(config: &BTreeMap<String, String>) -> Result<(), String> {
+    for (name, value) in config {
+        if client_key(name).is_none() {
+            return Err(format!(
+                "'{name}' is not a client option Strata can set on a connection."
+            ));
+        }
+        if value.trim().is_empty() {
+            return Err(format!("The client option '{name}' has no value."));
+        }
+    }
+    Ok(())
+}
+
+/// Resolve a connection's client options into `object_store`'s own keys, in a stable order.
+///
+/// Unknown names are **skipped rather than refused** here, because [`connect`] has already run
+/// [`check_client_config`] over the same map and this is the second half of one answer; a def that
+/// somehow reached this point with one would have failed above.
+fn client_options(conn: &ConnectionDef) -> Vec<(ClientConfigKey, String)> {
+    conn.client_config
+        .iter()
+        .filter_map(|(name, value)| Some((name.parse().ok()?, value.trim().to_string())))
+        .collect()
+}
+
 /// The store itself, per provider. Split from [`connect`] so the registration is one line
 /// with one meaning: every way this can fail is a way of describing the connection wrong.
 async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
-    let bucket = conn.bucket.trim();
+    let bucket = conn.address.trim();
     match &conn.provider {
         Provider::S3(s3) => {
             // Region is not optional and cannot be inferred: `AmazonS3Builder` silently
@@ -112,6 +284,18 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
                 .with_region(region);
             let endpoint = s3.endpoint.trim();
             if !endpoint.is_empty() {
+                // **Refused by name, because reqwest refuses it namelessly.** `ClientOptions`
+                // builds its client `https_only(!allow_http)`, so a plain-`http` endpoint without
+                // the toggle fails every request with "HTTP error: builder error" — no host, no
+                // scheme, nothing to act on. The HTTP provider derives its answer from the scheme
+                // the user typed; this one has a control of its own, so the honest thing is to say
+                // which control. (Cost an afternoon once, on the connection editor's own tests.)
+                if endpoint.starts_with("http://") && !s3.allow_http {
+                    return Err(format!(
+                        "The endpoint '{endpoint}' is plain HTTP. Turn on 'Allow plain HTTP' for \
+                         this connection, or give it an https endpoint."
+                    ));
+                }
                 builder = builder
                     .with_endpoint(endpoint)
                     .with_allow_http(s3.allow_http);
@@ -128,6 +312,12 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
                     builder.with_credentials(profile_credentials(region, profile).await?)
                 }
             };
+            // **Last, so an explicit option wins.** `allow_http` is the one key both halves can
+            // reach (the endpoint toggle above sets it), and the user's own table is the more
+            // specific statement of the two.
+            for (key, value) in client_options(conn) {
+                builder = builder.with_config(AmazonS3ConfigKey::Client(key), value);
+            }
             builder
                 .build()
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
@@ -155,17 +345,37 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
                 }
                 GcsAuth::Anonymous => builder.with_skip_signature(true),
             };
+            for (key, value) in client_options(conn) {
+                builder = builder.with_config(GoogleConfigKey::Client(key), value);
+            }
             builder
                 .build()
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
                 .map_err(|e| format!("Cannot reach '{}': {e}", conn.url()))
         }
-        // A public origin: no credentials to resolve, and nothing to get wrong but the URL.
-        Provider::Http => HttpBuilder::new()
-            .with_url(conn.url())
-            .build()
-            .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-            .map_err(|e| format!("Cannot reach '{}': {e}", conn.url())),
+        // A public origin: no credentials to resolve, and nothing to get wrong but the URL —
+        // whose scheme is the def's own, so a plain-`http` origin is reached as one.
+        // The one builder that takes `ClientConfigKey` directly; the two above wrap it in their
+        // own config enum, and all three land on the same `ClientOptions`.
+        Provider::Http => {
+            // **Plain `http` is allowed exactly when the address asks for it.** `ClientOptions`
+            // builds a reqwest client with `https_only(!allow_http)`, so without this every
+            // request to an `http://` origin fails before it leaves the process, with a
+            // "builder error" that names nothing. It is derived rather than offered as a
+            // control because the user has already said which they meant, in the scheme: a
+            // toggle beside it could only disagree with the URL above it.
+            let insecure = conn.address.trim().starts_with("http://");
+            let mut builder = HttpBuilder::new()
+                .with_url(conn.url())
+                .with_config(ClientConfigKey::AllowHttp, insecure.to_string());
+            for (key, value) in client_options(conn) {
+                builder = builder.with_config(key, value);
+            }
+            builder
+                .build()
+                .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+                .map_err(|e| format!("Cannot reach '{}': {e}", conn.url()))
+        }
     }
 }
 
@@ -290,8 +500,9 @@ mod tests {
 
     fn s3(bucket: &str, store: S3Store) -> ConnectionDef {
         ConnectionDef {
-            bucket: bucket.into(),
+            address: bucket.into(),
             provider: Provider::S3(store),
+            client_config: Default::default(),
         }
     }
 
@@ -317,14 +528,18 @@ mod tests {
                 },
             ),
             ConnectionDef {
-                bucket: "public-lake".into(),
+                address: "public-lake".into(),
                 provider: Provider::Gcs(GcsStore {
                     auth: GcsAuth::Anonymous,
                 }),
+                client_config: Default::default(),
             },
+            // HTTP's address is the whole origin, scheme and all — it is what the user typed
+            // and what the registry keys on, with nothing composed in between.
             ConnectionDef {
-                bucket: "example.com".into(),
+                address: "http://aserver:8484".into(),
                 provider: Provider::Http,
+                client_config: Default::default(),
             },
         ] {
             connect(&ctx, &conn).await.expect("registers");
@@ -507,19 +722,30 @@ mod tests {
             ),
             (
                 ConnectionDef {
-                    bucket: "lake".into(),
+                    address: "lake".into(),
                     provider: Provider::Gcs(GcsStore {
                         auth: GcsAuth::ServiceAccount { path: "".into() },
                     }),
+                    client_config: Default::default(),
                 },
                 "service-account file",
             ),
             (
                 ConnectionDef {
-                    bucket: "   ".into(),
+                    address: "   ".into(),
                     provider: Provider::Http,
+                    client_config: Default::default(),
                 },
-                "bucket",
+                "spaces",
+            ),
+            // A scheme is half of an HTTP address, so an origin without one is not one.
+            (
+                ConnectionDef {
+                    address: "aserver:8484".into(),
+                    provider: Provider::Http,
+                    client_config: Default::default(),
+                },
+                "scheme",
             ),
         ];
         for (conn, wanted) in cases {
@@ -528,22 +754,151 @@ mod tests {
         }
     }
 
-    /// A bucket is scheme + authority, so a path in it is a def that would register under a
-    /// key nothing ever looks up. Refused at the connection, where the user can fix it —
-    /// rather than silently, leaving every table over it reporting no object store.
+    /// **Every name we offer is one `object_store` answers to.** The catalogue is written down
+    /// (`ClientConfigKey` cannot enumerate itself), so this is what keeps it from drifting: a
+    /// typo would otherwise be a picker entry that parses to nothing and silently never applies.
+    #[test]
+    fn every_offered_client_key_is_one_object_store_knows() {
+        for key in CLIENT_KEYS {
+            let parsed: ClientConfigKey = key
+                .name
+                .parse()
+                .unwrap_or_else(|_| panic!("object_store does not know '{}'", key.name));
+            // Round-trips, so the name we store is the one it reads back — not a synonym.
+            assert_eq!(parsed.as_ref(), key.name);
+            assert!(!key.what.is_empty(), "{} has no description", key.name);
+        }
+        // The two deliberate omissions, so removing them stays a decision rather than an
+        // oversight: `allow_http` is the S3 endpoint toggle's, and nothing here uploads.
+        for absent in ["allow_http", "default_content_type"] {
+            assert!(
+                absent.parse::<ClientConfigKey>().is_ok(),
+                "still a real key, just not offered"
+            );
+            assert!(client_key(absent).is_none(), "{absent} is not offered");
+        }
+    }
+
+    /// A client option is refused for the two things `object_store` would not report: a name it
+    /// has never heard of (dropped on the floor at build time) and a blank value (handed to a
+    /// parser expecting a duration). Both name the key.
     #[tokio::test]
-    async fn a_bucket_carrying_a_path_is_refused() {
+    async fn a_client_option_it_cannot_use_is_refused_by_name() {
         let ctx = SessionContext::new();
-        let e = connect(
-            &ctx,
-            &ConnectionDef {
-                bucket: "example.com/data".into(),
-                provider: Provider::Http,
-            },
-        )
-        .await
-        .expect_err("refused");
-        assert!(e.contains("example.com/data"), "{e}");
+        for (config, wanted) in [
+            ([("nonsense", "1")], "'nonsense' is not a client option"),
+            ([("timeout", "  ")], "'timeout' has no value"),
+        ] {
+            let conn = ConnectionDef {
+                client_config: config
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                ..s3(
+                    "acme-lake",
+                    S3Store {
+                        region: "eu-west-2".into(),
+                        auth: S3Auth::Anonymous,
+                        ..Default::default()
+                    },
+                )
+            };
+            let e = connect(&ctx, &conn).await.expect_err("refused");
+            assert!(e.contains(wanted), "{e}");
+        }
+    }
+
+    /// …and one it *can* use reaches the store. Asserted through a successful registration rather
+    /// than by reading the client back (`ClientOptions` exposes nothing): the value is parsed by
+    /// `object_store` at build, so a duration it could not read would fail the build here.
+    #[tokio::test]
+    async fn a_client_option_is_applied_to_the_store_it_builds() {
+        let ctx = SessionContext::new();
+        let conn = ConnectionDef {
+            client_config: [("timeout", "45s"), ("user_agent", "strata-test")]
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..s3(
+                "acme-lake",
+                S3Store {
+                    region: "eu-west-2".into(),
+                    auth: S3Auth::Anonymous,
+                    ..Default::default()
+                },
+            )
+        };
+        connect(&ctx, &conn).await.expect("registers");
+        assert!(reaches(&ctx, "s3://acme-lake/data/x.parquet"));
+    }
+
+    /// **A plain-`http` S3 endpoint without the toggle is refused by name.** Left to
+    /// `object_store` it is not refused at all until the first request, and then only as
+    /// reqwest's "builder error" — no host, no scheme, nothing the user can act on — because the
+    /// client is built `https_only(!allow_http)`. The message has to name the control.
+    #[tokio::test]
+    async fn a_plain_http_endpoint_without_the_toggle_is_refused_by_name() {
+        let ctx = SessionContext::new();
+        let conn = |allow_http| {
+            s3(
+                "acme-lake",
+                S3Store {
+                    region: "eu-west-2".into(),
+                    auth: S3Auth::Anonymous,
+                    endpoint: "http://localhost:9000".into(),
+                    allow_http,
+                },
+            )
+        };
+        let e = connect(&ctx, &conn(false)).await.expect_err("refused");
+        assert!(
+            e.contains("plain HTTP") && e.contains("Allow plain HTTP"),
+            "{e}"
+        );
+        // …and with the toggle on it is exactly the connection the MinIO test drives.
+        connect(&ctx, &conn(true)).await.expect("registers");
+        // An https endpoint needs no toggle.
+        let mut secure = conn(false);
+        if let Provider::S3(s3) = &mut secure.provider {
+            s3.endpoint = "https://s3.example.net".into();
+        }
+        connect(&ctx, &secure).await.expect("registers");
+    }
+
+    /// An address is scheme + authority, so a path in one is a def that would register under a
+    /// key nothing ever looks up. Refused at the connection, where the user can fix it — rather
+    /// than silently, leaving every table over it reporting no object store.
+    ///
+    /// Both providers that can carry one, because they carry it differently: an HTTP address is
+    /// the whole URL, so its path comes after the origin, while a bucket name simply may not
+    /// contain a slash at all.
+    #[tokio::test]
+    async fn an_address_carrying_a_path_is_refused() {
+        let ctx = SessionContext::new();
+        for (conn, quoted) in [
+            (
+                ConnectionDef {
+                    address: "https://aserver:8484/fake".into(),
+                    provider: Provider::Http,
+                    client_config: Default::default(),
+                },
+                "'/fake'",
+            ),
+            (
+                ConnectionDef {
+                    address: "acme-lake/data".into(),
+                    provider: Provider::S3(S3Store {
+                        region: "eu-west-2".into(),
+                        ..Default::default()
+                    }),
+                    client_config: Default::default(),
+                },
+                "lowercase letters",
+            ),
+        ] {
+            let e = connect(&ctx, &conn).await.expect_err("refused");
+            assert!(e.contains(quoted), "{e}");
+        }
     }
 
     /// Re-connecting replaces, rather than stacking or failing — a re-scan re-runs the whole

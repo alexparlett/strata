@@ -48,11 +48,13 @@
 //! instead of spawning its own pass — a task spawned from a handler in here belongs to a scope
 //! the collapse tears down before the future is ever polled.
 //!
-//! ## Add and Edit are inert here (AGENTS.md §5)
+//! ## Add and Edit set a slot; the editor window is the project root's
 //!
-//! The editor forms are **Connections 03**'s, so the two gestures that open one are rendered and
-//! disabled rather than wired to a local one-off. Nothing at these call sites changes when that
-//! task lands but the handler behind them.
+//! All three gestures that open the editor — the header's `+`, the empty state's CTA and a row's
+//! *Edit connection* — do one thing: set [`ConnectionRequest`]. `ConnectionLauncher` at the
+//! project root opens the window, because that is where the app-globals, the engine and this
+//! window's log actually live, and a sidebar row has no business holding any of them. Exactly
+//! the split Configure makes, and the same reason Forget only sets the confirm slot.
 
 #[cfg(test)]
 mod interaction;
@@ -65,8 +67,9 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::ConnectionDef;
 
+use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::state::{ProjChan, ProjectState, Reg};
-use crate::apps::project::views::DropTarget;
+use crate::apps::project::views::{ConnectionRequest, DropTarget};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -326,7 +329,7 @@ impl Component for ConnectionRow {
             // The bucket absorbs the slack and truncates, so the status run and the ⋮ stay
             // visible however long it is named — the catalog entry row's arrangement exactly.
             .child(
-                MonoValue::new(self.def.bucket.clone())
+                MonoValue::new(self.def.address.clone())
                     .color(self.theme.bucket_color)
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
@@ -371,6 +374,9 @@ struct ConnectionActions {
     /// owns the store mutation, the persist and the `Engine::disconnect` behind it (P3-05's
     /// rule, and W7's fourth target).
     drop_target: State<Option<DropTarget>>,
+    /// The editor-window request slot, on the same terms: setting it *is* Edit, and
+    /// `ConnectionLauncher` at the project root opens the window.
+    editor: ConnectionRequest,
     /// The destructive tone, resolved here because a menu is built from an event handler, where
     /// no hook — `use_theme` included — may run.
     danger: Color,
@@ -385,6 +391,7 @@ struct ConnectionActions {
 fn use_connection_actions(tones: Tones) -> ConnectionActions {
     ConnectionActions {
         drop_target: use_consume::<State<Option<DropTarget>>>(),
+        editor: use_consume::<ConnectionRequest>(),
         danger: tones.error,
     }
 }
@@ -401,17 +408,23 @@ fn menu_row(icon: IconName, label: impl Into<String>) -> impl IntoElement {
 
 /// A **connection** row's menu: edit it · forget it (spec §1, `kind:"conn"`).
 ///
-/// **Edit is parked** — rendered, disabled — because the editor forms are Connections 03's and
-/// AGENTS.md §5 forbids folding a local one-off in front of a capability another task owns. A
-/// menu is a list of things you can do right now, which is why this one is greyed rather than
-/// dressed live: pressing it would have to do nothing.
+/// Both items **set a slot and stop** — the editor window and the remove confirm are both the
+/// project root's, and a menu built inside an event handler can run no hook to reach what either
+/// of them needs.
 fn connection_menu(actions: &ConnectionActions, url: String) -> Menu {
     let actions = *actions;
     Menu::new()
         .min_width(Size::px(MENU_WIDTH))
         .child(
             MenuButton::new()
-                .enabled(false)
+                .on_press({
+                    let url = url.clone();
+                    move |_| {
+                        let mut slot = actions.editor;
+                        slot.set(Some(ConnectionTarget::Edit(url.clone())));
+                        ContextMenu::close();
+                    }
+                })
                 .child(menu_row(IconName::Pencil, "Edit connection")),
         )
         .child(Divider::menu())
@@ -461,15 +474,16 @@ impl Component for ConnectionsHint {
 
 /// The pane header's **+**, which opens the editor on a new connection.
 ///
-/// **Inert until Connections 03**, and disabled rather than live for [`connection_menu`]'s
-/// reason: a control the user can press to no effect is worse than one that says it is not
-/// available yet. Its tooltip is the same either way, so nothing here changes when the editor
-/// lands but the handler.
+/// **It folds under panel pressure** (`ToolbarItem::Custom { folded: None }`, the catalog ↻'s
+/// terms) and, unlike ↻, has no second entry point on the pane: the empty state's CTA is gone the
+/// moment there is one connection. The command palette's *New connection…* is what makes that
+/// fold cost nothing.
 #[derive(PartialEq)]
 pub struct AddConnectionButton;
 
 impl Component for AddConnectionButton {
     fn render(&self) -> impl IntoElement {
+        let editor = use_consume::<ConnectionRequest>();
         TooltipContainer::new(Tooltip::new_text("Add connection"))
             .position(AttachedPosition::Bottom)
             .child(
@@ -477,7 +491,10 @@ impl Component for AddConnectionButton {
                     .flat()
                     .width(Size::px(24.))
                     .height(Size::px(24.))
-                    .enabled(false)
+                    .on_press(move |_: Event<PressEventData>| {
+                        let mut editor = editor;
+                        editor.set(Some(ConnectionTarget::New));
+                    })
                     .child(Icon::new(IconName::Plus).size(14.)),
             )
     }
@@ -495,6 +512,7 @@ struct Empty {
 
 impl Component for Empty {
     fn render(&self) -> impl IntoElement {
+        let editor = use_consume::<ConnectionRequest>();
         rect()
             .width(Size::fill())
             // The pane returns this *instead of* its scrolling body, so it carries the same
@@ -528,18 +546,22 @@ impl Component for Empty {
                 .wrap()
                 .align(TextAlign::Center),
             )
-            // The canvas's primary call to action, and **inert until Connections 03** — see
-            // `AddConnectionButton`. Disabled on the same terms: an empty state whose one button
-            // silently does nothing is a dead end that reads as a bug.
+            // The canvas's primary call to action — the header's `+` by another name, and the
+            // one the reader is actually looking at while this state is on screen.
             .child(
-                Button::new().enabled(false).child(
-                    rect()
-                        .horizontal()
-                        .cross_align(Alignment::Center)
-                        .spacing(6.)
-                        .child(Icon::new(IconName::Plus).size(12.))
-                        .child(Prose::new("Add connection")),
-                ),
+                Button::new()
+                    .on_press(move |_: Event<PressEventData>| {
+                        let mut editor = editor;
+                        editor.set(Some(ConnectionTarget::New));
+                    })
+                    .child(
+                        rect()
+                            .horizontal()
+                            .cross_align(Alignment::Center)
+                            .spacing(6.)
+                            .child(Icon::new(IconName::Plus).size(12.))
+                            .child(Prose::new("Add connection")),
+                    ),
             )
     }
 }

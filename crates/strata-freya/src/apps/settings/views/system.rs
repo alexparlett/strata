@@ -26,7 +26,7 @@ use strata_core::config::{OpenPref, HISTORY_MIN};
 
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{Anchor, SettingsCtx};
-use crate::components::form::{DirectoryField, Form, NumberField};
+use crate::components::form::{Form, NumberField, PathField};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 
 /// The canvas's numeric field (`width: 130px`) — the same box the data-display pane's are.
@@ -83,7 +83,7 @@ impl Component for SystemPane {
                         // a leading `~` — so an example in that form is one the app would
                         // silently ignore, from a field whose own browse button only ever
                         // writes absolute paths.
-                        DirectoryField::new(default_dir)
+                        PathField::folder(default_dir)
                             .placeholder("/Users/you/data")
                             .dialog_title("Default project directory")
                             .on_change(move |dir: String| {

@@ -37,6 +37,38 @@ implements + which feature we enable.
 - **Edit is menu-only:** the row is not clickable (cursor `default`); Edit / Forget come from the ⋮ / right-click
   catalog row-menu (`kind:"conn"`; Forget → remove-confirm).
 - Empty state: icon + one-line explainer + **Add connection**.
+- **Add / Edit dialog — as built (Connections 03), a child *window* rather than a dialog**
+  (`data-winframe="conn"`, like Configure and Export). Departures from the canvas, each a state
+  removed rather than a field renamed:
+    - **HTTP is one box holding a whole URL** (`http://aserver:8484`), scheme included — no
+      prefix chip and no scheme picker, because `http://` and `https://` are two different
+      origins and only the person typing knows which their server speaks. A **path is a
+      validation error naming the part to drop**, never trimmed off: the registry keys on scheme
+      and authority, so a connection carrying one would go in under a key nothing looks up.
+    - **A bucket name is checked against its provider's own published rules** before Save and
+      before `connect` — the same call, so the two cannot disagree. S3's are AWS's four (3-63
+      characters, lowercase/digits/dots/hyphens, alphanumeric at both ends, no `..`); GCS's are
+      Google's, which are **not** the same (underscores allowed, a dotted name to 222 with each
+      part to 63, no dotted-decimal IP, no `goog` prefix, no `google`).
+    - **Client options** are a table of `object_store` `ClientConfigKey` rows (timeouts, proxy,
+      HTTP version, user agent), edited as rows and committed as a map, offered on every
+      provider because all three stores are built on one HTTP client. `allow_http` is **not**
+      among them: on HTTP it is derived from the scheme typed, and on S3 it is the endpoint's own
+      toggle — and a plain-`http` endpoint without that toggle is now **refused by name**, because
+      reqwest is built `https_only` and otherwise fails every request with a bare
+      "builder error".
+    - **A new S3 connection opens with a blank region, not `us-east-1`.** That seed is exactly the
+      arrow-rs#2795 default in a user's handwriting — the builder assumes `us-east-1` silently, the
+      credential probe still passes, and the connection registers green over the wrong region.
+      Blank blocks Save and says why; `us-east-1` stays the placeholder.
+    - **A field's error lives in the footer, not on the field.** One value both disables Save and
+      explains it, so the form cannot hold two accounts of its own validity. The label still
+      carries `REQUIRED`.
+    - **HTTP shows the URL box and nothing else** — no auth pill, no region, no endpoint: a
+      control that cannot mean anything for the chosen provider is not shipped disabled.
+  Save writes the def, persists it, deregisters the old URL when an edit **moved** the bucket or
+  the provider, and asks for a whole-catalog pass; the window then watches its own row and closes
+  on `Ready`.
 - **Add / Edit dialog:**
     - **PROVIDER** segmented picker (S3 / GCS / HTTP) — explicit; switching provider sanitises the auth mode to one
       valid for it.
@@ -129,20 +161,29 @@ settings (the same argument as `SourceFormat`: a region means nothing to the HTT
 provider's fields has states where they disagree):
 
 ```json
-{ "bucket": "acme-lake",
+{ "address": "acme-lake",
   "provider": { "provider": "s3", "region": "eu-west-2",
                 "auth": { "mode": "profile", "name": "analytics" },
-                "endpoint": "", "allow_http": false } }
-{ "bucket": "lake",        "provider": { "provider": "gcs", "auth": { "mode": "service-account", "path": "…" } } }
-{ "bucket": "example.com", "provider": { "provider": "http" } }
+                "endpoint": "", "allow_http": false },
+  "client_config": { "timeout": "30s" } }
+{ "address": "lake",                "provider": { "provider": "gcs", "auth": { "mode": "service-account", "path": "…" } } }
+{ "address": "http://aserver:8484", "provider": { "provider": "http" } }
 ```
+
+The field is **`address`, not `bucket`** (`serde(alias = "bucket")` for the name, and
+`ConnectionDef::migrated` for the value — an HTTP connection written under the older shape stored
+the authority alone and derived `https`, so `load_defs` prepends it rather than letting a
+scheme-less URL be refused on the next open): S3 and GCS address a bucket whose scheme their provider states, while an
+HTTP connection addresses a whole origin URL, and one field cannot be named for only one of them.
+`client_config` is absent unless set.
 
 Two deliberate differences from the v11 canvas's flat object, both of them states being removed rather than fields
 being renamed:
 
-- **The bucket is the authority alone**, not the scheme-qualified string. The scheme comes from the provider
-  (`ConnectionDef::url()` → `s3://acme-lake`), so an `s3://` bucket under a GCS provider cannot be written down.
-  The form adds and strips the prefix; `url()` is the registry key.
+- **An S3 / GCS address is the bucket alone**, not the scheme-qualified string. The scheme comes from the provider
+  (`ConnectionDef::url()` → `s3://acme-lake`), so an `s3://` bucket under a GCS provider cannot be written down;
+  the form strips a pasted prefix. **An HTTP address is the whole URL**, because its scheme is not the provider's
+  to state. `url()` is the registry key either way.
 - **`profile` / `saPath` live inside `auth`**, not beside it — `{"mode":"profile","name":…}`. A profile named on an
   Ambient connection is not a state worth having.
 

@@ -532,12 +532,14 @@ mod tests {
             name: "test".into(),
             connections: vec![
                 ConnectionDef {
-                    bucket: "lake".into(),
+                    address: "lake".into(),
                     provider: Provider::S3(S3Store::default()),
+                    client_config: Default::default(),
                 },
                 ConnectionDef {
-                    bucket: "lake".into(),
+                    address: "lake".into(),
                     provider: Provider::Gcs(GcsStore::default()),
+                    client_config: Default::default(),
                 },
             ],
             tables: vec![table("orders"), table("users")],

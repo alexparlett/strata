@@ -83,10 +83,19 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     let path = strata_dir(root).join(PROJECT_JSON);
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut defs: ProjectDefs = from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    // Connections sort on the bucket, which *is* their name (`ConnectionDef`): the same
+    // **Migrated on the way in**, before anything reads one: an HTTP connection written before
+    // its address carried a scheme stored the authority alone, and would now read as a URL with
+    // none. This is the one place project defs come off disk, so it is the one place that has to
+    // know (`ConnectionDef::migrated` is the rule).
+    defs.connections = defs
+        .connections
+        .into_iter()
+        .map(ConnectionDef::migrated)
+        .collect();
+    // Connections sort on their address, which *is* their name (`ConnectionDef`): the same
     // ordering rule, over the field that carries identity here.
     defs.connections
-        .sort_by(|a, b| name_ord(&a.bucket, &b.bucket));
+        .sort_by(|a, b| name_ord(&a.address, &b.address));
     defs.tables.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.views.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.saved_queries
@@ -484,6 +493,33 @@ mod tests {
         // vocabulary and deliberately don't derive `Debug`.
         let loaded = load_defs(&root.0).unwrap();
         assert!(loaded == defs);
+    }
+
+    /// **A `project.json` written before an HTTP address carried its scheme still opens.** The
+    /// file below is exactly the older shape — `bucket`, and the authority alone — and this is the
+    /// one path every project comes off disk through, so it is where the migration has to happen.
+    /// Without it the connection loads as a URL with no scheme and is refused on the next open.
+    #[test]
+    fn an_older_http_connection_is_migrated_on_load() {
+        let root = TempRoot::new("http-migrate");
+        fs::create_dir_all(strata_dir(&root.0)).unwrap();
+        fs::write(
+            strata_dir(&root.0).join(PROJECT_JSON),
+            r#"{"name":"old","connections":[
+                 {"bucket":"example.com:8080","provider":{"provider":"http"}},
+                 {"bucket":"acme-lake","provider":{"provider":"s3","region":"eu-west-2"}}
+               ],"tables":[],"views":[],"saved_queries":[]}"#,
+        )
+        .unwrap();
+
+        let defs = load_defs(&root.0).unwrap();
+        let urls: Vec<String> = defs.connections.iter().map(|c| c.url()).collect();
+        assert_eq!(urls, ["s3://acme-lake", "https://example.com:8080"]);
+        // Every one of them is an address its provider will still accept, which is the whole
+        // point: the migration exists so an old file does not become an amber row.
+        for conn in &defs.connections {
+            assert!(conn.provider.check_address(&conn.address).is_ok());
+        }
     }
 
     #[test]

@@ -231,3 +231,61 @@ anywhere. Both have regression tests (`engine::store::tests`, `register::tests`)
 
 ---
 
+**Connections 03 (the editor, W7)** is ✅ — the window the pane's `+`, its empty-state CTA and a
+row's *Edit* all open, plus `upsert_connection` and the AWS profile discovery behind it. Configure's
+window shape throughout (child of the project window, pinned to the *subtree*, single-instance per
+target, writing that window's store through `persisted_defs`), so what is worth recording is only
+where it differs.
+
+**Save asks for a whole-catalog pass, and no `ScanScope::Connection` was added.** `plan_scan` puts
+connections in `All` alone, and its own doc names the re-connect case — a corrected region, an
+`aws sso login` — as "exactly what ↻ is for". That case *is* this window, so Save is the ↻ the user
+would otherwise press with the def written first; it is also the honest width, since every table
+over the bucket was registered against the store the save replaces. **An edit that moves the bucket
+or the provider deregisters the old URL in the footer** — `connect` is additive and only ever sees
+the def it is given, so nothing else ever would. **The window then watches its own row** rather
+than awaiting a second registration path: `Ready` closes it, `Failed` keeps the engine's sentence
+beside the field that caused it, which is worth more here than anywhere else because a credential
+refusal names a control still on screen.
+
+Three canvas departures, each a state removed. **A new S3 connection opens with a blank region**,
+where the canvas seeds `us-east-1`: that seed is arrow-rs#2795's silent default in a user's
+handwriting, and the credential probe would still pass, so the connection registers green over the
+wrong region. **A field's error is the footer's**, one value that both disables Save and explains
+it, so a form cannot hold two accounts of its own validity. **HTTP shows the URL box and nothing
+else** — an auth pill that can never mean anything is not a control, the same call Configure made
+about its one-option LOCATION toggle.
+
+Two smaller things worth not re-deriving. **`ProviderId` is the discriminant a picker needs**, and
+`Provider::id()` / `Display` / `scheme()` now delegate to it — so `GCS` and `gs` are each written
+down once across the badge, the picker and the registry key, rather than a third time here. And the
+**Named-profile picker is a real discovery** (`Engine::aws_profiles`, parsed by `aws-config`
+because `[profile x]` versus `[x]`, `AWS_CONFIG_FILE` and the two files merging are not the ini
+rules they look like) with three distinguishable states, because an empty dropdown cannot tell "no
+profiles" from "not read yet".
+
+A later pass over the same task settled four more, and they are the ones a reader is most likely
+to re-derive. **The def's field is `address`, not `bucket`** (aliased for old files), because the
+providers do not address the same thing — and **an HTTP connection's address is a whole URL**,
+scheme and all, in one box: `http` and `https` are two different origins, so there is no chip, no
+picker and no `Provider::scheme`. A **path is refused naming the part to drop**, never trimmed,
+since the registry keys on scheme and authority. `allow_http` for HTTP is **derived from the typed
+scheme**, and that one is worth not rediscovering: `ClientOptions` builds reqwest with
+`https_only(!allow_http)`, so a plain-`http` origin failed before any request left the process,
+with a "builder error" that named nothing. Only the MinIO test found it.
+
+**Every rule about an address lives in `Provider::check_address`**, called by the store and by the
+editor, because S3's naming rules and GCS's are genuinely different and two copies would drift.
+**Client options** (`client_config`) sit on the def rather than in a provider — one HTTP client
+serves all three stores — offered from `CLIENT_KEYS` and refused by `check_client_config`, one
+call on both sides again. And the editor's form keys **every** row by the provider: keying only
+the rows that come and go still leaves the ones that stay sitting at a new index, which Freya's
+differ records as *moved* and then unwraps a scope the move left behind.
+
+Two silent failures the review pass caught, and both are migration-shaped. **`serde(alias)`
+migrates a field's name, not its value**: an HTTP connection stored before its address carried a
+scheme held the authority alone and derived `https`, so after the rename it read as a URL with no
+scheme and was refused — `ConnectionDef::migrated` runs in `project::load_defs`, the one path defs
+come off disk. And **a plain-`http` endpoint without `allow_http` is refused by name**, because
+`ClientOptions` builds reqwest `https_only(!allow_http)` and every request then fails with a bare
+"builder error" that names neither the host nor the control to change.

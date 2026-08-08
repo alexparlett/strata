@@ -18,20 +18,22 @@ use strata_core::theme::load;
 use strata_model::{ConnectionDef, GcsAuth, GcsStore, Provider, S3Auth, S3Store};
 
 use super::{Connections, BODY_PAD, EMPTY_PAD};
+use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
-use crate::apps::project::views::DropTarget;
+use crate::apps::project::views::{ConnectionRequest, DropTarget};
 use crate::components::{PANE_BODY_MIN_W, PROGRESS_HOLD};
 use crate::theme::strata_theme;
 
 fn s3(bucket: &str, region: &str, auth: S3Auth) -> ConnectionDef {
     ConnectionDef {
-        bucket: bucket.into(),
+        address: bucket.into(),
         provider: Provider::S3(S3Store {
             region: region.into(),
             auth,
             endpoint: String::new(),
             allow_http: false,
         }),
+        client_config: Default::default(),
     }
 }
 
@@ -52,10 +54,11 @@ fn project() -> ProjectState {
                 },
             ),
             ConnectionDef {
-                bucket: "lake".into(),
+                address: "lake".into(),
                 provider: Provider::Gcs(GcsStore {
                     auth: GcsAuth::Anonymous,
                 }),
+                client_config: Default::default(),
             },
         ],
         ..Default::default()
@@ -80,6 +83,7 @@ fn app() -> impl IntoElement {
 type Handles = (
     RadioStation<ProjectState, ProjChan>,
     State<Option<DropTarget>>,
+    ConnectionRequest,
 );
 
 /// The pane's default test width — a comfortable sidebar.
@@ -105,10 +109,14 @@ fn runner_at(store: ProjectState, width: f32) -> (TestingRunner, Handles) {
             // The remove-confirm slot Forget sets. The dialog itself is the window root's and is
             // not mounted here — setting the slot is the whole of what this menu item does.
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
+            // …and the editor-window slot Add and Edit set, on exactly the same terms: the
+            // window is opened by `ConnectionLauncher` at the project root, which is not mounted
+            // here either.
+            let editor = r.provide_root_context(|| State::create(None::<ConnectionTarget>));
             r.provide_root_context(|| {
                 RadioStation::<SessionState, Chan>::create(SessionState::default())
             });
-            (project, drop_target)
+            (project, drop_target, editor)
         },
         1.,
     )
@@ -211,7 +219,7 @@ fn status_glyph(runner: &TestingRunner, bucket: &str) -> Option<Area> {
 /// row exists to prevent.
 #[test]
 fn a_refused_connection_carries_the_engines_reason_on_its_triangle() {
-    let (mut runner, _) = runner(project());
+    let (mut runner, ..) = runner(project());
     settle(&mut runner);
 
     // Not in the row itself: a settled row is clean, and a refused one says it with a glyph.
@@ -241,7 +249,7 @@ fn a_refused_connection_carries_the_engines_reason_on_its_triangle() {
 /// worth spending the slot on is the one row that needs fixing.
 #[test]
 fn a_settled_connection_wears_no_glyph() {
-    let (mut runner, _) = runner(project());
+    let (mut runner, ..) = runner(project());
     settle(&mut runner);
 
     assert!(shows(&runner, "acme-lake"), "the row itself is listed");
@@ -257,7 +265,7 @@ fn a_settled_connection_wears_no_glyph() {
 /// over the network — so this is the row a user is most likely to sit watching.
 #[test]
 fn a_connection_still_waiting_past_the_hold_spins() {
-    let (mut runner, _) = runner(project());
+    let (mut runner, ..) = runner(project());
     settle(&mut runner);
     assert!(
         status_glyph(&runner, "lake").is_none(),
@@ -285,7 +293,7 @@ fn a_connection_still_waiting_past_the_hold_spins() {
 /// renders it.
 #[test]
 fn an_unanswered_connection_states_nothing_until_the_hold_expires() {
-    let (mut runner, _) = runner(project());
+    let (mut runner, ..) = runner(project());
     settle(&mut runner);
 
     // The GCS row is still `Loading`, and well inside the hold.
@@ -300,7 +308,7 @@ fn an_unanswered_connection_states_nothing_until_the_hold_expires() {
 /// label is the product's word, not the URL scheme's: GCS, never `gs`.
 #[test]
 fn each_row_is_badged_with_its_provider() {
-    let (mut runner, _) = runner(project());
+    let (mut runner, ..) = runner(project());
     settle(&mut runner);
 
     let texts = texts(&runner);
@@ -321,7 +329,7 @@ fn each_row_is_badged_with_its_provider() {
 /// forgetting `s3://lake` and `gs://lake` two different gestures.
 #[test]
 fn forget_asks_the_confirm_by_the_connections_url() {
-    let (mut runner, (project, drop_target)) = runner(project());
+    let (mut runner, (project, drop_target, _)) = runner(project());
     settle(&mut runner);
 
     right_click_row(&mut runner, "acme-lake");
@@ -340,11 +348,49 @@ fn forget_asks_the_confirm_by_the_connections_url() {
     );
 }
 
+/// **Edit asks for the editor by the row's URL**, and does nothing else — the window is
+/// `ConnectionLauncher`'s at the project root, exactly as the removal is the confirm dialog's.
+///
+/// The URL and not the bucket, for the reason every other lookup here uses it: `s3://lake` and
+/// `gs://lake` are two connections, so a bucket-addressed edit would open one of them on the
+/// other's def and its first Save would write over it.
+#[test]
+fn edit_asks_for_the_editor_by_the_connections_url() {
+    let (mut runner, (project, _, editor)) = runner(project());
+    settle(&mut runner);
+
+    right_click_row(&mut runner, "lake");
+    click_text(&mut runner, "Edit connection");
+
+    assert_eq!(
+        editor.peek().clone(),
+        Some(ConnectionTarget::Edit("gs://lake".into())),
+        "the editor is asked for by the URL the engine registered under"
+    );
+    assert_eq!(
+        project.peek().connections.len(),
+        3,
+        "and the menu item changed nothing itself"
+    );
+}
+
+/// The empty state's call to action asks for a **new** connection. It is the only entry point on
+/// screen while it is up — the header's `+` is the same request, and both go through the slot.
+#[test]
+fn the_empty_states_cta_asks_for_a_new_connection() {
+    let (mut runner, (_, _, editor)) = runner(empty_project());
+    settle(&mut runner);
+
+    click_text(&mut runner, "Add connection");
+
+    assert_eq!(editor.peek().clone(), Some(ConnectionTarget::New));
+}
+
 /// The ⋮ opens the **same** menu the right-click does. Two triggers, one item list — the pair the
 /// catalog's rows keep in step by building one `Menu`, kept in step here the same way.
 #[test]
 fn the_actions_button_opens_the_same_menu() {
-    let (mut runner, _) = runner(project());
+    let (mut runner, ..) = runner(project());
     settle(&mut runner);
 
     press_row_actions(&mut runner, "broken");
@@ -372,7 +418,7 @@ fn the_actions_button_opens_the_same_menu() {
 #[test]
 fn a_drag_that_shrinks_the_pane_squeezes_the_rows_rather_than_spilling_them() {
     let width = PANE_BODY_MIN_W + BODY_PAD.left() + BODY_PAD.right();
-    let (mut runner, _) = runner_at(project(), width);
+    let (mut runner, ..) = runner_at(project(), width);
     settle(&mut runner);
 
     let overflowing: Vec<(f32, f32)> = runner
@@ -418,7 +464,7 @@ fn empty_project() -> ProjectState {
 /// No connections is not a fault, so the empty state says what one is *for*.
 #[test]
 fn an_empty_project_explains_what_a_connection_is_for() {
-    let (mut runner, _) = runner(empty_project());
+    let (mut runner, ..) = runner(empty_project());
     settle(&mut runner);
 
     assert!(
@@ -456,7 +502,7 @@ fn the_empty_state_keeps_its_floor_when_the_drag_reaches_the_stub() {
     // What the copy is entitled to at the floor: the body minimum less the empty state's inset.
     let floor = PANE_BODY_MIN_W - EMPTY_PAD.left() - EMPTY_PAD.right();
 
-    let (mut runner, _) = runner_at(empty_project(), PANEL_STUB_W);
+    let (mut runner, ..) = runner_at(empty_project(), PANEL_STUB_W);
     settle(&mut runner);
 
     let copy = runner

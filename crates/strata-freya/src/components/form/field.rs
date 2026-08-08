@@ -330,7 +330,17 @@ impl Component for NumberField {
     }
 }
 
-/// A **folder path** — the same box, with the native picker beside it.
+/// What a [`PathField`]'s browse button opens, and therefore what the field names.
+#[derive(PartialEq, Clone, Copy)]
+enum Pick {
+    Folder,
+    /// One file, narrowed to the extensions the surface names — a picker offering every file on
+    /// the disk for a field that takes one kind is a picker that finds the wrong one.
+    File(&'static [&'static str]),
+}
+
+/// A **path** — a value box with the native picker beside it, over a folder
+/// ([`folder`](PathField::folder)) or one file ([`file`](PathField::file)).
 ///
 /// Two ways to set one value, so there is one buffer and both write it: the picker sets the
 /// box, and what the box holds is what gets reported. A button that reached past the box into
@@ -346,22 +356,40 @@ impl Component for NumberField {
 ///
 /// Unlike a number, every string a user can type is a legal path, so there is nothing to
 /// normalize when the box is left — a path that does not exist yet is still the path they mean.
+///
+/// **One component for both**, because the two differ in the picker call and nothing else: the
+/// box, the report contract, the browse button and its geometry are the same field. Two
+/// components would be sixty duplicated lines and a second place for that contract to drift.
 #[derive(PartialEq)]
-pub struct DirectoryField {
+pub struct PathField {
     value: String,
+    pick: Pick,
     placeholder: Option<&'static str>,
-    /// What the picker calls itself — see [`DirectoryField::dialog_title`].
+    /// What the picker calls itself — see [`PathField::dialog_title`].
     dialog_title: &'static str,
     on_change: Option<EventHandler<String>>,
 }
 
-impl DirectoryField {
-    /// A field showing `value`, with a folder picker beside it.
-    pub fn new(value: impl Into<String>) -> Self {
+impl PathField {
+    /// A field showing `value`, with a **folder** picker beside it.
+    pub fn folder(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
+            pick: Pick::Folder,
             placeholder: None,
             dialog_title: "Choose a folder",
+            on_change: None,
+        }
+    }
+
+    /// A field showing `value`, with a **file** picker beside it, narrowed to `extensions`
+    /// (bare, no dot — `["json"]`).
+    pub fn file(value: impl Into<String>, extensions: &'static [&'static str]) -> Self {
+        Self {
+            value: value.into(),
+            pick: Pick::File(extensions),
+            placeholder: None,
+            dialog_title: "Choose a file",
             on_change: None,
         }
     }
@@ -386,7 +414,7 @@ impl DirectoryField {
     }
 }
 
-impl Component for DirectoryField {
+impl Component for PathField {
     fn render(&self) -> impl IntoElement {
         let mut text = use_state({
             let value = self.value.clone();
@@ -412,6 +440,7 @@ impl Component for DirectoryField {
         });
 
         let dialog_title = self.dialog_title;
+        let pick = self.pick;
         rect()
             .width(Size::fill())
             .horizontal()
@@ -438,8 +467,16 @@ impl Component for DirectoryField {
                     )
                     .on_press(move |_| {
                         // Start where the box points, so browsing from a set path opens there
-                        // rather than wherever the OS last left the panel.
-                        let start = text.peek().clone();
+                        // rather than wherever the OS last left the panel. A file field starts
+                        // at its file's *folder*: `set_directory` on a file path opens the
+                        // panel at whatever the OS makes of it, which is usually nowhere.
+                        let start = match pick {
+                            Pick::Folder => text.peek().clone(),
+                            Pick::File(_) => std::path::Path::new(&*text.peek())
+                                .parent()
+                                .map(|p| p.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                        };
                         spawn(async move {
                             let mut dialog = rfd::AsyncFileDialog::new().set_title(dialog_title);
                             if !start.is_empty() {
@@ -447,7 +484,13 @@ impl Component for DirectoryField {
                             }
                             // Dismissing the dialog is a decision, not a failure — the box
                             // keeps what it had.
-                            if let Some(handle) = dialog.pick_folder().await {
+                            let picked = match pick {
+                                Pick::Folder => dialog.pick_folder().await,
+                                Pick::File(extensions) => {
+                                    dialog.add_filter("", extensions).pick_file().await
+                                }
+                            };
+                            if let Some(handle) = picked {
                                 text.set(handle.path().to_string_lossy().into_owned());
                             }
                         });

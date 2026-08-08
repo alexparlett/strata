@@ -397,27 +397,30 @@ mod tests {
         let defs = ProjectDefs {
             connections: vec![
                 ConnectionDef {
-                    bucket: "lake".into(),
+                    address: "lake".into(),
                     provider: Provider::S3(S3Store {
                         region: "eu-west-2".into(),
                         auth: S3Auth::Anonymous,
                         ..Default::default()
                     }),
+                    client_config: Default::default(),
                 },
                 // The same authority under another provider: a different connection entirely.
                 ConnectionDef {
-                    bucket: "lake".into(),
+                    address: "lake".into(),
                     provider: Provider::Gcs(GcsStore {
                         auth: GcsAuth::Anonymous,
                     }),
+                    client_config: Default::default(),
                 },
                 // A def that cannot describe a store: refused, and the pass carries on.
                 ConnectionDef {
-                    bucket: "no-region".into(),
+                    address: "no-region".into(),
                     provider: Provider::S3(S3Store {
                         auth: S3Auth::Anonymous,
                         ..Default::default()
                     }),
+                    client_config: Default::default(),
                 },
             ],
             tables: vec![table("local", "local.csv")],
