@@ -168,23 +168,29 @@ const ROW_FIXED: f32 = 8. + 4. + 11. + 14. + STATUS_SIZE + ACTIONS_SIZE + (4. * 
 /// theme's own scale rather than this file, so retuning the type scale retunes the fold with it.
 const MONO_ADVANCE: f32 = 0.6;
 
-/// Whether the row should fold its `INTERNAL` badge away, given the row's width and the name's
-/// natural width.
+/// Whether the row folds its `INTERNAL` badge away, given the row's width and what the name
+/// would take unconstrained.
 ///
-/// **The badge goes only when going saves the name.** Three cases, and the middle one is the
-/// only fold:
+/// **This is `components::toolbar`'s policy, not a rule of its own** (AGENTS.md §3: one fold
+/// policy for every row). That row is `[ leading run (flexible, ellipsizes) ][ items (fold
+/// tail-first) ][ pinned tail ]`, and the space it offers the items is the row minus its padding,
+/// minus the pinned tail, **minus the leading run's floor** — so an item folds while the leading
+/// run is still whole, and the leading run goes on ellipsizing afterwards. A catalog row is that
+/// shape: the name is the leading run, the badge is the one foldable item, and the status column
+/// and ⋮ are the pinned tail that never folds.
 ///
-/// - the name fits *with* the badge — keep it, nothing is at stake;
-/// - the name fits only *without* it — fold, because a marker the icon's own tint already carries
-///   is a cheaper thing to lose than a name the reader cannot finish;
-/// - the name does not fit either way — **keep** it. This is the case the first attempt got
-///   wrong by folding on a flat width threshold: dropping the badge there buys no more of the
-///   name, so it is pure loss, and a long-named internal table would have been the one row that
-///   never showed what it was.
+/// What this row contributes is its leading floor: **the name's own natural width**, so the badge
+/// goes the moment it would cost a character rather than at some shared constant. That the name
+/// can be measured by arithmetic at all is [`MONO_ADVANCE`]'s doing, and stating a width is what
+/// every `ToolbarItem` does anyway.
+///
+/// Two earlier versions of this got it wrong in opposite directions, and both are worth not
+/// repeating: a flat 80px floor let a long name ellipsize while the badge sat there, and a
+/// "the name does not fit either way, so keep the badge" case rendered a badge beside an empty
+/// name. There is no width at which keeping the badge is worth a character of the name — the
+/// icon's own tint already says the row is internal, and the icon never folds.
 pub(super) fn folds_badge(row_width: f32, name_width: f32) -> bool {
-    let without = row_width - ROW_FIXED;
-    let with = without - BADGE_SLOT;
-    name_width > with && name_width <= without
+    name_width > row_width - ROW_FIXED - BADGE_SLOT
 }
 
 /// What a catalog entry (a table or a view) resolved to for rendering: its columns, its partition

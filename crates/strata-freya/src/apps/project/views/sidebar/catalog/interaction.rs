@@ -986,17 +986,40 @@ fn the_internal_badge_folds_before_the_name_truncates() {
     assert!(shows(&runner, "daily_totals"), "and the name is intact");
 }
 
-/// The arithmetic on its own, over the three cases — cheaper to state here than to stage as
-/// three rendered panes, and it is the part that has to be right.
+/// The rule on its own — `components::toolbar`'s order, applied to this row: the foldable item
+/// goes while the leading run is still whole. Both earlier versions are pinned here as the cases
+/// they got wrong: a flat floor let a long name ellipsize with the badge still up, and a "cannot
+/// fit either way" case kept the badge beside an empty name.
 #[test]
-fn a_badge_that_cannot_save_the_name_is_kept() {
-    // Room for the name and the badge together.
+fn the_badge_never_costs_the_name_a_character() {
+    // Room for both.
     assert!(!folds_badge(400., 100.));
-    // The badge is exactly what tips the name over: fold.
+    // The badge is what tips the name into an ellipsis.
     assert!(folds_badge(260., 100.));
-    // Hopeless either way — dropping the badge buys no more of the name, so keep it. This is
-    // the case a flat width threshold gets wrong.
-    assert!(!folds_badge(180., 300.));
+    // Tight enough that the name is in trouble regardless — the badge still goes, because that
+    // is when its 71px is worth the most.
+    assert!(folds_badge(180., 300.));
+}
+
+/// And the name goes on collapsing **after** the badge has gone. A leading run ellipsizes all the
+/// way down rather than setting a floor and making the row spill (AGENTS.md §3), so the order the
+/// user sees is: badge disappears, then the name shortens.
+#[test]
+fn the_name_goes_on_collapsing_once_the_badge_has_folded() {
+    let (mut runner, _) = runner_sized(mixed_origins, 150.);
+    settle(&mut runner);
+
+    assert!(
+        !shows(&runner, "INTERNAL"),
+        "the badge folded first: {:?}",
+        texts(&runner)
+    );
+    // The row still owns its own width — nothing spilled out of the pane to keep the name whole.
+    let name = text_area(&runner, "daily_totals");
+    assert!(
+        name.max_x() <= 150.,
+        "the name shrank inside the pane rather than spilling: {name:?}"
+    );
 }
 
 /// **The icon says it too**, in a colour of its own — the mark that survives the fold above, and
