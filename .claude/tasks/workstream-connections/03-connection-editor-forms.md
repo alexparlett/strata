@@ -105,7 +105,12 @@ Four changes after the first review pass, all of them tightening what a connecti
   **selected** row rather than a control per row, a header strip because it has two columns, the
   empty state *inside* the table, bare fields in both cells, and the name box carrying the grid's
   **attached suggestion panel** — matches anywhere, hides what another row claims, quiet on an
-  exact hit. Not a `Select`: a closed list is no reason to reach for one when the grid beside it
+  exact hit. It offers **every** match and caps its *height* at three rather than capping the
+  list, because an offer here is two lines (a client option's name means little without the
+  sentence under it) and these names share so many substrings that a cut entry is one typing
+  cannot find. The panel scrolls, and the gesture **latches** to it (`ScrollView::latch_wheel`,
+  the fork's macOS convention), so flicking through the offers cannot hand off mid-gesture and
+  scroll the form behind them. Not a `Select`: a closed list is no reason to reach for one when the grid beside it
   types the same kind of thing, and a field takes a paste, a partial match and a name from a newer
   `object_store` where a dropdown takes none of them. The one departure from the grid is the tint:
   an unknown name is an **error** here rather than a warning, because `check_client_config`

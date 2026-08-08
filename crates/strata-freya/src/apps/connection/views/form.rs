@@ -54,6 +54,13 @@ const OPTION_ROW: f32 = 38.;
 /// client option's name is long and the box it hangs off is a third of a narrow window.
 const ERROR_STRIPE: f32 = 2.;
 const SUGGEST_WIDTH: f32 = 300.;
+/// How many offers the panel shows before it scrolls, and what one of them stands at.
+///
+/// **Three**, because an offer here is two lines (the name means little without the sentence under
+/// it) and a panel taller than that covers the table it is being typed into. The rest are still
+/// offered — the panel scrolls to them — so nothing is cut from the answer, only from the view.
+const SUGGEST_ROWS: f32 = 3.;
+const SUGGEST_ROW_HEIGHT: f32 = 46.;
 pub const OPTION_KEY_WIDTH: f32 = 210.;
 const EMPTY_HEIGHT: f32 = 88.;
 const TOOL_GAP: f32 = 6.;
@@ -772,9 +779,9 @@ impl Component for OptionRow {
             Focus::Not => Vec::new(),
             _ => ctx.draft.read().client_config.suggestions(id),
         };
-        let mut menu = Menu::new().min_width(Size::px(SUGGEST_WIDTH));
+        let mut offers = rect().width(Size::fill()).vertical();
         for entry in suggestions.iter().copied() {
-            menu = menu.child(
+            offers = offers.child(
                 MenuButton::new()
                     .on_press(move |_: Event<PressEventData>| {
                         let mut name = name;
@@ -783,6 +790,17 @@ impl Component for OptionRow {
                     .child(SuggestionRow { entry }),
             );
         }
+        // **The panel scrolls, and the gesture latches to it** — the macOS convention the fork
+        // implements: a wheel gesture that starts here stays here for its whole life, including
+        // past the end of the range, so flicking through the offers cannot hand off mid-gesture
+        // and scroll the form behind them. Height capped rather than the list, so the panel is
+        // shorter than the table row it hangs over while still offering every match.
+        let menu = Menu::new().min_width(Size::px(SUGGEST_WIDTH)).child(
+            ScrollView::new()
+                .latch_wheel()
+                .height(Size::px(SUGGEST_ROWS * SUGGEST_ROW_HEIGHT))
+                .child(offers),
+        );
 
         let fill = match self.selected {
             true => win.row_selected_background,

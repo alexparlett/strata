@@ -148,8 +148,10 @@ impl Default for ConnectionDraft {
     }
 }
 
-/// How many catalogue matches the name box offers at once — the properties grid's seven.
-const MAX_SUGGESTIONS: usize = 7;
+/// The catalogue is small enough to offer whole: the name box shows **every** match and scrolls,
+/// where the properties grid caps its list at seven. What is capped here is the panel's *height*
+/// (`views::form::SUGGEST_ROWS`), not the answer — an option cut from the list is one the user
+/// cannot find by typing more, since these names share so many substrings.
 
 /// One row of the client-options table: an option and its value, under an id that outlives both.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -285,7 +287,7 @@ impl ConfigRows {
             .collect();
         match matches.as_slice() {
             [only] if only.name == typed => Vec::new(),
-            _ => matches.into_iter().take(MAX_SUGGESTIONS).collect(),
+            _ => matches,
         }
     }
 
@@ -808,10 +810,11 @@ mod tests {
             "offering back what is already typed is not a suggestion"
         );
 
-        // A blank box offers the catalogue, capped so the panel stays readable.
+        // A blank box offers the **whole** catalogue: the panel scrolls rather than truncating,
+        // because these names share so many substrings that a cut entry is one typing cannot find.
         let mut rows = ConfigRows::default();
         let blank = rows.add(String::new(), String::new());
-        assert_eq!(rows.suggestions(blank).len(), MAX_SUGGESTIONS);
+        assert_eq!(rows.suggestions(blank).len(), CLIENT_KEYS.len());
     }
 
     /// The box is tinted by whether the store will take the name — and an unknown one is an
