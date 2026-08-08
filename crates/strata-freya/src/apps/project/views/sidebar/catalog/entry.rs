@@ -59,8 +59,10 @@ const LOADING: &str = "Loading…";
 /// something to hold *onto*, and what this slot holds is the last verdict it showed.
 const SPINNER_DELAY: Duration = PROGRESS_HOLD;
 
-/// The trailing ⋮ actions button — the canvas's 22×22.
-const ACTIONS_SIZE: f32 = 22.;
+/// The trailing ⋮ actions button — the canvas's 22×22. `pub(super)` because it is also the
+/// column the interaction tests measure the rest of the trailing run against, and a second copy
+/// of the number there is a second thing to keep in step.
+pub(super) const ACTIONS_SIZE: f32 = 22.;
 /// What the **profiling** spinner says — its own words, because the registration spinner beside
 /// it means something else entirely (a scan is minutes of work the user asked for; a
 /// registration is a metadata read they didn't).
@@ -112,6 +114,57 @@ const INTERNAL_BADGE: &str = "INTERNAL";
 /// everywhere else for this (the router's own `INSERT targets internal tables`), but it does not
 /// on its own say the thing the user has to know before dropping the row.
 const INTERNAL_TIP: &str = "Strata stores this table's data in the project";
+
+/// What the row's one trailing status column is saying. A type rather than a built element so
+/// it can be compared — [`ProfileStatus`] holds it as a prop, and a component's props must be
+/// `PartialEq` for the tree to diff them.
+#[derive(Clone, PartialEq)]
+enum StatusMark {
+    /// The registration has not answered and the hold has expired (see [`SPINNER_DELAY`]).
+    Loading,
+    /// The settled verdict — what is wrong with this row, in the words the store recorded.
+    Problem(String),
+}
+
+impl StatusMark {
+    /// The glyph, wearing its message as a tooltip *and* an a11y label, so the explanation is
+    /// never mouse-only. Dropped below like the rest of the app's overlays, so it cannot cover
+    /// the row above it in a dense list.
+    fn glyph(&self, theme: &CatalogTheme) -> Element {
+        match self {
+            // Named, not bare: P3-09 puts a *profiling* spinner in this same slot, and two
+            // spinners meaning different things need to be tellable apart.
+            StatusMark::Loading => tip(LOADING)
+                .child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(LOADING))
+                .into_element(),
+            StatusMark::Problem(reason) => tip(reason.clone())
+                .child(
+                    rect().a11y_alt(reason.clone()).child(
+                        Icon::new(IconName::Warning)
+                            .color(theme.warn_color)
+                            .size(STATUS_SIZE),
+                    ),
+                )
+                .into_element(),
+        }
+    }
+}
+
+/// The width below which the row drops its `INTERNAL` badge (see the fold at the call site).
+///
+/// Arithmetic over the row's own items rather than a taste number: everything except the name is
+/// fixed — the row's padding (8 + 4), the chevron (11), the entity icon (14), the status column
+/// ([`STATUS_SIZE`]), the ⋮ ([`ACTIONS_SIZE`]) and the gaps between them (5 × 8 with the badge
+/// present) — so the badge can stay only while what is left still leaves the name a readable
+/// [`NAME_FLOOR`]. Keeping the badge past that point buys a marker the icon's tint already
+/// carries, at the price of a name the reader cannot finish.
+const NAME_FLOOR: f32 = 80.;
+/// The `INTERNAL` badge's laid-out width — `Eyebrow` at 10 over the badge's 4px side padding,
+/// measured rather than guessed (`the_internal_badge_folds_before_the_name_truncates`).
+const BADGE_WIDTH: f32 = 63.;
+/// Everything on the row that is not the name or the badge: padding, chevron, icon, status
+/// column, ⋮, and the five gaps between the six items.
+const ROW_FIXED: f32 = 8. + 4. + 11. + 14. + STATUS_SIZE + ACTIONS_SIZE + (5. * 8.);
 
 /// What a catalog entry (a table or a view) resolved to for rendering: its columns, its partition
 /// columns, and the registration state that produced them.
@@ -269,18 +322,20 @@ impl Component for EntryRow {
         let toggle_key = entry_key.clone();
 
         // The glyph is the shared mapping (the palette lists the same things); the tint is this
-        // surface's own.
+        // surface's own — and a table Strata owns takes its own entity colour, because the
+        // catalog shows both origins in one section under one glyph and the icon is the mark
+        // that never folds when the pane narrows.
         let icon = IconName::for_catalog(self.kind);
         let icon_color = match self.kind {
             CatalogKind::View => self.theme.view_color,
             CatalogKind::Query => self.theme.query_color,
+            CatalogKind::Table if internal => self.theme.internal_color,
             CatalogKind::Table => self.theme.table_color,
         };
 
-        // One trailing **status slot** and at most one glyph in it, with the words only on hover. A
-        // settled row is clean, per the design. No status *text*: "failed" said strictly less than
-        // the reason the triangle carries, and it cost the name half the row. Each glyph declares
-        // its message as an **a11y label** too, so the explanation isn't mouse-only.
+        // What the row's one status column is saying, with the words only on hover. A settled row
+        // is clean, per the design. No status *text*: "failed" said strictly less than the reason
+        // the triangle carries, and it cost the name half the row.
         let status = match (
             waiting && waited(),
             if waiting {
@@ -289,24 +344,21 @@ impl Component for EntryRow {
                 problem
             },
         ) {
-            // The wait has outlasted the hold, so it is now the thing worth saying. Named, not
-            // bare: P3-09 puts a *profiling* spinner in reach of this same row, and two spinners
-            // meaning different things need to be tellable apart.
-            (true, _) => {
-                Some(tip(LOADING).child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(LOADING)))
-            }
+            // The wait has outlasted the hold, so it is now the thing worth saying.
+            (true, _) => Some(StatusMark::Loading),
             // The settled verdict, or — mid-gap — the one still being held.
-            (false, Some(reason)) => Some(
-                tip(reason.clone()).child(
-                    rect().a11y_alt(reason).child(
-                        Icon::new(IconName::Warning)
-                            .color(self.theme.warn_color)
-                            .size(STATUS_SIZE),
-                    ),
-                ),
-            ),
+            (false, Some(reason)) => Some(StatusMark::Problem(reason)),
             (false, None) => None,
         };
+
+        // **The badge folds before the name truncates.** Freya has no container query, so the row
+        // measures itself and the next render acts on it — one `State` per row, written only when
+        // the width actually crosses the threshold, so a resize does not re-render rows whose
+        // answer has not changed. Seeded wide: the first paint shows the badge, and a genuinely
+        // narrow pane drops it on the frame after, which is the right way round — a marker that
+        // flashes away is better than a name that arrives clipped.
+        let mut folded = use_state(|| false);
+        let fold_badge = internal && folded();
 
         // One menu, two triggers (right-click the row, or press its ⋮) — a fresh snapshot each
         // time it is opened.
@@ -320,60 +372,79 @@ impl Component for EntryRow {
         };
         let menu_for_row = build_menu.clone();
 
-        let row =
-            SidebarRow::new()
-                .height(ENTRY_HEIGHT)
-                .on_press(move |_| {
-                    let mut set = open_entries.write();
-                    if !set.insert(toggle_key.clone()) {
-                        set.remove(&toggle_key);
-                    }
+        let row = SidebarRow::new()
+            .height(ENTRY_HEIGHT)
+            .on_press(move |_| {
+                let mut set = open_entries.write();
+                if !set.insert(toggle_key.clone()) {
+                    set.remove(&toggle_key);
+                }
+            })
+            .child(
+                Icon::new(if is_open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
                 })
-                .child(
-                    Icon::new(if is_open {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .color(self.theme.chevron_color)
-                    .size(11.),
-                )
-                .child(Icon::new(icon).color(icon_color).size(14.))
-                // The name absorbs the slack and truncates, so the status run stays visible however
-                // long the table is called.
-                .child(
-                    MonoValue::new(self.name.clone())
-                        .color(self.theme.name_color)
-                        .width(Size::flex(1.))
-                        .text_overflow(TextOverflow::Ellipsis),
-                )
-                .on_context_menu(move |_: Event<PressEventData>| {
-                    ContextMenu::open(menu_for_row());
-                })
-                // After the name and before the status run, so it reads as part of what the row *is*
-                // rather than as something that happened to it.
-                .maybe_child(internal.then(|| {
-                    tip(INTERNAL_TIP)
-                        .child(rect().a11y_alt(INTERNAL_TIP).child(
-                            Badge::tag(INTERNAL_BADGE, self.theme.table_color).into_element(),
-                        ))
-                        .into_element()
-                }))
-                // Its own slot, before the registration status: a scan is asked for from *here* (the
-                // row's menu) and can run for minutes with the inspector closed, so the row is the
-                // only thing that can say it is happening. Mounted only when there is a scan to
-                // watch — see `ProfileStatus` for why that matters.
-                .maybe_child(scan.map(|scan| {
-                    ProfileStatus {
-                        owner: self.name.clone(),
-                        scan,
-                        key: DiffKey::None,
-                    }
-                    .key(scan)
+                .color(self.theme.chevron_color)
+                .size(11.),
+            )
+            .child(Icon::new(icon).color(icon_color).size(14.))
+            // The name absorbs the slack and truncates, so the status run stays visible however
+            // long the table is called.
+            .child(
+                MonoValue::new(self.name.clone())
+                    .color(self.theme.name_color)
+                    .width(Size::flex(1.))
+                    .text_overflow(TextOverflow::Ellipsis),
+            )
+            .on_context_menu(move |_: Event<PressEventData>| {
+                ContextMenu::open(menu_for_row());
+            })
+            // After the name and before the status column, so it reads as part of what the
+            // row *is* rather than as something that happened to it — and **folded away
+            // before the name truncates**, because a name the reader cannot finish is a worse
+            // loss than a marker the icon's own tint already carries.
+            .maybe_child((internal && !fold_badge).then(|| {
+                tip(INTERNAL_TIP)
+                    .child(rect().a11y_alt(INTERNAL_TIP).child(
+                        Badge::tag(INTERNAL_BADGE, self.theme.internal_color).into_element(),
+                    ))
                     .into_element()
-                }))
-                .maybe_child(status.map(|s| s.into_element()))
-                .child(actions_button(build_menu));
+            }))
+            // **One** trailing status column, fixed width, always present. A scan is asked
+            // for from *here* (the row's menu) and can run for minutes with the inspector
+            // closed, so the row is the only thing that can say it is happening — but the
+            // spinner and the validity triangle are one question asked twice, never two
+            // marks at once, and they were two children before this. That cost the badge
+            // its position: a row that had ever been profiled kept a mounted, idle
+            // `ProfileStatus` in the run, so everything left of it sat 20px further in than
+            // on a row that had not. One reserved slot instead, so every row's marks line up
+            // in a column whatever any of them is doing.
+            .child(
+                rect()
+                    .width(Size::px(STATUS_SIZE))
+                    .cross_align(Alignment::Center)
+                    .maybe_child(match scan {
+                        // Mounted for the subscription as much as for the glyph — see
+                        // `ProfileStatus` — and it renders `status` whenever no scan is
+                        // running, so the slot never holds two things and never holds none
+                        // it could have filled.
+                        Some(scan) => Some(
+                            ProfileStatus {
+                                owner: self.name.clone(),
+                                scan,
+                                settled: status.clone(),
+                                theme: self.theme.clone(),
+                                key: DiffKey::None,
+                            }
+                            .key(scan)
+                            .into_element(),
+                        ),
+                        None => status.as_ref().map(|s| s.glyph(&self.theme)),
+                    }),
+            )
+            .child(actions_button(build_menu));
 
         // The column block: an indented run hung off a hairline rail, exactly the canvas's
         // `border-left` treatment.
@@ -438,6 +509,12 @@ impl Component for EntryRow {
             .width(Size::fill())
             .vertical()
             .margin(Gaps::new(0., 0., 2., 0.))
+            // The measurement behind the badge fold. `set_if_modified` on the *answer*, not on
+            // the width: a drag across the pane's whole range writes at most twice.
+            .on_sized(move |e: Event<SizedEventData>| {
+                let too_narrow = e.area.width() < ROW_FIXED + NAME_FLOOR + BADGE_WIDTH;
+                folded.set_if_modified(too_narrow);
+            })
             .child(row)
             .maybe_child(body)
     }
@@ -455,6 +532,10 @@ impl Component for EntryRow {
 struct ProfileStatus {
     owner: String,
     scan: ScanId,
+    /// What the row's status column says when **no scan is running** — so the one slot is never
+    /// empty while the row has something to report, and never holds two glyphs at once.
+    settled: Option<StatusMark>,
+    theme: CatalogTheme,
     key: DiffKey,
 }
 
@@ -475,14 +556,19 @@ impl Component for ProfileStatus {
         );
         drop(reader);
 
-        // No delay hold, unlike the registration spinner next door: a scan is *known* to be slow
-        // — it is the thing the user was warned about — so there is nothing to avoid flickering
-        // over, and starting one has to look like it started.
-        rect().maybe_child(running.then(|| {
-            tip(PROFILING)
+        // No delay hold, unlike the registration spinner: a scan is *known* to be slow — it is
+        // the thing the user was warned about — so there is nothing to avoid flickering over, and
+        // starting one has to look like it started. It outranks the settled mark while it runs,
+        // because "this is being recomputed" is the newer fact about the same row.
+        match running {
+            true => tip(PROFILING)
                 .child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(PROFILING))
-                .into_element()
-        }))
+                .into_element(),
+            false => match &self.settled {
+                Some(mark) => mark.glyph(&self.theme),
+                None => rect().into_element(),
+            },
+        }
     }
 
     fn render_key(&self) -> DiffKey {

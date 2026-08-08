@@ -96,6 +96,7 @@
     "chart.10": "#5c7a11",
 
     "entity.table": "#0550ae",
+    "entity.table.internal": "#0f6f74",
     "entity.view": "#8250df",
     "entity.query": "#7c3aed",
     "entity.column": "#0a7d33",

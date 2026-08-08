@@ -403,6 +403,10 @@
         "entity.table": {
           "$ref": "#/$defs/color"
         },
+        "entity.table.internal": {
+          "$ref": "#/$defs/color",
+          "description": "Optional; omitted reads 'entity.table'."
+        },
         "entity.view": {
           "$ref": "#/$defs/color"
         },

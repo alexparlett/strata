@@ -60,6 +60,9 @@ define_theme!(
         meta_color: Color,
         rail_fill: Color,
         table_color: Color,
+        /// A table whose data Strata owns (ED-04) — the row's icon *and* its `INTERNAL` badge,
+        /// so the two marks read as one statement rather than two colours.
+        internal_color: Color,
         view_color: Color,
         query_color: Color,
         part_color: Color,

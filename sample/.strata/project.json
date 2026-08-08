@@ -1,5 +1,6 @@
 {
   "name": "sample",
+  "connections": [],
   "tables": [
     {
       "name": "config",
@@ -12,7 +13,19 @@
       "sources": [
         "config.json"
       ],
-      "partition_cols": []
+      "partition_cols": [],
+      "origin": "external"
+    },
+    {
+      "name": "daily",
+      "format": {
+        "type": "arrow"
+      },
+      "sources": [
+        ".strata/tables/daily/"
+      ],
+      "partition_cols": [],
+      "origin": "internal"
     },
     {
       "name": "events",
@@ -31,7 +44,19 @@
           "month",
           "Utf8"
         ]
-      ]
+      ],
+      "origin": "external"
+    },
+    {
+      "name": "product_catalog",
+      "format": {
+        "type": "arrow"
+      },
+      "sources": [
+        ".strata/tables/product_catalog/"
+      ],
+      "partition_cols": [],
+      "origin": "internal"
     },
     {
       "name": "products",
@@ -41,7 +66,8 @@
       "sources": [
         "products.parquet"
       ],
-      "partition_cols": []
+      "partition_cols": [],
+      "origin": "external"
     },
     {
       "name": "regions",
@@ -60,7 +86,8 @@
       "sources": [
         "regions.csv"
       ],
-      "partition_cols": []
+      "partition_cols": [],
+      "origin": "external"
     },
     {
       "name": "signups",
@@ -73,7 +100,19 @@
       "sources": [
         "signups.json"
       ],
-      "partition_cols": []
+      "partition_cols": [],
+      "origin": "external"
+    },
+    {
+      "name": "signups_by_region",
+      "format": {
+        "type": "arrow"
+      },
+      "sources": [
+        ".strata/tables/signups_by_region/"
+      ],
+      "partition_cols": [],
+      "origin": "internal"
     },
     {
       "name": "test",
@@ -92,7 +131,8 @@
       "sources": [
         "regions.csv"
       ],
-      "partition_cols": []
+      "partition_cols": [],
+      "origin": "external"
     },
     {
       "name": "users",
@@ -102,7 +142,8 @@
       "sources": [
         "users.parquet"
       ],
-      "partition_cols": []
+      "partition_cols": [],
+      "origin": "external"
     }
   ],
   "views": [
@@ -113,6 +154,10 @@
     {
       "name": "revenue_by_region",
       "sql": "SELECT r.region, SUM(e.amount) AS revenue, COUNT(*) AS n FROM events e JOIN users u ON u.user_id = e.user_id JOIN regions r ON r.country = u.country WHERE e.amount IS NOT NULL GROUP BY r.region ORDER BY revenue DESC"
+    },
+    {
+      "name": "saved_view_1",
+      "sql": "SELECT region, signups FROM region_totals ORDER BY signups DESC;"
     }
   ],
   "saved_queries": [

@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
+use super::entry::ACTIONS_SIZE;
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
@@ -231,9 +232,14 @@ fn runner() -> (TestingRunner, Handles) {
 /// [`runner`] over a project of the caller's choosing — a `fn` pointer rather than a value,
 /// because `TestingRunner`'s initializer is a plain closure and a `fn` is `Copy` in one.
 fn runner_over(project: fn() -> ProjectState) -> (TestingRunner, Handles) {
+    runner_sized(project, 300.)
+}
+
+/// [`runner_over`] at a chosen pane width — what the badge's fold is measured against.
+fn runner_sized(project: fn() -> ProjectState, width: f32) -> (TestingRunner, Handles) {
     TestingRunner::new(
         app,
-        (300., 1400.).into(),
+        (width, 1400.).into(),
         |r| {
             let filter = r.provide_root_context(|| State::create(String::new()));
             let selection = r.provide_root_context(|| State::create(None::<ColRef>));
@@ -918,6 +924,96 @@ fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
 
 // ---- the row menus (P3-06) --------------------------------------------------------------------
 
+/// **The trailing run is one column, whatever the row is doing.** The badge, the validity
+/// triangle and the profiling spinner all used to be separate children, so a row that had ever
+/// been profiled kept a mounted, idle slot in the run and everything left of it sat 20px further
+/// in than on a row that had not — which is what made the `INTERNAL` badge look misaligned
+/// against a row carrying a warning triangle.
+#[test]
+fn the_trailing_marks_line_up_whatever_each_row_is_doing() {
+    let (runner, ..) = settled_over(|| {
+        let mut p = mixed_origins();
+        p.table_failed("orders", "boom".into());
+        // The state that broke it: a scan asked for on the internal row.
+        p.request_profile(CatalogKind::Table, "daily_totals");
+        p
+    });
+
+    // The ⋮ is the row's rightmost item and is unconditional, so it is the column to measure
+    // everything else against.
+    let right_of = |name: &str| {
+        let row = text_area(&runner, name);
+        let mid = row.min_y() + row.height() / 2.;
+        runner
+            .find_many(|node, _| {
+                let a = node.layout().area;
+                ((a.width() - ACTIONS_SIZE).abs() < 0.5
+                    && (a.height() - ACTIONS_SIZE).abs() < 0.5
+                    && a.min_y() <= mid
+                    && a.max_y() >= mid)
+                    .then_some(a.max_x())
+            })
+            .into_iter()
+            .fold(f32::MIN, f32::max)
+    };
+
+    assert_eq!(
+        right_of("orders"),
+        right_of("daily_totals"),
+        "a failed row and a profiled internal row end in the same place"
+    );
+}
+
+/// **The badge folds before the name truncates.** A marker the icon's own tint already carries is
+/// a cheaper thing to lose than a name the reader cannot finish, so the fold takes the badge
+/// first — the arithmetic is `ROW_FIXED + NAME_FLOOR + BADGE_WIDTH` in `entry.rs`.
+#[test]
+fn the_internal_badge_folds_before_the_name_truncates() {
+    // Wide: both the badge and the whole name fit.
+    let (runner, ..) = settled_over(mixed_origins);
+    assert!(shows(&runner, "INTERNAL"), "a wide pane keeps the marker");
+
+    // Narrow enough that keeping the badge would eat into the name's floor.
+    let (mut runner, _) = runner_sized(mixed_origins, 170.);
+    settle(&mut runner);
+
+    assert!(
+        !shows(&runner, "INTERNAL"),
+        "and a narrow one drops it: {:?}",
+        texts(&runner)
+    );
+    assert!(
+        shows(&runner, "daily_totals"),
+        "the name is still the thing the row is for"
+    );
+}
+
+/// **The icon says it too**, in a colour of its own — the mark that survives the fold above, and
+/// the reason dropping the badge costs nothing at width. Reinforcement only: the badge and its
+/// a11y label are what a colour-blind or screen-reader user gets, which is why the fold drops the
+/// badge *last* rather than first.
+///
+/// Asserted on the resolved role rather than on painted pixels: what this is about is that the
+/// theme actually distinguishes the two origins, and `entity.table.internal` falls back to
+/// `entity.table`, so a theme that forgot to author it would silently draw no distinction at all.
+#[test]
+fn both_built_in_themes_tell_the_two_table_origins_apart() {
+    for name in ["midnight", "daylight"] {
+        let roles = load(name).roles;
+        let internal = roles.get("entity.table.internal");
+        assert!(
+            internal.is_some(),
+            "{name} must author entity.table.internal — it falls back to entity.table, so \
+             omitting it draws no distinction at all and says nothing about having done so"
+        );
+        assert_ne!(
+            internal,
+            roles.get("entity.table"),
+            "{name} authors it as a colour of its own"
+        );
+    }
+}
+
 /// The menu items currently in the tree — what an open menu card is actually offering.
 ///
 /// Taken as the text runs that are *not* catalog rows: the pane's own runs are all present
@@ -1229,11 +1325,18 @@ fn a_row_being_profiled_says_so_in_its_own_words() {
     // `a_row_wearing_every_status_glyph_still_opens_its_own_menu` that pins it.
 }
 
-/// The row's trailing run is **three slots that come and go independently** — a profiling
-/// spinner, a registration status glyph, and the ⋮ button — and Freya assigns scopes by
-/// *position*. So the case with every slot filled has to keep working: `events` is a refused
-/// table (triangle) being profiled (spinner), and its ⋮ must still open its own menu rather than
-/// a scope some other element left behind.
+/// The row's trailing run changes shape under it — the status column can hold a spinner, a
+/// triangle or nothing, and the badge folds in and out — and Freya assigns scopes by *position*.
+/// So the most populated case has to keep working: `events` is a refused table being profiled,
+/// and its ⋮ must still open its own menu rather than a scope some other element left behind.
+///
+/// **The two glyphs are one column now, and the spinner wins while it runs.** They were separate
+/// children until the trailing run was collapsed (ED-04): a row that had *ever* been profiled
+/// kept a mounted, idle profile slot, and because a zero-width child still costs a full row
+/// `spacing`, everything left of it sat further in than on a row that had not — which is what
+/// made the `INTERNAL` badge look misaligned against a row carrying a triangle. Nothing is lost
+/// by the collapse: "a scan is running" is the newer fact about the same row, and the triangle
+/// returns the moment it settles.
 #[test]
 fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
     let (mut runner, (_, _, _, mut store, ..)) = settled();
@@ -1245,11 +1348,14 @@ fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
     runner.sync_and_update();
     let labels = status_labels(&runner);
     assert!(
-        labels.iter().any(|l| l == "Profiling…")
-            && labels
-                .iter()
-                .any(|l| l == "No such file or directory (os error 2)"),
-        "both glyphs are up: {labels:?}"
+        labels.iter().any(|l| l == "Profiling…"),
+        "the scan outranks the settled verdict while it runs: {labels:?}"
+    );
+    assert!(
+        !labels
+            .iter()
+            .any(|l| l == "No such file or directory (os error 2)"),
+        "and the column holds one glyph, not two: {labels:?}"
     );
 
     let before = texts(&runner);
