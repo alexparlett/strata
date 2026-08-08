@@ -911,6 +911,31 @@ impl ProjectState {
         self.tables.insert(at.min(self.tables.len()), row);
     }
 
+    /// Insert-or-replace a connection def (the editor's Save, W7 · 03), at its address-sorted
+    /// slot. Resets the row to `Loading`, like every other upsert here — the connection has to
+    /// be registered again before the row may claim anything.
+    ///
+    /// **Matched on [`ConnectionDef::url`], inserted by `address`**, and the two being different
+    /// keys is the whole of what this method has to get right. The list is sorted by address and
+    /// identified by URL, so `s3://lake` and `gs://lake` are neighbours in the sort and two
+    /// different connections: replacing on the address would let saving a `gs://lake` silently
+    /// take out the `s3://lake` it sorts beside, deregistering nothing and leaving a live store
+    /// with no def. Matched case-**sensitively** for [`remove_connection`]'s reason — a URL is
+    /// not a SQL identifier and the object-store registry matches it verbatim.
+    ///
+    /// It does **not** deregister anything. An edit that moves the address or the provider
+    /// changes `url()`, and the store the old URL registered survives this write untouched;
+    /// dropping it is `Engine::disconnect`, owed by the gesture that knows both URLs (the
+    /// editor's Save — `engine::store::connect` only ever sees the def it is given).
+    pub fn upsert_connection(&mut self, def: ConnectionDef) {
+        let url = def.url();
+        self.connections.retain(|c| c.def.url() != url);
+        let at = self
+            .connections
+            .partition_point(|c| name_ord(&c.def.address, &def.address).is_lt());
+        self.connections.insert(at, ConnRow::new(def));
+    }
+
     /// Forget the connection registered under `url` — the store half of the pane's Forget
     /// (W7). Hands back the row and its slot, like [`remove_view`](Self::remove_view).
     ///
@@ -933,7 +958,7 @@ impl ProjectState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strata_model::{GcsStore, Provider, S3Store, SourceFormat};
+    use strata_model::{GcsAuth, GcsStore, Provider, S3Store, SourceFormat};
 
     fn table_def(name: &str) -> TableDef {
         TableDef {
@@ -1688,12 +1713,14 @@ mod tests {
             name: "test".into(),
             connections: vec![
                 ConnectionDef {
-                    bucket: "lake".into(),
+                    address: "lake".into(),
                     provider: Provider::S3(S3Store::default()),
+                    client_config: Default::default(),
                 },
                 ConnectionDef {
-                    bucket: "lake".into(),
+                    address: "lake".into(),
                     provider: Provider::Gcs(GcsStore::default()),
+                    client_config: Default::default(),
                 },
             ],
             ..Default::default()
@@ -1731,6 +1758,91 @@ mod tests {
                 .map(|c| c.def.url())
                 .collect::<Vec<_>>(),
             ["s3://lake", "gs://lake"]
+        );
+    }
+
+    /// The editor's Save **replaces on the URL and sorts on the bucket** — the two keys the two
+    /// halves of this method use, and the pair that makes it worth a test.
+    ///
+    /// Saving over `gs://lake` must leave `s3://lake` exactly where it was. Replacing on the
+    /// bucket instead (the sort's key, and the tempting one) takes out a connection the user
+    /// never touched, deregisters nothing, and leaves a live object store with no def behind it.
+    #[test]
+    fn upsert_connection_replaces_the_url_and_sorts_the_bucket() {
+        let mut p = two_stores_one_bucket();
+        p.connection_registered("s3://lake");
+
+        p.upsert_connection(ConnectionDef {
+            address: "lake".into(),
+            provider: Provider::Gcs(GcsStore {
+                auth: GcsAuth::Anonymous,
+            }),
+            client_config: Default::default(),
+        });
+
+        assert_eq!(
+            p.connections.len(),
+            2,
+            "the GCS row was replaced, not added"
+        );
+        let gcs = p
+            .connections
+            .iter()
+            .find(|c| c.def.url() == "gs://lake")
+            .expect("the GCS connection");
+        assert_eq!(
+            gcs.def.provider,
+            Provider::Gcs(GcsStore {
+                auth: GcsAuth::Anonymous
+            }),
+            "…and it carries what was saved"
+        );
+        // The neighbour sharing its bucket keeps both its def and the verdict it had earned.
+        let s3 = p
+            .connections
+            .iter()
+            .find(|c| c.def.url() == "s3://lake")
+            .expect("the S3 connection over the same bucket");
+        assert!(matches!(s3.reg, Reg::Ready(())));
+        // A new bucket lands at its sorted slot rather than at the end.
+        p.upsert_connection(ConnectionDef {
+            address: "acme".into(),
+            provider: Provider::S3(S3Store::default()),
+            client_config: Default::default(),
+        });
+        assert_eq!(
+            p.connections
+                .iter()
+                .map(|c| c.def.address.as_str())
+                .collect::<Vec<_>>(),
+            ["acme", "lake", "lake"]
+        );
+    }
+
+    /// A saved connection goes back to `Loading`: the def it now holds has not been registered,
+    /// so the row must not go on showing the verdict the *previous* def earned.
+    #[test]
+    fn upsert_connection_awaits_its_own_registration() {
+        let mut p = two_stores_one_bucket();
+        p.connection_failed("s3://lake", "This S3 connection needs a region.".into());
+
+        p.upsert_connection(ConnectionDef {
+            address: "lake".into(),
+            provider: Provider::S3(S3Store {
+                region: "eu-west-2".into(),
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        });
+
+        let row = p
+            .connections
+            .iter()
+            .find(|c| c.def.url() == "s3://lake")
+            .expect("the S3 connection");
+        assert!(
+            matches!(row.reg, Reg::Loading),
+            "the old verdict is dropped"
         );
     }
 

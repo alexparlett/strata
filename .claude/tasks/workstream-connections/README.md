@@ -6,10 +6,9 @@ Touches the activity rail (U2), the sidebar (U3 pane), and the config modal (U14
 `docs/CONNECTIONS_SPEC.md`.
 
 ## State of play
-**The model, the connection half of the engine and the sidebar pane are built (01, 02); the
-editor is not, and remote *tables* are not wired.** The pane lists connections with their
-registration outcome and performs Forget (store + persist + `Engine::disconnect`); its Add and
-Edit gestures are on screen and disabled until 03 brings the forms.
+**Managing connections is complete (01–03); remote *tables* are not wired.** The pane lists
+connections with their registration outcome, its `+` / CTA / Edit open the editor window
+(`apps/connection/`), and Forget removes one (store + persist + `Engine::disconnect`).
 A project persists its connections in `project.json`, and the registration pass connects each
 bucket's object store before any table registers. What is still missing on the data path is task
 04's: `register::table_spec` resolves every source through
@@ -26,7 +25,7 @@ in one phase. Secrets are **by reference** (paths / env), never read into or sto
 |---|---|---|---|---|
 | 01 | Connections model + spec (project-scoped, no stored secrets) | ✅ | W7 | — |
 | 02 | Activity-rail button + sidebar connections pane | ✅ | W7 (U2/U3) | 01, P3-01 |
-| 03 | Connection editor forms (S3 / GCS / HTTP) | ⬜ | W7 | 01 |
+| 03 | Connection editor forms (S3 / GCS / HTTP) | ✅ | W7 | 01 |
 | 04 | Config LOCATION toggle + object-store branch | ⬜ | W7 (U14) | 01, P4-11 |
 
 **01 raised the workspace's effective MSRV to rustc 1.94.1** (`aws-config` and the `aws-smithy-*`

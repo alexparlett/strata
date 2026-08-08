@@ -8382,6 +8382,7 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "aws-sdk-s3",
+ "aws-types",
  "chrono",
  "datafusion",
  "datafusion-functions-json",

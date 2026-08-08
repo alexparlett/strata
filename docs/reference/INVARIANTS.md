@@ -506,7 +506,31 @@ Things that must not regress. Each was fought for once already.
   putting a credential round trip behind a one-table gesture buys nothing. **Ambient and Named
   profile are two providers, not one chain with a setting**: `aws-config`'s default chain is
   unconditionally `Environment → Profile → …`, so naming a profile on it lets an exported
-  `AWS_ACCESS_KEY_ID` sign instead, silently, with the row still green. Full model:
+  `AWS_ACCESS_KEY_ID` sign instead, silently, with the row still green.
+  And because a connection's identity is its **URL** while its list is sorted by **address**, the
+  two keys are never interchangeable: `upsert_connection` replaces on the URL and inserts at the
+  address's slot, an **edit that moves either half deregisters the old URL itself** (`connect` is
+  additive and only ever sees the def it is given, so nothing else ever would), and the editor's
+  Save asks for a **whole-catalog** pass — the width connections belong to, and the one that
+  re-registers the tables that were reading the store it just replaced.
+- **A connection's address is its provider's own, and every rule about it lives in one place.**
+  The field is `address` rather than `bucket` because the three providers do not address the same
+  thing: S3 and GCS name a bucket whose scheme the provider states, while HTTP names a **whole
+  origin URL** — its scheme is the user's answer, not the provider's, since `http://` and
+  `https://` are two different origins. So there is no `Provider::scheme`, no prefix chip and no
+  scheme picker; a path is **refused naming the part to drop**, never trimmed, because the
+  registry keys on scheme and authority. What a legal address is, is `Provider::check_address` —
+  called by `engine::store::connect` *and* by the editor, so a name refused at the field is
+  refused by the store in the same words. The two bucket rule sets are the providers' published
+  ones and are genuinely different (GCS takes underscores and a 222-character dotted name and
+  reserves `goog`/`google`; S3 takes neither and refuses `..`), which is exactly why one copy.
+  **Client options are the def's other half** (`client_config`, `object_store`'s own
+  `ClientConfigKey`s): on the def rather than in a provider, because all three stores are built on
+  one HTTP client; offered from `CLIENT_KEYS` and refused by `check_client_config`, the same call
+  on both sides again. `allow_http` is not offered — it is the S3 endpoint's toggle, and on an
+  HTTP connection it is **derived from the scheme the user typed**, since reqwest is built
+  `https_only(!allow_http)` and would otherwise refuse every plain-`http` request before it left
+  the process. Full model:
   [ENGINE.md](ENGINE.md), spec: [CONNECTIONS_SPEC.md](../CONNECTIONS_SPEC.md).
 - **A reader that outlives one Run pins the snapshot it reads.** A snapshot belongs to its
   workspace and is retired the moment that workspace dispatches another run (SNAPSHOT_SPEC §4),

@@ -43,10 +43,13 @@ use strata_core::config::Command;
 use strata_model::{DrawerTab, SidebarPane, TabId};
 
 use crate::apps::configure::ConfigureTarget;
+use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::close::{close_project, CloseGuard, CloseTarget};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{use_catalog_selection, CatalogSelection, Chan, SessionState};
-use crate::apps::project::views::{actions, use_catalog_actions, CatalogActions};
+use crate::apps::project::views::{
+    actions, use_catalog_actions, CatalogActions, ConnectionRequest,
+};
 use crate::components::icon::IconName;
 use crate::platform::{open_settings, OpenCtx};
 use crate::state::AppCtx;
@@ -90,6 +93,10 @@ pub struct PaletteCtx {
     pub engine: EngineCtx,
     /// Where a COLUMNS row lands: the inspected column (P3-08).
     pub selection: CatalogSelection,
+    /// The connection editor's request slot. The pane's `+` folds under panel pressure and has
+    /// no second entry point once there is one connection, so this row is what makes that fold
+    /// cost nothing.
+    pub connection: ConnectionRequest,
     /// The window's open path — Switch project… is ⌘O by another name.
     pub open: OpenCtx,
     /// The close-while-running gate's two halves, for Close project.
@@ -108,6 +115,7 @@ pub fn use_palette_ctx() -> PaletteCtx {
         session: use_radio::<SessionState, Chan>(Chan::Tabs),
         engine: use_consume::<EngineCtx>(),
         selection: use_catalog_selection(),
+        connection: use_consume::<ConnectionRequest>(),
         open: use_consume::<OpenCtx>(),
         guard: use_consume::<Arc<CloseGuard>>(),
         confirm: use_consume::<State<Option<CloseTarget>>>(),
@@ -166,6 +174,14 @@ impl PaletteCommands {
               keywords = "add register import parquet csv json")]
     fn new_table(ctx: &PaletteCtx) {
         ctx.catalog.configure(ConfigureTarget::New);
+    }
+
+    /// Read tables from S3, GCS or an HTTP(S) endpoint
+    #[command(label = "New connection…", icon = IconName::Connections,
+              keywords = "add object store bucket s3 gcs http remote")]
+    fn new_connection(ctx: &PaletteCtx) {
+        let mut slot = ctx.connection;
+        slot.set(Some(ConnectionTarget::New));
     }
 
     /// Browse and re-run past queries

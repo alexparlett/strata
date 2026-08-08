@@ -2,6 +2,7 @@
 //! components built to the `design-handoff/` comps — grown in place, never thrown away.
 
 mod configure_launch;
+mod connection_launch;
 mod dialogs;
 pub(super) mod drawer;
 mod header;
@@ -18,6 +19,7 @@ mod sidebar;
 pub(super) mod workbench;
 
 pub use configure_launch::{ConfigureLauncher, ConfigureRequest};
+pub use connection_launch::{ConnectionLauncher, ConnectionRequest};
 pub use dialogs::{
     use_profile_actions, CloseConfirm, DropConfirm, DropTarget, OpenPrompt, ProfileActions,
     ProfileConfirm, ProfileTarget, ProjectLoadFailed,

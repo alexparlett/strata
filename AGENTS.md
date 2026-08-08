@@ -201,7 +201,16 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   does not. The def stores the authority and derives the scheme from the provider; **Ambient and
   Named profile are two providers**, because naming a profile on `aws-config`'s default chain
   leaves `Environment` in front of it; and **no arm of `engine::store` takes a secret** — a profile
-  name and a key file path, never a key.
+  name and a key file path, never a key. Identity is the **URL** and the sort is the **address**,
+  so `upsert_connection` replaces on one and inserts by the other; an edit that moves either half
+  **deregisters the old URL itself**, and the editor's Save asks for a whole-catalog pass.
+- **A connection's address is its provider's own, and every rule about it lives in one place.**
+  `address`, not `bucket`: S3 and GCS name a bucket and take the provider's scheme, HTTP names a
+  **whole origin URL** and a path is refused rather than trimmed. `Provider::check_address` is the
+  one copy of the two providers' (different) naming rules, called by the store *and* the editor;
+  `client_config` is `object_store`'s `ClientConfigKey` map, on the def because one HTTP client
+  serves all three, offered from `CLIENT_KEYS` and refused by `check_client_config`. `allow_http`
+  is never offered — S3's endpoint toggle, and on HTTP derived from the typed scheme.
 - **History is a satellite** (`.strata/history.jsonl`), never a store field. Only successful runs —
   rows *or* an intercepted statement; Clear unwrites the file and keeps the `seen` guard.
 - **History is a list of queries, not of presses — and dedupe comes before the cap**, keyed by the

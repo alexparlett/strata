@@ -46,6 +46,10 @@ src/platform/configure.rs        where a Configure window goes: the same native 
                                  the second would revert the first. Between the other two rules:
                                  Settings is app-wide (a second ask means focus), Export has no
                                  rule at all
+src/platform/connection.rs       where the **connection editor** goes (W7 · 03) —
+                                 configure.rs's rules verbatim, one window per `ConnectionTarget`
+                                 keyed by owner *and* target, because it too is opened on a def
+                                 that two windows would both write
 src/platform/owner.rs            P4-16 — **how long a child window may live**: not as long as the
                                  window it sits above, but as long as the *mount* of `ProjectRoot`
                                  whose handles it borrowed. `Subtree` is that mount's own diff key
@@ -175,9 +179,10 @@ src/components/                  shared component library
                                  `Input`'s own `InputMode`, so the state keeps the real value and
                                  revealing is a prop flip) + `NumberField` (bounded,
                                  `.unit("px")`, reports per keystroke and normalizes its text on
-                                 blur) + `DirectoryField` (a path box + the native folder picker:
-                                 one buffer, both write it — the picker sets the box and the box
-                                 is what reports)
+                                 blur) + `PathField` (a path box + the native picker, over a
+                                 folder or one file: one buffer, both write it — the picker sets
+                                 the box and the box is what reports. One component for both
+                                 kinds, because they differ in the picker call and nothing else)
 src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher.dc.html`)
   mod.rs                         root + window config + the `launcher` component theme
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
@@ -304,6 +309,25 @@ src/apps/configure/              the Configure-table window (P4-11 — `Configur
                                  asks *its* one scan driver for the registration pass — rather
                                  than holding an engine or a second "make the engine match the
                                  defs" of its own
+src/apps/connection/             the **connection editor** window (W7 · 03 —
+                                 `Connections.dc.html`): add or edit one remote object store.
+                                 mod.rs (root · window config · `ConnectionCtx` · `Status`),
+                                 model.rs (`ConnectionTarget` + the draft, which holds *every*
+                                 provider's fields flat so flipping the picker forgets nothing,
+                                 and projects the one in play, plus `ConfigRows` — the client
+                                 options edited as identified rows and committed as a map),
+                                 views/ (title_bar · form · status · footer). The form's rows are
+                                 **all keyed by the provider**, so switching one is a clean
+                                 remove-and-add: a row that merely *moves* index is recorded by
+                                 the differ as moved and then unwraps a scope it left behind. Configure's shape throughout: a child of the
+                                 project window that asked, writing that window's store through
+                                 `persisted_defs` and asking *its* scan driver for the pass.
+                                 Two things are its own — Save deregisters the old URL when an
+                                 edit moves the connection's identity (`engine::store::connect`
+                                 never sees the def it replaced), and the pass it asks for is
+                                 whole-catalog, because `ScanScope` has no connection width and
+                                 every table over the bucket was registered against the store
+                                 being replaced
 src/apps/project/                the project window (Valin-shaped)
   project.rs                     two layers: `ProjectApp` = the **window** (theme, app-globals,
                                  close bridge, menubar, OpenCtx) and `ProjectRoot` = the **open
@@ -461,7 +485,8 @@ src/apps/project/                the project window (Valin-shaped)
                                  ⋮ / right-click menu, and Forget sets the shared remove
                                  confirm's `DropTarget::Connection(url)` — the dialog owns the
                                  store mutation, the persist and `Engine::disconnect`. Add and
-                                 Edit are **parked** until Connections 03 brings the forms
+                                 Edit set `ConnectionRequest` and stop, on the same terms: the
+                                 editor window is `ConnectionLauncher`'s at the project root
     inspector/                   P3-08/P3-09 — the selected column, and **only what was actually
                                  read or counted**: mod (frame + theme + the not-a-column
                                  states), model (resolve the ColRef path · the dynamic fact list ·
