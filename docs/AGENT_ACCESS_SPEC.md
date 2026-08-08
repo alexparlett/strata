@@ -55,7 +55,8 @@ UI seam the MCP server does, so nothing built for the first frontend is discarde
 - **MCP first, chat pane flagship later, headless third.** MCP ships the working agent
   experience for the cost of a thin [rmcp](https://github.com/modelcontextprotocol/rust-sdk)
   shim — Claude Code brings the brain, the context management and the conversation UI. The chat
-  pane (§9) reuses the vocabulary in-process; its "brain" choice is deferred to its own task.
+  pane (§9) reuses the vocabulary in-process; its brain is an app-owned loop over a pluggable
+  `genai` provider seam (decided 2026-08 — §9).
 - **One app-wide server**, localhost + bearer token, stable port. Multi-project is kept
   deliberately small: tools default to the single open project and error with the open-project
   list when there is more than one (`project` param disambiguates; a query-session handle is

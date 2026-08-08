@@ -80,4 +80,5 @@ everything below it unchanged.
   the window and the user is looking at it.
 
 ## Legend
-✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.
+✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · ➡ graduated to another workstream ·
+`[core ✓]` logic in `strata-core`.

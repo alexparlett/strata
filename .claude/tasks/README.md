@@ -48,6 +48,7 @@ Read this index first, then open only the phase/workstream file you're working i
 - 🟢 **UI only** — the view exists but is a shell: on fixture data, decorative, or not dispatched.
 - 🟡 **partial** — some of it works; specifics in the task.
 - ⬜ **todo** — not started in Freya.
+- ➡ **graduated** — the task moved to its own workstream; its file is the pointer.
 - `[core ✓]` — the underlying logic already exists in `strata-core`; only Freya UI/wiring remains.
 
 ## Where we are
