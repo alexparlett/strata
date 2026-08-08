@@ -29,7 +29,15 @@
 //! Testcontainers Cloud agent (which advertises itself only through that file) reads as no
 //! runtime at all. That is not hypothetical: it is how this first failed on CI.
 //!
-//! **S3 only, and GCS is not an oversight** — it was tried, and the gap is *listing*.
+//! **Two providers, S3 and HTTP** — the same container serves both, because MinIO is an S3 API
+//! *and* an ordinary HTTP origin once a bucket is world-readable. The HTTP arm reads a single
+//! object rather than a prefix, and that is not a shortcut: `object_store`'s HTTP store lists
+//! through **WebDAV `PROPFIND`**, which MinIO does not implement, so a directory-shaped source
+//! could not work against it. A single-file source is exactly what an `http(s)://` connection is
+//! for in any case, and it exercises the whole path — connection, registered store, `head` +
+//! `get` over the wire, schema inference, rows.
+//!
+//! **GCS is a known gap**, not an oversight — it was tried, and the gap is *listing*.
 //! `object_store`'s GCS client speaks the **XML** API and needs two halves of it:
 //! `{base}/{bucket}?list-type=2` to list and `{base}/{bucket}/{key}` to get (its
 //! `gcp/client.rs:156,670`). DataFusion lists a prefix before reading, so neither is optional.
@@ -155,6 +163,19 @@ async fn seed(endpoint: &str, key: &str, body: &str) {
         .send()
         .await
         .expect("put the fixture object");
+
+    // …and make it readable without a signature, which is what turns this container into an
+    // ordinary HTTP origin as well as an S3 endpoint. Only `GetObject`, and only on this
+    // bucket's objects: the HTTP arm reads one file and needs nothing else.
+    client
+        .put_bucket_policy()
+        .bucket(BUCKET)
+        .policy(format!(
+            r#"{{"Version":"2012-10-17","Statement":[{{"Effect":"Allow","Principal":{{"AWS":["*"]}},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::{BUCKET}/*"]}}]}}"#
+        ))
+        .send()
+        .await
+        .expect("make the bucket world-readable");
 }
 
 /// Put MinIO's credentials where an **Ambient** connection will find them: the environment is
@@ -173,13 +194,42 @@ fn ambient() {
 /// with whatever the host's chain resolves.
 fn connection(endpoint: &str, auth: S3Auth) -> ConnectionDef {
     ConnectionDef {
-        bucket: BUCKET.into(),
+        address: BUCKET.into(),
         provider: Provider::S3(S3Store {
             region: REGION.into(),
             auth,
             endpoint: endpoint.into(),
             allow_http: true,
         }),
+        // **Client options ride the signed store too**, which is the half a reader is most likely
+        // to doubt: `AmazonS3ConfigKey::Client(..)` routes straight into the same `ClientOptions`
+        // the HTTP builder takes (`aws/builder.rs`), so this proves it against a server that
+        // verifies signatures rather than only against a store that builds.
+        client_config: client_options(),
+    }
+}
+
+/// The two options both connections carry: one `object_store` must parse into a duration, and one
+/// it must accept as a header value.
+fn client_options() -> BTreeMap<String, String> {
+    [("timeout", "30s"), ("user_agent", "strata-integration")]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// The **same server, reached as a plain HTTP origin**: no bucket, no signing, the address is the
+/// whole URL. What an `http(s)://` connection is for — a public data drop rather than a store you
+/// hold credentials to.
+///
+/// It carries the same **client options** the S3 connection does, so `with_config` is proved
+/// through both routes into `ClientOptions`: `HttpBuilder`'s direct one here, and
+/// `AmazonS3ConfigKey::Client(..)` there.
+fn http_connection(endpoint: &str) -> ConnectionDef {
+    ConnectionDef {
+        address: endpoint.into(),
+        provider: Provider::Http,
+        client_config: client_options(),
     }
 }
 
@@ -190,6 +240,20 @@ fn table() -> TableSpec {
     TableSpec {
         name: "regions".into(),
         paths: vec![format!("s3://{BUCKET}/data/")],
+        format: SourceFormat::Csv(CsvRead::default()),
+        partitions: Vec::new(),
+        internal: false,
+    }
+}
+
+/// The same object over the **HTTP** connection: one file, and deliberately no trailing slash.
+/// `object_store`'s HTTP store lists through WebDAV `PROPFIND`, which MinIO does not implement,
+/// so a prefix-shaped source could not be read here — a single object is what this provider is
+/// for, and it is read through `head` + `get` like any other.
+fn http_table(endpoint: &str) -> TableSpec {
+    TableSpec {
+        name: "regions_http".into(),
+        paths: vec![format!("{endpoint}/{BUCKET}/data/regions.csv")],
         format: SourceFormat::Csv(CsvRead::default()),
         partitions: Vec::new(),
         internal: false,
@@ -244,6 +308,48 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         name: "orphan".into(),
         paths: vec!["s3://not-connected/data/".into()],
         ..table()
+    };
+    let refused = engine.register(orphan).await.expect_err("no object store");
+    assert!(
+        refused.to_lowercase().contains("object store"),
+        "the failure names the missing store: {refused}"
+    );
+
+    // --- the same server as a plain HTTP origin ------------------------------------------
+    //
+    // **The second provider, end to end.** Nothing here is signed and nothing is inferred: the
+    // connection's address *is* the URL the user typed, the table's source is one object under
+    // it, and the read is a `head` and a `get` over the wire. It shares this container because
+    // MinIO is an ordinary HTTP server once its bucket is world-readable — and sharing it is
+    // also what proves the two connections are independent registry entries rather than one
+    // store answering twice.
+    //
+    // It carries client options too (`http_connection`), so `with_config` is proved against a
+    // store that is then actually read through rather than only against one that builds.
+    engine
+        .connect(http_connection(&endpoint))
+        .await
+        .expect("the HTTP connection registers its object store");
+    let meta = engine
+        .register(http_table(&endpoint))
+        .await
+        .expect("the table registers over the HTTP origin");
+    let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(columns, ["id", "region"], "the schema came off the object");
+
+    let (output, _) = engine
+        .query(WsId(1), RunTag(2), "SELECT * FROM regions_http".into(), 50)
+        .await
+        .expect("query the remote table");
+    assert_eq!(output.total, 3, "every seeded row came back over HTTP");
+
+    // …and an HTTP origin nothing connected is as unreachable as an unconnected bucket, which
+    // is what says the registry keyed this one on its own scheme and authority rather than
+    // answering for `http://` in general.
+    let orphan = TableSpec {
+        name: "orphan_http".into(),
+        paths: vec!["http://127.0.0.1:1/lake/x.csv".into()],
+        ..http_table(&endpoint)
     };
     let refused = engine.register(orphan).await.expect_err("no object store");
     assert!(

@@ -40,7 +40,10 @@ mod providers;
 mod query;
 pub mod serialize;
 pub mod sql;
-mod store;
+/// `pub` for the connection editor, which offers the client options this module knows how to
+/// apply ([`store::CLIENT_KEYS`]) and refuses the ones it does not ([`store::check_client_config`])
+/// — the same call `connect` makes, so a form and the store cannot disagree about an option.
+pub mod store;
 pub mod value_tree;
 
 /// [`column_info`] and [`chart_role`] are `pub` because a column's vocabulary row is derived
@@ -1171,6 +1174,21 @@ impl Engine {
     /// a fault.
     pub fn disconnect(&self, url: &str) {
         store::disconnect(&self.ctx, url);
+    }
+
+    /// The AWS profile names this machine's own configuration defines — what the connection
+    /// editor's **Named profile** picker offers (W7 · 03). See [`store::aws_profiles`]; no
+    /// profile's *contents* are read.
+    ///
+    /// On the engine rather than beside the surface that asks for it, for the two reasons every
+    /// other method here is: `aws-config` is [`store`]'s dependency and stays there, and this
+    /// reads files — so it belongs on the runtime that keeps a read off the thread drawing every
+    /// window, not in a component that would have to invent one.
+    pub async fn aws_profiles(&self) -> Vec<String> {
+        self.rt()
+            .spawn(store::aws_profiles())
+            .await
+            .unwrap_or_default()
     }
 
     /// (Re)register one external table from its spec, returning its inferred schema +

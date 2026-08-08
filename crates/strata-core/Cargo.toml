@@ -32,6 +32,10 @@ object_store = { version = "0.13", features = ["aws", "gcp", "http"] }
 # `behavior-version-latest` is what makes `BehaviorVersion::latest()` callable.
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"
+# Only for `engine::store::aws_profiles`: `aws_config::profile::load` takes the filesystem and
+# environment shims from this crate, and there is no re-export of them on `aws-config` itself.
+# Already in the graph — `aws-config` depends on it — so naming it costs a line and no build.
+aws-types = "1"
 # `engine` worker: dedicated thread + tokio runtime + mpsc command/event channels.
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"

@@ -40,6 +40,16 @@ pub use state::{persisted_defs, use_report, ReportCtx};
 pub use state::{
     refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState, Reg,
 };
+/// The *values* behind the four handles above, for a **child window's tests**.
+///
+/// A window that is not this one carries `Catalog`, `CatalogRescan` and `ReportCtx` as launch
+/// values, so it never names what is inside them — but a test that stands one of those windows up
+/// has to create them, and `CatalogState` has no `Default` to hide behind (`Settled(0)` is a
+/// deliberate seed; see its doc). `#[cfg(test)]` rather than a widened module, because this is
+/// the whole of the need and it must not become a production coupling: the list above is what a
+/// child window may actually reach for.
+#[cfg(test)]
+pub use state::{CatalogState, Log, PersistFaults, ScanRequest};
 pub use views::{
     AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
     CellViewThemePreference, ChartThemePreference, CommandPaletteThemePreference,

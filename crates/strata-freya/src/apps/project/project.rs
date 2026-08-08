@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use crate::agent::use_agent_server;
 use crate::apps::configure::ConfigureTarget;
+use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::close::{
     close_bridge, close_project, CloseBridge, CloseGuard, CloseTarget, Veto,
 };
@@ -38,9 +39,9 @@ use crate::apps::project::state::{
     Loaded, SessionState,
 };
 use crate::apps::project::views::{
-    CloseConfirm, CommandPalette, ConfigureLauncher, DropConfirm, DropTarget, HeaderBar,
-    OpenPrompt, PaletteOpen, ProfileConfirm, ProfileTarget, ProjectLoadFailed, ProjectLoading,
-    RequestKeepers, Shell,
+    CloseConfirm, CommandPalette, ConfigureLauncher, ConnectionLauncher, DropConfirm, DropTarget,
+    HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProfileTarget, ProjectLoadFailed,
+    ProjectLoading, RequestKeepers, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
@@ -692,6 +693,10 @@ impl Component for ProjectLoaded {
         // Configure, the TABLES section's `+`) set it and stop; `ConfigureLauncher` below holds
         // the app-globals and the engine a window needs, so no row has to.
         use_provide_context(|| State::create(None::<ConfigureTarget>));
+        // The connection-editor request slot (W7 · 03), on identical terms — set by the
+        // Connections pane's `+`, its empty-state CTA and a row's Edit, acted on by
+        // `ConnectionLauncher` below.
+        use_provide_context(|| State::create(None::<ConnectionTarget>));
         // Whether the command palette is up (P6-01). A slot on the same terms as the three
         // above: the surface is mounted at this root, where every store it acts through
         // actually lives, and its other trigger is elsewhere — the header's ⌘K button.
@@ -745,6 +750,8 @@ impl Component for ProjectLoaded {
             // slot. Mounted here because this is where the handles opening a window needs
             // actually live.
             .child(ConfigureLauncher)
+            // The connection editor's, on the same terms and for the same reason.
+            .child(ConnectionLauncher)
             // Invisible, zero-size: every open tab's current press keeps a query
             // subscriber mounted for this project's whole life, so backgrounded runs
             // neither lose their cache entry nor miss their history settle. Root-level

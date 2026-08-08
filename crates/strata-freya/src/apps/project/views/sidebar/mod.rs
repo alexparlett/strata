@@ -277,6 +277,7 @@ mod tests {
 
     use super::*;
     use crate::apps::configure::ConfigureTarget;
+    use crate::apps::connection::ConnectionTarget;
     use crate::apps::project::contexts::EngineCtx;
     use crate::apps::project::state::{ProjChan, ProjectState, ScanRequest, ScanScope};
     use crate::apps::project::views::{DropTarget, ProfileTarget};
@@ -343,6 +344,9 @@ mod tests {
                 // The Configure-window request slot (P4-11): the TABLES `+` and the row menus
                 // set it, and the project root's launcher — not mounted here — acts on it.
                 r.provide_root_context(|| State::create(None::<ConfigureTarget>));
+                // …and the connection-editor request slot (W7 · 03), which the CONNECTIONS
+                // header's `+` and the empty state's CTA set on identical terms.
+                r.provide_root_context(|| State::create(None::<ConnectionTarget>));
                 // Where the catalog's row menus report the one action that writes
                 // `project.json` inline (the saved-query rename, P4-15).
                 r.provide_root_context(|| State::create(Log::default()));

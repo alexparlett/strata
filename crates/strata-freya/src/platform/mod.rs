@@ -5,6 +5,7 @@
 //! project subtree whose handles it holds ([`owner`]).
 
 pub mod configure;
+pub mod connection;
 pub mod export;
 pub mod open;
 pub mod owner;
@@ -12,6 +13,7 @@ pub mod settings;
 pub mod windows;
 
 pub use configure::open_configure;
+pub use connection::open_connection;
 pub use export::open_export;
 pub use open::{create_global_open, FocusedOpen, OpenCtx, OpenTarget};
 pub use owner::{use_owner_pin, Subtree};

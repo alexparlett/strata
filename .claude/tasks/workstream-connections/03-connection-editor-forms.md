@@ -1,70 +1,191 @@
 # Connections 03 · Editor forms (S3 / GCS / HTTP)
 
-**Workstream:** Connections (W7) · **Status:** ⬜ · **Depends on:** 01
+**Workstream:** Connections (W7) · **Status:** ✅ · **Depends on:** 01 · **Unblocks:** 04
 
 ## Goal
 Per-provider connection editor forms.
 
-## Current state
-Not built. The model is `strata_model::ConnectionDef` (Connections 01) and it is what the form
-edits — `Provider::{S3(S3Store), Gcs(GcsStore), Http}`, with the auth reference carried *inside*
-the auth variant (`S3Auth::Profile { name }`, `GcsAuth::ServiceAccount { path }`).
+## What landed
 
-## Build (to `Connections.dc.html`)
-- Provider tabs/segment (S3 / GCS / HTTP); per-provider fields (endpoint, region, bucket; GCS
-  service-account **path**; HTTP base URL/headers). Credentials by reference only.
-- Validate + save into the connection model (task 01). `components::form` is the row vocabulary
-  (AGENTS.md §3 — a settings-style surface is built from it, never its own rows).
-- The store mutators the save needs: `upsert_connection` / `remove_connection` on `ProjectState`,
-  persisted through `persisted_defs` like every other def mutation. Connections 01 left none —
-  nothing referenced them. **Replace on `ConnectionDef::url()`, insert at the bucket-sorted
-  slot**: the two are different keys and only one of them is identity, so an upsert matching on
-  bucket would let saving a `gs://lake` connection silently replace the `s3://lake` one it sorts
+- **A window, not a modal** — `apps/connection/`, the canvas's 480 × 588 frame with its own
+  traffic lights, drag bar and footer (`Connections.dc.html` is a `data-winframe`, like Configure
+  and Export). Configure's shape throughout: a child of the project window that asked, pinned
+  above it (`platform/connection.rs`), closing with the **project subtree** rather than the window
+  id, single-instance per target, and writing that window's store through `persisted_defs` rather
+  than holding an engine of its own.
+- **The three parked affordances are live**, and nothing at those call sites changed but the
+  handler: the pane header's `+`, the empty state's CTA and the row menu's *Edit connection* set
+  `ConnectionRequest` and stop. `ConnectionLauncher` at the project root opens the window —
+  `ConfigureLauncher`'s shape, for its reason (a menu is built inside an event handler, where no
+  hook may run).
+- **A command-palette row**, *New connection…*, so the header `+` folding under panel pressure
+  loses nothing. One method on the router (P6-01), whose body is the same slot write.
+- **`ProjectState::upsert_connection`** — replaces on `ConnectionDef::url()`, inserts at the
+  address-sorted slot, resets the row to `Loading`. The two keys are the point, and both are
+  tested: an address-keyed replace would let saving `gs://lake` take out the `s3://lake` it sorts
   beside.
+- **`strata_core::engine::store::aws_profiles`** + `Engine::aws_profiles` — the profile *names*
+  `~/.aws/config` and `~/.aws/credentials` define, parsed by `aws-config` (the `[profile x]` vs
+  `[x]` split, `AWS_CONFIG_FILE`, and the two files merging are not the ini rules they look like).
+  Nothing from inside a profile is read. New direct dep: `aws-types`, for the `Fs`/`Env` shims
+  `aws_config::profile::load` takes and does not re-export — already in the graph.
+- **`strata_model::ProviderId`** — the provider discriminant with no settings attached, so a
+  picker has something to offer. `Provider::id()` projects onto it and `Display` delegates, which
+  keeps the product's name (`GCS`) written down once across the badge and the picker. It carries
+  no scheme: two providers state one and HTTP's is inside its address.
+- **`components::form::PathField`** replaces `DirectoryField` — the same box and the same report
+  contract over a folder **or one file** (`PathField::file(value, &["json"])`), because the two
+  differ in the picker call and nothing else. The GCS service-account row is its first file user.
 
-## What Connections 02 handed over
+## Decisions this task settled
 
-The pane exists and every gesture that opens this editor is already on screen, **rendered and
-disabled** (AGENTS.md §5). Wiring them is this task's, and nothing at the call sites changes but
-the handler:
+- **Save asks for a whole-catalog pass.** `plan_scan` puts connections in `ScanScope::All` alone,
+  and its own doc names the re-connect case — a corrected region, an `aws sso login` — as "exactly
+  what ↻ is for". That case *is* this window, so Save is the ↻ the user would otherwise press with
+  the def written first. It is also the honest width: every table over the bucket was registered
+  against the store this save replaces, and no per-connection dependency index exists to narrow it.
+  No new `ScanScope` variant was added.
+- **The window watches its own row** (`use_watch_connection`), the Configure window's
+  reconciliation over shared state rather than a second registration path: `Ready` closes it,
+  `Failed` keeps it open with the engine's own sentence. Worth staying open for here more than
+  anywhere else — "The AWS profile 'analytics' resolved no credentials" describes the very field
+  still on screen, and the pane's row can only give it on a hover.
+- **A moved identity deregisters the old URL, in the footer.** A changed address *or* a changed
+  provider changes `url()`; `engine::store::connect` only ever sees the def it is given and
+  `register_pass` is additive, so nothing else would ever take that store out. Same
+  `Engine::disconnect` Forget makes, and the move is logged like Configure logs a rename.
+- **A new S3 connection opens with a blank region, not the canvas's `us-east-1`.** That seed is
+  the arrow-rs#2795 default wearing a user's handwriting: `AmazonS3Builder` assumes `us-east-1`
+  silently, the credential probe still passes, and the connection registers green over the wrong
+  region. Blank blocks Save and says why; `us-east-1` stays the box's placeholder.
+- **Field errors are the footer's, not the field's.** The canvas reddens the region box and writes
+  a line under it; here `blocker()` is both the note beside the buttons and the value that
+  disables Save, so a form cannot hold two accounts of its own validity. `Row::required()` still
+  marks the label, because that is a fact about the field rather than a verdict on its contents.
+- **The draft holds every provider's fields flat and projects the one in play** — the Configure
+  and Export windows' split over `SourceFormat`. Spec §1 asks for provider switching to *sanitise*
+  the auth mode; the types already make an invalid pair unwritable (`S3Auth` and `GcsAuth` are
+  different types), so what the draft has to do instead is **not forget**: flipping to GCS and
+  back must still have your region.
+- **The Named-profile picker is a real discovery, and says which of its three states it is in.**
+  A hardcoded list is the stub §1 forbids, and an empty dropdown cannot tell "no profiles" from
+  "not read yet" — so the row reads *reading*, *none defined here (use Ambient)*, or the list.
+- **HTTP shows the address box and nothing else.** No auth row, no region, no endpoint: a
+  control that cannot mean anything for the chosen provider is not a control, which is the call
+  the Configure window made about its own one-option LOCATION toggle.
 
-- `views/sidebar/connections/mod.rs` — `AddConnectionButton` (the pane header's `+`), the empty
-  state's *Add connection* CTA, and `connection_menu`'s *Edit connection* item. The first two open
-  the editor on a **new** connection; the third on the row's `url()`.
-- **The request shape is deliberately not pre-built.** No `ConnectionTarget` slot exists, because
-  an unreferenced one is pre-work §5 forbids. The precedent to follow is `ConfigureTarget`
-  (P4-11): a `State<Option<…>>` provided at the window root, set by these three call sites, acted
-  on by a launcher there. Drop the three `.enabled(false)` calls with it.
-- **The header `+` folds under panel pressure** (`ToolbarItem::Custom { folded: None }`, the
-  catalog ↻'s terms) — and unlike ↻ it has no second entry point, since the empty-state CTA is
-  gone the moment there is one connection. Give Add a **command-palette** row when it works, which
-  is one method on the command router (P6-01), and the fold loses nothing.
-- **Forget already owns the deregister.** `Engine::disconnect(url)` exists and the remove confirm
-  calls it. An **edit that moves the bucket or the provider** changes `url()`, so it owes the same
-  call on the *old* one before saving the new def — `engine::store::connect` never sees the def it
-  replaced.
-- **The store's `remove_connection` / `restore_connection` landed with Forget**, keyed on `url()`
-  and case-sensitively. `upsert_connection` is still this task's, on the terms below.
+## Follow-on, same task
 
-## What Connections 01 handed over
+Four changes after the first review pass, all of them tightening what a connection may *be*:
 
-- **The def stores the authority alone**; the scheme comes from the provider
-  (`ConnectionDef::url()`). So the form owns adding and stripping the prefix — the non-editable
-  `https://` chip for HTTP, nothing shown for S3/GCS since the picker already states the scheme.
-- **Core's refusals are the backstop, not the field errors.** `engine::store::connect` refuses a
-  blank region, a blank profile name, a blank SA path and a bucket carrying a path — those are the
-  same rules the form has to enforce at Save, and the wording there is written for a catalog row,
-  not for a field. Keep them in agreement; don't route the form's validation through the engine.
-- **Switching provider must sanitise the auth mode** (spec §1) — which the type already forces:
-  `S3Auth` and `GcsAuth` are different types, so there is no invalid pair to guard against.
-- **An edit that changes the bucket or the provider changes the connection's identity**, and
-  `engine::store::connect` cannot clean up after it — it only ever sees the new def, so the store
-  registered under the *old* `url()` survives. The edit gesture owns deregistering the old URL,
-  the same call Forget needs (02).
+- **`ConnectionDef::bucket` is now `address`** (`serde(alias = "bucket")`, so committed projects
+  still load). The three providers do not address the same thing, and one field named for one of
+  them was the reason HTTP kept needing special cases.
+- **HTTP is one input holding a whole URL** — `http://aserver:8484`, scheme included. No prefix
+  chip, no scheme picker, no `HttpStore`: `http` and `https` are two different origins, and only
+  the person typing knows which their server speaks. A **path is a validation error naming the
+  part to drop** rather than something trimmed off, because the registry keys on scheme and
+  authority. `allow_http` is **derived from the typed scheme** in `engine::store::build` —
+  `ClientOptions` builds reqwest `https_only(!allow_http)`, so without it every plain-`http`
+  request failed before leaving the process with a "builder error" naming nothing. The MinIO
+  integration test caught that; nothing else would have.
+- **Bucket names are validated against each provider's published rules**, in `Provider::
+  check_address` — one copy, called by `engine::store::connect` *and* the editor, so the two
+  cannot disagree. S3's are AWS's four; GCS's are Google's and genuinely differ (underscores,
+  a dotted name to 222 with each part to 63, no dotted-decimal IP, no `goog`/`google`). What no
+  local check can settle is left to the store and named as such: S3's reserved prefixes and
+  suffixes, GCS's "close misspellings" of `google`.
+- **Client options** — `object_store`'s `ClientConfigKey` map (`ConnectionDef::client_config`),
+  edited as a table and committed as a map. On the def rather than in a provider because all
+  three stores are built on one HTTP client; offered from `CLIENT_KEYS` (a written-down table,
+  since the enum cannot list itself — pinned by a test that parses every entry) and refused by
+  `check_client_config`, again one call for both sides.
+  **The table is the properties grid's, cell for cell** (Settings ▸ Engine, plus the Configure
+  window's source paths): Freya's built-in `Table`, a `ToolButton` toolbar above it acting on the
+  **selected** row rather than a control per row, a header strip because it has two columns, the
+  empty state *inside* the table, bare fields in both cells, and the name box carrying the grid's
+  **attached suggestion panel** — matches anywhere, hides what another row claims, quiet on an
+  exact hit. It offers **every** match and caps its *height* at three rather than capping the
+  list, because an offer here is two lines (a client option's name means little without the
+  sentence under it) and these names share so many substrings that a cut entry is one typing
+  cannot find. The panel scrolls, and the gesture **latches** to it (`ScrollView::latch_wheel`,
+  the fork's macOS convention), so flicking through the offers cannot hand off mid-gesture and
+  scroll the form behind them. `auto` + `max_height`, the app's own shape for a capped scroll
+  panel — `height` alone is an exact size and would hold three rows of panel open over one offer. Not a `Select`: a closed list is no reason to reach for one when the grid beside it
+  types the same kind of thing, and a field takes a paste, a partial match and a name from a newer
+  `object_store` where a dropdown takes none of them. The one departure from the grid is the tint:
+  an unknown name is an **error** here rather than a warning, because `check_client_config`
+  refuses it outright where an unknown engine key may just be newer than the build. The selection lives
+  on `ConnectionCtx`, **not** on the draft — `ConfigureCtx::selected_path`'s rule, and for its
+  reason: on the draft, clicking a row would count as an edit and clear the engine's failure
+  message out from under whoever was reading it.
+  **It is offered on every provider, and that is correct rather than convenient:** each builder
+  routes a `Client(..)` key into the same `ClientOptions`
+  (`aws/builder.rs:670`, `gcp/builder.rs:326`, `HttpBuilder::with_config`), so a proxy or a
+  timeout applies to a signed S3 request exactly as to a public HTTP one. Both connections in the
+  MinIO test carry one, so both routes are proved against a real server.
+  `ConfigRows` is deliberately **not**
+  Settings' `PropRows`, which is welded to `ENGINE_KEYS`, a selection, an autocomplete and an
+  inspector pane; what is shared is the rule, not the code.
+
+**Two things the review pass caught, both of them silent failures.** A stored HTTP connection
+written under the older shape (`bucket`, the authority alone, `https` derived) read as a URL with
+no scheme after the rename and was refused on the next open — asking the user for something they
+never had to type. `serde(alias)` migrates the field *name*; `ConnectionDef::migrated`, applied in
+`project::load_defs` (the one path defs come off disk), migrates the *value*. And a plain-`http`
+**S3-compatible endpoint** without Allow HTTP is now refused by name: `ClientOptions` builds its
+client `https_only(!allow_http)`, so `object_store` failed every request with a bare
+"HTTP error: builder error" naming neither the host nor the control to change. That is the same
+trap the HTTP arm derives away; S3 has a toggle of its own, so it says which one.
+
+**The MinIO integration test now proves external tables over two providers.** The same container
+serves S3 (signed, a prefix listing) and HTTP (anonymous, one object, world-readable bucket
+policy), each through connection → registered store → `register_external` → a query returning
+rows, and each with its own orphan check. The HTTP connection carries client options, so
+`with_config` is proved against a store that is then read through. **GCS remains a known gap**
+and the file says why: `object_store`'s GCS client needs the XML list API no emulator serves, and
+MinIO refuses its empty bearer header — GCS coverage needs a real bucket.
+
+## The one fork change
+
+**`TableRow` now follows column widths that change under it**
+(`freya-components/src/table.rs`, fork commit `5d55ad9`). It read its split through
+`use_try_consume`, whose initializer runs **once per component instance**, while `Table`
+re-provided a plain `TableConfig` every render — so a row kept the widths it was born with, and a
+table that started without `column_widths` and gained them laid its rows out at an equal share for
+the rest of their lives, with no later render recovering. `TableConfigContext` now carries a
+`Readable<TableConfig>`, kept in step by the same guarded write `ActivableRoute` uses.
+
+This app is the first caller that could ever have seen it: the properties grid and the source-path
+list both use widths that are constant *and* uniform, which are indistinguishable from the
+equal-share fallback. Pinned by a test in the fork (`a_row_follows_column_widths_that_change_under
+_it`), which fails at 200 against the 120 it declared without the fix.
+
+The client-options table still declares the same widths in **both** branches on top of that,
+because the two fixes answer different halves: the fork's makes a change propagate, and the app's
+means there is no change to propagate — so the header does not move even for the frame the first
+row lands in.
+
+**The gitlink is pushed** to `github.com:alexparlett/freya` (AGENTS.md §6), so a fresh clone and CI
+can init the submodule.
+
+## What this leaves 04
+
+- The **Configure LOCATION toggle** now has a way to make a connection: its canvas's
+  **＋ New connection…** entry in the connection dropdown is one `ConnectionRequest` write, the
+  same slot the pane's three triggers use — but from the *Configure* window, which is a different
+  window and therefore needs the slot passed as a launch value rather than consumed from context.
+  Worth deciding there rather than pre-building it here.
+- `ProviderId` is the filter the connection dropdown wants (`ProviderId::ALL` for its TYPE
+  segmented, `def.provider.id()` per row), and `ProviderId::label()` is the name that picker and
+  the pane's badge have to agree on.
+- The pane's ⓘ deliberately still does not mention Configure — add that sentence with the control
+  (`ConnectionsHint`).
 
 ## Acceptance
-- [ ] Each provider's form validates + saves a connection; no secret is stored inline.
-- [ ] The pane's three parked affordances open it, and none is left `enabled(false)`.
+- [x] Each provider's form validates + saves a connection; no secret is stored inline.
+- [x] The pane's three parked affordances open it, and none is left `enabled(false)`.
 
 ## Freya / references
-- Design: `Connections.dc.html` (+ the conn VM in `strata-windows.js`). `docs/CONNECTIONS_SPEC.md`. DEV_TASKS W7.
+- Design: `Connections.dc.html` (+ the conn VM in `strata-windows.js`). `docs/CONNECTIONS_SPEC.md`
+  §1/§6. DEV_TASKS W7. Module map: `docs/reference/MODULE_MAP.md` (`src/apps/connection/`).
