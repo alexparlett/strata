@@ -362,7 +362,7 @@ mod tests {
     use strata_agent::{Agent, AgentIdentity};
     use strata_core::engine::{column_info, TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
-    use strata_model::{ColumnInfo, SavedQuery, SourceFormat, TableDef, ViewDef};
+    use strata_model::{ColumnInfo, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef};
     use uuid::Uuid;
 
     use super::*;
@@ -384,12 +384,14 @@ mod tests {
                         format: SourceFormat::from_name("parquet"),
                         sources: vec!["data/orders".into()],
                         partition_cols: vec![("year".into(), "Int32".into())],
+                        origin: TableOrigin::External,
                     },
                     TableDef {
                         name: "gone".into(),
                         format: SourceFormat::from_name("csv"),
                         sources: vec!["missing.csv".into()],
                         partition_cols: Vec::new(),
+                        origin: TableOrigin::External,
                     },
                 ],
                 views: vec![ViewDef {

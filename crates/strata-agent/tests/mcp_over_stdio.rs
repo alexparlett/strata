@@ -23,7 +23,7 @@ use rmcp::ServiceExt;
 use serde_json::json;
 use strata_agent::{HeadlessHost, StrataTools};
 use strata_core::project::{save_defs, ProjectDefs};
-use strata_model::{SourceFormat, TableDef, ViewDef};
+use strata_model::{SourceFormat, TableDef, TableOrigin, ViewDef};
 
 /// A project folder holding one good table, one whose source is missing, and a view over the
 /// good one. `tag` is per test for the reason `strata-core`'s own `scratch` helper takes one:
@@ -44,12 +44,14 @@ fn project(tag: &str) -> PathBuf {
                     format: SourceFormat::from_name("csv"),
                     sources: vec!["people.csv".into()],
                     partition_cols: Vec::new(),
+                    origin: TableOrigin::External,
                 },
                 TableDef {
                     name: "gone".into(),
                     format: SourceFormat::from_name("parquet"),
                     sources: vec!["missing.parquet".into()],
                     partition_cols: Vec::new(),
+                    origin: TableOrigin::External,
                 },
             ],
             views: vec![ViewDef {

@@ -342,7 +342,7 @@ fn remove_any(path: &Path) {
 ///
 /// Both codecs are already available — `arrow-ipc`'s `lz4` and `zstd` features are enabled
 /// transitively by DataFusion — so this needs no dependency or feature change.
-fn snapshot_ipc_options() -> Result<IpcWriteOptions, String> {
+pub(super) fn snapshot_ipc_options() -> Result<IpcWriteOptions, String> {
     IpcWriteOptions::default()
         .try_with_compression(Some(CompressionType::LZ4_FRAME))
         .map_err(|e| e.to_string())

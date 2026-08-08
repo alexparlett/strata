@@ -483,7 +483,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
     use strata_core::engine::{column_info, TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
-    use strata_model::{TableDef, ViewDef};
+    use strata_model::{TableDef, TableOrigin, ViewDef};
 
     use super::*;
     use strata_model::SourceFormat;
@@ -528,6 +528,7 @@ mod tests {
             format: SourceFormat::from_name(format),
             sources: vec![format!("{name}.{format}")],
             partition_cols: Vec::new(),
+            origin: TableOrigin::External,
         }
     }
 

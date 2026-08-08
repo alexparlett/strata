@@ -500,7 +500,7 @@ mod tests {
     use strata_core::theme::load;
     use strata_model::{
         ConnectionDef, GcsStore, Origin, Provider, S3Store, SavedQuery, SourceFormat, TableDef,
-        ViewDef,
+        TableOrigin, ViewDef,
     };
 
     use super::*;
@@ -512,6 +512,7 @@ mod tests {
             format: SourceFormat::Parquet,
             sources: vec![format!("{name}.parquet")],
             partition_cols: Vec::new(),
+            origin: TableOrigin::External,
         }
     }
 

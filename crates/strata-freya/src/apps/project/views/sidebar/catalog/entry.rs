@@ -96,6 +96,23 @@ fn actions_button(menu: impl Fn() -> Menu + 'static) -> impl IntoElement {
         )
 }
 
+/// The marker a table row carries when Strata owns its data (ED-04).
+///
+/// **Not cosmetic.** Tables of both origins live in one section under one glyph, and the
+/// difference between them is what a drop means: one origin's Drop removes a def and leaves the
+/// user's files alone, the other's deletes the only copy of the data. The row is where that has
+/// to be legible, because the row is what gets right-clicked.
+///
+/// A badge rather than a second icon, because the catalog already marks a row that is special in
+/// a way that matters this way (a partition column's `PART` chip), and because a new glyph would
+/// be a new asset to say what one word says. Toned from the table entity colour rather than a
+/// status tone: it is a fact about the table, not a warning about it.
+const INTERNAL_BADGE: &str = "INTERNAL";
+/// What that marker means, on hover and to a screen reader. `INTERNAL` is the word the app uses
+/// everywhere else for this (the router's own `INSERT targets internal tables`), but it does not
+/// on its own say the thing the user has to know before dropping the row.
+const INTERNAL_TIP: &str = "Strata stores this table's data in the project";
+
 /// What a catalog entry (a table or a view) resolved to for rendering: its columns, its partition
 /// columns, and the registration state that produced them.
 enum EntryState {
@@ -173,7 +190,8 @@ impl Component for EntryRow {
                             partitions: Vec::new(),
                         },
                     };
-                    (state, p.view_problem(v))
+                    // A view has no origin: its data is whatever its query reads.
+                    (state, p.view_problem(v), false)
                 }),
                 _ => p.tables.iter().find(|t| t.def.name == self.name).map(|t| {
                     let state = match &t.reg {
@@ -184,7 +202,14 @@ impl Component for EntryRow {
                             partitions: t.def.partition_cols.clone(),
                         },
                     };
-                    (state, ProjectState::table_problem(t))
+                    // Off the **def**, so the marker is there whatever registration answered —
+                    // a `Reg::Failed` internal row is exactly the one whose origin the reader
+                    // most needs (its data is not in this copy of the project).
+                    (
+                        state,
+                        ProjectState::table_problem(t),
+                        t.def.origin.is_internal(),
+                    )
                 }),
             }
         };
@@ -201,8 +226,8 @@ impl Component for EntryRow {
         //
         // Both bits of state are armed here, above the early return, so hook order can't depend on
         // the row still being in the store.
-        let waiting = matches!(resolved, Some((EntryState::Loading, _)));
-        let problem = resolved.as_ref().and_then(|(_, p)| p.clone());
+        let waiting = matches!(resolved, Some((EntryState::Loading, ..)));
+        let problem = resolved.as_ref().and_then(|(_, p, _)| p.clone());
 
         // Whether the wait has outlasted the hold. Re-armed from zero on every entry into (and exit
         // from) the wait — but *not* on a re-scan of a row that was already waiting, whose wait
@@ -234,7 +259,7 @@ impl Component for EntryRow {
         });
 
         // The row was dropped from the store between the section's read and ours.
-        let Some((state, _)) = resolved else {
+        let Some((state, _, internal)) = resolved else {
             return rect();
         };
 
@@ -295,50 +320,60 @@ impl Component for EntryRow {
         };
         let menu_for_row = build_menu.clone();
 
-        let row = SidebarRow::new()
-            .height(ENTRY_HEIGHT)
-            .on_press(move |_| {
-                let mut set = open_entries.write();
-                if !set.insert(toggle_key.clone()) {
-                    set.remove(&toggle_key);
-                }
-            })
-            .child(
-                Icon::new(if is_open {
-                    IconName::ChevronDown
-                } else {
-                    IconName::ChevronRight
+        let row =
+            SidebarRow::new()
+                .height(ENTRY_HEIGHT)
+                .on_press(move |_| {
+                    let mut set = open_entries.write();
+                    if !set.insert(toggle_key.clone()) {
+                        set.remove(&toggle_key);
+                    }
                 })
-                .color(self.theme.chevron_color)
-                .size(11.),
-            )
-            .child(Icon::new(icon).color(icon_color).size(14.))
-            // The name absorbs the slack and truncates, so the status run stays visible however
-            // long the table is called.
-            .child(
-                MonoValue::new(self.name.clone())
-                    .color(self.theme.name_color)
-                    .width(Size::flex(1.))
-                    .text_overflow(TextOverflow::Ellipsis),
-            )
-            .on_context_menu(move |_: Event<PressEventData>| {
-                ContextMenu::open(menu_for_row());
-            })
-            // Its own slot, before the registration status: a scan is asked for from *here* (the
-            // row's menu) and can run for minutes with the inspector closed, so the row is the
-            // only thing that can say it is happening. Mounted only when there is a scan to
-            // watch — see `ProfileStatus` for why that matters.
-            .maybe_child(scan.map(|scan| {
-                ProfileStatus {
-                    owner: self.name.clone(),
-                    scan,
-                    key: DiffKey::None,
-                }
-                .key(scan)
-                .into_element()
-            }))
-            .maybe_child(status.map(|s| s.into_element()))
-            .child(actions_button(build_menu));
+                .child(
+                    Icon::new(if is_open {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .color(self.theme.chevron_color)
+                    .size(11.),
+                )
+                .child(Icon::new(icon).color(icon_color).size(14.))
+                // The name absorbs the slack and truncates, so the status run stays visible however
+                // long the table is called.
+                .child(
+                    MonoValue::new(self.name.clone())
+                        .color(self.theme.name_color)
+                        .width(Size::flex(1.))
+                        .text_overflow(TextOverflow::Ellipsis),
+                )
+                .on_context_menu(move |_: Event<PressEventData>| {
+                    ContextMenu::open(menu_for_row());
+                })
+                // After the name and before the status run, so it reads as part of what the row *is*
+                // rather than as something that happened to it.
+                .maybe_child(internal.then(|| {
+                    tip(INTERNAL_TIP)
+                        .child(rect().a11y_alt(INTERNAL_TIP).child(
+                            Badge::tag(INTERNAL_BADGE, self.theme.table_color).into_element(),
+                        ))
+                        .into_element()
+                }))
+                // Its own slot, before the registration status: a scan is asked for from *here* (the
+                // row's menu) and can run for minutes with the inspector closed, so the row is the
+                // only thing that can say it is happening. Mounted only when there is a scan to
+                // watch — see `ProfileStatus` for why that matters.
+                .maybe_child(scan.map(|scan| {
+                    ProfileStatus {
+                        owner: self.name.clone(),
+                        scan,
+                        key: DiffKey::None,
+                    }
+                    .key(scan)
+                    .into_element()
+                }))
+                .maybe_child(status.map(|s| s.into_element()))
+                .child(actions_button(build_menu));
 
         // The column block: an indented run hung off a hairline rail, exactly the canvas's
         // `border-left` treatment.

@@ -298,7 +298,7 @@ mod tests {
     use strata_core::engine::{TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_model::{ColumnInfo, TableDef, ViewDef};
+    use strata_model::{ColumnInfo, TableDef, TableOrigin, ViewDef};
 
     use super::*;
     use crate::theme::strata_theme;
@@ -317,6 +317,7 @@ mod tests {
                 format: SourceFormat::Parquet,
                 sources: vec!["events.parquet".into()],
                 partition_cols: Vec::new(),
+                origin: TableOrigin::External,
             }],
             views: vec![ViewDef {
                 name: "daily".into(),

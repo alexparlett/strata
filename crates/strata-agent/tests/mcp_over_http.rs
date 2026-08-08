@@ -47,6 +47,7 @@ async fn serve(tag: &str) -> (AgentServer, String) {
             paths: vec![root.join("people.csv").display().to_string()],
             format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
+            internal: false,
         })
         .await
         .unwrap();

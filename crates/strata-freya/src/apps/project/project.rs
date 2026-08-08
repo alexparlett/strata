@@ -575,9 +575,15 @@ impl Component for ProjectLoaded {
             // `RuntimeEnv` half is fixed the moment the context is built, so an engine is only
             // ever *born* with a full set. `use_engine_config` below keeps the rest in step.
             let overrides = config.peek().settings.engine.clone();
+            let root = self.root.clone();
             move || {
                 let engine = EngineCtx::new(overrides);
                 engine.watch_inflight(running);
+                // Which project this engine belongs to — where a `CREATE TABLE` spools its data
+                // and what an internal def's source path is relative to (ED-04). A launch value
+                // like the overrides, and for a stronger reason: the subtree is *keyed* on the
+                // folder, so a re-root builds a new engine rather than re-pointing this one.
+                engine.set_data_dir(&root);
                 engine
             }
         });

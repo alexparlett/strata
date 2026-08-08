@@ -194,7 +194,7 @@ mod tests {
     use crate::apps::project::state::ProjectFile;
     use std::path::PathBuf;
     use strata_core::project::ProjectDefs;
-    use strata_model::{SourceFormat, TableDef};
+    use strata_model::{SourceFormat, TableDef, TableOrigin};
 
     fn table(name: &str) -> TableDef {
         TableDef {
@@ -202,6 +202,7 @@ mod tests {
             format: SourceFormat::Parquet,
             sources: vec![format!("{name}.parquet")],
             partition_cols: vec![],
+            origin: TableOrigin::External,
         }
     }
 

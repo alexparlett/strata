@@ -21,6 +21,9 @@
 //! ED-02 ships the dispatch and the vocabulary; each arm is filled by the task that owns its
 //! capability, and until then answers with its stub refusal.
 
+mod tables;
+
+use std::path::PathBuf;
 use std::time::Instant;
 
 use datafusion::prelude::SessionContext;
@@ -95,6 +98,19 @@ pub enum StoreEffect {
     FunctionsChanged,
 }
 
+/// Where an intercepted statement may write, and what it may write **relative to**.
+///
+/// The **project folder**, not `.strata/tables` — because a statement that creates an internal
+/// table produces two things from it: an absolute path to spool into, and the project-relative
+/// source path the def stores, which is what makes the def portable
+/// ([`internal_source`](crate::project::internal_source)). Handing down only the data directory
+/// would leave the def naming an absolute path on the machine that ran the statement.
+///
+/// `None` is an engine with no project behind it — the agent's headless workspaces before a
+/// project is opened, and every test fixture. Nothing that only reads notices; the arms that
+/// write refuse politely.
+pub type DataRoot = Option<PathBuf>;
+
 /// Execute one intercepted statement and report what it did.
 ///
 /// The timer and the kind are stamped here rather than in the arms, so a report can never
@@ -105,6 +121,7 @@ pub async fn execute(
     kind: StmtKind,
     stmt: DFStatement,
     sql: String,
+    root: DataRoot,
 ) -> Result<StatementReport, String> {
     let start = Instant::now();
     // Exhaustive on `StmtKind` with no wildcard, so a kind the router learns to intercept is a
@@ -114,7 +131,7 @@ pub async fn execute(
     let outcome: StatementOutcome = match kind {
         // ED-04 — internal tables: spool the inner query to `.strata/tables/<slug>/`, register
         // the resulting Arrow def through `register_external`.
-        StmtKind::CreateTable | StmtKind::Ctas => Err(unimplemented(kind)),
+        StmtKind::CreateTable | StmtKind::Ctas => tables::create(ctx, kind, stmt, root).await,
         // ED-05 — writes and removal over the internal-name set.
         StmtKind::Insert | StmtKind::DropTable => Err(unimplemented(kind)),
         // ED-06 — typed view DDL onto `Engine::create_view` / `Engine::drop_view`.

@@ -71,6 +71,17 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   A re-scan is a new nonce; invalidating is dropping the request. Never a results field, dedup set,
   or spinner flag. The `Query` is cache identity, so it is built in **one** place.
 - **One entry point per expensive action, with the confirm in front of it** (`ProfileActions::ask`).
+- **An internal table is an ordinary def whose data Strata owns, and `TableOrigin` is a flag on
+  that def rather than a second kind of thing.** CTAS spools into `.strata/tables/<slug>/` and
+  registers through `register_external`, so the store, the persist funnel and replay need no new
+  code. The flag answers three questions only — may a write target it (`Engine::is_internal`,
+  never a second catalog), does a drop delete data, can Configure edit it (no: the item is
+  *absent*). The def travels and the data does not, and the failed row says so in its own words.
+  The spool is the **parsed plan**, never re-rendered SQL.
+- **A re-scan means "list the sources again", so this engine runs no list-files cache.** DF 54
+  turns one on by default with an infinite TTL, which silently serves ↻, Configure's re-inference
+  and `CREATE OR REPLACE` the previous file set. `ENGINE_KEYS` defaults it to `0` and
+  `build_runtime` applies that before any override.
 - **A reader that outlives one Run pins the snapshot it reads** (`Engine::pin_snapshot`, RAII).
   Never a staleness check or warning instead.
 - **The snapshot is Arrow IPC, so a result's type survives it.** Parquet cannot write a union at

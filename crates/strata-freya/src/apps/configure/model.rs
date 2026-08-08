@@ -18,7 +18,9 @@
 use std::path::Path;
 
 use strata_core::project::{relativize, resolve_source};
-use strata_model::{CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat, TableDef};
+use strata_model::{
+    CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat, TableDef, TableOrigin,
+};
 
 use crate::components::form::{one_char, Choice, Control, Group, Make, TextField};
 
@@ -429,6 +431,13 @@ impl ConfigureDraft {
                 .map(|p| relativize(root, p))
                 .collect(),
             partition_cols: self.effective_partitions(),
+            // Always external, and structurally so (ED-04): this window edits the sources,
+            // format and partition columns of a def that points at the user's own files, and an
+            // internal table has none of those to edit. The catalog row's menu therefore has no
+            // Configure item at all, and Configure's own post-save transition only ever lands on
+            // a *New* table — so an internal def cannot reach this draft, and a mood for one
+            // would be handling for a state nothing can produce.
+            origin: TableOrigin::External,
         }
     }
 
@@ -774,6 +783,7 @@ mod tests {
             }),
             sources: vec!["/data".into()],
             partition_cols: vec![],
+            origin: TableOrigin::External,
         };
         assert_eq!(ConfigureDraft::of(&def).csv_delimiter, "\\t");
     }
@@ -846,6 +856,7 @@ mod tests {
             }),
             sources: vec!["/data/a".into(), "/data/b".into()],
             partition_cols: vec![("year".into(), "Int32".into())],
+            origin: TableOrigin::External,
         };
         // The Hive section is only offered for a path that resolves to many files; a def that
         // already has partition columns keeps them regardless, which is what this asserts.
@@ -863,6 +874,7 @@ mod tests {
             format: SourceFormat::Csv(CsvRead::default()),
             sources: vec!["/data".into()],
             partition_cols: vec![],
+            origin: TableOrigin::External,
         };
         assert_eq!(ConfigureDraft::of(&def).csv_infer_rows, DEFAULT_INFER_ROWS);
     }
@@ -874,6 +886,7 @@ mod tests {
             format: SourceFormat::Unknown("avro".into()),
             sources: vec!["/data".into()],
             partition_cols: vec![],
+            origin: TableOrigin::External,
         };
         let draft = ConfigureDraft::of(&def);
         assert_eq!(draft.format, FormatId::Unknown("avro".into()));
@@ -924,6 +937,7 @@ mod tests {
             format: SourceFormat::Json(JsonRead::default()),
             sources: vec!["/data".into()],
             partition_cols: vec![],
+            origin: TableOrigin::External,
         };
         assert!(matches!(def.format, SourceFormat::Json(ref o) if o.infer_rows.is_none()));
 
@@ -960,6 +974,7 @@ mod tests {
             format: SourceFormat::Parquet,
             sources: vec!["data/events".into()],
             partition_cols: vec![("year".into(), "Int32".into())],
+            origin: TableOrigin::External,
         };
         let draft = ConfigureDraft::of(&def);
         assert!(draft.hive_on, "the def has columns, so the toggle opens on");

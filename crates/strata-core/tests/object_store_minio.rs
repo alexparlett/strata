@@ -192,6 +192,7 @@ fn table() -> TableSpec {
         paths: vec![format!("s3://{BUCKET}/data/")],
         format: SourceFormat::Csv(CsvRead::default()),
         partitions: Vec::new(),
+        internal: false,
     }
 }
 

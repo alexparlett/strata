@@ -197,21 +197,33 @@ fn menu_row(icon: IconName, label: impl Into<String>) -> impl IntoElement {
 // ---- the menus -------------------------------------------------------------------------------
 
 /// A **table** row's menu: open it in a tab · profile it · re-scan it · configure it · drop it.
+///
+/// **Configure is absent on an internal table** (ED-04), not parked. It is the only item here
+/// that could never apply rather than merely being unavailable right now: it edits the sources,
+/// format and partition columns of a def that points at the user's own files, and a table Strata
+/// wrote into `.strata/tables/` has none of that to edit, ever. That is this menu's established
+/// treatment for a row kind an item cannot apply to — the view menu has no Refresh at all — while
+/// parking (`enabled(false)`) means "not this second", which is what Refresh already uses while a
+/// scan is in flight. Nothing is lost by its absence: the column list is on the row's own
+/// expansion and Profile answers everything else about the data.
+///
+/// It also makes the Configure window's contract structural rather than guarded:
+/// `ConfigureTarget::Edit` is set from exactly two places — this item, and Configure's own
+/// post-save transition on a *New* table, which is external by construction — so with the item
+/// gone the window cannot receive an internal def at all.
 pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
     // Snapshotted at open (see the module doc). `loading` is this row's own state, which is what
     // makes "Refreshing…" mean *this* table rather than "some pass is running": the row's status
     // glyph says the same thing from the other side.
     let scanning = actions.catalog.peek().is_scanning();
-    let loading = matches!(
-        actions
-            .project
-            .peek()
-            .tables
-            .iter()
-            .find(|t| t.def.name == name)
-            .map(|t| &t.reg),
-        Some(Reg::Loading)
-    );
+    let (loading, internal) = {
+        let p = actions.project.peek();
+        let row = p.tables.iter().find(|t| t.def.name == name);
+        (
+            matches!(row.map(|t| &t.reg), Some(Reg::Loading)),
+            row.is_some_and(|t| t.def.origin.is_internal()),
+        )
+    };
     let registered = actions.registered(CatalogKind::Table, &name);
 
     Menu::new()
@@ -250,12 +262,14 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
                 )
                 .enabled(!scanning)
         })
-        .child({
+        .maybe_child((!internal).then(|| {
             let name = name.clone();
-            actions.item(IconName::Gear, "Configure", move |a| {
-                a.configure(ConfigureTarget::Edit(name.clone()))
-            })
-        })
+            actions
+                .item(IconName::Gear, "Configure", move |a| {
+                    a.configure(ConfigureTarget::Edit(name.clone()))
+                })
+                .into_element()
+        }))
         .child(Divider::menu())
         .child(actions.danger("Drop table", move |a| {
             let mut slot = a.drop_target;

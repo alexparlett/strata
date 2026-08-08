@@ -16,7 +16,9 @@ use freya_testing::TestingRunner;
 use strata_core::engine::{column_info, TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ColRef, ColumnInfo, Origin, SavedQuery, SourceFormat, TableDef, ViewDef};
+use strata_model::{
+    ColRef, ColumnInfo, Origin, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
+};
 use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
@@ -55,6 +57,22 @@ fn table(name: &str, partition_cols: Vec<(String, String)>) -> TableDef {
         format: SourceFormat::Parquet,
         sources: vec![format!("{name}.parquet")],
         partition_cols,
+        origin: TableOrigin::External,
+    }
+}
+
+/// An **internal** table def — one a `CREATE TABLE` wrote into the project (ED-04). Kept out of
+/// [`defs`] deliberately: the pane's counts, filters and spinner assertions are about the fixture
+/// as a whole, and the two things an origin changes (the row's marker, the row's menu) are
+/// answered better by a project of their own than by a fourth row every other test has to allow
+/// for.
+fn internal(name: &str) -> TableDef {
+    TableDef {
+        name: name.into(),
+        format: SourceFormat::Arrow,
+        sources: vec![format!(".strata/tables/{name}/")],
+        partition_cols: Vec::new(),
+        origin: TableOrigin::Internal,
     }
 }
 
@@ -153,6 +171,27 @@ fn project() -> ProjectState {
     p
 }
 
+/// A project holding **one table of each origin**, both registered — the pair the row marker and
+/// the row menu have to tell apart.
+fn mixed_origins() -> ProjectState {
+    let defs = ProjectDefs {
+        name: "test".into(),
+        tables: vec![table("orders", vec![]), internal("daily_totals")],
+        ..Default::default()
+    };
+    let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-catalog-origins"));
+    for name in ["orders", "daily_totals"] {
+        p.table_registered(
+            name,
+            TableMeta {
+                columns: vec![col("n", DataType::Int64)],
+                rows: Some(3),
+            },
+        );
+    }
+    p
+}
+
 /// The pane over the stores the runner provides. Both the project and the session store come from
 /// the runner as **root contexts**, so a test can write to the catalog (dropping a table, landing a
 /// registration) and read the layout back.
@@ -186,6 +225,12 @@ type Handles = (
 /// tree, but height removes all doubt). The session starts with the inspector **closed**, so a
 /// selection opening it is observable rather than a no-op against the default.
 fn runner() -> (TestingRunner, Handles) {
+    runner_over(project)
+}
+
+/// [`runner`] over a project of the caller's choosing — a `fn` pointer rather than a value,
+/// because `TestingRunner`'s initializer is a plain closure and a `fn` is `Copy` in one.
+fn runner_over(project: fn() -> ProjectState) -> (TestingRunner, Handles) {
     TestingRunner::new(
         app,
         (300., 1400.).into(),
@@ -199,8 +244,9 @@ fn runner() -> (TestingRunner, Handles) {
                     s
                 })
             });
-            let store = r
-                .provide_root_context(|| RadioStation::<ProjectState, ProjChan>::create(project()));
+            let store = r.provide_root_context(move || {
+                RadioStation::<ProjectState, ProjChan>::create(project())
+            });
             // The row menus' remaining handles: the engine (never asked anything here — no test
             // presses Refresh), the scan flag, the app config behind "View table"'s LIMIT, and
             // the drop-confirm slot the Drop items set.
@@ -901,7 +947,12 @@ fn open_menu(runner: &mut TestingRunner, name: &str) -> Vec<String> {
 /// A runner whose first paint has settled — a menu test's starting point, and a separate
 /// function so a test can take several without shadowing the constructor.
 fn settled() -> (TestingRunner, Handles) {
-    let (mut runner, handles) = runner();
+    settled_over(project)
+}
+
+/// [`settled`] over a project of the caller's choosing.
+fn settled_over(project: fn() -> ProjectState) -> (TestingRunner, Handles) {
+    let (mut runner, handles) = runner_over(project);
     settle(&mut runner);
     (runner, handles)
 }
@@ -937,6 +988,45 @@ fn each_row_kind_offers_its_own_menu() {
         open_menu(&mut runner, "signup funnel"),
         vec!["Open in new tab", "Rename", "Delete query"],
         "a saved query is a stored string: nothing to profile, configure or refresh"
+    );
+
+    // An **internal** table (ED-04) is a fourth row kind as far as this list is concerned. Its
+    // omission is pinned here, by the same test that pins every other kind's, rather than being
+    // incidental to whoever edits the menu next.
+    let (mut runner, ..) = settled_over(mixed_origins);
+    assert_eq!(
+        open_menu(&mut runner, "daily_totals"),
+        vec!["View table", "Profile table", "Refresh table", "Drop table"],
+        "Configure edits the sources, format and partitions of a def that points at the user's \
+         own files, and an internal table has none of those to edit — ever, which is why the \
+         item is absent rather than disabled. Refresh stays: re-inference is how its row count \
+         moves"
+    );
+    assert!(
+        open_menu(&mut runner, "orders").contains(&"Configure".to_string()),
+        "and the external table beside it still has it"
+    );
+}
+
+/// **The row says which origin it is**, because that is what stands between the user and a drop
+/// that means two different things. Off the def, so it does not depend on registration having
+/// answered.
+#[test]
+fn an_internal_table_row_is_marked_and_an_external_one_is_not() {
+    let (runner, ..) = settled_over(mixed_origins);
+
+    let runs = texts(&runner);
+    assert_eq!(
+        runs.iter().filter(|t| *t == "INTERNAL").count(),
+        1,
+        "exactly the one table Strata owns carries the marker: {runs:?}"
+    );
+    // Beside the row it belongs to, not floating somewhere in the pane.
+    let badge = text_area(&runner, "INTERNAL");
+    let row = text_area(&runner, "daily_totals");
+    assert!(
+        badge.min_y() >= row.min_y() && badge.max_y() <= row.max_y(),
+        "the marker sits on its own row"
     );
 }
 

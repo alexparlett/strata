@@ -14,7 +14,10 @@ use strata_model::{
     ChartRole, ColumnInfo, CsvRead, FileCompression, JsonShape, Kind, SourceFormat, Stat, StatKey,
 };
 
+use crate::engine::arrow_stats::StrataArrowFormat;
 use crate::engine::json_poly::PolyJsonFormat;
+use crate::engine::query::is_snapshot_name;
+use crate::engine::sql::Blocked;
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
@@ -25,8 +28,8 @@ pub struct TableMeta {
     pub rows: Option<u64>,
 }
 
-/// Everything needed to register one external table: its name, source paths, the reader and
-/// its options, and Hive partition columns.
+/// Everything needed to register one table: its name, source paths, the reader and
+/// its options, Hive partition columns, and whose files those are.
 #[derive(Clone, Debug)]
 pub struct TableSpec {
     pub name: String,
@@ -35,6 +38,16 @@ pub struct TableSpec {
     /// delimiter cannot be named on a parquet table.
     pub format: SourceFormat,
     pub partitions: Vec<(String, String)>,
+    /// [`TableOrigin::Internal`](strata_model::TableOrigin::Internal) — the data under
+    /// [`paths`](Self::paths) is Strata's, spooled into the project's `.strata/tables/` by a
+    /// `CREATE TABLE` (ED-04).
+    ///
+    /// The registration path itself is **identical** either way; this is carried so two things
+    /// downstream can be true. A failure to list the files reads differently (`.strata/tables`
+    /// is gitignored, so "no source at that path" is the wrong story in a fresh clone — see
+    /// [`no_files_error`]), and the engine records which providers a write statement may target
+    /// ([`Engine::is_internal`](super::Engine::is_internal)).
+    pub internal: bool,
 }
 
 /// What creating a view learned: its columns and what it reads (D10). `tables` /
@@ -63,16 +76,28 @@ pub struct ViewMeta {
 /// retries a table whose first registration failed.
 ///
 /// Only the *inferred schema* is frozen at registration; file sets, row counts and
-/// partition values are already live, since we run no `ListFilesCache` and DataFusion
-/// re-`LIST`s per scan.
+/// partition values are already live, because DataFusion re-`LIST`s per scan and this engine
+/// runs **no** `ListFilesCache` — which is a setting, not an absence: DataFusion 54 turns that
+/// cache on by default with an infinite TTL, and `build_runtime` turns it back off (see
+/// `config::ENGINE_KEYS`). With it on, this function returns the previous listing and a re-scan
+/// answers with the files that were there last time.
 pub async fn register_external(
     ctx: &SessionContext,
     spec: &TableSpec,
 ) -> Result<TableMeta, String> {
-    use datafusion::datasource::file_format::arrow::ArrowFormat;
     use datafusion::datasource::file_format::parquet::ParquetFormat;
     use datafusion::datasource::file_format::FileFormat;
     use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
+
+    // **The reserved namespace, backstopped at the funnel** (`docs/STATEMENTS_SPEC.md` §4). The
+    // router already refuses a `__snap_` target in a typed statement, but a def reaches here from
+    // three other directions — Table Config, a hand-edited `project.json`, a project written by
+    // an older build — and a table registered into that namespace would be invisible to every
+    // catalog reader (the schema provider hides the prefix) and would cost a *Run* the first
+    // time a snapshot wanted the same name.
+    if is_snapshot_name(&spec.name) {
+        return Err(Blocked::ReservedName.editor_message());
+    }
 
     let _ = ctx.deregister_table(spec.name.as_str());
 
@@ -91,7 +116,10 @@ pub async fn register_external(
     let fmt: Arc<dyn FileFormat> = match &spec.format {
         SourceFormat::Csv(o) => Arc::new(csv_format(o)?),
         SourceFormat::Json(o) => Arc::new(PolyJsonFormat::new(o.clone())),
-        SourceFormat::Arrow => Arc::new(ArrowFormat),
+        // Not stock `ArrowFormat`: its `infer_stats` answers unknown, so an internal table —
+        // whose whole data set Strata wrote — could not say how many rows it holds. See
+        // [`StrataArrowFormat`].
+        SourceFormat::Arrow => Arc::new(StrataArrowFormat::default()),
         SourceFormat::Parquet => Arc::new(ParquetFormat::default().with_skip_metadata(true)),
         SourceFormat::Unknown(name) => {
             return Err(format!(
@@ -465,6 +493,18 @@ fn no_files_error(spec: &TableSpec, ext: &str, raw: &str) -> Option<String> {
         .nth(1)?
         .split_whitespace()
         .next()?;
+    // **An internal table's empty listing is a different fact entirely** (ED-04), and every
+    // sentence below would be a lie about it: the path is `.strata/tables/<slug>/`, which the
+    // user never typed, cannot fix, and did not lose — `tables/` is gitignored, so a colleague
+    // who clones the project gets the def and none of the data. Say that, and do not invite
+    // them to go and repair a path.
+    if spec.internal {
+        return Some(format!(
+            "Table '{}' has no data in this copy of the project. An internal table's data is \
+             local to the machine that created it.",
+            spec.name
+        ));
+    }
     // Exactly the one sentence-ending dot DataFusion adds — `trim_end_matches` would eat a
     // trailing dot that belongs to the path itself.
     let url = token.strip_suffix('.').unwrap_or(token);
@@ -822,6 +862,7 @@ mod tests {
             paths: paths.iter().map(|s| s.to_string()).collect(),
             format: SourceFormat::from_name(format),
             partitions: Vec::new(),
+            internal: false,
         }
     }
 

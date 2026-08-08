@@ -2,3 +2,4 @@ session.json
 history.jsonl
 session.json.corrupt
 .*.tmp
+tables/

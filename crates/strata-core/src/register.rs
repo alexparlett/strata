@@ -77,6 +77,7 @@ pub fn table_spec(root: &Path, def: &TableDef) -> TableSpec {
             .collect(),
         format: def.format.clone(),
         partitions: def.partition_cols.clone(),
+        internal: def.origin.is_internal(),
     }
 }
 
@@ -224,7 +225,9 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, process};
 
-    use strata_model::{GcsAuth, GcsStore, Provider, S3Auth, S3Store, SourceFormat, ViewDef};
+    use strata_model::{
+        GcsAuth, GcsStore, Provider, S3Auth, S3Store, SourceFormat, TableOrigin, ViewDef,
+    };
 
     use super::*;
 
@@ -244,6 +247,7 @@ mod tests {
             format: SourceFormat::from_name("csv"),
             sources: vec![source.into()],
             partition_cols: Vec::new(),
+            origin: TableOrigin::External,
         }
     }
 

@@ -410,17 +410,29 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
         kind: Kind::Bytes,
         desc: "Memory for the file-metadata cache (e.g. Parquet metadata).",
     },
+    // **Off, which is Strata's default and not DataFusion's** (whose is 1M with no TTL). A
+    // table's file set is live here: a re-scan is defined as re-listing the sources, and the
+    // catalog's Refresh, the Configure window's re-inference and an internal table's own
+    // `CREATE OR REPLACE` all depend on the next listing seeing what is on disk now. A cache
+    // that never expires makes every one of those return the previous answer, silently. It stays
+    // a *default* rather than an owned key — a project over a slow bucket with a fixed file set
+    // is exactly what it is for — and `build_runtime` reads this entry, so a removed override
+    // lands back on off rather than on DataFusion's 1M.
     EngineKey {
         key: "datafusion.runtime.list_files_cache_limit",
-        default: "1M",
+        default: "0",
         kind: Kind::Bytes,
-        desc: "Memory for the list-files cache. Suffixes K/M/G.",
+        desc: "Memory for the list-files cache. 0 re-lists sources on every scan. Suffixes K/M/G.",
     },
+    // The condition is stated in the description because it is real: `CacheManager::try_new`
+    // builds no cache at all while the limit above is `0`, so a TTL set on its own configures
+    // nothing. Saying so is what keeps a catalogue entry a promise — the alternative, having a
+    // TTL silently switch the cache on, would make one key change another's meaning.
     EngineKey {
         key: "datafusion.runtime.list_files_cache_ttl",
         default: "",
         kind: Kind::Duration,
-        desc: "TTL of list-files cache entries. Units m/s, e.g. 2m.",
+        desc: "TTL of list-files cache entries, once the limit above is above 0. Units m/s.",
     },
 ];
 
