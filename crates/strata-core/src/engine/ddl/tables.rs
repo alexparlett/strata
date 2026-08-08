@@ -353,7 +353,8 @@ pub async fn drop_statement(
 /// **Deregister first.** No plan built after that can resolve the name, while a scan already
 /// running holds its own provider — it finishes against open files, or fails exactly as cleanly
 /// as one whose snapshot was retired. The other order would delete the files under a plan still
-/// allowed to go looking for them.
+/// allowed to go looking for them. And because the destroying step comes second, a failure there
+/// puts the provider back rather than reporting a drop that failed *after* half of it landed.
 ///
 /// **No cascade.** Dependent views are *named*, never dropped: a `ViewTable`'s plan was inlined
 /// when it was created and goes on executing until reload, so nothing is stale yet — and the
@@ -399,9 +400,29 @@ pub async fn drop_table(
     // While there are still plans to walk.
     let dependents = dependent_views(ctx, name).await;
 
-    ctx.deregister_table(name).map_err(|e| e.to_string())?;
+    let provider = ctx.deregister_table(name).map_err(|e| e.to_string())?;
     if let Some((tables, dir)) = data.filter(|(_, dir)| dir.exists()) {
-        discard(&tables, &dir)?;
+        if let Err(e) = discard(&tables, &dir) {
+            // **Put the provider back.** Everything above this line is a question; the discard is
+            // the first step that destroys anything, and its *first* act is the rename — so a
+            // failure here means nothing was destroyed and the drop did not happen. Returning the
+            // error with the table still deregistered would report a failure while having already
+            // performed the irreversible half of it: the def would stay in `project.json` and on
+            // the sidebar naming a table the session could no longer resolve, recoverable only by
+            // a re-scan the user has no reason to run.
+            //
+            // Undoable because `deregister_table` hands back what it removed. The **same** `Arc`
+            // goes back, so a view holding it never noticed, and the name is free by construction
+            // (we are what took it), so `register_table`'s already-exists refusal cannot fire.
+            if let Some(provider) = provider {
+                if let Err(put_back) = ctx.register_table(name, provider) {
+                    tracing::error!(
+                        "could not re-register '{name}' after a failed drop: {put_back}"
+                    );
+                }
+            }
+            return Err(e);
+        }
     }
 
     Ok(StatementOutcome {
@@ -1232,6 +1253,47 @@ mod tests {
     /// a half-emptied directory under a real table name that nothing ever will. Deleting in
     /// place had no such point: the def is gone by then, so nothing would point at the remains.
     ///
+    /// **A drop that reports a failure has not half-happened.** The deregister comes first so
+    /// nothing can plan against a table whose files are going, which means the one step that can
+    /// still fail runs after it — and a `discard` that cannot even start (its first act is the
+    /// rename) has destroyed nothing, so the provider goes back.
+    ///
+    /// Without the restore the user is told the drop failed while the table is already gone from
+    /// the session: the def stays in `project.json` and on the sidebar, and every query against
+    /// it answers "table not found" until a re-scan nobody has a reason to run.
+    ///
+    /// A read-only `tables/` is what makes the rename fail — renaming a child needs write on its
+    /// parent — which is the fault the sibling test above could not reach by locking the child.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_drop_that_cannot_discard_leaves_the_table_exactly_as_it_was() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch("discard-refused");
+        let eng = engine(&root, BTreeMap::new());
+        statement(&eng, "CREATE TABLE t AS SELECT 1 AS n")
+            .await
+            .expect("created");
+        let tables = tables_dir(&root);
+        fs::set_permissions(&tables, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let error = statement(&eng, "DROP TABLE t")
+            .await
+            .expect_err("the data could not be moved out of the way");
+
+        // Before the assertions, so a failing one cannot strand an unremovable scratch folder.
+        fs::set_permissions(&tables, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(error.contains("Permission denied"), "{error}");
+        assert_eq!(
+            read(&eng, "SELECT n FROM t").await,
+            vec![vec!["1"]],
+            "the table the drop said it could not drop is still there"
+        );
+        assert!(eng.is_internal("t"), "…and still a write target");
+        assert!(tables.join("t").exists(), "…with its data where it was");
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// Driven at [`discard`] directly, with the *removal* made to fail while the rename can
     /// still land — a read-only directory refuses `unlink` of what it holds, and the rename
     /// needs write on `tables/` only. That is the shape of every interruption this exists for:

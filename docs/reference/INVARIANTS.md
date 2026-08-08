@@ -596,7 +596,13 @@ Things that must not regress. Each was fought for once already.
   `tidy_strata_dir` sweeps only `.tmp-…`. After the rename the data is unreachable under that name
   whatever happens next, and what is left is exactly what the sweep exists for. **The rename is the
   operation; the removal is housekeeping** — a failure to finish it is logged, never returned, or
-  the app would report a failed drop for one that plainly succeeded. And because an `INSERT` is one
+  the app would report a failed drop for one that plainly succeeded. A failure of the *rename*
+  is returned, and **puts the provider back**: the deregister comes first so nothing can plan
+  against a table whose files are going, which leaves the one fallible step after it, and a
+  `discard` that could not even start destroyed nothing. `deregister_table` hands back what it
+  removed, so the same `Arc` goes home and the drop is all-or-nothing on the engine — otherwise
+  the report says "failed" while the irreversible half has landed, and the def sits in
+  `project.json` naming a table the session can no longer resolve. And because an `INSERT` is one
   file with no compaction, a heavily written table is a directory of thousands of files: the delete
   is not instant, so `Engine::drop_table` holds a `BackgroundGuard` for its whole await. That guard
   is `Lifecycle::background`, the count `export` already used — one counter, because every reader
