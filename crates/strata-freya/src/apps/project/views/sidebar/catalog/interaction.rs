@@ -964,18 +964,15 @@ fn the_trailing_marks_line_up_whatever_each_row_is_doing() {
     );
 }
 
-/// **The badge folds only when folding saves the name.** Three cases, and the middle one is the
-/// only fold — the first version of this got the third wrong, dropping the badge on any narrow
-/// pane, so a long-named internal table lost the marker *and* still truncated.
+/// **The badge is the first thing the row gives up**, and it goes while the name is still whole
+/// — the rendered half of [`the_row_folds_least_informative_first`], which pins the order itself.
 #[test]
 fn the_internal_badge_folds_before_the_name_truncates() {
     // A short name at a wide pane: room for both, so the marker stays.
     let (runner, ..) = settled_over(mixed_origins);
     assert!(shows(&runner, "INTERNAL"), "a wide pane keeps the marker");
 
-    // Narrow enough that the badge is what pushes the name over — the fold. Not *too* narrow:
-    // below about 190 the name (`daily_totals`, 12 mono characters) no longer fits even without
-    // the badge, and the rule correctly keeps it there.
+    // Narrow enough that the badge is what would tip the name into an ellipsis.
     let (mut runner, _) = runner_sized(mixed_origins, 240.);
     settle(&mut runner);
     assert!(
