@@ -410,7 +410,7 @@ impl Component for EntryRow {
             (false, None) => None,
         };
 
-        // **The badge folds before the name truncates**, on `components::toolbar`'s policy.
+        // **The row's fold plan** — `components::toolbar`'s policy, ranked here (see [`fold_plan`]).
         //
         // What is in state is the **measured width**, never the verdict — `Toolbar` keeps its
         // `measured` the same way, and for the reason AGENTS.md §2 gives: a value that must stay
@@ -479,9 +479,9 @@ impl Component for EntryRow {
                 ContextMenu::open(menu_for_row());
             })
             // After the name and before the status column, so it reads as part of what the
-            // row *is* rather than as something that happened to it — and **folded away
-            // before the name truncates**, because a name the reader cannot finish is a worse
-            // loss than a marker the icon's own tint already carries.
+            // row *is* rather than as something that happened to it — and the **first** thing
+            // the row gives up under pressure, because it is the only item that is pure
+            // reinforcement: the icon's own tint says the same thing.
             .maybe_child(folds.badge.then(|| {
                 tip(INTERNAL_TIP)
                     .child(rect().a11y_alt(INTERNAL_TIP).child(
@@ -588,8 +588,10 @@ impl Component for EntryRow {
             .width(Size::fill())
             .vertical()
             .margin(Gaps::new(0., 0., 2., 0.))
-            // The measurement behind the badge fold. `set_if_modified` on the *answer*, not on
-            // the width: a drag across the pane's whole range writes at most twice.
+            // The measurement the fold plan reads. `set_if_modified` dedupes on the raw width, so
+            // a drag writes once per distinct width Freya reports — the same trade `Toolbar`
+            // makes with its own `measured`, and the price of the verdict being derived rather
+            // than stored (see above): the fold has two inputs, and only one of them is this one.
             .on_sized(move |e: Event<SizedEventData>| {
                 measured.set_if_modified(e.area.width());
             })
