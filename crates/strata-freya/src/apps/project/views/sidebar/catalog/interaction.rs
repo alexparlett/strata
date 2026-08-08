@@ -1063,6 +1063,44 @@ fn the_name_goes_on_collapsing_once_the_row_has_folded() {
     );
 }
 
+/// **Folding the status column must not cancel the scan.** The spinner's component is what
+/// *dispatches* a profile, so gating it on the fold would mean a Profile asked for while the
+/// sidebar is narrow mounts nothing, starts nothing and says nothing — the user accepts the cost
+/// confirm and no work happens. The row keeps a subscriber-only twin in that case.
+///
+/// Asserted through the scan's own settling rather than through a glyph, because at this width
+/// there is deliberately no glyph to look at.
+#[test]
+fn a_scan_still_runs_when_the_status_column_has_folded() {
+    let (mut runner, (_, _, _, mut store, ..)) = runner_sized(mixed_origins, 130.);
+    settle(&mut runner);
+    assert!(
+        !shows(&runner, "INTERNAL"),
+        "the pane is narrow enough that the row has folded: {:?}",
+        texts(&runner)
+    );
+
+    store
+        .write_channel(ProjChan::Tables)
+        .request_profile(CatalogKind::Table, "daily_totals");
+    settle(&mut runner);
+
+    // Nothing is drawn — the column is folded — but the request is live and subscribed, which is
+    // what makes the scan execute. A row that dropped the subscription would leave this `None`
+    // forever, and the user would be waiting on work that never started.
+    assert!(
+        store
+            .peek()
+            .profile_scan(CatalogKind::Table, "daily_totals")
+            .is_some(),
+        "the scan request survives the fold"
+    );
+    assert!(
+        !status_labels(&runner).iter().any(|l| l == "Profiling…"),
+        "and it is genuinely folded away rather than merely off-screen"
+    );
+}
+
 /// **The icon says it too**, in a colour of its own — the mark that survives the fold above, and
 /// the reason dropping the badge costs nothing at width. Reinforcement only: the badge and its
 /// a11y label are what a colour-blind or screen-reader user gets, which is why the fold drops the
@@ -1383,10 +1421,9 @@ fn a_row_being_profiled_says_so_in_its_own_words() {
     store
         .write_channel(ProjChan::Tables)
         .request_profile(CatalogKind::Table, "orders");
-    // Two passes: one mounts the subscription, one renders what it says. The scan itself has not
-    // settled — its label is up because the query is in flight, not because time has passed.
-    runner.sync_and_update();
-    runner.sync_and_update();
+    // Settle rather than counting passes. The scan itself has not settled — its label is up
+    // because the query is in flight, not because time has passed.
+    settle(&mut runner);
 
     assert_eq!(
         profiling(&runner),
@@ -1419,8 +1456,7 @@ fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
     store
         .write_channel(ProjChan::Tables)
         .request_profile(CatalogKind::Table, "events");
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
     let labels = status_labels(&runner);
     assert!(
         labels.iter().any(|l| l == "Profiling…"),
