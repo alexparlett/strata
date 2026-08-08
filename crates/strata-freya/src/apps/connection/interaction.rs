@@ -305,6 +305,12 @@ fn an_edit_that_moves_the_bucket_leaves_no_row_behind() {
 /// number. What has to be asserted is the **declared** split, which is why this reads
 /// `OPTION_KEY_WIDTH` rather than the other state.
 ///
+/// The fork no longer goes stale either — `TableConfigContext` is a `Readable`, so a row re-reads a
+/// split that changes under it (`freya-components/src/table.rs`). This still declares the same
+/// widths in both branches, because the two fixes answer different halves: the fork's makes a
+/// *change* propagate, and this one means there is no change to propagate, so the header does not
+/// move even for the frame the first row lands in.
+///
 /// On laid-out geometry, because that *is* the bug — the element tree was right in both states.
 #[test]
 fn the_client_options_header_stands_at_the_split_it_declares() {

@@ -134,6 +134,29 @@ rows, and each with its own orphan check. The HTTP connection carries client opt
 and the file says why: `object_store`'s GCS client needs the XML list API no emulator serves, and
 MinIO refuses its empty bearer header — GCS coverage needs a real bucket.
 
+## The one fork change
+
+**`TableRow` now follows column widths that change under it**
+(`freya-components/src/table.rs`, fork commit `5d55ad9`). It read its split through
+`use_try_consume`, whose initializer runs **once per component instance**, while `Table`
+re-provided a plain `TableConfig` every render — so a row kept the widths it was born with, and a
+table that started without `column_widths` and gained them laid its rows out at an equal share for
+the rest of their lives, with no later render recovering. `TableConfigContext` now carries a
+`Readable<TableConfig>`, kept in step by the same guarded write `ActivableRoute` uses.
+
+This app is the first caller that could ever have seen it: the properties grid and the source-path
+list both use widths that are constant *and* uniform, which are indistinguishable from the
+equal-share fallback. Pinned by a test in the fork (`a_row_follows_column_widths_that_change_under
+_it`), which fails at 200 against the 120 it declared without the fix.
+
+The client-options table still declares the same widths in **both** branches on top of that,
+because the two fixes answer different halves: the fork's makes a change propagate, and the app's
+means there is no change to propagate — so the header does not move even for the frame the first
+row lands in.
+
+**The gitlink is pushed** to `github.com:alexparlett/freya` (AGENTS.md §6), so a fresh clone and CI
+can init the submodule.
+
 ## What this leaves 04
 
 - The **Configure LOCATION toggle** now has a way to make a connection: its canvas's
