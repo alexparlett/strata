@@ -42,6 +42,7 @@ fn project(tag: &str) -> PathBuf {
                 TableDef {
                     name: "people".into(),
                     format: SourceFormat::from_name("csv"),
+                    connection: None,
                     sources: vec!["people.csv".into()],
                     partition_cols: Vec::new(),
                     origin: TableOrigin::External,
@@ -49,6 +50,7 @@ fn project(tag: &str) -> PathBuf {
                 TableDef {
                     name: "gone".into(),
                     format: SourceFormat::from_name("parquet"),
+                    connection: None,
                     sources: vec!["missing.parquet".into()],
                     partition_cols: Vec::new(),
                     origin: TableOrigin::External,

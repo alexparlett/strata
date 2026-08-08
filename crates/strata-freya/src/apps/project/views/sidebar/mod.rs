@@ -299,6 +299,7 @@ mod tests {
             tables: vec![TableDef {
                 name: "orders".into(),
                 format: SourceFormat::Parquet,
+                connection: None,
                 sources: vec!["orders.parquet".into()],
                 partition_cols: vec![],
                 origin: TableOrigin::External,

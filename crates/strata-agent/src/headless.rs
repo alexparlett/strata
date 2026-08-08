@@ -531,6 +531,7 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::from_name("csv"),
+            connection: None,
             sources: vec![source.into()],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,

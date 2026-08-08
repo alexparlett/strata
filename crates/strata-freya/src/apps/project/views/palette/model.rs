@@ -366,6 +366,7 @@ mod tests {
             def: TableDef {
                 name: name.to_string(),
                 format: SourceFormat::Parquet,
+                connection: None,
                 sources: vec![format!("{name}/")],
                 partition_cols: partition_cols
                     .iter()

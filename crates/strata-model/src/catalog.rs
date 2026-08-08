@@ -354,13 +354,29 @@ impl TableOrigin {
 }
 
 /// One logical table definition (a DataFusion `ListingTable` over many source paths).
-/// `sources` are stored project-relative where they sit inside the project folder.
+/// `sources` are stored project-relative where they sit inside the project folder — unless the
+/// def names a [`connection`](Self::connection), which is what they are relative to instead.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct TableDef {
     pub name: String,
     /// The reader and its options — see [`SourceFormat`].
     #[serde(deserialize_with = "de_format", serialize_with = "se_format")]
     pub format: SourceFormat,
+    /// **Which object store [`sources`](Self::sources) are read from** (W7 · 04), as the
+    /// [`ConnectionDef::url`](crate::ConnectionDef::url) that identifies it — `s3://acme-lake`.
+    /// `None` is the local disk, which is what every def was before this field existed.
+    ///
+    /// A *reference*, not a copy of the connection: the bucket, its provider and where its
+    /// credentials come from all belong to the connection, and duplicating any of it here would
+    /// be two statements of one fact that can disagree. The URL rather than the bucket for the
+    /// reason the registry keys on it — `s3://lake` and `gs://lake` are two different stores over
+    /// one bucket name.
+    ///
+    /// It is the **one** field that says a table is remote, so the two halves cannot contradict
+    /// each other: a source is bucket-relative exactly when this is `Some`, and
+    /// `strata_core::project::resolve_source` is the single place that composes the two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
     pub sources: Vec<String>,
     /// Hive partition columns as `(name, arrow_type)` — the persisted source of truth for
     /// deterministic reload (types aren't re-detected).
@@ -413,6 +429,7 @@ mod format_tests {
                 compression: FileCompression::Gzip,
                 ..Default::default()
             }),
+            connection: None,
             sources: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
@@ -432,6 +449,7 @@ mod format_tests {
         let def = TableDef {
             name: "daily".into(),
             format: SourceFormat::Arrow,
+            connection: None,
             sources: vec![".strata/tables/daily/".into()],
             partition_cols: vec![],
             origin: TableOrigin::Internal,
@@ -439,6 +457,36 @@ mod format_tests {
         let json = serde_json::to_string(&def).expect("serialize");
         assert!(json.contains(r#""origin":"internal""#), "{json}");
         assert_eq!(parse(&json), def);
+    }
+
+    /// A def written before connections existed reads from the **local disk**, which is what
+    /// every def did; a remote one round-trips, and a local one writes no key at all — so a
+    /// project file gains nothing until a table is actually pointed at a bucket.
+    #[test]
+    fn a_connection_defaults_to_the_local_disk_and_round_trips() {
+        assert_eq!(
+            parse(r#"{"name":"t","format":"csv","sources":["/data"]}"#).connection,
+            None
+        );
+        let local = TableDef {
+            name: "events".into(),
+            format: SourceFormat::Parquet,
+            connection: None,
+            sources: vec!["data/events/".into()],
+            partition_cols: vec![],
+            origin: TableOrigin::External,
+        };
+        let json = serde_json::to_string(&local).expect("serialize");
+        assert!(!json.contains("connection"), "{json}");
+
+        let remote = TableDef {
+            connection: Some("s3://acme-lake".into()),
+            sources: vec!["events/2024/**/*.parquet".into()],
+            ..local
+        };
+        let json = serde_json::to_string(&remote).expect("serialize");
+        assert!(json.contains(r#""connection":"s3://acme-lake""#), "{json}");
+        assert_eq!(parse(&json), remote);
     }
 
     #[test]
@@ -449,6 +497,7 @@ mod format_tests {
         let def = TableDef {
             name: "legacy".into(),
             format: SourceFormat::Unknown("avro".into()),
+            connection: None,
             sources: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,

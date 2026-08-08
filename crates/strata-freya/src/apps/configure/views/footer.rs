@@ -16,7 +16,7 @@
 //! 4. leaves the window watching its row (`views::use_watch_registration`).
 
 use freya::prelude::*;
-use freya::radio::{use_radio_station, RadioStation};
+use freya::radio::{use_radio, use_radio_station, Radio, RadioStation};
 
 use crate::apps::configure::{ConfigureCtx, ConfigureTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
@@ -41,6 +41,9 @@ impl Component for Footer {
         let form = crate::components::form::form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
+        // The one channel this footer has to *watch*: a connection forgotten in the pane next
+        // door has to disable Save here, and nothing else in this window would notice.
+        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
         let rescan = use_consume::<CatalogRescan>();
         let catalog = use_consume::<Catalog>();
         let engine = use_consume::<EngineCtx>();
@@ -53,13 +56,15 @@ impl Component for Footer {
         // for good. The sidebar's ↻ answers this by disabling itself for the duration; so does
         // this. Subscribes, so the button comes back by itself when the pass settles.
         let scanning = catalog.read().is_scanning();
-        // What the *draft* can answer, the one thing only the catalog can (a name another def
-        // already owns), and last the one nobody can — see [`save_note`].
+        // What the *draft* can answer, the two things only the catalog can (a name another def
+        // already owns, a connection this project no longer has), and last the one nobody can —
+        // see [`save_note`].
         let note = save_note(
             ctx.draft
                 .read()
                 .blocker()
-                .or_else(|| name_clash(ctx, project)),
+                .or_else(|| name_clash(ctx, project))
+                .or_else(|| missing_connection(ctx, connections)),
             scanning,
         );
 
@@ -180,6 +185,36 @@ fn name_clash(ctx: ConfigureCtx, project: RadioStation<ProjectState, ProjChan>) 
             strata_model::CatalogKind::Query => "saved query",
         }
     ))
+}
+
+/// The other blocker the draft cannot see: the connection it reads through is **gone** (W7 · 04).
+///
+/// A def keeps naming its bucket after that connection is forgotten — the def is the table's, and
+/// nothing rewrites it behind the user's back — so this window can open on one. It says so and
+/// blocks Save rather than letting the reference be re-saved: the picker offers only connections
+/// the project has, so the fix is to choose one, and that is exactly the treatment a format with
+/// no reader gets (`ConfigureDraft::blocker`).
+///
+/// Only while LOCATION is on Remote: a connection kept across a flip back to Local
+/// is a remembered choice, not the table's location.
+///
+/// `connections` is a **subscribed** handle, unlike the station [`name_clash`] peeks: the
+/// catalog cannot lose a name under this window (only this window writes one), but the
+/// Connections pane next door can forget a bucket while the form sits untouched — and a Save
+/// that stayed enabled would then write a def naming a connection that is gone.
+fn missing_connection(
+    ctx: ConfigureCtx,
+    connections: Radio<ProjectState, ProjChan>,
+) -> Option<String> {
+    let url = ctx.draft.read().store()?.to_string();
+    let known = connections
+        .read()
+        .connections
+        .iter()
+        .any(|c| c.def.url() == url);
+    (!known).then(|| {
+        format!("'{url}' is not a connection in this project. Choose one, or add it back.")
+    })
 }
 
 /// Write the def, persist it, and ask for the registration pass. See the module doc.

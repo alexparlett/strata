@@ -382,6 +382,7 @@ mod tests {
                     TableDef {
                         name: "orders".into(),
                         format: SourceFormat::from_name("parquet"),
+                        connection: None,
                         sources: vec!["data/orders".into()],
                         partition_cols: vec![("year".into(), "Int32".into())],
                         origin: TableOrigin::External,
@@ -389,6 +390,7 @@ mod tests {
                     TableDef {
                         name: "gone".into(),
                         format: SourceFormat::from_name("csv"),
+                        connection: None,
                         sources: vec!["missing.csv".into()],
                         partition_cols: Vec::new(),
                         origin: TableOrigin::External,

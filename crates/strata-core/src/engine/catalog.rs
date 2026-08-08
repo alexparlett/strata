@@ -155,20 +155,30 @@ pub async fn register_external(
         opts = opts.with_table_partition_cols(cols);
     }
 
-    let config = ListingTableConfig::new_with_multi_paths(urls)
+    let config = match ListingTableConfig::new_with_multi_paths(urls)
         .with_listing_options(opts)
         .infer_schema(&ctx.state())
         .await
-        .map_err(|e| {
+    {
+        Ok(config) => config,
+        Err(e) => {
             tracing::error!("Failed to infer schema: {}", e);
-            register_error(spec, ext, &e.to_string())
-        })?;
-    let table =
-        ListingTable::try_new(config).map_err(|e| register_error(spec, ext, &e.to_string()))?;
+            let raw = e.to_string();
+            // **The one question the message cannot answer on its own**, asked here because
+            // asking it is `async` and a message mapper is not: does the location actually hold
+            // files of this format, under names the partition columns did not match? See
+            // [`store_holds_ext`] — it costs a listing, only on the failure path, and only for a
+            // partitioned source whose listing came back empty.
+            let holds = holds_under_partitions(ctx, spec, ext, &raw).await;
+            return Err(register_error(spec, ext, &raw, holds));
+        }
+    };
+    let table = ListingTable::try_new(config)
+        .map_err(|e| register_error(spec, ext, &e.to_string(), None))?;
     ctx.register_table(spec.name.as_str(), Arc::new(table))
         .map_err(|e| {
             tracing::error!("Failed to register table: {}", e);
-            register_error(spec, ext, &e.to_string())
+            register_error(spec, ext, &e.to_string(), None)
         })?;
 
     table_meta(ctx, spec.name.as_str()).await
@@ -386,17 +396,108 @@ fn is_glob(p: &str) -> bool {
     p.contains('*') || p.contains('?') || p.contains('[')
 }
 
+/// The most entries either walk will look at before giving up — [`store_holds_ext`]'s listing and
+/// [`holds_ext`]'s directory walk alike.
+///
+/// **One number, because it settles one question for both**: does this location hold a file of
+/// this format, asked on a failure path where the answer is a sentence rather than data. A lake
+/// big enough to exhaust it is a lake whose partition columns are the likelier answer anyway, and
+/// the two paths have to agree about when they stop knowing that.
+const MAX_ENTRIES: usize = 4096;
+
+/// Whether the **remote** source that failed holds a file of this format after all — the
+/// question [`holds_ext`] answers for a local directory, asked of an object store instead.
+///
+/// `None` for everything that is not exactly that case: a local path (the sync walk covers it),
+/// a glob (a pattern is not a place to list), an unpartitioned def (nothing was filtered, so
+/// DataFusion's empty listing is already trustworthy) and any failure that is not an empty
+/// location. So the cost is one listing, on a failure, for a partitioned remote table — and
+/// never on the happy path.
+///
+/// It lists through the **session's own store**, exactly as `detect_partitions` does: a bucket
+/// has no directories to walk, and the S3 client that answered the registration is the one that
+/// can say what is under a prefix. A listing error is `None` rather than `false` — unknown and
+/// empty are different answers, and only one of them is safe to turn into a claim about the
+/// user's data.
+async fn holds_under_partitions(
+    ctx: &SessionContext,
+    spec: &TableSpec,
+    ext: &str,
+    raw: &str,
+) -> Option<bool> {
+    if spec.partitions.is_empty() {
+        return None;
+    }
+    let path = failing_source(spec, raw)?;
+    if !path.contains("://") || is_glob(path) {
+        return None;
+    }
+    store_holds_ext(ctx, path, ext).await
+}
+
+/// Whether any object under `path` ends in `ext`, stopping at the first hit — `None` when the
+/// store could not be listed, or when the budget ran out before an answer.
+///
+/// `ObjectStore::list` is recursive (no delimiter), which is what this wants: the question is
+/// whether the files are *anywhere* under the prefix, not how they are laid out.
+async fn store_holds_ext(ctx: &SessionContext, path: &str, ext: &str) -> Option<bool> {
+    use futures::StreamExt;
+    use object_store::ObjectStore;
+
+    let url = listing_url(path).ok()?;
+    let store = ctx.runtime_env().object_store(&url).ok()?;
+    let mut listed = store.list(Some(url.prefix()));
+    let mut seen = 0;
+    while let Some(object) = listed.next().await {
+        let object = object.ok()?;
+        seen += 1;
+        if seen > MAX_ENTRIES {
+            return None;
+        }
+        if object.location.as_ref().ends_with(ext) {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+/// The location DataFusion called empty — the URL out of a "No files found at <url>" failure, and
+/// `None` for any other failure.
+///
+/// **The one place that message is parsed.** Three callers need it and they run in different
+/// worlds: the guard that says this mapping applies at all, the store listing (async), and the
+/// message itself. A second copy of the split would be a second copy of the trailing-dot rule
+/// below, which decides which file the message is about.
+fn failing_location(raw: &str) -> Option<&str> {
+    let token = raw
+        .split("No files found at ")
+        .nth(1)?
+        .split_whitespace()
+        .next()?;
+    // Exactly the one sentence-ending dot DataFusion adds — `trim_end_matches` would eat a
+    // trailing dot that belongs to the path itself.
+    Some(token.strip_suffix('.').unwrap_or(token))
+}
+
+/// Which of `spec`'s sources that location is, **in the user's own spelling** — `None` when it
+/// names none of them. Matched through [`listing_url`], so the lookup is the same normalization
+/// registration itself performed.
+fn failing_source<'a>(spec: &'a TableSpec, raw: &str) -> Option<&'a str> {
+    let url = failing_location(raw)?;
+    source_paths(spec).find(|p| listing_url(p).is_ok_and(|u| u.to_string() == url))
+}
+
 /// Translate a registration failure into something the user can act on.
 ///
 /// Only failures we actually recognise are rewritten; anything else passes through as
 /// DataFusion wrote it (capped — see [`MAX_PASSTHROUGH`]). Translating an unfamiliar error
 /// would mean guessing at its cause, and a confident wrong diagnosis is worse than a raw
 /// one the user can search for.
-fn register_error(spec: &TableSpec, ext: &str, raw: &str) -> String {
+fn register_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -> String {
     if let Some(m) = json_shape_error(spec, raw) {
         return m;
     }
-    if let Some(m) = no_files_error(spec, ext, raw) {
+    if let Some(m) = no_files_error(spec, ext, raw, holds) {
         return m;
     }
     if raw.chars().count() > MAX_PASSTHROUGH {
@@ -487,12 +588,12 @@ fn json_shape_error(spec: &TableSpec, raw: &str) -> Option<String> {
 /// [`listing_url`], so multi-path tables name the source that actually failed rather than
 /// the first one. A path that is a glob, or that lives in an object store (W7), can't be
 /// resolved on disk and only gets what is certain: nothing matched it.
-fn no_files_error(spec: &TableSpec, ext: &str, raw: &str) -> Option<String> {
-    let token = raw
-        .split("No files found at ")
-        .nth(1)?
-        .split_whitespace()
-        .next()?;
+fn no_files_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -> Option<String> {
+    // The location DataFusion named, and the guard that this mapping applies at all. `holds` is
+    // present only for the case that earned a listing — a partitioned **remote** source (see
+    // [`holds_under_partitions`]); everything else is `None` and the arms below decide for
+    // themselves, exactly as they did.
+    let location = failing_location(raw)?;
     // **An internal table's empty listing is a different fact entirely** (ED-04), and every
     // sentence below would be a lie about it: the path is `.strata/tables/<slug>/`, which the
     // user never typed, cannot fix, and did not lose — `tables/` is gitignored, so a colleague
@@ -505,14 +606,19 @@ fn no_files_error(spec: &TableSpec, ext: &str, raw: &str) -> Option<String> {
             spec.name
         ));
     }
-    // Exactly the one sentence-ending dot DataFusion adds — `trim_end_matches` would eat a
-    // trailing dot that belongs to the path itself.
-    let url = token.strip_suffix('.').unwrap_or(token);
-    let path = source_paths(spec)
-        .find(|p| listing_url(p).is_ok_and(|u| u.to_string() == url))
-        .unwrap_or(url);
+    // Falling back to the URL as DataFusion spelled it, when it names no source of ours — a
+    // normalization this build does not perform, or a path the def no longer carries.
+    let path = failing_source(spec, raw).unwrap_or(location);
 
     if path.contains("://") || is_glob(path) {
+        // **A remote prefix was listed** for exactly this (`holds_under_partitions`), so the
+        // partition columns are blamed on the same terms as a local directory's: the files are
+        // there, or the walk could not settle it, and either way they are the likelier answer.
+        // A glob brings no listing (a pattern is not a place), so it keeps the one claim it can
+        // make.
+        if !spec.partitions.is_empty() && holds != Some(false) && !is_glob(path) {
+            return Some(partition_mismatch(spec, ext, path));
+        }
         return Some(format!("No files matched '{path}'."));
     }
 
@@ -540,13 +646,20 @@ fn no_files_error(spec: &TableSpec, ext: &str, raw: &str) -> Option<String> {
     // counts as "don't claim emptiness": on a lake big enough to exhaust the budget, the
     // partition columns are the likelier answer, and they're the only claim still supported.
     if !spec.partitions.is_empty() && holds_ext(on_disk, ext) != Some(false) {
-        let cols: Vec<&str> = spec.partitions.iter().map(|(n, _)| n.as_str()).collect();
-        return Some(format!(
-            "No {ext} files under '{path}' match the partition columns '{}'.",
-            cols.join("', '")
-        ));
+        return Some(partition_mismatch(spec, ext, path));
     }
     Some(format!("No {ext} files under '{path}'."))
+}
+
+/// The one sentence both stores' walks arrive at: the files are under `path`, and the partition
+/// columns are what did not match them. One copy, because a local directory and a bucket prefix
+/// have earned the same claim by then — `holds_ext` for one, `store_holds_ext` for the other.
+fn partition_mismatch(spec: &TableSpec, ext: &str, path: &str) -> String {
+    let cols: Vec<&str> = spec.partitions.iter().map(|(n, _)| n.as_str()).collect();
+    format!(
+        "No {ext} files under '{path}' match the partition columns '{}'.",
+        cols.join("', '")
+    )
 }
 
 /// Whether `dir` holds any file with extension `ext` (`".parquet"`), stopping at the first
@@ -559,7 +672,6 @@ fn no_files_error(spec: &TableSpec, ext: &str, raw: &str) -> Option<String> {
 /// exists to answer one yes/no question, not to enumerate it. The budget also bounds the
 /// walk against a symlink cycle.
 fn holds_ext(dir: &Path, ext: &str) -> Option<bool> {
-    const MAX_ENTRIES: usize = 4096;
     let mut seen = 0;
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -847,6 +959,13 @@ fn parse_dtype(label: &str) -> DataType {
 
 #[cfg(test)]
 mod tests {
+
+    /// The message for a failure **nothing listed** — every case the sync mapper decides on its
+    /// own. The listed case (a partitioned remote source, `holds_under_partitions`) is the MinIO
+    /// test's, because it needs a store with objects in it to be a real answer.
+    fn message(spec: &TableSpec, ext: &str, raw: &str) -> String {
+        register_error(spec, ext, raw, None)
+    }
     use strata_model::JsonRead;
 
     use super::*;
@@ -950,7 +1069,7 @@ mod tests {
         // The file is valid JSON; Arrow's own "Not valid JSON" is the wrong story.
         let raw = "Arrow error: Json error: Not valid JSON: EOF while parsing an object at line 1 column 1";
         assert_eq!(
-            register_error(&spec("signups", &[], "json"), ".json", raw),
+            message(&spec("signups", &[], "json"), ".json", raw),
             "Cannot read 'signups' as JSON: a record does not end on its line. \
              Set the JSON shape to array in Table Config, or use newline-delimited JSON."
         );
@@ -960,7 +1079,7 @@ mod tests {
     fn a_top_level_array_never_carries_the_parsed_document() {
         let raw = "Arrow error: Json error: Expected JSON record to be an object, found Array \
                    [Object {\"a\": Number(1)}, Object {\"a\": Number(2)}]";
-        let msg = register_error(&spec("signups", &[], "json"), ".json", raw);
+        let msg = message(&spec("signups", &[], "json"), ".json", raw);
         assert_eq!(
             msg,
             "Cannot read 'signups' as JSON: the source is a JSON array. \
@@ -976,7 +1095,7 @@ mod tests {
     fn a_non_object_record_names_what_was_found() {
         let raw = "Arrow error: Json error: Expected JSON record to be an object, found Number 3";
         assert_eq!(
-            register_error(&spec("nums", &[], "json"), ".json", raw),
+            message(&spec("nums", &[], "json"), ".json", raw),
             "Cannot read 'nums' as JSON: a top-level Number is not a record. \
              Set the JSON shape to array in Table Config, or use newline-delimited JSON."
         );
@@ -988,7 +1107,7 @@ mod tests {
         // sends the user to a setting that already says what it should.
         let raw = "Arrow error: Json error: Expected JSON record to be an object, found Number 3";
         assert_eq!(
-            register_error(&array_spec("nums"), ".json", raw),
+            message(&array_spec("nums"), ".json", raw),
             "Cannot read 'nums' as JSON: a top-level Number is not a record."
         );
     }
@@ -1001,7 +1120,7 @@ mod tests {
         let raw =
             "Arrow error: Json error: Not valid JSON: key must be a string at line 1 column 9";
         assert_eq!(
-            register_error(&spec("bad", &[], "json"), ".json", raw),
+            message(&spec("bad", &[], "json"), ".json", raw),
             "Cannot read 'bad' as JSON: key must be a string at line 1 column 9"
         );
     }
@@ -1055,7 +1174,7 @@ mod tests {
         let missing = tmp("missing").join("nope.parquet");
         let p = missing.display().to_string();
         assert_eq!(
-            register_error(
+            message(
                 &spec("t", &[&p], "parquet"),
                 ".parquet",
                 &no_files_at_path(&missing)
@@ -1071,7 +1190,7 @@ mod tests {
         std::fs::write(&csv, "a,b\n1,2\n").unwrap();
         let p = csv.display().to_string();
         assert_eq!(
-            register_error(
+            message(
                 &spec("regions", &[&p], "parquet"),
                 ".parquet",
                 &no_files_at_path(&csv)
@@ -1086,7 +1205,7 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), "hello").unwrap();
         let p = dir.display().to_string();
         assert_eq!(
-            register_error(
+            message(
                 &spec("t", &[&p], "parquet"),
                 ".parquet",
                 &no_files_at_path(&dir)
@@ -1111,7 +1230,7 @@ mod tests {
         let mut s = spec("events", &[&p], "csv");
         s.partitions = vec![("year".into(), "Utf8".into())];
         assert_eq!(
-            register_error(&s, ".csv", &no_files_at_path(&dir)),
+            message(&s, ".csv", &no_files_at_path(&dir)),
             format!("No .csv files under '{p}' match the partition columns 'year'.")
         );
     }
@@ -1122,7 +1241,62 @@ mod tests {
         // path takes — and the message quotes the user's own glob, not the URL.
         let g = format!("{}/**/*.parquet", tmp("glob").display());
         assert_eq!(
-            register_error(&spec("t", &[&g], "parquet"), ".parquet", &no_files_at(&g)),
+            message(&spec("t", &[&g], "parquet"), ".parquet", &no_files_at(&g)),
+            format!("No files matched '{g}'.")
+        );
+    }
+
+    /// **A remote source gets the local directory's three answers**, off a listing instead of a
+    /// walk (W7 · 04). This is the arm around that listing: what the message says once the
+    /// answer is in, or when there was none.
+    ///
+    /// The two that matter are the partitioned ones, and they are the same rule `holds_ext`
+    /// follows for a directory — blame the columns unless the store *settled* that there is
+    /// nothing there, because an unsettled answer over a lake big enough to exhaust the budget
+    /// makes the columns the likelier story. `Some(true)` is what the MinIO test produces for
+    /// real, against files sitting under `2024/` where the def asks for `year=`.
+    #[test]
+    fn a_partitioned_remote_source_blames_the_columns_when_the_store_found_files() {
+        let url = "s3://acme-lake/events/";
+        let mut s = spec("events", &[url], "csv");
+        assert_eq!(
+            register_error(&s, ".csv", &no_files_at(url), None),
+            format!("No files matched '{url}'."),
+            "an unpartitioned table earns no listing and has nothing more to say"
+        );
+
+        s.partitions = vec![
+            ("year".into(), "Int32".into()),
+            ("month".into(), "Int32".into()),
+        ];
+        let blamed =
+            format!("No .csv files under '{url}' match the partition columns 'year', 'month'.");
+        assert_eq!(
+            register_error(&s, ".csv", &no_files_at(url), Some(true)),
+            blamed,
+            "the store found .csv files under the prefix, so the columns are what missed them"
+        );
+        assert_eq!(
+            register_error(&s, ".csv", &no_files_at(url), None),
+            blamed,
+            "and an unsettled listing counts as 'do not claim emptiness', exactly as a walk does"
+        );
+        assert_eq!(
+            register_error(&s, ".csv", &no_files_at(url), Some(false)),
+            format!("No files matched '{url}'."),
+            "but a prefix the store says is empty is not the columns' fault"
+        );
+    }
+
+    /// A **glob** brings no listing — a pattern is not a place — so it keeps the one claim it can
+    /// make even when the def is partitioned.
+    #[test]
+    fn a_partitioned_glob_still_only_claims_that_nothing_matched() {
+        let g = "s3://acme-lake/events/**/*.csv";
+        let mut s = spec("events", &[g], "csv");
+        s.partitions = vec![("year".into(), "Int32".into())];
+        assert_eq!(
+            register_error(&s, ".csv", &no_files_at(g), None),
             format!("No files matched '{g}'.")
         );
     }
@@ -1136,7 +1310,7 @@ mod tests {
         std::fs::write(&odd, "x").unwrap();
         let p = odd.display().to_string();
         assert_eq!(
-            register_error(
+            message(
                 &spec("t", &[&p], "parquet"),
                 ".parquet",
                 &no_files_at_path(&odd)
@@ -1151,7 +1325,7 @@ mod tests {
         // claim about a file that was never being read as JSON.
         let raw = "Arrow error: Json error: Not valid JSON: EOF while parsing an object at line 1 column 1";
         assert_eq!(
-            register_error(&spec("events", &[], "parquet"), ".parquet", raw),
+            message(&spec("events", &[], "parquet"), ".parquet", raw),
             raw
         );
     }
@@ -1170,7 +1344,7 @@ mod tests {
         let mut s = spec("lake", &[&p], "parquet");
         s.partitions = vec![("year".into(), "Utf8".into())];
         assert_eq!(
-            register_error(&s, ".parquet", &no_files_at_path(&dir)),
+            message(&s, ".parquet", &no_files_at_path(&dir)),
             format!("No .parquet files under '{p}' match the partition columns 'year'.")
         );
     }
@@ -1183,7 +1357,7 @@ mod tests {
         let missing = dir.join("b.parquet");
         let (g, m) = (good.display().to_string(), missing.display().to_string());
         assert_eq!(
-            register_error(
+            message(
                 &spec("t", &[&g, &m], "parquet"),
                 ".parquet",
                 &no_files_at_path(&missing)
@@ -1197,16 +1371,13 @@ mod tests {
     #[test]
     fn an_unrecognised_failure_is_left_exactly_as_datafusion_wrote_it() {
         let raw = "Parquet error: Parquet error: Invalid Parquet file. Corrupt footer";
-        assert_eq!(
-            register_error(&spec("t", &[], "parquet"), ".parquet", raw),
-            raw
-        );
+        assert_eq!(message(&spec("t", &[], "parquet"), ".parquet", raw), raw);
     }
 
     #[test]
     fn a_runaway_message_is_capped() {
         let raw = "Internal error: ".to_string() + &"x".repeat(5_000);
-        let msg = register_error(&spec("t", &[], "parquet"), ".parquet", &raw);
+        let msg = message(&spec("t", &[], "parquet"), ".parquet", &raw);
         assert_eq!(
             msg.chars().count(),
             MAX_PASSTHROUGH + 1,

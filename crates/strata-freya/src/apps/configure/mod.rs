@@ -14,11 +14,13 @@
 //! *def*, and two windows on one def would both `upsert_table` and both persist, so the second
 //! would silently revert the first — the same reason two windows cannot share a project.
 //!
-//! **Location is local disk only.** The canvas opens with a LOCATION toggle (Local disk ·
-//! Object store) and a connection picker behind it. Connections do not exist yet, so the toggle
-//! would offer one option, and a one-option toggle is a control that cannot be operated. The
-//! whole section is left out rather than shipped disabled; **W7 ▸ 04** adds it and the remote
-//! branch back.
+//! **A table reads from the local disk or from one of the project's object stores** (W7 · 04).
+//! That is the LOCATION toggle the canvas opens with, and behind its second answer the TYPE /
+//! CONNECTION pair (`views::location`) — an explicit choice, never inferred from a typed path.
+//! What it changes below is the source list: one bucket-relative path wearing the connection's
+//! bucket as a prefix, in place of the browsable local list (`views::paths`). The def records the
+//! connection's URL and nothing else about it, and `register::table_spec` composes the two — so
+//! the engine needs nothing new, the connection's store having gone in ahead of every table.
 //!
 //! **No theme of its own.** A window is not a component: its chrome — body, rules, panels,
 //! text — is the app's role vocabulary, and everything form-shaped is the shared `form`
@@ -40,6 +42,8 @@
 //! validating state, `Ready` closes it, `Failed` keeps it open with the reason. A reconciliation
 //! over shared state, not a second registration path.
 
+#[cfg(test)]
+mod interaction;
 mod model;
 mod views;
 
@@ -51,6 +55,7 @@ use strata_core::config::Command;
 
 use crate::apps::configure::views::{use_watch_registration, ConfigureBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::ConnectionRequest;
 use crate::apps::project::ReportCtx;
 use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
 use crate::components::window::window_theme;
@@ -101,6 +106,14 @@ pub struct ConfigureLaunch {
     /// this is not a subtle bug — `use_report` consumes both halves and **panics** when one is
     /// missing, which is how the first version of this crashed the moment Configure opened.
     pub report: ReportCtx,
+    /// The project window's **connection-editor request** (W7 · 04) — what the CONNECTION
+    /// picker's *New connection…* sets.
+    ///
+    /// The slot rather than a second `open_connection` call: that window needs the project
+    /// window's handles and belongs to *its* lifetime, and there is deliberately one open path
+    /// (`project::views::connection_launch`). A `State` carries a press across the window
+    /// boundary exactly as [`rescan`](Self::rescan) already does.
+    pub connections: ConnectionRequest,
 }
 
 /// Compares on the **target** alone. Everything else is fixed for the window's life — one store,
@@ -186,6 +199,8 @@ pub struct ConfigureApp {
     pub engine: EngineCtx,
     pub target: ConfigureTarget,
     pub report: ReportCtx,
+    /// The project window's connection-editor request — see [`ConfigureLaunch::connections`].
+    pub connections: ConnectionRequest,
     /// The window this one belongs to. Carried rather than looked up because the root's own
     /// `use_register_window` re-reports its kind, and an entry that forgot its owner would stop
     /// this window closing with the project window it configures.
@@ -193,6 +208,7 @@ pub struct ConfigureApp {
 }
 
 impl ConfigureApp {
+    #[allow(clippy::too_many_arguments)]
     pub fn window(
         app: AppCtx,
         project: RadioStation<ProjectState, ProjChan>,
@@ -202,6 +218,7 @@ impl ConfigureApp {
         engine: EngineCtx,
         target: ConfigureTarget,
         report: ReportCtx,
+        connections: ConnectionRequest,
         owner: WindowId,
     ) -> WindowConfig {
         // Match the theme's window body so a resize doesn't flash the default white — through
@@ -220,6 +237,7 @@ impl ConfigureApp {
             engine,
             target,
             report,
+            connections,
             owner,
         })
         .with_title("Table configuration")
@@ -270,6 +288,10 @@ impl App for ConfigureApp {
         let report = self.report;
         use_provide_context(move || report.log);
         use_provide_context(move || report.faults);
+        // The project window's connection-editor slot, so the CONNECTION picker's
+        // *New connection…* is the same request the pane's own `+` makes.
+        let connections = self.connections;
+        use_provide_context(move || connections);
 
         // Join the live window registry, so a second Configure on this table focuses this
         // window rather than opening another — and point the menubar here as a **panel** while
@@ -308,15 +330,22 @@ impl App for ConfigureApp {
                     // rename source, so its first Save deregisters a table it never showed. A
                     // row that is gone between the open and the first render is a fault, not a
                     // state to render.
-                    Some(name) => project
-                        .peek()
-                        .tables
-                        .iter()
-                        .find(|t| ProjectState::same_name(&t.def.name, name))
-                        .map(|row| ConfigureDraft::of(&row.def))
-                        .unwrap_or_else(|| {
-                            panic!("configure '{name}': no such table in this project")
-                        }),
+                    Some(name) => {
+                        let store = project.peek();
+                        // The project's connections, so a def that names one opens on that
+                        // connection's provider — which is the connection's fact, not the
+                        // table's (see `ConfigureDraft::of`).
+                        let connections: Vec<_> =
+                            store.connections.iter().map(|c| c.def.clone()).collect();
+                        store
+                            .tables
+                            .iter()
+                            .find(|t| ProjectState::same_name(&t.def.name, name))
+                            .map(|row| ConfigureDraft::of(&row.def, &connections))
+                            .unwrap_or_else(|| {
+                                panic!("configure '{name}': no such table in this project")
+                            })
+                    }
                 };
                 ConfigureCtx {
                     draft: State::create(draft),
