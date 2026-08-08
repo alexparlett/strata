@@ -32,7 +32,7 @@ use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::type_palette::{kind_color, type_palette};
-use crate::components::typography::{Body, InputTypography, Meta, MonoValue};
+use crate::components::typography::{scale, Body, InputTypography, Meta, MonoValue};
 use crate::components::PROGRESS_HOLD;
 use crate::keymap::on_command;
 use crate::state::use_config_station;
@@ -150,21 +150,42 @@ impl StatusMark {
     }
 }
 
-/// The width below which the row drops its `INTERNAL` badge (see the fold at the call site).
+/// The `INTERNAL` badge's laid-out width plus the row gap it brings with it — `Eyebrow` at 10
+/// over the badge's 4px side padding, measured rather than guessed
+/// (`the_internal_badge_folds_before_the_name_truncates`).
+const BADGE_SLOT: f32 = 63. + 8.;
+/// Everything on the row that is neither the name nor the badge: the row's padding (8 + 4), the
+/// chevron (11), the entity icon (14), the status column ([`STATUS_SIZE`]), the ⋮
+/// ([`ACTIONS_SIZE`]) and the four gaps between those five items.
+const ROW_FIXED: f32 = 8. + 4. + 11. + 14. + STATUS_SIZE + ACTIONS_SIZE + (4. * 8.);
+/// Advance width of the mono face, as a fraction of its point size.
 ///
-/// Arithmetic over the row's own items rather than a taste number: everything except the name is
-/// fixed — the row's padding (8 + 4), the chevron (11), the entity icon (14), the status column
-/// ([`STATUS_SIZE`]), the ⋮ ([`ACTIONS_SIZE`]) and the gaps between them (5 × 8 with the badge
-/// present) — so the badge can stay only while what is left still leaves the name a readable
-/// [`NAME_FLOOR`]. Keeping the badge past that point buys a marker the icon's tint already
-/// carries, at the price of a name the reader cannot finish.
-const NAME_FLOOR: f32 = 80.;
-/// The `INTERNAL` badge's laid-out width — `Eyebrow` at 10 over the badge's 4px side padding,
-/// measured rather than guessed (`the_internal_badge_folds_before_the_name_truncates`).
-const BADGE_WIDTH: f32 = 63.;
-/// Everything on the row that is not the name or the badge: padding, chevron, icon, status
-/// column, ⋮, and the five gaps between the six items.
-const ROW_FIXED: f32 = 8. + 4. + 11. + 14. + STATUS_SIZE + ACTIONS_SIZE + (5. * 8.);
+/// The name is [`MonoValue`] — a **monospace** role — so its natural width is exactly its
+/// character count times one advance, and that is the whole reason this fold can be arithmetic
+/// rather than a measurement: Freya lays the name out at the width it is *given* (it is
+/// `Size::flex(1.)`), so nothing downstream can report what it would have wanted. 0.6 em is
+/// JetBrains Mono's advance and the standard one for the genre; the point size comes from the
+/// theme's own scale rather than this file, so retuning the type scale retunes the fold with it.
+const MONO_ADVANCE: f32 = 0.6;
+
+/// Whether the row should fold its `INTERNAL` badge away, given the row's width and the name's
+/// natural width.
+///
+/// **The badge goes only when going saves the name.** Three cases, and the middle one is the
+/// only fold:
+///
+/// - the name fits *with* the badge — keep it, nothing is at stake;
+/// - the name fits only *without* it — fold, because a marker the icon's own tint already carries
+///   is a cheaper thing to lose than a name the reader cannot finish;
+/// - the name does not fit either way — **keep** it. This is the case the first attempt got
+///   wrong by folding on a flat width threshold: dropping the badge there buys no more of the
+///   name, so it is pure loss, and a long-named internal table would have been the one row that
+///   never showed what it was.
+pub(super) fn folds_badge(row_width: f32, name_width: f32) -> bool {
+    let without = row_width - ROW_FIXED;
+    let with = without - BADGE_SLOT;
+    name_width > with && name_width <= without
+}
 
 /// What a catalog entry (a table or a view) resolved to for rendering: its columns, its partition
 /// columns, and the registration state that produced them.
@@ -353,12 +374,15 @@ impl Component for EntryRow {
 
         // **The badge folds before the name truncates.** Freya has no container query, so the row
         // measures itself and the next render acts on it — one `State` per row, written only when
-        // the width actually crosses the threshold, so a resize does not re-render rows whose
-        // answer has not changed. Seeded wide: the first paint shows the badge, and a genuinely
-        // narrow pane drops it on the frame after, which is the right way round — a marker that
-        // flashes away is better than a name that arrives clipped.
+        // the answer actually flips, so a resize does not re-render rows whose answer has not
+        // changed. Seeded showing: the first paint keeps the badge, and a row too narrow for it
+        // drops it on the frame after, which is the right way round — a marker that flashes away
+        // is better than a name that arrives clipped.
         let mut folded = use_state(|| false);
         let fold_badge = internal && folded();
+        // What this name would take if nothing constrained it. Mono, so it is arithmetic — see
+        // [`MONO_ADVANCE`].
+        let name_width = self.name.chars().count() as f32 * scale().data_value.size * MONO_ADVANCE;
 
         // One menu, two triggers (right-click the row, or press its ⋮) — a fresh snapshot each
         // time it is opened.
@@ -512,8 +536,7 @@ impl Component for EntryRow {
             // The measurement behind the badge fold. `set_if_modified` on the *answer*, not on
             // the width: a drag across the pane's whole range writes at most twice.
             .on_sized(move |e: Event<SizedEventData>| {
-                let too_narrow = e.area.width() < ROW_FIXED + NAME_FLOOR + BADGE_WIDTH;
-                folded.set_if_modified(too_narrow);
+                folded.set_if_modified(folds_badge(e.area.width(), name_width));
             })
             .child(row)
             .maybe_child(body)

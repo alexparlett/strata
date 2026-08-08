@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
-use super::entry::ACTIONS_SIZE;
+use super::entry::{folds_badge, ACTIONS_SIZE};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
@@ -964,28 +964,39 @@ fn the_trailing_marks_line_up_whatever_each_row_is_doing() {
     );
 }
 
-/// **The badge folds before the name truncates.** A marker the icon's own tint already carries is
-/// a cheaper thing to lose than a name the reader cannot finish, so the fold takes the badge
-/// first — the arithmetic is `ROW_FIXED + NAME_FLOOR + BADGE_WIDTH` in `entry.rs`.
+/// **The badge folds only when folding saves the name.** Three cases, and the middle one is the
+/// only fold — the first version of this got the third wrong, dropping the badge on any narrow
+/// pane, so a long-named internal table lost the marker *and* still truncated.
 #[test]
 fn the_internal_badge_folds_before_the_name_truncates() {
-    // Wide: both the badge and the whole name fit.
+    // A short name at a wide pane: room for both, so the marker stays.
     let (runner, ..) = settled_over(mixed_origins);
     assert!(shows(&runner, "INTERNAL"), "a wide pane keeps the marker");
 
-    // Narrow enough that keeping the badge would eat into the name's floor.
-    let (mut runner, _) = runner_sized(mixed_origins, 170.);
+    // Narrow enough that the badge is what pushes the name over — the fold. Not *too* narrow:
+    // below about 190 the name (`daily_totals`, 12 mono characters) no longer fits even without
+    // the badge, and the rule correctly keeps it there.
+    let (mut runner, _) = runner_sized(mixed_origins, 240.);
     settle(&mut runner);
-
     assert!(
         !shows(&runner, "INTERNAL"),
-        "and a narrow one drops it: {:?}",
+        "the badge goes so the name can stay whole: {:?}",
         texts(&runner)
     );
-    assert!(
-        shows(&runner, "daily_totals"),
-        "the name is still the thing the row is for"
-    );
+    assert!(shows(&runner, "daily_totals"), "and the name is intact");
+}
+
+/// The arithmetic on its own, over the three cases — cheaper to state here than to stage as
+/// three rendered panes, and it is the part that has to be right.
+#[test]
+fn a_badge_that_cannot_save_the_name_is_kept() {
+    // Room for the name and the badge together.
+    assert!(!folds_badge(400., 100.));
+    // The badge is exactly what tips the name over: fold.
+    assert!(folds_badge(260., 100.));
+    // Hopeless either way — dropping the badge buys no more of the name, so keep it. This is
+    // the case a flat width threshold gets wrong.
+    assert!(!folds_badge(180., 300.));
 }
 
 /// **The icon says it too**, in a colour of its own — the mark that survives the fold above, and

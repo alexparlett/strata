@@ -70,6 +70,17 @@
       "origin": "external"
     },
     {
+      "name": "region_totals",
+      "format": {
+        "type": "arrow"
+      },
+      "sources": [
+        ".strata/tables/region_totals/"
+      ],
+      "partition_cols": [],
+      "origin": "internal"
+    },
+    {
       "name": "regions",
       "format": {
         "type": "csv",
