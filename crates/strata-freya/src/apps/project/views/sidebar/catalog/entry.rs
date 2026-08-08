@@ -224,6 +224,20 @@ pub(super) fn fold_plan(row_width: f32, name_width: f32, internal: bool) -> Fold
     folds
 }
 
+/// Whether the row must mount the **subscriber-only** [`ProfileWatch`] rather than leaving the
+/// subscription to [`ProfileStatus`] in the status column.
+///
+/// The one rule that broke: the subscription is what *dispatches* a scan, so it cannot be a
+/// function of whether there is room to draw a spinner. Exactly one of the two is mounted —
+/// `ProfileStatus` while the column is there, this while it is folded — so the query is never
+/// subscribed twice and never subscribed by nobody.
+///
+/// A named predicate rather than an inline `&&` because it is the thing worth pinning: the bug
+/// was not in either component, it was in what their mounting was gated on.
+pub(super) fn watches_scan(folds: Folds, scanning: bool) -> bool {
+    scanning && !folds.status
+}
+
 /// What a catalog entry (a table or a view) resolved to for rendering: its columns, its partition
 /// columns, and the registration state that produced them.
 enum EntryState {
@@ -602,7 +616,7 @@ impl Component for EntryRow {
             // child costs no layout (the horizontal row charges every child a `spacing`, which
             // is what made an idle slot shift its neighbours). Exactly one of the two is ever
             // mounted, so this is never a second execution.
-            .maybe_child(scan.filter(|_| !folds.status).map(|scan| {
+            .maybe_child(scan.filter(|_| watches_scan(folds, true)).map(|scan| {
                 ProfileWatch {
                     owner: self.name.clone(),
                     scan,

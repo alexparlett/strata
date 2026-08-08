@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
-use super::entry::{fold_plan, Folds, ACTIONS_SIZE};
+use super::entry::{fold_plan, watches_scan, Folds, ACTIONS_SIZE};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
@@ -1064,40 +1064,54 @@ fn the_name_goes_on_collapsing_once_the_row_has_folded() {
 }
 
 /// **Folding the status column must not cancel the scan.** The spinner's component is what
-/// *dispatches* a profile, so gating it on the fold would mean a Profile asked for while the
-/// sidebar is narrow mounts nothing, starts nothing and says nothing — the user accepts the cost
-/// confirm and no work happens. The row keeps a subscriber-only twin in that case.
+/// *dispatches* a profile, so gating it on the fold meant a Profile asked for while the sidebar
+/// was narrow mounted nothing, started nothing and said nothing — the user accepts the cost
+/// confirm and no work happens.
 ///
-/// Asserted through the scan's own settling rather than through a glyph, because at this width
-/// there is deliberately no glyph to look at.
+/// Pinned as the **predicate**, not as a rendered assertion. The first version of this test
+/// checked that the request was still in the store and that no spinner was drawn, and neither of
+/// those distinguishes a live subscription from a dropped one: `request_profile` writes the store
+/// field whatever is mounted, and there is deliberately no glyph at this width either way. It
+/// would have passed against the very regression it was named for. What actually broke was what
+/// the mount was gated on, so that is what is checked.
 #[test]
-fn a_scan_still_runs_when_the_status_column_has_folded() {
+fn a_folded_status_column_still_subscribes_to_the_scan() {
+    let shown = Folds {
+        badge: false,
+        icon: true,
+        status: true,
+    };
+    let folded = Folds {
+        status: false,
+        ..shown
+    };
+
+    // While the column is there, `ProfileStatus` in it owns the subscription.
+    assert!(!watches_scan(shown, true));
+    // Once it folds, the row has to take the subscription over — this is the case that broke.
+    assert!(watches_scan(folded, true));
+    // And a row with no scan subscribes to nothing, folded or not: a sidebar full of tables must
+    // not dispatch scans nobody asked for.
+    assert!(!watches_scan(folded, false));
+    assert!(!watches_scan(shown, false));
+}
+
+/// The rendered half of the above: at a width where the row has folded, there really is no glyph
+/// — so the subscription genuinely has nowhere else to live.
+#[test]
+fn a_folded_row_draws_no_status_glyph() {
     let (mut runner, (_, _, _, mut store, ..)) = runner_sized(mixed_origins, 130.);
     settle(&mut runner);
-    assert!(
-        !shows(&runner, "INTERNAL"),
-        "the pane is narrow enough that the row has folded: {:?}",
-        texts(&runner)
-    );
 
     store
         .write_channel(ProjChan::Tables)
         .request_profile(CatalogKind::Table, "daily_totals");
     settle(&mut runner);
 
-    // Nothing is drawn — the column is folded — but the request is live and subscribed, which is
-    // what makes the scan execute. A row that dropped the subscription would leave this `None`
-    // forever, and the user would be waiting on work that never started.
-    assert!(
-        store
-            .peek()
-            .profile_scan(CatalogKind::Table, "daily_totals")
-            .is_some(),
-        "the scan request survives the fold"
-    );
     assert!(
         !status_labels(&runner).iter().any(|l| l == "Profiling…"),
-        "and it is genuinely folded away rather than merely off-screen"
+        "the column is folded, so nothing is drawn: {:?}",
+        status_labels(&runner)
     );
 }
 
