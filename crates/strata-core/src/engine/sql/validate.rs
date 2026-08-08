@@ -478,9 +478,10 @@ pub fn classify(stmt: &DFStatement, cap: Capability) -> Verdict {
     match cap {
         // Reserved names, read and write: a `__snap_` identifier anywhere in a
         // statement the editor would run itself is refused before it can collide with
-        // a live snapshot registration (`register_table` is last-write-wins, and the
-        // same prefix hides the collision from every catalog reader). The agent column
-        // is untouched — it already refuses every intercepted form, with its own words.
+        // a live snapshot registration — which the provider answers "already exists"
+        // to, so the collision costs a *Run*, on a name the same prefix hides from
+        // every catalog reader. The agent column is untouched — it already refuses
+        // every intercepted form, with its own words.
         Capability::Editor => match editor {
             Verdict::Intercept(_) if names_reserved(stmt) => Verdict::Refuse(Blocked::ReservedName),
             verdict => verdict,
@@ -1530,7 +1531,8 @@ mod tests {
 
     /// Reserved names, both halves: a `__snap_` identifier in a statement the editor
     /// would run itself is refused before it can collide with a live snapshot
-    /// registration (which is last-write-wins, and invisible behind the same prefix).
+    /// registration — which fails as "already exists", on a name the same prefix keeps
+    /// invisible.
     #[test]
     fn a_snapshot_name_is_refused_in_an_intercepted_statement() {
         for sql in [
