@@ -16,9 +16,9 @@
 //! it (spec §1 asks for that), but because `S3Auth` and `GcsAuth` are different types and the
 //! draft keeps a mode per provider. There is no state to guard against.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use strata_core::engine::store::check_client_config;
+use strata_core::engine::store::{check_client_config, client_key, ClientKey, CLIENT_KEYS};
 use strata_model::{ConnectionDef, GcsAuth, GcsStore, Provider, ProviderId, S3Auth, S3Store};
 
 /// What this window is editing: a new connection, or an existing one by
@@ -148,6 +148,9 @@ impl Default for ConnectionDraft {
     }
 }
 
+/// How many catalogue matches the name box offers at once — the properties grid's seven.
+const MAX_SUGGESTIONS: usize = 7;
+
 /// One row of the client-options table: an option and its value, under an id that outlives both.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ConfigRow {
@@ -238,6 +241,62 @@ impl ConfigRows {
         if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
             row.value = value;
         }
+    }
+
+    /// What row `id` currently holds — what each box seeds from and compares against, so neither
+    /// direction writes over a change the other made.
+    pub fn name_of(&self, id: u64) -> Option<String> {
+        self.rows
+            .iter()
+            .find(|row| row.id == id)
+            .map(|row| row.key.clone())
+    }
+
+    pub fn value_of(&self, id: u64) -> Option<String> {
+        self.rows
+            .iter()
+            .find(|row| row.id == id)
+            .map(|row| row.value.clone())
+    }
+
+    /// What row `id`'s name box is worth offering — the properties grid's contract, key for key.
+    ///
+    /// Matches **anywhere** in the name rather than only at the front (`proxy` finds
+    /// `proxy_ca_certificate`), hides what another row already claims (offering a name that would
+    /// immediately read "set twice" is not an offer), and goes quiet on an exact hit, because
+    /// suggesting back what is already typed is a panel that will not close. Capped, so a blank
+    /// box shows a readable list rather than the whole catalogue.
+    pub fn suggestions(&self, id: u64) -> Vec<&'static ClientKey> {
+        let Some(row) = self.rows.iter().find(|row| row.id == id) else {
+            return Vec::new();
+        };
+        let typed = row.key.trim().to_lowercase();
+        let claimed: BTreeSet<&str> = self
+            .rows
+            .iter()
+            .filter(|other| other.id != id)
+            .map(|other| other.key.trim())
+            .filter(|key| !key.is_empty())
+            .collect();
+        let matches: Vec<&'static ClientKey> = CLIENT_KEYS
+            .iter()
+            .filter(|entry| !claimed.contains(entry.name))
+            .filter(|entry| typed.is_empty() || entry.name.contains(&typed))
+            .collect();
+        match matches.as_slice() {
+            [only] if only.name == typed => Vec::new(),
+            _ => matches.into_iter().take(MAX_SUGGESTIONS).collect(),
+        }
+    }
+
+    /// Whether row `id`'s name is one the store will take — what tints the box. A name that is not
+    /// in the catalogue is an **error** here rather than the properties grid's warning: an engine
+    /// key it has not heard of may simply be newer than this build, where `check_client_config`
+    /// refuses an unknown client option outright.
+    pub fn names_a_client_option(&self, id: u64) -> Option<bool> {
+        let row = self.rows.iter().find(|row| row.id == id)?;
+        let key = row.key.trim();
+        (!key.is_empty()).then(|| client_key(key).is_some())
     }
 
     /// The first problem the *list* can have, which is the pair the map cannot represent: a value
@@ -715,6 +774,60 @@ mod tests {
         draft.client_config.remove(first);
         assert_eq!(draft.blocker(), None);
         assert!(draft.def().client_config.is_empty());
+    }
+
+    /// The name box's autocomplete, on the properties grid's contract: matches **anywhere**, hides
+    /// what another row claims, and goes quiet on an exact hit rather than offering back what is
+    /// already typed (a panel that would never close).
+    #[test]
+    fn suggestions_match_anywhere_hide_claimed_options_and_stop_at_an_exact_hit() {
+        let mut rows = ConfigRows::default();
+        let editing = rows.add("keep".into(), String::new());
+        assert!(
+            rows.suggestions(editing)
+                .iter()
+                .any(|e| e.name == "http2_keep_alive_interval"),
+            "a substring matches, not only a prefix"
+        );
+
+        rows.add("http2_keep_alive_interval".into(), "5s".into());
+        assert!(
+            !rows
+                .suggestions(editing)
+                .iter()
+                .any(|e| e.name == "http2_keep_alive_interval"),
+            "another row already claims it"
+        );
+
+        // `user_agent`, not `timeout`: the quiet arm fires when the typed text matches exactly
+        // one catalogue name, and `timeout` is a substring of four of them.
+        let mut rows = ConfigRows::default();
+        let exact = rows.add("user_agent".into(), String::new());
+        assert!(
+            rows.suggestions(exact).is_empty(),
+            "offering back what is already typed is not a suggestion"
+        );
+
+        // A blank box offers the catalogue, capped so the panel stays readable.
+        let mut rows = ConfigRows::default();
+        let blank = rows.add(String::new(), String::new());
+        assert_eq!(rows.suggestions(blank).len(), MAX_SUGGESTIONS);
+    }
+
+    /// The box is tinted by whether the store will take the name — and an unknown one is an
+    /// **error** here, where the properties grid calls it a warning: an engine key it has not
+    /// heard of may be newer than this build, but `check_client_config` refuses an unknown client
+    /// option outright.
+    #[test]
+    fn an_unknown_client_option_reads_as_an_error_rather_than_a_warning() {
+        let mut rows = ConfigRows::default();
+        let blank = rows.add(String::new(), String::new());
+        let known = rows.add("timeout".into(), "30s".into());
+        let unknown = rows.add("nonsense".into(), "1".into());
+
+        assert_eq!(rows.names_a_client_option(blank), None, "nothing typed yet");
+        assert_eq!(rows.names_a_client_option(known), Some(true));
+        assert_eq!(rows.names_a_client_option(unknown), Some(false));
     }
 
     /// **Remove hands back the row that takes the removed one's place**, because the toolbar acts

@@ -18,11 +18,12 @@
 //! because that is a fact about the field rather than a verdict on what is in it.
 
 use freya::prelude::*;
-use strata_core::engine::store::CLIENT_KEYS;
+use strata_core::engine::store::ClientKey;
 use strata_model::ProviderId;
 
 use crate::apps::connection::model::{GcsAuthId, S3AuthId};
 use crate::apps::connection::ConnectionCtx;
+use crate::components::divider::Divider;
 use crate::components::form::{
     form_theme, Form, Note, PathField, Row, ValueField, FIELD_HEIGHT, LABEL_GAP,
 };
@@ -30,8 +31,9 @@ use crate::components::icon::IconName;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
-use crate::components::typography::{Control, MonoValue, Prose};
+use crate::components::typography::{Caption, Control, MonoValue, Prose};
 use crate::components::window::window_theme;
+use crate::theme::{use_roles, Role};
 
 /// The gap between a control and the thing that qualifies it — an auth pill and the reference it
 /// turned on, an endpoint box and its Allow-HTTP switch (canvas `var(--sp-4)`). Inside the row,
@@ -48,6 +50,10 @@ const PROFILE_WIDTH: f32 = 220.;
 const HEAD_HEIGHT: f32 = 32.;
 const CELL_INSET: f32 = 12.;
 const OPTION_ROW: f32 = 38.;
+/// The stripe down an invalid row's leading edge, and how wide the suggestion panel stands — a
+/// client option's name is long and the box it hangs off is a third of a narrow window.
+const ERROR_STRIPE: f32 = 2.;
+const SUGGEST_WIDTH: f32 = 300.;
 pub const OPTION_KEY_WIDTH: f32 = 210.;
 const EMPTY_HEIGHT: f32 = 88.;
 const TOOL_GAP: f32 = 6.;
@@ -619,9 +625,8 @@ impl Component for OptionTable {
             body = body.child(
                 OptionRow {
                     id: row.id,
-                    chosen: row.key.clone(),
-                    value: row.value.clone(),
                     selected: Some(row.id) == *ctx.selected_option.read(),
+                    invalid: rows.names_a_client_option(row.id) == Some(false),
                     key: DiffKey::None,
                 }
                 .key(row.id),
@@ -676,13 +681,18 @@ impl Component for OptionHead {
     }
 }
 
-/// One option: the key picker and its value, filled when it is the selected row.
+/// One option: its name, its value, and the fill that says it is the selected row.
+///
+/// **The name is a bare field with an attached suggestion panel**, the properties grid's cell for
+/// cell — not a dropdown. A closed list is not a reason to reach for one: the grid types the same
+/// kind of thing, the panel offers what is left of the catalogue while the box has focus, and a
+/// field takes a paste, a partial match and a name from a newer `object_store` where a `Select`
+/// takes none of them.
 #[derive(PartialEq)]
 struct OptionRow {
     id: u64,
-    chosen: String,
-    value: String,
     selected: bool,
+    invalid: bool,
     key: DiffKey,
 }
 
@@ -699,27 +709,47 @@ impl Component for OptionRow {
 
     fn render(&self) -> impl IntoElement {
         let win = window_theme();
+        let tones = tones();
+        let roles = use_roles();
         let ctx = use_consume::<ConnectionCtx>();
         let id = self.id;
 
-        // The box owns its buffer and reports per keystroke — the app's field contract. One way
-        // only, unlike the path list's two: a row here is keyed by its **id**, so nothing above it
-        // being removed can hand this scope another row's value, and nothing but the keyboard ever
-        // writes it.
-        let text = use_state({
-            let seed = self.value.clone();
-            move || seed
+        // Each box owns its buffer and pushes into the list — the grid's one direction of travel,
+        // and for its reason: the list wakes on every keystroke, so writing it back would drag the
+        // cursor. Guarded, or the write would wake this row and cost a second pass per keystroke.
+        let name = use_state(|| {
+            ctx.draft
+                .peek()
+                .client_config
+                .name_of(id)
+                .unwrap_or_default()
+        });
+        let value = use_state(|| {
+            ctx.draft
+                .peek()
+                .client_config
+                .value_of(id)
+                .unwrap_or_default()
+        });
+        // The name box's id is ours, so the suggestions can watch it take and lose focus — and so
+        // focusing it selects the row, since `Input` stops propagation on its focus press and the
+        // row's own press never fires over the field.
+        let a11y_id = use_a11y();
+        let focus = use_focus(a11y_id);
+
+        use_side_effect(move || {
+            let typed = name.read().clone();
+            if ctx.draft.peek().client_config.name_of(id).as_deref() != Some(typed.as_str()) {
+                ctx.edit(move |draft| draft.client_config.set_key(id, typed));
+            }
         });
         use_side_effect(move || {
-            let value = text.read().clone();
-            ctx.edit(move |draft| draft.client_config.set_value(id, value));
+            let typed = value.read().clone();
+            if ctx.draft.peek().client_config.value_of(id).as_deref() != Some(typed.as_str()) {
+                ctx.edit(move |draft| draft.client_config.set_value(id, typed));
+            }
         });
 
-        // The row's press selects it, and **focus does too**: Freya's `Input` stops propagation on
-        // its focus press, so clicking into the value box would otherwise leave the toolbar
-        // pointing at whichever row was selected before — and Remove would drop that one.
-        let field = use_a11y();
-        let focus = use_focus(field);
         let mut slot = ctx.selected_option;
         use_side_effect(move || {
             if focus() != Focus::Not && *slot.peek() != Some(id) {
@@ -727,26 +757,32 @@ impl Component for OptionRow {
             }
         });
 
-        let chosen = self.chosen.clone();
-        let options: Vec<Element> = CLIENT_KEYS
-            .iter()
-            .map(|key| {
-                MenuItem::new()
-                    .selected(key.name == chosen)
-                    .on_press(move |_| {
-                        slot.set(Some(id));
-                        ctx.edit(move |draft| draft.client_config.set_key(id, key.name.to_string()))
+        // An unknown name is an **error**, not the grid's warning: `check_client_config` refuses
+        // an option `object_store` has never heard of, where an unknown engine key may simply be
+        // newer than this build.
+        let name_color = match ctx.draft.read().client_config.names_a_client_option(id) {
+            Some(false) => tones.error,
+            _ => roles.get(Role::Text),
+        };
+
+        // Open exactly while the box has focus and the catalogue has something left to offer.
+        // Picking a name fills the box, which empties the list, which closes the panel — one
+        // condition rather than an open flag to keep in step with it.
+        let suggestions: Vec<&'static ClientKey> = match focus() {
+            Focus::Not => Vec::new(),
+            _ => ctx.draft.read().client_config.suggestions(id),
+        };
+        let mut menu = Menu::new().min_width(Size::px(SUGGEST_WIDTH));
+        for entry in suggestions.iter().copied() {
+            menu = menu.child(
+                MenuButton::new()
+                    .on_press(move |_: Event<PressEventData>| {
+                        let mut name = name;
+                        name.set(entry.name.to_string());
                     })
-                    .child(
-                        rect()
-                            .vertical()
-                            .spacing(2.)
-                            .child(MonoValue::new(key.name))
-                            .child(Prose::new(key.what)),
-                    )
-                    .into()
-            })
-            .collect();
+                    .child(SuggestionRow { entry }),
+            );
+        }
 
         let fill = match self.selected {
             true => win.row_selected_background,
@@ -763,20 +799,44 @@ impl Component for OptionRow {
             .child(
                 TableCell::new()
                     .height(Size::px(OPTION_ROW))
-                    .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
+                    .padding(Gaps::new(0., CELL_INSET, 0., 0.))
                     .main_align(Alignment::Start)
                     .child(
                         rect()
-                            .width(Size::fill())
-                            .height(Size::px(FIELD_HEIGHT))
+                            .expanded()
+                            .horizontal()
+                            .content(Content::Flex)
+                            .cross_align(Alignment::Center)
+                            .spacing(CELL_INSET - ERROR_STRIPE)
+                            // A painted rect and not a border: torin draws a border inside bounds
+                            // the box already fills, so it would be the one edge you cannot see.
                             .child(
-                                Select::new()
-                                    .selected_item(MonoValue::new(match self.chosen.is_empty() {
-                                        true => "Choose an option…".to_string(),
-                                        false => self.chosen.clone(),
-                                    }))
-                                    .children(options),
-                            ),
+                                rect()
+                                    .width(Size::px(ERROR_STRIPE))
+                                    .height(Size::fill())
+                                    .background(match self.invalid {
+                                        true => tones.error,
+                                        false => Color::TRANSPARENT,
+                                    }),
+                            )
+                            .child(
+                                Attached::new(
+                                    // The tone is set on the wrapper: `Input` paints no colour of
+                                    // its own, so its text takes the ambient one.
+                                    rect().width(Size::flex(1.)).color(name_color).child(
+                                        ValueField::new(name)
+                                            .bare()
+                                            .placeholder("timeout")
+                                            .height(Size::px(OPTION_ROW))
+                                            .width(Size::fill())
+                                            .a11y_id(a11y_id),
+                                    ),
+                                )
+                                .bottom()
+                                .align_start()
+                                .maybe_child((!suggestions.is_empty()).then_some(menu)),
+                            )
+                            .child(Divider::vertical().color(roles.get(Role::Border))),
                     ),
             )
             .child(
@@ -785,13 +845,36 @@ impl Component for OptionRow {
                     .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
                     .main_align(Alignment::Start)
                     .child(
-                        ValueField::new(text)
+                        ValueField::new(value)
                             .bare()
-                            .width(Size::fill())
-                            .height(Size::px(FIELD_HEIGHT))
                             .placeholder("30s")
-                            .a11y_id(field),
+                            .height(Size::px(OPTION_ROW))
+                            .width(Size::fill()),
                     ),
+            )
+    }
+}
+
+/// One catalogue offer: the option, and what it does.
+#[derive(PartialEq)]
+struct SuggestionRow {
+    entry: &'static ClientKey,
+}
+
+impl Component for SuggestionRow {
+    fn render(&self) -> impl IntoElement {
+        let form = form_theme();
+
+        rect()
+            .width(Size::fill())
+            .vertical()
+            .spacing(2.)
+            .child(MonoValue::new(self.entry.name))
+            .child(
+                Caption::new(self.entry.what)
+                    .color(form.hint_color)
+                    .width(Size::fill())
+                    .wrap(),
             )
     }
 }

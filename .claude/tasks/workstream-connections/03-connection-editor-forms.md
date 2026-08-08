@@ -100,10 +100,16 @@ Four changes after the first review pass, all of them tightening what a connecti
   three stores are built on one HTTP client; offered from `CLIENT_KEYS` (a written-down table,
   since the enum cannot list itself — pinned by a test that parses every entry) and refused by
   `check_client_config`, again one call for both sides.
-  **The table is the app's two existing list editors' shape** (Settings ▸ Engine's properties grid,
-  the Configure window's source paths): Freya's built-in `Table`, a `ToolButton` toolbar above it
-  acting on the **selected** row rather than a control per row, a header strip because it has two
-  columns, the empty state *inside* the table, and bare fields in the cells. The selection lives
+  **The table is the properties grid's, cell for cell** (Settings ▸ Engine, plus the Configure
+  window's source paths): Freya's built-in `Table`, a `ToolButton` toolbar above it acting on the
+  **selected** row rather than a control per row, a header strip because it has two columns, the
+  empty state *inside* the table, bare fields in both cells, and the name box carrying the grid's
+  **attached suggestion panel** — matches anywhere, hides what another row claims, quiet on an
+  exact hit. Not a `Select`: a closed list is no reason to reach for one when the grid beside it
+  types the same kind of thing, and a field takes a paste, a partial match and a name from a newer
+  `object_store` where a dropdown takes none of them. The one departure from the grid is the tint:
+  an unknown name is an **error** here rather than a warning, because `check_client_config`
+  refuses it outright where an unknown engine key may just be newer than the build. The selection lives
   on `ConnectionCtx`, **not** on the draft — `ConfigureCtx::selected_path`'s rule, and for its
   reason: on the draft, clicking a row would count as an edit and clear the engine's failure
   message out from under whoever was reading it.

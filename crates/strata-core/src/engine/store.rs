@@ -143,6 +143,7 @@ pub async fn aws_profiles() -> Vec<String> {
 /// The **name** is `ClientConfigKey`'s own (`AsRef<str>`), so what a connection stores is what
 /// `from_str` reads back; the description is ours, because the crate's is a doc comment and not a
 /// value.
+#[derive(PartialEq, Eq, Debug)]
 pub struct ClientKey {
     pub name: &'static str,
     pub what: &'static str,
