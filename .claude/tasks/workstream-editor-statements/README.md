@@ -25,7 +25,7 @@ already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Re
 | 01 | Policy router: `classify(stmt, Capability)` + `Verdict`; agent wrapper unchanged | ✅ | — | — |
 | 02 | `Engine::run` + statement results: `RunOutcome`/`StatementReport`/`StoreEffect`, app folds, history | ✅ | — | 01 |
 | 03 | Strata providers: `StrataCatalogProvider` + `StrataSchemaProvider`, information_schema on | ✅ | — | — |
-| 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ⬜ | — | 02 |
+| 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ✅ | — | 02 |
 | 05 | INSERT (native, target-gated) + DROP TABLE (both origins) | ⬜ | — | 04 |
 | 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ⬜ | — | 02 |
 | 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ⬜ | — | 02 |

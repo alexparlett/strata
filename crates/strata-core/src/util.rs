@@ -406,14 +406,85 @@ fn sweep_temps_older_than(dir: &Path, min_age: Duration) {
         if pid == own {
             continue;
         }
-        let age = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| SystemTime::now().duration_since(t).ok());
-        if age.is_some_and(|age| age >= min_age) {
+        if abandoned(&entry, min_age) {
             let _ = fs::remove_file(entry.path());
         }
+    }
+}
+
+/// Whether `entry` has sat untouched for `min_age` — the age half of "no live writer owns this".
+/// Anything unreadable, or with an mtime in the future (a clock-skewed network mount), answers
+/// `false`: littering is the cheap failure, deleting a live write is not.
+fn abandoned(entry: &fs::DirEntry, min_age: Duration) -> bool {
+    entry
+        .metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| SystemTime::now().duration_since(t).ok())
+        .is_some_and(|age| age >= min_age)
+}
+
+/// The first component of every [`temp_dir_name`] — the **directory** counterpart of
+/// [`TEMP_PREFIX`], and a `.` for the same reason.
+///
+/// Its own prefix rather than [`TEMP_GLOB`]'s, because the two are published differently and
+/// swept differently: a temp *file* is renamed over a file, a temp *directory* is renamed into
+/// place as a whole, and only the second can be removed with `remove_dir_all`.
+const TEMP_DIR_PREFIX: &str = ".tmp-";
+
+/// A temp **directory** name for a caller that builds a directory and then publishes it by
+/// rename — an internal table's Arrow spool (ED-04).
+///
+/// Carries the writing pid and a process-local counter, exactly as [`temp_name`] does and for
+/// the same reason: two windows spooling the same table must not share a staging directory, and
+/// the pid is what later lets [`sweep_stale_temp_dirs`] tell an abandoned spool from one a live
+/// process is still filling.
+pub fn temp_dir_name() -> String {
+    format!(
+        "{TEMP_DIR_PREFIX}{}-{}",
+        process::id(),
+        TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// The pid recorded in `name` if `name` is one of our temp directories — the inverse of
+/// [`temp_dir_name`], and `None` for everything else in the directory, which is what stops the
+/// sweep touching a directory that merely looks temp-ish.
+fn temp_dir_pid(name: &str) -> Option<u32> {
+    let (pid, seq) = name.strip_prefix(TEMP_DIR_PREFIX)?.split_once('-')?;
+    seq.parse::<u64>().ok()?;
+    pid.parse().ok()
+}
+
+/// Remove temp **directories** stranded in `dir` by a process that died between filling one and
+/// renaming it into place. Best-effort and silent, like [`sweep_stale_temps`], and safe by the
+/// same two rules: never this process's own (another thread may be spooling right now), and for
+/// any other pid, age stands in for liveness.
+///
+/// [`TEMP_STALE_AGE`] is generous for a `write_atomic` and merely sufficient here — a CTAS over a
+/// large lake is the one write in this codebase that can legitimately run for minutes. An hour is
+/// still well past it, and the exposure is narrow: only a *different* process's spool is ever
+/// eligible, and the cost of getting it wrong is one interrupted CTAS rather than lost data.
+pub fn sweep_stale_temp_dirs(dir: &Path) {
+    sweep_temp_dirs_older_than(dir, TEMP_STALE_AGE)
+}
+
+/// [`sweep_stale_temp_dirs`] with the threshold injected, so both arms are testable without
+/// waiting an hour.
+fn sweep_temp_dirs_older_than(dir: &Path, min_age: Duration) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let own = process::id();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(temp_dir_pid) else {
+            continue;
+        };
+        if pid == own || !abandoned(&entry, min_age) {
+            continue;
+        }
+        let _ = fs::remove_dir_all(entry.path());
     }
 }
 
@@ -657,6 +728,48 @@ mod tests {
     fn sweep_of_a_missing_directory_is_a_no_op() {
         let dir = TempDir::new("sweep-missing");
         sweep_stale_temps(&dir.0.join("nope"));
+        sweep_stale_temp_dirs(&dir.0.join("nope"));
+    }
+
+    /// The **directory** sweep, on the same two rules as the file one: a spool a dead process
+    /// left behind goes, ours never does whatever its age, and a real table's directory is not
+    /// a temp at all.
+    #[test]
+    fn the_directory_sweep_removes_a_dead_spool_and_never_our_own() {
+        let dir = TempDir::new("sweep-dirs");
+        let own = process::id();
+        let foreign = own.wrapping_add(1);
+        let mine = temp_dir_name();
+        assert_eq!(temp_dir_pid(&mine), Some(own));
+        // Not ours to touch: a real internal table's directory, and something else's `.tmp-`.
+        assert_eq!(temp_dir_pid("orders"), None);
+        assert_eq!(temp_dir_pid(".tmp-notapid-0"), None);
+
+        for name in [
+            format!(".tmp-{foreign}-0").as_str(),
+            mine.as_str(),
+            ".tmp-notapid-0",
+            "orders",
+        ] {
+            fs::create_dir_all(dir.0.join(name).join("nested")).unwrap();
+        }
+
+        // Age zero: every spool qualifies on age, so only the pid rule can spare one.
+        sweep_temp_dirs_older_than(&dir.0, Duration::ZERO);
+
+        // Sorted by `entries`: a numeric pid sorts before `notapid`, and both before `orders`.
+        assert_eq!(dir.entries(), [mine.as_str(), ".tmp-notapid-0", "orders"]);
+    }
+
+    /// Age is the stand-in for liveness here too: a CTAS in another window may still be
+    /// spooling, so a young directory stays.
+    #[test]
+    fn the_directory_sweep_spares_a_spool_too_young_to_be_abandoned() {
+        let dir = TempDir::new("sweep-dirs-young");
+        let name = format!(".tmp-{}-0", process::id().wrapping_add(1));
+        fs::create_dir_all(dir.0.join(&name)).unwrap();
+        sweep_temp_dirs_older_than(&dir.0, Duration::from_secs(3600));
+        assert_eq!(dir.entries(), [name]);
     }
 
     #[test]

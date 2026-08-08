@@ -464,7 +464,10 @@ fn is_bare_word(dialect: &dyn Dialect, name: &str) -> bool {
 }
 
 /// `COPY … TO` returns a single `UInt64` "count" column with the rows written.
-fn copy_row_count(batches: &[RecordBatch]) -> usize {
+///
+/// Shared with `ddl::tables`, whose CTAS spool is a `COPY` too: the row count in its report and
+/// the one in an export's are the same fact read out of the same shape.
+pub(super) fn copy_row_count(batches: &[RecordBatch]) -> usize {
     use datafusion::arrow::array::UInt64Array;
     let Some(batch) = batches.first() else {
         return 0;

@@ -123,6 +123,12 @@ impl HeadlessHost {
         }
         let defs = load_defs(&root)?;
         let engine = Arc::new(Engine::new(BTreeMap::new()));
+        // The project this engine belongs to (ED-04). It serves a read-only vocabulary, so
+        // nothing here can *create* an internal table — but a project that already has one
+        // registers it from `.strata/tables/`, and an engine that has not been told where its
+        // project is would answer for it out of context. One call, on the same terms the app
+        // makes it: the host is opened *on* a project, so this is that project.
+        engine.set_data_dir(&root);
         let mut outcomes = Vec::new();
         register_project(&engine, &root, &defs, |o| outcomes.push(o)).await;
         Ok(HeadlessHost::settled(root, defs, engine, outcomes))
@@ -505,7 +511,7 @@ mod tests {
     use std::{env, process};
 
     use strata_core::project::save_defs;
-    use strata_model::{SourceFormat, TableDef, ViewDef};
+    use strata_model::{SourceFormat, TableDef, TableOrigin, ViewDef};
 
     use crate::host::AgentIdentity;
 
@@ -527,6 +533,7 @@ mod tests {
             format: SourceFormat::from_name("csv"),
             sources: vec![source.into()],
             partition_cols: Vec::new(),
+            origin: TableOrigin::External,
         }
     }
 

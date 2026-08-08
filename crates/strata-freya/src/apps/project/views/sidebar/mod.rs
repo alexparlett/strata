@@ -273,7 +273,7 @@ mod tests {
     use strata_core::config::AppConfig;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_model::{ColRef, SourceFormat, TableDef};
+    use strata_model::{ColRef, SourceFormat, TableDef, TableOrigin};
 
     use super::*;
     use crate::apps::configure::ConfigureTarget;
@@ -301,6 +301,7 @@ mod tests {
                 format: SourceFormat::Parquet,
                 sources: vec!["orders.parquet".into()],
                 partition_cols: vec![],
+                origin: TableOrigin::External,
             }],
             views: Vec::new(),
             saved_queries: Vec::new(),

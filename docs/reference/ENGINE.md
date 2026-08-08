@@ -24,7 +24,7 @@ list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`, unknown kinds, and the cont
 `Capability::Agent` is read-only and refuses every non-query with the words AA-01 shipped.
 `Engine::run` is where that classification is *spent*: `Query` delegates to `query()`
 byte-for-byte (the only arm that touches the snapshot lifecycle, so "DDL does not retire
-snapshots" holds by construction), `Intercept(kind)` goes to `engine/ddl.rs` under the same
+snapshots" holds by construction), `Intercept(kind)` goes to `engine/ddl/` under the same
 in-flight bracket `explain` uses, and `Refuse` returns the editor's own message before anything
 can plan. A statement comes back as a `StatementReport` carrying a `StoreEffect` the app folds —
 never something to read back out of DataFusion. One statement per Run.
@@ -51,6 +51,24 @@ neither spool a CTAS result nor tell a user's `DROP` from the deregister every r
 (`STATEMENTS_SPEC.md` §3, settled). `CREATE DATABASE` is likewise not stoppable at a provider —
 DF registers it into the `CatalogProviderList`, whose `register_catalog` returns an `Option` — so
 the router's `Blocked::CreateDatabase` is its only gate.
+
+**A table's data can be Strata's own, and that is a flag on the def rather than a second kind of
+table** (ED-04, `engine::ddl::tables`). `CREATE TABLE` / CTAS hands the *parsed* statement to
+`SessionState::statement_to_plan` — which executes nothing, refuses every clause DataFusion does
+not implement in its own words, and resolves a declared column list against the query — then
+spools `CreateMemoryTable.input` through a `LogicalPlan::Copy` node `STORED AS ARROW` into
+`.strata/tables/.tmp-…/`, renames it into `<slug>/`, and registers it through `register_external`
+with `TableSpec { format: Arrow, internal: true }`. No SQL is re-rendered and no span is sliced,
+so the query that runs is the one the user wrote. The def that comes back is an ordinary
+`TableDef` with `origin: Internal` and a project-relative source, so replay, the persist funnel
+and the headless host need no new code; `Engine::set_data_dir(root)` is what tells an engine which
+project it may write into, and a CTAS on an engine with no project refuses politely.
+`StrataArrowFormat` wraps `ArrowFormat` to answer `infer_stats` from the IPC footer (a metadata-only
+read of each batch header), because otherwise the one table Strata itself wrote could not say how
+many rows it holds. Two settings ride with it: `datafusion.runtime.list_files_cache_limit` defaults
+to `0`, because DF 54's 1 MiB / infinite-TTL default makes every re-listing answer with the
+previous file set; and `register_external` refuses a `__snap_`-prefixed name outright, so a
+hand-edited `project.json` cannot do what a typed statement cannot.
 
 **A remote scheme is something we register, and a connection is what registers it.** DataFusion
 core resolves nothing: there is no built-in "read `s3://…`", so an embedder builds an

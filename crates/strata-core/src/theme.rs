@@ -301,6 +301,17 @@ roles! {
     // ---- Entity kinds: catalog icons + completion kinds, one reconciled set -----------------
     /// A table.
     EntityTable => "entity.table",
+    /// A table whose data **Strata owns** — one created by `CREATE TABLE` into the project
+    /// (ED-04). Split from [`EntityTable`](Self::EntityTable) rather than shared with it because
+    /// the two answer different questions about the same glyph: dropping one deletes the user's
+    /// only copy of the data and dropping the other does not, and the catalog shows both in one
+    /// section under one icon. Reinforcement, never the sole carrier — the row's `INTERNAL`
+    /// badge is what a colour-blind reader and a screen reader get, and it is also what survives
+    /// the pane being narrowed, which a tint has to because the icon never folds.
+    ///
+    /// Falls back to `entity.table`, so a theme file written before this existed stays valid and
+    /// simply does not draw the distinction.
+    EntityTableInternal => "entity.table.internal" (or EntityTable),
     /// A view.
     EntityView => "entity.view",
     /// A saved query.
@@ -845,7 +856,7 @@ mod tests {
         }
         assert_eq!(
             Role::COUNT,
-            100,
+            101,
             "the vocabulary is a deliberate, counted set"
         );
     }

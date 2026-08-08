@@ -12,7 +12,18 @@ data, external removes only the def — with dependents named in the report.
 ## Current state
 
 - ED-04 established `.strata/tables/<slug>/`, the engine internal-name set, and the
-  `TableUpserted`/`TableRemoved` folds.
+  `TableUpserted`/`TableRemoved` folds. Concretely, and **already built** — do not re-derive:
+  - `Engine::is_internal(name)` is the gate INSERT and DROP ask. It is maintained by
+    `Engine::note_origin`, called from `Engine::register` (from `TableSpec.internal`),
+    `Engine::deregister`, and `Engine::run`'s intercept arm (from the effect's `def.origin`).
+  - `ddl::tables::slug` maps a folded table name to its directory name, and
+    `project::tables_dir(root)` is the absolute root. **DROP's data deletion needs both**, so
+    give `tables` a `pub(super) fn table_dir(root, name)` composing them rather than a second
+    copy of the layout — ED-04 deliberately did not add one, having no reader for it.
+  - `ddl::DataRoot` is already threaded into `ddl::execute`, so DROP has the project folder
+    without a new parameter.
+  - `TableDef.origin` is what the sidebar's drop must branch on for its wording and its data
+    deletion; the row already renders the distinction (`INTERNAL` badge, `entry.rs`).
 - Verified (spec §2): `ListingTable::insert_into` for Arrow requires a directory-collection URL
   (`listing_url` already emits the trailing slash), schema-checks via
   `logically_equivalent_names_and_types`, appends one LZ4 IPC file, `Append` only.

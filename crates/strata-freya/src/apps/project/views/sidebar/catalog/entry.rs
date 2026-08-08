@@ -32,7 +32,7 @@ use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::type_palette::{kind_color, type_palette};
-use crate::components::typography::{Body, InputTypography, Meta, MonoValue};
+use crate::components::typography::{scale, Body, InputTypography, Meta, MonoValue};
 use crate::components::PROGRESS_HOLD;
 use crate::keymap::on_command;
 use crate::state::use_config_station;
@@ -59,8 +59,10 @@ const LOADING: &str = "Loading…";
 /// something to hold *onto*, and what this slot holds is the last verdict it showed.
 const SPINNER_DELAY: Duration = PROGRESS_HOLD;
 
-/// The trailing ⋮ actions button — the canvas's 22×22.
-const ACTIONS_SIZE: f32 = 22.;
+/// The trailing ⋮ actions button — the canvas's 22×22. `pub(super)` because it is also the
+/// column the interaction tests measure the rest of the trailing run against, and a second copy
+/// of the number there is a second thing to keep in step.
+pub(super) const ACTIONS_SIZE: f32 = 22.;
 /// What the **profiling** spinner says — its own words, because the registration spinner beside
 /// it means something else entirely (a scan is minutes of work the user asked for; a
 /// registration is a metadata read they didn't).
@@ -94,6 +96,149 @@ fn actions_button(menu: impl Fn() -> Menu + 'static) -> impl IntoElement {
                 })
                 .child(Icon::new(IconName::Dots).size(15.)),
         )
+}
+
+/// The marker a table row carries when Strata owns its data (ED-04).
+///
+/// **Not cosmetic.** Tables of both origins live in one section under one glyph, and the
+/// difference between them is what a drop means: one origin's Drop removes a def and leaves the
+/// user's files alone, the other's deletes the only copy of the data. The row is where that has
+/// to be legible, because the row is what gets right-clicked.
+///
+/// A badge rather than a second icon, because the catalog already marks a row that is special in
+/// a way that matters this way (a partition column's `PART` chip), and because a new glyph would
+/// be a new asset to say what one word says. Toned from the table entity colour rather than a
+/// status tone: it is a fact about the table, not a warning about it.
+const INTERNAL_BADGE: &str = "INTERNAL";
+/// What that marker means, on hover and to a screen reader. `INTERNAL` is the word the app uses
+/// everywhere else for this (the router's own `INSERT targets internal tables`), but it does not
+/// on its own say the thing the user has to know before dropping the row.
+const INTERNAL_TIP: &str = "Strata stores this table's data in the project";
+
+/// What the row's one trailing status column is saying. A type rather than a built element so
+/// it can be compared, and because the row draws it in more than one place.
+#[derive(Clone, PartialEq)]
+enum StatusMark {
+    /// The registration has not answered and the hold has expired (see [`SPINNER_DELAY`]).
+    Loading,
+    /// The settled verdict — what is wrong with this row, in the words the store recorded.
+    Problem(String),
+}
+
+impl StatusMark {
+    /// The glyph, wearing its message as a tooltip *and* an a11y label, so the explanation is
+    /// never mouse-only. Dropped below like the rest of the app's overlays, so it cannot cover
+    /// the row above it in a dense list.
+    fn glyph(&self, theme: &CatalogTheme) -> Element {
+        match self {
+            // Named, not bare: P3-09 puts a *profiling* spinner in this same slot, and two
+            // spinners meaning different things need to be tellable apart.
+            StatusMark::Loading => tip(LOADING)
+                .child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(LOADING))
+                .into_element(),
+            StatusMark::Problem(reason) => tip(reason.clone())
+                .child(
+                    rect().a11y_alt(reason.clone()).child(
+                        Icon::new(IconName::Warning)
+                            .color(theme.warn_color)
+                            .size(STATUS_SIZE),
+                    ),
+                )
+                .into_element(),
+        }
+    }
+}
+
+/// What each optional item costs the row: its own width plus the one gap it brings with it
+/// (`SidebarRow`'s spacing is 8).
+const BADGE_SLOT: f32 = 63. + 8.;
+const ICON_SLOT: f32 = 14. + 8.;
+const STATUS_SLOT: f32 = STATUS_SIZE + 8.;
+/// What the row can never give up: its padding (8 + 4), the chevron that expands it (11), the ⋮
+/// that opens its menu (22), and the two gaps around the name. The chevron and the ⋮ are the
+/// pinned tail in `components::toolbar`'s sense — they are how the row is *used*, so a row too
+/// narrow to show them is worse than one showing nothing else.
+const ROW_PINNED: f32 = 8. + 4. + 11. + ACTIONS_SIZE + (2. * 8.);
+/// Advance width of the mono face, as a fraction of its point size.
+///
+/// The name is [`MonoValue`] — a **monospace** role — so its natural width is exactly its
+/// character count times one advance, and that is the whole reason this fold can be arithmetic
+/// rather than a measurement: Freya lays the name out at the width it is *given* (it is
+/// `Size::flex(1.)`), so nothing downstream can report what it would have wanted. 0.6 em is
+/// JetBrains Mono's advance and the standard one for the genre; the point size comes from the
+/// theme's own scale rather than this file, so retuning the type scale retunes the fold with it.
+const MONO_ADVANCE: f32 = 0.6;
+
+/// Which of the row's optional items survive at a given width.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) struct Folds {
+    pub badge: bool,
+    pub icon: bool,
+    pub status: bool,
+}
+
+/// The row's fold plan — `components::toolbar`'s policy, ranked for this row.
+///
+/// That component's row is `[ leading run (flexible, ellipsizes) ][ items (fold lowest-rank
+/// first) ][ pinned tail ]`, and the space it offers the items is the row minus its padding,
+/// minus the pinned tail, minus the **leading run's floor**. So items fold while the leading run
+/// is still whole, and the leading run ellipsizes only once they have all gone. A catalog row is
+/// that shape: the name is the leading run, its floor is its own natural width, the chevron and
+/// the ⋮ are pinned, and everything else folds — **in this order, least informative first**:
+///
+/// 1. the `INTERNAL` badge — a marker the icon's tint repeats, and the only item that is pure
+///    reinforcement;
+/// 2. the entity icon — decoration once the row's section already says what kind it is;
+/// 3. the status glyph — information, not decoration, so it outranks both of the above and goes
+///    last of the three.
+///
+/// The name never sets a floor of its own: below the point where everything has folded it goes
+/// on ellipsizing, because a chrome row folds rather than spills (AGENTS.md §3).
+pub(super) fn fold_plan(row_width: f32, name_width: f32, internal: bool) -> Folds {
+    let needs = |f: Folds| {
+        ROW_PINNED
+            + name_width
+            + if f.badge { BADGE_SLOT } else { 0. }
+            + if f.icon { ICON_SLOT } else { 0. }
+            + if f.status { STATUS_SLOT } else { 0. }
+    };
+    // Unrolled rather than looped over the fields: the *order* is the policy here, and three
+    // named steps say it where an iterator over `&mut bool` would hide it.
+    let mut folds = Folds {
+        badge: internal,
+        icon: true,
+        status: true,
+    };
+    if needs(folds) <= row_width {
+        return folds;
+    }
+    folds.badge = false;
+    if needs(folds) <= row_width {
+        return folds;
+    }
+    folds.icon = false;
+    if needs(folds) <= row_width {
+        return folds;
+    }
+    folds.status = false;
+    folds
+}
+
+/// The scan the **row itself** must subscribe to, if any — what it mounts a subscriber-only
+/// [`ProfileWatch`] for rather than leaving to [`ProfileStatus`] in the status column.
+///
+/// The one rule that broke: the subscription is what *dispatches* a scan, so it cannot be a
+/// function of whether there is room to draw a spinner. Exactly one of the two is mounted —
+/// `ProfileStatus` while the column is there, this while it is folded — so the query is never
+/// subscribed twice and never subscribed by nobody.
+///
+/// It returns the scan rather than a `bool` so the **whole** condition lives here: an earlier
+/// version took `scanning: bool` and was called with a literal `true`, the "is there a scan"
+/// half being done by a `filter` at the call site — which left half its truth table unreachable
+/// through the production path, exactly the too-strong-looking guard this was extracted to
+/// avoid.
+pub(super) fn watched_scan(folds: Folds, scan: Option<ScanId>) -> Option<ScanId> {
+    scan.filter(|_| !folds.status)
 }
 
 /// What a catalog entry (a table or a view) resolved to for rendering: its columns, its partition
@@ -173,7 +318,8 @@ impl Component for EntryRow {
                             partitions: Vec::new(),
                         },
                     };
-                    (state, p.view_problem(v))
+                    // A view has no origin: its data is whatever its query reads.
+                    (state, p.view_problem(v), false)
                 }),
                 _ => p.tables.iter().find(|t| t.def.name == self.name).map(|t| {
                     let state = match &t.reg {
@@ -184,7 +330,14 @@ impl Component for EntryRow {
                             partitions: t.def.partition_cols.clone(),
                         },
                     };
-                    (state, ProjectState::table_problem(t))
+                    // Off the **def**, so the marker is there whatever registration answered —
+                    // a `Reg::Failed` internal row is exactly the one whose origin the reader
+                    // most needs (its data is not in this copy of the project).
+                    (
+                        state,
+                        ProjectState::table_problem(t),
+                        t.def.origin.is_internal(),
+                    )
                 }),
             }
         };
@@ -201,8 +354,8 @@ impl Component for EntryRow {
         //
         // Both bits of state are armed here, above the early return, so hook order can't depend on
         // the row still being in the store.
-        let waiting = matches!(resolved, Some((EntryState::Loading, _)));
-        let problem = resolved.as_ref().and_then(|(_, p)| p.clone());
+        let waiting = matches!(resolved, Some((EntryState::Loading, ..)));
+        let problem = resolved.as_ref().and_then(|(_, p, _)| p.clone());
 
         // Whether the wait has outlasted the hold. Re-armed from zero on every entry into (and exit
         // from) the wait — but *not* on a re-scan of a row that was already waiting, whose wait
@@ -233,8 +386,29 @@ impl Component for EntryRow {
             }
         });
 
+        // **The row's fold plan** — `components::toolbar`'s policy, ranked here (see [`fold_plan`]).
+        //
+        // What is in state is the **measured width**, never the verdict — `Toolbar` keeps its
+        // `measured` the same way, and for the reason AGENTS.md §2 gives: a value that must stay
+        // live is a second *input* to the derivation, never a stored result. The fold depends on
+        // the row's width *and* on what the name would take, and the second of those moves with
+        // the theme's type scale and with the name itself; caching the verdict and refreshing it
+        // only from `on_sized` left it computed under the old font whenever a theme switch
+        // changed the mono size without changing the row's area (the row is `Size::fill()` over a
+        // fixed height, so nothing about it resizes). Deriving it here costs one comparison and
+        // cannot go stale.
+        //
+        // Seeded infinite, like `Toolbar`'s: the first paint assumes it fits, and the frame after
+        // the measurement corrects it. That way round because a marker that flashes away beats a
+        // name that arrives clipped.
+        let mut measured = use_state(|| f32::INFINITY);
+        // What this name would take unconstrained. Mono, so it is arithmetic — see
+        // [`MONO_ADVANCE`] — and read from the live scale, so retuning the type scale retunes the
+        // fold with it.
+        let name_width = self.name.chars().count() as f32 * scale().data_value.size * MONO_ADVANCE;
+
         // The row was dropped from the store between the section's read and ours.
-        let Some((state, _)) = resolved else {
+        let Some((state, _, internal)) = resolved else {
             return rect();
         };
 
@@ -244,18 +418,20 @@ impl Component for EntryRow {
         let toggle_key = entry_key.clone();
 
         // The glyph is the shared mapping (the palette lists the same things); the tint is this
-        // surface's own.
+        // surface's own — and a table Strata owns takes its own entity colour, because the
+        // catalog shows both origins in one section under one glyph and the icon is the mark
+        // that never folds when the pane narrows.
         let icon = IconName::for_catalog(self.kind);
         let icon_color = match self.kind {
             CatalogKind::View => self.theme.view_color,
             CatalogKind::Query => self.theme.query_color,
+            CatalogKind::Table if internal => self.theme.internal_color,
             CatalogKind::Table => self.theme.table_color,
         };
 
-        // One trailing **status slot** and at most one glyph in it, with the words only on hover. A
-        // settled row is clean, per the design. No status *text*: "failed" said strictly less than
-        // the reason the triangle carries, and it cost the name half the row. Each glyph declares
-        // its message as an **a11y label** too, so the explanation isn't mouse-only.
+        // What the row's one status column is saying, with the words only on hover. A settled row
+        // is clean, per the design. No status *text*: "failed" said strictly less than the reason
+        // the triangle carries, and it cost the name half the row.
         let status = match (
             waiting && waited(),
             if waiting {
@@ -264,24 +440,14 @@ impl Component for EntryRow {
                 problem
             },
         ) {
-            // The wait has outlasted the hold, so it is now the thing worth saying. Named, not
-            // bare: P3-09 puts a *profiling* spinner in reach of this same row, and two spinners
-            // meaning different things need to be tellable apart.
-            (true, _) => {
-                Some(tip(LOADING).child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(LOADING)))
-            }
+            // The wait has outlasted the hold, so it is now the thing worth saying.
+            (true, _) => Some(StatusMark::Loading),
             // The settled verdict, or — mid-gap — the one still being held.
-            (false, Some(reason)) => Some(
-                tip(reason.clone()).child(
-                    rect().a11y_alt(reason).child(
-                        Icon::new(IconName::Warning)
-                            .color(self.theme.warn_color)
-                            .size(STATUS_SIZE),
-                    ),
-                ),
-            ),
+            (false, Some(reason)) => Some(StatusMark::Problem(reason)),
             (false, None) => None,
         };
+
+        let folds = fold_plan(measured(), name_width, internal);
 
         // One menu, two triggers (right-click the row, or press its ⋮) — a fresh snapshot each
         // time it is opened.
@@ -312,9 +478,14 @@ impl Component for EntryRow {
                 .color(self.theme.chevron_color)
                 .size(11.),
             )
-            .child(Icon::new(icon).color(icon_color).size(14.))
-            // The name absorbs the slack and truncates, so the status run stays visible however
-            // long the table is called.
+            // Folds second of the three: once the badge has gone, the glyph is decoration —
+            // the section header above already says what kind of thing this row is.
+            .maybe_child(
+                folds
+                    .icon
+                    .then(|| Icon::new(icon).color(icon_color).size(14.).into_element()),
+            )
+            // The leading run: it takes all the slack, and it is the last thing to give any up.
             .child(
                 MonoValue::new(self.name.clone())
                     .color(self.theme.name_color)
@@ -324,20 +495,49 @@ impl Component for EntryRow {
             .on_context_menu(move |_: Event<PressEventData>| {
                 ContextMenu::open(menu_for_row());
             })
-            // Its own slot, before the registration status: a scan is asked for from *here* (the
-            // row's menu) and can run for minutes with the inspector closed, so the row is the
-            // only thing that can say it is happening. Mounted only when there is a scan to
-            // watch — see `ProfileStatus` for why that matters.
-            .maybe_child(scan.map(|scan| {
-                ProfileStatus {
-                    owner: self.name.clone(),
-                    scan,
-                    key: DiffKey::None,
-                }
-                .key(scan)
-                .into_element()
+            // After the name and before the status column, so it reads as part of what the
+            // row *is* rather than as something that happened to it — and the **first** thing
+            // the row gives up under pressure, because it is the only item that is pure
+            // reinforcement: the icon's own tint says the same thing.
+            .maybe_child(folds.badge.then(|| {
+                tip(INTERNAL_TIP)
+                    .child(rect().a11y_alt(INTERNAL_TIP).child(
+                        Badge::tag(INTERNAL_BADGE, self.theme.internal_color).into_element(),
+                    ))
+                    .into_element()
             }))
-            .maybe_child(status.map(|s| s.into_element()))
+            // **One** trailing status column, holding at most one glyph: the profiling spinner
+            // while a scan runs, otherwise the validity triangle, otherwise nothing. They were
+            // two children before this, and a row that had ever been profiled kept a mounted,
+            // idle one in the run — a zero-width child still costs a full `spacing`, so
+            // everything left of it sat 20px further in than on a row that had not.
+            //
+            // It folds last of the three, because it is the only one carrying information rather
+            // than repeating something. Folding it takes the *glyph* only: the subscription that
+            // makes the scan run is [`ProfileWatch`], mounted in the vertical wrapper below.
+            .maybe_child(folds.status.then(|| {
+                rect()
+                    .width(Size::px(STATUS_SIZE))
+                    .cross_align(Alignment::Center)
+                    .maybe_child(match scan {
+                        // Subscribes *and* draws — see [`ProfileStatus`]. It renders `status`
+                        // whenever no scan is running, so the slot never holds two things and
+                        // never holds none it could have filled.
+                        Some(scan) => Some(
+                            ProfileStatus {
+                                owner: self.name.clone(),
+                                scan,
+                                settled: status.clone(),
+                                theme: self.theme.clone(),
+                                key: DiffKey::None,
+                            }
+                            .key(scan)
+                            .into_element(),
+                        ),
+                        None => status.as_ref().map(|s| s.glyph(&self.theme)),
+                    })
+                    .into_element()
+            }))
             .child(actions_button(build_menu));
 
         // The column block: an indented run hung off a hairline rail, exactly the canvas's
@@ -403,23 +603,51 @@ impl Component for EntryRow {
             .width(Size::fill())
             .vertical()
             .margin(Gaps::new(0., 0., 2., 0.))
+            // The measurement the fold plan reads. `set_if_modified` dedupes on the raw width, so
+            // a drag writes once per distinct width Freya reports — the same trade `Toolbar`
+            // makes with its own `measured`, and the price of the verdict being derived rather
+            // than stored (see above): the fold has two inputs, and only one of them is this one.
+            .on_sized(move |e: Event<SizedEventData>| {
+                measured.set_if_modified(e.area.width());
+            })
             .child(row)
+            // **The subscription outlives the glyph.** Folding the status column takes the
+            // spinner away, and the spinner's component is what *dispatches* the scan — so
+            // without this, a Profile asked for while the sidebar is narrow would mount nothing,
+            // start nothing, and say nothing. When the slot is folded the row keeps a
+            // subscriber-only twin here instead, in the **vertical** wrapper where a zero-size
+            // child costs no layout (the horizontal row charges every child a `spacing`, which
+            // is what made an idle slot shift its neighbours). Exactly one of the two is ever
+            // mounted, so this is never a second execution.
+            .maybe_child(watched_scan(folds, scan).map(|scan| {
+                ProfileWatch {
+                    owner: self.name.clone(),
+                    scan,
+                    key: DiffKey::None,
+                }
+                .key(scan)
+                .into_element()
+            }))
             .maybe_child(body)
     }
 }
 
-/// The row's **profiling** glyph (P3-09) — a spinner for exactly as long as this entry's scan is
-/// in flight, and nothing at all once it settles.
+/// The row's **profiling glyph** (P3-09) — a spinner for exactly as long as this entry's scan is
+/// in flight, and the settled verdict otherwise.
 ///
 /// Its own component because it **subscribes** to the scan, and a hook cannot be conditional: the
-/// row mounts this only when there is a request to watch, which is also what keeps a sidebar full
-/// of tables from subscribing (and, with an un-run entry, *dispatching*) a scan nobody asked for.
+/// row mounts it only when there is a request to watch, which is also what keeps a sidebar full of
+/// tables from subscribing (and, with an un-run entry, *dispatching*) a scan nobody asked for.
 /// Two subscribers of one request — this and the inspector's zone — attach to the same execution
 /// rather than starting a second, since freya-query counts executions in flight.
 #[derive(PartialEq)]
 struct ProfileStatus {
     owner: String,
     scan: ScanId,
+    /// What the column says when **no scan is running** — so the one slot is never empty while
+    /// the row has something to report, and never holds two glyphs at once.
+    settled: Option<StatusMark>,
+    theme: CatalogTheme,
     key: DiffKey,
 }
 
@@ -431,28 +659,70 @@ impl KeyExt for ProfileStatus {
 
 impl Component for ProfileStatus {
     fn render(&self) -> impl IntoElement {
-        let engine = use_consume::<EngineCtx>();
-        let query = use_profile(&engine, &self.owner, self.scan);
-        let reader = query.read();
-        let running = matches!(
-            &*reader.state(),
-            QueryStateData::Pending | QueryStateData::Loading { .. }
-        );
-        drop(reader);
-
-        // No delay hold, unlike the registration spinner next door: a scan is *known* to be slow
-        // — it is the thing the user was warned about — so there is nothing to avoid flickering
-        // over, and starting one has to look like it started.
-        rect().maybe_child(running.then(|| {
-            tip(PROFILING)
+        match scan_running(&self.owner, self.scan) {
+            // No delay hold, unlike the registration spinner: a scan is *known* to be slow — it
+            // is the thing the user was warned about — so there is nothing to avoid flickering
+            // over, and starting one has to look like it started. It outranks the settled mark
+            // while it runs, because "this is being recomputed" is the newer fact about the row.
+            true => tip(PROFILING)
                 .child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(PROFILING))
-                .into_element()
-        }))
+                .into_element(),
+            false => match &self.settled {
+                Some(mark) => mark.glyph(&self.theme),
+                None => rect().into_element(),
+            },
+        }
     }
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
     }
+}
+
+/// The same subscription with **no glyph** — what the row mounts in place of [`ProfileStatus`]
+/// when the fold plan has taken the status column away.
+///
+/// It exists because the subscription is what makes the scan *run*: a Profile asked for while the
+/// sidebar is narrow would otherwise mount nothing and dispatch nothing, and the user would have
+/// accepted the cost confirm for no work at all. Exactly one of the two is mounted at a time, so
+/// the query is never subscribed twice.
+#[derive(PartialEq)]
+struct ProfileWatch {
+    owner: String,
+    scan: ScanId,
+    key: DiffKey,
+}
+
+impl KeyExt for ProfileWatch {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for ProfileWatch {
+    fn render(&self) -> impl IntoElement {
+        let _running = scan_running(&self.owner, self.scan);
+        rect()
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// Subscribe to `owner`'s scan and answer whether it is executing right now — the one hook both
+/// [`ProfileStatus`] and [`ProfileWatch`] are built around, so the two cannot subscribe
+/// differently.
+fn scan_running(owner: &str, scan: ScanId) -> bool {
+    let engine = use_consume::<EngineCtx>();
+    let query = use_profile(&engine, owner, scan);
+    let reader = query.read();
+    let running = matches!(
+        &*reader.state(),
+        QueryStateData::Pending | QueryStateData::Loading { .. }
+    );
+    drop(reader);
+    running
 }
 
 /// One column row — a top-level column or an expanded nested field. Selecting it is what drives

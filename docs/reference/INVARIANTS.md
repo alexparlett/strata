@@ -532,6 +532,33 @@ Things that must not regress. Each was fought for once already.
   `https_only(!allow_http)` and would otherwise refuse every plain-`http` request before it left
   the process. Full model:
   [ENGINE.md](ENGINE.md), spec: [CONNECTIONS_SPEC.md](../CONNECTIONS_SPEC.md).
+- **An internal table is an ordinary def whose data Strata owns, and `TableOrigin` is a flag on
+  that def rather than a second kind of thing.** A `CREATE TABLE` / CTAS spools its result into
+  the project's `.strata/tables/<slug>/` as Arrow IPC and then registers it through
+  `register_external` like any other table (ED-04), so the store fold, the persist funnel, the
+  scan driver, the headless host and replay all handle it with **zero new code** — which is the
+  whole argument for a flag: splitting the type would make every reader match on two shapes to
+  ask nothing. What the flag answers is three questions and no more: may a write statement target
+  it (`Engine::is_internal`, an engine-side set of folded names rebuilt by the same registration
+  pass — never a second catalog), does dropping it delete data (ED-05), and can Configure edit it
+  (no — the item is *absent* from the row menu, which is what makes the window structurally
+  unable to receive an internal def). **The def travels and the data does not**: `project.json`
+  carries it, `tables/` is gitignored, and a clone gets an honest `Reg::Failed` row saying the
+  data is local to the machine that created it — never the external vocabulary ("no source at
+  …"), which invites the user to repair a path that was never theirs. The row says which origin
+  it is, because that is what stands between the user and a drop that means two different things.
+  **The spool is the parsed plan, never re-rendered SQL** (`CopyTo` over
+  `CreateMemoryTable.input`), so the query that runs is the query the user wrote and DataFusion's
+  own exhaustive clause refusals come for free. Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md)
+  §6.1 + §7.
+- **A re-scan means "list the sources again", so this engine runs no list-files cache.** DataFusion
+  54 turns one on by default — 1 MiB, **infinite TTL** — and with it every re-listing answers with
+  the file set from last time: the catalog's ↻, the Configure window's re-inference and
+  `CREATE OR REPLACE TABLE` all silently return the previous state. `ENGINE_KEYS` names `0` as the
+  default for `datafusion.runtime.list_files_cache_limit` and `build_runtime` applies it **before**
+  any override, which is why it always builds a `RuntimeEnv` rather than falling back to
+  DataFusion's. It stays a default and not an owned key — a project over a slow bucket with a
+  fixed file set is exactly what the cache is for.
 - **A reader that outlives one Run pins the snapshot it reads.** A snapshot belongs to its
   workspace and is retired the moment that workspace dispatches another run (SNAPSHOT_SPEC §4),
   which is right for the grid and wrong for anything longer-lived. `Engine::pin_snapshot` hands

@@ -116,6 +116,7 @@ mod tests {
             )],
             format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
+            internal: false,
         }))
         .expect("register");
 

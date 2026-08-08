@@ -1,6 +1,59 @@
 # ED-04 · Internal tables, engine half: def shape, CTAS spool, replay
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-02 (ED-03 should land before or with this)
+**Workstream:** Editor statements · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** ED-02 (ED-03 should land before or with this)
+
+## As built — five corrections to the plan below
+
+1. **The inner query is never rendered back into text.** The plan said "a `COPY (<inner query
+   text, sliced verbatim>) TO …` rendered internally". As built, the *parsed statement* goes to
+   `SessionState::statement_to_plan` and its `CreateMemoryTable.input` becomes the input of a
+   `LogicalPlan::Copy` node built directly — so the query that runs is the query the user wrote,
+   by construction rather than by the fidelity of a round trip. Slicing was rejected on evidence:
+   sqlparser's `Spanned` impls carry `todo` gaps and its `Location` is character-based, which is
+   the same offset-arithmetic-over-judged-text that `PolicyRefusal` already refuses to do
+   (`validate.rs`). It also removes work: DataFusion's own `CreateTable` arm **exhaustively**
+   refuses fifty-odd unsupported clauses (`TEMPORARY`, `LOCATION`, `PARTITION BY`, …) and already
+   resolves a declared column list against the query, casting and renaming to it. Ours are the two
+   it plans without enforcing — constraints and column defaults — plus duplicate result column
+   names, which is reachable through a join even though a duplicate *projection* is not.
+
+2. **DataFusion 54 runs a list-files cache by default, and it had to be turned off.** 1 MiB,
+   **infinite TTL**, keyed by table path (`CacheManagerConfig::default`). `CREATE OR REPLACE
+   TABLE` failed outright against it — registration re-listed the directory and got the file names
+   from before the rename. It is not only this task's problem: the catalog's ↻, the Configure
+   window's re-inference and D5's whole "a re-scan picks up new files" promise are all "list the
+   sources again", and every one of them was being served the previous answer. `catalog.rs`'s doc
+   asserted the opposite ("we run no `ListFilesCache`"), which is now true again because
+   `build_runtime` makes it true: `ENGINE_KEYS` names `0` as the default for
+   `datafusion.runtime.list_files_cache_limit`, the builder applies it before any override, and
+   `build_runtime` therefore always builds a runtime rather than short-circuiting to DataFusion's.
+   The key stays user-settable — a project over a slow bucket with a fixed file set is what it is
+   for. One consequence rides with it: `datafusion.runtime.list_files_cache_ttl` configures
+   nothing while the limit is `0` (`CacheManager::try_new` builds no cache at all), so that key's
+   description now states the dependency. Having a TTL implicitly switch the cache on was
+   rejected — one key must not change another's meaning.
+
+3. **`register_external` backstops the reserved namespace with `Blocked::ReservedName` verbatim**,
+   so a hand-edited `project.json` and a typed statement are refused in the same words.
+
+4. **`TableUpserted` asks for the dependent views to be re-created.** Found in review, and it is
+   ED-04's because this is the first task that can *produce* a `TableUpserted`. Re-registering a
+   table does not re-plan the views above it — their plans captured the old provider by `Arc`
+   (D10/D11) — so `CREATE OR REPLACE TABLE t` with a changed schema left every view over `t`
+   executing the old plan against the new files, surfacing as a raw
+   `column types must match schema types, expected Int64 but found Utf8` from a view the user
+   never touched. (A *same-schema* replace is fine on its own: the old `ListingTable` re-lists
+   the same directory.) The fold now calls `refresh_table` when `views_to_refresh` is non-empty,
+   which is the row Refresh's own funnel rather than a second copy of the rule — and it serves
+   the other direction too, since `views_to_refresh` widens to every *failing* view, so a
+   `CREATE TABLE archive AS …` brings back the view that could not plan without it.
+
+5. **A create over a `Reg::Failed` external def's name succeeds and replaces it.** The engine
+   resolves the namespace against itself (`ctx.table_provider`), and a def the engine refused has
+   no provider — the store's namespace is not reachable from `strata-core` and building a shadow
+   copy of it would be the second catalog the invariant forbids. The end state is defensible: the
+   user named a table they wanted to exist, the row visibly changes origin, and nothing on their
+   disk is touched. Stated in `ddl::tables::create` where it happens.
 
 ## Goal
 
@@ -125,3 +178,27 @@ where the other origin-dependent wordings are (ED-05's report), not a second voc
 
 `cargo test -p strata-core`; run the app end to end (CTAS → sidebar → restart → still there);
 `git status` confirms data files are ignored.
+
+## Open, and deliberately not in this task
+
+- **Compression is not a dial.** A CTAS's files are written by DataFusion's `ArrowFileSink`,
+  which hardcodes `LZ4_FRAME` (`datafusion-datasource-arrow/src/file_format.rs`) and exposes no
+  `COPY … OPTIONS` for it. Ours (`query::ipc_write_options`, shared with the snapshot writer) is
+  LZ4 too, so the two agree today **by coincidence rather than by construction** — noted in that
+  function. Nothing here can choose ZSTD without giving up the sink and hand-writing the IPC, and
+  nothing can choose parquet at all: the format is IPC precisely because parquet cannot round-trip
+  a union or a zero-field struct, which is an arbitrary query result's problem exactly as it was
+  the snapshot's. A "compact this table" capability (ZSTD, or one file instead of N) is a real
+  follow-up and wants its own task alongside ED-05's no-compaction note.
+- **`SidebarRow` should carry the fold policy, not each row.** The catalog row now folds on
+  `components::toolbar`'s policy — leading run ellipsizes last, items fold lowest-rank first,
+  chevron and ⋮ pinned — but it states that plan itself (`entry.rs::fold_plan`). Every other row
+  built on `SidebarRow` has the same shape and the same problem, and so do the table surfaces.
+  Lifting the plan onto `SidebarRow` (or a shared `fold` helper beside `Toolbar`'s) is the real
+  fix; **Alex is taking this as its own task** (agreed 2026-08-08), so nothing here should grow a
+  second copy of the arithmetic in the meantime.
+
+- **Hive layout.** An internal table is a flat directory of `<write_id>_<n>.arrow`, one file per
+  output partition — multi-file from the first CTAS on any result big enough to parallelise, and
+  read as a directory listing. `partition_by` is empty and `PARTITION BY` is refused by
+  DataFusion's own planner, so there is no `key=value/` tree and no `partition_cols` on the def.

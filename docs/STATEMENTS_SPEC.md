@@ -236,21 +236,43 @@ same one DF's Arrow sink writes). `ensure_gitignore` adds `tables/`; `tidy_strat
 `.strata/tables/.tmp-*`. The persist funnel keeps owning `.strata`'s metadata files; the engine
 owns the `tables/` payload with the snapshot writer's discipline (tmp + rename, tidy on open).
 
-**CTAS** (`Intercept(Ctas)`): refuse unsupported clauses up front from the parsed statement —
-constraints, column defaults, `TEMPORARY` — and duplicate result column names (DF's own
-`ensure_unique_column_names` rule, reproduced; an IPC file would store them and every later read
-would degrade). A `__snap_`-prefixed target name refuses at the router (§4 reserved names), and
-`register_external` backstops the same rule. Resolve `IF NOT EXISTS` / `OR REPLACE` /
-plain-exists against the store's namespace (tables + views, case-insensitive). Then spool: render
-`COPY (<the user's inner query text, sliced verbatim>) TO '<data_dir>/.tmp-<nonce>/' STORED AS
-ARROW` and drive it internally — streaming, memory-bounded, and the sink's `count` column is the
-exact row count for the report. Rename tmp → `.strata/tables/<slug>/` (atomic; a crash leaves
-only a tmp dir the tidy sweeps). Zero-row results and plain `CREATE TABLE (cols…)` write one
-empty IPC file carrying the schema (IPC self-describes, so replay infers without a schema in the
-def). Register through the existing funnel: `register_external` with
-`TableSpec { format: Arrow, paths: [dir], internal: true }` → `TableMeta` →
-`StoreEffect::TableUpserted { def, meta }`. `Engine::set_data_dir(root)` provides
-`.strata/tables` at project open (both hosts); CTAS refuses politely when unset.
+**CTAS** (`Intercept(Ctas)`) — **as built (ED-04); this replaces the draft's rendered-SQL
+mechanism.** The parsed statement goes to `SessionState::statement_to_plan`, whose
+`CreateMemoryTable { name, constraints, input, if_not_exists, or_replace, column_defaults }` is
+everything the arm needs, and the spool is a `LogicalPlan::Copy` node built over `input` directly
+— `CopyTo::new(input, "<data_dir>/.tmp-<pid>-<n>/", [], format_as_file_type(ArrowFormatFactory),
+{})`, driven through `DataFrame`. **No SQL text is rendered and no span is sliced**: the query
+that runs is the parsed query. (Slicing was rejected on evidence — sqlparser's `Spanned` impls
+carry `todo` gaps and `Location` is character-based, the same offset arithmetic over judged text
+`PolicyRefusal` already refuses; and re-rendering would be a fidelity claim about a round trip
+nothing verifies.) Planning is side-effect free, so this also inherits DataFusion's own
+exhaustive clause refusals — `TEMPORARY`, `LOCATION`, `PARTITION BY` and fifty more, each in its
+own words — and its resolution of a declared column list against the query (cast + rename). What
+is refused here is what DF *plans without enforcing*: constraints and column defaults, plus
+duplicate result column names (DF's `ensure_unique_column_names` rule, which its own projection
+check does not cover for a join's two same-named fields; an IPC file would store both and every
+later read would degrade). A `__snap_`-prefixed target refuses at the router (§4 reserved names),
+and `register_external` backstops it with the same `Blocked::ReservedName` wording. `IF NOT
+EXISTS` / `OR REPLACE` / plain-exists resolve against the engine's own namespace
+(`ctx.table_provider`, tables + views, case-insensitive, a view refused outright) — which is the
+store's namespace minus `Reg::Failed` rows, and a create over one of those replaces the broken
+def rather than erroring, because a shadow copy of the store's names inside the engine would be
+the second catalog the invariant forbids. Rename tmp → `.strata/tables/<slug>/` (atomic; a crash
+leaves only a tmp dir the tidy sweeps). Zero-row results and plain `CREATE TABLE (cols…)` — whose
+plan is an `EmptyRelation` — write one empty IPC file carrying the schema (IPC self-describes, so
+replay infers without a schema in the def). Register through the existing funnel:
+`register_external` with `TableSpec { format: Arrow, paths: [dir], internal: true }` →
+`TableMeta` → `StoreEffect::TableUpserted { def, meta }`. `Engine::set_data_dir(root)` takes the
+**project folder** at open (both hosts) — the data directory and the def's project-relative
+source path are both derived from it — and CTAS refuses politely when unset.
+
+**One DataFusion default had to move for any of this to work.** DF 54 runs a `ListFilesCache` by
+default (1 MiB, **infinite TTL**), so a re-listing of a table's directory returns the previous
+answer. `CREATE OR REPLACE` failed outright against it, and D5's "a re-scan picks up new files"
+promise — the catalog's ↻ and the Configure window's re-inference — was already quietly broken by
+it. `ENGINE_KEYS` now names `0` as Strata's default for
+`datafusion.runtime.list_files_cache_limit` and `build_runtime` applies it before any override
+(and therefore always builds a runtime). It stays a default, not an owned key.
 
 **INSERT** (`Intercept(Insert)`, native execution): the interception only gates the target —
 resolve the parsed target name against the engine's internal-name set and refuse an external

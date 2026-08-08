@@ -325,6 +325,34 @@ where
     })
 }
 
+/// **Whose files a table def points at** (ED-04) — a flag on [`TableDef`], not a second type.
+///
+/// The two origins share one namespace, one list in `project.json` and one catalog section,
+/// because they are the same kind of thing to everything that reads a def: a name over a set of
+/// files in a format. What differs is who owns the files, and that answers exactly three
+/// questions — may a write statement target it, does dropping it delete data, and can Configure
+/// edit it. Splitting the type would have every reader match on two shapes to ask nothing.
+///
+/// A def written before this field existed is [`External`](Self::External), which is what every
+/// def was.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TableOrigin {
+    /// The user's own files, registered by Table Config or a typed `CREATE EXTERNAL TABLE`.
+    /// Strata reads them and never writes them.
+    #[default]
+    External,
+    /// Strata's own: written by `CREATE TABLE` / CTAS into the project's `.strata/tables/`,
+    /// which is gitignored — so the **def** travels with the project and the data does not.
+    Internal,
+}
+
+impl TableOrigin {
+    pub fn is_internal(self) -> bool {
+        matches!(self, TableOrigin::Internal)
+    }
+}
+
 /// One logical table definition (a DataFusion `ListingTable` over many source paths).
 /// `sources` are stored project-relative where they sit inside the project folder.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -338,6 +366,9 @@ pub struct TableDef {
     /// deterministic reload (types aren't re-detected).
     #[serde(default, deserialize_with = "de_partition_cols")]
     pub partition_cols: Vec<(String, String)>,
+    /// Whose files [`sources`](Self::sources) names — see [`TableOrigin`].
+    #[serde(default)]
+    pub origin: TableOrigin,
 }
 
 #[cfg(test)]
@@ -384,9 +415,30 @@ mod format_tests {
             }),
             sources: vec!["/data".into()],
             partition_cols: vec![],
+            origin: TableOrigin::External,
         };
         let round: TableDef = parse(&serde_json::to_string(&def).expect("serialize"));
         assert_eq!(round.format, def.format);
+    }
+
+    /// A def written before origins existed is external — which is what every def was — and an
+    /// internal one round-trips, because `project.json` is how it survives a restart.
+    #[test]
+    fn an_origin_defaults_to_external_and_round_trips() {
+        assert_eq!(
+            parse(r#"{"name":"t","format":"csv","sources":["/data"]}"#).origin,
+            TableOrigin::External
+        );
+        let def = TableDef {
+            name: "daily".into(),
+            format: SourceFormat::Arrow,
+            sources: vec![".strata/tables/daily/".into()],
+            partition_cols: vec![],
+            origin: TableOrigin::Internal,
+        };
+        let json = serde_json::to_string(&def).expect("serialize");
+        assert!(json.contains(r#""origin":"internal""#), "{json}");
+        assert_eq!(parse(&json), def);
     }
 
     #[test]
@@ -399,6 +451,7 @@ mod format_tests {
             format: SourceFormat::Unknown("avro".into()),
             sources: vec!["/data".into()],
             partition_cols: vec![],
+            origin: TableOrigin::External,
         };
         let json = serde_json::to_string(&def).expect("an unreadable format still serializes");
         assert!(json.contains(r#""format":"avro""#), "{json}");

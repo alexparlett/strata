@@ -242,6 +242,7 @@ fn table() -> TableSpec {
         paths: vec![format!("s3://{BUCKET}/data/")],
         format: SourceFormat::Csv(CsvRead::default()),
         partitions: Vec::new(),
+        internal: false,
     }
 }
 
@@ -255,6 +256,7 @@ fn http_table(endpoint: &str) -> TableSpec {
         paths: vec![format!("{endpoint}/{BUCKET}/data/regions.csv")],
         format: SourceFormat::Csv(CsvRead::default()),
         partitions: Vec::new(),
+        internal: false,
     }
 }
 

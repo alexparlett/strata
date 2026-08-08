@@ -27,7 +27,7 @@ mod session;
 
 pub use catalog::{
     CatalogKind, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoveKind, RemoveTarget,
-    SavedQuery, SourceFormat, TableDef, ViewDef,
+    SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
 };
 pub use chart::{
     Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,

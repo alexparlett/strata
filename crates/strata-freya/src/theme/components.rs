@@ -553,6 +553,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             meta_color: role(Role::TextDisabled),
             rail_fill: role(Role::Border),
             table_color: role(Role::EntityTable),
+            internal_color: role(Role::EntityTableInternal),
             view_color: role(Role::EntityView),
             query_color: role(Role::EntityQuery),
             part_color: role(Role::Accent),

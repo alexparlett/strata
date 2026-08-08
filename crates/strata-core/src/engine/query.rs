@@ -6,7 +6,7 @@
 //! parquet's type system is narrower than Arrow's: it cannot write a union at all
 //! (`arrow_to_parquet_schema` **panics**, ARROW-8817) nor a zero-field struct, so results had to
 //! be coerced on the way in and the record view and JSON/CSV export then read the coerced form.
-//! IPC round-trips anything the engine can emit. Compressed (see `snapshot_ipc_options`) it is
+//! IPC round-trips anything the engine can emit. Compressed (see `ipc_write_options`) it is
 //! the same size on disk as the parquet it replaced.
 //!
 //! Snapshots are keyed by [`SnapshotId`] — the Run's request id, unique per engine for
@@ -342,7 +342,16 @@ fn remove_any(path: &Path) {
 ///
 /// Both codecs are already available — `arrow-ipc`'s `lz4` and `zstd` features are enabled
 /// transitively by DataFusion — so this needs no dependency or feature change.
-fn snapshot_ipc_options() -> Result<IpcWriteOptions, String> {
+///
+/// **Named for the format, not for the snapshot**, because it is no longer only the snapshot's:
+/// an internal table's spool writes IPC too (`ddl::tables`, ED-04), and the two must not drift
+/// into two codecs. Note the one place this function does *not* reach: DataFusion's own
+/// `ArrowFileSink`, which a CTAS drives, hardcodes `LZ4_FRAME` internally
+/// (`datafusion-datasource-arrow/src/file_format.rs`) — so the sink and this agree today by
+/// coincidence rather than by construction, and moving this dial would leave a CTAS's own files
+/// behind. That is the cost of using the sink, and it is written down here so the next person to
+/// turn the dial finds it.
+pub(super) fn ipc_write_options() -> Result<IpcWriteOptions, String> {
     IpcWriteOptions::default()
         .try_with_compression(Some(CompressionType::LZ4_FRAME))
         .map_err(|e| e.to_string())
@@ -542,7 +551,7 @@ async fn materialize(
         if writer.is_none() {
             let out = File::create(&file).map_err(|e| e.to_string())?;
             writer = Some(
-                FileWriter::try_new_with_options(out, &batch.schema(), snapshot_ipc_options()?)
+                FileWriter::try_new_with_options(out, &batch.schema(), ipc_write_options()?)
                     .map_err(|e| e.to_string())?,
             );
         }

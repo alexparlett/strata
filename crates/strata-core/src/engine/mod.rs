@@ -25,6 +25,7 @@
 //! (The retired `Command`/`Event` channel protocol this replaces lives on only in
 //! `crates/strata-dioxus`, which is reference code and no longer builds.)
 
+mod arrow_stats;
 mod catalog;
 mod chart;
 pub mod config;
@@ -92,6 +93,7 @@ pub fn stopped_on_purpose(error: &str) -> bool {
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -312,6 +314,17 @@ pub struct Engine {
     /// The registered SQL functions (built-ins + UDFs), enumerated once at build for
     /// the language service (S26/S7/S25).
     functions: FunctionCatalog,
+    /// The project folder this engine may write internal tables into (ED-04), set at project
+    /// open by whichever host owns it — see [`set_data_dir`](Engine::set_data_dir). `None` until
+    /// then, and forever for an engine with no project behind it.
+    data_root: Mutex<Option<PathBuf>>,
+    /// Which registered tables are **internal** — [`fold_ident`]ed names.
+    ///
+    /// Derived state, rebuilt by the same registration pass that builds everything else, and
+    /// deliberately **not a second catalog**: it holds names and nothing else, and answers
+    /// exactly one engine-side question — may a write statement target this provider (ED-05).
+    /// Everything the UI asks about the catalog is still the store's to answer.
+    internal: Mutex<HashSet<String>>,
 }
 
 impl Engine {
@@ -353,7 +366,44 @@ impl Engine {
             lifecycle: Mutex::default(),
             inflight_flag: OnceLock::new(),
             functions,
+            data_root: Mutex::default(),
+            internal: Mutex::default(),
         }
+    }
+
+    /// Tell this engine which **project folder** it belongs to (ED-04).
+    ///
+    /// `root` is the project folder, not `.strata/tables`, because a statement that creates an
+    /// internal table needs both: the absolute directory to spool into, and the project-relative
+    /// path the def stores, which is what lets the def travel with `project.json`. The layout
+    /// between them is [`project::tables_dir`](crate::project::tables_dir)'s, in one place.
+    ///
+    /// Every host that opens a project calls this — the app window and the headless server both.
+    /// An engine that is never told refuses to *create* a table (politely, naming the reason) and
+    /// is otherwise unaffected: a project's existing internal defs replay through the ordinary
+    /// registration pass, whose source paths were already resolved against the root by the
+    /// caller.
+    pub fn set_data_dir(&self, root: &Path) {
+        *self.data_root.lock().unwrap() = Some(root.to_path_buf());
+    }
+
+    /// Whether `name` is a table whose data Strata owns — the one question the internal-name set
+    /// exists to answer (see the field). `false` for an external table, a view, and a name that
+    /// is not registered at all.
+    pub fn is_internal(&self, name: &str) -> bool {
+        self.internal.lock().unwrap().contains(&fold_ident(name))
+    }
+
+    /// Record what a registration settled about a table's origin. Called from every path that
+    /// registers one, so the set is rebuilt by the pass rather than maintained beside it.
+    fn note_origin(&self, name: &str, internal: bool) {
+        let mut set = self.internal.lock().unwrap();
+        match internal {
+            true => set.insert(fold_ident(name)),
+            // Not `if internal` — a def that *was* internal and is now registered over the same
+            // name as an external one has to stop being one.
+            false => set.remove(&fold_ident(name)),
+        };
     }
 
     /// Mirror "this engine has work in flight" into `flag` for the rest of its life — the
@@ -570,11 +620,19 @@ impl Engine {
                 .map(|(output, batch)| RunOutcome::Rows(output, batch)),
             Verdict::Intercept(kind) => {
                 let ctx = self.ctx.clone();
-                self.bookkeep(ws, tag, "statement", async move {
-                    ddl::execute(&ctx, kind, stmt, sql).await
-                })
-                .await
-                .map(RunOutcome::Statement)
+                let root = self.data_root.lock().unwrap().clone();
+                let report = self
+                    .bookkeep(ws, tag, "statement", async move {
+                        ddl::execute(&ctx, kind, stmt, sql, root).await
+                    })
+                    .await?;
+                // The engine learns from the returned value, exactly as the store does: an arm
+                // that registered a table says so in its effect, and that is where the origin
+                // comes from — never by asking DataFusion, which does not know.
+                if let Some(StoreEffect::TableUpserted { def, .. }) = &report.effect {
+                    self.note_origin(&def.name, def.origin.is_internal());
+                }
+                Ok(RunOutcome::Statement(report))
             }
             Verdict::Refuse(blocked) => Err(blocked.editor_message()),
         }
@@ -1143,10 +1201,20 @@ impl Engine {
     pub async fn register(&self, spec: TableSpec) -> Result<TableMeta, String> {
         self.cancel_profile(&spec.name);
         let ctx = self.ctx.clone();
-        self.rt()
+        let (name, internal) = (spec.name.clone(), spec.internal);
+        let meta = self
+            .rt()
             .spawn(async move { catalog::register_external(&ctx, &spec).await })
             .await
-            .map_err(|e| format!("register task failed: {e}"))?
+            .map_err(|e| format!("register task failed: {e}"))?;
+        // On **both** arms. A def the engine refused has no provider at all — `register_external`
+        // deregisters before it re-infers — so the honest answer to "may a write statement target
+        // this" is no, whatever the def says. Recording only on success would leave a name that
+        // *used* to be internal claiming it still is: a table re-registered as external and then
+        // failing would keep answering `is_internal`, and ED-05's drop would take the origin from
+        // an entry the pass had already disproved.
+        self.note_origin(&name, internal && meta.is_ok());
+        meta
     }
 
     /// The Hive partition keys under `paths`, outermost first — what the Configure window's
@@ -1164,6 +1232,7 @@ impl Engine {
     pub fn deregister(&self, table: &str) {
         self.cancel_profile(table);
         let _ = self.ctx.deregister_table(table);
+        self.note_origin(table, false);
     }
 
     /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and
@@ -1473,11 +1542,14 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     // like the catalog names, so an override can't silently degrade diagnostics.
     config.options_mut().sql_parser.collect_spans = true;
     let mut ctx = match build_runtime(overrides) {
-        Ok(Some(rt)) => SessionContext::new_with_config_rt(config, rt),
-        Ok(None) => SessionContext::new_with_config(config),
+        Ok(rt) => SessionContext::new_with_config_rt(config, rt),
         Err(e) => {
             tracing::warn!("engine runtime config invalid ({e}); using defaults");
-            SessionContext::new_with_config(config)
+            // Not `new_with_config`: that would take DataFusion's whole runtime, list-files
+            // cache included, and a bad *memory limit* must not quietly turn the file listings
+            // stale as well. Fall back to our own defaults with no overrides applied.
+            let rt = build_runtime(&BTreeMap::new()).expect("default runtime");
+            SessionContext::new_with_config_rt(config, rt)
         }
     };
     // Our own catalog + schema, in place of the `MemoryCatalogProvider` the session builder
@@ -1522,10 +1594,16 @@ fn runtime_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, Stri
         .collect()
 }
 
-/// A `RuntimeEnv` from the `datafusion.runtime.*` overrides, or `None` when none are
-/// set (default runtime). Sizes ("2G", "100G") parse via `parse_capacity_limit`; the TTL via
-/// [`crate::util::parse_duration`], the same function [`config::value_error`] validates the
-/// field with.
+/// A `RuntimeEnv` from the `datafusion.runtime.*` overrides. Sizes ("2G", "100G") parse via
+/// `parse_capacity_limit`; the TTL via [`crate::util::parse_duration`], the same function
+/// [`config::value_error`] validates the field with.
+///
+/// **Always built, never DataFusion's own**, because one of these settings is ours: the
+/// list-files cache starts *off* (`ENGINE_KEYS`, where the reason is written down). DataFusion
+/// 54 turns it on by default with an infinite TTL, and a cached listing makes a re-scan return
+/// the previous answer — which is the one thing a re-scan exists not to do. That default has to
+/// be applied even when the user has set no `runtime.*` key at all, so there is no
+/// "nothing to configure" short circuit here.
 ///
 /// **Every key [`config::ENGINE_KEYS`] catalogues as `runtime.*` is read here.** Four of them
 /// were catalogued — named, described, and treated as restart-required by
@@ -1534,7 +1612,7 @@ fn runtime_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, Stri
 /// validates the value, badges it RESTART and rebuilds the engine, and the setting then did
 /// nothing, with no error to say so. A catalogue entry is a promise that the key applies, so
 /// adding one to `ENGINE_KEYS` means adding it here in the same change.
-fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<RuntimeEnv>>, String> {
+fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Arc<RuntimeEnv>, String> {
     use datafusion::execution::runtime_env::RuntimeEnvBuilder;
     let val = |k: &str| {
         overrides
@@ -1552,23 +1630,15 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
     let metadata_cache = val("datafusion.runtime.metadata_cache_limit");
     let list_cache = val("datafusion.runtime.list_files_cache_limit");
     let list_ttl = val("datafusion.runtime.list_files_cache_ttl");
-    // Nothing to configure — a default `RuntimeEnv` rather than a hand-built one that happens to
-    // match it.
-    if [
-        &mem,
-        &max_temp,
-        &temp_dir,
-        &metadata_cache,
-        &list_cache,
-        &list_ttl,
-    ]
-    .iter()
-    .all(|v| v.is_none())
-    {
-        return Ok(None);
-    }
 
-    let mut b = RuntimeEnvBuilder::new();
+    // Ours before any override, so a key the user *removed* lands back here — the same shape
+    // `information_schema` uses on the `SessionConfig` side.
+    let mut b = RuntimeEnvBuilder::new().with_object_list_cache_limit(bytes(
+        "datafusion.runtime.list_files_cache_limit",
+        config::key_def("datafusion.runtime.list_files_cache_limit")
+            .expect("the catalogued key")
+            .default,
+    )?);
     if let Some(v) = &mem {
         b = b.with_memory_limit(bytes("datafusion.runtime.memory_limit", v)?, 1.0);
     }
@@ -1592,7 +1662,7 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Option<Arc<Runt
         })?;
         b = b.with_object_list_cache_ttl(Some(ttl));
     }
-    b.build_arc().map(Some).map_err(|e| e.to_string())
+    b.build_arc().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1884,8 +1954,14 @@ mod tests {
     /// A catalogue entry is a promise that the key applies. Four `runtime.*` keys were
     /// catalogued, described and badged RESTART while `build_runtime` never read them, so setting
     /// one did nothing at all — invisible until P4-07 gave them an editor. This is the guard:
-    /// every `runtime.*` key the catalogue names must reach `RuntimeEnvBuilder`, which shows up
-    /// here as "the builder accepts its documented default without erroring".
+    /// every `runtime.*` key the catalogue names must reach `RuntimeEnvBuilder`.
+    ///
+    /// It shows up as **the builder rejecting a value that key's kind cannot hold**, which is
+    /// something only a key that is actually read can do. (It used to be "the builder answered
+    /// with a runtime rather than `None`", which stopped meaning anything when `build_runtime`
+    /// started always building one — the list-files cache default is ours, so there is no longer
+    /// a "nothing to configure" answer to distinguish.) A free-text key has no invalid value and
+    /// is exempted by name rather than silently skipped.
     #[test]
     fn every_catalogued_runtime_key_reaches_the_runtime_builder() {
         for entry in config::ENGINE_KEYS
@@ -1901,16 +1977,41 @@ mod tests {
                 },
                 default => default,
             };
-            let one = overrides(&[(entry.key, value)]);
-            let built = build_runtime(&one)
+            build_runtime(&overrides(&[(entry.key, value)]))
                 .unwrap_or_else(|e| panic!("{} = {value} was rejected: {e}", entry.key));
+
+            // `temp_directory` is a path: every string is a legal value, so there is nothing a
+            // reader could refuse and no negative to assert.
+            if entry.key == "datafusion.runtime.temp_directory" {
+                continue;
+            }
             assert!(
-                built.is_some(),
-                "{} = {value} built a default runtime — the key is catalogued but never read, so \
-                 setting it does nothing and says nothing",
+                build_runtime(&overrides(&[(entry.key, "nonsense")])).is_err(),
+                "{} accepted a value its kind cannot hold — the key is catalogued but never \
+                 read, so setting it does nothing and says nothing",
                 entry.key
             );
         }
+    }
+
+    /// The list-files cache is **off by Strata's default**, not DataFusion's — which turns it on
+    /// at 1M with an infinite TTL. Every re-scan promise depends on it: the catalog's Refresh,
+    /// the Configure window's re-inference and `CREATE OR REPLACE TABLE` all mean "list the
+    /// sources again", and a cached listing answers each of them with the previous file set.
+    #[test]
+    fn the_list_files_cache_is_off_unless_the_user_asks_for_one() {
+        let default = build_runtime(&BTreeMap::new()).expect("runtime");
+        assert!(
+            default.cache_manager.get_list_files_cache().is_none(),
+            "a fresh engine caches no listing"
+        );
+        // Still the user's to turn on — it is a default, not an owned key.
+        let asked = build_runtime(&overrides(&[(
+            "datafusion.runtime.list_files_cache_limit",
+            "4M",
+        )]))
+        .expect("runtime");
+        assert!(asked.cache_manager.get_list_files_cache().is_some());
     }
 
     #[test]
@@ -1921,7 +2022,7 @@ mod tests {
             "datafusion.runtime.list_files_cache_ttl",
             "2m"
         )]))
-        .is_ok_and(|rt| rt.is_some()));
+        .is_ok());
         assert_eq!(
             crate::util::parse_duration("2m"),
             Some(std::time::Duration::from_secs(120))
@@ -2180,6 +2281,7 @@ mod tests {
             )],
             format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
+            internal: false,
         })
         .await
         .expect("register");
@@ -2462,11 +2564,33 @@ mod tests {
     async fn an_unimplemented_interception_names_the_statement() {
         let eng = Engine::new(Default::default());
         let err = eng
-            .run(WsId(1), RunTag(1), "CREATE TABLE t AS SELECT 1".into(), 10)
+            .run(
+                WsId(1),
+                RunTag(1),
+                "SET datafusion.execution.batch_size = 2".into(),
+                10,
+            )
             .await
             .err()
             .expect("not implemented yet");
-        assert_eq!(err, "CREATE TABLE AS is not implemented yet");
+        assert_eq!(err, "SET is not implemented yet");
+    }
+
+    /// A statement that **is** implemented still needs somewhere to put what it makes, and an
+    /// engine with no project behind it says so rather than failing in DataFusion's words about
+    /// a path nobody chose (ED-04).
+    #[tokio::test]
+    async fn creating_a_table_without_a_project_folder_says_why() {
+        let eng = Engine::new(Default::default());
+        let err = eng
+            .run(WsId(1), RunTag(1), "CREATE TABLE t AS SELECT 1".into(), 10)
+            .await
+            .err()
+            .expect("nowhere to store it");
+        assert_eq!(
+            err,
+            "CREATE TABLE AS needs a project folder to store the table's data"
+        );
     }
 
     /// **Neither refusal touches the snapshot lifecycle.** DDL does not retire a snapshot
@@ -2600,6 +2724,7 @@ mod read_options_tests {
             paths,
             format,
             partitions: Vec::new(),
+            internal: false,
         }
     }
 

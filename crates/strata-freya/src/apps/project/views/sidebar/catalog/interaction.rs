@@ -16,12 +16,16 @@ use freya_testing::TestingRunner;
 use strata_core::engine::{column_info, TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ColRef, ColumnInfo, Origin, SavedQuery, SourceFormat, TableDef, ViewDef};
+use strata_model::{
+    ColRef, ColumnInfo, Origin, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
+};
 use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
+use crate::apps::project::query::ScanId;
 use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
+use super::entry::{fold_plan, watched_scan, Folds, ACTIONS_SIZE};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
@@ -55,6 +59,22 @@ fn table(name: &str, partition_cols: Vec<(String, String)>) -> TableDef {
         format: SourceFormat::Parquet,
         sources: vec![format!("{name}.parquet")],
         partition_cols,
+        origin: TableOrigin::External,
+    }
+}
+
+/// An **internal** table def — one a `CREATE TABLE` wrote into the project (ED-04). Kept out of
+/// [`defs`] deliberately: the pane's counts, filters and spinner assertions are about the fixture
+/// as a whole, and the two things an origin changes (the row's marker, the row's menu) are
+/// answered better by a project of their own than by a fourth row every other test has to allow
+/// for.
+fn internal(name: &str) -> TableDef {
+    TableDef {
+        name: name.into(),
+        format: SourceFormat::Arrow,
+        sources: vec![format!(".strata/tables/{name}/")],
+        partition_cols: Vec::new(),
+        origin: TableOrigin::Internal,
     }
 }
 
@@ -153,6 +173,27 @@ fn project() -> ProjectState {
     p
 }
 
+/// A project holding **one table of each origin**, both registered — the pair the row marker and
+/// the row menu have to tell apart.
+fn mixed_origins() -> ProjectState {
+    let defs = ProjectDefs {
+        name: "test".into(),
+        tables: vec![table("orders", vec![]), internal("daily_totals")],
+        ..Default::default()
+    };
+    let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-catalog-origins"));
+    for name in ["orders", "daily_totals"] {
+        p.table_registered(
+            name,
+            TableMeta {
+                columns: vec![col("n", DataType::Int64)],
+                rows: Some(3),
+            },
+        );
+    }
+    p
+}
+
 /// The pane over the stores the runner provides. Both the project and the session store come from
 /// the runner as **root contexts**, so a test can write to the catalog (dropping a table, landing a
 /// registration) and read the layout back.
@@ -186,9 +227,20 @@ type Handles = (
 /// tree, but height removes all doubt). The session starts with the inspector **closed**, so a
 /// selection opening it is observable rather than a no-op against the default.
 fn runner() -> (TestingRunner, Handles) {
+    runner_over(project)
+}
+
+/// [`runner`] over a project of the caller's choosing — a `fn` pointer rather than a value,
+/// because `TestingRunner`'s initializer is a plain closure and a `fn` is `Copy` in one.
+fn runner_over(project: fn() -> ProjectState) -> (TestingRunner, Handles) {
+    runner_sized(project, 300.)
+}
+
+/// [`runner_over`] at a chosen pane width — what the badge's fold is measured against.
+fn runner_sized(project: fn() -> ProjectState, width: f32) -> (TestingRunner, Handles) {
     TestingRunner::new(
         app,
-        (300., 1400.).into(),
+        (width, 1400.).into(),
         |r| {
             let filter = r.provide_root_context(|| State::create(String::new()));
             let selection = r.provide_root_context(|| State::create(None::<ColRef>));
@@ -199,8 +251,9 @@ fn runner() -> (TestingRunner, Handles) {
                     s
                 })
             });
-            let store = r
-                .provide_root_context(|| RadioStation::<ProjectState, ProjChan>::create(project()));
+            let store = r.provide_root_context(move || {
+                RadioStation::<ProjectState, ProjChan>::create(project())
+            });
             // The row menus' remaining handles: the engine (never asked anything here — no test
             // presses Refresh), the scan flag, the app config behind "View table"'s LIMIT, and
             // the drop-confirm slot the Drop items set.
@@ -872,6 +925,225 @@ fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
 
 // ---- the row menus (P3-06) --------------------------------------------------------------------
 
+/// **The trailing run is one column, whatever the row is doing.** The badge, the validity
+/// triangle and the profiling spinner all used to be separate children, so a row that had ever
+/// been profiled kept a mounted, idle slot in the run and everything left of it sat 20px further
+/// in than on a row that had not — which is what made the `INTERNAL` badge look misaligned
+/// against a row carrying a warning triangle.
+#[test]
+fn the_trailing_marks_line_up_whatever_each_row_is_doing() {
+    let (runner, ..) = settled_over(|| {
+        let mut p = mixed_origins();
+        p.table_failed("orders", "boom".into());
+        // The state that broke it: a scan asked for on the internal row.
+        p.request_profile(CatalogKind::Table, "daily_totals");
+        p
+    });
+
+    // The ⋮ is the row's rightmost item and is unconditional, so it is the column to measure
+    // everything else against.
+    let right_of = |name: &str| {
+        let row = text_area(&runner, name);
+        let mid = row.min_y() + row.height() / 2.;
+        runner
+            .find_many(|node, _| {
+                let a = node.layout().area;
+                ((a.width() - ACTIONS_SIZE).abs() < 0.5
+                    && (a.height() - ACTIONS_SIZE).abs() < 0.5
+                    && a.min_y() <= mid
+                    && a.max_y() >= mid)
+                    .then_some(a.max_x())
+            })
+            .into_iter()
+            .fold(f32::MIN, f32::max)
+    };
+
+    assert_eq!(
+        right_of("orders"),
+        right_of("daily_totals"),
+        "a failed row and a profiled internal row end in the same place"
+    );
+}
+
+/// **The badge is the first thing the row gives up**, and it goes while the name is still whole
+/// — the rendered half of [`the_row_folds_least_informative_first`], which pins the order itself.
+#[test]
+fn the_internal_badge_folds_before_the_name_truncates() {
+    // A short name at a wide pane: room for both, so the marker stays.
+    let (runner, ..) = settled_over(mixed_origins);
+    assert!(shows(&runner, "INTERNAL"), "a wide pane keeps the marker");
+
+    // Narrow enough that the badge is what would tip the name into an ellipsis.
+    let (mut runner, _) = runner_sized(mixed_origins, 240.);
+    settle(&mut runner);
+    assert!(
+        !shows(&runner, "INTERNAL"),
+        "the badge goes so the name can stay whole: {:?}",
+        texts(&runner)
+    );
+    assert!(shows(&runner, "daily_totals"), "and the name is intact");
+}
+
+/// **The fold order, which is the policy** — `components::toolbar`'s, ranked for this row: items
+/// go lowest-rank first while the leading run is still whole, and the leading run ellipsizes only
+/// once they have all gone.
+///
+/// Least informative first: the badge (pure reinforcement — the icon's tint repeats it), then the
+/// entity icon (decoration, since the section header already says what kind the row is), then the
+/// status glyph (information, so it outranks both). The name is never folded and never floors —
+/// it just gets shorter.
+#[test]
+fn the_row_folds_least_informative_first() {
+    // Wide: everything up.
+    assert_eq!(
+        fold_plan(400., 100., true),
+        Folds {
+            badge: true,
+            icon: true,
+            status: true
+        }
+    );
+    // The badge is what tips the name into an ellipsis, so it goes alone.
+    assert_eq!(
+        fold_plan(260., 100., true),
+        Folds {
+            badge: false,
+            icon: true,
+            status: true
+        }
+    );
+    // Tighter: the icon follows.
+    assert_eq!(
+        fold_plan(200., 100., true),
+        Folds {
+            badge: false,
+            icon: false,
+            status: true
+        }
+    );
+    // Tighter still: the status glyph is the last to go, and the name simply keeps shrinking
+    // after that — there is no fourth step.
+    assert_eq!(
+        fold_plan(120., 100., true),
+        Folds {
+            badge: false,
+            icon: false,
+            status: false
+        }
+    );
+    // An external row has no badge to give up, so its first fold is the icon.
+    assert_eq!(
+        fold_plan(230., 140., false),
+        Folds {
+            badge: false,
+            icon: false,
+            status: true
+        }
+    );
+}
+
+/// And the name goes on collapsing **after** everything foldable has gone — a leading run
+/// ellipsizes all the way down rather than setting a floor and making the row spill
+/// (AGENTS.md §3), so the order the user sees is: badge, icon, status glyph, then the name
+/// shortening.
+#[test]
+fn the_name_goes_on_collapsing_once_the_row_has_folded() {
+    let (mut runner, _) = runner_sized(mixed_origins, 150.);
+    settle(&mut runner);
+
+    assert!(
+        !shows(&runner, "INTERNAL"),
+        "the badge folded first: {:?}",
+        texts(&runner)
+    );
+    // The row still owns its own width — nothing spilled out of the pane to keep the name whole.
+    let name = text_area(&runner, "daily_totals");
+    assert!(
+        name.max_x() <= 150.,
+        "the name shrank inside the pane rather than spilling: {name:?}"
+    );
+}
+
+/// **Folding the status column must not cancel the scan.** The spinner's component is what
+/// *dispatches* a profile, so gating it on the fold meant a Profile asked for while the sidebar
+/// was narrow mounted nothing, started nothing and said nothing — the user accepts the cost
+/// confirm and no work happens.
+///
+/// Pinned as the **predicate**, not as a rendered assertion. The first version of this test
+/// checked that the request was still in the store and that no spinner was drawn, and neither of
+/// those distinguishes a live subscription from a dropped one: `request_profile` writes the store
+/// field whatever is mounted, and there is deliberately no glyph at this width either way. It
+/// would have passed against the very regression it was named for. What actually broke was what
+/// the mount was gated on, so that is what is checked.
+#[test]
+fn a_folded_status_column_still_subscribes_to_the_scan() {
+    let shown = Folds {
+        badge: false,
+        icon: true,
+        status: true,
+    };
+    let folded = Folds {
+        status: false,
+        ..shown
+    };
+    let scan = Some(ScanId::new());
+
+    // While the column is there, `ProfileStatus` in it owns the subscription.
+    assert_eq!(watched_scan(shown, scan), None);
+    // Once it folds, the row has to take the subscription over — this is the case that broke.
+    assert_eq!(watched_scan(folded, scan), scan);
+    // And a row with no scan subscribes to nothing, folded or not: a sidebar full of tables must
+    // not dispatch scans nobody asked for. Both halves of the condition are in here, so both of
+    // these are the production path rather than an argument only a test ever passes.
+    assert_eq!(watched_scan(folded, None), None);
+    assert_eq!(watched_scan(shown, None), None);
+}
+
+/// The rendered half of the above: at a width where the row has folded, there really is no glyph
+/// — so the subscription genuinely has nowhere else to live.
+#[test]
+fn a_folded_row_draws_no_status_glyph() {
+    let (mut runner, (_, _, _, mut store, ..)) = runner_sized(mixed_origins, 130.);
+    settle(&mut runner);
+
+    store
+        .write_channel(ProjChan::Tables)
+        .request_profile(CatalogKind::Table, "daily_totals");
+    settle(&mut runner);
+
+    assert!(
+        !status_labels(&runner).iter().any(|l| l == "Profiling…"),
+        "the column is folded, so nothing is drawn: {:?}",
+        status_labels(&runner)
+    );
+}
+
+/// **The icon says it too**, in a colour of its own — the mark that survives the fold above, and
+/// the reason dropping the badge costs nothing at width. Reinforcement only: the badge and its
+/// a11y label are what a colour-blind or screen-reader user gets, which is why the fold drops the
+/// badge *last* rather than first.
+///
+/// Asserted on the resolved role rather than on painted pixels: what this is about is that the
+/// theme actually distinguishes the two origins, and `entity.table.internal` falls back to
+/// `entity.table`, so a theme that forgot to author it would silently draw no distinction at all.
+#[test]
+fn both_built_in_themes_tell_the_two_table_origins_apart() {
+    for name in ["midnight", "daylight"] {
+        let roles = load(name).roles;
+        let internal = roles.get("entity.table.internal");
+        assert!(
+            internal.is_some(),
+            "{name} must author entity.table.internal — it falls back to entity.table, so \
+             omitting it draws no distinction at all and says nothing about having done so"
+        );
+        assert_ne!(
+            internal,
+            roles.get("entity.table"),
+            "{name} authors it as a colour of its own"
+        );
+    }
+}
+
 /// The menu items currently in the tree — what an open menu card is actually offering.
 ///
 /// Taken as the text runs that are *not* catalog rows: the pane's own runs are all present
@@ -901,7 +1173,12 @@ fn open_menu(runner: &mut TestingRunner, name: &str) -> Vec<String> {
 /// A runner whose first paint has settled — a menu test's starting point, and a separate
 /// function so a test can take several without shadowing the constructor.
 fn settled() -> (TestingRunner, Handles) {
-    let (mut runner, handles) = runner();
+    settled_over(project)
+}
+
+/// [`settled`] over a project of the caller's choosing.
+fn settled_over(project: fn() -> ProjectState) -> (TestingRunner, Handles) {
+    let (mut runner, handles) = runner_over(project);
     settle(&mut runner);
     (runner, handles)
 }
@@ -937,6 +1214,45 @@ fn each_row_kind_offers_its_own_menu() {
         open_menu(&mut runner, "signup funnel"),
         vec!["Open in new tab", "Rename", "Delete query"],
         "a saved query is a stored string: nothing to profile, configure or refresh"
+    );
+
+    // An **internal** table (ED-04) is a fourth row kind as far as this list is concerned. Its
+    // omission is pinned here, by the same test that pins every other kind's, rather than being
+    // incidental to whoever edits the menu next.
+    let (mut runner, ..) = settled_over(mixed_origins);
+    assert_eq!(
+        open_menu(&mut runner, "daily_totals"),
+        vec!["View table", "Profile table", "Refresh table", "Drop table"],
+        "Configure edits the sources, format and partitions of a def that points at the user's \
+         own files, and an internal table has none of those to edit — ever, which is why the \
+         item is absent rather than disabled. Refresh stays: re-inference is how its row count \
+         moves"
+    );
+    assert!(
+        open_menu(&mut runner, "orders").contains(&"Configure".to_string()),
+        "and the external table beside it still has it"
+    );
+}
+
+/// **The row says which origin it is**, because that is what stands between the user and a drop
+/// that means two different things. Off the def, so it does not depend on registration having
+/// answered.
+#[test]
+fn an_internal_table_row_is_marked_and_an_external_one_is_not() {
+    let (runner, ..) = settled_over(mixed_origins);
+
+    let runs = texts(&runner);
+    assert_eq!(
+        runs.iter().filter(|t| *t == "INTERNAL").count(),
+        1,
+        "exactly the one table Strata owns carries the marker: {runs:?}"
+    );
+    // Beside the row it belongs to, not floating somewhere in the pane.
+    let badge = text_area(&runner, "INTERNAL");
+    let row = text_area(&runner, "daily_totals");
+    assert!(
+        badge.min_y() >= row.min_y() && badge.max_y() <= row.max_y(),
+        "the marker sits on its own row"
     );
 }
 
@@ -1122,10 +1438,9 @@ fn a_row_being_profiled_says_so_in_its_own_words() {
     store
         .write_channel(ProjChan::Tables)
         .request_profile(CatalogKind::Table, "orders");
-    // Two passes: one mounts the subscription, one renders what it says. The scan itself has not
-    // settled — its label is up because the query is in flight, not because time has passed.
-    runner.sync_and_update();
-    runner.sync_and_update();
+    // Settle rather than counting passes. The scan itself has not settled — its label is up
+    // because the query is in flight, not because time has passed.
+    settle(&mut runner);
 
     assert_eq!(
         profiling(&runner),
@@ -1139,11 +1454,18 @@ fn a_row_being_profiled_says_so_in_its_own_words() {
     // `a_row_wearing_every_status_glyph_still_opens_its_own_menu` that pins it.
 }
 
-/// The row's trailing run is **three slots that come and go independently** — a profiling
-/// spinner, a registration status glyph, and the ⋮ button — and Freya assigns scopes by
-/// *position*. So the case with every slot filled has to keep working: `events` is a refused
-/// table (triangle) being profiled (spinner), and its ⋮ must still open its own menu rather than
-/// a scope some other element left behind.
+/// The row's trailing run changes shape under it — the status column can hold a spinner, a
+/// triangle or nothing, and the badge folds in and out — and Freya assigns scopes by *position*.
+/// So the most populated case has to keep working: `events` is a refused table being profiled,
+/// and its ⋮ must still open its own menu rather than a scope some other element left behind.
+///
+/// **The two glyphs are one column now, and the spinner wins while it runs.** They were separate
+/// children until the trailing run was collapsed (ED-04): a row that had *ever* been profiled
+/// kept a mounted, idle profile slot, and because a zero-width child still costs a full row
+/// `spacing`, everything left of it sat further in than on a row that had not — which is what
+/// made the `INTERNAL` badge look misaligned against a row carrying a triangle. Nothing is lost
+/// by the collapse: "a scan is running" is the newer fact about the same row, and the triangle
+/// returns the moment it settles.
 #[test]
 fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
     let (mut runner, (_, _, _, mut store, ..)) = settled();
@@ -1151,15 +1473,17 @@ fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
     store
         .write_channel(ProjChan::Tables)
         .request_profile(CatalogKind::Table, "events");
-    runner.sync_and_update();
-    runner.sync_and_update();
+    settle(&mut runner);
     let labels = status_labels(&runner);
     assert!(
-        labels.iter().any(|l| l == "Profiling…")
-            && labels
-                .iter()
-                .any(|l| l == "No such file or directory (os error 2)"),
-        "both glyphs are up: {labels:?}"
+        labels.iter().any(|l| l == "Profiling…"),
+        "the scan outranks the settled verdict while it runs: {labels:?}"
+    );
+    assert!(
+        !labels
+            .iter()
+            .any(|l| l == "No such file or directory (os error 2)"),
+        "and the column holds one glyph, not two: {labels:?}"
     );
 
     let before = texts(&runner);

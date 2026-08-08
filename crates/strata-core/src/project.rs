@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string, to_string_pretty};
 use strata_model::{ConnectionDef, HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef};
 
-use crate::util::{collapse_sql, sweep_stale_temps, write_atomic, TEMP_GLOB};
+use crate::util::{
+    collapse_sql, sweep_stale_temp_dirs, sweep_stale_temps, write_atomic, TEMP_GLOB,
+};
 
 /// The project directory name inside a project folder.
 pub const STRATA_DIR: &str = ".strata";
@@ -38,6 +40,16 @@ const SESSION_JSON: &str = "session.json";
 /// committed project folder.
 const SESSION_JSON_CORRUPT: &str = "session.json.corrupt";
 const HISTORY_JSONL: &str = "history.jsonl";
+/// Where an **internal table**'s data lives, under `.strata/` (ED-04): one directory per table,
+/// holding the Arrow IPC files a `CREATE TABLE` spooled. Gitignored as a whole ([`TABLES_GLOB`]),
+/// which is the *point*: the def travels with `project.json` and the data does not.
+///
+/// One name for one layout, because three things have to agree on it — the engine that writes
+/// under it, the def whose source path names it ([`internal_source`]), and the `.gitignore` line.
+const TABLES_DIR: &str = "tables";
+/// The `.gitignore` line covering [`TABLES_DIR`]. A trailing slash, so it ignores the directory
+/// rather than a file that happens to be called `tables`.
+const TABLES_GLOB: &str = "tables/";
 
 /// The committed definitions — the shape of `.strata/project.json`.
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
@@ -63,6 +75,23 @@ pub struct ProjectDefs {
 /// The `.strata/` dir of the project folder `root`.
 pub fn strata_dir(root: &Path) -> PathBuf {
     root.join(STRATA_DIR)
+}
+
+/// Where the project folder `root` stores **internal table** data (ED-04) — `.strata/tables`.
+/// Absolute, because it is handed to the engine, which resolves nothing.
+pub fn tables_dir(root: &Path) -> PathBuf {
+    strata_dir(root).join(TABLES_DIR)
+}
+
+/// The **project-relative** source path an internal table's def stores for the directory
+/// `slug` — `.strata/tables/<slug>/`.
+///
+/// Relative by construction rather than through [`relativize`], because it is relative by
+/// construction: the directory is inside the project folder and always will be. That is what
+/// makes the def portable, and it is the whole reason a clone of the project loads the def and
+/// then reports honestly that its data is not here.
+pub fn internal_source(slug: &str) -> String {
+    format!("{STRATA_DIR}/{TABLES_DIR}/{slug}/")
 }
 
 /// Whether a project already exists in folder `root` (a `.strata/project.json`).
@@ -382,13 +411,22 @@ pub fn clear_history(root: &Path) -> Result<(), String> {
 fn tidy_strata_dir(dir: &Path) {
     ensure_gitignore(dir);
     sweep_stale_temps(dir);
+    // The same housekeeping one level down, for the other thing published by rename: a CTAS
+    // that was killed between spooling its Arrow files and renaming the directory into place
+    // leaves a `.tmp-…` under `tables/` (ED-04). Cheap — a `read_dir` of a directory holding
+    // one entry per internal table — and skipped entirely on the usual project, which has none.
+    sweep_stale_temp_dirs(&dir.join(TABLES_DIR));
 }
 
 /// Ensure `.strata/.gitignore` ignores the local, per-user files — the working session,
-/// the copy kept aside when that session won't parse, the query-history log, and the
-/// in-flight temp of any [`write_atomic`] ([`TEMP_GLOB`]) — adding any that are missing
-/// while preserving other lines. Run from every local-file write, so an older `.gitignore`
-/// (session-only) gets upgraded.
+/// the copy kept aside when that session won't parse, the query-history log, the internal
+/// tables' data ([`TABLES_GLOB`]) and the in-flight temp of any [`write_atomic`]
+/// ([`TEMP_GLOB`]) — adding any that are missing while preserving other lines. Run from every
+/// local-file write, so an older `.gitignore` (session-only) gets upgraded.
+///
+/// `tables/` is the one entry that is not merely per-user noise: it is the design (ED-04). An
+/// internal table's **def** is committed like every other, and its data is not, so a colleague
+/// who clones the project gets the row and an honest "no data in this copy" against it.
 ///
 /// The names are literal but [`TEMP_GLOB`] is a pattern, and both are taken from the one
 /// place that defines them, because a gitignore line matches literally: `session.json` does
@@ -402,7 +440,13 @@ fn ensure_gitignore(dir: &Path) {
     let existing = fs::read_to_string(&gi).unwrap_or_default();
     let mut lines: Vec<&str> = existing.lines().collect();
     let mut changed = false;
-    for wanted in [SESSION_JSON, SESSION_JSON_CORRUPT, HISTORY_JSONL, TEMP_GLOB] {
+    for wanted in [
+        SESSION_JSON,
+        SESSION_JSON_CORRUPT,
+        HISTORY_JSONL,
+        TABLES_GLOB,
+        TEMP_GLOB,
+    ] {
         if !lines.iter().any(|l| l.trim() == wanted) {
             lines.push(wanted);
             changed = true;
@@ -487,7 +531,7 @@ mod tests {
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
         assert_eq!(
             gi,
-            "session.json\nsession.json.corrupt\nhistory.jsonl\n.*.tmp\n"
+            "session.json\nsession.json.corrupt\nhistory.jsonl\ntables/\n.*.tmp\n"
         );
         // `assert!` over `assert_eq!` here and below: the model types are serde
         // vocabulary and deliberately don't derive `Debug`.
@@ -617,7 +661,7 @@ mod tests {
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
         assert_eq!(
             gi,
-            "session.json\nsession.json.corrupt\nhistory.jsonl\n.*.tmp\n"
+            "session.json\nsession.json.corrupt\nhistory.jsonl\ntables/\n.*.tmp\n"
         );
     }
 

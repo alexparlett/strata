@@ -352,7 +352,7 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field};
     use strata_core::engine::{column_info, TableMeta};
-    use strata_model::{ColumnInfo, SourceFormat, TableDef, ViewDef};
+    use strata_model::{ColumnInfo, SourceFormat, TableDef, TableOrigin, ViewDef};
 
     use super::*;
     use crate::apps::project::state::{TableRow, ViewInfo, ViewRow};
@@ -371,6 +371,7 @@ mod tests {
                     .iter()
                     .map(|c| (c.to_string(), "Utf8".to_string()))
                     .collect(),
+                origin: TableOrigin::External,
             },
             reg,
             profile: None,
