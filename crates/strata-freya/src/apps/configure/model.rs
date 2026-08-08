@@ -147,6 +147,14 @@ pub struct ConfigureDraft {
     /// **TYPE** — which provider the CONNECTION picker is filtered to. Only meaningful while
     /// [`remote`](Self::remote), and kept in step with the chosen connection by
     /// [`set_provider`](Self::set_provider).
+    ///
+    /// **A filter, never the table's provider.** The two agree by construction while the chosen
+    /// connection is one the project has — which is the only state the picker can *produce* — but
+    /// a def naming a connection that has since been forgotten opens on the first provider
+    /// whatever its URL says, so a forgotten `gs://` bucket shows the S3 segment ([`of`](Self::of)
+    /// says why it is not re-derived from the scheme). Nothing may read this as a fact about the
+    /// table: what the table reads through is [`store`](Self::store), and while the two disagree
+    /// Save is blocked naming the missing URL (`views::footer`).
     pub provider: ProviderId,
     /// The chosen connection, by its [`ConnectionDef::url`] — the project's own identity for one.
     ///
