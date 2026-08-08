@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use async_io::Timer;
 use freya::prelude::{
-    spawn, use_drop, use_hook, use_provide_context, use_side_effect, use_state, Platform, State,
-    TaskHandle, WritableUtils,
+    spawn, spawn_forever, use_drop, use_hook, use_provide_context, use_side_effect, use_state,
+    Platform, State, TaskHandle, WritableUtils,
 };
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
 use strata_core::engine::TableSpec;
@@ -183,7 +183,9 @@ pub fn use_init_project(
         // The work list is read **before** any row is reset, because resetting is what discards
         // the information it is derived from: a `Loading` view has no `view_deps` to order by,
         // and none to say which table it reads.
-        let work = plan_scan(station, &request.scope);
+        // The read guard is a temporary of this statement, so it is released before `reset_rows`
+        // takes the write guard below.
+        let work = plan_scan(&station.peek(), &request.scope);
         // Rows drop to `Loading` so the pane reads as re-scanning rather than as settled
         // data. Only for a real request: at mount every row is already `Loading`, and writing
         // them again would wake the catalog's subscribers for nothing.
@@ -234,8 +236,10 @@ impl ScanWork {
 /// per row Refresh would put a network round trip behind a gesture that is about one table's
 /// files. The case that needs a re-connect — the user fixes a region, or runs `aws sso login`
 /// — is exactly what ↻ is for.
-fn plan_scan(station: RadioStation<ProjectState, ProjChan>, scope: &ScanScope) -> ScanWork {
-    let p = station.peek();
+///
+/// Takes the state rather than the station, because it only reads it — and because that is what
+/// lets the name reconciliation below be pinned by a test that needs no window.
+fn plan_scan(p: &ProjectState, scope: &ScanScope) -> ScanWork {
     match scope {
         ScanScope::All => ScanWork {
             connections: p.connections.iter().map(|c| c.def.url()).collect(),
@@ -244,13 +248,25 @@ fn plan_scan(station: RadioStation<ProjectState, ProjChan>, scope: &ScanScope) -
         },
         // A name with no row left is planned as an empty pass rather than a whole-catalog one:
         // the table went between the request and the driver serving it.
-        ScanScope::Table(name) => match p.tables.iter().any(|t| t.def.name == *name) {
-            true => ScanWork {
+        //
+        // **Matched case-insensitively, and the pass then carries the def's own spelling.** Every
+        // caller today names a def (the row menu, the `TableUpserted` fold), so this is the rule
+        // every other catalog lookup already uses rather than a fix for a live bug — the one
+        // request that arrives under the *planner's* spelling is an `INSERT`'s, and that lands
+        // through `refresh_table_rows` instead. An exact match here would plan an empty pass for
+        // a name that folds, which is a silent no-op; and the pass registers from defs, so what
+        // it carries has to be the def name whatever it was asked under.
+        ScanScope::Table(name) => match p
+            .tables
+            .iter()
+            .find(|t| ProjectState::same_name(&t.def.name, name))
+        {
+            Some(row) => ScanWork {
                 connections: Vec::new(),
-                tables: vec![name.clone()],
-                views: p.views_to_refresh(name),
+                tables: vec![row.def.name.clone()],
+                views: p.views_to_refresh(&row.def.name),
             },
-            false => ScanWork::none(),
+            None => ScanWork::none(),
         },
     }
 }
@@ -292,6 +308,44 @@ fn reset_rows(
 /// before it is ever polled, and the rows it just reset would spin forever.
 pub fn refresh_table(rescan: CatalogRescan, name: String) {
     request_scan(rescan, ScanScope::Table(name));
+}
+
+/// Re-read one table's own facts and land them on its row — **not** a scan pass (ED-05).
+///
+/// What an `INSERT` needs, and deliberately much less than [`refresh_table`]. A re-scan
+/// re-*registers*, which deregisters the table and builds a fresh provider; that is what leaves
+/// every view above it holding a stale `Arc` (D10/D11), and why a re-scan re-creates them
+/// afterwards. An append cannot make a view stale — the sink schema-checks before it writes, so
+/// the shape a view captured is the shape still there, and the old provider re-LISTs per scan
+/// anyway (this engine runs no `ListFilesCache`), so it already sees the new file. Going through
+/// the pass would break the views and repair them again for nothing, re-infer a schema that
+/// could not have moved, and flash every affected row through `Loading` on the way.
+///
+/// So: ask the engine what the row says now, and land it. No epoch bump either — the count moved,
+/// not what any name resolves to, and diagnostics resolve against the engine.
+///
+/// `spawn_forever`, for [`drop_confirm`]'s reason: the answer belongs to the window's store, and
+/// the tab whose statement asked for it may be closed before it arrives.
+///
+/// [`drop_confirm`]: crate::apps::project::views::DropConfirm
+pub fn refresh_table_rows(
+    engine: EngineCtx,
+    mut project: RadioStation<ProjectState, ProjChan>,
+    name: String,
+) {
+    spawn_forever(async move {
+        match engine.table_meta(name.clone()).await {
+            // `table_reread`, not `table_registered`: this answer may have been overtaken by a
+            // scan pass while the read was in flight, and that pass's is the fresher one.
+            Ok(meta) => project
+                .write_channel(ProjChan::Tables)
+                .table_reread(&name, meta),
+            // The row keeps the count it last read, which is what a row's count always is. The
+            // table itself is fine — only this re-read failed — so flagging the row would be
+            // the worse lie of the two.
+            Err(e) => tracing::error!("table meta '{name}': {e}"),
+        }
+    });
 }
 
 /// The sidebar's ↻ (P3-03): ask for a re-scan of the whole catalog — re-infer every table's
@@ -718,6 +772,9 @@ mod tests {
     use std::env;
     use std::process;
 
+    use strata_core::engine::TableMeta;
+    use strata_model::{SourceFormat, TableDef, TableOrigin};
+
     use super::*;
 
     /// A scratch project folder with a `.strata/`, unique per test (they run in threads of
@@ -912,5 +969,51 @@ mod tests {
         assert!(project_io::exists_at(&root), "the scaffold wrote the defs");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **A re-scan request's name is not always a def's own spelling**, and the pass registers
+    /// from defs — so it resolves the request case-insensitively and then carries the def's name.
+    ///
+    /// The engine answers under the *planner's* identity: `mytable` for a def saved as `MyTable`
+    /// (pinned engine-side by `a_statement_names_a_table_as_the_planner_folds_it`). An exact match
+    /// here plans an empty pass, which is a silent no-op — the row simply never refreshes.
+    #[test]
+    fn a_rescan_finds_its_row_whatever_case_the_request_names_it() {
+        let mut p = ProjectState::from_defs(
+            ProjectDefs {
+                tables: vec![TableDef {
+                    name: "MyTable".into(),
+                    format: SourceFormat::Arrow,
+                    sources: vec![".strata/tables/mytable/".into()],
+                    partition_cols: Vec::new(),
+                    origin: TableOrigin::Internal,
+                }],
+                ..Default::default()
+            },
+            // No filesystem: `plan_scan` reads the store's rows and `from_defs` only keeps the
+            // root, so a real scratch folder would be created and left behind for nothing.
+            PathBuf::from("/strata-plan-scan"),
+        );
+        p.table_registered(
+            "MyTable",
+            TableMeta {
+                columns: Vec::new(),
+                rows: Some(1),
+            },
+        );
+
+        let work = plan_scan(&p, &ScanScope::Table("mytable".into()));
+
+        assert_eq!(
+            work.tables,
+            vec!["MyTable".to_string()],
+            "the folded request found the row, and the pass carries the def's name"
+        );
+        assert!(
+            plan_scan(&p, &ScanScope::Table("gone".into()))
+                .tables
+                .is_empty(),
+            "a name with no row at all is still an empty pass"
+        );
     }
 }

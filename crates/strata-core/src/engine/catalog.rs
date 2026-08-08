@@ -18,6 +18,7 @@ use crate::engine::arrow_stats::StrataArrowFormat;
 use crate::engine::json_poly::PolyJsonFormat;
 use crate::engine::query::is_snapshot_name;
 use crate::engine::sql::Blocked;
+use crate::engine::{fold_ident, CATALOG, SCHEMA};
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
@@ -141,8 +142,8 @@ pub async fn register_external(
     // hand-built `ListingTable` never picks the `datafusion.execution.collect_statistics`
     // key up on its own — `ListingTableConfig::with_listing_options` does no such wiring.
     // Without this, every footer statistic comes back `Absent` while the engine setting
-    // claims to be on. It's baked in at `try_new`, so a registered table can't be fixed
-    // after the fact — `rebuild_listing` inherits it by cloning `lt.options()`.
+    // claims to be on. It's baked in at `try_new`, so a registered table can't be fixed after
+    // the fact — a re-scan is a re-registration through here, which is the only way it moves.
     let mut opts = ListingOptions::new(fmt)
         .with_session_config_options(&ctx.copied_config())
         .with_file_extension(ext);
@@ -163,8 +164,25 @@ pub async fn register_external(
             tracing::error!("Failed to infer schema: {}", e);
             register_error(spec, ext, &e.to_string())
         })?;
-    let table =
-        ListingTable::try_new(config).map_err(|e| register_error(spec, ext, &e.to_string()))?;
+    // **The runtime's per-file statistics cache, handed to the table that needs it.**
+    //
+    // Without it `collected_statistics` is `None`, so `do_collect_statistics_and_ordering`
+    // misses every time and re-reads every file's footer — on **every scan**, because
+    // [`free_stats`] reaches it through `list_files_for_scan`, and on every registration,
+    // because that is what [`table_meta`] answers a row's count from. An internal table is one
+    // appended IPC file per `INSERT` (ED-05), and an `INSERT` asks for a re-scan, so file *k*'s
+    // arrival re-read *k* footers: quadratic in the number of writes, before anyone had queried
+    // anything.
+    //
+    // The `RuntimeEnv` builds a 20 MiB `DefaultFileStatisticsCache` by default and we never
+    // asked for it. **Not the same call as the list-files cache**, which `ENGINE_KEYS` defaults
+    // to `0` on purpose: that one answers "which files are there", and a re-scan means asking
+    // again. This one answers "what is in *this* file", keyed per object and invalidated by
+    // `is_valid_for` on size and mtime — so a re-listing still finds new files, a replaced file
+    // still re-reads, and only an unchanged file is spared.
+    let table = ListingTable::try_new(config)
+        .map_err(|e| register_error(spec, ext, &e.to_string()))?
+        .with_cache(ctx.runtime_env().cache_manager.get_file_statistic_cache());
     ctx.register_table(spec.name.as_str(), Arc::new(table))
         .map_err(|e| {
             tracing::error!("Failed to register table: {}", e);
@@ -640,6 +658,39 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     }
 }
 
+/// The registered views whose plans read the table `name` — the readers a drop leaves invalid
+/// (ED-05), sorted, and **named rather than cascaded**.
+///
+/// Asked of the providers, because a drop's report is about what is registered at the moment it
+/// happens: a view is anything in the schema still carrying a plan
+/// ([`TableProvider::get_logical_plan`](datafusion::catalog::TableProvider::get_logical_plan) is
+/// `None` for every base table), and the plan it carries was inlined when it was created — so a
+/// view reading `orders` through another view names `orders` at its leaf and is found here with
+/// no recursion of ours. That is the same walk [`plan_deps`] does for `ViewMeta`, run against the
+/// same trees; the catalog pane's before-the-fact warning reads the store's recorded copy of it,
+/// which is the same fact from before the drop.
+pub async fn dependent_views(ctx: &SessionContext, name: &str) -> Vec<String> {
+    let Some(schema) = ctx.catalog(CATALOG).and_then(|c| c.schema(SCHEMA)) else {
+        return Vec::new();
+    };
+    let target = fold_ident(name);
+    let mut readers = Vec::new();
+    // `table_names()` is the provider's own sorted key list, so the report's order is stable
+    // without a sort of ours — and it already hides the result snapshots.
+    for table in schema.table_names() {
+        let Ok(Some(provider)) = schema.table(&table).await else {
+            continue;
+        };
+        let Some(plan) = provider.get_logical_plan() else {
+            continue;
+        };
+        if plan_deps(&plan).tables.contains(&target) {
+            readers.push(table);
+        }
+    }
+    readers
+}
+
 /// Profile `name` — one full scan, every column at once (see [`crate::profile`]).
 ///
 /// Spawned onto the engine's own runtime by [`Engine::profile`](super::Engine::profile), which
@@ -674,7 +725,7 @@ pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProf
 /// min/max/nulls, read from the source's own footers. One metadata read per file, no
 /// data pages. Everything lands `None` for a source that reports nothing (CSV/JSON),
 /// which the inspector renders as an absent row rather than a guess.
-async fn table_meta(ctx: &SessionContext, name: &str) -> Result<TableMeta, String> {
+pub(super) async fn table_meta(ctx: &SessionContext, name: &str) -> Result<TableMeta, String> {
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
     // `|f| column_info(f)`, not `column_info`: `fields()` yields `&Arc<Field>` and the
     // deref coercion to `&Field` only happens at a call site.

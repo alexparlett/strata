@@ -23,15 +23,16 @@
 //! whether the def actually reached `project.json` — the `save_view` lesson: a success row logged
 //! over a failed write is the log promising a table the next open loses.
 
-use freya::prelude::{use_side_effect, use_state, WritableUtils};
+use freya::prelude::{use_consume, use_side_effect, use_state, WritableUtils};
 use freya::query::{QueryStateData, UseQuery};
 use freya::radio::{use_radio_station, RadioStation};
 use strata_core::engine::{StatementReport, StoreEffect};
 
+use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryOutcome, RunQuery};
 
 use super::catalog::{catalog_settled, use_catalog, use_catalog_rescan, Catalog, CatalogRescan};
-use super::hooks::refresh_table;
+use super::hooks::{refresh_table, refresh_table_rows};
 use super::log::{log_event, LogLevel};
 use super::persist::{persisted_defs, use_report, ReportCtx};
 use super::{ProjChan, ProjectState};
@@ -59,6 +60,8 @@ pub fn use_statement_settle(query: UseQuery<RunQuery>) {
         rescan: use_catalog_rescan(),
         report: use_report(),
     };
+    // Not on `Settle`: an `Arc` handle would cost that struct its `Copy` for the sake of one arm.
+    let engine = use_consume::<EngineCtx>();
     let mut applied = use_state(|| false);
     use_side_effect(move || {
         if *applied.peek() {
@@ -78,18 +81,21 @@ pub fn use_statement_settle(query: UseQuery<RunQuery>) {
             return;
         };
         applied.set(true);
-        settle(to, &report);
+        settle(to, &engine, &report);
     });
 }
 
 /// Apply `report`'s effect, then say so — in that order, because whether the statement is worth
 /// announcing is the write's answer, not the engine's.
-fn settle(to: Settle, report: &StatementReport) {
+///
+/// The engine rides beside the `Copy` handles rather than on [`Settle`], exactly as `drop_row`
+/// takes it: `EngineCtx` is an `Arc` and would cost the struct its `Copy`, for one arm.
+fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) {
     // No effect is not a failure: `SET`, `PREPARE` and `DEALLOCATE` change the session and
     // nothing the catalog holds, so there is nothing to persist and the report stands on its own.
     let landed = match &report.effect {
         None => true,
-        Some(effect) => apply(to, effect),
+        Some(effect) => apply(to, engine, effect),
     };
     if landed {
         log_event(to.report.log, LogLevel::Ok, report.message.clone());
@@ -104,7 +110,7 @@ fn settle(to: Settle, report: &StatementReport) {
 /// mutation point and bumping the catalog epoch are [`mutated`]'s, held **once** rather than
 /// spelled out per arm. That is the difference between an invariant and four copies of it — an
 /// arm added by a later ED task cannot forget either half, because it never writes either half.
-fn apply(to: Settle, effect: &StoreEffect) -> bool {
+fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
     match effect {
         // A registered table: the def and the answer land together, so the sidebar row goes
         // straight to `Reg::Ready` rather than flashing `Loading` for a registration that is
@@ -147,12 +153,14 @@ fn apply(to: Settle, effect: &StoreEffect) -> bool {
         StoreEffect::ViewRemoved { name } => mutated(to, ProjChan::Views, |p| {
             p.remove_view(name);
         }),
-        // The data moved, the def did not. Row counts come from the scan driver reading the
-        // table again — never from the store adding up what a statement claimed — so this is a
-        // request for the pass the sidebar's row Refresh raises, and that pass bumps the epoch
-        // itself on the way out.
+        // The data moved, the def did not — and **only** the data. Still read from the files,
+        // never added up from what the statement claimed, but read without re-registering: a
+        // re-scan replaces the provider, which is the one thing that makes the views above it
+        // stale (D10/D11) and the only reason a table Refresh re-creates them. An append cannot
+        // change the shape they captured, so `refresh_table_rows` asks the engine for this row's
+        // count and lands it, and every view is left alone.
         StoreEffect::RescanTable { name } => {
-            refresh_table(to.rescan, name.clone());
+            refresh_table_rows(engine.clone(), to.project, name.clone());
             true
         }
         // Nothing persists (functions are session-scoped) and no row changes, but names that

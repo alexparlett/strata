@@ -1344,7 +1344,7 @@ fn drop_asks_the_confirm_and_leaves_the_catalog_alone() {
     click_text(&mut runner, "Drop table");
 
     assert!(
-        matches!(drop_target.peek().as_ref(), Some(DropTarget::Table(n)) if n == "orders"),
+        matches!(drop_target.peek().as_ref(), Some(DropTarget::Table { name, .. }) if name == "orders"),
         "the confirm was asked about `orders`: {:?}",
         drop_target.peek()
     );

@@ -31,7 +31,13 @@ use datafusion::sql::parser::Statement as DFStatement;
 
 use crate::engine::catalog::{TableMeta, ViewMeta};
 use crate::engine::sql::StmtKind;
+use crate::engine::InternalTables;
 use strata_model::{TableDef, ViewDef};
+
+/// A table drop's own words — see [`tables::drop_intent`]. Re-exported here because the
+/// catalog pane says them too, and `ddl` is the vocabulary module the app already reads.
+pub use tables::drop_intent;
+pub(super) use tables::drop_table;
 
 /// What one intercepted statement did — the `RunOutcome::Statement` the results pane renders
 /// as a status row and the app folds into its stores.
@@ -122,6 +128,7 @@ pub async fn execute(
     stmt: DFStatement,
     sql: String,
     root: DataRoot,
+    internal: InternalTables,
 ) -> Result<StatementReport, String> {
     let start = Instant::now();
     // Exhaustive on `StmtKind` with no wildcard, so a kind the router learns to intercept is a
@@ -133,7 +140,8 @@ pub async fn execute(
         // the resulting Arrow def through `register_external`.
         StmtKind::CreateTable | StmtKind::Ctas => tables::create(ctx, kind, stmt, root).await,
         // ED-05 — writes and removal over the internal-name set.
-        StmtKind::Insert | StmtKind::DropTable => Err(unimplemented(kind)),
+        StmtKind::Insert => tables::insert(ctx, stmt, &internal).await,
+        StmtKind::DropTable => tables::drop_statement(ctx, &root, &internal, stmt).await,
         // ED-06 — typed view DDL onto `Engine::create_view` / `Engine::drop_view`.
         StmtKind::CreateView | StmtKind::DropView => Err(unimplemented(kind)),
         // ED-07 — editor `COPY … TO`, behind the pre-flight NULL-partition gate.
