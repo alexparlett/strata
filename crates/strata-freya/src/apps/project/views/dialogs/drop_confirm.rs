@@ -19,6 +19,14 @@
 //! drop and fails only on the next reload (verified against DataFusion 54 — DEV_TASKS
 //! D10/D11). So the warning says exactly what the catalog row will say afterwards: these
 //! views are flagged, and they will not survive a reopen.
+//!
+//! **A connection's dependents are its tables, and then the views over those** (W7 · 04) — the
+//! other dependency direction, and a different question: nothing reads an object store *by name*,
+//! so a connection has no readers in the SQL namespace at all. What it has is the defs that name
+//! it ([`ProjectState::tables_over`]) and everything reading one of those
+//! ([`ProjectState::views_over`]), which is the reading a table drop already reports. Still "left
+//! invalid", because that is what happens: the defs survive, still naming the bucket, and it is
+//! the next registration that has nothing to read.
 
 use freya::components::{get_theme, ScrollView};
 use freya::prelude::*;
@@ -84,8 +92,8 @@ impl DropTarget {
 
     /// Which catalog section it belongs to — what [`ProjectState::dependent_views`] dispatches
     /// on to pick the right dependency list — or `None` for a target that is not in the SQL
-    /// namespace at all. A connection is an object store, so nothing can *read* it by name and
-    /// there is no dependency list to ask for.
+    /// namespace at all. A connection is an object store, so nothing can *read* it by name; its
+    /// dependents are the tables that name it, which [`DropConfirm`] asks for by URL instead.
     fn kind(&self) -> Option<CatalogKind> {
         match self {
             DropTarget::Table { .. } => Some(CatalogKind::Table),
@@ -169,6 +177,38 @@ fn consequence(count: usize, noun: &str) -> Option<String> {
     }
 }
 
+/// A **forget**'s consequence line (W7 · 04): the tables that read through the connection, and
+/// the views left invalid behind them.
+///
+/// Its own sentence rather than [`consequence`]'s with a swapped noun, because it counts two
+/// different things. A connection has no readers in the SQL namespace at all — what breaks is
+/// the tables whose def names it, and then everything that reads *those*, which is the same
+/// reading a table drop reports. Naming only the tables would under-report a forget against the
+/// drop it is otherwise identical to; naming both in one count would say "3 defs", which is not
+/// a word the catalog uses.
+///
+/// `views` is only ever spoken of behind the tables, so a connection with no tables says nothing
+/// at all — there is nothing over it for a view to read through.
+fn forget_consequence(tables: usize, views: usize) -> Option<String> {
+    if tables == 0 {
+        return None;
+    }
+    let subject = match tables {
+        1 => "1 table reads".to_string(),
+        n => format!("{n} tables read"),
+    };
+    let behind = match (views, tables) {
+        (0, _) => String::new(),
+        (1, 1) => ", with 1 view over it".to_string(),
+        (1, _) => ", with 1 view over them".to_string(),
+        (n, 1) => format!(", with {n} views over it"),
+        (n, _) => format!(", with {n} views over them"),
+    };
+    Some(format!(
+        "{subject} this connection and will be left invalid{behind}:"
+    ))
+}
+
 /// Mounted at the window root beside [`CloseConfirm`](super::CloseConfirm), on the same terms:
 /// while open, its key handler precedes every feature listener in document order and consumes
 /// every press, so nothing underneath can act on a keystroke aimed at the dialog. Esc cancels,
@@ -228,11 +268,26 @@ impl Component for DropConfirm {
         // Subscribed to `ProjChan::Views` (see above), so a view registering or being dropped
         // under the open dialog refreshes the count — the dialog blocks input, not the engine,
         // and this is the one screen where acting on a stale count is destructive.
-        let dependents = match target.kind() {
-            Some(kind) => views.read().dependent_views(kind, target.name()),
-            None => Vec::new(),
+        let (dependents, consequence) = match (&target, target.kind()) {
+            // Not a member of the SQL namespace: what reads it is the tables whose def names it,
+            // and then the views over those. The tables come off the **unsubscribed** station,
+            // because `tables_over` reads a stored field and nothing a re-scan touches: a
+            // `ProjChan::Tables` subscription would re-render this card once per table for an
+            // answer that cannot have changed, which is the very cost the split above avoids.
+            // The chips are the tables and then the views, in catalog order.
+            (DropTarget::Connection(url), _) => {
+                let over = project.peek().tables_over(url);
+                let behind = views.read().views_over(&over);
+                let line = forget_consequence(over.len(), behind.len());
+                (over.into_iter().chain(behind).collect(), line)
+            }
+            (_, Some(kind)) => {
+                let dependents = views.read().dependent_views(kind, target.name());
+                let line = consequence(dependents.len(), target.noun());
+                (dependents, line)
+            }
+            (_, None) => (Vec::new(), None),
         };
-        let consequence = consequence(dependents.len(), target.noun());
 
         // The action over its subject — the close confirm's shape exactly, which is what the comp
         // asks for. The name is mono at 12.5 on its own line, where it reads as the identifier it
@@ -548,17 +603,29 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::Parquet,
+            connection: None,
             sources: vec![format!("{name}.parquet")],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
         }
     }
 
-    /// A table def Strata wrote — `.strata/tables/<name>/`, exactly as a CTAS leaves it.
+    /// The same table read through a connection (W7 · 04) — its source is then relative to that
+    /// bucket rather than to the project folder.
+    fn table_over(name: &str, url: &str) -> TableDef {
+        TableDef {
+            connection: Some(url.into()),
+            ..table(name)
+        }
+    }
+
+    /// A table def Strata wrote — `.strata/tables/<name>/`, exactly as a CTAS leaves it. Never
+    /// through a connection: an internal table's data is local to the machine that created it.
     fn internal(name: &str) -> TableDef {
         TableDef {
             name: name.into(),
             format: SourceFormat::Arrow,
+            connection: None,
             sources: vec![format!(".strata/tables/{name}/")],
             partition_cols: Vec::new(),
             origin: TableOrigin::Internal,
@@ -585,6 +652,10 @@ mod tests {
     /// `orders` ← `orders_daily` ← `orders_weekly` (the nested reader), plus an unrelated
     /// `users` table, one saved query, and two connections **over one bucket** — the pair that
     /// only `url()` tells apart (W7).
+    ///
+    /// `orders` reads through `s3://lake`, which is what makes the two connections tell apart in
+    /// the one place it matters: forgetting that one takes a table (and the views behind it) with
+    /// it, and forgetting its `gs://` namesake takes nothing.
     fn project(root: &Path) -> ProjectState {
         let defs = ProjectDefs {
             name: "test".into(),
@@ -600,7 +671,7 @@ mod tests {
                     client_config: Default::default(),
                 },
             ],
-            tables: vec![table("orders"), table("users")],
+            tables: vec![table_over("orders", "s3://lake"), table("users")],
             views: vec![
                 view("orders_daily", "SELECT * FROM orders"),
                 view("orders_weekly", "SELECT * FROM orders_daily"),
@@ -1237,6 +1308,53 @@ mod tests {
             "the other connection over the same bucket stays"
         );
         assert!(slot.peek().is_none(), "the dialog closed itself");
+    }
+
+    /// **A forget names what it breaks** (W7 · 04): the tables whose def reads through this
+    /// connection, *and* the views behind them — the reading a table drop already reports, which
+    /// a line that stopped at the tables would under-report.
+    ///
+    /// `orders` is the table over `s3://lake`, and both views come with it — including
+    /// `orders_weekly`, which only reaches the bucket through another view.
+    #[test]
+    fn forgetting_a_connection_names_the_tables_over_it_and_the_views_behind_them() {
+        let (mut runner, (mut slot, ..)) = runner("forget-deps");
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::Connection("s3://lake".into()),
+        );
+
+        assert!(
+            shows(
+                &runner,
+                "1 table reads this connection and will be left invalid, with 2 views over it:"
+            ),
+            "the line counts both, and says which is which: {:?}",
+            texts(&runner)
+        );
+        for name in ["orders", "orders_daily", "orders_weekly"] {
+            assert!(shows(&runner, name), "{name} is named as a chip");
+        }
+    }
+
+    /// The sentence itself, over the shapes the fixture cannot show at once: no tables at all
+    /// (the callout is absent, not a zero), tables with nothing behind them, and the singular /
+    /// plural of both halves.
+    #[test]
+    fn a_forgets_line_counts_the_tables_and_the_views_behind_them() {
+        assert_eq!(forget_consequence(0, 0), None);
+        // A view can only read through a table, so views without tables cannot happen — and if
+        // it somehow did, the callout still says nothing rather than inventing a subject.
+        assert_eq!(forget_consequence(0, 3), None);
+        assert_eq!(
+            forget_consequence(1, 0).as_deref(),
+            Some("1 table reads this connection and will be left invalid:")
+        );
+        assert_eq!(
+            forget_consequence(2, 1).as_deref(),
+            Some("2 tables read this connection and will be left invalid, with 1 view over them:")
+        );
     }
 
     /// A forget is **recorded**, in the past tense and in the pane's own word — the row it

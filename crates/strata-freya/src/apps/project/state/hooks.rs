@@ -984,6 +984,7 @@ mod tests {
                 tables: vec![TableDef {
                     name: "MyTable".into(),
                     format: SourceFormat::Arrow,
+                    connection: None,
                     sources: vec![".strata/tables/mytable/".into()],
                     partition_cols: Vec::new(),
                     origin: TableOrigin::Internal,

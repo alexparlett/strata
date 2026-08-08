@@ -70,6 +70,7 @@ fn table(name: &str, format: &str) -> TableDef {
     TableDef {
         name: name.into(),
         format: SourceFormat::from_name(format),
+        connection: None,
         sources: vec![format!("{name}.{format}")],
         partition_cols: Vec::new(),
         origin: TableOrigin::External,

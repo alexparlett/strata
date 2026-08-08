@@ -245,6 +245,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   name and a key file path, never a key. Identity is the **URL** and the sort is the **address**,
   so `upsert_connection` replaces on one and inserts by the other; an edit that moves either half
   **deregisters the old URL itself**, and the editor's Save asks for a whole-catalog pass.
+- **A table reads through a connection by naming it, and the composition happens once, in
+  `resolve_source`.** `TableDef::connection` is the connection's `url()` and the only thing that
+  says a table is remote; its sources are bucket-relative exactly then, never relativized, and
+  `resolve_source` takes the connection so the local rule cannot be reached for by mistake. The
+  LOCATION toggle is an explicit choice, never a scheme parsed out of a path, and a forget's
+  confirm names the tables over the bucket and the views behind them.
 - **A connection's address is its provider's own, and every rule about it lives in one place.**
   `address`, not `bucket`: S3 and GCS name a bucket and take the provider's scheme, HTTP names a
   **whole origin URL** and a path is refused rather than trimmed. `Provider::check_address` is the

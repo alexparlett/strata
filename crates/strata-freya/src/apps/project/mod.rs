@@ -50,6 +50,10 @@ pub use state::{
 /// child window may actually reach for.
 #[cfg(test)]
 pub use state::{CatalogState, Log, PersistFaults, ScanRequest};
+/// The connection-editor request slot, for the **Configure** window (W7 · 04): its CONNECTION
+/// picker's *New connection…* sets this window's slot and stops, exactly as the pane's own `+`
+/// does, so the editor still opens from the one place that holds the handles for it.
+pub use views::ConnectionRequest;
 pub use views::{
     AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
     CellViewThemePreference, ChartThemePreference, CommandPaletteThemePreference,

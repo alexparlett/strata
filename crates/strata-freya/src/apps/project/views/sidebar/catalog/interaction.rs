@@ -57,6 +57,7 @@ fn table(name: &str, partition_cols: Vec<(String, String)>) -> TableDef {
     TableDef {
         name: name.into(),
         format: SourceFormat::Parquet,
+        connection: None,
         sources: vec![format!("{name}.parquet")],
         partition_cols,
         origin: TableOrigin::External,
@@ -72,6 +73,7 @@ fn internal(name: &str) -> TableDef {
     TableDef {
         name: name.into(),
         format: SourceFormat::Arrow,
+        connection: None,
         sources: vec![format!(".strata/tables/{name}/")],
         partition_cols: Vec::new(),
         origin: TableOrigin::Internal,

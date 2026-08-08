@@ -10,7 +10,9 @@
 //! Paths in `sources` are stored **project-relative** where they sit inside the project
 //! folder (portable — the file can be committed and checked out elsewhere), and resolved
 //! to absolute against the project folder when handed to the engine / filesystem:
-//! [`resolve_source`] / [`relativize`].
+//! [`resolve_source`] / [`relativize`]. A def that names a **connection** (W7 · 04) stores
+//! its sources relative to that bucket instead, and [`resolve_source`] is where the two
+//! rules meet.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -459,14 +461,33 @@ fn ensure_gitignore(dir: &Path) {
     }
 }
 
-/// Resolve a (possibly project-relative) source path to an absolute path for the
-/// engine / filesystem, joining relative entries onto `root` (the project folder).
-pub fn resolve_source(root: &Path, p: &str) -> String {
-    let path = Path::new(p);
-    if path.is_absolute() {
-        return p.to_string();
-    }
-    root.join(p).to_string_lossy().into_owned()
+/// Resolve one of a table def's sources to what the engine reads: composed onto its
+/// **connection's** bucket when the def names one ([`TableDef::connection`]), and otherwise
+/// joined onto `root` (the project folder) where it is relative.
+///
+/// **One function, taking the connection**, rather than a local rule with a remote one beside
+/// it. The two answers are mutually exclusive and every caller has the def in hand, so a
+/// resolver that could not see the connection would silently give the wrong one: `s3://` is not
+/// an absolute *path*, so a bucket-relative source handed to the local rule comes back as
+/// `<project>/events/2024`, which registers as a missing folder on the user's own disk.
+///
+/// `connection` is a [`ConnectionDef::url`](strata_model::ConnectionDef::url) — scheme and
+/// authority — so the composition is that URL, a separator, and the source. Both sides are
+/// trimmed of the separator first: a bucket URL never carries one and a path typed with a
+/// leading `/` means the bucket root, not an empty first segment.
+pub fn resolve_source(root: &Path, connection: Option<&str>, p: &str) -> String {
+    let Some(url) = connection else {
+        let path = Path::new(p);
+        if path.is_absolute() {
+            return p.to_string();
+        }
+        return root.join(p).to_string_lossy().into_owned();
+    };
+    format!(
+        "{}/{}",
+        url.trim_end_matches('/'),
+        p.trim_start_matches('/')
+    )
 }
 
 /// If `abs` sits inside `root`, return it relative to `root` (portable, stored in
@@ -1005,17 +1026,44 @@ mod tests {
     #[test]
     fn source_paths_resolve_and_relativize() {
         let root = Path::new("/proj");
-        assert_eq!(resolve_source(root, "events"), "/proj/events");
+        assert_eq!(resolve_source(root, None, "events"), "/proj/events");
         assert_eq!(
-            resolve_source(root, "/abs/data.parquet"),
+            resolve_source(root, None, "/abs/data.parquet"),
             "/abs/data.parquet"
         );
         assert_eq!(relativize(root, "/proj/events"), "events");
         assert_eq!(relativize(root, "/elsewhere/x.csv"), "/elsewhere/x.csv");
         // Round trip: what the engine gets resolves back to what the file stores.
         assert_eq!(
-            relativize(root, &resolve_source(root, "sub/dir")),
+            relativize(root, &resolve_source(root, None, "sub/dir")),
             "sub/dir"
+        );
+    }
+
+    /// A source over a connection is composed onto that bucket and **never** onto the project
+    /// folder — the whole reason this function takes the connection. `s3://` is not an absolute
+    /// path, so the local rule would have turned every one of these into `/proj/…`.
+    #[test]
+    fn a_source_over_a_connection_is_composed_onto_its_bucket() {
+        let root = Path::new("/proj");
+        let s3 = Some("s3://acme-lake");
+        assert_eq!(
+            resolve_source(root, s3, "events/2024/**/*.parquet"),
+            "s3://acme-lake/events/2024/**/*.parquet"
+        );
+        // One separator, wherever the user put theirs: a leading `/` means the bucket root.
+        assert_eq!(
+            resolve_source(root, s3, "/events/"),
+            "s3://acme-lake/events/"
+        );
+        assert_eq!(
+            resolve_source(root, Some("s3://acme-lake/"), "events/"),
+            "s3://acme-lake/events/"
+        );
+        // An HTTP connection is a whole origin, and composes exactly the same way.
+        assert_eq!(
+            resolve_source(root, Some("http://aserver:8484"), "data/a.csv"),
+            "http://aserver:8484/data/a.csv"
         );
     }
 }

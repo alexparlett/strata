@@ -26,6 +26,7 @@
 //! (save-as-view, register, drop), never on a timer. The local session file is the
 //! session-persistence slice's, not this store's.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use freya::radio::RadioChannel;
@@ -730,6 +731,47 @@ impl ProjectState {
             .collect()
     }
 
+    /// The tables that read through the connection `url` names (W7 · 04), alphabetically — the
+    /// forget confirm's consequence line and its name chips.
+    ///
+    /// The **other** dependency direction, and a different question from
+    /// [`dependent_views`](Self::dependent_views): nothing can read an object store *by name*, so
+    /// a connection has no dependents in the SQL namespace at all — what it has is the defs that
+    /// name it, which is a stored field rather than anything the planner reported. So this is an
+    /// exact match on the def's own [`TableDef::connection`], and it does **not** ask what the
+    /// engine last said about the row: a table over a forgotten bucket is left invalid whether it
+    /// had registered or not.
+    pub fn tables_over(&self, url: &str) -> Vec<String> {
+        self.tables
+            .iter()
+            .filter(|t| t.def.connection.as_deref() == Some(url))
+            .map(|t| t.def.name.clone())
+            .collect()
+    }
+
+    /// The views left invalid **behind** those tables, alphabetically and each named once —
+    /// the second half of a forget's consequence (W7 · 04).
+    ///
+    /// Forgetting a connection does not stop at its tables: a view over one of them is as invalid
+    /// as it would be if that table had been dropped, and the dialog that names the tables and
+    /// stops would under-report a forget against exactly the reading a table drop *does* report.
+    /// [`dependent_views`](Self::dependent_views) answers per table and is transitive (the
+    /// planner inlines nested views), so this is its union over `tables`, deduplicated: one view
+    /// reading two of them is one broken view, not two.
+    pub fn views_over(&self, tables: &[String]) -> Vec<String> {
+        let broken: BTreeSet<String> = tables
+            .iter()
+            .flat_map(|table| self.dependent_views(CatalogKind::Table, table))
+            .collect();
+        // Filtered back through the rows rather than handed over as the set, so the names come
+        // out in the catalog's own order — the chips read as the section they came from.
+        self.views
+            .iter()
+            .map(|v| v.def.name.clone())
+            .filter(|name| broken.contains(name))
+            .collect()
+    }
+
     // --- re-scan (P3-03) -----------------------------------------------------------
 
     /// Reset every connection row to `Loading` — the start of a whole-catalog re-scan
@@ -1007,6 +1049,7 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::Parquet,
+            connection: None,
             sources: vec![format!("{name}.parquet")],
             partition_cols: vec![("year".into(), "Int32".into())],
             origin: TableOrigin::External,

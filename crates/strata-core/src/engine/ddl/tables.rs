@@ -176,6 +176,9 @@ pub async fn create(
     let def = TableDef {
         name: name.clone(),
         format: SourceFormat::Arrow,
+        // Never a connection: this table's data is Strata's own, spooled into the project's
+        // `.strata/tables/` a few lines above. What a remote source names is the user's bucket.
+        connection: None,
         sources: vec![internal_source(&slug)],
         partition_cols: Vec::new(),
         origin: TableOrigin::Internal,

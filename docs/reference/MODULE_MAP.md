@@ -302,13 +302,20 @@ src/apps/configure/              the Configure-table window (P4-11 — `Configur
                                  import-option set and both halves reach the engine through one
                                  `TableSpec`). Register a new table or edit an existing def:
                                  mod.rs (root · window config · `ConfigureCtx` · `Status`),
-                                 model.rs (the draft + its option groups), views/ (title_bar ·
-                                 identity · paths · options · hive · status · footer). It is a
-                                 child of the project window that asked, so it writes that
+                                 model.rs (the draft + its option groups), interaction.rs (the
+                                 body and footer driven as a user drives them), views/ (title_bar ·
+                                 location · identity · paths · options · hive · status · footer).
+                                 It is a child of the project window that asked, so it writes that
                                  window's store through the shared `persisted_defs` funnel and
                                  asks *its* one scan driver for the registration pass — rather
                                  than holding an engine or a second "make the engine match the
-                                 defs" of its own
+                                 defs" of its own. **location.rs** is the LOCATION toggle and,
+                                 behind its object-store arm, the TYPE / CONNECTION pair (W7 ·
+                                 04): the draft records the connection's `url()`, the source list
+                                 goes single-path under the bucket as a prefix, and
+                                 `register::table_spec` composes the two — so the window needs no
+                                 engine call and the picker's *New connection…* sets the project
+                                 window's own `ConnectionRequest` rather than opening an editor
 src/apps/connection/             the **connection editor** window (W7 · 03 —
                                  `Connections.dc.html`): add or edit one remote object store.
                                  mod.rs (root · window config · `ConnectionCtx` · `Status`),

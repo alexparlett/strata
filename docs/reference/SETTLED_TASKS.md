@@ -289,3 +289,30 @@ scheme and was refused — `ConnectionDef::migrated` runs in `project::load_defs
 come off disk. And **a plain-`http` endpoint without `allow_http` is refused by name**, because
 `ClientOptions` builds reqwest `https_only(!allow_http)` and every request then fails with a bare
 "builder error" that names neither the host nor the control to change.
+
+**Connections 04 (the LOCATION toggle, W7)** is ✅ — the Configure window's object-store arm, and
+the last piece of the data path: a table def can now name a connection. Four things it settled.
+
+**A table names its connection; it does not carry a composed URL.** `TableDef::connection` is the
+connection's `url()` and nothing else about it, which makes it the *one* field that says a table is
+remote — sources are bucket-relative exactly when it is `Some`, so the two halves cannot disagree,
+and the LOCATION choice stays explicit rather than a scheme parsed back out of a path (spec §4).
+**`resolve_source` takes the connection**, rather than a local resolver with a remote sibling
+beside it: `s3://` is not an absolute *path*, so the local rule silently answers
+`<project>/events/2024/` and reports a missing folder on the user's own disk — a wrong answer that
+looks like a broken table. One function is what makes reaching for the wrong one impossible. The
+engine needed nothing at all: the store went in under that URL in the pass's first phase, so
+`table_spec` composing the string is the whole of it.
+
+**A forget now has a consequence, and it is two lists.** Nothing reads an object store by name, so
+the shared `consequence` could not say this: what breaks is the tables whose def names the
+connection (`tables_over`) and then the views behind those (`views_over`), which is the reading a
+table drop already reports. `forget_consequence` says both in one sentence; stopping at the tables
+would have under-reported a forget against the drop it is otherwise identical to.
+
+**A def over a forgotten connection keeps naming it.** Rewriting it to "local disk" would re-point
+the table at a relative path on the user's machine; the footer says which connection is missing and
+blocks Save until one is chosen — the treatment `FormatId::Unknown` already gets, for the same
+reason. **New connection… sets the project window's slot** rather than opening an editor of its
+own, so there is still one open path, the editor outlives a Configure window closed under it, and
+what it saves appears in the picker with no reopen.

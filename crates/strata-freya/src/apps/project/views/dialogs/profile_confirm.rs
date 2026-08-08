@@ -315,6 +315,7 @@ mod tests {
             tables: vec![TableDef {
                 name: "events".into(),
                 format: SourceFormat::Parquet,
+                connection: None,
                 sources: vec!["events.parquet".into()],
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,

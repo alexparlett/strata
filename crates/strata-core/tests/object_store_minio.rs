@@ -7,8 +7,9 @@
 //! without ever signing a request with it.
 //!
 //! So this drives MinIO in a container and asserts the whole chain end to end — connection →
-//! registered object store → `register_external`'s listing and schema inference → a query that
-//! returns rows. In particular it is the only thing that exercises **SigV4 signing through the
+//! registered object store → **a table def naming that connection**, composed by
+//! `register::table_spec` (W7 · 04) → `register_external`'s listing and schema inference → a
+//! query that returns rows. In particular it is the only thing that exercises **SigV4 signing through the
 //! `aws-config` bridge**: `SdkCredentials` hands `object_store` a key/secret/token triple, and
 //! a server that actually verifies signatures is the only witness that the triple is right.
 //!
@@ -51,10 +52,14 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Display;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use strata_core::engine::{Engine, RunTag, TableSpec, WsId};
-use strata_model::{ConnectionDef, CsvRead, Provider, S3Auth, S3Store, SourceFormat};
+use strata_core::register::table_spec;
+use strata_model::{
+    ConnectionDef, CsvRead, Provider, S3Auth, S3Store, SourceFormat, TableDef, TableOrigin,
+};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
 use testcontainers_modules::minio::MinIO;
@@ -72,6 +77,20 @@ const REGION: &str = "us-east-1";
 
 /// Two rows the query at the end can count.
 const REGIONS_CSV: &str = "id,region\n1,emea\n2,apac\n3,amer\n";
+
+/// A **Hive-partitioned** lake under one prefix: `year=`/`month=` folders whose names carry the
+/// values, and files that hold only the other columns. Two partitions with different row counts,
+/// so a query filtered to one of them can be told from a query over both.
+const HIVE_PREFIX: &str = "hive/";
+const HIVE_2024: (&str, &str) = ("hive/year=2024/month=03/part.csv", "id,tally\n1,10\n2,20\n");
+const HIVE_2025: (&str, &str) = ("hive/year=2025/month=01/part.csv", "id,tally\n3,30\n");
+
+/// The **mistake** the partition diagnosis exists for: a lake laid out under plain `2024/`
+/// folders, read by a def that declares `year`. Hive partitions are `key=value` directories, so
+/// an unkeyed level matches nothing and DataFusion calls the location empty — with the files
+/// sitting right there.
+const HIVE_UNKEYED_PREFIX: &str = "flat/";
+const HIVE_UNKEYED: (&str, &str) = ("flat/2024/part.csv", "id,tally\n9,90\n");
 
 /// How long to keep asking for a container while the *provider* says it is at capacity, and
 /// how long to wait between asks. Sized for a hosted runtime handing out one worker at a time:
@@ -129,12 +148,16 @@ async fn minio() -> (ContainerAsync<MinIO>, String) {
     (container, format!("http://127.0.0.1:{port}"))
 }
 
-/// Create `BUCKET` and put one CSV object at `key`, through `aws-sdk-s3`.
+/// Create `BUCKET` and put every `(key, body)` in `objects`, through `aws-sdk-s3`.
 ///
 /// Deliberately not through `object_store`: it has no create-bucket call at all, and using a
 /// second implementation for the write is what makes the read a real check rather than a
 /// round trip of our own assumptions.
-async fn seed(endpoint: &str, key: &str, body: &str) {
+///
+/// Every object in one call, because the bucket is created **once**: MinIO answers a second
+/// `CreateBucket` with `BucketAlreadyOwnedByYou`, so a per-object seed would have to either
+/// swallow that error (and with it a real one) or ask whether it is the first caller.
+async fn seed(endpoint: &str, objects: &[(&str, &str)]) {
     use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
     use aws_sdk_s3::primitives::ByteStream;
     use aws_sdk_s3::{Client, Config};
@@ -155,14 +178,16 @@ async fn seed(endpoint: &str, key: &str, body: &str) {
         .send()
         .await
         .expect("create the bucket");
-    client
-        .put_object()
-        .bucket(BUCKET)
-        .key(key)
-        .body(ByteStream::from(body.as_bytes().to_vec()))
-        .send()
-        .await
-        .expect("put the fixture object");
+    for (key, body) in objects {
+        client
+            .put_object()
+            .bucket(BUCKET)
+            .key(*key)
+            .body(ByteStream::from(body.as_bytes().to_vec()))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("put the fixture object '{key}': {e}"));
+    }
 
     // …and make it readable without a signature, which is what turns this container into an
     // ordinary HTTP origin as well as an S3 endpoint. Only `GetObject`, and only on this
@@ -233,31 +258,69 @@ fn http_connection(endpoint: &str) -> ConnectionDef {
     }
 }
 
-/// One CSV table over the seeded prefix. The trailing `/` is load-bearing: without it
-/// `ListingTableUrl` reads the path as a single file (`engine::catalog::listing_url` only adds
-/// one for a local directory, which a bucket prefix is not).
+/// A table def **as Table Config writes one over a connection** (W7 · 04): the connection's URL,
+/// and a source relative to its bucket. Composed into the spec by `register::table_spec`, which
+/// is the app's own mapping — so what registers below is the string a def really produces rather
+/// than one this test wrote out by hand.
+///
+/// The trailing `/` is load-bearing: without it `ListingTableUrl` reads the path as a single file
+/// (`engine::catalog::listing_url` only adds one for a local directory, which a bucket prefix is
+/// not).
 fn table() -> TableSpec {
-    TableSpec {
+    let def = TableDef {
         name: "regions".into(),
-        paths: vec![format!("s3://{BUCKET}/data/")],
         format: SourceFormat::Csv(CsvRead::default()),
-        partitions: Vec::new(),
-        internal: false,
-    }
+        connection: Some(format!("s3://{BUCKET}")),
+        sources: vec!["data/".into()],
+        partition_cols: Vec::new(),
+        origin: TableOrigin::External,
+    };
+    // The project folder is **never consulted** for a source over a connection, which is why any
+    // path serves here: `resolve_source` composes onto the bucket instead. Handing this to the
+    // local rule is the failure this arrangement exists to catch — it would answer
+    // `/nowhere/data/` and report a missing folder, with the bucket never contacted.
+    table_spec(Path::new("/nowhere"), &def)
+}
+
+/// The **Hive-partitioned** table over that same bucket: one bucket-relative prefix, and the two
+/// folder levels declared as typed columns exactly as the Configure window's Hive section writes
+/// them.
+///
+/// `Int32`, not the `Utf8` DataFusion infers on its own: the types are the def's, and a value
+/// that came out of a folder name has to arrive as the column the user asked for or the cast
+/// warning that surface shows would be about nothing.
+fn hive_table() -> TableSpec {
+    let def = TableDef {
+        name: "tallies".into(),
+        format: SourceFormat::Csv(CsvRead::default()),
+        connection: Some(format!("s3://{BUCKET}")),
+        sources: vec![HIVE_PREFIX.into()],
+        partition_cols: vec![
+            ("year".into(), "Int32".into()),
+            ("month".into(), "Int32".into()),
+        ],
+        origin: TableOrigin::External,
+    };
+    table_spec(Path::new("/nowhere"), &def)
 }
 
 /// The same object over the **HTTP** connection: one file, and deliberately no trailing slash.
 /// `object_store`'s HTTP store lists through WebDAV `PROPFIND`, which MinIO does not implement,
 /// so a prefix-shaped source could not be read here — a single object is what this provider is
 /// for, and it is read through `head` + `get` like any other.
+///
+/// An HTTP connection's URL is a whole origin, so the bucket is part of the *table's* source —
+/// the same composition, over an address the provider does not supply a scheme for.
 fn http_table(endpoint: &str) -> TableSpec {
-    TableSpec {
+    let def = TableDef {
         name: "regions_http".into(),
-        paths: vec![format!("{endpoint}/{BUCKET}/data/regions.csv")],
         format: SourceFormat::Csv(CsvRead::default()),
-        partitions: Vec::new(),
-        internal: false,
-    }
+        connection: Some(endpoint.to_string()),
+        sources: vec![format!("{BUCKET}/data/regions.csv")],
+        partition_cols: Vec::new(),
+        origin: TableOrigin::External,
+    };
+    table_spec(Path::new("/nowhere"), &def)
 }
 
 /// **The whole chain, against a server that verifies signatures.**
@@ -278,7 +341,16 @@ fn http_table(endpoint: &str) -> TableSpec {
 #[tokio::test]
 async fn a_table_over_a_connection_reads_through_the_object_store() {
     let (_minio, endpoint) = minio().await;
-    seed(&endpoint, "data/regions.csv", REGIONS_CSV).await;
+    seed(
+        &endpoint,
+        &[
+            ("data/regions.csv", REGIONS_CSV),
+            HIVE_2024,
+            HIVE_2025,
+            HIVE_UNKEYED,
+        ],
+    )
+    .await;
     ambient();
 
     let engine = Engine::new(BTreeMap::new());
@@ -301,6 +373,133 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .await
         .expect("query the remote table");
     assert_eq!(output.total, 3, "every seeded row came back");
+
+    // --- Hive partitioning, over the bucket ----------------------------------------------
+    //
+    // **The folder tree read as columns, against a store that has no folders.** Everything in
+    // this arm is `ObjectStore`-level on DataFusion's side — `list_partitions` walks
+    // `list_with_delimiter`'s common prefixes and `parse_partitions_for_path` reads the
+    // `key=value` segments off the object path — so nothing about it is local-disk-shaped in
+    // principle. What could not be checked without a real store is whether *our* half holds:
+    // `detect_partitions` lists through the session's registered store rather than `read_dir`,
+    // and the values have to survive the trip as the typed columns the def declares.
+    //
+    // The keys are **found, not declared**: this is the same call the Configure window's Hive
+    // switch makes, so the section that says it found `key=value` folders in a bucket is the
+    // thing being proved.
+    let found = engine
+        .detect_partitions(vec![format!("s3://{BUCKET}/{HIVE_PREFIX}")])
+        .await;
+    assert_eq!(
+        found,
+        ["year", "month"],
+        "the levels were listed through the object store, outermost first"
+    );
+
+    let meta = engine
+        .register(hive_table())
+        .await
+        .expect("the partitioned table registers over the bucket");
+    let columns: Vec<(&str, &str)> = meta
+        .columns
+        .iter()
+        .map(|c| (c.name.as_str(), c.dtype.as_str()))
+        .collect();
+    assert_eq!(
+        columns,
+        [
+            ("id", "Int64"),
+            ("tally", "Int64"),
+            ("year", "Int32"),
+            ("month", "Int32")
+        ],
+        "the file's columns, then the folder tree's — as the types the def asked for"
+    );
+
+    let (output, _) = engine
+        .query(
+            WsId(1),
+            RunTag(2),
+            "SELECT year, month, tally FROM tallies ORDER BY year, tally".into(),
+            50,
+        )
+        .await
+        .expect("query the partitioned table");
+    let cells: Vec<Vec<&str>> = output
+        .rows
+        .iter()
+        .map(|row| row.iter().map(|c| c.text.as_str()).collect())
+        .collect();
+    assert_eq!(
+        cells,
+        [
+            ["2024", "3", "10"],
+            ["2024", "3", "20"],
+            ["2025", "1", "30"]
+        ],
+        "every partition's rows came back carrying its folder's values"
+    );
+
+    // **A filter on a partition column takes a different path through the store**:
+    // `pruned_partition_list` lists the levels and drops whole prefixes before any file is
+    // opened, where the unfiltered read above just lists everything. It is the arm that would
+    // break if a value arrived as text, since `year = 2025` would then be comparing against
+    // `'2025'` — and the one that proves the pruning talks to the same registered store.
+    let (pruned, _) = engine
+        .query(
+            WsId(1),
+            RunTag(3),
+            "SELECT tally FROM tallies WHERE year = 2025".into(),
+            50,
+        )
+        .await
+        .expect("query one partition");
+    assert_eq!(pruned.total, 1, "only the 2025 partition was read");
+    assert_eq!(pruned.rows[0][0].text, "30");
+
+    // **And the diagnosis, which is the part that needed a listing of our own.** A lake under
+    // plain `2024/` folders read by a def that declares `year` matches nothing, and DataFusion
+    // reports the location as empty with the files sitting right there — the one Hive mistake
+    // worth naming. A local directory earns that message from a bounded `std::fs` walk;
+    // `holds_under_partitions` asks the **object store** the same question, so the two now say
+    // the same thing. Nothing but a real bucket with real objects in it can prove that: with an
+    // empty prefix the message is the same either way.
+    let unkeyed = TableSpec {
+        name: "flat".into(),
+        paths: vec![format!("s3://{BUCKET}/{HIVE_UNKEYED_PREFIX}")],
+        ..hive_table()
+    };
+    let refused = engine
+        .register(unkeyed)
+        .await
+        .expect_err("an unkeyed level matches no partition column");
+    assert_eq!(
+        refused,
+        format!(
+            "No .csv files under 's3://{BUCKET}/{HIVE_UNKEYED_PREFIX}' match the partition \
+             columns 'year', 'month'."
+        ),
+        "the store was listed, found the files, and the columns are what missed them"
+    );
+
+    // **The assertion above cannot fail on its own**, which is why this one is here: an
+    // unsettled answer counts as "do not claim emptiness", so a listing that never happened
+    // produces exactly the message it does. A prefix with *nothing* under it is the case only a
+    // real listing can tell apart — `Some(false)`, and the columns are then not to blame.
+    let empty = TableSpec {
+        name: "empty".into(),
+        paths: vec![format!("s3://{BUCKET}/nothing/")],
+        ..hive_table()
+    };
+    let refused = engine
+        .register(empty)
+        .await
+        .expect_err("a prefix with nothing under it");
+    assert_eq!(
+        refused,
+        format!("No files matched 's3://{BUCKET}/nothing/'."),
+        "the store settled that there is nothing there, so the partition columns are not blamed"
+    );
 
     // …and the engine reads through the connection, not around it: a bucket nothing connected
     // has no store, which is the failure a table over an unregistered bucket must give.
@@ -338,7 +537,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     assert_eq!(columns, ["id", "region"], "the schema came off the object");
 
     let (output, _) = engine
-        .query(WsId(1), RunTag(2), "SELECT * FROM regions_http".into(), 50)
+        .query(WsId(1), RunTag(4), "SELECT * FROM regions_http".into(), 50)
         .await
         .expect("query the remote table");
     assert_eq!(output.total, 3, "every seeded row came back over HTTP");
