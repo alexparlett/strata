@@ -54,12 +54,25 @@ use strata_model::{Cell, ColumnInfo, QueryOutput, SnapshotId};
 /// The prefix every result snapshot is registered under. Named here, next to the
 /// only thing that mints one, because two other rules key off it: the statement
 /// router refuses an intercepted statement that names a table with this prefix
-/// (`sql::validate::classify`), and the catalog's readers hide such tables — the
-/// naming rule and the hiding rule must not be able to drift apart.
-pub const SNAPSHOT_PREFIX: &str = "__snap_";
+/// (`sql::validate::classify`), and the schema provider hides such tables from every
+/// enumeration (`engine::providers`) — the naming rule and the hiding rule must not
+/// be able to drift apart.
+const SNAPSHOT_PREFIX: &str = "__snap_";
 
 pub fn snapshot_name(snapshot: SnapshotId) -> String {
     format!("{SNAPSHOT_PREFIX}{snapshot}")
+}
+
+/// Whether `name` is in the snapshot namespace — the one predicate the refusal and the
+/// hiding both ask, so neither can answer differently from [`snapshot_name`].
+///
+/// Case-folded, because the one namespace is case-insensitive and `__SNAP_2` is the same
+/// table — compared in place rather than through `to_ascii_lowercase`, because the router
+/// runs this per identifier per statement on every keystroke and the whole answer is seven
+/// bytes wide.
+pub fn is_snapshot_name(name: &str) -> bool {
+    name.get(..SNAPSHOT_PREFIX.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(SNAPSHOT_PREFIX))
 }
 
 fn snapshots_root() -> String {

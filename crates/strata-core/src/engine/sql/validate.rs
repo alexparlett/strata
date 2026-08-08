@@ -43,7 +43,7 @@ use datafusion::sql::sqlparser::ast::{
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion::sql::sqlparser::parser::ParserError;
 
-use crate::engine::query::SNAPSHOT_PREFIX;
+use crate::engine::query::is_snapshot_name;
 use crate::engine::sql::lex::{
     is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
 };
@@ -628,18 +628,13 @@ fn reads_reserved<V: Visit>(node: &V) -> bool {
     .is_break()
 }
 
-/// Whether any part of `name` carries the snapshot prefix. Case-folded, because the
-/// one namespace is case-insensitive and `__SNAP_2` is the same table — compared in
-/// place rather than through `to_ascii_lowercase`, because this runs per identifier
-/// per statement on every keystroke and the whole answer is seven bytes wide.
+/// Whether any part of `name` is in the snapshot namespace. The predicate itself is
+/// [`is_snapshot_name`], next to the function that mints those names, because the
+/// provider's hiding rule asks the same question and the two must not drift.
 fn is_reserved(name: &ObjectName) -> bool {
     name.0.iter().any(|part| {
-        part.as_ident().is_some_and(|ident| {
-            ident
-                .value
-                .get(..SNAPSHOT_PREFIX.len())
-                .is_some_and(|head| head.eq_ignore_ascii_case(SNAPSHOT_PREFIX))
-        })
+        part.as_ident()
+            .is_some_and(|ident| is_snapshot_name(&ident.value))
     })
 }
 

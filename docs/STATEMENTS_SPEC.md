@@ -147,11 +147,13 @@ with `StmtKind` covering `CreateExternalTable`, `CreateTable`, `Ctas`, `Insert`,
   typed `COPY (SELECT * FROM __snap_3)` from writing `__strata_ord` into a user file. The write
   half keeps `CREATE TABLE __snap_2 …` / CTAS / `CREATE VIEW __snap_2` / `INSERT` / `DROP` off
   the snapshot namespace: `snapshot_name` is `__snap_{seq}` off a counter starting near zero
-  (`engine/mod.rs:517`), the provider's `register_table` is last-write-wins, and a collision is
-  invisible in SHOW/information_schema because the same prefix filters it — either the user's
-  table is silently displaced by the next Run or a Run's readers get the user's rows. Defense in
-  depth at the funnel: `register_external` refuses a reserved-prefix spec name too, which also
-  covers a Configure-typed or hand-edited def.
+  (`engine/mod.rs:517`), and a collision is invisible in SHOW/information_schema because the same
+  prefix filters it. (ED-03 correction: `register_table` is **not** last-write-wins — the provider
+  keeps `MemorySchemaProvider`'s "already exists" error — so the collision costs a *Run*, failing
+  on a name the user cannot see, rather than silently displacing their table. Same conclusion,
+  worse failure than the one first written down.) Defense in depth at the funnel:
+  `register_external` refuses a reserved-prefix spec name too, which also covers a
+  Configure-typed or hand-edited def.
 
 **Dispatch.** New facade entry:
 
@@ -195,21 +197,34 @@ squiggles for free.
 `strata` name:
 
 - **`StrataCatalogProvider`** — exactly one schema, `public`; `register_schema` /
-  `deregister_schema` refuse structurally, so `CREATE SCHEMA`/`DATABASE` are impossible by
-  construction, not just by policy (the `is_owned_key` config fence keeps its job as the
-  second layer).
+  `deregister_schema` refuse structurally, so `CREATE SCHEMA` is impossible by construction, not
+  just by policy (the `is_owned_key` config fence keeps its job as the second layer).
+  **`CREATE DATABASE` is not, and cannot be** (ED-03 correction to the line above): DataFusion's
+  `create_catalog` registers into the `CatalogProviderList`, not into a `CatalogProvider`, and
+  `CatalogProviderList::register_catalog` returns an `Option` with no way to fail
+  (`datafusion-54.0.0/src/execution/context/mod.rs:1030-1050`). A refusing list could only lie
+  ("catalog already exists") or silently no-op, both worse end-states than a refusal — so the
+  router's `Blocked::CreateDatabase` is its only gate, and the first line for `CREATE SCHEMA` too.
 - **`StrataSchemaProvider`** — tables keyed by **folded** name (defense in depth for the one
   case-insensitive namespace); `table_names()` filters `__snap_`-prefixed entries while `table()`
   resolves everything, so every existing reader, `DROP`'s `find_and_deregister`, validation's
-  `table_exist` and snapshot retirement work with zero call-site changes. The `__snap_` prefix
-  constant moves next to `snapshot_name` in `query.rs` and is imported here, so the hiding rule
-  and the naming rule cannot drift.
+  `table_exist` and snapshot retirement work with zero call-site changes. The prefix predicate
+  lives next to `snapshot_name` in `query.rs` (`is_snapshot_name`) and is imported here, so the
+  hiding rule and the naming rule cannot drift. Everything else is `MemorySchemaProvider`'s
+  behaviour verbatim, its duplicate-name error included. Folding on **both** sides is what makes
+  the namespace genuinely case-insensitive: `SELECT * FROM "MyView"` now resolves the view named
+  `MyView`, where DataFusion alone would treat the quoted spelling as a different table. The
+  fold-preservation oracle moved with it, pinning the stored identity rather than which spellings
+  resolve.
 
 Companion decision: flip `datafusion.catalog.information_schema` default **on** (still a
 user-facing Settings key, not owned). Today `SHOW TABLES` is policy-allowed but fails at plan
 time on a fresh project; behind the filter it works and agrees with the sidebar (modulo
 `Reg::Failed` rows, which are unregistered and thus absent from SHOW — documented, and exactly
-why the store remains the catalog authority).
+why the store remains the catalog authority). "Default" here means two things kept in step:
+`build_context` sets it on the `SessionConfig` **before** the override loop, so a user's `false`
+still wins, and `ENGINE_KEYS` names `true` so a *removed* override lands back on what the engine
+was built with rather than on DataFusion's own `false`.
 
 ## 6. Per-capability design
 
@@ -397,10 +412,36 @@ re-registers over the same files. The headless host replays identically. DROP ru
 backwards (deregister → delete dir → `TableRemoved` fold → persist → bump); INSERT appends a file
 and its effect requests `ScanScope::Table`.
 
-There is no new integration surface: an internal table is an ordinary def whose sources live
-under `.strata/`, so the sidebar, scan driver, drop machinery, persist funnel, headless host and
-Configure window already handle it. Configure shows internal defs read-only ("Internal table.
-Data is managed by Strata; drop and re-create to change it").
+An internal table is an ordinary def whose sources live under `.strata/`, so the scan driver,
+persist funnel and headless host handle it with no new code — that half of the claim holds, and it
+is what makes replay free.
+
+**But "there is no new integration surface" was too strong, and the catalog pane is the
+correction** (found while building ED-03; settled 2026-08-08). Landing in `ProjectState.tables` is
+required — the store *is* the catalog — and the consequence is that an internal table inherits
+every affordance a table row has, three of which do not mean the same thing on a def whose data
+Strata owns:
+
+- **Configure does not apply at all.** It edits sources, format and partition columns, and an
+  internal table has none of those to edit, ever. The item is **absent** from the row menu, which
+  is the catalog's existing treatment for an item that could never apply to a row kind (the view
+  menu has no Refresh, for the same reason) rather than parking, which means "not right now".
+  With the item gone the window cannot receive an internal def — `ConfigureTarget::Edit` is set
+  only from that menu and from Configure's own post-save transition on a *New* table — so it
+  needs no internal mood and must not grow a guard for one. This **replaces** the earlier
+  read-only-window design.
+- **Drop is one action with two entry points, and they must be one funnel.** The sidebar's drop
+  and the editor's `DROP TABLE` both destroy an internal table; drafted separately, the sidebar's
+  would have removed the def and left `.strata/tables/<slug>/` orphaned, under a dialog whose
+  fixed copy promises "files on disk are not deleted". Both go through `engine::ddl::drop_table`,
+  with the dialog as the confirm in front of it, and the origin-dependent wording stated once.
+- **The row has to show which origin it is** — it is what stands between the user and that drop.
+
+**Refresh** is the one that survives unchanged, and it is load-bearing: re-inference is how row
+counts move after an INSERT.
+
+Task ownership: the row and the menu are ED-04's (where `TableOrigin` is introduced), the drop is
+ED-05's.
 
 ## 8. Lifetimes (state in one table)
 

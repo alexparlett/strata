@@ -301,12 +301,16 @@ in the freya-query cache — the store holds specs, never rows:
 > described a `FetchCatalog` freya-query capability invalidated by the DDL mutations. That was
 > never built and must not be: the catalog is the project file's **defs** plus what registration
 > learned (`ProjectState`, §2), never an introspection query against DataFusion. Asking the engine
-> would be wrong four ways — result snapshots are registered as real `__snap_*` tables and would
-> appear; a def whose registration *failed* has no engine presence yet is exactly the row the
-> catalog must keep showing (P3-04's validity badge); `datafusion.catalog.information_schema`
-> defaults to `false` and is a user-facing Settings key; and saved queries aren't a DataFusion
-> concept. `ProjectState` is also the ⌘S save-target store, so a cached second copy would be two
-> sources of truth. DDL mutations therefore call the engine and then the store's own methods
+> would be wrong three ways — a def whose registration *failed* has no engine presence yet is
+> exactly the row the catalog must keep showing (P3-04's validity badge);
+> `datafusion.catalog.information_schema` is a user-facing Settings key the user may turn off; and
+> saved queries aren't a DataFusion concept. `ProjectState` is also the ⌘S save-target store, so a
+> cached second copy would be two sources of truth. (Two of the four grounds originally listed
+> moved with **ED-03**, and neither weakens the rule: result snapshots no longer "would appear" —
+> `engine::providers` filters `__snap_*` out of every enumeration — and `information_schema` now
+> defaults **on** rather than off. The `Reg::Failed` ground is the one introspection can never
+> answer, and it is the one that settles it.)
+> DDL mutations therefore call the engine and then the store's own methods
 > (`upsert_view` / `remove_table` / …) on the matching `ProjChan`, and subscribers re-render —
 > nothing refetches. Functions **are** a snapshot the engine hands over (`Engine::functions`).
 

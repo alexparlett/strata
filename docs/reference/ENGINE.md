@@ -33,6 +33,25 @@ See `docs/STATEMENTS_SPEC.md` and the invariants in `reference/INVARIANTS.md` fo
 classification and ED-02 the dispatch, and each `StmtKind`'s implementation is the ED task that
 owns its capability — until then an intercepted statement runs into `ddl::execute`'s stub refusal.
 
+**The catalog and schema providers are ours, for identity and visibility — never lifecycle**
+(ED-03, `engine::providers`, installed in `build_context` before anything registers). One catalog
+with one schema, `public`, whose `register_schema` refuses: `CREATE SCHEMA` is impossible by
+construction rather than by policy. One schema map keyed by `fold_ident`, so the single namespace
+is genuinely case-insensitive. And `table_names()` filters the `__snap_` result snapshots while
+`table()` still resolves them — which matters because `table_names()` is the *only* path every
+`information_schema` view and every `SHOW` form enumerates through, so one filter hides the spool
+from all of them and keeps `__strata_ord` out of `information_schema.columns`, while paging, chart,
+export and retirement (all by name) notice nothing. That is what makes
+`datafusion.catalog.information_schema` safe to default **on**, so `SHOW TABLES` works on a fresh
+project — it rewrites to `SELECT * FROM information_schema.tables` and errors outright when the key
+is off, which `DESCRIBE` never did (`describe_table_to_plan` goes straight to `get_table_source`).
+Everything else is `MemorySchemaProvider`'s behaviour verbatim. Lifecycle
+is **not** here and cannot be: `register_table` is sync and carries no caller identity, so it can
+neither spool a CTAS result nor tell a user's `DROP` from the deregister every re-scan does
+(`STATEMENTS_SPEC.md` §3, settled). `CREATE DATABASE` is likewise not stoppable at a provider —
+DF registers it into the `CatalogProviderList`, whose `register_catalog` returns an `Option` — so
+the router's `Blocked::CreateDatabase` is its only gate.
+
 **A remote scheme is something we register, and a connection is what registers it.** DataFusion
 core resolves nothing: there is no built-in "read `s3://…`", so an embedder builds an
 `object_store` and calls `register_object_store` **per bucket** or every scan of it fails with *no

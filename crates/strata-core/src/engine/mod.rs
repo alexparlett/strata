@@ -35,6 +35,7 @@ mod functions;
 pub mod json_poly;
 pub mod plan;
 pub mod profile;
+mod providers;
 mod query;
 pub mod serialize;
 pub mod sql;
@@ -99,6 +100,7 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
 
 use crate::engine::plan::QueryPlan;
+use providers::StrataCatalogProvider;
 use query::{
     claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
 };
@@ -1413,7 +1415,14 @@ pub(crate) fn quote_ident(name: &str) -> String {
 /// build a `RuntimeEnv` (parsed via `parse_capacity_limit`). Bad values are logged
 /// and skipped rather than failing the whole engine.
 fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
-    let mut config = SessionConfig::new();
+    // `information_schema` on by default — Strata's default, not DataFusion's, which is why
+    // it is set *before* the override loop rather than in it: a user who turns it off in
+    // Settings still wins, and it is not an owned key. `SHOW TABLES` and every
+    // `information_schema` view need it, and they only became safe to expose with the
+    // snapshot filter in `providers` (`docs/STATEMENTS_SPEC.md` §5) — without that they would
+    // list every `__snap_N` spool table and its `__strata_ord` column. `ENGINE_KEYS` carries
+    // the same `true`, so a *removed* override lands back here rather than on DataFusion's.
+    let mut config = SessionConfig::new().with_information_schema(true);
     for (key, value) in overrides {
         if key.starts_with("datafusion.runtime.") {
             continue; // runtime.* live on the RuntimeEnv, not ConfigOptions
@@ -1441,6 +1450,12 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
             SessionContext::new_with_config(config)
         }
     };
+    // Our own catalog + schema, in place of the `MemoryCatalogProvider` the session builder
+    // just registered under the same name, and **before** anything registers a table: identity
+    // (one schema, folded names) and visibility (result snapshots resolve but do not
+    // enumerate) — never lifecycle, which lives in `ddl` in front of `ctx.sql`. See
+    // `providers` for why the traits cannot carry more than this.
+    ctx.register_catalog(CATALOG, Arc::new(StrataCatalogProvider::default()));
     // The Postgres-style JSON accessors (`json_get`, `->`, `->>`) over a Utf8 column of JSON
     // text. They belong to the **engine**, not to a table: `json_get('{"a":1}', 'a')` is valid
     // with nothing registered, so this sits beside the catalog naming rather than in `catalog`.
@@ -2027,6 +2042,16 @@ mod tests {
         hit
     }
 
+    /// The **identities** `ctx`'s schema is keyed by, whatever spelling registered them —
+    /// `StrataSchemaProvider`'s own keys, minus the result snapshots it hides.
+    fn registered(ctx: &SessionContext) -> Vec<String> {
+        ctx.catalog(CATALOG)
+            .expect("our catalog")
+            .schema(SCHEMA)
+            .expect("our schema")
+            .table_names()
+    }
+
     /// **The fold-preservation oracle.** The tests above pin `quote_ident` to hardcoded
     /// expectations; this one pins it to *the code it replaced*, which is the property that
     /// actually matters — an existing `.strata/project.json`, written and registered by the
@@ -2073,17 +2098,25 @@ mod tests {
                 .unwrap_or_else(|e| panic!("create_view {name:?}: {e}"));
         }
 
-        let before = reachable(&legacy.ctx, PROBES).await;
+        // Sanity, asked of the **identity** each view registered under rather than of what
+        // resolves. `StrataSchemaProvider` keys the namespace by `fold_ident` on both sides
+        // (ED-03), so every spelling of a name now resolves and a probe list can no longer
+        // show a fold happening; the stored key still can, and it is the stricter question.
         assert_eq!(
-            before,
-            ["myview", "dailysales", "daily_sales", "orders", "order"],
+            registered(&legacy.ctx),
+            ["daily_sales", "dailysales", "myview", "order", "orders"],
             "sanity: the shipped path folded each name to its lowercase spelling"
         );
         assert_eq!(
+            registered(&now.ctx),
+            registered(&legacy.ctx),
+            "every name must keep exactly the identity it always had — a sibling def saying \
+             `FROM myview` has no migration if this changes"
+        );
+        assert_eq!(
             reachable(&now.ctx, PROBES).await,
-            before,
-            "every name must stay reachable under exactly the spellings it always was — a \
-             sibling def saying `FROM myview` has no migration if this changes"
+            reachable(&legacy.ctx, PROBES).await,
+            "and must stay reachable under exactly the spellings it always was"
         );
     }
 

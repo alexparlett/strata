@@ -44,15 +44,67 @@ namespace kept; old `project.json` loads unchanged; a def is one list entry eith
   attempted.
 - `tidy_strata_dir` sweeps `.strata/tables/.tmp-*`; `ensure_gitignore` adds `tables/`.
 
-**App:** the Configure window shows an `origin: Internal` def read-only ("Internal table. Data is
-managed by Strata; drop and re-create to change it") — sources/format/hive controls disabled, no
-Save.
+**App:**
+
+- **No Configure on an internal table** (settled with Alex 2026-08-08, replacing this task's
+  first draft, which had the window open read-only). Configure edits the sources, format and
+  partition columns of a def that points at the user's files; an internal table has none of that
+  to edit, ever — so the item is **absent from the row menu**, not parked. That is the catalog's
+  own established treatment for an item that could never apply to a row kind rather than one that
+  is merely unavailable right now: the view menu has no Refresh at all, and
+  `each_row_kind_offers_its_own_menu` states the reason in as many words ("a view has no files to
+  re-infer, so no Refresh"). Parking (`MenuButton::enabled(false)`) is for the other case — the
+  in-flight one that item already uses for "Refreshing…".
+  The internal table menu is therefore `View table`, `Profile table`, `Refresh table`,
+  `Drop table`. Nothing is lost: the column list is on the row's own expansion, and Profile
+  still answers everything about the data.
+  **Drop the read-only-window work with it.** `ConfigureTarget::Edit` is set from exactly two
+  places — the row menu, and `configure/views/footer.rs`'s post-save transition on a *New* table,
+  which is external by construction (the palette only offers `New`). Remove the menu item and the
+  window cannot receive an internal def at all, so an internal mood for it would be handling for
+  an unreachable state. Make it structurally impossible; do not add a guard.
+- **The catalog row says which origin it is** (gap found while building ED-03; the plan had the
+  Configure window and nothing else). `entry.rs` picks its icon with
+  `IconName::for_catalog(self.kind)` — kind only — so as written an internal table renders
+  identically to one pointing at the user's own parquet. That is not cosmetic: it is the only
+  thing standing between the user and ED-05's drop, where one origin deletes their data and the
+  other does not. The distinction comes off `TableDef.origin`, which this task is what introduces,
+  so it belongs here rather than in a later polish pass. Design call (icon variant vs. a row
+  affordance) is open — do not invent a token; the design handoff's catalog surface is the
+  reference, and AGENTS.md §3's "a missing component *state* belongs on the component's theme in
+  the fork" applies if it turns out to need one.
+- **Not** the drop confirm's wording or the sidebar drop's data deletion — those are ED-05's, with
+  the editor's `DROP TABLE`, so one destructive action has one owner. See the note there.
+
+**An internal table is a table row, and inherits every affordance one has.** `TableUpserted` puts
+it in `ProjectState.tables` — which is required, because the store is the catalog and a table the
+pane cannot see is not in the catalog at all. The consequence is the work: the row arrives holding
+the whole table menu (`View table`, `Profile table`, `Refresh table`, `Configure`, `Drop table` —
+pinned in order by `catalog/interaction.rs`'s `each_row_kind_offers_its_own_menu`), and three of
+those five do not mean the same thing on a def whose data Strata owns. Settle each **here**, where
+`TableOrigin` is introduced, rather than leaving the pane to discover it:
+
+- **Configure** is a table's *only* edit surface (a view has "Edit query"; a table has this — the
+  same test says so in as many words), and it is the one that goes: settled above, absent from the
+  menu.
+- **Refresh table** is fine and is *load-bearing* — re-inference against `.strata/tables/<slug>/`
+  is how row counts move after an INSERT, and ED-05's `StoreEffect::RescanTable` depends on it.
+  No change; noted so a later reader does not "fix" it.
+- **Drop table** is ED-05's, above.
+
+**The def travels and the data does not**, and the pane has to say so honestly. `project.json`
+carries an internal def like any other, while `.strata/tables/` is gitignored — so a teammate who
+clones the project gets a def with no data. The acceptance below already requires an honest
+`Reg::Failed` row for that case; what it must not do is render it in the external-table
+vocabulary ("could not read location …", which invites the user to go fix a path). The true
+sentence is that the table's data is local to the machine that created it. One message, stated
+where the other origin-dependent wordings are (ED-05's report), not a second vocabulary here.
 
 ## Acceptance
 
 - CTAS over a large result completes without proportional RAM growth (streamed), lands the row
-  in the sidebar, persists the def, and the table is queryable in another tab after the epoch
-  bump.
+  in the sidebar **marked as internal**, persists the def, and the table is queryable in another
+  tab after the epoch bump.
 - `CREATE TABLE t (a INT)` yields an empty queryable table with the declared schema; a following
   restart replays it (schema from the IPC file, not the def).
 - `IF NOT EXISTS` no-ops with a report; plain create over an existing name errors; `OR REPLACE`
@@ -61,7 +113,12 @@ Save.
   `__snap_1` fails registration through `register_external` with the same class of error.
 - Close and reopen the project: the internal table returns through the ordinary pass
   (`register_project` test in `strata-core` covers the headless half). A copy of the project
-  without `.strata/tables/` shows an honest `Reg::Failed` row.
+  without `.strata/tables/` shows an honest `Reg::Failed` row **naming the real cause** — the data
+  is local to the machine that created it, not a path the user can go and fix.
+- `each_row_kind_offers_its_own_menu` gains the internal-table case, asserting the item list
+  `View table` / `Profile table` / `Refresh table` / `Drop table` in order — Configure absent, so
+  its omission is pinned by the same test that pins every other row kind's, rather than being
+  incidental to whoever edits the menu next.
 - `TableMeta.rows` is exact for Arrow tables (footer-read test with a multi-batch file).
 
 ## Verification
