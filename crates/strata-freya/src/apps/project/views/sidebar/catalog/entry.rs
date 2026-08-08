@@ -150,14 +150,16 @@ impl StatusMark {
     }
 }
 
-/// The `INTERNAL` badge's laid-out width plus the row gap it brings with it — `Eyebrow` at 10
-/// over the badge's 4px side padding, measured rather than guessed
-/// (`the_internal_badge_folds_before_the_name_truncates`).
+/// What each optional item costs the row: its own width plus the one gap it brings with it
+/// (`SidebarRow`'s spacing is 8).
 const BADGE_SLOT: f32 = 63. + 8.;
-/// Everything on the row that is neither the name nor the badge: the row's padding (8 + 4), the
-/// chevron (11), the entity icon (14), the status column ([`STATUS_SIZE`]), the ⋮
-/// ([`ACTIONS_SIZE`]) and the four gaps between those five items.
-const ROW_FIXED: f32 = 8. + 4. + 11. + 14. + STATUS_SIZE + ACTIONS_SIZE + (4. * 8.);
+const ICON_SLOT: f32 = 14. + 8.;
+const STATUS_SLOT: f32 = STATUS_SIZE + 8.;
+/// What the row can never give up: its padding (8 + 4), the chevron that expands it (11), the ⋮
+/// that opens its menu (22), and the two gaps around the name. The chevron and the ⋮ are the
+/// pinned tail in `components::toolbar`'s sense — they are how the row is *used*, so a row too
+/// narrow to show them is worse than one showing nothing else.
+const ROW_PINNED: f32 = 8. + 4. + 11. + ACTIONS_SIZE + (2. * 8.);
 /// Advance width of the mono face, as a fraction of its point size.
 ///
 /// The name is [`MonoValue`] — a **monospace** role — so its natural width is exactly its
@@ -168,29 +170,59 @@ const ROW_FIXED: f32 = 8. + 4. + 11. + 14. + STATUS_SIZE + ACTIONS_SIZE + (4. * 
 /// theme's own scale rather than this file, so retuning the type scale retunes the fold with it.
 const MONO_ADVANCE: f32 = 0.6;
 
-/// Whether the row folds its `INTERNAL` badge away, given the row's width and what the name
-/// would take unconstrained.
+/// Which of the row's optional items survive at a given width.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) struct Folds {
+    pub badge: bool,
+    pub icon: bool,
+    pub status: bool,
+}
+
+/// The row's fold plan — `components::toolbar`'s policy, ranked for this row.
 ///
-/// **This is `components::toolbar`'s policy, not a rule of its own** (AGENTS.md §3: one fold
-/// policy for every row). That row is `[ leading run (flexible, ellipsizes) ][ items (fold
-/// tail-first) ][ pinned tail ]`, and the space it offers the items is the row minus its padding,
-/// minus the pinned tail, **minus the leading run's floor** — so an item folds while the leading
-/// run is still whole, and the leading run goes on ellipsizing afterwards. A catalog row is that
-/// shape: the name is the leading run, the badge is the one foldable item, and the status column
-/// and ⋮ are the pinned tail that never folds.
+/// That component's row is `[ leading run (flexible, ellipsizes) ][ items (fold lowest-rank
+/// first) ][ pinned tail ]`, and the space it offers the items is the row minus its padding,
+/// minus the pinned tail, minus the **leading run's floor**. So items fold while the leading run
+/// is still whole, and the leading run ellipsizes only once they have all gone. A catalog row is
+/// that shape: the name is the leading run, its floor is its own natural width, the chevron and
+/// the ⋮ are pinned, and everything else folds — **in this order, least informative first**:
 ///
-/// What this row contributes is its leading floor: **the name's own natural width**, so the badge
-/// goes the moment it would cost a character rather than at some shared constant. That the name
-/// can be measured by arithmetic at all is [`MONO_ADVANCE`]'s doing, and stating a width is what
-/// every `ToolbarItem` does anyway.
+/// 1. the `INTERNAL` badge — a marker the icon's tint repeats, and the only item that is pure
+///    reinforcement;
+/// 2. the entity icon — decoration once the row's section already says what kind it is;
+/// 3. the status glyph — information, not decoration, so it outranks both of the above and goes
+///    last of the three.
 ///
-/// Two earlier versions of this got it wrong in opposite directions, and both are worth not
-/// repeating: a flat 80px floor let a long name ellipsize while the badge sat there, and a
-/// "the name does not fit either way, so keep the badge" case rendered a badge beside an empty
-/// name. There is no width at which keeping the badge is worth a character of the name — the
-/// icon's own tint already says the row is internal, and the icon never folds.
-pub(super) fn folds_badge(row_width: f32, name_width: f32) -> bool {
-    name_width > row_width - ROW_FIXED - BADGE_SLOT
+/// The name never sets a floor of its own: below the point where everything has folded it goes
+/// on ellipsizing, because a chrome row folds rather than spills (AGENTS.md §3).
+pub(super) fn fold_plan(row_width: f32, name_width: f32, internal: bool) -> Folds {
+    let needs = |f: Folds| {
+        ROW_PINNED
+            + name_width
+            + if f.badge { BADGE_SLOT } else { 0. }
+            + if f.icon { ICON_SLOT } else { 0. }
+            + if f.status { STATUS_SLOT } else { 0. }
+    };
+    // Unrolled rather than looped over the fields: the *order* is the policy here, and three
+    // named steps say it where an iterator over `&mut bool` would hide it.
+    let mut folds = Folds {
+        badge: internal,
+        icon: true,
+        status: true,
+    };
+    if needs(folds) <= row_width {
+        return folds;
+    }
+    folds.badge = false;
+    if needs(folds) <= row_width {
+        return folds;
+    }
+    folds.icon = false;
+    if needs(folds) <= row_width {
+        return folds;
+    }
+    folds.status = false;
+    folds
 }
 
 /// What a catalog entry (a table or a view) resolved to for rendering: its columns, its partition
@@ -378,17 +410,27 @@ impl Component for EntryRow {
             (false, None) => None,
         };
 
-        // **The badge folds before the name truncates.** Freya has no container query, so the row
-        // measures itself and the next render acts on it — one `State` per row, written only when
-        // the answer actually flips, so a resize does not re-render rows whose answer has not
-        // changed. Seeded showing: the first paint keeps the badge, and a row too narrow for it
-        // drops it on the frame after, which is the right way round — a marker that flashes away
-        // is better than a name that arrives clipped.
-        let mut folded = use_state(|| false);
-        let fold_badge = internal && folded();
-        // What this name would take if nothing constrained it. Mono, so it is arithmetic — see
-        // [`MONO_ADVANCE`].
+        // **The badge folds before the name truncates**, on `components::toolbar`'s policy.
+        //
+        // What is in state is the **measured width**, never the verdict — `Toolbar` keeps its
+        // `measured` the same way, and for the reason AGENTS.md §2 gives: a value that must stay
+        // live is a second *input* to the derivation, never a stored result. The fold depends on
+        // the row's width *and* on what the name would take, and the second of those moves with
+        // the theme's type scale and with the name itself; caching the verdict and refreshing it
+        // only from `on_sized` left it computed under the old font whenever a theme switch
+        // changed the mono size without changing the row's area (the row is `Size::fill()` over a
+        // fixed height, so nothing about it resizes). Deriving it here costs one comparison and
+        // cannot go stale.
+        //
+        // Seeded infinite, like `Toolbar`'s: the first paint assumes it fits, and the frame after
+        // the measurement corrects it. That way round because a marker that flashes away beats a
+        // name that arrives clipped.
+        let mut measured = use_state(|| f32::INFINITY);
+        // What this name would take unconstrained. Mono, so it is arithmetic — see
+        // [`MONO_ADVANCE`] — and read from the live scale, so retuning the type scale retunes the
+        // fold with it.
         let name_width = self.name.chars().count() as f32 * scale().data_value.size * MONO_ADVANCE;
+        let folds = fold_plan(measured(), name_width, internal);
 
         // One menu, two triggers (right-click the row, or press its ⋮) — a fresh snapshot each
         // time it is opened.
@@ -419,9 +461,14 @@ impl Component for EntryRow {
                 .color(self.theme.chevron_color)
                 .size(11.),
             )
-            .child(Icon::new(icon).color(icon_color).size(14.))
-            // The name absorbs the slack and truncates, so the status run stays visible however
-            // long the table is called.
+            // Folds second of the three: once the badge has gone, the glyph is decoration —
+            // the section header above already says what kind of thing this row is.
+            .maybe_child(
+                folds
+                    .icon
+                    .then(|| Icon::new(icon).color(icon_color).size(14.).into_element()),
+            )
+            // The leading run: it takes all the slack, and it is the last thing to give any up.
             .child(
                 MonoValue::new(self.name.clone())
                     .color(self.theme.name_color)
@@ -435,7 +482,7 @@ impl Component for EntryRow {
             // row *is* rather than as something that happened to it — and **folded away
             // before the name truncates**, because a name the reader cannot finish is a worse
             // loss than a marker the icon's own tint already carries.
-            .maybe_child((internal && !fold_badge).then(|| {
+            .maybe_child(folds.badge.then(|| {
                 tip(INTERNAL_TIP)
                     .child(rect().a11y_alt(INTERNAL_TIP).child(
                         Badge::tag(INTERNAL_BADGE, self.theme.internal_color).into_element(),
@@ -450,8 +497,9 @@ impl Component for EntryRow {
             // its position: a row that had ever been profiled kept a mounted, idle
             // `ProfileStatus` in the run, so everything left of it sat 20px further in than
             // on a row that had not. One reserved slot instead, so every row's marks line up
-            // in a column whatever any of them is doing.
-            .child(
+            // in a column whatever any of them is doing. It folds last of the three, because
+            // it is the only one carrying information rather than repeating something.
+            .maybe_child(folds.status.then(|| {
                 rect()
                     .width(Size::px(STATUS_SIZE))
                     .cross_align(Alignment::Center)
@@ -472,8 +520,9 @@ impl Component for EntryRow {
                             .into_element(),
                         ),
                         None => status.as_ref().map(|s| s.glyph(&self.theme)),
-                    }),
-            )
+                    })
+                    .into_element()
+            }))
             .child(actions_button(build_menu));
 
         // The column block: an indented run hung off a hairline rail, exactly the canvas's
@@ -542,7 +591,7 @@ impl Component for EntryRow {
             // The measurement behind the badge fold. `set_if_modified` on the *answer*, not on
             // the width: a drag across the pane's whole range writes at most twice.
             .on_sized(move |e: Event<SizedEventData>| {
-                folded.set_if_modified(folds_badge(e.area.width(), name_width));
+                measured.set_if_modified(e.area.width());
             })
             .child(row)
             .maybe_child(body)

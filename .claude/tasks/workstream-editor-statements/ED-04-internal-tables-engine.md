@@ -190,6 +190,14 @@ where the other origin-dependent wordings are (ED-05's report), not a second voc
   a union or a zero-field struct, which is an arbitrary query result's problem exactly as it was
   the snapshot's. A "compact this table" capability (ZSTD, or one file instead of N) is a real
   follow-up and wants its own task alongside ED-05's no-compaction note.
+- **`SidebarRow` should carry the fold policy, not each row.** The catalog row now folds on
+  `components::toolbar`'s policy — leading run ellipsizes last, items fold lowest-rank first,
+  chevron and ⋮ pinned — but it states that plan itself (`entry.rs::fold_plan`). Every other row
+  built on `SidebarRow` has the same shape and the same problem, and so do the table surfaces.
+  Lifting the plan onto `SidebarRow` (or a shared `fold` helper beside `Toolbar`'s) is the real
+  fix; **Alex is taking this as its own task** (agreed 2026-08-08), so nothing here should grow a
+  second copy of the arithmetic in the meantime.
+
 - **Hive layout.** An internal table is a flat directory of `<write_id>_<n>.arrow`, one file per
   output partition — multi-file from the first CTAS on any result big enough to parallelise, and
   read as a directory listing. `partition_by` is empty and `PARTITION BY` is refused by

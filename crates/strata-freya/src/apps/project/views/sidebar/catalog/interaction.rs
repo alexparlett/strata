@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
-use super::entry::{folds_badge, ACTIONS_SIZE};
+use super::entry::{fold_plan, Folds, ACTIONS_SIZE};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
@@ -986,26 +986,70 @@ fn the_internal_badge_folds_before_the_name_truncates() {
     assert!(shows(&runner, "daily_totals"), "and the name is intact");
 }
 
-/// The rule on its own — `components::toolbar`'s order, applied to this row: the foldable item
-/// goes while the leading run is still whole. Both earlier versions are pinned here as the cases
-/// they got wrong: a flat floor let a long name ellipsize with the badge still up, and a "cannot
-/// fit either way" case kept the badge beside an empty name.
+/// **The fold order, which is the policy** — `components::toolbar`'s, ranked for this row: items
+/// go lowest-rank first while the leading run is still whole, and the leading run ellipsizes only
+/// once they have all gone.
+///
+/// Least informative first: the badge (pure reinforcement — the icon's tint repeats it), then the
+/// entity icon (decoration, since the section header already says what kind the row is), then the
+/// status glyph (information, so it outranks both). The name is never folded and never floors —
+/// it just gets shorter.
 #[test]
-fn the_badge_never_costs_the_name_a_character() {
-    // Room for both.
-    assert!(!folds_badge(400., 100.));
-    // The badge is what tips the name into an ellipsis.
-    assert!(folds_badge(260., 100.));
-    // Tight enough that the name is in trouble regardless — the badge still goes, because that
-    // is when its 71px is worth the most.
-    assert!(folds_badge(180., 300.));
+fn the_row_folds_least_informative_first() {
+    // Wide: everything up.
+    assert_eq!(
+        fold_plan(400., 100., true),
+        Folds {
+            badge: true,
+            icon: true,
+            status: true
+        }
+    );
+    // The badge is what tips the name into an ellipsis, so it goes alone.
+    assert_eq!(
+        fold_plan(260., 100., true),
+        Folds {
+            badge: false,
+            icon: true,
+            status: true
+        }
+    );
+    // Tighter: the icon follows.
+    assert_eq!(
+        fold_plan(200., 100., true),
+        Folds {
+            badge: false,
+            icon: false,
+            status: true
+        }
+    );
+    // Tighter still: the status glyph is the last to go, and the name simply keeps shrinking
+    // after that — there is no fourth step.
+    assert_eq!(
+        fold_plan(120., 100., true),
+        Folds {
+            badge: false,
+            icon: false,
+            status: false
+        }
+    );
+    // An external row has no badge to give up, so its first fold is the icon.
+    assert_eq!(
+        fold_plan(230., 140., false),
+        Folds {
+            badge: false,
+            icon: false,
+            status: true
+        }
+    );
 }
 
-/// And the name goes on collapsing **after** the badge has gone. A leading run ellipsizes all the
-/// way down rather than setting a floor and making the row spill (AGENTS.md §3), so the order the
-/// user sees is: badge disappears, then the name shortens.
+/// And the name goes on collapsing **after** everything foldable has gone — a leading run
+/// ellipsizes all the way down rather than setting a floor and making the row spill
+/// (AGENTS.md §3), so the order the user sees is: badge, icon, status glyph, then the name
+/// shortening.
 #[test]
-fn the_name_goes_on_collapsing_once_the_badge_has_folded() {
+fn the_name_goes_on_collapsing_once_the_row_has_folded() {
     let (mut runner, _) = runner_sized(mixed_origins, 150.);
     settle(&mut runner);
 
