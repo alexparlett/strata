@@ -110,7 +110,8 @@ Four changes after the first review pass, all of them tightening what a connecti
   sentence under it) and these names share so many substrings that a cut entry is one typing
   cannot find. The panel scrolls, and the gesture **latches** to it (`ScrollView::latch_wheel`,
   the fork's macOS convention), so flicking through the offers cannot hand off mid-gesture and
-  scroll the form behind them. Not a `Select`: a closed list is no reason to reach for one when the grid beside it
+  scroll the form behind them. `auto` + `max_height`, the app's own shape for a capped scroll
+  panel — `height` alone is an exact size and would hold three rows of panel open over one offer. Not a `Select`: a closed list is no reason to reach for one when the grid beside it
   types the same kind of thing, and a field takes a paste, a partial match and a name from a newer
   `object_store` where a dropdown takes none of them. The one departure from the grid is the tint:
   an unknown name is an **error** here rather than a warning, because `check_client_config`

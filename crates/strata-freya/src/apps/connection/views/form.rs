@@ -54,11 +54,12 @@ const OPTION_ROW: f32 = 38.;
 /// client option's name is long and the box it hangs off is a third of a narrow window.
 const ERROR_STRIPE: f32 = 2.;
 const SUGGEST_WIDTH: f32 = 300.;
-/// How many offers the panel shows before it scrolls, and what one of them stands at.
+/// How many offers the panel grows to before it scrolls, and what one of them stands at.
 ///
 /// **Three**, because an offer here is two lines (the name means little without the sentence under
 /// it) and a panel taller than that covers the table it is being typed into. The rest are still
 /// offered — the panel scrolls to them — so nothing is cut from the answer, only from the view.
+/// A *maximum*, so one match is one row of panel rather than three rows of empty.
 const SUGGEST_ROWS: f32 = 3.;
 const SUGGEST_ROW_HEIGHT: f32 = 46.;
 pub const OPTION_KEY_WIDTH: f32 = 210.;
@@ -799,12 +800,16 @@ impl Component for OptionRow {
         // **The panel scrolls, and the gesture latches to it** — the macOS convention the fork
         // implements: a wheel gesture that starts here stays here for its whole life, including
         // past the end of the range, so flicking through the offers cannot hand off mid-gesture
-        // and scroll the form behind them. Height capped rather than the list, so the panel is
-        // shorter than the table row it hangs over while still offering every match.
+        // and scroll the form behind them. The **height** is capped rather than the list, so the
+        // panel stays shorter than the table it hangs over while still offering every match —
+        // `auto` + `max_height`, the app's own shape for this (`record_view`, `drop_confirm`),
+        // because `height` alone is an exact size and would hold all three rows' worth of panel
+        // open over a single offer.
         let menu = Menu::new().min_width(Size::px(SUGGEST_WIDTH)).child(
             ScrollView::new()
                 .latch_wheel()
-                .height(Size::px(SUGGEST_ROWS * SUGGEST_ROW_HEIGHT))
+                .height(Size::auto())
+                .max_height(Size::px(SUGGEST_ROWS * SUGGEST_ROW_HEIGHT))
                 .child(offers),
         );
 
