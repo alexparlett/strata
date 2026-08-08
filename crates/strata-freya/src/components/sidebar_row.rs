@@ -1,5 +1,12 @@
-//! One **sidebar row** — the shared shell behind every clickable row in the left pane: the
-//! catalog's tables, views, columns and saved queries (P3-02), and the connections list (W7).
+//! One **sidebar row** — the shared shell behind every row in the left pane: the catalog's
+//! tables, views, columns and saved queries (P3-02), and the connections list (W7).
+//!
+//! Most of them are clickable and one is not. A connection row has no `on_press` at all (its
+//! actions are the ⋮ menu, `CONNECTIONS_SPEC.md` §1), and `SideBarItem` used to announce it as
+//! a focusable `Link` regardless — a tab stop with a focus ring that no key could activate.
+//! Fixed **in the fork**, not around it: role and focusability now follow whether the item is
+//! pressable. Hover still paints on both, because a row you can right-click is a row worth
+//! marking under the pointer.
 //!
 //! It is a thin preset over Freya's [`SideBarItem`], not a component of our own, because that
 //! already carries everything the rows genuinely share:
@@ -7,16 +14,16 @@
 //! - the **idle / hover / selected** background state machine, from the one `sidebar_item` theme
 //!   key (so the hover fill can't drift between panes, which is exactly what happened when each
 //!   row hand-rolled its own `on_pointer_enter` and its own token);
-//! - **accessibility** — an a11y id, `Link` role, keyboard focusability and a focus ring, none of
-//!   which the hand-rolled rows had.
+//! - **accessibility** — an a11y id, and, on a row that is actually pressable, a `Link` role,
+//!   keyboard focusability and a focus ring, none of which the hand-rolled rows had.
 //!
 //! Selection rides Freya's [`Activable`], whose own docs name `SideBarItem` as the case it exists
 //! for: it provides the `ActivableContext` that `SideBarItem::use_is_active` reads. No fork change
 //! was needed.
 //!
-//! What is **not** shared is geometry: across the four row types the height (30 / 25 / 30 / auto),
-//! corner radius (6 / 6 / 6 / 8), padding and gap all differ, so those stay builder parameters set
-//! by the caller rather than pretending to be one row.
+//! What is **not** shared is geometry: across the row types the height (30 / 25 / 30 / auto),
+//! corner radius, padding and gap all differ, so those stay builder parameters set by the caller
+//! rather than pretending to be one row.
 
 use freya::components::{Activable, SideBarItem, SideBarItemThemePartial};
 use freya::prelude::*;
@@ -54,14 +61,13 @@ impl SidebarRow {
     }
 
     /// Fix the row's height. Omit (via [`auto_height`](Self::auto_height)) for a row that grows
-    /// with its content, like the connections list's two-line entries.
+    /// with its content, like the launcher rail's two-line Settings entry.
     pub fn height(mut self, height: f32) -> Self {
         self.height = Some(height);
         self
     }
 
     /// Let the row hug its content instead of taking a fixed height.
-    #[allow(dead_code)] // Feature reservoir: the connections list's two-line rows (W7).
     pub fn auto_height(mut self) -> Self {
         self.height = None;
         self

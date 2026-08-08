@@ -22,6 +22,30 @@ the auth variant (`S3Auth::Profile { name }`, `GcsAuth::ServiceAccount { path }`
   bucket would let saving a `gs://lake` connection silently replace the `s3://lake` one it sorts
   beside.
 
+## What Connections 02 handed over
+
+The pane exists and every gesture that opens this editor is already on screen, **rendered and
+disabled** (AGENTS.md §5). Wiring them is this task's, and nothing at the call sites changes but
+the handler:
+
+- `views/sidebar/connections/mod.rs` — `AddConnectionButton` (the pane header's `+`), the empty
+  state's *Add connection* CTA, and `connection_menu`'s *Edit connection* item. The first two open
+  the editor on a **new** connection; the third on the row's `url()`.
+- **The request shape is deliberately not pre-built.** No `ConnectionTarget` slot exists, because
+  an unreferenced one is pre-work §5 forbids. The precedent to follow is `ConfigureTarget`
+  (P4-11): a `State<Option<…>>` provided at the window root, set by these three call sites, acted
+  on by a launcher there. Drop the three `.enabled(false)` calls with it.
+- **The header `+` folds under panel pressure** (`ToolbarItem::Custom { folded: None }`, the
+  catalog ↻'s terms) — and unlike ↻ it has no second entry point, since the empty-state CTA is
+  gone the moment there is one connection. Give Add a **command-palette** row when it works, which
+  is one method on the command router (P6-01), and the fold loses nothing.
+- **Forget already owns the deregister.** `Engine::disconnect(url)` exists and the remove confirm
+  calls it. An **edit that moves the bucket or the provider** changes `url()`, so it owes the same
+  call on the *old* one before saving the new def — `engine::store::connect` never sees the def it
+  replaced.
+- **The store's `remove_connection` / `restore_connection` landed with Forget**, keyed on `url()`
+  and case-sensitively. `upsert_connection` is still this task's, on the terms below.
+
 ## What Connections 01 handed over
 
 - **The def stores the authority alone**; the scheme comes from the provider
@@ -40,6 +64,7 @@ the auth variant (`S3Auth::Profile { name }`, `GcsAuth::ServiceAccount { path }`
 
 ## Acceptance
 - [ ] Each provider's form validates + saves a connection; no secret is stored inline.
+- [ ] The pane's three parked affordances open it, and none is left `enabled(false)`.
 
 ## Freya / references
 - Design: `Connections.dc.html` (+ the conn VM in `strata-windows.js`). `docs/CONNECTIONS_SPEC.md`. DEV_TASKS W7.

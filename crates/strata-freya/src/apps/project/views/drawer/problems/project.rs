@@ -28,11 +28,10 @@
 
 use freya::prelude::*;
 use freya::radio::use_radio;
-use strata_model::CatalogKind;
 
 use super::super::{DrawerBody, DrawerEmpty, DrawerTheme};
 use super::{PAD, ROW_HEIGHT};
-use crate::apps::project::state::{FaultsCtx, PersistFaults, ProjChan, ProjectState};
+use crate::apps::project::state::{FaultKind, FaultsCtx, PersistFaults, ProjChan, ProjectState};
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
 use crate::components::tones::Tones;
@@ -45,8 +44,32 @@ pub struct ProjectProblem {
     pub subject: String,
     /// What is wrong with it — the engine's words, or the write's error.
     pub why: String,
-    /// The trailing tag: `table` / `view`, or `not saved`.
-    pub tag: String,
+    /// The trailing tag, which is also the one thing that says *which family* the row came
+    /// from.
+    pub tag: ProblemTag,
+}
+
+/// A project-problem row's trailing tag — the two families this scope flattens, kept as a type
+/// so the row carries the distinction rather than a rendered word.
+///
+/// [`FaultKind`] rides inside it rather than being copied out: a refused def's kind is already
+/// a closed vocabulary owned by the store, and converting it to a string here would be the one
+/// place the drawer could disagree with it.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ProblemTag {
+    /// A `.strata` file a failed write left behind.
+    NotSaved,
+    /// A def the engine refused.
+    Refused(FaultKind),
+}
+
+impl ProblemTag {
+    fn label(self) -> &'static str {
+        match self {
+            Self::NotSaved => "not saved",
+            Self::Refused(kind) => kind.label(),
+        }
+    }
 }
 
 /// Every project-scope problem, write faults first.
@@ -58,7 +81,7 @@ pub fn project_problems(project: &ProjectState, faults: &PersistFaults) -> Vec<P
     let writes = faults.rows().into_iter().map(|(file, why)| ProjectProblem {
         subject: file.file_name().to_string(),
         why,
-        tag: "not saved".into(),
+        tag: ProblemTag::NotSaved,
     });
     let regs = project
         .registration_faults()
@@ -66,10 +89,7 @@ pub fn project_problems(project: &ProjectState, faults: &PersistFaults) -> Vec<P
         .map(|f| ProjectProblem {
             subject: f.name,
             why: f.why,
-            tag: match f.kind {
-                CatalogKind::View => "view".into(),
-                _ => "table".into(),
-            },
+            tag: ProblemTag::Refused(f.kind),
         });
     writes.chain(regs).collect()
 }
@@ -82,13 +102,15 @@ pub struct Project {
 
 impl Component for Project {
     fn render(&self) -> impl IntoElement {
-        // `ProjChan::Tables` and `Views` are the two channels a registration answer lands on;
-        // the catalog rows already subscribe to exactly these, so a def flipping to `Failed`
-        // wakes this list at the same moment it wakes its row.
+        // `ProjChan::Connections`, `Tables` and `Views` are the three channels a registration
+        // answer lands on; the pane and catalog rows already subscribe to exactly these, so a
+        // def flipping to `Failed` wakes this list at the same moment it wakes its row.
+        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let faults = use_consume::<FaultsCtx>();
 
+        let _ = connections.read();
         let _ = views.read();
         let rows = project_problems(&tables.read(), &faults.read());
 
@@ -153,7 +175,7 @@ impl Component for ProjectRow {
             // `Badge::value` is the role History's line-count pill already uses, and the tint it
             // derives from its foreground is what makes a small marker read — the same reason
             // that pill is legible on a tone this one could not carry as bare text.
-            .child(Badge::value(self.row.tag.clone(), self.theme.value_color))
+            .child(Badge::value(self.row.tag.label(), self.theme.value_color))
     }
 }
 
@@ -221,9 +243,9 @@ mod tests {
         let rows = project_problems(&s, &faults);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].subject, "project.json");
-        assert_eq!(rows[0].tag, "not saved");
+        assert!(matches!(rows[0].tag, ProblemTag::NotSaved));
         assert_eq!(rows[1].subject, "orders");
-        assert_eq!(rows[1].tag, "table");
+        assert!(matches!(rows[1].tag, ProblemTag::Refused(FaultKind::Table)));
     }
 
     /// The count the strip, the drawer header and the rail badge all read is the length of that

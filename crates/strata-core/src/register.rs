@@ -18,9 +18,11 @@
 //!   names it registered against the new defs and deregisters the difference first —
 //!   or a removed table stays silently queryable, the exact inverse of the
 //!   catalog-is-the-store rule above. A **connection** is the same case with a
-//!   different call (`SessionContext::deregister_object_store`) and no owner yet:
-//!   Forget is Connections 02's gesture, and until it exists a forgotten bucket stays
-//!   registered for the life of the engine.
+//!   different call, and it has its owner: [`Engine::disconnect`] is the pane's Forget
+//!   (W7 · Connections 02), and an edit that moves a connection's bucket or provider
+//!   owes it too, since that changes the `url()` the store went in under. A host
+//!   diffing a shrunken defs file must call it for every connection that has gone, on
+//!   the same terms as the tables above.
 //! - **The registration window.** [`Engine::register`] deregisters before it
 //!   re-infers, so for the duration of a pass every table being rebuilt is absent from
 //!   the catalog. The app gates validation behind its scan claim

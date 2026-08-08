@@ -215,42 +215,79 @@ pub struct ProjectState {
 /// diagnostics have, reached a different way.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RegistrationFault {
-    /// Which section it sits in — the row says "table" or "view" rather than making the user
-    /// infer it from the name.
-    pub kind: CatalogKind,
+    /// What kind of def it is — the row says which rather than making the user infer it from
+    /// the name.
+    pub kind: FaultKind,
     pub name: String,
     /// What the engine said. P3-07's wording, the same text the catalog row's triangle carries.
     pub why: String,
 }
 
+/// What kind of def a [`RegistrationFault`] is about.
+///
+/// Its own closed vocabulary rather than [`CatalogKind`], because a **connection** is not one:
+/// it registers beside the catalog and fails in exactly the same shape, but it is an object
+/// store rather than a member of the SQL namespace, so it has no place in the enum that
+/// `dependent_views` and `name_in_use` dispatch on. Saved queries go the other way — they are
+/// a `CatalogKind` and can never be a fault, because a stored string is never registered.
+///
+/// A type and not a noun string: the set is closed, the drawer dispatches on it, and a
+/// `&'static str` would put the rendering of these three words at whichever call site got there
+/// first.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FaultKind {
+    Connection,
+    Table,
+    View,
+}
+
+impl FaultKind {
+    /// How a row refers to it — the Problems drawer's trailing tag.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Connection => "connection",
+            Self::Table => "table",
+            Self::View => "view",
+        }
+    }
+}
+
 impl ProjectState {
-    /// Every **catalog** def the engine refused, tables before views (the order they register
-    /// in, so a view broken *by* a broken table reads below its cause).
+    /// Every def the engine refused, **in registration order** — connections, then tables, then
+    /// views — so anything broken *by* something above it reads below its cause.
+    ///
+    /// A refused **connection** (W7) is here for the reason the probe behind it exists
+    /// (`CONNECTIONS_SPEC.md` §3): a bucket with no usable credentials takes every table over
+    /// it down with it, so without this row the drawer fills with signing failures on the
+    /// tables and says nothing about the one thing that is actually wrong. It is named by
+    /// [`ConnectionDef::url`] rather than by its bucket, which is the only form that tells
+    /// `s3://lake` from `gs://lake`.
     ///
     /// Saved queries can't appear: they are stored strings that are never registered, so there is
     /// no engine answer for them to have failed.
-    ///
-    /// A refused **connection** (W7) can, and deliberately does not yet: its condition is a
-    /// `Reg::Failed` on its own row exactly like these, but the surface it belongs to is the
-    /// sidebar's Connections pane, which Connections 02 builds. Whether it *also* earns a
-    /// Problems ▸ Project row is that task's call — the pass already records it in the event
-    /// log, so it is not silent in the meantime.
     pub fn registration_faults(&self) -> Vec<RegistrationFault> {
+        let connections = self.connections.iter().filter_map(|r| {
+            r.reg.error().map(|why| RegistrationFault {
+                kind: FaultKind::Connection,
+                name: r.def.url(),
+                why: why.to_string(),
+            })
+        });
         let tables = self.tables.iter().filter_map(|r| {
             r.reg.error().map(|why| RegistrationFault {
-                kind: CatalogKind::Table,
+                kind: FaultKind::Table,
                 name: r.def.name.clone(),
                 why: why.to_string(),
             })
         });
         let views = self.views.iter().filter_map(|r| {
             r.reg.error().map(|why| RegistrationFault {
-                kind: CatalogKind::View,
+                kind: FaultKind::View,
                 name: r.def.name.clone(),
                 why: why.to_string(),
             })
         });
-        tables.chain(views).collect()
+        connections.chain(tables).chain(views).collect()
     }
 
     /// How many defs the engine refused — [`registration_faults`](Self::registration_faults)'s
@@ -261,10 +298,15 @@ impl ProjectState {
     /// screen. Going through the list would clone two `String`s per failed def just to drop them
     /// again a line later.
     pub fn registration_fault_count(&self) -> usize {
-        self.tables
+        self.connections
             .iter()
             .filter(|r| r.reg.error().is_some())
             .count()
+            + self
+                .tables
+                .iter()
+                .filter(|r| r.reg.error().is_some())
+                .count()
             + self
                 .views
                 .iter()
@@ -868,12 +910,30 @@ impl ProjectState {
     pub fn restore_table(&mut self, at: usize, row: TableRow) {
         self.tables.insert(at.min(self.tables.len()), row);
     }
+
+    /// Forget the connection registered under `url` — the store half of the pane's Forget
+    /// (W7). Hands back the row and its slot, like [`remove_view`](Self::remove_view).
+    ///
+    /// Matched on [`ConnectionDef::url`] and **case-sensitively**, which is where it parts
+    /// company with every other remover here. A catalog name is a SQL identifier and the
+    /// engine folds it; a connection's key is a URL the object-store registry matches
+    /// verbatim, so folding it would let Forget take a row the engine would go on answering
+    /// for.
+    pub fn remove_connection(&mut self, url: &str) -> Option<(usize, ConnRow)> {
+        let at = self.connections.iter().position(|c| c.def.url() == url)?;
+        Some((at, self.connections.remove(at)))
+    }
+
+    /// Put a row back where [`remove_connection`](Self::remove_connection) took it from.
+    pub fn restore_connection(&mut self, at: usize, row: ConnRow) {
+        self.connections.insert(at.min(self.connections.len()), row);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strata_model::SourceFormat;
+    use strata_model::{GcsStore, Provider, S3Store, SourceFormat};
 
     fn table_def(name: &str) -> TableDef {
         TableDef {
@@ -1619,5 +1679,104 @@ mod tests {
         p.view_registered("orders_daily", view_meta(&["orders"]));
 
         assert_eq!(p.view_problem(&p.views[0]), None);
+    }
+
+    /// Two connections over **one bucket** — the pair every connection lookup has to tell apart,
+    /// and the one a bucket-keyed store would land both answers on.
+    fn two_stores_one_bucket() -> ProjectState {
+        let defs = ProjectDefs {
+            name: "test".into(),
+            connections: vec![
+                ConnectionDef {
+                    bucket: "lake".into(),
+                    provider: Provider::S3(S3Store::default()),
+                },
+                ConnectionDef {
+                    bucket: "lake".into(),
+                    provider: Provider::Gcs(GcsStore::default()),
+                },
+            ],
+            ..Default::default()
+        };
+        ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-connections-store-test"))
+    }
+
+    /// Forget takes the row it was asked for and **only** that one. Keyed on `url()`, so the
+    /// bucket the two share is not what is matched — a bucket-keyed remover would take whichever
+    /// sorted first and leave the user's own connection gone.
+    #[test]
+    fn remove_connection_matches_the_url_and_not_the_bucket() {
+        let mut p = two_stores_one_bucket();
+
+        let (at, row) = p
+            .remove_connection("gs://lake")
+            .expect("the GCS connection");
+        assert_eq!(row.def.url(), "gs://lake");
+        assert_eq!(
+            p.connections
+                .iter()
+                .map(|c| c.def.url())
+                .collect::<Vec<_>>(),
+            ["s3://lake"],
+            "the S3 connection over the same bucket is untouched"
+        );
+
+        // And a failed write puts it back exactly where it was (P4-15 item 4). The section's
+        // order is the load's own — `load_defs` sorts on the bucket, which these two share, so
+        // the tie-break is the file's order and restoring by *index* is what preserves it.
+        p.restore_connection(at, row);
+        assert_eq!(
+            p.connections
+                .iter()
+                .map(|c| c.def.url())
+                .collect::<Vec<_>>(),
+            ["s3://lake", "gs://lake"]
+        );
+    }
+
+    /// A URL nothing is registered under removes nothing, rather than taking the nearest row.
+    #[test]
+    fn remove_connection_ignores_a_url_it_does_not_hold() {
+        let mut p = two_stores_one_bucket();
+        assert!(p.remove_connection("s3://other").is_none());
+        assert_eq!(p.connections.len(), 2);
+    }
+
+    /// A refused **connection** is a project problem, and it leads the list: registration order
+    /// is connections, then tables, then views, so anything broken *by* the connection reads
+    /// below its cause. It is named by its URL, which is the only form that says which store.
+    #[test]
+    fn a_refused_connection_leads_the_project_faults() {
+        let mut p = two_stores_one_bucket();
+        p.upsert_table(table_def("orders"));
+        p.table_failed("orders", "No suitable object store found".into());
+        p.connection_failed("s3://lake", "This S3 connection needs a region.".into());
+
+        let faults = p.registration_faults();
+        assert_eq!(
+            faults
+                .iter()
+                .map(|f| (f.kind, f.name.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (FaultKind::Connection, "s3://lake"),
+                (FaultKind::Table, "orders")
+            ]
+        );
+        assert_eq!(faults[0].why, "This S3 connection needs a region.");
+        assert_eq!(
+            p.registration_fault_count(),
+            faults.len(),
+            "the count the rail badge reads is the length of the list the drawer renders"
+        );
+    }
+
+    /// A connection the pass has not answered for yet is **not** a problem — a project mid-scan
+    /// must not flash every bucket it has not reached as a fault.
+    #[test]
+    fn an_unanswered_connection_is_not_a_fault() {
+        let p = two_stores_one_bucket();
+        assert!(p.registration_faults().is_empty());
+        assert_eq!(p.registration_fault_count(), 0);
     }
 }

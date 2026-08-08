@@ -1101,6 +1101,18 @@ impl Engine {
             .map_err(|e| format!("connect task failed: {e}"))?
     }
 
+    /// Forget the object store a connection registered — the Forget gesture's engine half
+    /// (W7), addressed by the same [`ConnectionDef::url`] [`connect`](Self::connect) put it in
+    /// under.
+    ///
+    /// Synchronous, like [`deregister`](Self::deregister) and for the same reason: DataFusion
+    /// just drops the entry from its registry, so there is no work to spawn and no answer to
+    /// await. Nothing is reported — see [`store::disconnect`] for why neither of its no-ops is
+    /// a fault.
+    pub fn disconnect(&self, url: &str) {
+        store::disconnect(&self.ctx, url);
+    }
+
     /// (Re)register one external table from its spec, returning its inferred schema +
     /// free row count.
     ///

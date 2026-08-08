@@ -77,6 +77,23 @@ pub async fn connect(ctx: &SessionContext, conn: &ConnectionDef) -> Result<(), S
     }
 }
 
+/// Forget the object store registered under `url` — the Forget gesture's engine half (W7),
+/// and the half an *edit* that moves a connection's bucket or provider also needs.
+///
+/// [`connect`] is additive by contract and only ever sees the def it is given, so nothing
+/// else can take a store back out: without this, a forgotten bucket stays queryable until the
+/// window is re-opened. `url` is the connection's [`ConnectionDef::url`] — the key it went in
+/// under, and the only key the registry answers to.
+///
+/// Silent about both ways it can do nothing, because neither is a fault: a URL that does not
+/// parse never registered anything, and a key with no store behind it is the ordinary case
+/// for a connection that was refused.
+pub fn disconnect(ctx: &SessionContext, url: &str) {
+    if let Ok(url) = ObjectStoreUrl::parse(url) {
+        let _ = ctx.deregister_object_store(url.as_ref());
+    }
+}
+
 /// The store itself, per provider. Split from [`connect`] so the registration is one line
 /// with one meaning: every way this can fail is a way of describing the connection wrong.
 async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {

@@ -132,9 +132,9 @@ impl Component for ActivityRail {
 /// It totals the **same two counts the drawer header does**, from the same two functions, so the
 /// badge and the header can never disagree — the SQL errors across every open tab
 /// (`error_count`) plus the project-scope conditions behind the Problems drawer's second tab
-/// (`project_error_count`: defs the engine refused, and `.strata` files a failed write left
-/// behind). A badge that counted only the first would go quiet while the project underneath was
-/// broken, which is the case P4-15 exists for.
+/// (`project_error_count`: connections and defs the engine refused, and `.strata` files a failed
+/// write left behind). A badge that counted only the first would go quiet while the project
+/// underneath was broken, which is the case P4-15 exists for.
 ///
 /// Errors only — a keyword-typo warning lists in the drawer without claiming the query is broken.
 #[derive(PartialEq)]
@@ -143,9 +143,11 @@ struct ProblemsBadge;
 impl Component for ProblemsBadge {
     fn render(&self) -> impl IntoElement {
         let session = use_radio::<SessionState, Chan>(Chan::Diagnostics);
+        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let faults = use_consume::<FaultsCtx>();
+        let _ = connections.read();
         let _ = views.read();
         let errors =
             session.read().error_count() + project_error_count(&tables.read(), &faults.read());

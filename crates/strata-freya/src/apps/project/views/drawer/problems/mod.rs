@@ -102,6 +102,7 @@ impl Component for ScopeStrip {
     fn render(&self) -> impl IntoElement {
         let mut layout = use_radio::<SessionState, Chan>(Chan::Layout);
         let session = use_radio::<SessionState, Chan>(Chan::Diagnostics);
+        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let faults = use_consume::<FaultsCtx>();
@@ -111,6 +112,7 @@ impl Component for ScopeStrip {
         // Both counts every render, because the strip labels *both* tabs — the whole point of a
         // scope strip is telling you there is something in the one you are not looking at.
         let queries = session.read().error_count();
+        let _ = connections.read();
         let _ = views.read();
         let project = project_error_count(&tables.read(), &faults.read());
 

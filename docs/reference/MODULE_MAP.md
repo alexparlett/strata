@@ -407,7 +407,9 @@ src/apps/project/                the project window (Valin-shaped)
   views/
     dialogs/                     the window's modal dialogs, mounted early so their key barrier
                                  precedes every feature listener: close_confirm (T2) ·
-                                 drop_confirm (P3-05) · open_prompt (the This/New question) ·
+                                 drop_confirm (P3-05 — every removal that destroys project work,
+                                 the Connections pane's Forget included: one card, one
+                                 `DropTarget`, one event) · open_prompt (the This/New question) ·
                                  profile_confirm (P3-10 — and `ProfileActions`, the one entry
                                  point every "profile this" trigger calls) · load_failed
                                  (P4-01 — not a barrier over features but the whole fault arm:
@@ -430,7 +432,7 @@ src/apps/project/                the project window (Valin-shaped)
                                  dropdown; every row opens through the window's `OpenCtx`
     sidebar/
       mod.rs                     sidebar shell — pane-specific header (the catalog's filter +
-                                 refresh row) over the active pane
+                                 refresh row, Connections' label + ⓘ + `+`) over the active pane
       agents/                    AA-03b — what each connected agent is doing: mod (pane + theme +
                                  the header's ⓘ, agent group over session group), run (the run
                                  card). Built to the canvas out of vocabulary the app already
@@ -443,6 +445,23 @@ src/apps/project/                the project window (Valin-shaped)
                                  tab strip
       catalog/                   P3-02: mod (pane + sections), section, entry (entry/column/
                                  saved-query rows), columns (flatten + tests), interaction (tests)
+      connections/               W7 — the project's object stores: mod (pane + theme + the
+                                 header's ⓘ and `+`, one row per `ConnRow`), interaction (tests).
+                                 **The catalog entry row's shape**: badge, bucket, one trailing
+                                 status slot, ⋮. A row that registered is clean; a refused one
+                                 wears the warning triangle with the engine's reason on its
+                                 popover, in full — a two-line row spelling that reason under
+                                 the bucket ellipsized it to four useless words. What the slot
+                                 reports is the registration outcome, never a probe of its own:
+                                 `connect` resolves the chain once and throws the answer away so
+                                 this slot can mean something. `Loading` states nothing until the
+                                 wait outlasts `PROGRESS_HOLD`, then spins, holding the last
+                                 settled verdict across the gap.
+                                 The row is **not** clickable (spec §1); Edit and Forget are the
+                                 ⋮ / right-click menu, and Forget sets the shared remove
+                                 confirm's `DropTarget::Connection(url)` — the dialog owns the
+                                 store mutation, the persist and `Engine::disconnect`. Add and
+                                 Edit are **parked** until Connections 03 brings the forms
     inspector/                   P3-08/P3-09 — the selected column, and **only what was actually
                                  read or counted**: mod (frame + theme + the not-a-column
                                  states), model (resolve the ColRef path · the dynamic fact list ·

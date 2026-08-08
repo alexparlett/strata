@@ -59,7 +59,7 @@ pub use persist::ProjectFile;
 pub use persist::{
     persisted_defs, use_init_faults, use_report, FaultsCtx, PersistFaults, ReportCtx,
 };
-pub use project::{ProjChan, ProjectState, Reg};
+pub use project::{FaultKind, ProjChan, ProjectState, Reg};
 /// The catalog's rows themselves. Nothing outside this module names them at runtime — every
 /// consumer reads them through [`ProjectState`]'s own fields — but a test that builds a store
 /// **inline** has to, which is what AGENTS.md §1 asks for instead of bending a signature to be

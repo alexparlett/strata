@@ -35,7 +35,7 @@ pub use shell::Shell;
 ///
 /// [`Origin`]: strata_model::Origin
 pub use sidebar::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
-pub use sidebar::{AgentsThemePreference, CatalogThemePreference};
+pub use sidebar::{AgentsThemePreference, CatalogThemePreference, ConnectionsThemePreference};
 /// The editor's shared actions, for the window's command registry
 /// ([`commands`](super::commands)): the palette's Run and Save-as-view rows are the same
 /// presses ⌘↵ and the Eye button make, gate included.

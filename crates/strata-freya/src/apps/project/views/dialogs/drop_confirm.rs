@@ -9,6 +9,9 @@
 //! is told. What P3-06 adds is the entry point — a catalog row's context menu setting the
 //! [`DropTarget`] slot this dialog watches — not a second copy of the mechanics.
 //!
+//! The Connections pane's **Forget** (W7) is the fourth target rather than a dialog of its own,
+//! for the reason [`DropTarget`] states: destroying a project's work asks on one set of terms.
+//!
 //! ## What the consequence line claims
 //!
 //! *Left invalid*, never "will stop working". A dependent view captured its sources by `Arc`
@@ -36,46 +39,62 @@ use crate::components::tones::tones;
 use crate::components::typography::{Caption, Control, MonoValue, Prose, Title};
 use crate::theme::{use_roles, Role};
 
-/// What a drop confirm is about. The variants mirror the catalog's identity rules: tables and
+/// What a drop confirm is about. The variants mirror each section's identity rule: tables and
 /// views are addressed by **name** (their engine/SQL identity, one shared namespace), a saved
-/// query by its stable **id** — its name is only the label, carried so the dialog can show it.
+/// query by its stable **id** — its name is only the label, carried so the dialog can show it —
+/// and a connection by its [`ConnectionDef::url`], which is what the object-store registry keys
+/// on and the only form that tells `s3://lake` from `gs://lake`.
+///
+/// **Forget is here rather than in a dialog of its own** because every path that destroys a
+/// project's work asks on the same terms: one card, one pair of actions, one Esc/Enter barrier,
+/// one event recorded afterwards. What varies per variant is the wording and what the confirm
+/// then calls, which is exactly what these methods are.
+///
+/// [`ConnectionDef::url`]: strata_model::ConnectionDef::url
 #[derive(Clone, PartialEq, Debug)]
-// The dialog reads every variant; nothing *constructs* one until P3-06's catalog row menus set
-// the slot. Drop this attribute with that task.
-#[allow(dead_code)]
 pub enum DropTarget {
     Table(String),
     View(String),
-    Query { id: Uuid, name: String },
+    Query {
+        id: Uuid,
+        name: String,
+    },
+    /// A connection, by its `ConnectionDef::url()` — `s3://acme-lake` (W7).
+    Connection(String),
 }
 
 impl DropTarget {
     /// The row's name, as the title shows it.
     pub fn name(&self) -> &str {
         match self {
-            DropTarget::Table(name) | DropTarget::View(name) => name,
+            DropTarget::Table(name) | DropTarget::View(name) | DropTarget::Connection(name) => name,
             DropTarget::Query { name, .. } => name,
         }
     }
 
     /// Which catalog section it belongs to — what [`ProjectState::dependent_views`] dispatches
-    /// on to pick the right dependency list.
-    fn kind(&self) -> CatalogKind {
+    /// on to pick the right dependency list — or `None` for a target that is not in the SQL
+    /// namespace at all. A connection is an object store, so nothing can *read* it by name and
+    /// there is no dependency list to ask for.
+    fn kind(&self) -> Option<CatalogKind> {
         match self {
-            DropTarget::Table(_) => CatalogKind::Table,
-            DropTarget::View(_) => CatalogKind::View,
-            DropTarget::Query { .. } => CatalogKind::Query,
+            DropTarget::Table(_) => Some(CatalogKind::Table),
+            DropTarget::View(_) => Some(CatalogKind::View),
+            DropTarget::Query { .. } => Some(CatalogKind::Query),
+            DropTarget::Connection(_) => None,
         }
     }
 
     /// The action, used for both the title and the button (canvas `removeTitle` / `removeBtn`
     /// are the same string). A saved query is *deleted*, not dropped — it was never registered
-    /// with the engine.
+    /// with the engine — and a connection is *forgotten*, which is the spec's own word for it
+    /// and the right one: nothing in the bucket changes.
     fn verb(&self) -> &'static str {
         match self {
             DropTarget::Table(_) => "Drop table",
             DropTarget::View(_) => "Drop view",
             DropTarget::Query { .. } => "Delete query",
+            DropTarget::Connection(_) => "Forget connection",
         }
     }
 
@@ -94,6 +113,9 @@ impl DropTarget {
             DropTarget::Query { .. } => {
                 "Removes this saved query from the project. Any open tab keeps its SQL."
             }
+            DropTarget::Connection(_) => {
+                "Removes the object store from this project. Nothing in the bucket is deleted."
+            }
         }
     }
 
@@ -103,6 +125,7 @@ impl DropTarget {
             DropTarget::Table(_) => "table",
             DropTarget::View(_) => "view",
             DropTarget::Query { .. } => "query",
+            DropTarget::Connection(_) => "connection",
         }
     }
 }
@@ -114,6 +137,7 @@ fn past(target: &DropTarget) -> &'static str {
         DropTarget::Table(_) => "Dropped table",
         DropTarget::View(_) => "Dropped view",
         DropTarget::Query { .. } => "Deleted query",
+        DropTarget::Connection(_) => "Forgot connection",
     }
 }
 
@@ -193,7 +217,10 @@ impl Component for DropConfirm {
         // Subscribed to `ProjChan::Views` (see above), so a view registering or being dropped
         // under the open dialog refreshes the count — the dialog blocks input, not the engine,
         // and this is the one screen where acting on a stale count is destructive.
-        let dependents = views.read().dependent_views(target.kind(), target.name());
+        let dependents = match target.kind() {
+            Some(kind) => views.read().dependent_views(kind, target.name()),
+            None => Vec::new(),
+        };
         let consequence = consequence(dependents.len(), target.noun());
 
         // The action over its subject — the close confirm's shape exactly, which is what the comp
@@ -407,6 +434,25 @@ fn drop_row(
                 catalog_settled(catalog);
             });
         }
+        DropTarget::Connection(url) => {
+            let landed = {
+                let mut p = project.write_channel(ProjChan::Connections);
+                let taken = p.remove_connection(url);
+                let landed = persisted_defs(&p, report);
+                if let (false, Some((at, row))) = (landed, taken) {
+                    p.restore_connection(at, row);
+                }
+                landed
+            };
+            if !landed {
+                return;
+            }
+            // Synchronous and local, like a table's `deregister`: DataFusion drops the entry
+            // from its object-store registry. Without it the bucket stays queryable for the
+            // life of the window — `register_pass` is additive by contract, so nothing else
+            // would ever take the store back out.
+            engine.disconnect(url);
+        }
         DropTarget::Query { id, .. } => {
             // Never registered with the engine — a saved query is a stored string.
             let landed = {
@@ -452,7 +498,10 @@ mod tests {
     use strata_core::engine::{TableMeta, ViewMeta};
     use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
-    use strata_model::{Origin, SavedQuery, SourceFormat, TableDef, ViewDef};
+    use strata_model::{
+        ConnectionDef, GcsStore, Origin, Provider, S3Store, SavedQuery, SourceFormat, TableDef,
+        ViewDef,
+    };
 
     use super::*;
     use crate::theme::strata_theme;
@@ -476,10 +525,21 @@ mod tests {
     const QUERY_ID: Uuid = Uuid::from_u128(7);
 
     /// `orders` ← `orders_daily` ← `orders_weekly` (the nested reader), plus an unrelated
-    /// `users` table and one saved query.
+    /// `users` table, one saved query, and two connections **over one bucket** — the pair that
+    /// only `url()` tells apart (W7).
     fn project(root: &Path) -> ProjectState {
         let defs = ProjectDefs {
             name: "test".into(),
+            connections: vec![
+                ConnectionDef {
+                    bucket: "lake".into(),
+                    provider: Provider::S3(S3Store::default()),
+                },
+                ConnectionDef {
+                    bucket: "lake".into(),
+                    provider: Provider::Gcs(GcsStore::default()),
+                },
+            ],
             tables: vec![table("orders"), table("users")],
             views: vec![
                 view("orders_daily", "SELECT * FROM orders"),
@@ -1047,6 +1107,70 @@ mod tests {
             "Enter performed the drop"
         );
         assert!(slot.peek().is_none(), "and closed the dialog");
+    }
+
+    /// **Forget** is the same confirm on a fourth target: it names the connection by its
+    /// `url()`, warns about nothing (an object store is not in the SQL namespace, so nothing can
+    /// read it by name), and confirming takes exactly that connection out of the project.
+    ///
+    /// The bucket the two connections share is the whole point of asserting the survivor: a
+    /// removal keyed on it would take both, or the wrong one.
+    #[test]
+    fn forgetting_a_connection_removes_the_one_its_url_names() {
+        let (mut runner, (mut slot, _, project, ..)) = runner("forget");
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::Connection("gs://lake".into()),
+        );
+
+        assert_eq!(title(&runner), "Forget connection gs://lake");
+        assert!(
+            !texts(&runner).iter().any(|t| t.contains("left invalid")),
+            "nothing reads an object store by name: {:?}",
+            texts(&runner)
+        );
+        assert!(texts(&runner)
+            .iter()
+            .any(|t| t.contains("Nothing in the bucket is deleted")));
+
+        click_action(&mut runner, "Forget connection");
+
+        assert_eq!(
+            project
+                .peek()
+                .connections
+                .iter()
+                .map(|c| c.def.url())
+                .collect::<Vec<_>>(),
+            ["s3://lake"],
+            "the other connection over the same bucket stays"
+        );
+        assert!(slot.peek().is_none(), "the dialog closed itself");
+    }
+
+    /// A forget is **recorded**, in the past tense and in the pane's own word — the row it
+    /// describes is gone from the store by the time anyone reads the message.
+    #[test]
+    fn forgetting_a_connection_records_the_event() {
+        let (mut runner, (mut slot, _, _, log)) = runner("forget-log");
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::Connection("s3://lake".into()),
+        );
+
+        click_action(&mut runner, "Forget connection");
+
+        let recorded: Vec<(LogLevel, String)> = log
+            .peek()
+            .events()
+            .map(|e| (e.level, e.message.clone()))
+            .collect();
+        assert_eq!(
+            recorded,
+            [(LogLevel::Info, "Forgot connection 's3://lake'".to_string())]
+        );
     }
 
     /// Esc cancels — the dialog's own key barrier, the same one that stops a keystroke aimed at
