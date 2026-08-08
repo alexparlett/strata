@@ -383,11 +383,16 @@ does, on the same `strata-agent` runtime, through the same bridge).
   mini-results and an explicit open-in-tab for anything bigger, through the same
   `actions::open_sql` funnel the Agents pane uses. §1's distinction is exactly this: an agent
   that is *in* the window versus one that is not.
-- **The brain is deliberately undecided** — native Anthropic API client (app-owned loop, API
-  key in Settings) vs a Claude Agent SDK / CLI sidecar (reuses the user's subscription and
-  Anthropic's context management, costs process management + an install dependency). That
-  decision is the chat workstream's first task, and nothing in the core prejudges it: both
-  brains drive the identical tool layer.
+- **The brain is decided (2026-08): the app owns the agentic loop, and the provider is
+  pluggable.** One provider-abstraction crate — **`genai`** — behind a Settings-chosen config
+  (Anthropic · OpenAI · Gemini · Ollama · OpenAI-compatible endpoint), driving this spec's
+  tool layer in-process: the loop streams a turn, executes the model's tool calls through the
+  same `StrataTools` the rmcp router serves, and iterates. The original either/or (native
+  Anthropic client vs Claude Agent SDK sidecar) resolved as "the first, minus the vendor pin";
+  the sidecar lost to pluggability itself. Decision record and the surveyed alternates
+  (`llm`, `llm-kernel`, `rig`): `.claude/tasks/workstream-assistant/README.md`, which is also
+  where this design is decomposed (AS-01 in-process facade + tool manifest, AS-02 provider
+  seam + loop, AS-03 Settings ▸ Assistant, AS-04 the pane).
 
 ## 10. Headless host (`strata mcp <project>`) — built (AA-05)
 
