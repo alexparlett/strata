@@ -5,8 +5,9 @@ parsed statement, whether Run executes a query, performs the statement as an eng
 refuses it with the same words the squiggle showed. The agent surface asks the same classifier and
 stays read-only. This file documents that surface as built — the router, the dispatch, the
 provider layer, and the statement family implemented so far (internal tables, the two writes over
-them, and typed view DDL). The remaining statement lift (COPY, session statements, functions,
-typed `CREATE EXTERNAL TABLE`) is tracked in `.claude/tasks/workstream-editor-statements/`.
+them, typed view DDL, and typed `COPY`). The remaining statement lift (session statements,
+functions, typed `CREATE EXTERNAL TABLE`) is tracked in
+`.claude/tasks/workstream-editor-statements/`.
 
 ```mermaid
 flowchart TD
@@ -370,9 +371,54 @@ lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Engine
 Replay needs no code of its own: a typed view is a `ViewDef`, and `register_pass`'s fixed-point
 rounds order a chain from cold exactly as they do a saved one.
 
-### 6.4 Not yet implemented
+### 6.4 Typed `COPY … TO`
 
-`COPY`, `SET`, `RESET`, `PREPARE`,
+**DataFusion's own write, behind the two checks the Export window used to stand in for**
+(`engine/ddl/copy.rs`). Nothing about the write is Strata's: `COPY` is DataFusion's statement, its
+`OPTIONS` are DataFusion's, and every format Strata reads it can write. The statement is planned
+once — planning a `COPY` executes nothing — and that one value is what the gate counts over and
+what is then driven, so **the plan that was judged is the plan that runs**, the rule the `INSERT`
+arm already keeps. Driving it is `ctx.sql` minus the re-parse: `execute_logical_plan` special-cases
+`Ddl` and `Statement` and hands everything else, `LogicalPlan::Copy` included, to exactly that.
+
+The Export window is **unchanged** and remains the snapshot-backed, race-free path: it writes the
+immutable table the grid is paging, so the file matches what was on screen. A typed COPY reads live
+tables — twice when it is partitioned — so its gate is a pre-flight, not a lock.
+
+What the editor adds, both of them about a statement that would otherwise *succeed* and produce
+something wrong:
+
+| Check | Why | Where |
+|---|---|---|
+| A partition identifier is one bare word | DF 54's COPY parser renders each with `Ident::to_string()` and the planner looks it up by that string, so `PARTITIONED BY ("order date")` reaches `field_with_name` with its quotes attached and fails about a column nobody named | `export::partition_columns_are_bare_words` — **shared**, not copied, and asked before planning so the refusal is ours |
+| No NULL in a partition column | DF 54 has no `__HIVE_DEFAULT_PARTITION__`: it files the row under a *neighbouring* value's directory, so the output reads back claiming a value it never had | `ddl::copy::no_null_partition_values`, in `export::partition_null_refusal`'s wording |
+| No `__snap_` source | a snapshot carries `__strata_ord`, which must never reach a user's file | the router (§4), `Blocked::ReservedName` |
+
+The NULL gate's *mechanism* differs from the window's because the sources do. The window reads
+exact per-column counts the snapshot's write pass already produced, for free; a typed COPY's source
+is any query at all, so it counts — `count_all()` plus one `count(col)` per partition column over
+the **planned input**, positionally decoded, the shape `profile::aggregates` uses. One extra scan
+per partitioned typed COPY, the honest price of the same guarantee over an arbitrary source. The
+rule is identical: **proceed only on an exact zero**, a count that could not be read being a reason
+to decline just as a positive one is.
+
+The report is "Exported N rows to '<path>'" off the sink's own `count` column, and the effect is
+`None` — a COPY changes nothing the catalog holds, while history and the event log record it like
+any successful run. `Blocked::CopyTo` and its message stay defined as the **agent** path's refusal;
+the editor path simply no longer reaches them.
+
+One thing moved on the window's side with this: `keep_partition_by_columns` is now stated in the
+`COPY`'s own `OPTIONS` rather than by a session `SET`. DataFusion's physical planner reads that key
+out of the statement's options and only falls back to the session config when it is absent, and the
+`SET` was never restored — invisible for as long as nothing could read it back, and the moment
+`SET` and `SHOW` become statements a user can type (§6.5) one partitioned export would be deciding
+the answer for every later one, window or typed. It keeps its `execution.` namespace because
+`TableOptions::set` skips that namespace entirely, which is what lets the key reach the planner
+without a format refusing it as unknown.
+
+### 6.5 Not yet implemented
+
+`SET`, `RESET`, `PREPARE`,
 `DEALLOCATE`, `CREATE FUNCTION`, `DROP FUNCTION` and `CREATE EXTERNAL TABLE` all classify
 `Intercept` — the editor draws no squiggle — and answer at Run with `ddl::execute`'s stub refusal:
 "*KIND* is not implemented yet". `EXECUTE` classifies `Query` and fails in the read path (§1).

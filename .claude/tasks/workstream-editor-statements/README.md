@@ -2,13 +2,14 @@
 
 Lifting the managed-DDL policy into a **full-statement editor**: internal tables persisted under
 `.strata/tables/` (`CREATE TABLE` / CTAS, `INSERT`, `DROP TABLE`), typed `CREATE`/`DROP VIEW`,
-typed `CREATE EXTERNAL TABLE`, editor `COPY … TO`, session statements (`SET`/`RESET`,
+editor `COPY … TO`, typed `CREATE EXTERNAL TABLE`, session statements (`SET`/`RESET`,
 `PREPARE`/`EXECUTE`/`DEALLOCATE`) and
 `CREATE FUNCTION` — while the agent surface stays read-only and every settled funnel (the catalog
 store, the persist path, the epoch discipline, the snapshot lifecycle) stays exactly where it is.
 
 **Docs: `docs/STATEMENTS_SPEC.md`** — the statement surface **as built** (router, dispatch,
-providers, internal tables, and the two writes over them). Read it first; do not re-litigate its
+providers, internal tables, the two writes over them, typed view DDL and typed `COPY`). Read it
+first; do not re-litigate its
 §3 (why lifecycle cannot live in the provider traits). The settled design for each *unbuilt*
 statement — typed view DDL onto the save-view funnel, session-scoped SET/PREPARE/functions, and
 the rest — lives in its own task file
@@ -31,7 +32,7 @@ already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Re
 | 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ✅ | — | 02 |
 | 05 | INSERT (native, target-gated) + DROP TABLE (both origins) | ✅ | — | 04 |
 | 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ✅ | — | 02 |
-| 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ⬜ | — | 02 |
+| 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ✅ | — | 02 |
 | 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ⬜ | — | 02 |
 | 09 | `StrataFunctionFactory` + swappable function catalog | ⬜ | — | 02 |
 | 10 | Typed CREATE EXTERNAL TABLE onto the Table Config funnel | ⬜ | — | 02 |
@@ -87,10 +88,10 @@ reassuring the user at exactly the moment the action became destructive.
 Verified against the sources this workspace compiles
 (`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`, `datafusion-54.0.0` and siblings).
 The open tasks hang off these; the facts behind the *landed* tasks (eager DDL, the in-RAM CTAS,
-`information_schema` enumeration, ED-05's `insert_into` and `find_and_deregister` behaviour, and
-ED-06's replace-a-table hazard) are restated in the code's own module docs
-(`engine/ddl/tables.rs`, `engine/ddl/views.rs`, `engine/providers.rs`) and in
-`docs/STATEMENTS_SPEC.md`.
+`information_schema` enumeration, ED-05's `insert_into` and `find_and_deregister` behaviour,
+ED-06's replace-a-table hazard, and ED-07's COPY parser/planner behaviour) are restated in the
+code's own module docs (`engine/ddl/tables.rs`, `engine/ddl/views.rs`, `engine/ddl/copy.rs`,
+`engine/providers.rs`) and in `docs/STATEMENTS_SPEC.md`.
 
 | Fact | Evidence | Task |
 |---|---|---|

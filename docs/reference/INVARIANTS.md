@@ -787,6 +787,34 @@ Things that must not regress. Each was fought for once already.
   `create_view` / `drop_view`, which never produce an effect. Replay needs no code of its own — a
   typed view is a `ViewDef`, and `register_pass`'s fixed point orders a chain from cold exactly as
   it does a saved one. Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.3.
+- **A typed `COPY` is DataFusion's own write behind the two checks the Export window used to
+  stand in for, and the Export window is unchanged.** The write is not ours and never becomes
+  ours: `ddl::copy::copy_to` plans the statement once, gates that plan, and drives it — no text is
+  re-rendered, so the plan that was judged is the plan that runs (the `INSERT` arm's rule). What
+  the editor adds is the pair of refusals that stop a statement which would otherwise *succeed*
+  and produce something wrong. **A partition identifier has to be one bare word**, asked of
+  `export::partition_columns_are_bare_words` — shared, not copied — because DF 54's COPY parser
+  renders each one with `Ident::to_string()` and the planner then looks it up by that string, so a
+  quoted name arrives still carrying its quotes and fails about a column nobody named. **A NULL in
+  a partition column is refused**, in `export::partition_null_refusal`'s words, for the reason the
+  export gives: DF 54 has no `__HIVE_DEFAULT_PARTITION__` and files the row under a neighbouring
+  value's directory. The mechanisms differ because the sources do — the window reads the snapshot
+  write pass's exact counts for free, a typed COPY counts over the planned input and pays one
+  extra scan, the honest price of the same guarantee over an arbitrary query — and the rule is
+  identical: **proceed only on an exact zero**, an unreadable count being a reason to decline just
+  as a positive one is. A `__snap_` source is the router's refusal (`Blocked::ReservedName`), which
+  is what keeps `__strata_ord` out of a user's file. The effect is `None`: a COPY changes nothing
+  the catalog holds, and history and the event log record it like any successful run.
+  `Blocked::CopyTo` stays defined as the **agent** path's refusal.
+  **And a partitioned write states `keep_partition_by_columns` in the statement, never in the
+  session.** DF's physical planner reads that key out of the COPY's own `OPTIONS` and only falls
+  back to the session config when it is absent, so `run_export` sends it as an option; the `SET`
+  it replaces was global and never restored, which was invisible only for as long as no statement
+  could read it back (ED-08) and would otherwise have made one export decide the answer for every
+  later one. Namespaced (`execution.…`) rather than bare because `TableOptions::set` skips that
+  whole namespace, which is what lets the key reach the planner without a format refusing it.
+  Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.4,
+  [EXPORT_OPTIONS.md](../EXPORT_OPTIONS.md).
 - **A re-scan means "list the sources again", so this engine runs no list-files cache.** DataFusion
   54 turns one on by default — 1 MiB, **infinite TTL** — and with it every re-listing answers with
   the file set from last time: the catalog's ↻, the Configure window's re-inference and
