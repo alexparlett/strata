@@ -8,7 +8,7 @@ use super::tree::PlanKind;
 use crate::util::fmt_int;
 
 /// The unit-class of a metric value, so the UI can format and group it without
-/// re-deriving units (mirrors the `type` in EXPLAIN_PLAN_SPEC §2). The engine
+/// re-deriving units (mirrors the `type` in `EXPLAIN_PLAN_SPEC` §2). The engine
 /// tags each [`Metric`] with one, derived from DataFusion's `MetricValue` variant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MetricKind {
@@ -44,7 +44,7 @@ impl MetricKind {
     }
 }
 
-/// One typed, pre-labelled operator metric (EXPLAIN_PLAN_SPEC §2). Built by the
+/// One typed, pre-labelled operator metric (`EXPLAIN_PLAN_SPEC` §2). Built by the
 /// engine from a DataFusion `MetricValue`; the UI never re-derives units.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Metric {
@@ -59,7 +59,7 @@ pub struct Metric {
     pub zero: bool,
 }
 
-/// Fixed tier-3 group order (EXPLAIN_PLAN_SPEC §4).
+/// Fixed tier-3 group order (`EXPLAIN_PLAN_SPEC` §4).
 pub const METRIC_GROUPS: [&str; 9] = [
     "Output",
     "Time",
@@ -145,7 +145,7 @@ impl InsightTone {
 }
 
 /// A tier-2 "insight" callout — a non-zero signal worth surfacing above the full
-/// metrics grid (EXPLAIN_PLAN_SPEC §4), tone-coded.
+/// metrics grid (`EXPLAIN_PLAN_SPEC` §4), tone-coded.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Insight {
     pub text: String,
@@ -241,7 +241,7 @@ pub fn insights(metrics: &[Metric]) -> Vec<Insight> {
     out
 }
 
-/// Per-node **self-time** in milliseconds (EXPLAIN_PLAN_SPEC §3) computed from the
+/// Per-node **self-time** in milliseconds (`EXPLAIN_PLAN_SPEC` §3) computed from the
 /// typed metric list: the real "work done here", picked per operator kind because
 /// there is no single reliable time field. `fetch_time`/`send_time` (exchange wait,
 /// not work) are deliberately never used. Returns `None` when the node carries no

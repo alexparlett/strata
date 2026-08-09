@@ -137,7 +137,7 @@ pub fn fmt_int(n: u64) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*b as char);
@@ -208,7 +208,7 @@ pub fn folder_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Turn a file/dir name into a valid, unique lower_snake SQL identifier.
+/// Turn a file/dir name into a valid, unique `lower_snake` SQL identifier.
 pub fn derive_table_name(path: &Path, existing: &BTreeSet<String>) -> String {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("table");
     let mut base: String = stem
@@ -224,7 +224,7 @@ pub fn derive_table_name(path: &Path, existing: &BTreeSet<String>) -> String {
     if base.is_empty() {
         base = "table".into();
     }
-    if base.chars().next().map_or(true, |c| c.is_ascii_digit()) {
+    if base.chars().next().is_none_or(|c| c.is_ascii_digit()) {
         base = format!("t_{base}");
     }
     let mut name = base.clone();
@@ -251,7 +251,7 @@ pub fn is_byte_size(v: &str) -> bool {
     unit.is_empty()
         || matches!(
             unit.chars().next().map(|c| c.to_ascii_lowercase()),
-            Some('k') | Some('m') | Some('g') | Some('t') | Some('b')
+            Some('k' | 'm' | 'g' | 't' | 'b')
         )
 }
 
@@ -388,7 +388,7 @@ fn temp_pid(name: &str) -> Option<u32> {
 /// the future (a clock-skewed network mount) — is left alone. Littering is the cheap
 /// failure here; deleting a live write is not.
 pub fn sweep_stale_temps(dir: &Path) {
-    sweep_temps_older_than(dir, TEMP_STALE_AGE)
+    sweep_temps_older_than(dir, TEMP_STALE_AGE);
 }
 
 /// [`sweep_stale_temps`] with the threshold injected, so both arms are testable without
@@ -466,7 +466,7 @@ fn temp_dir_pid(name: &str) -> Option<u32> {
 /// still well past it, and the exposure is narrow: only a *different* process's spool is ever
 /// eligible, and the cost of getting it wrong is one interrupted CTAS rather than lost data.
 pub fn sweep_stale_temp_dirs(dir: &Path) {
-    sweep_temp_dirs_older_than(dir, TEMP_STALE_AGE)
+    sweep_temp_dirs_older_than(dir, TEMP_STALE_AGE);
 }
 
 /// [`sweep_stale_temp_dirs`] with the threshold injected, so both arms are testable without

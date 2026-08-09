@@ -34,6 +34,64 @@ freya-edit = { path = "crates/freya/crates/freya-edit" }
 freya-components = { path = "crates/freya/crates/freya-components" }
 torin = { path = "crates/freya/crates/torin" }
 
+# Workspace lint policy, inherited by every member (`[lints] workspace = true`). The base is
+# `clippy::all` plus a hand-picked readability/complexity set — deliberately NOT the whole
+# pedantic group, which fights this codebase's own conventions (everything is `pub`, prose is
+# terse, a render fn is long on purpose) and would cost more than it finds. Thresholds live in
+# `clippy.toml`. CI denies all of it: `cargo clippy --workspace --all-targets --locked -- -D
+# warnings`. A lint that is wrong for this codebase is allowed HERE, with a one-line reason,
+# never with a blanket allow at the use site.
+[workspace.lints.rust]
+# The mechanical form of "a path is qualified in the `use` and nowhere else" (AGENTS.md §1).
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+# The base, stated rather than assumed. `priority = -1` so the individual entries below win.
+all = { level = "warn", priority = -1 }
+
+# -- default-on lints demoted for this codebase ------------------------------------------
+# A `new` here is a deliberate entry point into a stateful object; a `Default` impl would add
+# a second, unused way to build one. Replaces five inline allows.
+new_without_default = "allow"
+# A match here is written one arm per variant, and the arm carries the prose for *that* variant —
+# which is this codebase's main documentation vehicle. Two arms answering alike is then a fact
+# about the answer, not a duplication: `CatalogState::Scanning` and `Settled(0)` both give `None`
+# for reasons its doc spends a paragraph separating, `Kind::Bool` and `Kind::Struct` both have no
+# stats for two unrelated reasons, and `ddl::execute`'s stubs are grouped one-arm-per-ED-task on
+# purpose. Merging them folds distinct explanations into one arm that can only hold one. Sixteen
+# sites, of which about three were real; the ratio is the reason this is a workspace call and not
+# sixteen inline ones.
+match_same_arms = "allow"
+
+# -- complexity --------------------------------------------------------------------------
+cognitive_complexity = "warn"                 # tangled control flow, not arm count
+too_many_lines = "warn"                       # 200 in clippy.toml; the few over it say why
+
+# -- readability -------------------------------------------------------------------------
+uninlined_format_args = "warn"                # `{name}` over `{}` — greppable format strings
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+redundant_else = "warn"
+manual_let_else = "warn"
+unnested_or_patterns = "warn"
+explicit_iter_loop = "warn"
+items_after_statements = "warn"
+manual_string_new = "warn"
+ignored_unit_patterns = "warn"
+needless_continue = "warn"
+doc_markdown = "warn"                         # idents whitelisted via `doc-valid-idents`
+dbg_macro = "warn"                            # a leftover `dbg!` never ships; tests exempt
+
+# -- correctness-adjacent ----------------------------------------------------------------
+unnecessary_wraps = "warn"                    # needs `avoid-breaking-exported-api = false`
+match_wildcard_for_single_variants = "warn"   # a `_` hiding one variant defeats exhaustiveness
+
+# -- perf-adjacent -------------------------------------------------------------------------
+redundant_clone = "warn"                      # nursery: triage by hand, never `--fix`
+cloned_instead_of_copied = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+
 # Profiles are honoured only at the workspace root (a virtual manifest), so they live here
 # and apply workspace-wide.
 [profile.dev]

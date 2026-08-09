@@ -9,7 +9,7 @@
 //! So this drives MinIO in a container and asserts the whole chain end to end — connection →
 //! registered object store → **a table def naming that connection**, composed by
 //! `register::table_spec` (W7 · 04) → `register_external`'s listing and schema inference → a
-//! query that returns rows. In particular it is the only thing that exercises **SigV4 signing through the
+//! query that returns rows. In particular it is the only thing that exercises **`SigV4` signing through the
 //! `aws-config` bridge**: `SdkCredentials` hands `object_store` a key/secret/token triple, and
 //! a server that actually verifies signatures is the only witness that the triple is right.
 //!
@@ -33,7 +33,7 @@
 //! **Two providers, S3 and HTTP** — the same container serves both, because MinIO is an S3 API
 //! *and* an ordinary HTTP origin once a bucket is world-readable. The HTTP arm reads a single
 //! object rather than a prefix, and that is not a shortcut: `object_store`'s HTTP store lists
-//! through **WebDAV `PROPFIND`**, which MinIO does not implement, so a directory-shaped source
+//! through **WebDAV PROPFIND**, which MinIO does not implement, so a directory-shaped source
 //! could not work against it. A single-file source is exactly what an `http(s)://` connection is
 //! for in any case, and it exercises the whole path — connection, registered store, `head` +
 //! `get` over the wire, schema inference, rows.
@@ -305,7 +305,7 @@ fn hive_table() -> TableSpec {
 }
 
 /// The same object over the **HTTP** connection: one file, and deliberately no trailing slash.
-/// `object_store`'s HTTP store lists through WebDAV `PROPFIND`, which MinIO does not implement,
+/// `object_store`'s HTTP store lists through WebDAV PROPFIND, which MinIO does not implement,
 /// so a prefix-shaped source could not be read here — a single object is what this provider is
 /// for, and it is read through `head` + `get` like any other.
 ///

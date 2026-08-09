@@ -175,7 +175,7 @@ impl SyntaxHighlighter {
     /// Configures the language used for highlighting, or disables it with `None`. Theme-independent.
     pub fn set_language(&mut self, language: Option<&EditorLanguage>) {
         self.tree = None;
-        self.config = language.and_then(|language| language.lang_config());
+        self.config = language.and_then(EditorLanguage::lang_config);
         if let Some(cfg) = &self.config {
             let _ = self.parser.set_language(&cfg.language);
         }

@@ -29,9 +29,9 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::planner::object_name_to_table_reference;
 use datafusion::sql::sqlparser::ast::{
-    visit_expressions, visit_relations, AccessExpr, Cte, Expr, FunctionArg, FunctionArgExpr,
-    FunctionArguments, GroupByExpr, Ident, JoinConstraint, JoinOperator, ObjectName, OrderBy,
-    OrderByExpr, OrderByKind, Query, Select, SelectItem, SetExpr, Spanned,
+    visit_expressions, visit_relations, AccessExpr, Cte, Expr, Function, FunctionArg,
+    FunctionArgExpr, FunctionArguments, GroupByExpr, Ident, JoinConstraint, JoinOperator,
+    ObjectName, OrderBy, OrderByExpr, OrderByKind, Query, Select, SelectItem, SetExpr, Spanned,
     Statement as SqlStatement, Subscript, TableAlias, TableFactor, WindowType,
 };
 use datafusion::sql::sqlparser::tokenizer::Span;
@@ -97,7 +97,12 @@ pub(crate) async fn resolve(
 
 /// The sqlparser statement inside a DataFusion statement, with `EXPLAIN` layers
 /// unwrapped; `None` for DataFusion extensions (policy handles those).
-fn unwrap_statement(stmt: &DFStatement) -> Option<&SqlStatement> {
+///
+/// Shared with [`read_policy`](crate::engine::sql::read_policy), which asks the same question of
+/// the same two wrappers: DataFusion spells `EXPLAIN` twice (its own extension statement and
+/// sqlparser's), and a consumer that unwrapped only one would answer differently about
+/// `EXPLAIN EXECUTE p` depending on which parser arm produced it.
+pub(super) fn unwrap_statement(stmt: &DFStatement) -> Option<&SqlStatement> {
     match stmt {
         DFStatement::Statement(s) => {
             let mut s: &SqlStatement = s;
@@ -536,6 +541,46 @@ impl Resolver<'_> {
 
     // ---- expressions -------------------------------------------------------
 
+    /// Walk a function call's four expression-bearing parts: its arguments, the `OVER` window
+    /// spec, a `FILTER` clause, and `WITHIN GROUP`.
+    ///
+    /// The function *name* is the planner's to judge (`FunctionCatalog` + engine arity); only
+    /// these carry column refs.
+    fn function(&mut self, f: &Function, scope: &Scope, allow_aliases: bool, checkable: bool) {
+        match &f.args {
+            FunctionArguments::List(list) => {
+                for arg in &list.args {
+                    let fae = match arg {
+                        FunctionArg::Named { arg, .. } => arg,
+                        FunctionArg::ExprNamed { arg, .. } => arg,
+                        FunctionArg::Unnamed(fae) => fae,
+                    };
+                    if let FunctionArgExpr::Expr(e) = fae {
+                        self.expr(e, scope, allow_aliases, checkable);
+                    }
+                }
+            }
+            FunctionArguments::Subquery(q) => {
+                self.query(q, Some(scope));
+            }
+            FunctionArguments::None => {}
+        }
+        if let Some(WindowType::WindowSpec(spec)) = &f.over {
+            for e in &spec.partition_by {
+                self.expr(e, scope, allow_aliases, checkable);
+            }
+            for obe in &spec.order_by {
+                self.order_by_expr(obe, scope, checkable);
+            }
+        }
+        if let Some(filter) = &f.filter {
+            self.expr(filter, scope, allow_aliases, checkable);
+        }
+        for obe in &f.within_group {
+            self.order_by_expr(obe, scope, checkable);
+        }
+    }
+
     /// Walk one expression against `scope`. `allow_aliases` marks the
     /// post-projection clauses where select aliases are legal targets;
     /// `checkable` is false in draft scopes (walk still recurses for subqueries).
@@ -553,42 +598,7 @@ impl Resolver<'_> {
                 self.expr(expr, scope, allow_aliases, checkable);
                 self.query(subquery, Some(scope));
             }
-            Expr::Function(f) => {
-                // The function *name* is the planner's to judge (FunctionCatalog +
-                // engine arity); only its argument expressions carry column refs.
-                match &f.args {
-                    FunctionArguments::List(list) => {
-                        for arg in &list.args {
-                            let fae = match arg {
-                                FunctionArg::Named { arg, .. } => arg,
-                                FunctionArg::ExprNamed { arg, .. } => arg,
-                                FunctionArg::Unnamed(fae) => fae,
-                            };
-                            if let FunctionArgExpr::Expr(e) = fae {
-                                self.expr(e, scope, allow_aliases, checkable);
-                            }
-                        }
-                    }
-                    FunctionArguments::Subquery(q) => {
-                        self.query(q, Some(scope));
-                    }
-                    FunctionArguments::None => {}
-                }
-                if let Some(WindowType::WindowSpec(spec)) = &f.over {
-                    for e in &spec.partition_by {
-                        self.expr(e, scope, allow_aliases, checkable);
-                    }
-                    for obe in &spec.order_by {
-                        self.order_by_expr(obe, scope, checkable);
-                    }
-                }
-                if let Some(filter) = &f.filter {
-                    self.expr(filter, scope, allow_aliases, checkable);
-                }
-                for obe in &f.within_group {
-                    self.order_by_expr(obe, scope, checkable);
-                }
-            }
+            Expr::Function(f) => self.function(f, scope, allow_aliases, checkable),
             Expr::BinaryOp { left, right, .. } => {
                 self.expr(left, scope, allow_aliases, checkable);
                 self.expr(right, scope, allow_aliases, checkable);
@@ -671,7 +681,7 @@ impl Resolver<'_> {
                     match path.as_slice() {
                         [id] => self.check_unqualified(id, scope, allow_aliases, checkable),
                         [q, c] => {
-                            self.check_qualified(&[(*q).clone(), (*c).clone()], scope, checkable)
+                            self.check_qualified(&[(*q).clone(), (*c).clone()], scope, checkable);
                         }
                         // Longer paths are ambiguous with schema-qualified names —
                         // the planner's to judge.
@@ -682,7 +692,7 @@ impl Resolver<'_> {
                     if let AccessExpr::Subscript(sub) = access {
                         match sub {
                             Subscript::Index { index } => {
-                                self.expr(index, scope, allow_aliases, checkable)
+                                self.expr(index, scope, allow_aliases, checkable);
                             }
                             Subscript::Slice {
                                 lower_bound,
@@ -720,10 +730,10 @@ impl Resolver<'_> {
                 for x in &idents {
                     match x {
                         Expr::Identifier(id) => {
-                            self.check_unqualified(id, scope, allow_aliases, checkable)
+                            self.check_unqualified(id, scope, allow_aliases, checkable);
                         }
                         Expr::CompoundIdentifier(parts) => {
-                            self.check_qualified(parts, scope, checkable)
+                            self.check_qualified(parts, scope, checkable);
                         }
                         _ => unreachable!(),
                     }
@@ -775,7 +785,7 @@ impl Resolver<'_> {
         match scope.chain_binding(&qualifier.value) {
             Some(rel) => match &rel.cols {
                 Cols::Unknown => {}
-                cols => {
+                cols @ Cols::Known(_) => {
                     if !cols.contains(&column.value) {
                         let span = self.byte_span(qualifier.span.union(&column.span));
                         self.push(
@@ -926,7 +936,7 @@ mod tests {
         for (name, cols) in tables {
             schemas.insert(
                 (*name).to_string(),
-                SchemaEntry::Known(cols.iter().map(|c| c.to_string()).collect()),
+                SchemaEntry::Known(cols.iter().map(ToString::to_string).collect()),
             );
         }
         let stmt = Parser::parse_sql(&GenericDialect {}, sql)

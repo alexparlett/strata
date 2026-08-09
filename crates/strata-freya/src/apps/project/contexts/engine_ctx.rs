@@ -64,7 +64,7 @@ impl EngineCtx {
     }
 
     /// Hold `snapshot` open for as long as the returned pin lives — the escape hatch from
-    /// retire-on-dispatch for a reader that outlives one Run (SNAPSHOT_SPEC §4). The export
+    /// retire-on-dispatch for a reader that outlives one Run (`SNAPSHOT_SPEC` §4). The export
     /// window holds one for its whole life.
     ///
     /// Not reachable through `Deref`: [`Engine::pin_snapshot`] takes `&Arc<Engine>` (the pin

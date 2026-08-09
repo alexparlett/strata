@@ -23,7 +23,7 @@ use crate::engine::sql::fuzzy::match_tier;
 use crate::engine::sql::lex::{
     caret_extends_numeric_literal, caret_in_string_or_comment, is_reserved_in_name_position, lex,
 };
-use crate::engine::sql::symbols::{Catalog, TableSym};
+use crate::engine::sql::symbols::{Catalog, PreparedSym, TableSym};
 use crate::engine::sql::FunctionSym;
 use strata_model::Kind;
 
@@ -170,6 +170,14 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
                     T_PRIMARY,
                     coverage(have) * 2 + written_rel(&t.name),
                 ));
+            }
+        }
+        // `EXECUTE |` / `DEALLOCATE |` — the session's prepared statements and nothing else.
+        // Empty until something has been prepared, which is the correct offer: no table,
+        // column or keyword can stand in the operand of either statement.
+        Context::At(Clause::Execute, Role::Operand) => {
+            for p in &catalog.prepared {
+                pool.push(Cand::new(prepared_item(p, &replace), T_PRIMARY));
             }
         }
         // LIMIT / OFFSET take numbers — nothing sensible to offer.
@@ -391,12 +399,30 @@ fn cte_item(name: &str, replace: &Range<usize>) -> Completion {
     }
 }
 
+/// A prepared statement at an `EXECUTE` / `DEALLOCATE` operand (ED-08).
+///
+/// `Function` is the nearest existing kind and the row reads right — a prepared statement is a
+/// name invoked with parenthesised arguments — but the **bare** name is inserted, not `name(`:
+/// `DEALLOCATE p` takes none, and so does an `EXECUTE` of a statement with no placeholders. Its
+/// parameter shape is the detail column instead, which is what says which of the two it is. (The
+/// same reuse `cte_item` makes of `Table`, and for the same reason: the kind is a glyph, not a
+/// taxonomy.)
+fn prepared_item(p: &PreparedSym, replace: &Range<usize>) -> Completion {
+    Completion {
+        label: p.name.clone(),
+        insert: ident_insert(&p.name),
+        kind: CompletionKind::Function,
+        detail: Some(p.detail()),
+        replace: replace.clone(),
+    }
+}
+
 fn column_item(name: &str, detail: Option<&str>, replace: &Range<usize>) -> Completion {
     Completion {
         label: name.to_string(),
         insert: ident_insert(name),
         kind: CompletionKind::Column,
-        detail: detail.map(|d| d.to_string()),
+        detail: detail.map(ToString::to_string),
         replace: replace.clone(),
     }
 }

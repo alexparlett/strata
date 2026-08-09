@@ -69,7 +69,6 @@ impl Component for Footer {
         );
 
         let cancel = {
-            let platform = platform.clone();
             Button::new()
                 .height(Size::px(ACTION_HEIGHT))
                 // Always available: a registration in flight is the project window's, and it
@@ -83,7 +82,6 @@ impl Component for Footer {
             .height(Size::px(ACTION_HEIGHT))
             .enabled(!registering && note.is_none())
             .on_press({
-                let engine = engine.clone();
                 move |_: Event<PressEventData>| save(ctx, project, rescan, engine.clone(), report)
             })
             .child(Control::new(match registering {
@@ -135,31 +133,6 @@ fn save_note(blocker: Option<String>, scanning: bool) -> Option<String> {
         scanning
             .then(|| "The catalog is being re-scanned. Save is available when it settles.".into())
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::save_note;
-
-    #[test]
-    fn an_actionable_blocker_outranks_the_re_scan() {
-        let blocker = || Some("A table needs a name.".to_string());
-        assert_eq!(save_note(blocker(), true), blocker());
-        assert_eq!(save_note(blocker(), false), blocker());
-    }
-
-    #[test]
-    fn a_re_scan_is_explained_once_it_is_the_only_thing_left() {
-        // The regression this guards: Save was disabled while scanning and the footer said
-        // nothing, because the two were computed separately.
-        let note = save_note(None, true).expect("a scanning footer says why");
-        assert!(note.contains("re-scanned"), "{note}");
-    }
-
-    #[test]
-    fn nothing_to_say_when_save_is_available() {
-        assert_eq!(save_note(None, false), None);
-    }
 }
 
 /// The one blocker the draft cannot see: a name that belongs to something else.
@@ -291,5 +264,29 @@ fn save(
         // from the provider this rename just deregistered.
         Some(_) => refresh_catalog(rescan),
         None => refresh_table(rescan, name),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::save_note;
+
+    #[test]
+    fn an_actionable_blocker_outranks_the_re_scan() {
+        let blocker = || Some("A table needs a name.".to_string());
+        assert_eq!(save_note(blocker(), true), blocker());
+        assert_eq!(save_note(blocker(), false), blocker());
+    }
+
+    #[test]
+    fn a_re_scan_is_explained_once_it_is_the_only_thing_left() {
+        // The regression this guards: Save was disabled while scanning and the footer said
+        // nothing, because the two were computed separately.
+        let note = save_note(None, true).expect("a scanning footer says why");
+        assert!(note.contains("re-scanned"), "{note}");
+    }
+
+    #[test]
+    fn nothing_to_say_when_save_is_available() {
+        assert_eq!(save_note(None, false), None);
     }
 }

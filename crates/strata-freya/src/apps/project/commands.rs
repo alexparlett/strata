@@ -271,8 +271,8 @@ mod tests {
     #[test]
     fn every_command_describes_itself() {
         for action in Action::ALL {
-            assert!(!action.sub().is_empty(), "{:?} has no doc comment", action);
-            assert!(!action.label().is_empty(), "{:?} has no label", action);
+            assert!(!action.sub().is_empty(), "{action:?} has no doc comment");
+            assert!(!action.label().is_empty(), "{action:?} has no label");
         }
     }
 }

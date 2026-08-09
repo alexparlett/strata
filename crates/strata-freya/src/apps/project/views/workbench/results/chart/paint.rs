@@ -567,7 +567,7 @@ mod tests {
                     dress: Dress::new(&theme, &scale()),
                 })))
         };
-        let (mut runner, _) = TestingRunner::new(app, (800., 600.).into(), |_| {}, 1.);
+        let (mut runner, ()) = TestingRunner::new(app, (800., 600.).into(), |_| {}, 1.);
         runner.sync_and_update();
         // The hit regions and the plot frame are recorded *by* the paint, and headless only
         // paints on demand.
@@ -738,7 +738,7 @@ mod tests {
                     dress: Dress::new(&theme, &scale()),
                 })))
         };
-        let (mut runner, _) = TestingRunner::new(app, (800., 600.).into(), |_| {}, 1.);
+        let (mut runner, ()) = TestingRunner::new(app, (800., 600.).into(), |_| {}, 1.);
         runner.sync_and_update();
         runner.render();
         // Inside the second bin — the tallest, whose top edge *is* the axis top.

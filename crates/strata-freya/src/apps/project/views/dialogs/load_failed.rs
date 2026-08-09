@@ -121,7 +121,7 @@ impl Component for ProjectLoadFailed {
                     .modal(false)
                     // Enter is the keyboard close; every other chord stays the window's
                     // (⌘O, ⌘,, ⇧⌘W — see the module doc).
-                    .on_confirm(move |_| close_enter())
+                    .on_confirm(move |()| close_enter())
                     .header(header)
                     .body(
                         rect()

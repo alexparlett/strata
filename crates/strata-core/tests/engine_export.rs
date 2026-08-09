@@ -7,7 +7,7 @@
 //! surface the export window offers is real.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use strata_core::engine::export::{
     Codec, Compression, Csv, ExportSpec, Format, Json, Parquet, Partition, Scope, Statistics,
@@ -42,7 +42,7 @@ fn csv() -> Csv {
     }
 }
 
-fn spec(path: &PathBuf, format: Format) -> ExportSpec {
+fn spec(path: &Path, format: Format) -> ExportSpec {
     ExportSpec {
         path: path.to_string_lossy().into_owned(),
         scope: Scope::All,
@@ -349,7 +349,7 @@ async fn partitioning_writes_a_hive_tree_and_drops_the_columns_by_default() {
 
     let mut levels: Vec<String> = fs::read_dir(&out)
         .expect("tree root")
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     levels.sort();
@@ -362,7 +362,7 @@ async fn partitioning_writes_a_hive_tree_and_drops_the_columns_by_default() {
     // The partition column is in the directory name, so it is gone from the file itself.
     let leaf = fs::read_dir(out.join("column3=true"))
         .expect("leaf dir")
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .next()
         .expect("a part file");
     let text = fs::read_to_string(leaf.path()).expect("read part");
@@ -391,7 +391,7 @@ async fn keeping_partition_columns_puts_them_back_in_the_files() {
 
     let leaf = fs::read_dir(out.join("column3=true"))
         .expect("leaf dir")
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .next()
         .expect("a part file");
     let text = fs::read_to_string(leaf.path()).expect("read part");
@@ -727,7 +727,7 @@ async fn a_partition_column_without_nulls_is_allowed() {
 
     let mut levels: Vec<String> = fs::read_dir(&out)
         .expect("tree root")
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     levels.sort();

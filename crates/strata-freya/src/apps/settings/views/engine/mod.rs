@@ -1,4 +1,4 @@
-//! **Settings ▸ Engine ▸ Properties** (P4-07, DEV_TASKS W2) — the DataFusion `ConfigOptions`
+//! **Settings ▸ Engine ▸ Properties** (P4-07, `DEV_TASKS` W2) — the DataFusion `ConfigOptions`
 //! this app's engines are built with, edited as a free-form key/value table.
 //!
 //! The other four categories are a list of named settings; this one is a list the *user* names,

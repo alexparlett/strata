@@ -334,7 +334,7 @@ impl Component for ConnectionRow {
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
-            .maybe_child(status.map(|s| s.into_element()))
+            .maybe_child(status.map(IntoElement::into_element))
             .child(actions_button(build_menu))
     }
 }

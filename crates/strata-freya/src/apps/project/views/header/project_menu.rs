@@ -109,7 +109,7 @@ impl Component for ProjectMenu {
             let recent_rows: Vec<ProjectRow> = cfg
                 .recent_projects
                 .iter()
-                .filter(|r| !cfg.open_projects.iter().any(|p| *p == r.path))
+                .filter(|r| !cfg.open_projects.contains(&r.path))
                 .map(|r| ProjectRow {
                     name: r.name.clone(),
                     path: r.path.clone(),
@@ -121,7 +121,7 @@ impl Component for ProjectMenu {
         // Built by folding the two lists in — the `Menu` is never held in a mutable variable.
         let menu = Menu::new()
             .min_width(Size::px(MENU_WIDTH))
-            .on_close(move |_| open.set(false))
+            .on_close(move |()| open.set(false))
             .child(
                 MenuButton::new()
                     .on_press({
@@ -219,7 +219,7 @@ impl Component for ProjectMenu {
         // A few pixels off the trigger, so the card reads as its own surface rather than growing
         // out of the button.
         .offset(4.)
-        .maybe_child(open().then(|| menu))
+        .maybe_child(open().then_some(menu))
     }
 }
 

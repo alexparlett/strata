@@ -472,7 +472,7 @@ mod tests {
     fn levels(dir: &Path) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(dir)
             .expect("tree root")
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         names.sort();

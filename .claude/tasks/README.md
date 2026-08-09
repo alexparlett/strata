@@ -133,10 +133,11 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Editor statements** (ED-08..10) — the open capability arms over the built router/dispatch
+1. **Editor statements** (ED-09..11) — the open capability arms over the built router/dispatch
    spine.
-2. **Agent access AA-06** — the chat pane (starts with the deferred brain decision; read AA-03c's
-   identity finding first).
+2. **Assistant AS-03 then AS-04** — the Settings roster, then the chat pane. The loop and the
+   provider seam under them are built (AS-02); read that file's "What AS-04 gets" for the event
+   vocabulary, and AA-03c's identity finding before touching query sessions.
 3. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
    trendline.
 4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave

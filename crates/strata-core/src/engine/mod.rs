@@ -57,7 +57,7 @@ pub use chart::MAX_BINS;
 /// The intercepted-statement vocabulary (ED-02): what an arm answers with, what the app folds.
 /// [`drop_intent`](ddl::drop_intent) rides with them because a drop's wording is the engine's
 /// (ED-05) — the catalog's confirm says before the fact what the report says after it.
-pub use ddl::{drop_intent, StatementOutcome, StatementReport, StoreEffect};
+pub use ddl::{drop_intent, SessionScope, StatementOutcome, StatementReport, StoreEffect};
 pub use query::purge_snapshot_root;
 
 use sql::{PolicyRefusal, Verdict};
@@ -105,6 +105,9 @@ use std::time::Instant;
 
 use datafusion::common::TableReference;
 use datafusion::execution::runtime_env::RuntimeEnv;
+// `register_udf` is `FunctionRegistry`'s, not an inherent method on `SessionState`.
+use datafusion::execution::{FunctionRegistry, SessionState};
+use datafusion::logical_expr::ScalarUDF;
 use datafusion::prelude::*;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
@@ -113,8 +116,9 @@ use crate::engine::plan::QueryPlan;
 use providers::StrataCatalogProvider;
 use query::{
     claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
+    ReadPolicy,
 };
-use sql::FunctionCatalog;
+use sql::{FunctionCatalog, PreparedSym};
 use strata_model::{
     Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, QueryOutput, SnapshotId, TabId,
 };
@@ -329,6 +333,9 @@ pub struct Engine {
     data_root: Mutex<Option<PathBuf>>,
     /// Which registered tables are **internal** — see [`InternalTables`].
     internal: InternalTables,
+    /// The `SET` overlay and the prepared-statement mirror (ED-08) — see [`SessionScope`].
+    /// Default on a fresh engine, which is what makes a restart clear the session.
+    session: SessionScope,
 }
 
 /// The engine-side set of tables whose data Strata owns — [`fold_ident`]ed names (ED-04).
@@ -407,6 +414,7 @@ impl Engine {
             functions,
             data_root: Mutex::default(),
             internal: InternalTables::default(),
+            session: SessionScope::default(),
         }
     }
 
@@ -533,6 +541,12 @@ impl Engine {
     /// `datafusion.runtime.*` is the exception, and the reason this returns anything: those
     /// configure the `RuntimeEnv`, which is fixed when the `SessionContext` is built. They
     /// are recorded, not applied, and `true` means the caller owes the user a restart.
+    ///
+    /// A key the **session overlay** holds is recorded and not applied either (ED-08): a typed
+    /// `SET` wins for its key until `RESET` or restart, so the new value becomes the baseline a
+    /// `RESET` will land on rather than something that quietly overwrites what the user just
+    /// typed. That is the whole precedence rule, and it lives here because this is the only place
+    /// the two writers meet.
     pub fn set_config(&self, overrides: BTreeMap<String, String>) -> bool {
         let mut current = self.overrides.lock().unwrap();
         if *current != overrides {
@@ -541,7 +555,10 @@ impl Engine {
             let options = state.config_mut().options_mut();
             let touched: BTreeSet<&String> = current.keys().chain(overrides.keys()).collect();
             for key in touched {
-                if config::is_restart_key(key) || config::is_owned_key(key) {
+                if config::is_restart_key(key)
+                    || config::is_owned_key(key)
+                    || self.session.overlaid(key)
+                {
                     continue;
                 }
                 let value = match overrides.get(key) {
@@ -556,6 +573,8 @@ impl Engine {
                     tracing::warn!("engine config: skipping {key}={value}: {e}");
                 }
             }
+            // Once, after the batch rather than per key — see the function.
+            refresh_config_dependent_udfs(&mut state);
             *current = overrides;
         }
         runtime_subset(&current) != self.built_runtime
@@ -571,6 +590,15 @@ impl Engine {
     /// The `datafusion.*` overrides this engine is running with.
     pub fn overrides(&self) -> BTreeMap<String, String> {
         self.overrides.lock().unwrap().clone()
+    }
+
+    /// The statements `PREPARE` has left in this session (ED-08), as language-service symbols —
+    /// what completion offers at an `EXECUTE` / `DEALLOCATE` operand.
+    ///
+    /// Off the engine's own mirror, because DataFusion's `SessionState::prepared_plans` is
+    /// `pub(crate)` and has no public enumeration.
+    pub fn prepared(&self) -> Vec<PreparedSym> {
+        self.session.prepared()
     }
 
     /// Validate `sql` against this engine's live session (P2-18): lexical lints,
@@ -614,9 +642,11 @@ impl Engine {
     /// underline is a statement Run is prepared to perform, and a refusal fails the run with
     /// the words the squiggle showed rather than a DataFusion error about a rule that is ours.
     ///
-    /// - `Query` delegates to [`query`](Engine::query) **byte-for-byte**. It is the only arm
-    ///   that touches the snapshot lifecycle, which is what keeps "DDL does not retire
-    ///   snapshots" true by construction rather than by care.
+    /// - `Query` delegates to [`query`](Engine::query)'s body **byte-for-byte**, carrying only
+    ///   the one thing the router knows and the read path cannot: the [`ReadPolicy`] an `EXECUTE`
+    ///   needs ([`sql::read_policy`], ED-08). It is the only arm that touches the snapshot
+    ///   lifecycle, which is what keeps "DDL does not retire snapshots" true by construction
+    ///   rather than by care.
     /// - `Intercept(kind)` goes to `ddl::execute`, bracketed by
     ///   [`bookkeep`](Engine::bookkeep) so `cancel` / `is_running` / the close-while-running
     ///   confirm see it like any other work — a CTAS is a full scan, and a window closing over
@@ -625,10 +655,9 @@ impl Engine {
     ///   precisely because DDL executes *eagerly* inside it (spec §3), so anything that must
     ///   not run cannot be allowed to plan.
     ///
-    /// The `SQLOptions` triple the read path carries (`query::materialize`) stays all-false and
-    /// becomes defense in depth behind this: it is no longer the gate, and it never had the
-    /// vocabulary to be one — it can refuse a class of plan, not name the surface that owns the
-    /// capability.
+    /// The `SQLOptions` triple the read path carries (`query::materialize`) stays defense in
+    /// depth behind this: it is no longer the gate, and it never had the vocabulary to be one —
+    /// it can refuse a class of plan, not name the surface that owns the capability.
     pub async fn run(
         &self,
         ws: WsId,
@@ -648,16 +677,18 @@ impl Engine {
         };
         match verdict {
             Verdict::Query => self
-                .query(ws, tag, sql, page_size)
+                .read(ws, tag, sql, page_size, sql::read_policy(&stmt))
                 .await
                 .map(|(output, batch)| RunOutcome::Rows(output, batch)),
             Verdict::Intercept(kind) => {
                 let ctx = self.ctx.clone();
                 let root = self.data_root.lock().unwrap().clone();
                 let internal = self.internal.clone();
+                let scope = self.session.clone();
+                let baseline = self.overrides();
                 let report = self
                     .bookkeep(ws, tag, "statement", async move {
-                        ddl::execute(&ctx, kind, stmt, sql, root, internal).await
+                        ddl::execute(&ctx, kind, stmt, root, internal, scope, baseline).await
                     })
                     .await?;
                 self.settle_effect(report.effect.as_ref());
@@ -682,7 +713,7 @@ impl Engine {
         let Some(effect) = effect else { return };
         match effect {
             StoreEffect::TableUpserted { def, .. } => {
-                self.note_origin(&def.name, def.origin.is_internal())
+                self.note_origin(&def.name, def.origin.is_internal());
             }
             // A dropped table is no longer a write target, and a profile still scanning it is
             // now measuring files that may already be gone — cancelled here rather than inside
@@ -704,8 +735,11 @@ impl Engine {
                 self.cancel_profile(name);
             }
             // Nothing for the engine to learn. An `INSERT` moves data under a registration that
-            // is unchanged, and the function catalog is not a table.
-            StoreEffect::RescanTable { .. } | StoreEffect::FunctionsChanged => {}
+            // is unchanged; the function catalog is not a table; and a prepared statement's
+            // bookkeeping is the session's, already applied by the arm that moved it.
+            StoreEffect::RescanTable { .. }
+            | StoreEffect::FunctionsChanged
+            | StoreEffect::PreparedChanged => {}
         }
     }
 
@@ -822,6 +856,24 @@ impl Engine {
         sql: String,
         page_size: usize,
     ) -> Result<(QueryOutput, RecordBatch), String> {
+        self.read(ws, tag, sql, page_size, ReadPolicy::default())
+            .await
+    }
+
+    /// [`query`](Engine::query)'s body, plus the [`ReadPolicy`] the statement is planned under.
+    ///
+    /// Private, and `query` is the read-only entry every other caller keeps: the widening is only
+    /// ever sound for a statement [`sql::read_policy`] judged, so the ability to ask for it does
+    /// not belong on the facade (spec §1). One body either way — the lifecycle is identical, and a
+    /// second copy of it is what the whole snapshot discipline exists to avoid.
+    async fn read(
+        &self,
+        ws: WsId,
+        tag: RunTag,
+        sql: String,
+        page_size: usize,
+        policy: ReadPolicy,
+    ) -> Result<(QueryOutput, RecordBatch), String> {
         let snapshot = SnapshotId(self.snap_seq.fetch_add(1, Ordering::Relaxed));
         let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
@@ -841,7 +893,7 @@ impl Engine {
             let ctx = self.ctx.clone();
             let engine_id = self.engine_id;
             let task = self.rt().spawn(async move {
-                run_and_snapshot(&ctx, engine_id, snapshot, &sql, page_size, &fmt).await
+                run_and_snapshot(&ctx, engine_id, snapshot, &sql, page_size, &fmt, policy).await
             });
             lc.inflight.insert(
                 ws,
@@ -1694,6 +1746,35 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
 /// The catalog + schema **we own** — see [`build_context`].
 const CATALOG: &str = "strata";
 const SCHEMA: &str = "public";
+
+/// Re-initialise the UDFs that read `ConfigOptions` **when they were registered**, after a write
+/// to a live session's options. Call from every path that moves an option: a Settings Apply
+/// ([`Engine::set_config`]) and a typed `SET` / `RESET` (`ddl::session`).
+///
+/// Writing `ConfigOptions` is not the whole of applying a setting, and the gap is silent rather
+/// than loud. `NowFunc` captures `execution.time_zone` in `new_with_config` and bakes it into the
+/// literal its `simplify` returns, and the `to_timestamp` family does the same — so an option
+/// written without this reports success, moves `SHOW`, and leaves `now()` / `current_timestamp`
+/// answering in the zone the engine was *built* with until a restart. DataFusion's own
+/// `set_variable` and `reset_variable` do this immediately after the same `options.set` call
+/// (`context/mod.rs`); the `SessionStateBuilder` does it at construction, which is why a launch
+/// override always worked and only a live change did not.
+///
+/// `with_updated_config` returning `None` is the overwhelmingly common answer (the trait's own
+/// default), so this walks the registry and re-registers the handful that opt in.
+fn refresh_config_dependent_udfs(state: &mut SessionState) {
+    let options = state.config().options();
+    let updated: Vec<Arc<ScalarUDF>> = state
+        .scalar_functions()
+        .values()
+        .filter_map(|udf| udf.inner().with_updated_config(options).map(Arc::new))
+        .collect();
+    for udf in updated {
+        if let Err(e) = state.register_udf(udf) {
+            tracing::warn!("engine config: could not re-register a config-dependent function: {e}");
+        }
+    }
+}
 
 /// Just the `datafusion.runtime.*` entries of `overrides` — the half that
 /// [`build_runtime`] reads, and so the half a restart would change.
@@ -2714,13 +2795,13 @@ mod tests {
             .run(
                 WsId(1),
                 RunTag(1),
-                "SET datafusion.execution.batch_size = 2".into(),
+                "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'x.csv'".into(),
                 10,
             )
             .await
             .err()
             .expect("not implemented yet");
-        assert_eq!(err, "SET is not implemented yet");
+        assert_eq!(err, "CREATE EXTERNAL TABLE is not implemented yet");
     }
 
     /// A statement that **is** implemented still needs somewhere to put what it makes, and an
@@ -2741,7 +2822,7 @@ mod tests {
     }
 
     /// **Neither refusal touches the snapshot lifecycle.** DDL does not retire a snapshot
-    /// (SNAPSHOT_SPEC §4), so the workspace's settled result is still there to page after a
+    /// (`SNAPSHOT_SPEC` §4), so the workspace's settled result is still there to page after a
     /// statement runs in the same tab — which is also what makes the results pane's "previous
     /// snapshot survives" claim true rather than hopeful.
     #[tokio::test]
@@ -2846,7 +2927,7 @@ mod read_options_tests {
         d
     }
 
-    fn write(dir: &PathBuf, name: &str, body: &str) -> String {
+    fn write(dir: &Path, name: &str, body: &str) -> String {
         let path = dir.join(name);
         std::fs::write(&path, body).expect("fixture");
         path.to_string_lossy().into_owned()
@@ -2854,10 +2935,10 @@ mod read_options_tests {
 
     /// The same, gzipped — a compression option can only be proved by a genuinely compressed
     /// file whose name carries the suffix.
-    fn write_gz(dir: &PathBuf, name: &str, body: &str) -> String {
+    fn write_gz(dir: &Path, name: &str, body: &str) -> String {
         let path = dir.join(name);
         let mut enc = flate2::write::GzEncoder::new(
-            std::fs::File::create(&path).expect("fixture"),
+            File::create(&path).expect("fixture"),
             flate2::Compression::default(),
         );
         enc.write_all(body.as_bytes()).expect("compress");
@@ -3049,10 +3130,7 @@ mod read_options_tests {
             .query(WsId(1), RunTag(1), "SELECT * FROM strict".into(), 100)
             .await
             .expect_err("the short file cannot be read against the merged schema");
-        assert!(
-            err.to_string().contains("incorrect number of fields"),
-            "{err}"
-        );
+        assert!(err.contains("incorrect number of fields"), "{err}");
 
         let meta = eng
             .register(spec(

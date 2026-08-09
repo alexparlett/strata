@@ -8,7 +8,7 @@ name **Strata** (uneven sedimentary layers = data strata).
 
 The app is built on **Freya 0.4 (Skia/native)**. It began as a Dioxus (wry/webview) app and was
 rewritten clean-slate on Freya; the Dioxus frontend has been **deleted**. The open work is the
-remaining workstreams (`.claude/tasks/`): the statement lift (ED-08..10), the assistant's
+remaining workstreams (`.claude/tasks/`): the statement lift (ED-09..11), the assistant's
 Settings roster and chat pane (AS-03/AS-04 — the loop under them is built), chart follow-ons,
 and design polish.
 
@@ -51,6 +51,15 @@ To build something you can hand to a tester — a universal `.app` + DMG in `tar
 The same script is what the **Release** workflow runs (Actions → Release → Run workflow), which can
 also bump the crate version, tag the commit and publish a release page in the same press.
 `scripts/version.sh` owns the version number. See **`docs/RELEASING.md`**.
+
+Linting is part of the check, and CI runs it before the tests:
+
+```bash
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+The curated lint set is `[workspace.lints]` in the root `Cargo.toml` and the thresholds are
+`clippy.toml`; both are annotated, and [AGENTS.md](AGENTS.md) §7 has the rule for adding to them.
 
 Formatting is the **`fmt` skill**, never `cargo fmt --all` (which reformats the fork — see
 [AGENTS.md](AGENTS.md) §7). Running the app is the **`run-app` skill**; one Strata window across
@@ -163,8 +172,9 @@ context. Snapshots are **Arrow IPC**; lifecycle is the facade's own bookkeeping
 (`docs/SNAPSHOT_SPEC.md`). The SQL function set is the **live registry**, not a list we keep.
 Statement policy is one router in front of dispatch: `Engine::run` classifies, then runs a query,
 intercepts a statement, or refuses it — the editor runs queries, the table statements
-(`CREATE TABLE`/CTAS, `INSERT`, `DROP TABLE`), view DDL and `COPY` today, the remaining
-intercepted statements are being lifted one by one (ED-08..10), and the agent stays read-only.
+(`CREATE TABLE`/CTAS, `INSERT`, `DROP TABLE`), view DDL, `COPY` and the session statements today,
+the remaining intercepted statements are being lifted one by one (ED-09..11), and the agent stays
+read-only.
 
 Full model — the snapshot format argument, the function registry, the statement router and its
 surfaces: [docs/reference/ENGINE.md](docs/reference/ENGINE.md).
@@ -209,8 +219,9 @@ pick up a single task (e.g. in a worktree) without loading the rest. Read the to
 first (status legend, what remains, known bugs).
 
 The numbered phases are done (their folders removed); what remains is design polish (phase 5) and
-the open workstream tasks — the statement lift (ED-08..10), the assistant's Settings roster and
-chat pane (AS-03/AS-04) and the chart follow-ons. **What each finished task settled — including several corrections that must not
+the open workstream tasks — the statement lift (ED-09..11), the assistant's Settings roster and
+chat pane (AS-03/AS-04) and the chart follow-ons. **What each finished task settled — including
+several corrections that must not
 be re-litigated** (the catalog is a store and not a query; diagnostics are a reconciliation; a
 log is recorded by its observer; only real facts) — is
 [docs/reference/SETTLED_TASKS.md](docs/reference/SETTLED_TASKS.md), with the rule form of each in

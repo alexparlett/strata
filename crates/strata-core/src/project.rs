@@ -275,7 +275,7 @@ pub fn history_path(root: &Path) -> PathBuf {
 }
 
 /// Append one history entry as a JSON line to `root`'s `history.jsonl` (creating and
-/// tidying the dir — [`tidy_strata_dir`] — if needed). Append-only (DESIGN_SPEC §"History as `.jsonl`") so a completed
+/// tidying the dir — [`tidy_strata_dir`] — if needed). Append-only (`DESIGN_SPEC` §"History as `.jsonl`") so a completed
 /// run is one cheap `O_APPEND` write, not a whole-file rewrite; [`load_history`] bounds the
 /// file back down.
 ///
@@ -327,7 +327,7 @@ pub fn save_history(root: &Path, entries: &[HistoryEntry]) -> Result<(), String>
 /// never render identically), and the cap counts what is left.
 ///
 /// Compaction rides the same path: whenever anything was dropped — a duplicate, an overflowing
-/// entry or a corrupt line — the file is **rewritten** to exactly what was kept (DESIGN_SPEC:
+/// entry or a corrupt line — the file is **rewritten** to exactly what was kept (`DESIGN_SPEC`:
 /// "rotate to bound size"), which is what stops an append-only log of one repeated query growing
 /// without bound.
 ///
@@ -578,7 +578,7 @@ mod tests {
         .unwrap();
 
         let defs = load_defs(&root.0).unwrap();
-        let urls: Vec<String> = defs.connections.iter().map(|c| c.url()).collect();
+        let urls: Vec<String> = defs.connections.iter().map(ConnectionDef::url).collect();
         assert_eq!(urls, ["s3://acme-lake", "https://example.com:8080"]);
         // Every one of them is an address its provider will still accept, which is the whole
         // point: the migration exists so an old file does not become an amber row.

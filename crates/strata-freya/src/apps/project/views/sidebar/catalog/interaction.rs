@@ -646,15 +646,16 @@ fn collapsing_a_section_hides_only_its_own_rows() {
 /// from a top-level `city` — the identity bug `ColRef`'s `Vec<String>` path exists to prevent.
 #[test]
 fn a_nested_field_selects_by_its_full_path() {
-    let (mut runner, (_, selection, ..)) = runner();
-    settle(&mut runner);
-
-    click_text(&mut runner, "orders");
     // The struct's own chevron sits left of its name; pressing the *name* would select the column
     // instead, so the press has to land in the chevron gutter. Its offset back from the name run is
     // fixed by the row's layout: chevron slot (11) + gap (8) + swatch (6) + gap (8) = 33 to the
     // slot's left edge, so its centre is 33 - 11/2 = 27.5 back.
     const CHEVRON_BACK_FROM_NAME: f32 = 27.5;
+
+    let (mut runner, (_, selection, ..)) = runner();
+    settle(&mut runner);
+
+    click_text(&mut runner, "orders");
     expand_nested(&mut runner, "address", CHEVRON_BACK_FROM_NAME);
 
     assert!(shows(&runner, "city"), "the struct expanded in place");
@@ -684,7 +685,7 @@ fn status_labels(runner: &TestingRunner) -> Vec<String> {
             .accessibility()
             .builder
             .label()
-            .map(|label| label.to_string())
+            .map(ToString::to_string)
     });
     labels.sort();
     labels
@@ -1292,7 +1293,7 @@ fn view_table_opens_a_select_star_tab_without_running_it() {
 }
 
 /// **Edit query** opens the view's own SQL bound to it, so ⌘S redefines *that view* rather than
-/// saving a new query — the DEV_TASKS "⌘S on a view saves a saved-query" bug, from the other end.
+/// saving a new query — the `DEV_TASKS` "⌘S on a view saves a saved-query" bug, from the other end.
 #[test]
 fn edit_query_opens_the_views_sql_bound_to_the_view() {
     let (mut runner, (_, _, session, ..)) = settled();

@@ -2,7 +2,7 @@
 //! Properties** (design24). A flat, datafusion-free list of known keys — name +
 //! built-in default (as the string we store/apply) + a value [`Kind`] (for validation)
 //! + a one-line description — used by the Properties editor's autocomplete, inspector,
-//! and value validation, and by [`crate::engine`] to apply the overrides.
+//!   and value validation, and by [`crate::engine`] to apply the overrides.
 //!
 //! It is **not** a whitelist: any `datafusion.*` key may be entered in the editor;
 //! unknown keys are applied best-effort (DataFusion rejects the ones it doesn't know).
@@ -474,6 +474,17 @@ pub fn is_owned_key(name: &str) -> bool {
     )
 }
 
+/// Whether `name` is a **display** key — one that changes how already-materialized values are
+/// rendered rather than what is read.
+///
+/// Two rules ask it and must not drift: [`display_subset`] carries these into a cached read's
+/// identity, and the session overlay refuses them (`Blocked::SetFormat`, ED-08) because the grid
+/// formatter and the chart read take them from the Settings store, so a session value would leave
+/// the two disagreeing about the same column.
+pub fn is_display_key(name: &str) -> bool {
+    name.trim().starts_with("datafusion.format.")
+}
+
 /// Just the `datafusion.format.*` entries of `overrides` — the **display** half, which
 /// changes how already-materialized values are rendered rather than what is read.
 ///
@@ -485,7 +496,7 @@ pub fn is_owned_key(name: &str) -> bool {
 pub fn display_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     overrides
         .iter()
-        .filter(|(k, _)| k.trim().starts_with("datafusion.format."))
+        .filter(|(k, _)| is_display_key(k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }

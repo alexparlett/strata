@@ -661,7 +661,7 @@ mod tests {
 
     /// A scratch project folder of our own, per test — the tag is load-bearing because these
     /// run concurrently in one process and each engine re-LISTs its own sources.
-    fn scratch(tag: &str) -> std::path::PathBuf {
+    fn scratch(tag: &str) -> PathBuf {
         let dir = env::temp_dir().join(format!("strata_internal_{}_{tag}", process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();

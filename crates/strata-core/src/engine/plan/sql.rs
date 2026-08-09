@@ -27,12 +27,7 @@ pub fn as_explain(sql: &str, analyze: bool) -> String {
     fn strip<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
         s.get(..kw.len())
             .filter(|h| h.eq_ignore_ascii_case(kw))
-            .filter(|_| {
-                s[kw.len()..]
-                    .chars()
-                    .next()
-                    .map_or(true, |c| c.is_whitespace())
-            })
+            .filter(|_| s[kw.len()..].chars().next().is_none_or(char::is_whitespace))
             .map(|_| s[kw.len()..].trim_start())
     }
     let mut body = sql.trim_start();

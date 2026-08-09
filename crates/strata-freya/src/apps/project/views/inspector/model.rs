@@ -1,6 +1,6 @@
 //! What the inspector is describing, derived from the catalog store — **and nothing else**.
 //!
-//! The rule this module exists to hold (DEV_TASKS U9, "only real facts"): every number here
+//! The rule this module exists to hold (`DEV_TASKS` U9, "only real facts"): every number here
 //! was *read* from the source, never computed from whatever rows happen to be on screen. The
 //! Dioxus inspector once derived Rows / Nulls / Distinct / Min / Max from the current page of
 //! the current tab's query and presented them as column facts; they described one page of one
@@ -235,7 +235,7 @@ pub fn with_scan(mut facts: ColumnFacts, profile: &CatalogProfile) -> ColumnFact
         match facts.stats.iter().position(|s| s.key == stat.key) {
             // `Nulls` and any free *bound* yield to the computed value — see above.
             Some(i) if stat.key == StatKey::Nulls || !facts.stats[i].exact => {
-                facts.stats[i] = stat.clone()
+                facts.stats[i] = stat.clone();
             }
             Some(_) => {}
             None => facts.stats.push(stat.clone()),
@@ -435,7 +435,7 @@ fn fill_label(filled: f64) -> String {
         "0%".to_string()
     } else if pct < 0.05 {
         "<0.1%".to_string()
-    } else if pct < 10.0 || pct >= 99.5 {
+    } else if !(10.0..99.5).contains(&pct) {
         // Under 10%, and in the band `{:.0}` would round to 100.
         format!("{pct:.1}%")
     } else {

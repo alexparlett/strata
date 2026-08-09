@@ -33,7 +33,7 @@ pub enum Origin {
 }
 
 /// Which body the results pane shows for a settled rows outcome — the toolbar's Table/Chart
-/// segmented toggle (P2-07). Per **tab** (CHART_SPEC §2): switching tabs restores the mode,
+/// segmented toggle (P2-07). Per **tab** (`CHART_SPEC` §2): switching tabs restores the mode,
 /// and it survives re-runs; the chart *config* will be per result set (Chart workstream).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum ResultsView {

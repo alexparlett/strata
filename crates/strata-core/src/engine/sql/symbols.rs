@@ -41,6 +41,31 @@ impl TableSym {
     }
 }
 
+/// One statement `PREPARE` left in the session (ED-08) — what `EXECUTE` and `DEALLOCATE` name.
+///
+/// Session-scoped and engine-side: it comes off `Engine::prepared`, the mirror of DataFusion's
+/// own `prepared_plans` (which is `pub(crate)`), and the parameter types are already rendered in
+/// the `short_type` vocabulary a column's dtype uses — so the language service never depends on
+/// DataFusion's types, exactly as [`FunctionSym`](super::FunctionSym) does not.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PreparedSym {
+    pub name: String,
+    /// One label per parameter, in `$1`-first order. Empty for a statement with no placeholders,
+    /// or one whose placeholder types DataFusion could not resolve.
+    pub params: Vec<String>,
+}
+
+impl PreparedSym {
+    /// The completion row's detail column: the parameter shape, or the flat noun when there is
+    /// none to show.
+    pub fn detail(&self) -> String {
+        match self.params.is_empty() {
+            true => "prepared".into(),
+            false => format!("({})", self.params.join(", ")),
+        }
+    }
+}
+
 /// A snapshot of everything the analysis layer resolves against, plus the engine setting it
 /// has to *read* the buffer with.
 #[derive(Clone, Default)]
@@ -48,6 +73,11 @@ pub struct Catalog {
     /// Registered tables and saved views (both address columns).
     pub tables: Vec<TableSym>,
     pub functions: FunctionCatalog,
+    /// The session's prepared statements — offered at an `EXECUTE` / `DEALLOCATE` operand and
+    /// nowhere else. Engine state like [`functions`](Self::functions), and it rides the same
+    /// snapshot for the same reason: a completion pass reached from a keystroke has no engine to
+    /// ask.
+    pub prepared: Vec<PreparedSym>,
     /// The engine's `datafusion.sql_parser.dialect`, for [`lex`](super::lex::lex).
     ///
     /// It rides here because this is already the language service's one snapshot of engine
@@ -65,6 +95,7 @@ impl Catalog {
         tables: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
         views: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
         functions: FunctionCatalog,
+        prepared: Vec<PreparedSym>,
         dialect: String,
     ) -> Self {
         let mut out = Vec::new();
@@ -77,6 +108,7 @@ impl Catalog {
         Catalog {
             tables: out,
             functions,
+            prepared,
             dialect,
         }
     }

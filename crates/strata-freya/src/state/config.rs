@@ -169,7 +169,7 @@ pub fn use_promote_recent(station: ConfigStation, name: &str, root: &Path) {
     let name = name.to_string();
     use_hook(move || {
         write_config(station, &[ConfigChan::Recents], |cfg| {
-            cfg.push_recent(&name, &path)
+            cfg.push_recent(&name, &path);
         });
     });
 }

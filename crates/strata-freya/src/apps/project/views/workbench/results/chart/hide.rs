@@ -41,7 +41,7 @@ pub fn applied(data: ChartData, hidden: &[String]) -> ChartData {
         series: series
             .into_iter()
             .map(|one| {
-                if hidden.iter().any(|name| *name == one.name) {
+                if hidden.contains(&one.name) {
                     ChartSeries {
                         values: vec![None; one.values.len()],
                         name: one.name,
@@ -63,10 +63,7 @@ pub fn all_hidden(data: &ChartData, hidden: &[String]) -> bool {
     let ChartData::Table { series, .. } = data else {
         return false;
     };
-    !series.is_empty()
-        && series
-            .iter()
-            .all(|one| hidden.iter().any(|name| *name == one.name))
+    !series.is_empty() && series.iter().all(|one| hidden.contains(&one.name))
 }
 
 #[cfg(test)]

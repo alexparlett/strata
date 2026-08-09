@@ -432,7 +432,7 @@ pub fn resolve_recent(config: ConfigStation, path: &str) -> Option<PathBuf> {
     let root = resolve_project_folder(Path::new(path));
     if root.is_none() && !Path::new(path).exists() {
         write_config(config, &[ConfigChan::Recents], |cfg| {
-            cfg.remove_recent(path)
+            cfg.remove_recent(path);
         });
     }
     root

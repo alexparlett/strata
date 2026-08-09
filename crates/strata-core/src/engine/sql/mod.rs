@@ -30,10 +30,10 @@ pub mod symbols;
 pub mod validate;
 
 pub use complete::{complete, Completion, CompletionKind};
-pub use symbols::Catalog;
+pub use symbols::{Catalog, PreparedSym};
 pub use validate::{
-    classify, classify_one, policy_verdicts, validate, Blocked, Capability, PolicyRefusal,
-    StmtKind, Verdict,
+    classify, classify_one, policy_verdicts, read_policy, validate, Blocked, Capability,
+    PolicyRefusal, StmtKind, Verdict,
 };
 
 /// Which registry a function came from — the docs-panel header word, and (for the
@@ -204,7 +204,7 @@ mod function_sym_tests {
             kind: FnKind::Scalar,
             signatures: sigs
                 .iter()
-                .map(|o| o.iter().map(|s| s.to_string()).collect())
+                .map(|o| o.iter().map(ToString::to_string).collect())
                 .collect(),
             ret: ret.map(String::from),
             description: None,

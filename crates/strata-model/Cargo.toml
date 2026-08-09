@@ -16,3 +16,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # The catalog defs are what `.strata/project.json` holds, so their tests are about the JSON
 # they load from and write back — including the legacy shapes that still have to parse.
 serde_json = "1"
+
+# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
+# `clippy.toml`). Every member inherits the same set — CI denies it.
+[lints]
+workspace = true

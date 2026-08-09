@@ -123,7 +123,7 @@ mod tests {
         ChartData::Table {
             axis: Axis {
                 labels: labels.iter().map(|l| (*l).to_string()).collect(),
-                positions: positions.map(|p| p.to_vec()),
+                positions: positions.map(<[_]>::to_vec),
             },
             series: vec![ChartSeries {
                 name: "amount".into(),

@@ -149,7 +149,7 @@ impl Component for ToggleButton {
                     on_change.call(e.map(|_| ChangeEventData::new(v)));
                 }
             })
-            .map(self.width.clone(), |el, w| el.width(w))
+            .map(self.width.clone(), ContainerSizeExt::width)
             .maybe(self.width.is_none(), |el| {
                 el.min_width(Size::px(28.)).padding((0., 6.))
             })

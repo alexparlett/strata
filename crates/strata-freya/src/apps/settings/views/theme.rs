@@ -84,7 +84,7 @@ impl Component for ThemePane {
                     .child(
                         Switch::new()
                             .toggled(sync_os)
-                            .on_toggle(move |_| ctx.edit(|s| s.sync_os = !s.sync_os)),
+                            .on_toggle(move |()| ctx.edit(|s| s.sync_os = !s.sync_os)),
                     ),
             )
             .child(grid);
@@ -318,12 +318,6 @@ struct Preview {
 
 impl Component for Preview {
     fn render(&self) -> impl IntoElement {
-        let Swatch {
-            body,
-            raised,
-            line,
-            accent,
-        } = self.swatch;
         /// One dim text run in the miniature.
         fn run(width: f32, color: Color) -> impl IntoElement {
             rect()
@@ -333,6 +327,12 @@ impl Component for Preview {
                 .background(color)
         }
 
+        let Swatch {
+            body,
+            raised,
+            line,
+            accent,
+        } = self.swatch;
         let mut radius = CornerRadius::default();
         radius.fill_top(self.radius);
 

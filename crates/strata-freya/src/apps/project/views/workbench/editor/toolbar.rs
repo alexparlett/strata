@@ -17,7 +17,7 @@ use strata_model::TabId;
 
 /// The editor query toolbar, built to the comp. The bar itself only needs the editor surface (its
 /// background) and the divider colour. The Run control is its own three-state `RunButton`; the rest
-/// are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke IconButton).
+/// are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke `IconButton`).
 ///
 /// Run / Explain / Analyze are wired (P2-15): a press snapshots the tab's editor text into a
 /// fresh-nonce `QuerySpec` in the tab's own `request` slot (`QueryTab::request`, written on
@@ -74,7 +74,7 @@ impl Component for EditorToolbar {
             .read()
             .tabs
             .get(&id)
-            .is_none_or(|t| t.editor.rope.chars().all(|c| c.is_whitespace()));
+            .is_none_or(|t| t.editor.rope.chars().all(char::is_whitespace));
 
         // A press is an *action* — `actions::press_query` snapshots the text, mints a
         // fresh nonce, and sets the tab's current execution; the ⌘↵ listener in the
@@ -134,14 +134,14 @@ impl Component for EditorToolbar {
             )
             .separator()
             .item(action(IconName::Eye, "Save as view").on_press(move |_| {
-                actions::save_as_view(radio, project, view_engine.clone(), catalog, report, id)
+                actions::save_as_view(radio, project, view_engine.clone(), catalog, report, id);
             }))
             .item(
                 action(IconName::Save, "Save query")
                     // The live chord, in the tooltip inline and in the menu row once folded.
                     .hint(Command::SaveQuery)
                     .on_press(move |_| {
-                        actions::save(radio, project, save_engine.clone(), catalog, report, id)
+                        actions::save(radio, project, save_engine.clone(), catalog, report, id);
                     }),
             );
 

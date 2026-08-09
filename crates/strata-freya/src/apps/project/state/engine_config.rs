@@ -1,5 +1,5 @@
 //! The window's **engine-config driver**: keep this project's engine in step with
-//! Settings ▸ Engine ▸ Properties (P4-07, DEV_TASKS W2).
+//! Settings ▸ Engine ▸ Properties (P4-07, `DEV_TASKS` W2).
 //!
 //! The engine is per project window; the setting is app-wide, one `BTreeMap` on the config
 //! global. The Settings window has no engine of its own to talk to, so Apply does what every

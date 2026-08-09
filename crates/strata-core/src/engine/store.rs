@@ -725,7 +725,9 @@ mod tests {
                 ConnectionDef {
                     address: "lake".into(),
                     provider: Provider::Gcs(GcsStore {
-                        auth: GcsAuth::ServiceAccount { path: "".into() },
+                        auth: GcsAuth::ServiceAccount {
+                            path: String::new(),
+                        },
                     }),
                     client_config: Default::default(),
                 },

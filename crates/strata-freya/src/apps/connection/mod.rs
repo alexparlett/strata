@@ -274,7 +274,6 @@ impl App for ConnectionApp {
         use_register_window(
             &self.app,
             {
-                let target = target.clone();
                 move || WindowKind::Connection {
                     owner,
                     target: target.clone(),

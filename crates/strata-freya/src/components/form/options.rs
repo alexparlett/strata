@@ -275,7 +275,7 @@ impl<E: Clone + PartialEq + 'static> Component for OptionGroup<E> {
         // The label, its hint and the gap under them are the shared form row's — a surface
         // contributes only which control goes in it.
         Row::new(self.group.label.clone())
-            .map(self.group.hint, |row, hint| row.hint(hint))
+            .map(self.group.hint, Row::hint)
             .child(control)
     }
 
@@ -342,7 +342,7 @@ impl<E: Clone + PartialEq + 'static> Component for ToggleControl<E> {
         let on_edit = self.on_edit.clone();
         let switch = Switch::new()
             .toggled(self.on)
-            .on_toggle(move |_| on_edit.call(edit.clone()));
+            .on_toggle(move |()| on_edit.call(edit.clone()));
 
         // Bare when there is nothing to say, so a caller's own layout lands on the switch
         // itself rather than on a wrapper that hugs it.

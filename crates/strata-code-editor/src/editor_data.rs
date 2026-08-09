@@ -232,7 +232,7 @@ impl CodeEditorData {
                     .byte_to_char(end)
                     .max(start + 1)
                     .min(self.rope.len_chars());
-                (start < end).then(|| Decoration {
+                (start < end).then_some(Decoration {
                     range: start..end,
                     severity,
                     message,
@@ -466,102 +466,6 @@ impl CodeEditorData {
 impl Display for CodeEditorData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.rope.to_string())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::languages::EditorLanguage;
-
-    #[test]
-    fn set_decorations_maps_bytes_to_chars_and_clamps() {
-        let mut data = CodeEditorData::new(Rope::from_str("sél x\nfrom t"), None::<EditorLanguage>);
-
-        let msg = || "boom".to_string();
-        // "sél" is 4 bytes (é is 2) but 3 chars.
-        assert!(data.set_decorations([(0..4, DecorationSeverity::Error, msg())]));
-        assert_eq!(
-            data.decorations,
-            vec![Decoration {
-                range: 0..3,
-                severity: DecorationSeverity::Error,
-                message: msg()
-            }]
-        );
-
-        // Re-applying the same spans reports no change (write_if-friendly).
-        assert!(!data.set_decorations([(0..4, DecorationSeverity::Error, msg())]));
-
-        // A span past the end of the text is dropped, not panicked on.
-        assert!(data.set_decorations([(100..104, DecorationSeverity::Warning, msg())]));
-        assert!(data.decorations.is_empty());
-    }
-
-    /// The regression behind the "validation stops firing mid-burst" bug: the history
-    /// groups a typing burst into one transaction, so its change counter is *undo*
-    /// granularity — the revision must move on every mutation regardless.
-    #[test]
-    fn revision_bumps_per_mutation_not_per_history_transaction() {
-        let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
-        let r0 = data.revision();
-        data.insert("se", 0);
-        let r1 = data.revision();
-        // Same history transaction (within the merge window) — still a new revision.
-        data.insert("lct", 2);
-        let r2 = data.revision();
-        assert!(r0 < r1 && r1 < r2);
-        assert_eq!(
-            data.history.current_change(),
-            1,
-            "precondition: the burst merged into one history transaction"
-        );
-
-        data.undo_edit();
-        let r3 = data.revision();
-        assert!(r2 < r3, "undo is a text change too");
-    }
-
-    /// The completion-accept edit: one undo step, isolated from the typing burst
-    /// around it, caret at the end of the inserted text.
-    #[test]
-    fn replace_range_is_single_undo_step() {
-        let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
-        // A typing burst (merges into one history transaction)…
-        data.insert("se", 0);
-        data.insert("l", 2);
-        assert_eq!(data.history.current_change(), 1);
-
-        // …then the accept replaces the partial word.
-        data.replace_range(0..3, "SELECT");
-        assert_eq!(data.rope.to_string(), "SELECT");
-        assert_eq!(data.cursor_pos(), "SELECT".len());
-
-        // One undo restores the typed prefix (the accept was exactly one step)…
-        data.undo_edit();
-        assert_eq!(data.rope.to_string(), "sel");
-        // …and the next removes the burst.
-        data.undo_edit();
-        assert_eq!(data.rope.to_string(), "");
-
-        data.redo_edit();
-        data.redo_edit();
-        assert_eq!(data.rope.to_string(), "SELECT");
-    }
-
-    /// Typing right after an accept starts a fresh transaction (the trailing seal):
-    /// undo peels the typing first, then the accept.
-    #[test]
-    fn replace_range_does_not_absorb_subsequent_typing() {
-        let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
-        data.insert("fr", 0);
-        data.replace_range(0..2, "FROM");
-        data.insert(" t", 4);
-
-        data.undo_edit();
-        assert_eq!(data.rope.to_string(), "FROM");
-        data.undo_edit();
-        assert_eq!(data.rope.to_string(), "fr");
     }
 }
 
@@ -831,5 +735,100 @@ impl TextEditor for CodeEditorData {
 
     fn get_indentation(&self) -> u8 {
         4
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::languages::EditorLanguage;
+
+    #[test]
+    fn set_decorations_maps_bytes_to_chars_and_clamps() {
+        let mut data = CodeEditorData::new(Rope::from_str("sél x\nfrom t"), None::<EditorLanguage>);
+
+        let msg = || "boom".to_string();
+        // "sél" is 4 bytes (é is 2) but 3 chars.
+        assert!(data.set_decorations([(0..4, DecorationSeverity::Error, msg())]));
+        assert_eq!(
+            data.decorations,
+            vec![Decoration {
+                range: 0..3,
+                severity: DecorationSeverity::Error,
+                message: msg()
+            }]
+        );
+
+        // Re-applying the same spans reports no change (write_if-friendly).
+        assert!(!data.set_decorations([(0..4, DecorationSeverity::Error, msg())]));
+
+        // A span past the end of the text is dropped, not panicked on.
+        assert!(data.set_decorations([(100..104, DecorationSeverity::Warning, msg())]));
+        assert!(data.decorations.is_empty());
+    }
+
+    /// The regression behind the "validation stops firing mid-burst" bug: the history
+    /// groups a typing burst into one transaction, so its change counter is *undo*
+    /// granularity — the revision must move on every mutation regardless.
+    #[test]
+    fn revision_bumps_per_mutation_not_per_history_transaction() {
+        let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
+        let r0 = data.revision();
+        data.insert("se", 0);
+        let r1 = data.revision();
+        // Same history transaction (within the merge window) — still a new revision.
+        data.insert("lct", 2);
+        let r2 = data.revision();
+        assert!(r0 < r1 && r1 < r2);
+        assert_eq!(
+            data.history.current_change(),
+            1,
+            "precondition: the burst merged into one history transaction"
+        );
+
+        data.undo_edit();
+        let r3 = data.revision();
+        assert!(r2 < r3, "undo is a text change too");
+    }
+
+    /// The completion-accept edit: one undo step, isolated from the typing burst
+    /// around it, caret at the end of the inserted text.
+    #[test]
+    fn replace_range_is_single_undo_step() {
+        let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
+        // A typing burst (merges into one history transaction)…
+        data.insert("se", 0);
+        data.insert("l", 2);
+        assert_eq!(data.history.current_change(), 1);
+
+        // …then the accept replaces the partial word.
+        data.replace_range(0..3, "SELECT");
+        assert_eq!(data.rope.to_string(), "SELECT");
+        assert_eq!(data.cursor_pos(), "SELECT".len());
+
+        // One undo restores the typed prefix (the accept was exactly one step)…
+        data.undo_edit();
+        assert_eq!(data.rope.to_string(), "sel");
+        // …and the next removes the burst.
+        data.undo_edit();
+        assert_eq!(data.rope.to_string(), "");
+
+        data.redo_edit();
+        data.redo_edit();
+        assert_eq!(data.rope.to_string(), "SELECT");
+    }
+
+    /// Typing right after an accept starts a fresh transaction (the trailing seal):
+    /// undo peels the typing first, then the accept.
+    #[test]
+    fn replace_range_does_not_absorb_subsequent_typing() {
+        let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
+        data.insert("fr", 0);
+        data.replace_range(0..2, "FROM");
+        data.insert(" t", 4);
+
+        data.undo_edit();
+        assert_eq!(data.rope.to_string(), "FROM");
+        data.undo_edit();
+        assert_eq!(data.rope.to_string(), "fr");
     }
 }

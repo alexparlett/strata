@@ -4,7 +4,7 @@
 //! ## Live, not a log
 //!
 //! Diagnostics self-clear by construction, which is why there is no Clear button here and no
-//! dismissal state to build (DEV_TASKS U10). Each validation pass replaces a tab's slice
+//! dismissal state to build (`DEV_TASKS` U10). Each validation pass replaces a tab's slice
 //! **wholesale**, so fixing the SQL — or fixing the catalog the SQL reads — retracts the rows on
 //! the next pass, without the user opening the tab.
 //!
@@ -140,7 +140,7 @@ impl Component for Group {
 /// takes you to the tab it belongs to (the canvas's `onProblemJump`).
 ///
 /// No code chip — the canvas's row is those three, and a rule code was a fourth thing competing
-/// for one line (DEV_TASKS U10). The owning tab comes from the **group**, not from the
+/// for one line (`DEV_TASKS` U10). The owning tab comes from the **group**, not from the
 /// diagnostic: a `Diagnostic` deliberately carries no `TabId`, so there is no second copy to
 /// disagree with the tab it is stored on.
 #[derive(PartialEq)]

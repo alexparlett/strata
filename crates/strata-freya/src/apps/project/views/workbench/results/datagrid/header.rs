@@ -359,9 +359,9 @@ impl Component for ColGrip {
             // *earlier* content, so nudge it down at the right edge). Each nudge shifts the content by
             // `EDGE_STEP`, so fold that back into the width via the accumulator (`accum -= step`).
             let vp = *viewport.peek();
-            let step = if x > vp.max_x() as f32 - EDGE_MARGIN {
+            let step = if x > vp.max_x() - EDGE_MARGIN {
                 -EDGE_STEP
-            } else if x < vp.min_x() as f32 + EDGE_MARGIN {
+            } else if x < vp.min_x() + EDGE_MARGIN {
                 EDGE_STEP
             } else {
                 0.

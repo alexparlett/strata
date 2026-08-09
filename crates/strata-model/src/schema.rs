@@ -118,7 +118,7 @@ pub enum ChartRole {
     /// mark is a line, and the only role a **stride** means anything to — which is why it is
     /// not the same variant as [`Clock`](Self::Clock). `date_bin(interval '1 day', …)` over a
     /// time of day is not a coarser reading of it, it is one bucket; DataFusion says so
-    /// outright ("DATE_BIN stride for TIME input must be less than 1 day").
+    /// outright ("`DATE_BIN` stride for TIME input must be less than 1 day").
     ///
     /// **Nothing reads the distinction today.** It was split for a scaffold that wrote that
     /// SQL, and the scaffold was cut (`docs/CHART_SPEC.md` §8); the split was kept because

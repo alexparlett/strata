@@ -309,7 +309,7 @@ impl Component for ShortcutCell {
                 // No `&& !row.fixed`: a fixed command is never custom, because the override a
                 // hand-edited config gives it is ignored (`keymap::is_custom`). One predicate, so
                 // the badge and this control can never disagree about the same row.
-                .maybe_child(row.custom.then(|| ResetRow { editing, command }))
+                .maybe_child(row.custom.then_some(ResetRow { editing, command }))
                 .into_element(),
         };
 

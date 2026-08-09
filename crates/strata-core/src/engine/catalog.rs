@@ -1068,7 +1068,7 @@ mod tests {
     fn spec(name: &str, paths: &[&str], format: &str) -> TableSpec {
         TableSpec {
             name: name.into(),
-            paths: paths.iter().map(|s| s.to_string()).collect(),
+            paths: paths.iter().map(ToString::to_string).collect(),
             format: SourceFormat::from_name(format),
             partitions: Vec::new(),
             internal: false,
@@ -1091,7 +1091,7 @@ mod tests {
     /// registers for `file://`, the same code path a bucket will take.
     fn detect(paths: &[&str]) -> Vec<String> {
         let ctx = SessionContext::new();
-        let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+        let paths: Vec<String> = paths.iter().map(ToString::to_string).collect();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1255,7 +1255,7 @@ mod tests {
         )
     }
 
-    fn no_files_at_path(path: &std::path::Path) -> String {
+    fn no_files_at_path(path: &Path) -> String {
         no_files_at(&path.display().to_string())
     }
 

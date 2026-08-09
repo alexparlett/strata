@@ -15,3 +15,8 @@ proc-macro = true
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
+
+# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
+# `clippy.toml`). Every member inherits the same set — CI denies it.
+[lints]
+workspace = true

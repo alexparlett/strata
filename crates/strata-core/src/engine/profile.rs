@@ -11,7 +11,7 @@
 //! which is exactly why profiling is opt-in rather than automatic. For a view the cost
 //! isn't a file scan but its whole query: joins, aggregates and all.
 //!
-//! Built with the DataFrame API, not generated SQL: internal logic doesn't write SQL,
+//! Built with the `DataFrame` API, not generated SQL: internal logic doesn't write SQL,
 //! only the user does.
 //!
 //! Leaf scalars only: a nested column gets its null count and nothing else, and is
@@ -21,7 +21,7 @@
 //! Results cache on the UI project store's catalog rows. A table's dies with its row when the
 //! engine re-registers it; a view's dies when its SQL is rewritten. ⚠️ A view is also
 //! only as fresh as the tables beneath it, and nothing currently propagates that — see
-//! the view-dependency task in DEV_TASKS.
+//! the view-dependency task in `DEV_TASKS`.
 
 use std::collections::BTreeMap;
 use std::time::SystemTime;
@@ -66,7 +66,7 @@ pub enum Slot {
 
 /// The aggregate expressions for one entry's profile, and what each output means.
 ///
-/// Built with the DataFrame API rather than generated SQL: internal logic doesn't write
+/// Built with the `DataFrame` API rather than generated SQL: internal logic doesn't write
 /// SQL, only the user does. It also sidesteps identifier handling entirely — note
 /// `ident`, not `col`: `col` parses its argument (so a column named `a.b` becomes
 /// relation `a` column `b`) and lower-cases it (`A` → `a`). Column names come out of

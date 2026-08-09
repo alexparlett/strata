@@ -586,7 +586,7 @@ mod tests {
     #[tokio::test]
     async fn a_name_outside_the_one_schema_is_refused_however_it_is_spelled() {
         let eng = Engine::new(BTreeMap::new());
-        let elsewhere = super::elsewhere(WHAT);
+        let elsewhere = elsewhere(WHAT);
 
         statement(&eng, "CREATE VIEW strata.public.qualified AS SELECT 1 AS n")
             .await
