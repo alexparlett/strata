@@ -420,6 +420,26 @@ Things that must not regress. Each was fought for once already.
   retired it). The one thing `read_page` deliberately does **not** do is pin: a pin is right
   for an export window, which owes the user the rows it was opened on, and wrong for a
   long-lived server, where the honest answer is that the query session has moved on.
+- **The vocabulary is public methods and `#[tool]` is a wrapper over them; the model-facing
+  manifest is derived from the router that serves MCP.** (AS-01) The ten tools *are*
+  `StrataTools`' own public methods — plain arguments in, wire result types out, no rmcp type
+  in any signature — and each `#[tool]` item does only what a semantic call cannot: resolve
+  which agent the *request* is (`Caller`) and hold it against the idle sweep (`Busy`), then
+  delegate. A session-scoped tool has a private `_as` core taking the `AgentId`, so the wrapper
+  passes the request's agent and the public method passes the value's own; that is
+  `open_query_session`'s original split generalized rather than a new mechanism, and it makes
+  the in-process caller the **owned** case by construction — its `AgentId` retracts by RAII,
+  there is no roster entry, and there is nothing for the sweep to reap. The alternative, an
+  in-process shim that re-implemented anything, is the second vocabulary this crate exists to
+  not have, and it would put the policy gate on the far side of a copy. `manifest()` is that
+  same offer as plain data (name, doc-comment description, schemars argument schema), read off
+  `Self::tool_router().list_all()`, so a tool added to the router reaches a model with no
+  further edit; a hand-kept list would be right on the day it was written and wrong on the day
+  a tool was added — silently, and in the direction of advertising a capability that is not
+  there. rmcp's own dispatch is deliberately *not* reused for the in-process path:
+  `ToolCallContext` needs a live `Peer`, and it answers in content blocks rather than typed
+  values. Binding a model's tool call **by name** belongs with the loop (AS-02), where the
+  provider's tool-call type and a bad-arguments message a model can act on both live.
 - **An agent drives the app through the app's own funnels, and works in a surface of its own;
   only a *gate* may be skipped, and only when the gate is a question for the user.** The in-app
   host (AA-03/AA-03b) is a `Host` impl over a cross-thread service directory each project window

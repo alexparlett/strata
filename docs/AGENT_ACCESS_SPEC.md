@@ -27,13 +27,21 @@ engine handles for the data reads. The vocabulary is deployed:
   (`crates/strata-agent/src/headless.rs`; the CLI branch is in
   `crates/strata-freya/src/main.rs`). The `Host` here is a plain `Engine` with the project's
   registration pass replayed over it.
-- **In-process** — the planned assistant pane will call the same tool layer directly, with no
-  MCP hop: an app-owned agentic loop over a pluggable provider seam. Not built yet (see
-  [What is not built](#what-is-not-built)).
+- **In-process** — `StrataTools`' own public methods, with no MCP hop and no rmcp type in any
+  signature. The ten tools *are* those methods; the `#[tool]` items are wrappers that add the
+  two things a semantic call cannot have (which agent the request is, and holding it against
+  the idle sweep) and then delegate. `StrataTools::manifest()` is the vocabulary as plain data
+  — name, description, argument schema per tool — **derived from the same router that answers
+  `tools/list`**, so an in-process loop offers a model exactly what an MCP client is offered,
+  with no second list. An in-process caller is the *owned* case: it holds the value's own
+  connection, so its `AgentId` lives as long as its mount and retracts by RAII, and it
+  introduces itself with an identity of its own (`AgentIdentity::assistant()` for the
+  assistant). The seam is built and tested (`crates/strata-agent/tests/facade.rs`); the loop
+  and the pane over it are not (see [What is not built](#what-is-not-built)).
 
 `strata-agent` has **no Freya dependency**, and that is the property doing the work: it is
-what lets one implementation of the vocabulary serve HTTP, serve stdio, be called in-process
-later, and be tested against a mock host with no window or renderer. The crate owns the tool
+what lets one implementation of the vocabulary serve HTTP, serve stdio, be called in-process,
+and be tested against a mock host with no window or renderer. The crate owns the tool
 schemas and semantics, the policy gate's application, the error taxonomy, the HTTP server,
 and the headless host; everything that touches a window lives in `strata-freya`.
 
@@ -372,12 +380,13 @@ the disconnection.
 
 Stated so the reader does not go looking:
 
-- **The in-process assistant pane** — a native conversation surface in the project window,
-  calling this same tool layer directly. The vocabulary is shaped for it (it can be driven
-  with no MCP peer at all), but no pane exists. Its shape is settled: the app owns the
-  agentic loop, and the provider is pluggable (`genai` — Anthropic, OpenAI, Gemini, Ollama,
-  OpenAI-compatible), chosen in Settings. The design and decision record live in
-  `.claude/tasks/workstream-assistant/`.
+- **The in-process assistant pane** — a native conversation surface in the project window.
+  The vocabulary underneath it is built and driveable with no MCP peer at all (AS-01, above),
+  but there is no agentic loop, no provider client and no pane. That shape is settled: the app
+  owns the loop, and the provider is pluggable (`genai` — Anthropic, OpenAI, Gemini, Ollama,
+  OpenAI-compatible), chosen in Settings. Binding a model's tool call *by name* to a facade
+  method belongs with the loop, where the provider's own tool-call type lives. The design and
+  decision record are in `.claude/tasks/workstream-assistant/`.
 - **MCP resources** — the vocabulary is tools only.
 - **Curated writes** (register a table, save a view, export). If they ever arrive, they
   arrive as new, separately permissioned tools; `run` never loosens.

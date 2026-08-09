@@ -168,6 +168,24 @@ pub struct AgentIdentity {
     pub version: String,
 }
 
+impl AgentIdentity {
+    /// **The in-process assistant** (AS-01), as the Agents pane attributes it.
+    ///
+    /// A constant this crate owns rather than something the pane passes in. Every other
+    /// identity is a *claim* — what a client said it was at `initialize` — and there is no
+    /// client here: the assistant is part of Strata, driving [`crate::StrataTools`] directly
+    /// with no protocol to introduce itself over. Letting a surface name it would be
+    /// inventing a `clientInfo` for a caller that has none, and the pane would then be
+    /// showing a label nothing minted. The version is this crate's, which is the version of
+    /// the vocabulary it drives.
+    pub fn assistant() -> AgentIdentity {
+        AgentIdentity {
+            name: "strata-assistant".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        }
+    }
+}
+
 /// An agent introducing itself: its connection's identity, and what it calls itself.
 ///
 /// Only [`Host::open_query_session`] takes one, and that is the design rather than an
