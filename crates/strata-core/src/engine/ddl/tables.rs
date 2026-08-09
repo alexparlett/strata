@@ -42,7 +42,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use datafusion::arrow::ipc::writer::FileWriter;
-use datafusion::catalog::TableProvider;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::format_as_file_type;
@@ -50,18 +49,20 @@ use datafusion::logical_expr::dml::{InsertOp, WriteOp};
 use datafusion::logical_expr::{CreateMemoryTable, DdlStatement, LogicalPlan, TableType};
 use datafusion::prelude::{SQLOptions, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
-use datafusion::sql::TableReference;
 
 use crate::engine::catalog::{dependent_views, register_external, TableSpec};
 use crate::engine::export::copy_row_count;
 use crate::engine::query::ipc_write_options;
 use crate::engine::sql::{Blocked, StmtKind};
-use crate::engine::{fold_ident, InternalTables, CATALOG, SCHEMA};
+use crate::engine::{fold_ident, InternalTables};
 use crate::project::{internal_source, tables_dir};
 use crate::util::{plural, temp_dir_name};
 use strata_model::{SourceFormat, TableDef, TableOrigin};
 
-use super::{DataRoot, StatementOutcome, StoreEffect};
+use super::{bare_name, existing, left_invalid, DataRoot, StatementOutcome, StoreEffect};
+
+/// What [`bare_name`] calls the objects these statements create.
+const WHAT: &str = "Tables";
 
 /// Create an internal table from a `CREATE TABLE` / `CREATE TABLE … AS SELECT`.
 ///
@@ -121,7 +122,7 @@ pub async fn create(
         return Err("Column defaults are not supported".into());
     }
 
-    let name = bare_name(&name)?;
+    let name = bare_name(&name, WHAT)?;
     // Reproduced from DataFusion's own `ensure_unique_column_names` rule rather than inherited:
     // its CTAS never writes a file, and an IPC file *would* store both columns, after which
     // every read of the table resolves the second by name onto the first.
@@ -214,38 +215,6 @@ pub async fn create(
     })
 }
 
-/// The table `name` resolves to in the engine's one schema, and what kind it is — `None` when
-/// the name is free.
-///
-/// Through `table_provider`, not `table`: the latter builds a `DataFrame`, which for a view
-/// means planning its whole body just to ask whether the name is taken.
-async fn existing(ctx: &SessionContext, name: &str) -> Option<TableType> {
-    let provider: Arc<dyn TableProvider> = ctx.table_provider(name).await.ok()?;
-    Some(provider.table_type())
-}
-
-/// The bare table name a `CREATE TABLE` targets.
-///
-/// Strata has exactly one catalog and one schema (`engine::providers`), so a qualified name is
-/// either a longer spelling of the same place or a place that does not exist — and registration
-/// takes a bare name, so an unrecognised qualifier would otherwise be silently dropped and the
-/// table created somewhere the user did not ask for.
-fn bare_name(name: &TableReference) -> Result<String, String> {
-    let ok = match name {
-        TableReference::Bare { .. } => true,
-        TableReference::Partial { schema, .. } => schema.as_ref() == SCHEMA,
-        TableReference::Full {
-            catalog, schema, ..
-        } => catalog.as_ref() == CATALOG && schema.as_ref() == SCHEMA,
-    };
-    match ok {
-        true => Ok(name.table().to_string()),
-        false => Err(format!(
-            "Strata has one schema, '{SCHEMA}'. Tables cannot be created elsewhere"
-        )),
-    }
-}
-
 /// Append rows to an internal table from an `INSERT` (ED-05).
 ///
 /// **Native execution behind a target gate.** The only thing intercepted is *where* the write
@@ -281,7 +250,7 @@ pub async fn insert(
             StmtKind::Insert.label()
         ));
     };
-    let name = bare_name(&dml.table_name)?;
+    let name = bare_name(&dml.table_name, WHAT)?;
     // The gate. A view and an external table are the same refusal: neither is a set of files
     // Strata wrote, and the wording names the surface that loads data into the other kind.
     if !internal.contains(&name) {
@@ -344,7 +313,14 @@ pub async fn drop_statement(
     };
     // Planning a `DROP` builds the node and checks nothing — the existence test lives in
     // `execute_logical_plan`, which is the half we are replacing, so it is ours below.
-    drop_table(ctx, root, internal, &bare_name(&drop.name)?, drop.if_exists).await
+    drop_table(
+        ctx,
+        root,
+        internal,
+        &bare_name(&drop.name, WHAT)?,
+        drop.if_exists,
+    )
+    .await
 }
 
 /// Drop the registered table `name`: deregister the provider, delete the data **if the data is
@@ -483,25 +459,13 @@ pub fn drop_intent(origin: TableOrigin) -> &'static str {
 
 /// What a completed drop reports.
 fn drop_report(name: &str, origin: TableOrigin, dependents: &[String]) -> String {
-    let mut message = match origin {
+    let message = match origin {
         TableOrigin::Internal => format!("Table '{name}' and its data were deleted"),
         TableOrigin::External => {
             format!("Table '{name}' removed from the catalog. Source files were not deleted")
         }
     };
-    if !dependents.is_empty() {
-        let names: Vec<String> = dependents.iter().map(|v| format!("'{v}'")).collect();
-        let verb = match dependents.len() {
-            1 => "is",
-            _ => "are",
-        };
-        message.push_str(&format!(
-            ". {} {verb} left invalid: {}",
-            plural(dependents.len(), "view"),
-            names.join(", ")
-        ));
-    }
-    message
+    message + &left_invalid(dependents)
 }
 
 /// The directory name `name`'s data lives in — the name→directory mapping, in one place so a

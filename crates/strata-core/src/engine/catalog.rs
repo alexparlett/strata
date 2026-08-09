@@ -773,15 +773,48 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
 /// The registered views whose plans read the table `name` — the readers a drop leaves invalid
 /// (ED-05), sorted, and **named rather than cascaded**.
 ///
+/// The plan a view carries was inlined when it was created, so a view reading `orders` through
+/// another view names `orders` at its leaf and is found here with no recursion of ours.
+pub async fn dependent_views(ctx: &SessionContext, name: &str) -> Vec<String> {
+    readers(ctx, name, |deps| &deps.tables).await
+}
+
+/// The registered views whose plans read the **view** `name` — the same question a rung up
+/// (ED-06), and the answer the catalog pane's own view-drop confirm shows.
+///
+/// A different half of [`PlanDeps`], because a view is not a leaf: the inliner leaves the view's
+/// *name* behind as a `SubqueryAlias` and its base tables at the leaves, so a reader of `orders`
+/// and a reader of the view over `orders` are told apart by which list the name is in. That is
+/// exactly the split the store keeps (`ViewInfo::deps` vs `view_deps`), which is what makes the
+/// typed drop's report and the pane's warning the same fact.
+///
+/// **The aliases half is raw, and this over-reports on purpose.** A `SubqueryAlias` is what the
+/// inliner leaves *and* what `FROM t AS v` and a CTE named `v` leave, and the plan cannot tell
+/// them apart — so dropping the view `v` also names a view that merely aliased something else `v`.
+/// Kept, for two reasons. It is the safe direction: a **missed** reader is a destructive action
+/// reported as consequence-free, where a spare one is a name the user can look at. And it is not
+/// a divergence from the pane, whose filter (`ProjectState::view_registered`) keeps an alias only
+/// where a view row of that name exists — always true of the name being dropped, so the filter
+/// cannot subtract this case and the two surfaces still say one thing. Telling the two apart
+/// would mean comparing the aliased subtree against the view's own registered plan, which is a
+/// change to what `PlanDeps` *is* and would have to move both surfaces at once.
+pub async fn dependents_of_view(ctx: &SessionContext, name: &str) -> Vec<String> {
+    readers(ctx, name, |deps| &deps.aliases).await
+}
+
+/// The registered views whose `deps` name `target`, sorted.
+///
 /// Asked of the providers, because a drop's report is about what is registered at the moment it
 /// happens: a view is anything in the schema still carrying a plan
 /// ([`TableProvider::get_logical_plan`](datafusion::catalog::TableProvider::get_logical_plan) is
-/// `None` for every base table), and the plan it carries was inlined when it was created — so a
-/// view reading `orders` through another view names `orders` at its leaf and is found here with
-/// no recursion of ours. That is the same walk [`plan_deps`] does for `ViewMeta`, run against the
-/// same trees; the catalog pane's before-the-fact warning reads the store's recorded copy of it,
-/// which is the same fact from before the drop.
-pub async fn dependent_views(ctx: &SessionContext, name: &str) -> Vec<String> {
+/// `None` for every base table). That is the same walk [`plan_deps`] does for `ViewMeta`, run
+/// against the same trees; the catalog pane's before-the-fact warning reads the store's recorded
+/// copy of it, which is the same fact from before the drop.
+async fn readers(
+    ctx: &SessionContext,
+    name: &str,
+    deps: fn(&PlanDeps) -> &Vec<String>,
+) -> Vec<String> {
     let Some(schema) = ctx.catalog(CATALOG).and_then(|c| c.schema(SCHEMA)) else {
         return Vec::new();
     };
@@ -790,13 +823,19 @@ pub async fn dependent_views(ctx: &SessionContext, name: &str) -> Vec<String> {
     // `table_names()` is the provider's own sorted key list, so the report's order is stable
     // without a sort of ours — and it already hides the result snapshots.
     for table in schema.table_names() {
+        // Nothing is left invalid by its own drop, and a view cannot read itself — but an alias
+        // shares a namespace with nothing, so `FROM orders AS v` inside `v` would otherwise
+        // report `v` as its own reader.
+        if fold_ident(&table) == target {
+            continue;
+        }
         let Ok(Some(provider)) = schema.table(&table).await else {
             continue;
         };
         let Some(plan) = provider.get_logical_plan() else {
             continue;
         };
-        if plan_deps(&plan).tables.contains(&target) {
+        if deps(&plan_deps(&plan)).contains(&target) {
             readers.push(table);
         }
     }

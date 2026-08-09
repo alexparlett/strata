@@ -97,6 +97,17 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   DataFusion's own INSERT path — one appended IPC file per statement, no compaction, and the
   schema check is DataFusion's. The plan that was judged is the plan that runs; `Blocked` carries
   every refusal's wording, including the two only a plan can name.
+- **A view is Save's artifact, and typed view DDL is a second gesture into that funnel — one
+  body, views indistinguishable by origin.** `ddl::views::create` serves ⌘S and the typed
+  statement, so either gesture edits the row the other made; the statement never runs natively
+  (DF's `CREATE OR REPLACE VIEW` silently replaces a *table* of that name, and the store
+  write-back needs a `ViewMeta`). `ViewDef` is `{ name, sql }`, so the arm arrives at the folded
+  name plus the definition **query's** canonical rendering — and because the statement is rebuilt
+  around that query, every clause it can carry is refused **by name** from a destructure with no
+  `..`, or `CREATE TEMPORARY VIEW` would create a permanent one. A drop names its readers in the
+  table drop's own words (`ddl::left_invalid`) off the **aliases** half of `PlanDeps` — raw, so it
+  over-reports on purpose — and never cascades. `Blocked::CreateView`/`DropView` stay as the agent
+  path's refusals.
 - **An append re-reads the table's facts; it does not re-register it, and it leaves the views
   alone.** Re-registering replaces the provider, and *that* is what strands the `Arc` a view
   captured — which is why a table Refresh re-creates them. An `INSERT` cannot change the shape a

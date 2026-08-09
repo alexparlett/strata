@@ -15,29 +15,36 @@
 //! invariant forbids — or pushed out through a channel, which is the message-passing
 //! architecture the direct-call facade deleted.
 //!
-//! **Every arm is one call into a funnel that already exists.** Typed `CREATE VIEW` is
-//! [`Engine::create_view`](crate::engine::Engine::create_view) — the same call ⌘S makes; typed
-//! `CREATE EXTERNAL TABLE` and a CTAS's spooled output are both `catalog::register_external`.
-//! ED-02 ships the dispatch and the vocabulary; each arm is filled by the task that owns its
-//! capability, and until then answers with its stub refusal.
+//! **Every arm is one call into a funnel that already exists.** Typed `CREATE VIEW` runs
+//! [`views::create`] — the body [`Engine::create_view`](crate::engine::Engine::create_view) runs
+//! for ⌘S; typed `CREATE EXTERNAL TABLE` and a CTAS's spooled output are both
+//! `catalog::register_external`. ED-02 ships the dispatch and the vocabulary; each arm is filled
+//! by the task that owns its capability, and until then answers with its stub refusal.
 
 mod tables;
+mod views;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
+use datafusion::catalog::TableProvider;
+use datafusion::logical_expr::TableType;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::Statement as DFStatement;
+use datafusion::sql::TableReference;
 
 use crate::engine::catalog::{TableMeta, ViewMeta};
 use crate::engine::sql::StmtKind;
-use crate::engine::InternalTables;
+use crate::engine::{fold_ident, InternalTables, CATALOG, SCHEMA};
+use crate::util::plural;
 use strata_model::{TableDef, ViewDef};
 
 /// A table drop's own words — see [`tables::drop_intent`]. Re-exported here because the
 /// catalog pane says them too, and `ddl` is the vocabulary module the app already reads.
 pub use tables::drop_intent;
 pub(super) use tables::drop_table;
+pub(super) use views::{create as create_view, drop as drop_view};
 
 /// What one intercepted statement did — the `RunOutcome::Statement` the results pane renders
 /// as a status row and the app folds into its stores.
@@ -142,8 +149,9 @@ pub async fn execute(
         // ED-05 — writes and removal over the internal-name set.
         StmtKind::Insert => tables::insert(ctx, stmt, &internal).await,
         StmtKind::DropTable => tables::drop_statement(ctx, &root, &internal, stmt).await,
-        // ED-06 — typed view DDL onto `Engine::create_view` / `Engine::drop_view`.
-        StmtKind::CreateView | StmtKind::DropView => Err(unimplemented(kind)),
+        // ED-06 — typed view DDL onto the body the save-view funnel already runs.
+        StmtKind::CreateView => views::create_statement(ctx, stmt).await,
+        StmtKind::DropView => views::drop_statement(ctx, stmt).await,
         // ED-07 — editor `COPY … TO`, behind the pre-flight NULL-partition gate.
         StmtKind::Copy => Err(unimplemented(kind)),
         // ED-08 — the session overlay and prepared statements.
@@ -168,4 +176,70 @@ pub async fn execute(
 /// has to say plainly why it did nothing.
 fn unimplemented(kind: StmtKind) -> String {
     format!("{} is not implemented yet", kind.label())
+}
+
+/// What `name` resolves to in the engine's one schema, and what kind it is — `None` when the
+/// name is free. The one existence question every arm asks, because tables and views share that
+/// namespace and a create has to know which of them it is standing on.
+///
+/// Through `table_provider`, not `table`: the latter builds a `DataFrame`, which for a view means
+/// planning its whole body just to ask whether the name is taken. Addressed as a **bare, folded**
+/// reference for the reason [`Engine::create_view`](crate::engine::Engine::create_view) gives —
+/// `impl Into<TableReference> for &str` parses, and a name that needed quoting does not survive a
+/// parse, so it would be looked up under a name nothing ever registered.
+pub(super) async fn existing(ctx: &SessionContext, name: &str) -> Option<TableType> {
+    let provider: Arc<dyn TableProvider> = ctx
+        .table_provider(TableReference::bare(fold_ident(name)))
+        .await
+        .ok()?;
+    Some(provider.table_type())
+}
+
+/// The bare name a statement targets, and `what` those statements create — `"Tables"`,
+/// `"Views"`.
+///
+/// Strata has exactly one catalog and one schema (`engine::providers`), so a qualified name is
+/// either a longer spelling of the same place or a place that does not exist — and registration
+/// takes a bare name, so an unrecognised qualifier would otherwise be silently dropped and the
+/// object created somewhere the user did not ask for.
+pub(super) fn bare_name(name: &TableReference, what: &str) -> Result<String, String> {
+    let ok = match name {
+        TableReference::Bare { .. } => true,
+        TableReference::Partial { schema, .. } => schema.as_ref() == SCHEMA,
+        TableReference::Full {
+            catalog, schema, ..
+        } => catalog.as_ref() == CATALOG && schema.as_ref() == SCHEMA,
+    };
+    match ok {
+        true => Ok(name.table().to_string()),
+        false => Err(elsewhere(what)),
+    }
+}
+
+/// The wording for a name that points outside Strata's single schema — held apart from
+/// [`bare_name`] because a caller that parses the name itself has to be able to refuse the forms
+/// a `TableReference` cannot even represent, in the same words (`views::definition`).
+pub(super) fn elsewhere(what: &str) -> String {
+    format!("Strata has one schema, '{SCHEMA}'. {what} cannot be created elsewhere")
+}
+
+/// What a drop leaves behind, appended to its report — empty when it leaves nothing.
+///
+/// One wording for both drops, because "left invalid" is one fact: a dependent's plan was inlined
+/// when it was created and goes on executing until reload, so nothing is stale yet and nothing is
+/// cascaded. Shared so a table drop and a view drop cannot describe the same consequence two ways.
+pub(super) fn left_invalid(dependents: &[String]) -> String {
+    if dependents.is_empty() {
+        return String::new();
+    }
+    let names: Vec<String> = dependents.iter().map(|v| format!("'{v}'")).collect();
+    let verb = match dependents.len() {
+        1 => "is",
+        _ => "are",
+    };
+    format!(
+        ". {} {verb} left invalid: {}",
+        plural(dependents.len(), "view"),
+        names.join(", ")
+    )
 }

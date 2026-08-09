@@ -1,22 +1,37 @@
 # ED-06 · Typed CREATE/DROP VIEW onto the save-view funnel
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-02
+**Workstream:** Editor statements · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** ED-02
 
 ## Goal
 
 Typed view DDL becomes a second gesture into the funnel ⌘S already uses — one merge path, views
 indistinguishable by origin. The dispatch and settle it rides: `docs/STATEMENTS_SPEC.md` §2.
 
-## Current state
+## As built
 
-- `Engine::create_view(name, sql)` (`engine/mod.rs:1025`) renders
-  `CREATE OR REPLACE VIEW {quote_ident} AS {sql}`, reads back columns + `plan_deps`;
-  `drop_view` (`mod.rs:1070`). The Save flow (`editor/actions.rs:254`) folds
-  `ViewDef` upsert → persist → engine call → `ViewMeta` fold → epoch bump.
-- Verified hazard (workstream README, DataFusion 54 facts): DF's own `CREATE OR REPLACE VIEW` over a **table** name silently
-  replaces the table — the interceptor must fence it; another reason the statement never runs
-  natively. The other reason: the store write-back needs `ViewMeta`, and introspecting for it
-  would violate catalog-is-the-store.
+`engine/ddl/views.rs` holds **both halves**: `create` / `drop` are the ctx-level bodies (moved out
+of `Engine::create_view` / `drop_view`, which now spawn them), and `create_statement` /
+`drop_statement` are the arms. Documented as built in `docs/STATEMENTS_SPEC.md` §6.3.
+
+Three things the plan below did not spell out, settled while building:
+
+- **The clause fences are exhaustive, not selective.** `create` rebuilds the statement around the
+  parsed query, so DataFusion's own `CREATE VIEW` clause gate never sees the user's spelling —
+  anything not read here is accepted and silently ignored, and `CREATE TEMPORARY VIEW` would
+  create a permanent view. `definition` destructures sqlparser's `CreateView` with **no `..`**, so
+  a clause added upstream is a compile error. A view's **column list** is refused for the same
+  reason `ViewDef` is `{ name, sql }`: there is nowhere for it to round-trip.
+- **A view drop's dependents are the *aliases* half of `PlanDeps`**, not the tables half — the
+  inliner leaves a view's name behind as a `SubqueryAlias` and its base tables at the leaves, so
+  the table drop's `dependent_views` finds nothing for a view target. `catalog::dependents_of_view`
+  is its sibling over the same walk; the report's sentence is `ddl::left_invalid`, now shared with
+  the table drop.
+- **The profile cancel moved to `Engine::settle_effect`.** The arm runs in a task that cannot
+  reach the lifecycle (the `TableRemoved` reason); the direct gestures keep theirs, since they
+  never produce an effect.
+
+`existing` and `bare_name` moved to `ddl/mod.rs` as the shared helpers both arms use — `bare_name`
+gained the object noun so a `CREATE VIEW` in another schema is not told about tables.
 
 ## What to build
 

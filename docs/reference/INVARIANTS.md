@@ -675,6 +675,43 @@ Things that must not regress. Each was fought for once already.
   because the re-read runs **outside the scan driver's claim**, it lands through
   `table_reread`, which stands down for a row a pass has put back to `Loading`: otherwise a ↻
   pressed while the read was in flight would be silently undone by the state from before it.
+- **A view is Save's artifact, and typed view DDL is a second gesture into that funnel — one
+  body, views indistinguishable by origin.** `ddl::views::create` is what
+  `Engine::create_view` spawns for ⌘S *and* what a typed `CREATE VIEW` reaches through the router
+  (ED-06), so one store row, one `project.json` entry and one set of deps serve both, and either
+  gesture edits the row the other made. The statement is never run natively for two reasons, each
+  disqualifying on its own: DataFusion's `CREATE OR REPLACE VIEW` over a **table** name silently
+  replaces the table (`context/mod.rs`, the `(true, Ok(_))` arm never checks `table_type`), so a
+  typo would turn a registered parquet table into a view while its def went on naming files
+  nothing reads; and the store write-back needs a `ViewMeta`, which introspecting for afterwards
+  is the refetch the catalog invariant forbids. `Blocked::CreateView` / `DropView` stay defined as
+  the **agent** path's refusals.
+  **`ViewDef` is `{ name, sql }`, so the arm has to arrive at exactly that pair**: the folded name
+  (`TableReference::parse_str`, DataFusion's own normalization) and the definition **query's**
+  canonical rendering, which is what makes the row round-trip — it is the string ⌘S would have
+  saved from a tab holding that query. And because the statement is *rebuilt* around that query,
+  DataFusion's own clause gate never sees the user's spelling: every clause `CREATE VIEW` can
+  carry is therefore refused **by name**, from a destructure with no `..`, or it would be accepted
+  and silently ignored (`CREATE TEMPORARY VIEW` creating a permanent one). A clause sqlparser
+  learns later is a compile error, the rule the router's wildcard-free match keeps from the other
+  end. A table name is refused whether or not `OR REPLACE` is written, and a plain create over an
+  existing view points at `OR REPLACE` rather than at DataFusion's "Table 'v' already exists".
+  **A view drop names its readers and does not cascade**, in the table drop's own words
+  (`ddl::left_invalid`, shared so the two cannot describe one consequence two ways) — from
+  `catalog::dependents_of_view`, which reads the **aliases** half of `PlanDeps` where the table
+  drop reads the tables half: the inliner leaves a view's name behind as a `SubqueryAlias` and its
+  base tables at the leaves, which is the same split the store keeps (`ViewInfo::deps` vs
+  `view_deps`) and so makes the report and the pane's warning one fact. That half is **raw** and
+  **over-reports on purpose**: a plan cannot tell an inlined view from `FROM t AS v` or a CTE
+  named `v`, and a *missed* reader is a destructive action reported as consequence-free where a
+  spare one is a name the user can look at. It is not a divergence from the pane either — the
+  store's filter keeps an alias only where a view row of that name exists, which is always true of
+  the name being dropped. A redefined or dropped
+  view's profile is cancelled by `Engine::settle_effect` off the returned effect, because the
+  statement runs in a task that cannot reach the lifecycle; the direct gestures cancel in
+  `create_view` / `drop_view`, which never produce an effect. Replay needs no code of its own — a
+  typed view is a `ViewDef`, and `register_pass`'s fixed point orders a chain from cold exactly as
+  it does a saved one. Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.3.
 - **A re-scan means "list the sources again", so this engine runs no list-files cache.** DataFusion
   54 turns one on by default — 1 MiB, **infinite TTL** — and with it every re-listing answers with
   the file set from last time: the catalog's ↻, the Configure window's re-inference and
@@ -953,8 +990,8 @@ Things that must not regress. Each was fought for once already.
   `visit_relations` (`CREATE VIEW`'s name, `DROP`'s name list) are named explicitly rather than
   assumed.
   Every interception is a **second gesture into a funnel that already exists**, never a second
-  implementation: typed view DDL onto `Engine::create_view` (what ⌘S already wraps the buffer's
-  plain query in), typed `CREATE EXTERNAL TABLE` onto Table Config's own def-first registration.
+  implementation: typed view DDL onto the body ⌘S runs (`ddl::views::create`, ED-06), typed
+  `CREATE EXTERNAL TABLE` onto Table Config's own def-first registration.
   (ED-01 landed classification, ED-02 the dispatch below; each `StmtKind`'s implementation is its
   own ED task, and until one lands its statement classifies, draws no squiggle, and fails at Run
   with `ddl::execute`'s stub refusal naming the statement.)
