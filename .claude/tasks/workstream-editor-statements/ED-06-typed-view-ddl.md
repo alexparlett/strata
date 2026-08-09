@@ -35,7 +35,8 @@ indistinguishable by origin. The dispatch and settle it rides: `docs/STATEMENTS_
 - Update the views-are-Save's-artifact invariant text (AGENTS.md §2 + INVARIANTS.md + the
   `Blocked::CreateView` doc comment) in this change — typed view DDL is a second gesture into the
   same funnel; the variant and message stay as the agent path's refusal — and move CREATE/DROP
-  VIEW out of `docs/STATEMENTS_SPEC.md` §6.2, documenting the built behaviour there.
+  VIEW out of `docs/STATEMENTS_SPEC.md`'s *Not yet implemented* list, documenting the built
+  behaviour there.
 
 ## Acceptance
 

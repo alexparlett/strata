@@ -187,6 +187,36 @@ Things that must not regress. Each was fought for once already.
     chart the first time it was written. A gap is not a small value; `total_cmp` and a stated place
     for the missing ones are what keep the withdrawn pipeline's `sort_by` panic from coming back.
 
+  And one **Copy Image** settled (Rz2/08):
+
+  - **A chart image is the chart, so the capture and the paint are one draw body.** Copy Image
+    renders the *same* `Frame` the visible canvas is painting — held as an `Rc` and handed to
+    both, so the toolbar item and the plot cannot describe different charts — through the same
+    `marks::draw`, which takes a canvas and a `FontCollection` rather than a `CanvasContext`
+    exactly so the offscreen path has nothing to reimplement. `draw` **returns** its hit regions
+    instead of writing them through a handle, so a capture cannot overwrite what the visible plot
+    last recorded for its pointer. And it needs no paint pass at all: the `FontCollection` is a
+    root context (`consume_root_context`, the same one `freya-code-editor` measures against), so
+    a press renders on its own rather than raising a flag the next paint has to notice. The
+    capture is a fixed 1600x900 at 2x — the pane's own size would copy whatever labels a narrow
+    drag had thinned away, and drawing the export's pixels as logical units would leave a 10pt
+    tick label lost in a chart at twice the size. The background is filled first (the live canvas
+    is transparent over the pane, which paints it), and the pixels are converted to
+    **unpremultiplied RGBA** on the way out, because `raster_n32_premul` is the platform's native
+    order (BGRA on Apple) and a raw read puts a blue-for-red chart on the pasteboard. Nothing is
+    written to disk: the clipboard grew image support in the fork rather than the app growing a
+    save-to-PNG stopgap. It grew it **inside the existing shape** — the platform integration still
+    provides a `Box<dyn ClipboardProvider>` into the root context and `Clipboard` still reads it
+    from there; what changed is that the trait is the fork's own and covers images as well as
+    text, and copypasta was **replaced** by arboard rather than run beside it, because text and
+    images are one clipboard and a second backend is a second claim on the same selection. The
+    Linux trade is stated where it lives (`ClipboardContext`): arboard reaches Wayland over
+    `wlr-data-control` / `ext-data-control` and otherwise falls back through XWayland, where
+    copypasta used the standard `wl_data_device`. No crate speaks that protocol *and* carries
+    images, and a second provider for text alone is the thing being avoided.
+    The item is **absent** over a notice rather than disabled, because there
+    is no chart to copy and a greyed control says there is one that is merely unavailable.
+
   And one the **guardrails** settled (Rz2/04):
 
   - **A refusal names its fix in prose, and V1 puts no control behind it.** The chart aggregates
@@ -268,8 +298,9 @@ Things that must not regress. Each was fought for once already.
     same reason `Hit::anchor` exists. The price is that the axis can only be read at a mark,
     which is where the numbers are. The value is **carried on the `Hit`, never inverted out of
     the pixel row** — that round trip put `11.01` under a tooltip reading `11` — and `PlotArea`
-    (plotters' own `plotting_area().get_pixel_range()`) is recorded beside the hit regions only
-    so the rules span the plot rather than the pane. The three pieces hang off the canvas root,
+    (plotters' own `plotting_area().get_pixel_range()`) comes back **with** the hit regions, in
+    `draw`'s own answer rather than a second slot, only so the rules span the plot rather than
+    the pane — the capture gets one too and drops it, which is the point of returning both. The three pieces hang off the canvas root,
     not off a wrapper: an absolutely positioned node resolves against its parent's area, and a
     wrapper would be a *stacked* sibling of a fill-height plot — measured, its horizontal rule
     came out one whole pane below the pointer.
@@ -639,6 +670,84 @@ Things that must not regress. Each was fought for once already.
   `CreateMemoryTable.input`), so the query that runs is the query the user wrote and DataFusion's
   own exhaustive clause refusals come for free. Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md)
   §6.1 + §7.
+- **A table is dropped in one place, on both origins, and a confirm is a gesture in front of that
+  place — never a second implementation of it.** `ddl::tables::drop_table` (ED-05) is the whole
+  drop: resolve the target against the engine's own namespace (an unknown name errors, `IF EXISTS`
+  reports a no-op with nothing for the store to fold, a view says which statement drops it),
+  **deregister first** so no plan built afterwards can resolve the name while a scan already
+  running finishes against its own provider, delete `.strata/tables/<slug>/` **only** where the
+  def is internal, and answer with `StoreEffect::TableRemoved`. The catalog pane reaches it through
+  `Engine::drop_table` after its store-first write (the `save_view` order — a drop the project file
+  never heard about comes back on the next open); a typed `DROP TABLE` reaches it through the
+  router. **That sharing is the point, not tidiness.** As this task was first drafted the two were
+  separate: the statement deleted the data directory and the pane's `Engine::deregister` did not,
+  which orphans an internal table's data forever — no def points at it and `tidy_strata_dir` only
+  sweeps `.tmp-*`. The engine's own bookkeeping (`cancel_profile`, the internal-name set) is
+  applied by `Engine::settle_effect` off the returned value, once, for the same reason. **No
+  cascade**: dependent views are *named* in the report, read from the providers before the
+  deregister — a `ViewTable`'s plan was inlined when it was created and goes on executing until
+  reload (D11), and the epoch the fold bumps is what re-derives every tab's diagnostics, which is
+  the surface that actually tells the user. **The two wordings are the engine's**
+  (`ddl::drop_intent` before the fact, `drop_report` after), because a fixed "the source files on
+  disk are not deleted" in the confirm was reassuring the user at exactly the moment the action
+  became destructive.
+- **A table's data is discarded by rename, and the drop that does it is background work.**
+  `ddl::tables::discard` moves the directory into a `.tmp-…` sibling and only then walks it — the
+  mirror of the spool, which publishes by rename for the same reason. A `remove_dir_all` in place
+  is interruptible at every step, and what an interruption leaves is a half-emptied directory under
+  the table's *real* name that nothing ever collects: the def naming it is already gone and
+  `tidy_strata_dir` sweeps only `.tmp-…`. After the rename the data is unreachable under that name
+  whatever happens next, and what is left is exactly what the sweep exists for. **The rename is the
+  operation; the removal is housekeeping** — a failure to finish it is logged, never returned, or
+  the app would report a failed drop for one that plainly succeeded. A failure of the *rename*
+  is returned, and **puts the provider back**: the deregister comes first so nothing can plan
+  against a table whose files are going, which leaves the one fallible step after it, and a
+  `discard` that could not even start destroyed nothing. `deregister_table` hands back what it
+  removed, so the same `Arc` goes home and the drop is all-or-nothing on the engine — otherwise
+  the report says "failed" while the irreversible half has landed, and the def sits in
+  `project.json` naming a table the session can no longer resolve. And because an `INSERT` is one
+  file with no compaction, a heavily written table is a directory of thousands of files: the delete
+  is not instant, so `Engine::drop_table` holds a `BackgroundGuard` for its whole await. That guard
+  is `Lifecycle::background`, the count `export` already used — one counter, because every reader
+  asks the same question ("is anything the user would rather finish still going?") and the
+  close-while-running flag is the only consumer. The confirm's copy follows: `whose_work` answers
+  `Mine`/`Agent`/`Background`, since "Queries are running" shown to somebody deleting a table sends
+  them looking for a query they never started.
+- **A write statement only ever reaches files Strata owns, and the gate is the *parsed* target.**
+  `INSERT` (ED-05) plans the statement — side-effect free — and gates on what the plan names: a
+  target outside `Engine::is_internal` is refused (`Blocked::InsertExternal`, which covers a view
+  too, neither being a directory a `CREATE TABLE` wrote), and a write op that is not `Append` is
+  refused (`Blocked::InsertOverwrite`, which the router already produces for `INSERT OVERWRITE`
+  off the bare statement, and which the arm produces for `REPLACE INTO` — DataFusion folds both
+  onto the one thing the Arrow sink has no implementation for). Everything else is DataFusion's
+  own INSERT path: the column list, the source query, the schema check
+  (`logically_equivalent_names_and_types`) and the single LZ4-frame IPC file the sink appends.
+  **The plan that was judged is the plan that runs** — driving it *is* `execute_logical_plan`'s
+  own arm for a DML node, so re-dispatching the text through `ctx.sql` would only gate one value
+  and execute another. **One file per statement and no compaction**, stated in the module doc:
+  `DROP TABLE` plus a `CREATE TABLE AS SELECT * FROM t` is the compaction story until a task owns
+  one. The row count on the catalog row comes back through `StoreEffect::RescanTable`, never from
+  the store adding up what a statement claimed.
+- **An append re-reads the table's facts; it does not re-register it, and it leaves the views
+  alone.** `StoreEffect::RescanTable` folds through `refresh_table_rows` → `Engine::table_meta` →
+  `ProjectState::table_registered`, not through the scan pass. The distinction is the one D10/D11
+  settled: a `ViewTable` captures its sources by `Arc` at creation and never re-resolves, so what
+  strands a view is a **provider replacement** — which is what `register_external` does, and the
+  only reason a table Refresh re-creates the views above it. An `INSERT` replaces no provider, and
+  could not invalidate one if it did: `logically_equivalent_names_and_types` runs before the sink
+  writes, so the shape a view captured is the shape still there, and the provider re-LISTs per
+  scan (no `ListFilesCache`) so it finds the appended file unaided. Going through the pass broke
+  every view above the table and repaired it again for nothing, re-inferred a schema that could
+  not have moved, and flashed each affected row through `Loading`. The count is still *read* —
+  `table_meta` re-LISTs and totals the footers, of which only the new file's is uncached — so
+  "never store-side arithmetic" holds. No epoch bump either: the data moved, not what a name
+  resolves to. Stale *profiles* on dependent views are unaffected, being
+  `ProjectState::invalidate_readers`', which its own doc says exists "for the landing path that
+  does **not** re-create them". A table **Refresh** keeps the full pass, because it re-infers from
+  whatever is on disk now and so genuinely may move the schema — the caller is what knows. And
+  because the re-read runs **outside the scan driver's claim**, it lands through
+  `table_reread`, which stands down for a row a pass has put back to `Loading`: otherwise a ↻
+  pressed while the read was in flight would be silently undone by the state from before it.
 - **A re-scan means "list the sources again", so this engine runs no list-files cache.** DataFusion
   54 turns one on by default — 1 MiB, **infinite TTL** — and with it every re-listing answers with
   the file set from last time: the catalog's ↻, the Configure window's re-inference and
@@ -647,6 +756,16 @@ Things that must not regress. Each was fought for once already.
   any override, which is why it always builds a `RuntimeEnv` rather than falling back to
   DataFusion's. It stays a default and not an owned key — a project over a slow bucket with a
   fixed file set is exactly what the cache is for.
+  **The per-file *statistics* cache is the opposite call, and the two must not be confused.**
+  That one answers "what is in this file", keyed per object and invalidated by `is_valid_for` on
+  size and mtime, so a re-listing still finds new files and a replaced file still re-reads — only
+  an unchanged file is spared. `register_external` hands the table the runtime's own
+  (`ListingTable::with_cache`), which `SessionContext::register_listing_table` does for itself,
+  so snapshots always had it and only our hand-built config did not. Without it statistics are
+  re-read on **every scan** (`free_stats` reaches them through `list_files_for_scan`) *and* every
+  registration — and since an `INSERT` asks for a re-scan, the *k*th write re-read *k* footers.
+  Hand-building a `ListingTable` means opting into every default the convenience constructor
+  applies; this is the second one that had to be applied by hand, after `collect_stat`.
 - **A reader that outlives one Run pins the snapshot it reads.** A snapshot belongs to its
   workspace and is retired the moment that workspace dispatches another run (SNAPSHOT_SPEC §4),
   which is right for the grid and wrong for anything longer-lived. `Engine::pin_snapshot` hands

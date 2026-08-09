@@ -38,7 +38,8 @@ lifts: §1.
   (runtime keys can't enter the overlay).
 - Update the SET/RESET invariant text (AGENTS.md §2 + `docs/reference/INVARIANTS.md`) — a session
   overlay for non-owned, non-runtime, non-format keys; Settings stays the durable authority — and
-  move SET/RESET/PREPARE/DEALLOCATE out of `docs/STATEMENTS_SPEC.md` §6.2, documenting the built
+  move SET/RESET/PREPARE/DEALLOCATE out of `docs/STATEMENTS_SPEC.md`'s *Not yet implemented*
+  list, documenting the built
   behaviour (and the session lifetimes in its §8) there. `Blocked::Set`/`Reset` keep their variants
   and words for the agent surface; the `SetOwned`/`SetRuntime`/`SetFormat` messages join them.
 

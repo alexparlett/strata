@@ -126,6 +126,17 @@
       "origin": "internal"
     },
     {
+      "name": "t",
+      "format": {
+        "type": "arrow"
+      },
+      "sources": [
+        ".strata/tables/t/"
+      ],
+      "partition_cols": [],
+      "origin": "internal"
+    },
+    {
       "name": "test",
       "format": {
         "type": "csv",

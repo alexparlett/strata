@@ -4,9 +4,9 @@ The editor is a **full-statement surface**: one classification in front of dispa
 parsed statement, whether Run executes a query, performs the statement as an engine method, or
 refuses it with the same words the squiggle showed. The agent surface asks the same classifier and
 stays read-only. This file documents that surface as built — the router, the dispatch, the
-provider layer, and the one statement family implemented so far (internal tables). The remaining
-statement lift (INSERT, DROP, typed view DDL, COPY, session statements, functions, typed
-`CREATE EXTERNAL TABLE`) is tracked in `.claude/tasks/workstream-editor-statements/`.
+provider layer, and the statement family implemented so far (internal tables, and the two writes
+over them). The remaining statement lift (typed view DDL, COPY, session statements, functions,
+typed `CREATE EXTERNAL TABLE`) is tracked in `.claude/tasks/workstream-editor-statements/`.
 
 ```mermaid
 flowchart TD
@@ -247,11 +247,67 @@ Around it, as built:
 - **Configure is absent** from an internal row's menu — it edits sources, format and partition
   columns, and an internal table has none to edit, ever — so the window is structurally unable to
   receive an internal def.
-- A drop of an internal table **will delete its data**; that funnel is the open INSERT/DROP task's.
+- A drop of an internal table **deletes its data** — see the next section.
+- `register_external` hands the table the runtime's per-file **statistics cache**
+  (`ListingTable::with_cache`). `SessionContext::register_listing_table` does this for itself, so
+  snapshots always had it and only the hand-built config did not; without it statistics are
+  re-read on every scan *and* every registration. **Not** the list-files cache, which
+  `ENGINE_KEYS` zeroes on purpose: that one answers "which files are there", and a re-scan means
+  asking again. This one answers "what is in *this* file", invalidated on size and mtime.
 
-### 6.2 Not yet implemented
+### 6.2 Writes over an internal table — `INSERT` and `DROP TABLE`
 
-`INSERT`, `DROP TABLE`, `CREATE VIEW`, `DROP VIEW`, `COPY`, `SET`, `RESET`, `PREPARE`,
+**`INSERT` is DataFusion's own write behind a target gate.** The statement is planned (side-effect
+free) and the gate reads what the plan names: a target outside `Engine::is_internal` is refused
+(`Blocked::InsertExternal` — a view is the same refusal, neither being a directory a
+`CREATE TABLE` wrote), and any write op that is not `Append` is refused
+(`Blocked::InsertOverwrite`; the router already catches `INSERT OVERWRITE` off the bare statement,
+while `REPLACE INTO` reaches the arm because only the plan names it). Everything after the gate is
+DataFusion's INSERT path unchanged — the column list, the source query, the schema check, and the
+single LZ4-frame IPC file the Arrow sink appends. **The plan that was gated is the plan that
+runs**: driving it *is* `execute_logical_plan`'s own arm for a DML node, so re-dispatching the
+text would gate one value and execute another.
+
+One file per statement and **no compaction** — `DROP TABLE` plus `CREATE TABLE AS SELECT * FROM t`
+is the compaction story until a task owns one.
+
+The effect is `StoreEffect::RescanTable`, and its fold **re-reads the table's facts without
+re-registering it**. Re-registering replaces the provider, and that is what strands the `Arc` a
+view captured (D10/D11) — the only reason a table Refresh re-creates the views above it. An append
+cannot change the shape a view captured (the sink schema-checks first) and the provider re-LISTs
+per scan anyway, so the fold is `refresh_table_rows` → `Engine::table_meta` →
+`ProjectState::table_reread`: no re-inference, no view churn, no epoch bump, no `Loading` flash.
+The count is still read from the footers, never added up from what the statement claimed.
+
+**`DROP TABLE` works on both origins, and is the one place a table is dropped.** The catalog
+pane's confirm reaches `ddl::tables::drop_table` through `Engine::drop_table` after its store-first
+write; a typed statement reaches it through the router. That sharing is the point: a pane that
+merely deregistered would orphan an internal table's data forever, since no def would point at it
+and `tidy_strata_dir` sweeps only `.tmp-…`.
+
+The target resolves against the engine's namespace first — an unknown name errors, `IF EXISTS`
+reports a no-op with nothing to fold, a view says which statement drops it. Then **deregister
+first**, so no plan built afterwards can resolve the name while a scan already running finishes
+against its own provider. Only then is the data destroyed, and only where the def is internal.
+Dependent views are **named, never cascaded**: read from the providers before the deregister,
+because a `ViewTable`'s plan was inlined at creation and goes on executing until reload.
+
+The data is discarded **by rename** — the directory moves into a `.tmp-…` sibling and is only then
+walked, the mirror of the spool's publish-by-rename, so an interrupted delete leaves what the
+`.strata` sweep collects rather than a half-emptied directory under a live table name. The rename
+is the operation and the removal is housekeeping (logged, not returned); a failure of the *rename*
+puts the provider back, so a drop that reports a failure has not half-happened. And because an
+`INSERT` is one file with no compaction, a heavily written table's delete is not instant, so it
+holds a `BackgroundGuard` and the close-while-running confirm asks before a window takes the
+runtime away.
+
+Both wordings are the engine's — `ddl::drop_intent` before the fact, the report's after — so the
+confirm cannot promise what the report then contradicts: an internal drop names the data, an
+external one keeps "the source files on disk are not deleted".
+
+### 6.3 Not yet implemented
+
+`CREATE VIEW`, `DROP VIEW`, `COPY`, `SET`, `RESET`, `PREPARE`,
 `DEALLOCATE`, `CREATE FUNCTION`, `DROP FUNCTION` and `CREATE EXTERNAL TABLE` all classify
 `Intercept` — the editor draws no squiggle — and answer at Run with `ddl::execute`'s stub refusal:
 "*KIND* is not implemented yet". `EXECUTE` classifies `Query` and fails in the read path (§1).

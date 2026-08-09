@@ -8,12 +8,13 @@ typed `CREATE EXTERNAL TABLE`, editor `COPY … TO`, session statements (`SET`/`
 store, the persist path, the epoch discipline, the snapshot lifecycle) stays exactly where it is.
 
 **Docs: `docs/STATEMENTS_SPEC.md`** — the statement surface **as built** (router, dispatch,
-providers, internal tables). Read it first; do not re-litigate its §3 (why lifecycle cannot live
-in the provider traits). The settled design for each *unbuilt* statement — DROP on both origins
-without a dialog, session-scoped SET/PREPARE/functions, and the rest — lives in its own task file
+providers, internal tables, and the two writes over them). Read it first; do not re-litigate its
+§3 (why lifecycle cannot live in the provider traits). The settled design for each *unbuilt*
+statement — typed view DDL onto the save-view funnel, session-scoped SET/PREPARE/functions, and
+the rest — lives in its own task file
 below, each self-contained, on top of the **verified DataFusion 54 facts** at the bottom of this
-file. Do not re-derive those facts. When a task lands, move its statements out of the doc's §6.2
-not-implemented list and document the built behaviour there, in the same change.
+file. Do not re-derive those facts. When a task lands, move its statements out of the doc's
+*Not yet implemented* list and document the built behaviour there, in the same change.
 
 The architecture in one line: **classify in front of dispatch, execute through funnels that
 already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Refuse` (ED-01, done),
@@ -28,7 +29,7 @@ already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Re
 | 02 | `Engine::run` + statement results: `RunOutcome`/`StatementReport`/`StoreEffect`, app folds, history | ✅ | — | 01 |
 | 03 | Strata providers: `StrataCatalogProvider` + `StrataSchemaProvider`, information_schema on | ✅ | — | — |
 | 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ✅ | — | 02 |
-| 05 | INSERT (native, target-gated) + DROP TABLE (both origins) | ⬜ | — | 04 |
+| 05 | INSERT (native, target-gated) + DROP TABLE (both origins) | ✅ | — | 04 |
 | 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ⬜ | — | 02 |
 | 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ⬜ | — | 02 |
 | 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ⬜ | — | 02 |
@@ -86,13 +87,12 @@ reassuring the user at exactly the moment the action became destructive.
 Verified against the sources this workspace compiles
 (`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`, `datafusion-54.0.0` and siblings).
 The open tasks hang off these; the facts behind the *landed* tasks (eager DDL, the in-RAM CTAS,
-`information_schema` enumeration) are restated in the code's own module docs
-(`engine/ddl/tables.rs`, `engine/providers.rs`) and in `docs/STATEMENTS_SPEC.md`.
+`information_schema` enumeration, and ED-05's `insert_into` and `find_and_deregister` behaviour)
+are restated in the code's own module docs (`engine/ddl/tables.rs`, `engine/providers.rs`) and in
+`docs/STATEMENTS_SPEC.md`.
 
 | Fact | Evidence | Task |
 |---|---|---|
-| INSERT plans through `TableProvider::insert_into`; `ListingTable` supports it for Arrow — directory-collection URL required, schema-checked via `logically_equivalent_names_and_types`, appends one LZ4-frame IPC file per statement, `Append` only | `physical_planner.rs:845`; `datafusion-catalog-listing-54.0.0/src/table.rs:614-681`; `datafusion-datasource-arrow-54.0.0/src/file_format.rs:227-241` | ED-05 |
-| DROP TABLE/VIEW = `find_and_deregister` → `SchemaProvider::deregister_table`; type-checked, knows nothing of files or defs | `datafusion-54.0.0/src/execution/context/mod.rs:1052-1078`, `:1430-1455` | ED-05 |
 | `CREATE OR REPLACE VIEW` over a **table** name silently replaces the table (the `(true, Ok(_))` arm never checks `table_type`) | `context/mod.rs:939-972` | ED-06 |
 | PREPARE/EXECUTE/DEALLOCATE supported; plans stored in `SessionState.prepared_plans` (**`pub(crate)`** — no public enumeration); EXECUTE returns the bound plan as a plain DataFrame | `context/mod.rs:733-772`, `:1534-1587`; `session_state.rs:208`, `:984-1013` | ED-08 |
 | `SQLOptions::verify_plan` rejects `Ddl` / `Dml`+`Copy` / `Statement` per flag, visiting subqueries — and **cannot see through EXECUTE**, so DML must be fenced at PREPARE | `context/mod.rs:2305-2339` | ED-08 |

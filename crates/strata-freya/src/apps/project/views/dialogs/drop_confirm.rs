@@ -31,7 +31,8 @@
 use freya::components::{get_theme, ScrollView};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
-use strata_model::CatalogKind;
+use strata_core::engine::drop_intent;
+use strata_model::{CatalogKind, TableOrigin};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
@@ -61,7 +62,16 @@ use crate::theme::{use_roles, Role};
 /// [`ConnectionDef::url`]: strata_model::ConnectionDef::url
 #[derive(Clone, PartialEq, Debug)]
 pub enum DropTarget {
-    Table(String),
+    /// A table, by name, **with what dropping it destroys** (ED-05): an internal table's data
+    /// files go with the def, an external table's do not, and the difference is the one thing
+    /// this card exists to tell the user. Carried from the row the gesture started on rather
+    /// than looked up here, because by the time the copy is rendered the only ways to answer
+    /// are a lookup that cannot fail or a default — and a default reads "the source files on
+    /// disk are not deleted" at exactly the moment the action is destructive.
+    Table {
+        name: String,
+        origin: TableOrigin,
+    },
     View(String),
     Query {
         id: Uuid,
@@ -75,8 +85,8 @@ impl DropTarget {
     /// The row's name, as the title shows it.
     pub fn name(&self) -> &str {
         match self {
-            DropTarget::Table(name) | DropTarget::View(name) | DropTarget::Connection(name) => name,
-            DropTarget::Query { name, .. } => name,
+            DropTarget::View(name) | DropTarget::Connection(name) => name,
+            DropTarget::Table { name, .. } | DropTarget::Query { name, .. } => name,
         }
     }
 
@@ -86,7 +96,7 @@ impl DropTarget {
     /// dependents are the tables that name it, which [`DropConfirm`] asks for by URL instead.
     fn kind(&self) -> Option<CatalogKind> {
         match self {
-            DropTarget::Table(_) => Some(CatalogKind::Table),
+            DropTarget::Table { .. } => Some(CatalogKind::Table),
             DropTarget::View(_) => Some(CatalogKind::View),
             DropTarget::Query { .. } => Some(CatalogKind::Query),
             DropTarget::Connection(_) => None,
@@ -99,7 +109,7 @@ impl DropTarget {
     /// and the right one: nothing in the bucket changes.
     fn verb(&self) -> &'static str {
         match self {
-            DropTarget::Table(_) => "Drop table",
+            DropTarget::Table { .. } => "Drop table",
             DropTarget::View(_) => "Drop view",
             DropTarget::Query { .. } => "Delete query",
             DropTarget::Connection(_) => "Forget connection",
@@ -108,12 +118,13 @@ impl DropTarget {
 
     /// What the drop actually does — the canvas's `removeBody`, each line chosen to answer the
     /// question the user is really asking (are my *files* gone? are the tables it read gone?).
+    ///
+    /// A table's line is the **engine's** ([`drop_intent`]), not a second wording beside it: the
+    /// confirm is asking permission for exactly what the drop's report then describes, and the
+    /// two sentences have to agree about whether the files go.
     fn body(&self) -> &'static str {
         match self {
-            DropTarget::Table(_) => {
-                "Unregisters the table from this project. The source files on disk are not \
-                 deleted."
-            }
+            DropTarget::Table { origin, .. } => drop_intent(*origin),
             DropTarget::View(_) => {
                 "Removes the view definition from the catalog. The tables it reads are not \
                  affected."
@@ -130,7 +141,7 @@ impl DropTarget {
     /// How the consequence line refers to it.
     fn noun(&self) -> &'static str {
         match self {
-            DropTarget::Table(_) => "table",
+            DropTarget::Table { .. } => "table",
             DropTarget::View(_) => "view",
             DropTarget::Query { .. } => "query",
             DropTarget::Connection(_) => "connection",
@@ -142,7 +153,7 @@ impl DropTarget {
 /// cannot reuse [`DropTarget::verb`], which is worded as the thing you are about to do.
 fn past(target: &DropTarget) -> &'static str {
     match target {
-        DropTarget::Table(_) => "Dropped table",
+        DropTarget::Table { .. } => "Dropped table",
         DropTarget::View(_) => "Dropped view",
         DropTarget::Query { .. } => "Deleted query",
         DropTarget::Connection(_) => "Forgot connection",
@@ -430,7 +441,7 @@ fn drop_row(
     // did not. A drop the project file never heard about comes back on the next open, so logging
     // it first would leave the log contradicting the catalog.
     match target {
-        DropTarget::Table(name) => {
+        DropTarget::Table { name, .. } => {
             let landed = {
                 let mut p = project.write_channel(ProjChan::Tables);
                 let taken = p.remove_table(name);
@@ -443,10 +454,34 @@ fn drop_row(
             if !landed {
                 return;
             }
-            // Synchronous and local: DataFusion just forgets the provider.
-            engine.deregister(name);
-            // Every tab that reads it is now wrong, and none of them has been typed in.
-            catalog_settled(catalog);
+            let engine = engine.clone();
+            let name = name.clone();
+            // **`Engine::drop_table`, not `deregister`** (ED-05): a table Strata wrote owns a
+            // directory under `.strata/tables/`, and forgetting the provider without deleting it
+            // orphans that data forever — no def points at it and the `.strata` housekeeping only
+            // sweeps `.tmp-` directories. The typed `DROP TABLE` goes through the same call, so
+            // the two gestures cannot leave different states behind.
+            //
+            // `spawn_forever` rather than `spawn`, for the reason the view arm below gives: the
+            // engine call has to outlive the dialog that ordered it.
+            spawn_forever(async move {
+                // `if_exists`: the row came out of the store, and a def whose registration failed
+                // has no provider to deregister — which is a drop that has nothing left to do,
+                // not a drop that failed.
+                if let Err(e) = engine.drop_table(name.clone(), true).await {
+                    // The def is already gone, which is the catalog's truth; what may be left is
+                    // a stale registration or, on an internal table, its data directory. The log
+                    // is the only surface that can say so — the row it would describe is gone.
+                    tracing::error!("drop table '{name}': {e}");
+                    log_event(
+                        report.log,
+                        LogLevel::Warning,
+                        format!("The engine could not finish dropping table '{name}': {e}"),
+                    );
+                }
+                // Every tab that reads it is now wrong, and none of them has been typed in.
+                catalog_settled(catalog);
+            });
         }
         DropTarget::View(name) => {
             let landed = {
@@ -546,11 +581,14 @@ fn drop_row(
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+    use std::thread::sleep;
+    use std::time::Duration;
 
     use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
     use freya_testing::TestingRunner;
-    use strata_core::engine::{TableMeta, ViewMeta};
+    use futures::executor::block_on;
+    use strata_core::engine::{RunTag, TableMeta, ViewMeta, WsId};
     use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
     use strata_model::{
@@ -578,6 +616,27 @@ mod tests {
         TableDef {
             connection: Some(url.into()),
             ..table(name)
+        }
+    }
+
+    /// A table def Strata wrote — `.strata/tables/<name>/`, exactly as a CTAS leaves it. Never
+    /// through a connection: an internal table's data is local to the machine that created it.
+    fn internal(name: &str) -> TableDef {
+        TableDef {
+            name: name.into(),
+            format: SourceFormat::Arrow,
+            connection: None,
+            sources: vec![format!(".strata/tables/{name}/")],
+            partition_cols: Vec::new(),
+            origin: TableOrigin::Internal,
+        }
+    }
+
+    /// The drop gesture a catalog row starts, for the ordinary (external) table in this fixture.
+    fn dropping(name: &str) -> DropTarget {
+        DropTarget::Table {
+            name: name.into(),
+            origin: TableOrigin::External,
         }
     }
 
@@ -765,7 +824,7 @@ mod tests {
     #[test]
     fn the_confirm_counts_and_names_every_view_the_drop_leaves_invalid() {
         let (mut runner, (mut slot, ..)) = runner("names");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         assert_eq!(title(&runner), "Drop table orders");
         assert!(
@@ -785,7 +844,7 @@ mod tests {
     #[test]
     fn a_drop_with_no_dependents_shows_no_consequence_line() {
         let (mut runner, (mut slot, ..)) = runner("nodeps");
-        open(&mut runner, &mut slot, DropTarget::Table("users".into()));
+        open(&mut runner, &mut slot, dropping("users"));
 
         assert_eq!(title(&runner), "Drop table users");
         assert!(
@@ -793,10 +852,40 @@ mod tests {
             "nothing reads `users`: {:?}",
             texts(&runner)
         );
-        // The body copy still runs — the dialog isn't empty, it just makes no extra claim.
+        // The body copy still runs — the dialog isn't empty, it just makes no extra claim. And
+        // for an **external** table the claim it makes is that the files stay, which is the half
+        // that stopped being true for every table the moment Strata could own some (ED-05).
         assert!(texts(&runner)
             .iter()
             .any(|t| t.contains("files on disk are not deleted")));
+    }
+
+    /// **An internal table's confirm names the data**, because dropping one deletes it. The
+    /// external sentence above would be reassuring the user at exactly the moment the action is
+    /// destructive — and both sentences are the engine's, so the card cannot promise something
+    /// the drop's own report then contradicts.
+    #[test]
+    fn dropping_an_internal_table_says_its_data_goes_with_it() {
+        let (mut runner, (mut slot, ..)) = runner("internal");
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::Table {
+                name: "daily".into(),
+                origin: TableOrigin::Internal,
+            },
+        );
+
+        assert_eq!(title(&runner), "Drop table daily");
+        let texts = texts(&runner);
+        assert!(
+            texts.iter().any(|t| t.contains("data files")),
+            "the copy names the data: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|t| t.contains("are not deleted")),
+            "and never claims the files survive: {texts:?}"
+        );
     }
 
     /// Dropping a **view** asks the other dependency list: the view that reads it, not the
@@ -854,7 +943,7 @@ mod tests {
     #[test]
     fn confirming_removes_the_def_and_leaves_its_dependents_in_place() {
         let (mut runner, (mut slot, _, project, ..)) = runner("confirm");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         click_action(&mut runner, "Drop table");
 
@@ -879,7 +968,7 @@ mod tests {
     #[test]
     fn confirming_records_the_drop_in_the_event_log() {
         let (mut runner, (mut slot, _, _, log)) = runner("logged");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         click_action(&mut runner, "Drop table");
 
@@ -912,7 +1001,7 @@ mod tests {
         let strata = project_io::strata_dir(&root);
         std::fs::create_dir_all(&strata).unwrap();
         let (mut runner, (mut slot, _, _, log)) = runner("nowrite");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
         click_action(&mut runner, "Drop table");
@@ -952,7 +1041,7 @@ mod tests {
         let strata = project_io::strata_dir(&root);
         std::fs::create_dir_all(&strata).unwrap();
         let (mut runner, (mut slot, _, project, _)) = runner("rollback");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
         click_action(&mut runner, "Drop table");
@@ -984,7 +1073,7 @@ mod tests {
             .iter()
             .map(|t| t.def.name.clone())
             .collect();
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
         click_action(&mut runner, "Drop table");
@@ -1042,7 +1131,7 @@ mod tests {
     #[test]
     fn cancelling_touches_nothing() {
         let (mut runner, (mut slot, _, project, log)) = runner("cancel");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         click_action(&mut runner, "Cancel");
         assert_eq!(
@@ -1089,7 +1178,7 @@ mod tests {
     #[test]
     fn the_action_strip_is_the_comps_fifty_eight_pixels() {
         let (mut runner, (mut slot, ..)) = runner("footer");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         // Both actions, by their laid-out boxes: the two buttons are the only 34px-tall boxes
         // carrying a button role.
@@ -1124,7 +1213,7 @@ mod tests {
     #[ignore = "writes target/drop-confirm-preview.png for eyeballing; run explicitly"]
     fn drop_confirm_preview() {
         let (mut runner, (mut slot, ..)) = runner("preview");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
         runner.render_to_file(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../target/drop-confirm-preview.png"
@@ -1169,7 +1258,7 @@ mod tests {
     #[test]
     fn enter_confirms_the_drop() {
         let (mut runner, (mut slot, _, project, ..)) = runner("enter");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         runner.press_key(Key::Named(NamedKey::Enter));
         runner.sync_and_update();
@@ -1292,12 +1381,102 @@ mod tests {
         );
     }
 
+    /// **Confirming an internal table's drop deletes its data** — the half of ED-05's parity
+    /// only this surface can show, the other half (that the typed statement and
+    /// `Engine::drop_table` leave the same state) being pinned in `strata-core`.
+    ///
+    /// Before ED-05 this arm called `Engine::deregister`, which forgets the provider and nothing
+    /// else. On an internal table that orphans `.strata/tables/<slug>/` forever: no def points at
+    /// it and the `.strata` housekeeping only sweeps `.tmp-` directories.
+    ///
+    /// Driven over a **real** engine and a real project folder, because the claim is about a
+    /// directory on disk. The engine call is spawned, so the assertion waits for it rather than
+    /// assuming one tick is enough.
+    #[test]
+    fn confirming_an_internal_drop_deletes_its_data() {
+        let root = temp_root("internal-data");
+        let _ = std::fs::remove_dir_all(&root);
+        project_io::save_defs(&root, &ProjectDefs::default()).expect("scaffolded");
+        let engine = EngineCtx::default();
+        engine.set_data_dir(&root);
+        // A real internal table, made the way the editor makes one.
+        block_on(engine.run(
+            WsId(9),
+            RunTag(9),
+            "CREATE TABLE daily AS SELECT 1 AS n".into(),
+            10,
+        ))
+        .expect("created");
+        let dir = project_io::tables_dir(&root).join("daily");
+        assert!(dir.exists(), "the CTAS wrote its data");
+
+        let (mut runner, (mut slot, ..)) = {
+            let engine = engine.clone();
+            let root = root.clone();
+            TestingRunner::new(
+                app,
+                (900., 700.).into(),
+                move |r| {
+                    r.provide_root_context(|| engine.clone());
+                    r.provide_root_context(|| State::create(CatalogState::Settled(0)));
+                    let target = r.provide_root_context(|| State::create(None::<DropTarget>));
+                    let session = r.provide_root_context(|| {
+                        RadioStation::<SessionState, Chan>::create(SessionState::default())
+                    });
+                    let project = r.provide_root_context(|| {
+                        let mut p = ProjectState::from_defs(
+                            ProjectDefs {
+                                tables: vec![internal("daily")],
+                                ..Default::default()
+                            },
+                            root.clone(),
+                        );
+                        p.table_registered(
+                            "daily",
+                            TableMeta {
+                                columns: Vec::new(),
+                                rows: Some(1),
+                            },
+                        );
+                        RadioStation::<ProjectState, ProjChan>::create(p)
+                    });
+                    let log = r.provide_root_context(|| State::create(Log::default()));
+                    r.provide_root_context(|| State::create(PersistFaults::default()));
+                    (target, session, project, log)
+                },
+                1.,
+            )
+        };
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::Table {
+                name: "daily".into(),
+                origin: TableOrigin::Internal,
+            },
+        );
+
+        click_action(&mut runner, "Drop table");
+
+        // The drop is dispatched onto the engine's own runtime and awaited by a root task, so
+        // the answer lands a wake later — bounded rather than assumed.
+        for _ in 0..200 {
+            if !dir.exists() {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+            runner.sync_and_update();
+        }
+        assert!(!dir.exists(), "{} was left behind", dir.display());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Esc cancels — the dialog's own key barrier, the same one that stops a keystroke aimed at
     /// it reaching the workbench underneath.
     #[test]
     fn escape_cancels_the_drop() {
         let (mut runner, (mut slot, _, project, ..)) = runner("escape");
-        open(&mut runner, &mut slot, DropTarget::Table("orders".into()));
+        open(&mut runner, &mut slot, dropping("orders"));
 
         runner.press_key(Key::Named(NamedKey::Escape));
         runner.sync_and_update();

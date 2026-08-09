@@ -23,6 +23,15 @@ UI + wiring, on the state rules the app already lives by.
   focused `Input` owns the keyboard: chords in `on_pre_key_down`); send becomes **stop** while
   a turn streams (cancel = AS-02's token; a cancelled turn stays in the transcript marked as
   such — truthful, not erased). Assistant prose streams in as deltas.
+- **The selector.** The composer's footer holds the conversation's pick: **entry · model ·
+  effort** (the IntelliJ AI-chat footer shape — "Junie · GPT-5.5 · High effort"). Entries
+  come from the AS-03 roster in config; model defaults to the entry's own and is overridable
+  free-form; effort renders **only** for kinds the provider table says have one (absent, not
+  disabled). The pick is per-conversation runtime state on the transcript satellite — never
+  config, never `SessionState` — seeded from the roster's default entry, read at send time
+  into AS-02's per-send selection. Changing it mid-conversation affects the next send and
+  nothing already settled. A pick whose entry has since been deleted degrades honestly:
+  the footer says so and offers the default, never a silent re-point.
 - **Rendering.** Evaluate the fork's `freya-markdown` for the transcript **first**
   (standard-components-first, one level up); build bespoke only for what it will not carry,
   and then prefer extending it in the fork (§6) over app-side workarounds.
@@ -61,4 +70,8 @@ UI + wiring, on the state rules the app already lives by.
   mid-run leaves no run in flight (the Agents pane agrees).
 - Unconfigured state names the missing field and reaches Settings; configuring and returning
   makes the same composer live without a restart.
+- The selector round-trips: switching entry or model mid-conversation changes the next send
+  (observable in AS-02's selection); effort appears only for kinds that have one; deleting
+  the picked entry in Settings leaves the footer in its honest degraded state, not a crash
+  and not a silent fallback.
 - Pane open/collapse and width survive restart via the layout channels like every panel.

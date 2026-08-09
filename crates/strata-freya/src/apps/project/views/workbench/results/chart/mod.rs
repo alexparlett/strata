@@ -40,6 +40,7 @@
 //! chart, so a value no logarithm has a place for is drawn linearly and said out loud.
 
 mod axis;
+mod capture;
 mod config;
 mod hide;
 mod marks;
@@ -48,6 +49,8 @@ mod paint;
 mod preview;
 mod sort;
 mod strip;
+
+use std::rc::Rc;
 
 use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
@@ -59,6 +62,8 @@ use strata_model::{
     CapUnit, ChartData, ChartMark, ChartQuery, ChartSeries, ColumnInfo, SnapshotId, TabId,
 };
 
+pub use self::capture::ChartCapture;
+
 use self::config::{encode, resolve, Roles};
 use self::paint::{ChartCanvas, Dress, Frame};
 use self::strip::{ControlStrip, LegendEntry};
@@ -67,7 +72,7 @@ use super::toolbar::ResultsToolbar;
 use crate::apps::export::ExportLaunch;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::ChartSpec;
-use crate::apps::project::state::{Chan, SessionState};
+use crate::apps::project::state::{Chan, LogCtx, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{scale, Prose, Title};
 use crate::state::{use_config, ConfigChan};
@@ -154,6 +159,7 @@ impl Component for ChartView {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
         let engine = use_consume::<EngineCtx>();
+        let log = use_consume::<LogCtx>();
         let roles = Roles::of(&self.columns);
 
         // The tab's encoding, on its own channel — so the strip's edits re-chart this body
@@ -190,6 +196,10 @@ impl Component for ChartView {
         // What the plot's colours mean, resolved beside the body that draws them so the two
         // read the same settled answer — the strip renders it, because that is what scrolls.
         let mut key: Vec<LegendEntry> = Vec::new();
+        // What Copy Image would put on the clipboard, set only where a chart was actually drawn
+        // — over any notice there is nothing to copy, and the toolbar shows no item at all
+        // rather than an inert one.
+        let mut snap: Option<ChartCapture> = None;
         let body: Element = match (self.snapshot, &encoded) {
             (None, _) => Notice::new(
                 "Nothing to chart",
@@ -247,12 +257,18 @@ impl Component for ChartView {
                             // once, here, so the banner and the painter cannot disagree.
                             let fallback = encoding.log_y.then(|| log_fallback(&data)).flatten();
                             let banner = fallback.map(str::to_string).or_else(|| crowded(&data));
-                            let plot = ChartCanvas::new(Frame {
+                            // One frame, two readers: the canvas paints it and Copy Image
+                            // captures it, so an image is the chart on screen by construction —
+                            // the log axis and the hidden series included, because both are
+                            // already settled into the frame by here.
+                            let frame = Rc::new(Frame {
                                 data,
                                 mark: mark_now,
                                 log_y: encoding.log_y && fallback.is_none(),
                                 dress: dress.clone(),
                             });
+                            snap = Some(ChartCapture::new(Rc::clone(&frame), log));
+                            let plot = ChartCanvas::new(frame);
                             // The banner sits *over* the plot, never instead of it: a crowded
                             // axis is still the user's data, drawn honestly.
                             rect()
@@ -279,11 +295,7 @@ impl Component for ChartView {
             .width(Size::fill())
             .height(Size::fill())
             .content(Content::Flex)
-            .child(ResultsToolbar::new(
-                self.tab,
-                self.find,
-                self.export.clone(),
-            ))
+            .child(ResultsToolbar::new(self.tab, self.find, self.export.clone()).copy_image(snap))
             .child(
                 rect()
                     .width(Size::fill())

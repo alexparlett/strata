@@ -6,6 +6,7 @@
 //! that a gap cuts a run and that an axis spans its data, and none of them can see that a
 //! legend has run off the pane or that a wedge is aliased.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use datafusion::arrow::datatypes::{DataType, Field};
@@ -159,12 +160,12 @@ fn body(data: ChartData, config: ChartConfig, schema: Vec<ColumnInfo>) -> impl I
                     rect()
                         .width(Size::fill())
                         .height(Size::flex(1.))
-                        .child(ChartCanvas::new(Frame {
+                        .child(ChartCanvas::new(Rc::new(Frame {
                             log_y: encoding.log_y && fallback.is_none(),
                             data,
                             mark,
                             dress,
-                        })),
+                        }))),
                 ),
         ))
 }

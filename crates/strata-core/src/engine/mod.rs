@@ -55,7 +55,9 @@ pub use catalog::{chart_role, column_info, TableMeta, TableSpec, ViewMeta};
 /// bounded by the same number rather than a second copy of it.
 pub use chart::MAX_BINS;
 /// The intercepted-statement vocabulary (ED-02): what an arm answers with, what the app folds.
-pub use ddl::{StatementOutcome, StatementReport, StoreEffect};
+/// [`drop_intent`](ddl::drop_intent) rides with them because a drop's wording is the engine's
+/// (ED-05) — the catalog's confirm says before the fact what the report says after it.
+pub use ddl::{drop_intent, StatementOutcome, StatementReport, StoreEffect};
 pub use query::purge_snapshot_root;
 
 use sql::{PolicyRefusal, Verdict};
@@ -258,11 +260,15 @@ struct Lifecycle {
     /// In-flight profile scans by entry identity ([`fold_ident`] of the name — tables and
     /// views share one namespace).
     profiles: HashMap<String, ProfileRun>,
-    /// How many exports are writing right now. A **count, not a map**: nothing addresses one
-    /// export — there is no cancel, no supersede and no per-export state to look up. All it
-    /// has to do is keep [`publish_inflight`](Engine::publish_inflight) true while a file is
-    /// half-written.
-    exports: usize,
+    /// How many pieces of **background** work are in flight — an export writing a file, a
+    /// drop deleting a table's data (ED-05). A **count, not a map**: nothing addresses one of
+    /// these — no cancel, no supersede, no per-item state to look up. All it has to do is keep
+    /// [`publish_inflight`](Engine::publish_inflight) true while something is half-done, so the
+    /// close-while-running confirm asks before the window takes the runtime away.
+    ///
+    /// Not per-kind, because the question every reader asks is the same one: is anything the
+    /// user would rather finish still going? A second counter would be a second answer to it.
+    background: usize,
     /// Snapshots a caller is **holding open**, and how many holds each has
     /// ([`Engine::pin_snapshot`]). A pinned snapshot survives its workspace re-running.
     pins: HashMap<SnapshotId, usize>,
@@ -321,13 +327,43 @@ pub struct Engine {
     /// open by whichever host owns it — see [`set_data_dir`](Engine::set_data_dir). `None` until
     /// then, and forever for an engine with no project behind it.
     data_root: Mutex<Option<PathBuf>>,
-    /// Which registered tables are **internal** — [`fold_ident`]ed names.
-    ///
-    /// Derived state, rebuilt by the same registration pass that builds everything else, and
-    /// deliberately **not a second catalog**: it holds names and nothing else, and answers
-    /// exactly one engine-side question — may a write statement target this provider (ED-05).
-    /// Everything the UI asks about the catalog is still the store's to answer.
-    internal: Mutex<HashSet<String>>,
+    /// Which registered tables are **internal** — see [`InternalTables`].
+    internal: InternalTables,
+}
+
+/// The engine-side set of tables whose data Strata owns — [`fold_ident`]ed names (ED-04).
+///
+/// Derived state, rebuilt by the same registration pass that builds everything else, and
+/// deliberately **not a second catalog**: it holds names and nothing else, and answers exactly
+/// one engine-side question — may a write statement target this provider (ED-05). Everything
+/// the UI asks about the catalog is still the store's to answer.
+///
+/// **Shared by handle rather than borrowed**, because the two statements that ask it —
+/// `INSERT`, which gates on it, and `DROP TABLE`, which takes the origin from it — run inside
+/// the task [`bookkeep`](Engine::bookkeep) spawned, and that task must not hold the engine
+/// itself: the engine's `Drop` is what aborts it, so a task keeping the engine alive would
+/// keep the abort from ever arriving. This holds names only, so it outlives an engine
+/// harmlessly.
+#[derive(Clone, Debug, Default)]
+pub struct InternalTables(Arc<Mutex<HashSet<String>>>);
+
+impl InternalTables {
+    /// Whether `name` is a table whose data Strata owns. `false` for an external table, a view,
+    /// and a name that is not registered at all.
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.lock().unwrap().contains(&fold_ident(name))
+    }
+
+    /// Record what a registration (or a drop) settled about a table's origin.
+    fn note(&self, name: &str, internal: bool) {
+        let mut set = self.0.lock().unwrap();
+        match internal {
+            true => set.insert(fold_ident(name)),
+            // Not `if internal` — a def that *was* internal and is now registered over the same
+            // name as an external one has to stop being one.
+            false => set.remove(&fold_ident(name)),
+        };
+    }
 }
 
 impl Engine {
@@ -370,7 +406,7 @@ impl Engine {
             inflight_flag: OnceLock::new(),
             functions,
             data_root: Mutex::default(),
-            internal: Mutex::default(),
+            internal: InternalTables::default(),
         }
     }
 
@@ -391,22 +427,16 @@ impl Engine {
     }
 
     /// Whether `name` is a table whose data Strata owns — the one question the internal-name set
-    /// exists to answer (see the field). `false` for an external table, a view, and a name that
-    /// is not registered at all.
+    /// exists to answer (see [`InternalTables`]). `false` for an external table, a view, and a
+    /// name that is not registered at all.
     pub fn is_internal(&self, name: &str) -> bool {
-        self.internal.lock().unwrap().contains(&fold_ident(name))
+        self.internal.contains(name)
     }
 
     /// Record what a registration settled about a table's origin. Called from every path that
     /// registers one, so the set is rebuilt by the pass rather than maintained beside it.
     fn note_origin(&self, name: &str, internal: bool) {
-        let mut set = self.internal.lock().unwrap();
-        match internal {
-            true => set.insert(fold_ident(name)),
-            // Not `if internal` — a def that *was* internal and is now registered over the same
-            // name as an external one has to stop being one.
-            false => set.remove(&fold_ident(name)),
-        };
+        self.internal.note(name, internal);
     }
 
     /// Mirror "this engine has work in flight" into `flag` for the rest of its life — the
@@ -446,7 +476,7 @@ impl Engine {
     fn publish_inflight(&self, lc: &Lifecycle) {
         if let Some(flag) = self.inflight_flag.get() {
             flag.store(
-                !lc.inflight.is_empty() || !lc.profiles.is_empty() || lc.exports > 0,
+                !lc.inflight.is_empty() || !lc.profiles.is_empty() || lc.background > 0,
                 Ordering::Relaxed,
             );
         }
@@ -460,18 +490,18 @@ impl Engine {
         self.lifecycle.lock().unwrap().inflight.contains_key(&ws)
     }
 
-    /// Whether anything **other than a workspace run** is in flight: a profile scan or an
-    /// export.
+    /// Whether anything **other than a workspace run** is in flight: a profile scan, an export,
+    /// or a drop deleting a table's data.
     ///
     /// The close confirm's gate is `watch_inflight`'s flag, which is runs ∪ profiles ∪
-    /// exports — so a surface deciding *whose* work is at stake cannot answer from
+    /// background — so a surface deciding *whose* work is at stake cannot answer from
     /// [`is_running`](Engine::is_running) alone. Enumerating the workspaces it knows about and
-    /// assuming the rest is idle is exactly the wrong answer: a scan or an export in flight is
-    /// the user's own work, and a dialog that named an agent instead would ask them to
+    /// assuming the rest is idle is exactly the wrong answer: a scan, an export or a drop in
+    /// flight is the user's own work, and a dialog that named an agent instead would ask them to
     /// destroy it under the wrong sentence.
     pub fn has_background_work(&self) -> bool {
         let lc = self.lifecycle.lock().unwrap();
-        !lc.profiles.is_empty() || lc.exports > 0
+        !lc.profiles.is_empty() || lc.background > 0
     }
 
     /// This engine's process-unique id — what makes a [`SnapshotId`] meaningful.
@@ -624,21 +654,87 @@ impl Engine {
             Verdict::Intercept(kind) => {
                 let ctx = self.ctx.clone();
                 let root = self.data_root.lock().unwrap().clone();
+                let internal = self.internal.clone();
                 let report = self
                     .bookkeep(ws, tag, "statement", async move {
-                        ddl::execute(&ctx, kind, stmt, sql, root).await
+                        ddl::execute(&ctx, kind, stmt, sql, root, internal).await
                     })
                     .await?;
-                // The engine learns from the returned value, exactly as the store does: an arm
-                // that registered a table says so in its effect, and that is where the origin
-                // comes from — never by asking DataFusion, which does not know.
-                if let Some(StoreEffect::TableUpserted { def, .. }) = &report.effect {
-                    self.note_origin(&def.name, def.origin.is_internal());
-                }
+                self.settle_effect(report.effect.as_ref());
                 Ok(RunOutcome::Statement(report))
             }
             Verdict::Refuse(blocked) => Err(blocked.editor_message()),
         }
+    }
+
+    /// What the **engine** has to learn from a statement's [`StoreEffect`], applied wherever one
+    /// is produced — [`run`](Engine::run)'s interception and [`drop_table`](Engine::drop_table)'s
+    /// direct call both.
+    ///
+    /// The engine learns from the returned value, exactly as the store does: an arm that
+    /// registered a table says so in its effect, and that is where the origin comes from — never
+    /// by asking DataFusion, which does not know. Held once rather than at each producer, so the
+    /// catalog-surface drop and the typed one cannot leave the engine in two different states.
+    /// Exhaustive on [`StoreEffect`] with no wildcard, for the reason [`ddl::execute`] is
+    /// exhaustive on `StmtKind`: an effect a later task adds must be a compile error here rather
+    /// than something the engine silently declines to learn from.
+    fn settle_effect(&self, effect: Option<&StoreEffect>) {
+        let Some(effect) = effect else { return };
+        match effect {
+            StoreEffect::TableUpserted { def, .. } => {
+                self.note_origin(&def.name, def.origin.is_internal())
+            }
+            // A dropped table is no longer a write target, and a profile still scanning it is
+            // now measuring files that may already be gone — cancelled here rather than inside
+            // the drop for the reason [`InternalTables`] gives: the drop runs in a task that
+            // cannot reach the lifecycle without holding the engine open.
+            StoreEffect::TableRemoved { name, .. } => {
+                self.cancel_profile(name);
+                self.note_origin(name, false);
+            }
+            // Nothing for the engine to learn. A view's own lifecycle is `create_view` /
+            // `drop_view`, which already cancel its scan; an `INSERT` moves data under a
+            // registration that is unchanged; and the function catalog is not a table.
+            StoreEffect::ViewUpserted { .. }
+            | StoreEffect::ViewRemoved { .. }
+            | StoreEffect::RescanTable { .. }
+            | StoreEffect::FunctionsChanged => {}
+        }
+    }
+
+    /// Drop the registered table `name` — **the one funnel both surfaces drop through** (ED-05).
+    ///
+    /// A typed `DROP TABLE` reaches the same body through [`run`](Engine::run)'s interception;
+    /// the catalog pane's confirm reaches it here, after it has taken the def out of the store
+    /// and written `project.json` (the store-first order `save_view` established — a drop the
+    /// project file never heard about comes back on the next open). Two gestures, one
+    /// implementation, because the difference between them is a *question asked of the user*,
+    /// not a difference in what the drop does: an internal table's data directory goes with it
+    /// on both paths, which is the whole reason this is not two calls.
+    ///
+    /// `if_exists` is the statement's clause. The pane passes `true`: the row it is dropping came
+    /// out of the store, and a def whose registration failed has no provider to deregister.
+    pub async fn drop_table(
+        &self,
+        name: String,
+        if_exists: bool,
+    ) -> Result<StatementOutcome, String> {
+        // **Background work, so the close confirm asks about it.** An internal table's data is
+        // one file per `INSERT` with no compaction, so a heavily written table is a directory of
+        // thousands of files and deleting it is not instant — long enough that a window closing
+        // over it would take the runtime away mid-delete. The user gets the same question a
+        // running export gets, and can let it finish.
+        let _deleting = BackgroundGuard::new(self);
+        let ctx = self.ctx.clone();
+        let root = self.data_root.lock().unwrap().clone();
+        let internal = self.internal.clone();
+        let outcome = self
+            .rt()
+            .spawn(async move { ddl::drop_table(&ctx, &root, &internal, &name, if_exists).await })
+            .await
+            .map_err(|e| format!("drop table task failed: {e}"))??;
+        self.settle_effect(outcome.effect.as_ref());
+        Ok(outcome)
     }
 
     /// Bracket `work` as workspace `ws`'s in-flight call — the lifecycle every dispatch that
@@ -1220,6 +1316,27 @@ impl Engine {
         meta
     }
 
+    /// What `name`'s row says **now** — its columns and free row count — read from the files
+    /// without re-registering the table (ED-05).
+    ///
+    /// The answer an `INSERT` needs, and the reason it is not [`register`](Engine::register):
+    /// re-registering deregisters the provider and builds a fresh one, and **that** is what
+    /// leaves every view above it holding a stale `Arc` (D10/D11). Views survive it only
+    /// because the caller then re-creates them. An append cannot make them stale — the sink
+    /// schema-checks before it writes, so the shape a view captured is the shape that is still
+    /// there — so re-registering after one would break the views and repair them again for
+    /// nothing, and re-infer a schema that could not have moved on the way.
+    ///
+    /// The count is still *read*, never added up from what a statement claimed: this re-LISTs
+    /// the sources and totals the footers, of which only the appended file's is uncached.
+    pub async fn table_meta(&self, name: String) -> Result<TableMeta, String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { catalog::table_meta(&ctx, &name).await })
+            .await
+            .map_err(|e| format!("table meta task failed: {e}"))?
+    }
+
     /// The Hive partition keys under `paths`, outermost first — what the Configure window's
     /// Hive section offers (P4-11). Listed through the session's object store, so it answers for
     /// a bucket as readily as for a local folder.
@@ -1347,15 +1464,49 @@ impl Engine {
     }
 }
 
-/// One in-flight export's bookkeeping — the count the close confirm reads, and a hold on the
-/// snapshot being written — released together by `Drop`.
+/// One piece of **background** engine work in flight — an export writing a file, a drop
+/// deleting a table's data. Holding one is what keeps the close-while-running flag true
+/// (`Lifecycle::background`), so the window asks before it takes the runtime away.
 ///
-/// A guard rather than a matching pair of statements because [`Engine::export`] awaits, and a
-/// dropped future must not be able to leak either. Borrows the engine, so it cannot outlive the
-/// call; [`SnapshotPin`] is the owned variant, for a holder that outlives one method.
-struct ExportGuard<'a> {
+/// A guard rather than a matching pair of statements because every holder **awaits**, and a
+/// dropped future must not be able to leak the count: a leaked increment would make every later
+/// window close claim work was running for the rest of the engine's life. Borrows the engine, so
+/// it cannot outlive the call.
+struct BackgroundGuard<'a> {
     engine: &'a Engine,
+}
+
+impl<'a> BackgroundGuard<'a> {
+    /// Constructing the guard *is* the acquire, so there is no way to hold one without having
+    /// taken what it releases.
+    fn new(engine: &'a Engine) -> Self {
+        let mut lc = engine.lifecycle.lock().unwrap();
+        lc.background += 1;
+        engine.publish_inflight(&lc);
+        Self { engine }
+    }
+}
+
+impl Drop for BackgroundGuard<'_> {
+    fn drop(&mut self) {
+        let mut lc = self.engine.lifecycle.lock().unwrap();
+        lc.background = lc.background.saturating_sub(1);
+        self.engine.publish_inflight(&lc);
+    }
+}
+
+/// One in-flight export's bookkeeping — [`BackgroundGuard`]'s count, plus a hold on the snapshot
+/// being written — released together by `Drop`.
+///
+/// The export half is the pin: a write must read the snapshot it was opened on even if the tab
+/// behind it re-runs. [`SnapshotPin`] is the owned variant, for a holder that outlives one
+/// method.
+struct ExportGuard<'a> {
     snapshot: SnapshotId,
+    /// The engine rides here rather than beside it — one copy of the reference, so a later edit
+    /// cannot have the pin and the count answer to two of them. Dropped after this struct's own
+    /// `Drop` body, which is the order the lock wants (see there).
+    background: BackgroundGuard<'a>,
 }
 
 impl<'a> ExportGuard<'a> {
@@ -1363,25 +1514,18 @@ impl<'a> ExportGuard<'a> {
     /// one without having taken what it releases.
     fn new(engine: &'a Engine, snapshot: SnapshotId) -> Self {
         engine.acquire_pin(snapshot);
-        {
-            let mut lc = engine.lifecycle.lock().unwrap();
-            lc.exports += 1;
-            engine.publish_inflight(&lc);
+        Self {
+            snapshot,
+            background: BackgroundGuard::new(engine),
         }
-        Self { engine, snapshot }
     }
 }
 
 impl Drop for ExportGuard<'_> {
     fn drop(&mut self) {
-        {
-            let mut lc = self.engine.lifecycle.lock().unwrap();
-            lc.exports = lc.exports.saturating_sub(1);
-            self.engine.publish_inflight(&lc);
-        }
-        // Outside the lock above: `release_pin` takes it itself, and this mutex is not
-        // reentrant.
-        self.engine.release_pin(self.snapshot);
+        // `release_pin` takes the lifecycle lock itself, and this mutex is not reentrant — so it
+        // runs here, before the field's own `Drop` takes the lock again.
+        self.background.engine.release_pin(self.snapshot);
     }
 }
 
@@ -2484,6 +2628,42 @@ mod tests {
         assert!(settled.is_err(), "the cancel landed");
         assert!(!flag.load(Ordering::Relaxed), "cleared once it settled");
         assert!(!eng.is_running(ws));
+    }
+
+    /// **Background work raises the same flag a run does** — the close confirm's whole gate is
+    /// that one `AtomicBool` (`close::CloseHook::running`), so anything the user would rather
+    /// finish has to be counted in it, not merely runnable.
+    ///
+    /// Asserted on the guard rather than by racing a real drop or export: the guard *is* the
+    /// mechanism (`Engine::drop_table` and `Engine::export` each hold one for the length of
+    /// their await), the count is what a leaked increment would strand true for the engine's
+    /// whole life, and a test that had to make a delete slow enough to observe would be timing
+    /// against a filesystem.
+    #[test]
+    fn background_work_raises_the_close_confirms_flag_and_releases_it() {
+        let eng = Engine::new(Default::default());
+        let flag = Arc::new(AtomicBool::new(false));
+        eng.watch_inflight(flag.clone());
+        assert!(!flag.load(Ordering::Relaxed), "seeded from an idle engine");
+        assert!(!eng.has_background_work());
+
+        {
+            let _first = BackgroundGuard::new(&eng);
+            assert!(flag.load(Ordering::Relaxed), "the window would now ask");
+            assert!(eng.has_background_work());
+            // Two at once — an export writing while a drop deletes — so the release is a
+            // decrement and not a reset. A `bool` here would have the first to finish tell the
+            // window the second was done too.
+            let second = BackgroundGuard::new(&eng);
+            drop(second);
+            assert!(
+                flag.load(Ordering::Relaxed),
+                "still flagged while the other is going"
+            );
+        }
+
+        assert!(!flag.load(Ordering::Relaxed), "cleared once both released");
+        assert!(!eng.has_background_work());
     }
 
     #[tokio::test]

@@ -410,17 +410,52 @@ impl ProjectState {
     /// (P3-03), and a table-config save (P4-11) all land here — which is why it is also where
     /// the **profile is invalidated** (P3-09): a landing answer means the files may have moved
     /// under the row, and that is exactly when a cached full scan becomes a lie.
+    /// Matched with [`same_name`](Self::same_name) for the reason
+    /// [`reload_table`](Self::reload_table) is: an answer does not always arrive under the def's
+    /// own spelling. An `INSERT`'s row-count refresh names the table the *planner* resolved
+    /// (ED-05), which folds an unquoted identifier while the def keeps whatever was typed.
     pub fn table_registered(&mut self, name: &str, meta: TableMeta) {
-        if let Some(r) = self.tables.iter_mut().find(|r| r.def.name == name) {
+        if let Some(r) = self
+            .tables
+            .iter_mut()
+            .find(|r| Self::same_name(&r.def.name, name))
+        {
             r.reg = Reg::Ready(meta);
             r.profile = None;
         }
         self.invalidate_readers(name);
     }
 
+    /// Land a **re-read** of a table's own facts — [`table_registered`](Self::table_registered)
+    /// for an answer that did not come from a registration (ED-05's `INSERT`).
+    ///
+    /// Skipped when a scan pass has claimed the row, which `reset_rows` says by putting it back
+    /// to `Loading`: that pass re-registers against whatever is on disk *now* and will land its
+    /// own answer, and a re-read that started earlier would otherwise overwrite it with the state
+    /// from before — silently undoing a re-scan the user asked for. The check and the write share
+    /// one write guard, which the pass also has to take, so they cannot interleave.
+    ///
+    /// Two re-reads racing each other still land last-writer-wins, and the loser can be the older
+    /// answer. That is a count one write behind until the next statement, refresh or open — the
+    /// same staleness the request-dropping path had before it, self-correcting, and not worth a
+    /// per-row sequence number.
+    pub fn table_reread(&mut self, name: &str, meta: TableMeta) {
+        let claimed = self
+            .tables
+            .iter()
+            .any(|r| Self::same_name(&r.def.name, name) && matches!(r.reg, Reg::Loading));
+        if !claimed {
+            self.table_registered(name, meta);
+        }
+    }
+
     /// Land a failed table registration on its row.
     pub fn table_failed(&mut self, name: &str, error: String) {
-        if let Some(r) = self.tables.iter_mut().find(|r| r.def.name == name) {
+        if let Some(r) = self
+            .tables
+            .iter_mut()
+            .find(|r| Self::same_name(&r.def.name, name))
+        {
             r.reg = Reg::Failed(error);
             r.profile = None;
         }
@@ -788,8 +823,16 @@ impl ProjectState {
     /// Reset **one** table row to `Loading` — the start of a row's own Refresh (P3-06). Same
     /// reasoning as [`reload_tables`](Self::reload_tables), scoped to the row the user asked
     /// about; every other row keeps the verdict it already has.
+    ///
+    /// Case-insensitively, like [`remove_table`](Self::remove_table): the name reaching a re-scan
+    /// is not always a def's own spelling, because a request can come from the engine, which
+    /// answers under the planner's identity (see [`table_registered`](Self::table_registered)).
     pub fn reload_table(&mut self, name: &str) {
-        if let Some(t) = self.tables.iter_mut().find(|t| t.def.name == name) {
+        if let Some(t) = self
+            .tables
+            .iter_mut()
+            .find(|t| Self::same_name(&t.def.name, name))
+        {
             t.reg = Reg::Loading;
         }
     }
@@ -1146,6 +1189,37 @@ mod tests {
         assert_eq!(p.tables[1].reg.ready().and_then(|m| m.rows), Some(3));
         // Its neighbour is still awaiting its own answer — rows land one at a time.
         assert!(matches!(p.tables[0].reg, Reg::Loading));
+    }
+
+    /// **A re-read never overwrites a scan pass's answer** (ED-05). An `INSERT`'s row-count
+    /// re-read runs outside the scan driver's claim, so a `↻` pressed while it is in flight would
+    /// otherwise be silently undone: the pass re-registers against what is on disk now, and the
+    /// older read lands on top of it. A row back at `Loading` is the pass saying it has claimed
+    /// this row, and that is what the re-read stands down for.
+    #[test]
+    fn a_re_read_stands_down_for_a_scan_that_claimed_the_row() {
+        let mut p = settled();
+        let rows = |p: &ProjectState, at: usize| p.tables[at].reg.ready().and_then(|m| m.rows);
+        let meta = |n| TableMeta {
+            columns: Vec::new(),
+            rows: Some(n),
+        };
+
+        // Nothing has claimed it: the re-read lands, exactly as a registration would.
+        p.table_reread("users", meta(9));
+        assert_eq!(rows(&p, 1), Some(9));
+
+        // A pass claims the row, and now the re-read that was already in flight must not.
+        p.reload_table("users");
+        p.table_reread("users", meta(1));
+        assert!(
+            matches!(p.tables[1].reg, Reg::Loading),
+            "the row is still the pass's to answer"
+        );
+
+        // …and the pass's own answer lands normally.
+        p.table_registered("users", meta(12));
+        assert_eq!(rows(&p, 1), Some(12));
     }
 
     // --- validity (P3-04) --------------------------------------------------------------

@@ -669,11 +669,14 @@ src/apps/project/                the project window (Valin-shaped)
                                  data (sorted **then** hidden); strip.rs the mark picker, the
                                  X/Y/Series encoders, the bin count, the sort + scale toggles
                                  and the pressable legend; paint.rs the frame + the `canvas`
-                                 (slot-peeked, redraw requested) + the crosshair, ruled through the
-                                 hovered mark so it costs no repaint;
-                                 axis.rs the plotters `Ranged`s — the category coord and the
-                                 linear-or-log `ValueCoord` — plus nice max, decade span and
-                                 abbreviated tick; marks.rs a render fn per mark;
+                                 (slot-peeked, redraw requested) + the crosshair, ruled through
+                                 the hovered mark so it costs no repaint; axis.rs the plotters
+                                 `Ranged`s — the category coord and the linear-or-log
+                                 `ValueCoord` — plus nice max, decade span and abbreviated tick;
+                                 marks.rs a render fn per mark plus the **one** draw body (a
+                                 canvas + a `FontCollection`, returning its hit regions and the
+                                 plot frame); capture.rs Copy Image — the same frame through
+                                 that same body onto an offscreen surface, then the clipboard;
                                  preview.rs the headless PNG harness (the plan view's), because
                                  a chart's correctness is *visual*
         explain_plan/            the EXPLAIN plan view (P2-05, EXPLAIN_PLAN_SPEC v3): mod.rs the

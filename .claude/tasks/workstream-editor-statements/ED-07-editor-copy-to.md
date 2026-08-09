@@ -40,7 +40,8 @@ report it rides: `docs/STATEMENTS_SPEC.md` §2.
    route through ED-08's overlay if it lands first — coordinate, don't duplicate).
 5. Update the COPY invariant text (AGENTS.md §2 + `docs/reference/INVARIANTS.md`) — editor COPY
    dispatches natively behind the pre-flight NULL gate; the Export window is unchanged — and move
-   COPY out of `docs/STATEMENTS_SPEC.md` §6.2, documenting the built behaviour there.
+   COPY out of `docs/STATEMENTS_SPEC.md`'s *Not yet implemented* list, documenting the built
+   behaviour there.
    `Blocked::CopyTo` and its message stay verbatim
    — the agent surface still renders them; the editor path simply no longer reaches them.
 

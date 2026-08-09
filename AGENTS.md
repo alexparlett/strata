@@ -77,10 +77,40 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   never a second catalog), does a drop delete data, can Configure edit it (no: the item is
   *absent*). The def travels and the data does not, and the failed row says so in its own words.
   The spool is the **parsed plan**, never re-rendered SQL.
+- **A table is dropped in one place, on both origins, and a confirm is a gesture in front of that
+  place — never a second implementation of it.** `ddl::tables::drop_table` resolves the target,
+  deregisters, deletes `.strata/tables/<slug>/` **only** for an internal def, and names the
+  dependent views without cascading; the catalog pane reaches it through `Engine::drop_table` after
+  its store-first write, a typed `DROP TABLE` through the router. The pane's own `deregister`
+  orphaned an internal table's data forever. The two wordings (`ddl::drop_intent` before,
+  the report after) are the engine's, so the card cannot promise what the report then contradicts.
+- **A table's data is discarded by rename, and the drop that does it is background work.** The
+  directory moves to a `.tmp-…` sibling and is only then walked (`ddl::tables::discard`), so an
+  interruption leaves what `tidy_strata_dir` already sweeps rather than a half-emptied directory
+  under a live table name; the rename is the operation and the removal is housekeeping, so a
+  failure to finish it is logged, never reported as a failed drop. And because one `INSERT` is one
+  file with no compaction, that delete is not instant — so it holds a `BackgroundGuard`
+  (`Lifecycle::background`, shared with export) and the close confirm asks before a window takes
+  the runtime away mid-delete.
+- **A write statement only ever reaches files Strata owns, and the gate is the *parsed* target.**
+  `INSERT` asks `Engine::is_internal` about the target its plan names and otherwise runs
+  DataFusion's own INSERT path — one appended IPC file per statement, no compaction, and the
+  schema check is DataFusion's. The plan that was judged is the plan that runs; `Blocked` carries
+  every refusal's wording, including the two only a plan can name.
+- **An append re-reads the table's facts; it does not re-register it, and it leaves the views
+  alone.** Re-registering replaces the provider, and *that* is what strands the `Arc` a view
+  captured — which is why a table Refresh re-creates them. An `INSERT` cannot change the shape a
+  view captured (the sink schema-checks first) and the old provider re-LISTs per scan anyway, so
+  `refresh_table_rows` → `Engine::table_meta` → `table_registered` is the whole fold: no
+  re-inference, no view churn, no epoch bump, no `Loading` flash. Still read from the files,
+  never added up store-side.
 - **A re-scan means "list the sources again", so this engine runs no list-files cache.** DF 54
   turns one on by default with an infinite TTL, which silently serves ↻, Configure's re-inference
   and `CREATE OR REPLACE` the previous file set. `ENGINE_KEYS` defaults it to `0` and
-  `build_runtime` applies that before any override.
+  `build_runtime` applies that before any override. **The per-file statistics cache is the
+  opposite call** — keyed per object, invalidated on size/mtime, so it spares only an unchanged
+  file — and `register_external` must hand it over by hand (`ListingTable::with_cache`), as
+  `register_listing_table` already does for snapshots.
 - **A reader that outlives one Run pins the snapshot it reads** (`Engine::pin_snapshot`, RAII).
   Never a staleness check or warning instead.
 - **The snapshot is Arrow IPC, so a result's type survives it.** Parquet cannot write a union at
@@ -121,6 +151,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   different wherever a stride is, because a day-wide `date_bin` over a `Time` column is refused;
   and a chart read's cache identity is `(snapshot, query, **display config**)`, because
   axis labels render through `datafusion.format.*`.
+- **A chart image is the chart, so the capture and the paint are one draw body.** Copy Image
+  renders the canvas's own `Rc<Frame>` through the same `marks::draw` (a canvas + a
+  `FontCollection`, never a `CanvasContext`), which **returns** its hit regions so a capture
+  cannot overwrite the plot's. No paint pass: the font collection is a root context. Fixed
+  1600x900 at 2x, background filled first, read back as unpremultiplied RGBA, nothing on disk.
+  The fork's clipboard grew images rather than the app growing a save-to-PNG stopgap, **inside
+  its existing shape**: the integration still provides a `Box<dyn ClipboardProvider>` into the
+  root context. The trait is the fork's own now and covers images; copypasta was **replaced** by
+  arboard rather than run beside it, because text and images are one clipboard.
 - **A chart refusal names its fix in prose, and V1 puts no control behind it.** The
   *Aggregate in SQL* press was built and cut: sound mechanism, wrong surface (no tool puts it
   among the encoders), and it stood in for the chart-side aggregation actually worth building.
@@ -151,7 +190,8 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **The crosshair rules through the hovered mark, and its pieces are absolute siblings of the
   plot.** Freya repaints every node every frame and a canvas re-runs `on_render` each pass, so a
   pointer-tracked crosshair replots the whole chart per mouse sample; riding on `hover` is free.
-  The value is carried on the `Hit`, never inverted back out of the pixel row.
+  The value is carried on the `Hit`, never inverted back out of the pixel row, and the plot
+  frame comes back in `draw`'s own answer rather than a second slot.
 - **A snapshot read has no order of its own; order is the ordinal column.** Reads that need order
   `ORDER BY __strata_ord` (unsorted reads entire, user sorts as the tie-break) and every reader
   projects it away — export must never write it. Measured: above 10 MB a bare `LIMIT/OFFSET` read
