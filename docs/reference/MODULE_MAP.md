@@ -558,7 +558,7 @@ src/apps/project/                the project window (Valin-shaped)
                                  this slot can mean something. `Loading` states nothing until the
                                  wait outlasts `PROGRESS_HOLD`, then spins, holding the last
                                  settled verdict across the gap.
-                                 The row is **not** clickable (spec §1); Edit and Forget are the
+                                 The row is **not** clickable (the doc's "The Connections pane" section); Edit and Forget are the
                                  ⋮ / right-click menu, and Forget sets the shared remove
                                  confirm's `DropTarget::Connection(url)` — the dialog owns the
                                  store mutation, the persist and `Engine::disconnect`. Add and
@@ -696,7 +696,7 @@ Everything frontend-agnostic about agent access (`docs/AGENT_ACCESS_SPEC.md`). T
 ```
 src/lib.rs                       the crate charter + the seam diagram: rmcp server / stdio host /
                                  chat loop → `StrataTools` (the ten tools) → `Host`
-src/tools.rs                     the **vocabulary** — the ten read-only tools (spec §5) as the
+src/tools.rs                     the **vocabulary** — the ten read-only tools (the doc's "The ten tools" section) as the
                                  rmcp `ServerHandler`, deliberately transport-free. The policy
                                  gate runs here, *before* dispatch; `run` never rewrites SQL and
                                  reports a stop as a status, not a fault
@@ -708,7 +708,7 @@ src/wire.rs                      the **wire shapes** — flat JSON in/out, proje
                                  types by the `from_*` fns so no tool assembles a response by
                                  hand. A cell is `null` or a string (the engine's own
                                  `CellFormat` text, the same the grid shows)
-src/error.rs                     the error taxonomy (spec §7) — every fault typed once, rendered
+src/error.rs                     the error taxonomy (the doc's "Error taxonomy" section) — every fault typed once, rendered
                                  once, as `isError` tool results. No `Stopped` variant (a stop
                                  is an outcome shape, not a fault) and no `Unauthorized` (a bad
                                  token is HTTP 401 before any tool runs)
