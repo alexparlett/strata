@@ -188,3 +188,155 @@ fn mutated(to: Settle, chan: ProjChan, write: impl FnOnce(&mut ProjectState)) ->
     catalog_settled(to.catalog);
     persisted
 }
+
+/// Statement-fold tests — the arm that has no def to write and therefore no store mutation to
+/// assert on: an `INSERT`'s row-count refresh, which leaves the fold, goes to the engine and
+/// comes back on a task.
+///
+/// Driven over a **real** engine and a real project folder, because that round trip is the whole
+/// deliverable: every link either side of it is unit-tested (`Engine::table_meta` in
+/// `strata-core`, `ProjectState::table_reread` next door), and what nothing else covers is that
+/// the arm dispatches at all and its spawned task lands.
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    use freya::prelude::*;
+    use freya::radio::RadioStation;
+    use freya_testing::TestingRunner;
+    use futures::executor::block_on;
+    use strata_core::engine::{RunOutcome, RunTag, StoreEffect, TableMeta, WsId};
+    use strata_core::project::{save_defs, ProjectDefs};
+    use strata_core::theme::load;
+
+    use crate::apps::project::state::{CatalogState, Log, PersistFaults, ScanRequest};
+    use crate::theme::strata_theme;
+
+    use super::*;
+
+    /// `use_statement_settle`'s body with the query replaced by a report handed in — the fold is
+    /// what is under test, and a real `UseQuery` would only add the press that produced one.
+    #[derive(PartialEq)]
+    struct Fold {
+        report: StatementReport,
+    }
+
+    impl Component for Fold {
+        fn render(&self) -> impl IntoElement {
+            let to = Settle {
+                project: use_radio_station::<ProjectState, ProjChan>(),
+                catalog: use_catalog(),
+                rescan: use_catalog_rescan(),
+                report: use_report(),
+            };
+            let engine = use_consume::<EngineCtx>();
+            let report = self.report.clone();
+            use_hook(move || settle(to, &engine, &report));
+            rect()
+        }
+    }
+
+    /// Run one statement on `engine` and take its report.
+    fn statement(engine: &EngineCtx, sql: &str) -> StatementReport {
+        match block_on(engine.run(WsId(1), RunTag(1), sql.into(), 10)).expect("ran") {
+            RunOutcome::Statement(report) => report,
+            RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
+        }
+    }
+
+    /// **An `INSERT`'s row count reaches the sidebar.** The arm leaves the fold entirely — no def
+    /// to write, no channel to mutate — so nothing about the store proves it ran; the row only
+    /// moves if `refresh_table_rows` dispatched, its `spawn_forever` was polled, the engine
+    /// answered and `table_reread` landed it.
+    ///
+    /// Before ED-05 this was a scan-pass request, which the driver serialises and a store
+    /// assertion could see. It is now a bare engine round trip, which is exactly why it needs a
+    /// test that waits for one.
+    #[test]
+    fn an_inserts_row_count_reaches_the_row() {
+        let root = std::env::temp_dir().join(format!("strata-settle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        save_defs(&root, &ProjectDefs::default()).expect("scaffolded");
+
+        let engine = EngineCtx::default();
+        engine.set_data_dir(&root);
+        let created = statement(
+            &engine,
+            "CREATE TABLE t AS SELECT * FROM (VALUES (1)) AS v(n)",
+        );
+        let Some(StoreEffect::TableUpserted { def, .. }) = created.effect.clone() else {
+            panic!("{:?}", created.effect);
+        };
+        // The files now hold two rows; the store still says one, exactly as the sidebar does
+        // between the press and the answer.
+        let inserted = statement(&engine, "INSERT INTO t VALUES (2)");
+        assert_eq!(inserted.count, Some(1), "the statement itself landed");
+
+        let (mut runner, project) = {
+            let engine = engine.clone();
+            let root = root.clone();
+            TestingRunner::new(
+                move || {
+                    use_init_theme(|| strata_theme(&load("midnight")));
+                    let report = use_consume::<State<StatementReport>>();
+                    rect()
+                        .expanded()
+                        .child(Fold {
+                            report: report.read().clone(),
+                        })
+                        .into_element()
+                },
+                (400., 300.).into(),
+                move |r| {
+                    r.provide_root_context(|| engine.clone());
+                    r.provide_root_context(|| State::create(CatalogState::Settled(0)));
+                    r.provide_root_context(|| State::create(ScanRequest::default()));
+                    r.provide_root_context(|| State::create(Log::default()));
+                    r.provide_root_context(|| State::create(PersistFaults::default()));
+                    r.provide_root_context(|| State::create(inserted.clone()));
+                    r.provide_root_context(|| {
+                        let mut p = ProjectState::from_defs(
+                            ProjectDefs {
+                                tables: vec![def.clone()],
+                                ..Default::default()
+                            },
+                            root.clone(),
+                        );
+                        p.table_registered(
+                            &def.name,
+                            TableMeta {
+                                columns: Vec::new(),
+                                rows: Some(1),
+                            },
+                        );
+                        RadioStation::<ProjectState, ProjChan>::create(p)
+                    })
+                },
+                1.,
+            )
+        };
+
+        let rows = |p: &RadioStation<ProjectState, ProjChan>| {
+            p.peek().tables[0].reg.ready().and_then(|m| m.rows)
+        };
+        assert_eq!(rows(&project), Some(1), "the row before the fold answers");
+
+        // The engine round trip lands a wake later, so this waits for it rather than assuming
+        // one tick is enough.
+        for _ in 0..200 {
+            runner.sync_and_update();
+            if rows(&project) == Some(2) {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            rows(&project),
+            Some(2),
+            "the appended row reached the sidebar"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
