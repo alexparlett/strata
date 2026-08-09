@@ -284,6 +284,24 @@ const READOUT_OFFSET: f32 = 14.;
 const HAIRLINE: f32 = 1.;
 const CROSS_READOUT_GAP: f32 = 4.;
 
+/// Where the crosshair's value label sits for a rule at row `y`: above it, or **below it** when
+/// above would leave the plot.
+///
+/// The same flip the hover readout makes, and for a commoner case than it sounds. A value axis
+/// ends on a nice number ([`nice_max`](super::axis::nice_max)), and when the data's own maximum
+/// is *already* one — 10, 20, 100, 1000, or any percentage column topping out at 100 — the
+/// tallest mark sits exactly on `frame.top`. Its label would then be placed a gap and a line
+/// above the plot and clipped away by the pane, on precisely the mark a reader reaches for
+/// first.
+fn label_top(y: f32, label_height: f32, frame: &PlotArea) -> f32 {
+    let above = y - CROSS_READOUT_GAP - label_height;
+    if above < frame.top {
+        y + CROSS_READOUT_GAP
+    } else {
+        above
+    }
+}
+
 /// Squared distance from a mark's anchor to the pointer — the tie-break when hit regions
 /// overlap. Squared because only the ordering is wanted, and `total_cmp` needs a total order.
 fn reach((ax, ay): (f32, f32), x: f32, y: f32) -> f32 {
@@ -443,9 +461,7 @@ impl Component for ChartCanvas {
                         .position(
                             Position::new_absolute()
                                 .left(frame.left + CROSS_READOUT_GAP)
-                                // Above the rule, so the label names the row it sits on rather
-                                // than covering it.
-                                .top(y - CROSS_READOUT_GAP - label_height),
+                                .top(label_top(y, label_height, &frame)),
                         )
                         .background(dress.background)
                         .child(Meta::new(readout(value)).color(dress.tick))
@@ -671,6 +687,76 @@ mod tests {
                 "every wedge of {shares:?} must answer somewhere; named {named:?}"
             );
         }
+    }
+
+    /// **The tallest mark's label stays in the plot.** A value axis ends on a nice number, so
+    /// when the data's own maximum is already one — 20 here, and every percentage column
+    /// topping out at 100 — the tallest mark sits *exactly* on the frame's top edge. Placed
+    /// unconditionally above its rule the label then lands a gap and a line-height off the top
+    /// of the plot, where the pane's `Overflow::Clip` cuts it away: no readout at all, on the
+    /// one mark a reader reaches for first.
+    #[test]
+    fn the_crosshair_label_flips_below_its_rule_rather_than_off_the_top_of_the_plot() {
+        // The unit the placement turns on, checked directly — the layout assertion below can
+        // only fail once, and this says which way it failed.
+        let frame = PlotArea {
+            left: 56.,
+            top: 12.,
+            right: 700.,
+            bottom: 560.,
+        };
+        assert_eq!(label_top(300., 10., &frame), 286., "room above: above");
+        assert_eq!(label_top(12., 10., &frame), 16., "on the top edge: below");
+        assert_eq!(label_top(20., 10., &frame), 24., "not quite room: below");
+
+        // …and over a real layout, hovering the tallest bin of a histogram whose counts top
+        // out at exactly 20.
+        let app = || {
+            use_init_theme(|| strata_theme(&load("midnight")));
+            let theme = get_theme!(
+                &None::<super::super::ChartThemePartial>,
+                super::super::ChartThemePreference,
+                "chart"
+            );
+            rect()
+                .width(Size::fill())
+                .height(Size::fill())
+                .child(ChartCanvas::new(Rc::new(Frame {
+                    data: ChartData::Bins(
+                        [4u64, 20, 7, 11]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, count)| ChartBin {
+                                lo: i as f64,
+                                hi: (i + 1) as f64,
+                                count,
+                            })
+                            .collect(),
+                    ),
+                    mark: ChartMark::Histogram,
+                    log_y: false,
+                    dress: Dress::new(&theme, &scale()),
+                })))
+        };
+        let (mut runner, _) = TestingRunner::new(app, (800., 600.).into(), |_| {}, 1.);
+        runner.sync_and_update();
+        runner.render();
+        // Inside the second bin — the tallest, whose top edge *is* the axis top.
+        runner.move_cursor((300., 400.));
+        runner.sync_and_update();
+        runner.sync_and_update();
+
+        let label = runner
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|l| l.text == "20")
+                    .map(|_| node.layout().area)
+            })
+            .expect("no crosshair readout for the tallest bin");
+        assert!(
+            label.min_y() >= 0.,
+            "the readout was placed off the top of the plot: {label:?}"
+        );
     }
 
     /// Outside the circle is nobody's wedge, however the arc is described.

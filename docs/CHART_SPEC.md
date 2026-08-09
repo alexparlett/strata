@@ -352,8 +352,11 @@ Each `Hit` carries the mark's own point **and its value**, so the readout is nev
 out of the pixel row — that round trip put `11.01` under a tooltip reading `11`. `PlotArea`
 (plotters' own `plotting_area().get_pixel_range()`) comes back **with** the hit regions, in
 `draw`'s own answer rather than a second slot, only so the rules span the plot rather than the
-pane; a pie answers none and has no crosshair. The three pieces
-are absolute siblings of the plot, not children of a wrapper: an absolutely positioned node
+pane; a pie answers none and has no crosshair. The value label **flips below its rule** where
+sitting above it would leave the plot — the same flip the hover card makes, and a commoner case
+than it sounds: a value axis ends on a nice number, so a maximum that is already one (any
+percentage topping out at 100) puts the tallest mark exactly on the frame's top edge. The three
+pieces are absolute siblings of the plot, not children of a wrapper: an absolutely positioned node
 resolves against its parent's area, and a wrapper here is a *stacked* sibling of a fill-height plot
 — measured, its rule landed a whole pane below the pointer.
 

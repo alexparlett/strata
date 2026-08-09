@@ -300,7 +300,9 @@ Things that must not regress. Each was fought for once already.
     the pixel row** — that round trip put `11.01` under a tooltip reading `11` — and `PlotArea`
     (plotters' own `plotting_area().get_pixel_range()`) comes back **with** the hit regions, in
     `draw`'s own answer rather than a second slot, only so the rules span the plot rather than
-    the pane — the capture gets one too and drops it, which is the point of returning both. The three pieces hang off the canvas root,
+    the pane — the capture gets one too and drops it, which is the point of returning both. The value label
+    **flips below its rule** rather than off the top of the plot, because a maximum that is
+    already a nice number puts the tallest mark exactly on `frame.top`. The three pieces hang off the canvas root,
     not off a wrapper: an absolutely positioned node resolves against its parent's area, and a
     wrapper would be a *stacked* sibling of a fill-height plot — measured, its horizontal rule
     came out one whole pane below the pointer.
