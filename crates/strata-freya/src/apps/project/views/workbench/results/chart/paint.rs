@@ -204,9 +204,13 @@ impl Hit {
     }
 }
 
-/// Where a paint leaves what it drew, for the pointer to read back. A plain `RefCell` and not
-/// a `State`: nothing renders from it, so a write must not wake anything.
-pub type Hits = Rc<RefCell<Vec<Hit>>>;
+/// Where the **live** paint leaves what it drew, for the pointer to read back. A plain `RefCell`
+/// and not a `State`: nothing renders from it, so a write must not wake anything.
+///
+/// The visible plot's alone. `marks::draw` answers with its regions rather than writing them
+/// here, so the offscreen capture behind Copy Image cannot leave the pointer testing against a
+/// chart nobody is looking at.
+type Hits = Rc<RefCell<Vec<Hit>>>;
 
 /// Which mark the pointer is over, and where on it to say so.
 ///
@@ -232,11 +236,13 @@ fn reach((ax, ay): (f32, f32), x: f32, y: f32) -> f32 {
 /// names whatever mark the pointer is over.
 #[derive(PartialEq)]
 pub struct ChartCanvas {
-    frame: Frame,
+    /// Shared with the toolbar's Copy Image, which captures the very frame this paints
+    /// ([`super::capture`]) — one value, so the two cannot describe different charts.
+    frame: Rc<Frame>,
 }
 
 impl ChartCanvas {
-    pub fn new(frame: Frame) -> Self {
+    pub fn new(frame: Rc<Frame>) -> Self {
         Self { frame }
     }
 }
@@ -244,14 +250,12 @@ impl ChartCanvas {
 impl Component for ChartCanvas {
     fn render(&self) -> impl IntoElement {
         let platform = use_hook(Platform::get);
-        // Seeded, and cloned **once**. A `use_state` initialiser only ever runs on the first
-        // render, but the expression building its seed is evaluated on every one — so this is
-        // one deep copy of the read per render, and it used to be two. It is not zero on
-        // purpose: an empty slot filled by the effect below would leave the first paint with
-        // nothing to draw, and the paint is what records the hit regions the pointer reads, so
-        // a chart would not answer a hover until something else asked it to repaint.
+        // Seeded rather than left empty: an empty slot filled by the effect below would leave
+        // the first paint with nothing to draw, and the paint is what records the hit regions
+        // the pointer reads, so a chart would not answer a hover until something else asked it
+        // to repaint. The seed is a handle, so it costs a refcount and not a copy of the read.
         let mut slot = use_state({
-            let seed = Rc::new(self.frame.clone());
+            let seed = Rc::clone(&self.frame);
             move || seed
         });
 
@@ -263,7 +267,7 @@ impl Component for ChartCanvas {
         // `use_reactive` under the hood, because a `use_side_effect` closure is built once and
         // would capture the *first* frame forever (AGENTS.md §3).
         use_side_effect_with_deps(&self.frame, move |frame| {
-            slot.set(Rc::new(frame.clone()));
+            slot.set(Rc::clone(frame));
             // The repaint this asks for rebuilds every hit region, so whatever the readout was
             // naming is gone: keeping it would leave a label pinned over a mark that has moved
             // or is no longer drawn.
@@ -275,7 +279,14 @@ impl Component for ChartCanvas {
             let hits = Rc::clone(&hits);
             move |context| {
                 let frame = Rc::clone(&slot.peek());
-                marks::draw(context, &frame, &hits);
+                // Replaced wholesale, never appended: what the pointer can be over is exactly
+                // what this paint drew.
+                *hits.borrow_mut() = marks::draw(
+                    context.canvas,
+                    context.font_collection,
+                    context.size,
+                    &frame,
+                );
             }
         }))
         .width(Size::fill())

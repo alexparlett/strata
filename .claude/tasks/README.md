@@ -78,8 +78,9 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 - **Chart view** ([`workstream-chart-view/`](workstream-chart-view/README.md), **Rz2**) — the
   results Chart surface. **The core is built (00–04 ✅)**: the snapshot ordinal, the
   renderer-first `Engine::chart` read, the plotters/Skia body, the encoder strip + `ChartConfig`,
-  and the guardrails. Open: the follow-ons (05–11 — presets, interactivity, templates, copy
-  image, shape panel, Tier B marks, trendline). Spec: `docs/CHART_SPEC.md`.
+  the guardrails, and Copy Image (08 ✅, which grew the fork's clipboard an image side). Open:
+  the remaining follow-ons (05–07, 09–11 — presets, interactivity, templates, shape panel, Tier B
+  marks, trendline). Spec: `docs/CHART_SPEC.md`.
 - **Polymorphic JSON** (WJ) — ✅ **done, folder removed**: the Postgres-style JSON accessors
   (WJ-01) and the union-tolerant `FileFormat` (WJ-02, `engine::json_poly`). Entirely
   `strata-core`; no UI surface of its own.
@@ -125,7 +126,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
    spine; ED-04/05 include the catalog pane's internal-table treatment.
 2. **Agent access AA-06** — the chat pane (starts with the deferred brain decision; read AA-03c's
    identity finding first).
-3. **Chart follow-ons** (05–11) — presets, interactivity, templates, copy image, shape panel,
+3. **Chart follow-ons** (05–07, 09–11) — presets, interactivity, templates, shape panel,
    Tier B marks, trendline.
 4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
    with the above.

@@ -669,9 +669,12 @@ src/apps/project/                the project window (Valin-shaped)
                                  the X/Y/Series encoders, the sort toggle and the legend;
                                  paint.rs the frame + the `canvas` (slot-peeked, redraw
                                  requested); axis.rs the plotters `Ranged` category coord +
-                                 nice max + abbreviated tick; marks.rs a render fn per mark;
-                                 preview.rs the headless PNG harness (the plan view's), because
-                                 a chart's correctness is *visual*
+                                 nice max + abbreviated tick; marks.rs a render fn per mark
+                                 plus the **one** draw body (a canvas + a `FontCollection`,
+                                 returning its hit regions); capture.rs Copy Image — the same
+                                 frame through that same body onto an offscreen surface, then
+                                 the clipboard; preview.rs the headless PNG harness (the plan
+                                 view's), because a chart's correctness is *visual*
         explain_plan/            the EXPLAIN plan view (P2-05, EXPLAIN_PLAN_SPEC v3): mod.rs the
                                  `explain_plan` theme + the shell (Physical/Logical segments ·
                                  ANALYZE badge · Raw/Tree toggle over the tree or the raw text —

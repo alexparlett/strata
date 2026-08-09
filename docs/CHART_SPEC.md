@@ -307,6 +307,22 @@ plot, and is never a pointer target (a hit-testable card under the pointer would
 `pointer_leave` and unmount itself). A new frame or a resize rebuilds the hit regions and clears
 the hover.
 
+**Copy Image** (`chart/capture.rs`). The results toolbar's Copy Image renders the settled frame
+into an offscreen raster surface and puts its pixels on the system clipboard; nothing is written
+to disk. It is the **same** `Frame` the visible canvas is painting, through the **same**
+`marks::draw` — which is why `draw` takes a canvas and a `FontCollection` rather than a
+`CanvasContext`, and why it returns its hit regions instead of writing them through the handle
+the live plot's pointer reads. No paint pass is involved: the font collection is a root context.
+The capture is a fixed 1600x900 at 2x rather than the pane's own size (a pane dragged narrow
+would copy a chart with half its labels thinned away), fills `dress.background` first because
+the live canvas is transparent over the pane, and reads back as unpremultiplied RGBA because
+`raster_n32_premul` is BGRA on Apple. The item is **absent** over a notice state, not disabled.
+The clipboard's image side is a fork addition (`freya-clipboard`: `Clipboard::set_image` /
+`get_image`) made inside the crate's existing shape — the integration still provides a
+`Box<dyn ClipboardProvider>` into the root context; the trait is the fork's own now and covers
+images, and copypasta was replaced by arboard rather than run beside it, because text and images
+are one clipboard.
+
 **Legend** (`chart/strip.rs`, entries resolved in `chart/mod.rs::legend`). The legend lives in
 the strip, not on the canvas — a plot-overlay legend has nowhere to go when it outgrows its box,
 while the strip already scrolls, so the legend grows down and the plot keeps its width. Only
