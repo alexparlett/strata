@@ -530,10 +530,16 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   go in prose beneath the card, which has no field for either. Never print the list twice.
 - **CI runs that same check on every PR** — `cargo test --workspace --locked` on **macOS**, with
   `submodules: true`, asserting the gitlink **before** compiling.
-- **The container runtime is a single shared worker, so CI serializes repo-wide — and it queues
-  rather than cancels.** A job-level, constant-named concurrency group with `queue: max`; the
-  per-ref workflow group keeps the superseding. Never `queue: single` here — a silently cancelled
-  run on main is no coverage of main.
+- **Only the tests that need the container runtime queue for it, and the split is a test target.**
+  Two jobs: `minio` runs `--test object_store_minio` entire (so a test added to that file needs no
+  workflow edit) and carries the queue, the cloud agent and the release step; `test` is the same
+  `--workspace` run with those tests `--skip`ped, and queues behind nothing. Never split by taste
+  or by package. The lists cannot drift silently: `test` has no runtime, so a renamed or added
+  minio test runs *there* and fails loud.
+- **The container runtime is a single shared worker, so the job that uses it serializes repo-wide —
+  and it queues rather than cancels.** A job-level, constant-named concurrency group with
+  `queue: max`; the per-ref workflow group keeps the superseding. Never `queue: single` here — a
+  silently cancelled run on main is no coverage of main.
 - **A cloud session outlives the job that opened it, so the job releases it — and the test still
   waits out a handover it cannot watch.** `action: terminate` with `if: always()` (a *cancelled*
   job is the worst case), plus a bounded retry in `object_store_minio.rs` on the capacity refusal

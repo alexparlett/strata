@@ -16,30 +16,26 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+# Two jobs, split on one axis only: whether a test needs the container runtime.
+#
+# Everything the shared MinIO worker forces on a job - the repo-wide queue, the cloud
+# agent, the release step, the capacity retry - is a cost the *other* tests were paying
+# for no reason. They are the overwhelming majority of the suite and they are the ones
+# a PR is usually waiting on, so they now run in `test`, which queues behind nothing.
+# `minio` keeps the whole serialization apparatus, and it is cheap to queue: it builds
+# `strata-core` and its dependencies only, so it never compiles Skia or the Freya fork's
+# UI crates the way a workspace build does.
+#
+# The split is drawn at the **test target**, not by taste. `crates/strata-core/tests/
+# object_store_minio.rs` is the only file in the workspace that mentions testcontainers,
+# and `minio` runs that binary entire (`--test object_store_minio`), so a test added to
+# it is covered without touching this file. `test` names the same tests in a `--skip`
+# so it can still say `--workspace` and stay honest about everything else. The two do
+# not have to be kept in agreement by hand: a minio test that is renamed or added
+# without updating the skip list is *run* by `test`, which has no container runtime, and
+# a test that cannot tell a busy provider from a missing one fails loud there.
 jobs:
   test:
-    # Serialized across the whole repository, not per branch: Testcontainers Cloud gives
-    # this account **one** worker at a time, and the connections test (W7) drives a real
-    # MinIO through it. Two runs overlapping means the second is refused - `Failed to get
-    # a worker: ErrValidator: too many concurrent requests`, or the same refusal arriving
-    # as a truncated response (`hyper::Error(IncompleteMessage)`) - and the test fails
-    # loud exactly as it is built to. Merging a PR is precisely when that overlap
-    # happens: the merge commit pushes to main while other PR branches are still
-    # building, which is why main was the ref that kept failing. Raising the limit is a
-    # billing decision; waiting for the worker costs nothing, because a queued job holds
-    # no runner and `timeout-minutes` does not start until it runs.
-    #
-    # `queue: max` is load-bearing. The default (`single`) keeps one pending job per
-    # group and cancels any previously pending one, so a third concurrent run would be
-    # silently *cancelled* rather than queued - and a cancelled run on main is no
-    # coverage of main at all, which is the failure this whole change exists to stop.
-    # `max` queues up to 100. It cannot be combined with `cancel-in-progress: true`;
-    # superseding belongs to the per-ref group above, which still drops a stale
-    # same-branch run before it ever reaches this queue, so this level only ever waits.
-    concurrency:
-      group: ci-testcontainers-worker
-      cancel-in-progress: false
-      queue: max
     # macOS, not ubuntu: the app is macOS-first (the muda menubar, the traffic-light
     # gutter, `set_window_parent`), so a green Linux build would not be evidence the
     # thing we ship compiles. It also skips the gtk/webkit apt dance the fork's own
@@ -98,16 +94,87 @@ jobs:
       # This is also the theme guard: strata-freya's `schema_in_sync` test fails when
       # `themes/theme.schema.json` no longer matches `theme.rs`'s REGISTRY (regenerate
       # with `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`).
-      # Before `cargo test`, not after: the connections integration tests (W7) drive a real
-      # MinIO in a container and are ordinary tests, so the run below executes them. GitHub's
-      # macOS images have no Docker daemon; Testcontainers Cloud supplies the runtime.
+      #
+      # The `--skip` is the container-runtime split and nothing else: it names the tests
+      # in `crates/strata-core/tests/object_store_minio.rs`, which the `minio` job below
+      # runs instead. This job has no Testcontainers Cloud agent, so it is also the guard
+      # on that list - a minio test renamed or added without amending it runs here, finds
+      # no runtime and fails, which is exactly what that test is built to do rather than
+      # passing quietly.
+      - name: cargo test
+        run: |
+          cargo test --workspace --locked -- \
+            --skip a_table_over_a_connection_reads_through_the_object_store
+
+  # The connections test (W7) drives a real MinIO, so this job - and only this job -
+  # carries the cloud agent and the repo-wide queue.
+  minio:
+    # Serialized across the whole repository, not per branch: Testcontainers Cloud gives
+    # this account **one** worker at a time. Two runs overlapping means the second is
+    # refused - `Failed to get a worker: ErrValidator: too many concurrent requests`, or
+    # the same refusal arriving as a truncated response
+    # (`hyper::Error(IncompleteMessage)`) - and the test fails loud exactly as it is
+    # built to. Merging a PR is precisely when that overlap happens: the merge commit
+    # pushes to main while other PR branches are still building, which is why main was
+    # the ref that kept failing. Raising the limit is a billing decision; waiting for the
+    # worker costs nothing, because a queued job holds no runner and `timeout-minutes`
+    # does not start until it runs.
+    #
+    # `queue: max` is load-bearing. The default (`single`) keeps one pending job per
+    # group and cancels any previously pending one, so a third concurrent run would be
+    # silently *cancelled* rather than queued - and a cancelled run on main is no
+    # coverage of main at all, which is the failure this whole change exists to stop.
+    # `max` queues up to 100. It cannot be combined with `cancel-in-progress: true`;
+    # superseding belongs to the per-ref group at the top of the file, which still drops
+    # a stale same-branch run before it ever reaches this queue, so this level only ever
+    # waits.
+    concurrency:
+      group: ci-testcontainers-worker
+      cancel-in-progress: false
+      queue: max
+    runs-on: macos-latest
+    # Shorter than `test`'s: this builds strata-core and its dependencies, not the
+    # workspace, so no Skia and no Freya UI crates. DataFusion is still a cold compile.
+    timeout-minutes: 60
+    steps:
+      # Still `submodules: true` even though nothing here links Freya: cargo resolves the
+      # whole workspace graph before it builds one package of it, and the root
+      # `[workspace.dependencies]` names `crates/freya` by path. Without the checkout the
+      # manifest does not parse.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: true
+
+      - name: Verify the Freya submodule is at the recorded commit
+        run: |
+          git submodule status crates/freya
+          git submodule status crates/freya | grep -qE '^ ' || {
+            echo "::error::crates/freya is not checked out at the commit this repo records."
+            echo "The fork commit is probably not pushed to github.com/alexparlett/freya - see AGENTS.md section 6."
+            exit 1
+          }
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+          # See the note in `test`: the action's `-D warnings` default would assert
+          # something stricter than the check AGENTS.md section 7 describes.
+          rustflags: ''
+
+      # Before `cargo test`: GitHub's macOS images have no Docker daemon, and
+      # Testcontainers Cloud supplies the runtime the test looks for in
+      # `~/.testcontainers.properties`.
       - name: Setup Testcontainers Cloud Client
         uses: atomicjar/testcontainers-cloud-setup-action@v1
         with:
           token: ${{ secrets.TC_CLOUD_TOKEN }}
 
-      - name: cargo test
-        run: cargo test --workspace --locked
+      # The whole binary, not a named test: this file is the container split, so anything
+      # added to it belongs to this job without an edit here.
+      - name: cargo test (connections)
+        run: cargo test -p strata-core --locked --test object_store_minio
 
       # **Release the cloud session at the end of the job, always.** The agent above is
       # started in the background and nothing ever tells it to stop: the runner VM is
@@ -121,9 +188,9 @@ jobs:
       # other half, and the two are only sufficient together.
       #
       # `always()`, not `success()` or the default: a **cancelled** job is the case that
-      # matters most - `cancel-in-progress` on the per-ref group above means we generate
-      # those deliberately, and a cancelled run kills the agent in the way least likely
-      # to release anything. `always()` is the only condition that still runs then.
+      # matters most - `cancel-in-progress` on the per-ref group means we generate those
+      # deliberately, and a cancelled run kills the agent in the way least likely to
+      # release anything. `always()` is the only condition that still runs then.
       - name: Release the Testcontainers Cloud session
         if: always()
         uses: atomicjar/testcontainers-cloud-setup-action@v1

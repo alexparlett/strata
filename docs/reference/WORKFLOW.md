@@ -178,15 +178,31 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `cargo test`, which `default-members` would narrow to `strata-freya` alone. It asserts the
   submodule sits at the recorded gitlink **before** compiling, so §6's unpushed-fork-commit trap
   fails in seconds with that named as the cause instead of as a missing method 40 minutes in.
-- **The container runtime is a single shared worker, so CI serializes repo-wide — and it queues
-  rather than cancels.** Testcontainers Cloud gives this account one worker at a time and the
-  connections test (W7) drives a real MinIO through it, so a second overlapping run is refused
+- **Only the tests that need the container runtime queue for it, and the split is a test target.**
+  Everything the shared MinIO worker forces on a job — the repo-wide queue below, the cloud agent,
+  the release step, the capacity retry — was being paid for by the whole suite, when one test file
+  needs it. So the workflow is two jobs. `minio` keeps the apparatus and runs
+  `cargo test -p strata-core --locked --test object_store_minio`: the **binary entire**, because
+  `crates/strata-core/tests/object_store_minio.rs` is the only file in the workspace that mentions
+  testcontainers, so drawing the line at the test target means a test added to it is covered
+  without a workflow edit. It is also the cheap job to leave queueing — one package and its
+  dependencies, so no Skia and none of the fork's UI crates. `test` is the same `cargo test
+  --workspace --locked` as before with those tests named in a `--skip`, and queues behind nothing;
+  it is the job a PR is normally waiting on, and now nothing on another branch can hold it up.
+  The two lists are not kept in agreement by hand and must not be: `test` has **no** container
+  runtime, so a minio test renamed or added without amending the skip runs there, finds nothing,
+  and fails loud — which is what that test is built to do rather than pass quietly. Do not split
+  this by package, by "slow vs fast", or by taste; the only axis that carries the property is
+  whether the runtime is needed.
+- **The container runtime is a single shared worker, so the job that uses it serializes repo-wide —
+  and it queues rather than cancels.** Testcontainers Cloud gives this account one worker at a time
+  and the connections test (W7) drives a real MinIO through it, so a second overlapping run is refused
   with `Failed to get a worker: ErrValidator: too many concurrent requests` — or that same refusal
   arriving as a truncated response, `hyper::Error(IncompleteMessage)`, which is the same fault and
   not a second one. The test then fails loud, correctly: it cannot tell a busy provider from a
   missing one, and it must never call the latter fine. Merging a PR is exactly when the overlap
   happens — the merge commit pushes to main while other branches are still building — which is why
-  **main** was the ref that kept failing while its own PR had just passed. So the `test` job carries
+  **main** was the ref that kept failing while its own PR had just passed. So the `minio` job carries
   a second, **job-level** concurrency group with a constant name: the workflow-level group is
   per-ref and supersedes within a branch, this one is repo-wide and only ever waits. Waiting is
   free — a pending job holds no runner and `timeout-minutes` does not start until it runs. The
