@@ -145,6 +145,15 @@ did not achieve. Right now this repo is on the first rung.
 Only the third rung actually gets you a clean install. A Developer ID certificate on its own is a
 half-step that costs a tester exactly as much as no signature at all.
 
+There is a second cost to the ad-hoc rung, and it grows once the app stores a secret. macOS grants
+keychain access against the *designated requirement* recorded on the item, and an ad-hoc signature
+has no stable anchor to record — the requirement pins to the binary's own hash, so every ad-hoc
+build is a different application as far as the Keychain is concerned, and a tester is asked to
+allow access again after each update. A Developer ID signature anchors on the bundle identifier
+plus the team certificate, which stays the same across versions. That identifier is
+`strata_core::secret::APP_ID`, read out of the Rust source by the bundle script for exactly this
+reason (see `.claude/tasks/workstream-assistant/AS-05-secret-store.md`).
+
 > **Note on the certificate you have.** The keychain on this machine holds an *Apple Development*
 > certificate. That is the wrong kind — it signs, but Apple will not notarize a build signed with
 > it, so it produces a signature that still fails on a tester's Mac while looking like success

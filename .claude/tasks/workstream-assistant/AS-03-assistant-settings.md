@@ -1,5 +1,13 @@
 # AS-03 · Settings ▸ Assistant: the provider roster
 
+> **AS-05 landed.** The surface to call is `strata_core::secret`: `SecretRef::mint()` for a new
+> roster entry, `r.put(&secret)` / `r.get()` / `r.delete()`, `Secret::new(&draft_text)` (which
+> returns `None` for a blank field — so "cleared" and "delete the store entry" are the same
+> branch), and `SecretError` for what Apply renders. Every call blocks: `task::offload`. Two
+> things this pane owes back to AS-05's acceptance: the marker's first real `Settings` field
+> (and with it the `write_config` round trip), and the manual check that the bundled, signed
+> app reads its own item — see `AS-05-secret-store.md` ▸ *What is not proved yet*.
+
 **Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-05 (the key-reference type;
 the pane can be built against that vocabulary before the store itself lands) — parallel with
 AS-01/02; AS-02's per-send selection struct is the target shape — coordinate the field list

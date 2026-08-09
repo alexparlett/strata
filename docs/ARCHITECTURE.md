@@ -14,7 +14,7 @@ A virtual Cargo workspace, six member crates plus a vendored fork:
 | Crate | Role |
 |---|---|
 | `strata-freya` | The app — Freya (Skia, native) frontend. One module per OS window under `apps/`: launcher, project, settings, export, configure, connection. The default build target. |
-| `strata-core` | Engine logic, and the only place DataFusion is touched: query execution, the statement router, snapshots, export, profiling, the SQL language service, config, keymap, themes. |
+| `strata-core` | Engine logic, and the only place DataFusion is touched: query execution, the statement router, snapshots, export, profiling, the SQL language service, config, keymap, themes, the OS-keystore secret store. |
 | `strata-model` | The leaf data vocabulary — schema, results, catalog, session, history, connections. Serde only, no logic, so every other crate can speak it without dragging dependencies. |
 | `strata-code-editor` | The vendored Skia code editor (Rope buffer, tree-sitter highlighting, completion popup, diagnostic squiggles) the SQL surface is built on. |
 | `strata-agent` | Agent access: the read-only MCP tool vocabulary, the HTTP server, and the headless stdio host. Deliberately Freya-free — one implementation serves the in-app server and `strata mcp` alike. |
@@ -127,6 +127,12 @@ Around those, satellites with one job each: the project store (the catalog — a
 query against DataFusion; a def whose registration failed is exactly the row it must keep
 showing), the event log, the agents pane's record, query history (a `.jsonl` file, not a store
 field), and one app-global config store whose single write path also persists.
+
+Config never holds a secret. The one class of secret the app must keep — third-party provider keys
+for the assistant — lives in the OS keystore (`strata_core::secret`, opened once in `main`), and
+config carries only a minted `SecretRef` to it. That is enforced by the types rather than by care:
+the in-memory `Secret` derives no `Serialize`, so there is no path from a pasted key to
+`config.json` at all.
 
 The full design — the channel vocabulary, persistence, the menu seam, the diagnostics driver —
 is [FREYA_STATE_ARCHITECTURE.md](FREYA_STATE_ARCHITECTURE.md).
