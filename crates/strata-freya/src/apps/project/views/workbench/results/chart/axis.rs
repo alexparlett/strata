@@ -14,11 +14,18 @@
 //!   order" and "value order" are the same order — otherwise placing marks by value would
 //!   quietly re-order the axis the spec (§1.6) says is the user's.
 //!
+//! [`ValueCoord`] is the second one, and it exists for the same reason: the value axis is
+//! linear or logarithmic depending on a view preference, and a coordinate that can be either
+//! keeps that choice out of every signature downstream. Without it each mark would have to be
+//! generic over its Y axis and split into a build half and a draw half.
+//!
 //! [`Axis::positions`]: strata_model::Axis::positions
 
 use std::ops::Range;
 
 use freya::plot::plotters::coord::ranged1d::{DefaultFormatting, KeyPointHint, Ranged};
+use freya::plot::plotters::coord::types::RangedCoordf64;
+use freya::plot::plotters::prelude::{IntoLogRange, LogCoord};
 use strata_core::util::fmt_int;
 
 /// The category axis: where each category sits, how wide one category's slot is, and the
@@ -113,6 +120,143 @@ impl Ranged for Categories {
     fn range(&self) -> Range<f64> {
         self.span.clone()
     }
+}
+
+// ---- the value axis ----
+
+/// The value axis a cartesian mark is built on: linear, or logarithmic when the user asked for
+/// one and the data can carry it.
+///
+/// One coordinate with two arms rather than making every mark generic over its Y: the marks
+/// would each have to split into a build half and a draw half to name two different
+/// `ChartContext` types, and `hit_box`, `mesh` and `zero_baseline` would grow a second type
+/// parameter apiece. [`Categories`] is already precedent for writing the coordinate we want.
+///
+/// `FormatOption = DefaultFormatting` is safe despite the `Debug` blanket it opts into:
+/// [`mesh`](super::marks::mesh) always sets an explicit `y_label_formatter`, so plotters never
+/// reaches for the default.
+pub enum ValueCoord {
+    Linear(RangedCoordf64),
+    Log(LogCoord<f64>),
+}
+
+impl ValueCoord {
+    pub fn linear(range: Range<f64>) -> Self {
+        ValueCoord::Linear(range.into())
+    }
+
+    /// A logarithmic axis over `range`, whose ends are already decades ([`log_span`]).
+    pub fn log(range: Range<f64>) -> Self {
+        ValueCoord::Log(range.log_scale().into())
+    }
+
+    /// How a tick on this axis is labelled.
+    ///
+    /// A **linear** axis picks one unit from its span ([`ticks`]) — every gridline is the same
+    /// magnitude, so `2 000` reads `2k` or does not, once, for all of them. A **logarithmic**
+    /// axis is the case that rule was written against: its whole point is that the gridlines
+    /// are decades apart, so each is abbreviated on its own terms.
+    pub fn tick_label(&self) -> Box<dyn Fn(&f64) -> String> {
+        match self {
+            ValueCoord::Linear(coord) => Box::new(ticks(&coord.range())),
+            ValueCoord::Log(_) => Box::new(|v: &f64| decade(*v)),
+        }
+    }
+}
+
+impl Ranged for ValueCoord {
+    type FormatOption = DefaultFormatting;
+    type ValueType = f64;
+
+    fn map(&self, v: &f64, limit: (i32, i32)) -> i32 {
+        match self {
+            ValueCoord::Linear(coord) => coord.map(v, limit),
+            ValueCoord::Log(coord) => coord.map(v, limit),
+        }
+    }
+
+    fn key_points<Hint: KeyPointHint>(&self, hint: Hint) -> Vec<f64> {
+        match self {
+            ValueCoord::Linear(coord) => coord.key_points(hint),
+            ValueCoord::Log(coord) => coord.key_points(hint),
+        }
+    }
+
+    fn range(&self) -> Range<f64> {
+        match self {
+            ValueCoord::Linear(coord) => coord.range(),
+            ValueCoord::Log(coord) => coord.range(),
+        }
+    }
+}
+
+/// The decade span covering the **positive finite** values in `values`, or `None` when there
+/// are none.
+///
+/// A log axis deliberately skips the linear axis's [`nice_max`] rounding and its proportional
+/// edge padding: both are arithmetic on a linear span, and applied to a range that covers
+/// several orders of magnitude they push the bottom of the axis through zero — where a
+/// logarithm does not go. Rounding out to whole decades is the log axis's own version of the
+/// same idea, and it is what puts the gridlines on 1, 10, 100.
+///
+/// It is also the log version of [`EDGE_AIR`](super::marks): an extreme value is drawn *inside*
+/// the frame rather than on it, so a bound that already sits exactly on a decade takes the next
+/// one out. Without that the commonest log histogram there is — a long tail whose smallest
+/// count is 1 — draws every one of its 1s as a bar of no height at all, on an axis floored at
+/// exactly 1.
+pub fn log_span(values: impl Iterator<Item = f64>) -> Option<Range<f64>> {
+    let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+    for value in values.filter(|v| v.is_finite() && *v > 0.) {
+        low = low.min(value);
+        high = high.max(value);
+    }
+    if !(low.is_finite() && high.is_finite()) {
+        return None;
+    }
+    let floor = 10f64.powf(low.log10().floor());
+    let ceil = 10f64.powf(high.log10().ceil());
+    let mut start = if floor < low { floor } else { floor / 10. };
+    let mut end = if ceil > high { ceil } else { ceil * 10. };
+    // The same guard the linear axis needs, for the same reason: plotters derives key points by
+    // dividing a span down, and a non-finite or inverted one never terminates. A value near
+    // `f64::MAX` is what rounds a decade up to infinity, so it keeps the data's own bound.
+    if !(start.is_finite() && start > 0.) {
+        start = low;
+    }
+    if !end.is_finite() {
+        end = high;
+    }
+    if end <= start {
+        // One decade at the very top of f64's range: there is no decade above the data to
+        // round out to, so the axis takes the one below it instead.
+        start = (end / 10.).max(f64::MIN_POSITIVE);
+    }
+    // **A log axis is bounded by its ratio, not its difference** — and an unbounded ratio is a
+    // hang, not a bad-looking axis. `LogCoord::key_points` takes `((end/start).ln()/ln(base))`
+    // as a bold-tick count and then loops `while max_points < count / cnt { cnt += 1 }`; a
+    // column holding both 1e-300 and 1e300 overflows that division to infinity, `as usize`
+    // saturates it to `usize::MAX`, and the loop runs ~3.7e18 times on the render thread. The
+    // caller falls back to a linear axis, which is the same non-blocking degradation a
+    // non-positive value takes.
+    if !(end / start).is_finite() {
+        return None;
+    }
+    (end > start).then_some(start..end)
+}
+
+/// A **log** axis's tick: abbreviated per value rather than per axis.
+///
+/// See [`ValueCoord::tick_label`] — a decade axis has no single magnitude to choose a unit
+/// from, so `1`, `1k` and `1M` are three gridlines of the same axis and each says its own size.
+pub fn decade(v: f64) -> String {
+    for (unit, suffix) in [(1e9, "B"), (1e6, "M"), (1e3, "k")] {
+        if v.abs() >= unit {
+            let scaled = v / unit;
+            let text = format!("{scaled:.1}");
+            return format!("{}{suffix}", text.strip_suffix(".0").unwrap_or(&text));
+        }
+    }
+    plain(v)
 }
 
 /// Round `v` up to a "nice" axis maximum — 1, 2, 5 or 10 times a power of ten — so the value
@@ -349,6 +493,89 @@ mod tests {
             assert!(max.is_finite(), "nice_max({v}) = {max}");
             assert!(max >= v, "nice_max({v}) = {max} must not shrink the data");
         }
+    }
+
+    /// **A log axis rounds out to decades, and it never reaches for zero.** The linear axis's
+    /// padding is proportional arithmetic on a span, and over several orders of magnitude that
+    /// pushes the bottom of the axis through zero — where a logarithm does not go.
+    #[test]
+    fn a_log_span_covers_its_data_in_whole_decades() {
+        assert_eq!(log_span([3., 40., 900.].into_iter()), Some(1.0..1000.0));
+        assert_eq!(log_span([0.05, 0.4].into_iter()), Some(0.01..1.0));
+        // One value still gets a decade to sit in rather than a span of nothing.
+        let one = log_span([7.].into_iter()).expect("a single value has a decade");
+        assert!(one.start < 7. && one.end > 7., "{one:?}");
+
+        // Zero, the negatives and the non-finite have no logarithm and are simply not in it.
+        assert_eq!(log_span([-4., 0., 25.].into_iter()), Some(10.0..100.0));
+        assert_eq!(log_span([-4., 0.].into_iter()), None);
+        assert_eq!(log_span([f64::NAN, f64::INFINITY].into_iter()), None);
+        assert_eq!(log_span(std::iter::empty()), None);
+    }
+
+    /// **A value on a decade boundary is drawn inside the frame, not on it** — the log axis's
+    /// version of the linear one's edge air. Without it the commonest log histogram there is
+    /// (a long tail bottoming out at a count of 1) draws every 1 as a bar of no height.
+    #[test]
+    fn a_bound_already_on_a_decade_takes_the_next_one_out() {
+        assert_eq!(log_span([1., 900.].into_iter()), Some(0.1..1000.0));
+        assert_eq!(log_span([3., 1_000.].into_iter()), Some(1.0..10_000.0));
+        for values in [vec![1., 900.], vec![3., 1_000.], vec![100., 100.]] {
+            let span = log_span(values.iter().copied()).expect("positive values span");
+            let (low, high) = (values[0], values[values.len() - 1]);
+            assert!(
+                span.start < low.min(high) && span.end > low.max(high),
+                "log_span({values:?}) = {span:?} draws an extreme on the frame"
+            );
+        }
+    }
+
+    /// A non-finite bound is a hang, not a bad-looking axis (see [`nice_max`]) — and rounding
+    /// a decade *up* is exactly where one comes from.
+    #[test]
+    fn a_log_span_is_always_finite_and_ordered() {
+        for values in [vec![f64::MAX], vec![1e-30, 1e30], vec![f64::MIN_POSITIVE]] {
+            let span = log_span(values.iter().copied()).expect("positive values span");
+            assert!(
+                span.start.is_finite() && span.end.is_finite() && span.end > span.start,
+                "log_span({values:?}) = {span:?}"
+            );
+            assert!(span.start > 0., "a log axis never reaches zero: {span:?}");
+        }
+    }
+
+    /// **A log axis is bounded by its bounds' *ratio*, not their difference — and an unbounded
+    /// ratio is a hang.** `LogCoord::key_points` turns `ln(end/start)/ln(10)` into a bold-tick
+    /// count; an overflowed ratio saturates that `as usize` to `usize::MAX`, and the loop that
+    /// divides it down then runs ~3.7e18 times on the render thread. So the span refuses
+    /// instead, and the caller draws a linear axis — the same non-blocking fallback a
+    /// non-positive value takes.
+    #[test]
+    fn a_span_whose_ratio_overflows_is_no_log_axis_at_all() {
+        assert_eq!(log_span([1e-300, 1e300].into_iter()), None);
+        assert_eq!(log_span([f64::MIN_POSITIVE, f64::MAX].into_iter()), None);
+        // Wide, but a ratio f64 can still hold — that one is drawn.
+        assert!(log_span([1e-150, 1e150].into_iter()).is_some());
+    }
+
+    /// A decade axis has no single magnitude to choose one unit from, so each gridline is
+    /// abbreviated on its own terms — the deliberate opposite of [`ticks`].
+    #[test]
+    fn a_log_tick_abbreviates_per_value_where_a_linear_one_abbreviates_per_axis() {
+        assert_eq!(decade(1.), "1");
+        assert_eq!(decade(100.), "100");
+        assert_eq!(decade(1_000.), "1k");
+        assert_eq!(decade(2_500_000.), "2.5M");
+        assert_eq!(decade(1e9), "1B");
+        assert_eq!(decade(0.01), "0.01");
+
+        // The same axis carries all of them, which is what a per-axis unit could not do.
+        let span = log_span([1., 1e9].into_iter()).expect("a nine-decade span");
+        let label = ValueCoord::log(span).tick_label();
+        assert_eq!(
+            [1., 1e3, 1e6, 1e9].map(|v| label(&v)),
+            ["1", "1k", "1M", "1B"]
+        );
     }
 
     #[test]

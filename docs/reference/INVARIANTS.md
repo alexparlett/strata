@@ -232,6 +232,81 @@ Things that must not regress. Each was fought for once already.
     makes that gap tolerable is a reason not to close it. What survives is the role split above.
     Re-litigate the *placement* only with a surface that isn't the strip.
 
+  And four the **interactivity** pass settled (Rz2/06), all about which side of the read a
+  control sits on:
+
+  - **A chart's controls are repaints, and the bin count is the one exception — because the
+    engine does the counting.** `ChartConfig` grew four channels and only `bins` reaches a
+    `ChartQuery`: a new bin count is a new cache entry, exactly as it should be, while `hidden`,
+    `log_y` and `sort` are transforms over data already in hand. The cap is
+    `engine::MAX_BINS`, `pub` and clamped at **both** ends of the wire, because a box that
+    accepts 5 000 over a read that answers 200 shows one thing and means another. An empty box
+    is `None` and `None` is the engine's `√n` — reachable by clearing the field, which is why
+    the strip owns a small buffer of its own rather than reusing `NumberField` (a number field
+    has no state for "deliberately no number"). It **bounds its box and normalizes it when it
+    is left** (AGENTS.md §3): `max_len` is the cap's own digit count, and losing focus re-echoes
+    what was committed — without both, the box showed `5000` over a 200-bin chart, which is the
+    "shows one thing and means another" failure the shared cap exists to prevent. The parse is
+    wide and the clamp comes after it, or a count over 65 535 would fail a `u16` parse and read
+    as Auto rather than as the cap.
+  - **A hidden series keeps its slot, and the order it is hidden in is sorted-then-hidden.**
+    Hiding blanks a series' `values` to all-`None` rather than removing it (`chart::hide`), so
+    positions — and therefore `Dress::series` colours — never move under a legend press, and
+    `marks` needs no idea it happened (a `None` cell is already a gap and hit regions are built
+    per finite value). It is keyed by **name**, so a NULL-valued series and a literal `"(null)"`
+    one toggle together: accepted coarseness, because the name is what the user pressed and a
+    position-keyed legend forgets the choice the moment the SELECT list changes. `sort::sorted`
+    runs **before** `hide::applied`, or hiding the first series would silently reshuffle a
+    `ByYDesc` chart's whole category axis. `resolve` drops the set for a mark whose legend cannot
+    un-hide, exactly as it drops `bins` for a mark with nothing to bin — a pie's Y is an ordinary
+    measure a bar may have hidden earlier, and honouring it there blanks the pie with no control
+    on screen to bring it back. ⌥-press **edits** the set rather than rebuilding it from the
+    current legend, so a name this result cannot answer survives the gesture the way it survives
+    an ordinary press; on the sole visible series it shows them all again, so the gesture cannot
+    empty the chart. And the **legend survives the one notice that names it**: the all-hidden
+    notice says "press a legend entry", and built only on the drawable path the legend vanished
+    exactly when its own message named it — a dead end the tab carried across a re-run and a
+    restart, because `hidden` is persisted. Only that one: every other notice draws no plot and
+    offers no way back through the legend, so keying colours beside one would name colours
+    nothing on screen is wearing.
+  - **A log axis never refuses; it says why it could not and draws linearly.** `ValueCoord`
+    (`chart::axis`) is one plotters `Ranged` with a linear and a log arm, so no mark has to be
+    generic over its Y — the alternative was splitting every mark into a build half and a draw
+    half. It is offered only where a mark plots **position** rather than extent (`log_axis`:
+    line, scatter, histogram; a bar and an area are read as area from a baseline, which a log
+    axis has none of), and `log_fallback` answers **which** of two reasons sent it back to
+    linear, because a banner that blames zeros that are not there is worse than none. A value at
+    or below zero is one; the other is a span whose **ratio** overflows — a log axis is bounded
+    by `end/start`, not by `end - start`, and `LogCoord::key_points` turns an overflowed ratio
+    into a `usize::MAX` tick count it then counts down one at a time on the render thread (a
+    column holding 1e-300 and 1e300 reaches it). A histogram's **empty bins are not such a
+    value**: a zero count paints nothing on either axis, and blocking on one would take the log
+    scale away from exactly the long-tailed distributions it exists for. And a result with
+    **nothing positive in it at all** gets no banner — `log_span` answers `None` for that and
+    for an unusable ratio alike, and reporting the ratio's message told a user whose every value
+    was NULL that their data spanned too many orders of magnitude. `log_span` rounds out to
+    whole decades and takes the *next* decade out when a bound already sits on one — the log
+    version of `EDGE_AIR`, and without it the commonest log histogram there is draws every count
+    of 1 as a bar of no height.
+  - **The crosshair rules through the hovered mark, and its pieces are absolute siblings of the
+    plot.** Through the **mark**, not under the pointer, and that is a cost model rather than a
+    simplification: Freya has no incremental rendering (`render_pipeline.rs` repaints every node
+    every frame) and `CanvasElement::render` calls its `on_render` on each pass, so *any*
+    reactive write here re-runs `marks::draw` — a full plotters replot plus a rebuild of every
+    hit region, on the render thread. A crosshair that followed the pointer did that on every
+    mouse sample; riding on `hover` costs nothing beyond what the readout already costs, for the
+    same reason `Hit::anchor` exists. The price is that the axis can only be read at a mark,
+    which is where the numbers are. The value is **carried on the `Hit`, never inverted out of
+    the pixel row** — that round trip put `11.01` under a tooltip reading `11` — and `PlotArea`
+    (plotters' own `plotting_area().get_pixel_range()`) comes back **with** the hit regions, in
+    `draw`'s own answer rather than a second slot, only so the rules span the plot rather than
+    the pane — the capture gets one too and drops it, which is the point of returning both. The value label
+    **flips below its rule** rather than off the top of the plot, because a maximum that is
+    already a nice number puts the tallest mark exactly on `frame.top`. The three pieces hang off the canvas root,
+    not off a wrapper: an absolutely positioned node resolves against its parent's area, and a
+    wrapper would be a *stacked* sibling of a fill-height plot — measured, its horizontal rule
+    came out one whole pane below the pointer.
+
 - **A snapshot read has no order of its own; order is the ordinal column.** (`SNAPSHOT_SPEC.md`
   §9; lands with the workstream re-cut.) Above 10 MB an Arrow File scan range-splits and a bare
   `LIMIT/OFFSET` read sits over a `CoalescePartitionsExec` — measured: at 3M rows the *same page
@@ -712,6 +787,34 @@ Things that must not regress. Each was fought for once already.
   `create_view` / `drop_view`, which never produce an effect. Replay needs no code of its own — a
   typed view is a `ViewDef`, and `register_pass`'s fixed point orders a chain from cold exactly as
   it does a saved one. Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.3.
+- **A typed `COPY` is DataFusion's own write behind the two checks the Export window used to
+  stand in for, and the Export window is unchanged.** The write is not ours and never becomes
+  ours: `ddl::copy::copy_to` plans the statement once, gates that plan, and drives it — no text is
+  re-rendered, so the plan that was judged is the plan that runs (the `INSERT` arm's rule). What
+  the editor adds is the pair of refusals that stop a statement which would otherwise *succeed*
+  and produce something wrong. **A partition identifier has to be one bare word**, asked of
+  `export::partition_columns_are_bare_words` — shared, not copied — because DF 54's COPY parser
+  renders each one with `Ident::to_string()` and the planner then looks it up by that string, so a
+  quoted name arrives still carrying its quotes and fails about a column nobody named. **A NULL in
+  a partition column is refused**, in `export::partition_null_refusal`'s words, for the reason the
+  export gives: DF 54 has no `__HIVE_DEFAULT_PARTITION__` and files the row under a neighbouring
+  value's directory. The mechanisms differ because the sources do — the window reads the snapshot
+  write pass's exact counts for free, a typed COPY counts over the planned input and pays one
+  extra scan, the honest price of the same guarantee over an arbitrary query — and the rule is
+  identical: **proceed only on an exact zero**, an unreadable count being a reason to decline just
+  as a positive one is. A `__snap_` source is the router's refusal (`Blocked::ReservedName`), which
+  is what keeps `__strata_ord` out of a user's file. The effect is `None`: a COPY changes nothing
+  the catalog holds, and history and the event log record it like any successful run.
+  `Blocked::CopyTo` stays defined as the **agent** path's refusal.
+  **And a partitioned write states `keep_partition_by_columns` in the statement, never in the
+  session.** DF's physical planner reads that key out of the COPY's own `OPTIONS` and only falls
+  back to the session config when it is absent, so `run_export` sends it as an option; the `SET`
+  it replaces was global and never restored, which was invisible only for as long as no statement
+  could read it back (ED-08) and would otherwise have made one export decide the answer for every
+  later one. Namespaced (`execution.…`) rather than bare because `TableOptions::set` skips that
+  whole namespace, which is what lets the key reach the planner without a format refusing it.
+  Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.4,
+  [EXPORT_OPTIONS.md](../EXPORT_OPTIONS.md).
 - **A re-scan means "list the sources again", so this engine runs no list-files cache.** DataFusion
   54 turns one on by default — 1 MiB, **infinite TTL** — and with it every re-listing answers with
   the file set from last time: the catalog's ↻, the Configure window's re-inference and
@@ -1024,6 +1127,45 @@ Things that must not regress. Each was fought for once already.
   tab's `CREATE TABLE` still has to reach the sidebar and `project.json`), and it **owns the log
   entry**: `run_event` returns `None` for a statement, because a message claiming something
   durable must not be logged over a `project.json` write that failed — the `save_view` lesson.
+- **A secret Strata must keep lives in the OS keystore, and config holds a reference to it —
+  which is a property of the types, not a rule to remember.** `strata_core::secret` is the one
+  mechanism (AS-05): `SecretRef` is a minted id, `Clone + PartialEq + Serialize + Deserialize` so
+  it rides `settings_merge!` like any other field, and `Secret` — the pasted value on its way to
+  the store, or one just read back — derives **no** `Serialize`, has no `Display`, and prints
+  `Secret(<redacted>)`. So a provider key reaching `config.json` is not carelessness, it is a
+  program that does not compile. This extends the connections posture ("no arm of `engine::store`
+  takes a secret") to the case where the app really must hold one: third-party API keys for the
+  assistant's provider roster. The agent-access bearer token stays a plain config string on
+  purpose — locally minted, for our own loopback server, worthless elsewhere — and "stored like
+  the token" was the wrong precedent to extend to a billing credential; migrating it here is a
+  recorded follow-on that needs a config upgrade path.
+  Four consequences worth naming. **Empty is not a secret**: `Secret::new` returns `None` for a
+  blank field, which is what makes the Settings draft rule fall out of the types rather than
+  being restated — a cleared field yields no `Secret`, and no `Secret` is a `delete`. **Absence
+  is not an error**: `get` answers `Ok(None)` for a marker whose entry is gone, because "no key
+  set" and "the keystore is broken" are different sentences on screen; `SecretError` is
+  `Unavailable` (unlock it, allow it) or `Failed` (report it), and never a plaintext fallback,
+  which is the exact failure the module exists to prevent. **The store is opened once**, by
+  `open_keystore` in `main` — explicit rather than lazy, because `keyring-core`'s default store is
+  process-wide and a module that installed itself on first touch could never be handed the mock
+  that proves a refusal surfaces. That is also why the app links `keyring-core` plus a per-target
+  platform store instead of the all-in-one `keyring` crate, whose `Entry::new` installs its own
+  store from a `LazyLock`. **And the service is the app id**: `secret::APP_ID` is the macOS bundle
+  identifier, read out of that constant by `scripts/bundle-macos.sh`, because Keychain access is
+  scoped per code signature and a bundle claiming a different identity than the items it writes is
+  a bug nobody would go looking for. Every call blocks — `task::offload`, like any other blocking
+  read.
+  **In memory the value is zeroed, not guarded, and the difference is stated rather than blurred.**
+  `Secret` zeroes its buffer on drop and `get` zeroes the string the store returned once it has
+  been wrapped; that narrows a window and is described as nothing more. mlock/mprotect-style
+  guarding (`secrets`) was rejected: it would guard **one link of six** — the text field's own
+  `String`, the draft, `security-framework`'s buffer, then the HTTP header and TLS write buffers —
+  and a measure that reads as stronger than it is, is worse than none; the threats it addresses
+  (swap, core dumps, cross-process reads) are already macOS's; and it links libsodium, which the
+  self-contained universal bundle cannot have for free, while setting `RLIMIT_CORE` to 0 for the
+  whole process on the way past. What reduces exposure here is **lifetime** — read a key per use,
+  never cache one, never let it reach a buffer that outlives the call. Reopen only with a change
+  that closes the chain, not a better allocator for one link of it.
 - **One app-global config store.** `RadioStation<AppConfig, ConfigChan>` created once in `main`,
   shared into every window (`use_share_config`). Disk is a startup input, read **once** — no file
   watching, ever; after launch only the UI writes. `write_config` (src/state/config.rs) is the

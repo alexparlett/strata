@@ -234,27 +234,17 @@ pub async fn run_export(
     partition_columns_are_bare_words(&spec.partition.columns, ctx)?;
     partition_columns_have_no_nulls(&spec.partition.columns, &schema, stats)?;
 
+    let mut options = format_pairs(&spec.format)?;
     let part_clause = if spec.partition.is_flat() {
         String::new()
     } else {
+        options.push((
+            KEEP_PARTITION_COLUMNS,
+            spec.partition.keep_columns.to_string(),
+        ));
         format!(" PARTITIONED BY ({})", spec.partition.columns.join(", "))
     };
-
-    let opts = format_options(&spec.format)?;
-
-    // `keep_partition_by_columns` is a session config, not a COPY option — set it
-    // explicitly per partitioned export (default off).
-    if !spec.partition.is_flat() {
-        if let Ok(df) = ctx
-            .sql(&format!(
-                "SET datafusion.execution.keep_partition_by_columns = {}",
-                spec.partition.keep_columns
-            ))
-            .await
-        {
-            let _ = df.collect().await;
-        }
-    }
+    let opts = options_clause(&options);
 
     let esc = quote_literal(&spec.path);
     let stored = spec.format.stored_as();
@@ -315,13 +305,27 @@ fn quote_col(name: impl AsRef<str>) -> String {
     format!("\"{}\"", name.as_ref().replace('"', "\"\""))
 }
 
-/// The ` OPTIONS (…)` clause for a format, or an empty string for one with no options.
+/// Whether a partitioned write also puts the partition columns **inside** the files.
+///
+/// Sent as a **COPY option**, not as a session `SET`. DataFusion's physical planner reads this
+/// exact key out of the statement's own options and only falls back to the session config when it
+/// is absent (`physical_planner.rs`, the `Copy` arm), so an export states its own answer and
+/// leaves the session's alone. The `SET` this replaces was never restored: invisible while
+/// nothing else could read the option, and — the moment `SET` and `SHOW` became statements a user
+/// can type (ED-08) — one partitioned export silently rewriting an engine option for every later
+/// one, window or typed. Namespaced rather than bare because `TableOptions::set` ignores the whole
+/// `execution.` namespace, which is what lets the key reach the planner without the format
+/// refusing it as unknown.
+const KEEP_PARTITION_COLUMNS: &str = "execution.keep_partition_by_columns";
+
+/// The `'key' 'value'` pairs a format contributes to ` OPTIONS (…)`.
 ///
 /// Keys are bare and uppercase: DataFusion's COPY planner lowercases them and applies the
 /// `format.` prefix itself, so these resolve onto `CsvOptions` / `JsonOptions` /
-/// `TableParquetOptions` field names.
-fn format_options(format: &Format) -> Result<String, String> {
-    let pairs: Vec<(&str, String)> = match format {
+/// `TableParquetOptions` field names. A key that carries its own namespace
+/// ([`KEEP_PARTITION_COLUMNS`]) keeps it — the planner only prefixes a key with no dot in it.
+fn format_pairs(format: &Format) -> Result<Vec<(&'static str, String)>, String> {
+    let pairs: Vec<(&'static str, String)> = match format {
         Format::Csv(csv) => {
             let mut pairs = vec![
                 ("HAS_HEADER", csv.header.to_string()),
@@ -349,15 +353,20 @@ fn format_options(format: &Format) -> Result<String, String> {
         ],
         Format::Arrow => vec![],
     };
+    Ok(pairs)
+}
+
+/// The ` OPTIONS (…)` clause for a set of pairs, or an empty string for none.
+fn options_clause(pairs: &[(&str, String)]) -> String {
     if pairs.is_empty() {
-        return Ok(String::new());
+        return String::new();
     }
     let body = pairs
-        .into_iter()
+        .iter()
         .map(|(key, value)| format!("'{key}' '{value}'"))
         .collect::<Vec<_>>()
         .join(", ");
-    Ok(format!(" OPTIONS ({body})"))
+    format!(" OPTIONS ({body})")
 }
 
 /// A single-character CSV option as its **byte value**, which is how it must be sent.
@@ -378,6 +387,21 @@ fn ascii_byte(what: &str, c: char) -> Result<String, String> {
 /// inside `'…'`, so an embedded quote would otherwise close the literal early.
 fn quote_literal(raw: &str) -> String {
     raw.replace('\'', "''")
+}
+
+/// Why a partition column containing NULLs is refused, in the one wording both surfaces use.
+///
+/// Shared with the typed `COPY` arm (`ddl::copy`), which reaches the same conclusion by a
+/// different route — a pre-flight count over the statement's own source, since a typed COPY has
+/// no snapshot behind it and therefore none of the write pass's free counts. Two mechanisms, one
+/// sentence: the fact the user is told is the same fact, and a second phrasing of it would read
+/// like a second rule.
+pub(super) fn partition_null_refusal(name: &str) -> String {
+    format!(
+        "Can't partition by '{name}': it contains NULL values, and a NULL has no folder name — \
+         those rows would be written under another value and read back wrong. Partition by a \
+         column with no NULLs, or filter them out of the query first"
+    )
 }
 
 /// Refuse a partitioned export whose partition columns contain NULLs.
@@ -412,11 +436,7 @@ fn partition_columns_have_no_nulls(
         // A missing entry is not "zero nulls" — it means the count is unavailable, which under
         // the exact-zero rule is a reason to decline just as a positive count is.
         if stats.nulls.get(index).copied() != Some(0) {
-            return Err(format!(
-                "Can't partition by '{name}': it contains NULL values, and a NULL has no folder \
-                 name — those rows would be written under another value and read back wrong. \
-                 Partition by a column with no NULLs, or filter them out of the query first"
-            ));
+            return Err(partition_null_refusal(name));
         }
     }
     Ok(())
@@ -435,14 +455,20 @@ fn partition_columns_have_no_nulls(
 /// Its own (sync) function rather than an inline check, because the resolved dialect is not
 /// `Send` and [`run_export`] is spawned onto the engine runtime — a `Box<dyn Dialect>` held
 /// across one of its awaits would not compile.
-fn partition_columns_are_bare_words(
+///
+/// **Shared with the typed `COPY` arm** (`ddl::copy`), which asks it of the very strings
+/// `CopyToStatement::partitioned_by` holds — those are `Ident::to_string()`'s output, so a
+/// quoted `PARTITIONED BY ("order date")` arrives here *with its quotes*, which is exactly the
+/// name that would then match no field. The bad name is rendered inside single quotes rather
+/// than by `Debug` so that case reads as what the user typed instead of as escaped Rust.
+pub(super) fn partition_columns_are_bare_words(
     columns: &[String],
     ctx: &SessionContext,
 ) -> Result<(), String> {
     let dialect = sql::lex::dialect(ctx.state().config_options().sql_parser.dialect.as_ref());
     match columns.iter().find(|c| !is_bare_word(dialect.as_ref(), c)) {
         Some(bad) => Err(format!(
-            "Can't partition by {bad:?}: COPY takes unquoted column names, so a partition \
+            "Can't partition by '{bad}': COPY takes unquoted column names, so a partition \
              column has to be a single plain word"
         )),
         None => Ok(()),
@@ -498,6 +524,12 @@ mod tests {
             format,
             partition: Partition::default(),
         }
+    }
+
+    /// The ` OPTIONS (…)` a format alone contributes — what [`run_export`] then appends the
+    /// partition option to.
+    fn format_options(format: &Format) -> Result<String, String> {
+        Ok(options_clause(&format_pairs(format)?))
     }
 
     fn csv() -> Csv {
@@ -626,6 +658,20 @@ mod tests {
     #[test]
     fn arrow_writes_no_options_clause_at_all() {
         assert_eq!(format_options(&Format::Arrow).expect("arrow"), "");
+    }
+
+    /// **Keep-columns rides in the statement, never in the session.** It is the one option that
+    /// is not a format option, and it keeps its `execution.` namespace so the COPY planner reads
+    /// it and `TableOptions::set` skips it. The `SET` this replaced was global and unrestored, so
+    /// one partitioned export decided the answer for every later one.
+    #[test]
+    fn keeping_partition_columns_is_a_copy_option_in_its_own_namespace() {
+        let mut pairs = format_pairs(&Format::Arrow).expect("arrow");
+        pairs.push((KEEP_PARTITION_COLUMNS, true.to_string()));
+        assert_eq!(
+            options_clause(&pairs),
+            " OPTIONS ('execution.keep_partition_by_columns' 'true')"
+        );
     }
 
     #[test]

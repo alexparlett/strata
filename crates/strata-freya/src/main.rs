@@ -21,6 +21,7 @@ use strata_agent::serve_stdio;
 use strata_core::config::AppConfig;
 use strata_core::engine::purge_snapshot_root;
 use strata_core::project as project_io;
+use strata_core::secret::open_keystore;
 
 use crate::agent::create_global_agent;
 use crate::platform::{create_global_open, create_global_windows};
@@ -53,6 +54,15 @@ fn main() {
     // First thing: nothing logged before this exists. Every `tracing::*` call in the app
     // and in `strata-core` is a no-op until a subscriber is installed.
     init_logging(Log::Stdout);
+    // Open the OS keystore for the process (AS-05). One call, here, because the default
+    // store is process-wide and a module that installed itself on first touch could never
+    // be handed a different one. A failure is not fatal and not silent: nothing needs a
+    // secret to start, and every read that does then answers `SecretError::Unavailable` at
+    // the surface asking for it. Headless (`strata mcp`) never opens it — the agent
+    // vocabulary is read-only and holds no keys.
+    if let Err(err) = open_keystore() {
+        tracing::error!("{err}");
+    }
     // Clear snapshot leftovers from a previous crashed run (each live engine only ever
     // cleans its own subdirectory — safe only here, before any engine exists).
     purge_snapshot_root();

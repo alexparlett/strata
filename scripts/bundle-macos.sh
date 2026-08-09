@@ -30,8 +30,16 @@ set -euo pipefail
 APP_NAME="Strata"
 # The bundle id is the app's permanent identity to macOS - it keys the quarantine record, the
 # window-restore state and (once notarized) the Apple ticket. Changing it later orphans all of
-# that, so it is set here and not derived from anything that moves.
-BUNDLE_ID="${STRATA_BUNDLE_ID:-com.alexparlett.strata}"
+# that.
+#
+# It is **read out of the Rust source**, because the app needs the same string at runtime: it is
+# the keystore service every Strata credential is filed under (`strata_core::secret::APP_ID`,
+# AS-05), and Keychain access is scoped by the signature of the bundle claiming that identity. A
+# copy here that drifted from the constant would put the app's own keys under a name the bundle
+# does not claim, which is a class of bug nobody would look for. There is no environment override
+# for the same reason - one identity, one place, and the app can see it. (The read itself is in
+# the Version section below, which is where `fail` exists to complain with.)
+BUNDLE_ID_SRC="crates/strata-core/src/secret.rs"
 # The Rust bin, which is not what the bundle is called. `CFBundleExecutable` below is the one
 # place the two names have to agree.
 CARGO_BIN="strata-freya"
@@ -98,8 +106,15 @@ fail() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Version
+# Version and identity
 # ---------------------------------------------------------------------------------------------
+
+# The bundle id, out of the Rust constant that is also the app's keystore service (see the Identity
+# section). An empty result means the constant was renamed or reformatted, and stamping an empty
+# CFBundleIdentifier would produce a bundle macOS treats as a different app on every build - so it
+# is a hard stop rather than a warning.
+BUNDLE_ID="$(sed -n 's/^pub const APP_ID: &str = "\(.*\)";$/\1/p' "$BUNDLE_ID_SRC" | head -1)"
+[[ -n "$BUNDLE_ID" ]] || fail "could not read APP_ID out of $BUNDLE_ID_SRC"
 
 # The crate version is the single source of truth for what a build calls itself, so a release is a
 # version bump plus a tag and never a number typed into two places. Read it through version.sh

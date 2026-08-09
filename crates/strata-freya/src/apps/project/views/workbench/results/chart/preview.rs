@@ -122,33 +122,52 @@ fn wide_columns() -> Vec<ColumnInfo> {
         .collect()
 }
 
-/// The whole body: strip on the left (mark picker, encoders, sort, legend), plot on the right.
-fn body(data: ChartData, mark: ChartMark, schema: Vec<ColumnInfo>) -> impl IntoElement {
+/// The whole body: strip on the left (mark picker, encoders, bins, sort, scale, legend), plot
+/// on the right. `config` is the tab's stored intent, so a fixture can pose the surface in a
+/// state a press would have put it in.
+fn body(data: ChartData, config: ChartConfig, schema: Vec<ColumnInfo>) -> impl IntoElement {
     let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
     let typography = scale();
     let dress = Dress::new(&theme, &typography);
-    let config = ChartConfig {
-        mark: Some(mark),
-        ..ChartConfig::default()
-    };
     let roles = Roles::of(&schema);
     let encoding = resolve(&config, &roles);
+    let mark = encoding.mark;
+    let data = super::hide::applied(data, &encoding.hidden);
+    let key = legend(&data, mark, &dress, &encoding.hidden);
+    // The same two questions the body asks, in the same order — a fixture that skipped them
+    // would be a picture of a surface the app does not have.
+    let fallback = encoding.log_y.then(|| super::log_fallback(&data)).flatten();
+    let banner = fallback
+        .map(str::to_string)
+        .or_else(|| super::crowded(&data));
     rect()
         .width(Size::fill())
         .height(Size::fill())
         .horizontal()
         .content(Content::Flex)
         .background(theme.background)
-        .child(
-            ControlStrip::new(TabId::new(), config, encoding, roles)
-                .legend(legend(&data, mark, &dress)),
-        )
+        .child(ControlStrip::new(TabId::new(), config, encoding.clone(), roles).legend(key))
         // The body's own pane, floor and all — not a second copy of it (see `canvas_pane`).
-        .child(super::canvas_pane(ChartCanvas::new(Rc::new(Frame {
-            data,
-            mark,
-            dress,
-        }))))
+        .child(super::canvas_pane(
+            rect()
+                .width(Size::fill())
+                .height(Size::fill())
+                .vertical()
+                .content(Content::Flex)
+                .spacing(8.)
+                .maybe_child(banner.map(super::Banner::new))
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .height(Size::flex(1.))
+                        .child(ChartCanvas::new(Rc::new(Frame {
+                            log_y: encoding.log_y && fallback.is_none(),
+                            data,
+                            mark,
+                            dress,
+                        }))),
+                ),
+        ))
 }
 
 /// Render one mark to `target/chart-<name>.png`.
@@ -157,7 +176,15 @@ fn body(data: ChartData, mark: ChartMark, schema: Vec<ColumnInfo>) -> impl IntoE
 /// own popups get into a picture — an encoder's open list is the one part of this surface
 /// whose layout a static render cannot show.
 fn shoot(name: &str, data: ChartData, mark: ChartMark, hover: Option<(f64, f64)>) {
-    shoot_at(name, data, mark, columns(), hover, None);
+    shoot_as(name, data, marked(mark), columns(), hover, None);
+}
+
+/// An otherwise untouched config on one mark — what most fixtures pose.
+fn marked(mark: ChartMark) -> ChartConfig {
+    ChartConfig {
+        mark: Some(mark),
+        ..ChartConfig::default()
+    }
 }
 
 fn shoot_at(
@@ -168,9 +195,20 @@ fn shoot_at(
     hover: Option<(f64, f64)>,
     press: Option<(f64, f64)>,
 ) {
+    shoot_as(name, data, marked(mark), schema, hover, press);
+}
+
+fn shoot_as(
+    name: &str,
+    data: ChartData,
+    config: ChartConfig,
+    schema: Vec<ColumnInfo>,
+    hover: Option<(f64, f64)>,
+    press: Option<(f64, f64)>,
+) {
     let app = move || {
         use_init_theme(|| strata_theme(&load("midnight")));
-        body(data.clone(), mark, schema.clone())
+        body(data.clone(), config.clone(), schema.clone())
     };
     // The strip's controls write the tab's encoding, so they need the session store the
     // window provides — nothing presses here, but the handles have to resolve.
@@ -184,7 +222,14 @@ fn shoot_at(
         },
         1.,
     );
-    runner.sync_and_update();
+    // **Settled, not merely synced once.** The hit regions below are recorded by the *paint*,
+    // at whatever layout is current when it runs — so a tree still one pass short of its final
+    // layout records them at coordinates the finished picture does not use, and a hover lands
+    // on nothing while the shot looks perfectly right. Measured: the histogram fixture missed
+    // its own bar that way.
+    for _ in 0..4 {
+        runner.sync_and_update();
+    }
     if let Some(at) = press {
         runner.move_cursor(at);
         runner.click_cursor(at);
@@ -239,20 +284,91 @@ fn chart_preview() {
     shoot("area", table(), ChartMark::Area, None);
     shoot("pie", many_slices(), ChartMark::Pie, None);
     shoot("scatter", points(), ChartMark::Scatter, None);
-    shoot(
-        "histogram",
+    shoot("histogram", bins(), ChartMark::Histogram, None);
+
+    // ---- Chart 06 ----
+
+    // A hidden series: the middle line gone from the plot, its legend row dim, and every other
+    // series still in the colour it had.
+    shoot_as(
+        "hidden-series",
+        table(),
+        ChartConfig {
+            hidden: vec!["amount".into()],
+            ..marked(ChartMark::Line)
+        },
+        columns(),
+        None,
+        None,
+    );
+
+    // A log count axis over a long tail — decade gridlines, bars standing on the axis floor.
+    shoot_as(
+        "log-histogram",
         ChartData::Bins(
             (0..12)
                 .map(|i| ChartBin {
                     lo: f64::from(i) * 5.,
                     hi: f64::from(i + 1) * 5.,
-                    count: 4 + (i as u64 * 7) % 23,
+                    // Two and a half decades of counts, with an empty bin in the tail — which
+                    // must not cost the axis its log scale.
+                    count: [900, 400, 180, 70, 30, 12, 6, 3, 2, 1, 0, 1][i as usize],
                 })
                 .collect(),
         ),
-        ChartMark::Histogram,
+        ChartConfig {
+            log_y: true,
+            ..marked(ChartMark::Histogram)
+        },
+        columns(),
+        None,
         None,
     );
+
+    // The same preference over a series that dips to zero: linear, under the banner.
+    shoot_as(
+        "log-refused",
+        ChartData::Table {
+            axis: Axis {
+                labels: (0..6).map(|i| format!("t{i}")).collect(),
+                positions: None,
+            },
+            series: vec![ChartSeries {
+                name: "amount".into(),
+                values: vec![Some(10.), Some(0.), Some(400.), Some(90.), None, Some(7.)],
+            }],
+        },
+        ChartConfig {
+            log_y: true,
+            ..marked(ChartMark::Line)
+        },
+        columns(),
+        None,
+        None,
+    );
+
+    // The crosshair: two hairlines across the plot frame through the hovered bin's own top
+    // edge, its value at the axis, and the ordinary hover readout beside it. The pointer has
+    // to be **on** a mark — the crosshair rides on the hover, which is what makes it free.
+    shoot(
+        "crosshair",
+        bins(),
+        ChartMark::Histogram,
+        Some((495., 450.)),
+    );
+}
+
+/// A dozen bins with a readable spread — the plain histogram fixture.
+fn bins() -> ChartData {
+    ChartData::Bins(
+        (0..12)
+            .map(|i| ChartBin {
+                lo: f64::from(i) * 5.,
+                hi: f64::from(i + 1) * 5.,
+                count: 4 + (i as u64 * 7) % 23,
+            })
+            .collect(),
+    )
 }
 
 /// A guardrail notice in a **collapsed** pane — the state the min-width fix got wrong. What to
@@ -262,7 +378,7 @@ fn chart_preview() {
 #[ignore = "writes target/chart-*.png for eyeballing; run explicitly"]
 fn narrow_notice_preview() {
     for (name, width) in [("notice-narrow", 300.), ("notice-wide", 900.)] {
-        let app = || {
+        let app = move || {
             use_init_theme(|| strata_theme(&load("midnight")));
             let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
             let config = ChartConfig::default();

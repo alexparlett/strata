@@ -78,9 +78,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 - **Chart view** ([`workstream-chart-view/`](workstream-chart-view/README.md), **Rz2**) — the
   results Chart surface. **The core is built (00–04 ✅)**: the snapshot ordinal, the
   renderer-first `Engine::chart` read, the plotters/Skia body, the encoder strip + `ChartConfig`,
-  the guardrails, and Copy Image (08 ✅, which grew the fork's clipboard an image side). Open:
-  the remaining follow-ons (05–07, 09–11 — presets, interactivity, templates, shape panel, Tier B
-  marks, trendline). Spec: `docs/CHART_SPEC.md`.
+  the guardrails, Copy Image (08 ✅, which grew the fork's clipboard an image side) and the
+  interactivity pass (06 ✅ — bin count, legend hide/isolate, log value axis, crosshair). Open:
+  the remaining follow-ons (05, 07, 09–11 — presets, templates, shape panel, Tier B marks,
+  trendline). Spec: `docs/CHART_SPEC.md`.
 - **Polymorphic JSON** (WJ) — ✅ **done, folder removed**: the Postgres-style JSON accessors
   (WJ-01) and the union-tolerant `FileFormat` (WJ-02, `engine::json_poly`). Entirely
   `strata-core`; no UI surface of its own.
@@ -99,8 +100,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   + tool manifest, provider seam + loop, Settings ▸ Assistant (a **roster** of provider
   entries — the per-conversation pick of entry/model/effort lives on the pane's composer, a
   split settled 2026-08-09), the pane, and the **secret store** (OS keystore; config holds
-  references, never keys). Decision records in that workstream's README; the doc records the
-  pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
+  references, never keys). **05 ✅** (`strata_core::secret` — a `SecretRef` in config, a
+  `Secret` with no serde path at all); 01–04 open. Decision records in that workstream's
+  README; the doc records the pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not
+  built").
 - **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
   ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,
@@ -124,12 +127,12 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Editor statements** (ED-05..10) — the open capability arms over the built router/dispatch
-   spine; ED-04/05 include the catalog pane's internal-table treatment.
+1. **Editor statements** (ED-08..10) — the open capability arms over the built router/dispatch
+   spine.
 2. **Agent access AA-06** — the chat pane (starts with the deferred brain decision; read AA-03c's
    identity finding first).
-3. **Chart follow-ons** (05–07, 09–11) — presets, interactivity, templates, shape panel,
-   Tier B marks, trendline.
+3. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
+   trendline.
 4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
    with the above.
 

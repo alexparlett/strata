@@ -13,7 +13,7 @@ use strata_core::engine::export::{
     Codec, Compression, Csv, ExportSpec, Format, Json, Parquet, Partition, Scope, Statistics,
     WriterVersion,
 };
-use strata_core::engine::{Engine, RunTag, WsId};
+use strata_core::engine::{Engine, RunOutcome, RunTag, WsId};
 
 /// Five rows, three columns, unsorted on `column1` so a sorted export is observable.
 const SQL: &str = "SELECT * FROM (VALUES (3, 'c', true), (1, 'a', false), (5, 'e', true), (2, 'b', false), (4, 'd', true)) AS t";
@@ -401,7 +401,41 @@ async fn keeping_partition_columns_puts_them_back_in_the_files() {
         "kept inside the files too: {header:?}"
     );
 
+    // **And it said so in the statement, not in the session.** The option rides in the COPY's own
+    // `OPTIONS`, which the planner reads before falling back to the session config — so an export
+    // that keeps its partition columns does not decide that for every later one. The `SET` this
+    // replaced never restored the value, which was invisible only for as long as nothing else
+    // could read it back.
+    assert_eq!(
+        keep_partition_by_columns(&eng).await,
+        "false",
+        "the engine's own setting is untouched by an export"
+    );
+
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// The engine's live value for `datafusion.execution.keep_partition_by_columns`, read the way a
+/// user would — a typed `SHOW`, through the same `Engine::run` the editor uses.
+async fn keep_partition_by_columns(eng: &Engine) -> String {
+    let RunOutcome::Rows(output, _) = eng
+        .run(
+            WsId(9),
+            RunTag(9),
+            "SHOW datafusion.execution.keep_partition_by_columns".into(),
+            10,
+        )
+        .await
+        .expect("show")
+    else {
+        panic!("SHOW did not return rows");
+    };
+    output
+        .rows
+        .first()
+        .and_then(|row| row.last())
+        .map(|cell| cell.text.clone())
+        .expect("a value row")
 }
 
 #[tokio::test]
@@ -625,8 +659,10 @@ async fn exporting_without_a_snapshot_says_so_plainly() {
 /// neighbouring value's directory, so it reads back claiming a value it never had. Since nothing
 /// on our side can steer that, the export declines instead.
 ///
-/// The check is a footer read, not a scan — the snapshot is written with column statistics on
-/// (`query::snapshot_writer_props`), so the null count is already in its metadata.
+/// The check costs nothing and scans nothing: `query::materialize` streams every batch to write
+/// the snapshot and sums `Array::null_count` as it goes, so the exact per-column count is already
+/// in hand (`query::SnapshotStats`). A typed `COPY`, which has no snapshot behind it, reaches the
+/// same refusal by counting — see `ddl::copy`.
 #[tokio::test]
 async fn a_partition_column_with_nulls_is_refused() {
     let dir = scratch("partition-null");

@@ -56,7 +56,7 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
 | 03 | Encoder strip + `ChartConfig` state | ✅ | Rz2 | 02 |
 | 04 | Guardrails (overlays + banner) | ✅ | Rz2 | 02, 03 |
 | 05 | Analytical presets — the remaining menu (follow-on) | ⬜ | Rz2 | 07, 10 |
-| 06 | Interactivity — bins, legend toggle, log axis, crosshair | ⬜ | Rz2 | 01–04 |
+| 06 | Interactivity — bins, legend toggle, log axis, crosshair | ✅ | Rz2 | 01–04 |
 | 07 | Tier A templates — palette commands that write the SQL | ⬜ | Rz2 | 01–04 |
 | 08 | Copy chart as image — fork clipboard + offscreen capture | ✅ | Rz2 | 02 |
 | 09 | Shape panel — the aggregation composer, its own surface | ⬜ | Rz2 | 01–04 |

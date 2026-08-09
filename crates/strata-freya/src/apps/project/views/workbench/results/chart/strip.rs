@@ -1,9 +1,14 @@
 //! The Chart body's **control strip** — the fixed-width column down the left of the canvas
 //! (canvas `Strata.dc.html`, the chart view's first child).
 //!
-//! It carries the **mark picker**, the **encoders** (X / Y / Series), the **sort** toggle and
-//! the **legend**. Every control commits a whole [`ChartConfig`] through one write
-//! ([`commit`]) on `Chan::Chart(tab)`, so an encoder edit re-charts and wakes nothing else.
+//! It carries the **mark picker**, the **encoders** (X / Y / Series), a histogram's **bin
+//! count**, the **sort** and **scale** toggles, and the **legend**. Every control commits a
+//! whole [`ChartConfig`] through one write ([`commit`]) on `Chan::Chart(tab)`, so an encoder
+//! edit re-charts and wakes nothing else.
+//!
+//! **One of them is a read and the rest are repaints.** The bin count reaches the
+//! [`ChartQuery`](strata_model::ChartQuery), because the engine does the counting; the sort,
+//! the scale and the legend's hidden set are transforms over data already in hand.
 //!
 //! **The options are the constraint.** What each control offers comes from `config`'s
 //! per-mark option sets, so an encoding a mark cannot take is unreachable rather than
@@ -15,7 +20,8 @@
 //! same reason the Export window's format cards aren't segments: a `SegmentedToggle` holding
 //! six labelled options in 232px would give each one 33px.
 //!
-//! **The legend lives here rather than on the canvas**, which is a deliberate divergence from
+//! **The legend lives here rather than on the canvas**, and it is also the control that hides
+//! a series — which is a deliberate divergence from
 //! the design (whose canvas draws a key inside the plot, for the pie). A plot-overlay legend
 //! has nowhere to go when it outgrows its box: plotters sizes the box to its entries and draws
 //! it inside the plotting area, so four long column names push it over the edge of the pane,
@@ -33,14 +39,16 @@ use freya::components::get_theme;
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
 use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
+use strata_core::engine::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartSort, ChartX, TabId};
 
 use super::config::{
-    allows_row_index, series_options, sortable, takes_many_ys, x_options, y_options, Encoding,
-    Roles,
+    allows_row_index, log_axis, series_options, sortable, takes_many_ys, x_options, y_options,
+    Encoding, Roles,
 };
 use super::{ChartTheme, ChartThemePartial, ChartThemePreference};
 use crate::apps::project::state::{Chan, SessionState};
+use crate::components::form::ValueField;
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue};
@@ -90,8 +98,23 @@ fn glyph(mark: ChartMark) -> IconName {
 
 /// **The strip's one write.** Every control — a tile, a menu row, a sort segment — commits the
 /// whole config, so there is one place that knows which channel an encoder edit lands on.
-fn commit(mut session: Radio<SessionState, Chan>, tab: TabId, next: ChartConfig) {
-    session.write_channel(Chan::Chart(tab)).set_chart(tab, next);
+fn commit(session: Radio<SessionState, Chan>, tab: TabId, next: ChartConfig) {
+    edit(session, tab, move |config| *config = next);
+}
+
+/// The same write, over the config **as the store currently holds it** — for the one control
+/// that commits from an effect rather than from a press.
+///
+/// A press handler is rebuilt on every render, so the config it captured is fresh. A
+/// `use_side_effect` closure is built *once* (AGENTS.md §3), so a config captured for one is
+/// the config from the first render — and committing it would undo every encoder edit made
+/// since. `Radio` has no non-subscribing read, and it does not need one: the guard that writes
+/// dereferences to the store, so the read and the write are the same borrow.
+fn edit(mut session: Radio<SessionState, Chan>, tab: TabId, edit: impl FnOnce(&mut ChartConfig)) {
+    let mut store = session.write_channel(Chan::Chart(tab));
+    let mut next = store.chart(tab);
+    edit(&mut next);
+    store.set_chart(tab, next);
 }
 
 /// What "nothing on this channel" reads as, per channel. Both are real choices, not empty
@@ -100,7 +123,8 @@ fn commit(mut session: Radio<SessionState, Chan>, tab: TabId, next: ChartConfig)
 const ROW_INDEX: &str = "Row index";
 const NO_SERIES: &str = "None";
 
-/// One row of the legend: what a colour on the plot means.
+/// One row of the legend: what a colour on the plot means, and — where the row is pressable —
+/// which series pressing it hides.
 #[derive(Clone, PartialEq)]
 pub struct LegendEntry {
     pub swatch: Color,
@@ -108,6 +132,11 @@ pub struct LegendEntry {
     /// A slice's share of the whole. `None` for a series, whose values are on the axis
     /// already.
     pub detail: Option<String>,
+    /// The series name a press toggles, or `None` for an inert row (a pie's slices — see
+    /// [`legend`](super::legend)).
+    pub series: Option<String>,
+    /// Whether that series is currently hidden, so the row can read as struck out.
+    pub hidden: bool,
 }
 
 /// A legend swatch's box.
@@ -226,6 +255,47 @@ impl ControlStrip {
             .collect()
     }
 
+    /// This config with `name` hidden or shown again — the ordinary press.
+    fn toggled(&self, name: &str) -> ChartConfig {
+        self.with(|c| {
+            if let Some(at) = c.hidden.iter().position(|held| held == name) {
+                c.hidden.remove(at);
+            } else {
+                c.hidden.push(name.to_string());
+            }
+        })
+    }
+
+    /// This config with **only** `name` showing among the series this result has — ⌥-press. On
+    /// the sole visible series it shows them all again instead, so the gesture is its own undo
+    /// and a user cannot ⌥-press their way into a chart with nothing on it.
+    ///
+    /// **It edits the set, it does not replace it.** A name for a series this result has no
+    /// column for is kept on both paths, the same as an ordinary press keeps it: the config
+    /// holds intent and is never pruned against the result in hand
+    /// ([`ChartConfig::hidden`](strata_model::ChartConfig::hidden)), so a column that comes
+    /// back brings the user's choice with it. Rebuilding the field from the current legend
+    /// would quietly spend every such choice, and would make the two legend gestures disagree
+    /// about the same field.
+    fn isolated(&self, name: &str) -> ChartConfig {
+        let here: Vec<String> = self
+            .legend
+            .iter()
+            .filter_map(|entry| entry.series.clone())
+            .collect();
+        let alone = here
+            .iter()
+            .all(|other| other == name || self.config.hidden.contains(other));
+        self.with(|c| {
+            // Only the names this result can show are touched; everything else stays put.
+            c.hidden.retain(|held| !here.contains(held));
+            if !alone {
+                c.hidden
+                    .extend(here.iter().filter(|other| *other != name).cloned());
+            }
+        })
+    }
+
     /// The series menu: no split, then every column that can carry one beside the current X.
     fn series_choices(&self, options: Vec<String>) -> Vec<Choice> {
         let mut choices = vec![Choice {
@@ -329,6 +399,13 @@ impl Component for ControlStrip {
             .key("series")
         });
 
+        // The engine does the binning, so this one is part of the read — a new count is a new
+        // entry rather than a repaint. Only a histogram has bins to count.
+        let bins = (mark == ChartMark::Histogram).then_some(BinsField {
+            tab: self.tab,
+            current: self.encoding.bins,
+        });
+
         // The sort is a view transform over the settled rows (spec §6) — offered only for the
         // marks whose data has an order to permute.
         let sort = sortable(mark).then(|| SortToggle {
@@ -337,6 +414,17 @@ impl Component for ControlStrip {
             config: self.config.clone(),
         });
 
+        // As is the value axis's scale, offered only where the mark plots position rather than
+        // extent (`config::log_axis`).
+        let scale = log_axis(mark).then(|| ScaleToggle {
+            tab: self.tab,
+            log: self.encoding.log_y,
+            config: self.config.clone(),
+        });
+
+        // ⌥ isolates a series, and a pointer event carries no modifiers (AGENTS.md §3) — so
+        // the strip mirrors the key state and each row reads it at press time.
+        let mut alt = use_state(|| false);
         let legend = (!self.legend.is_empty()).then(|| {
             let mut section = rect()
                 .width(Size::fill())
@@ -344,9 +432,16 @@ impl Component for ControlStrip {
                 .spacing(TILE_GAP)
                 .child(Eyebrow::new("LEGEND").color(theme.label_color));
             for (nth, entry) in self.legend.iter().enumerate() {
+                let next = entry
+                    .series
+                    .as_deref()
+                    .map(|name| (self.toggled(name), self.isolated(name)));
                 section = section.child(
                     LegendRow {
                         entry: entry.clone(),
+                        tab: self.tab,
+                        next,
+                        alt,
                         key: DiffKey::None,
                     }
                     .key(nth),
@@ -364,6 +459,20 @@ impl Component for ControlStrip {
             .height(Size::fill())
             .background(theme.panel_background)
             .border(Border::new().width(strip_rule()).fill(theme.border_fill))
+            // **Mirroring ⌥, and re-reading it from every event.** A key-up lost while the
+            // window is unfocused would otherwise leave the modifier stuck on, so the flag is
+            // taken from each event's own `modifiers` rather than only toggled by the ⌥ key —
+            // any keystroke at all resynchronizes it (FREYA_UI.md, "reset defensively").
+            .on_global_key_down(move |e: Event<KeyboardEventData>| {
+                let held = matches!(e.key, Key::Named(NamedKey::Alt))
+                    || e.modifiers.contains(Modifiers::ALT);
+                alt.set_if_modified(held);
+            })
+            .on_global_key_up(move |e: Event<KeyboardEventData>| {
+                let held = !matches!(e.key, Key::Named(NamedKey::Alt))
+                    && e.modifiers.contains(Modifiers::ALT);
+                alt.set_if_modified(held);
+            })
             .child(
                 ScrollView::new().child(
                     rect()
@@ -375,7 +484,9 @@ impl Component for ControlStrip {
                         .maybe_child(x)
                         .maybe_child(y)
                         .maybe_child(series)
+                        .maybe_child(bins)
                         .maybe_child(sort)
+                        .maybe_child(scale)
                         .maybe_child(legend),
                 ),
             )
@@ -506,11 +617,163 @@ impl Component for SortToggle {
     }
 }
 
+/// The **value axis's scale**: linear or logarithmic, as one segmented pill.
+///
+/// A display transform in the sort's class — flipping it repaints and never re-reads. Its own
+/// component for the same reason [`SortToggle`] is: it is only shown for some marks, and a hook
+/// taken behind a condition is a hook count that changes between renders.
+#[derive(PartialEq)]
+struct ScaleToggle {
+    tab: TabId,
+    log: bool,
+    config: ChartConfig,
+}
+
+impl Component for ScaleToggle {
+    fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
+        let session = use_radio::<SessionState, Chan>(Chan::Chart(self.tab));
+        let tab = self.tab;
+
+        let mut pill = SegmentedToggle::new();
+        for (label, title, log) in [
+            ("Linear", "Linear value axis", false),
+            ("Log", "Logarithmic value axis", true),
+        ] {
+            let next = ChartConfig {
+                log_y: log,
+                ..self.config.clone()
+            };
+            pill = pill.child(
+                ToggleSegment::text(label)
+                    .title(title)
+                    .selected(self.log == log)
+                    .on_press(move |_| commit(session, tab, next.clone())),
+            );
+        }
+
+        rect()
+            .width(Size::fill())
+            .vertical()
+            .spacing(LABEL_GAP)
+            .child(Eyebrow::new("SCALE").color(theme.label_color))
+            .child(pill)
+    }
+}
+
+/// How many characters the bin box will hold — the cap's own width, so a slip of the keyboard
+/// cannot type an order of magnitude the read would throw away. It is a **digit** bound, not
+/// the cap itself: over 200 the box still accepts 201..=999, and the clamp plus the blur echo
+/// are what make those honest. Derived from [`MAX_BINS`] rather than written out, because two
+/// places is where they drift.
+fn bins_digits() -> usize {
+    MAX_BINS.to_string().len()
+}
+
+/// A histogram's **bin count** — a box, empty for the engine's own `√n` choice.
+///
+/// Follows [`NumberField`](crate::components::form::NumberField)'s contract, including the half
+/// that matters most here: it **publishes on every keystroke and normalizes its box when the
+/// box is left** (AGENTS.md §3). Without the second half the field is the very thing this
+/// change made [`MAX_BINS`] public to prevent — a control showing one number over a chart
+/// drawn with another.
+///
+/// One deliberate difference from `NumberField`: an **empty box is a value here**, not a
+/// half-typed number. "Auto" is what most histograms want, so it has to be reachable by
+/// clearing the field rather than only by deleting the tab's state — which is why this owns its
+/// buffer and reports `Option<u16>` instead of reusing that component.
+///
+/// Its own component so the strip's hook count is fixed whether or not a histogram is showing
+/// (the [`SortToggle`] precedent).
+#[derive(PartialEq)]
+struct BinsField {
+    tab: TabId,
+    current: Option<u16>,
+}
+
+impl Component for BinsField {
+    fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
+        let session = use_radio::<SessionState, Chan>(Chan::Chart(self.tab));
+        let mut text = use_state({
+            let seed = self.current.map(|n| n.to_string()).unwrap_or_default();
+            move || seed
+        });
+        // What was last committed. In state rather than captured, because a
+        // `use_side_effect` closure is built once and a captured comparison would freeze at
+        // the first render — the field could then never be typed back to where it started
+        // (`NumberField`'s own note).
+        let mut reported = use_state({
+            let seed = self.current;
+            move || seed
+        });
+        // The box's id is ours, so the effect below can see it lose focus.
+        let a11y_id = use_a11y();
+        let focus = use_focus(a11y_id);
+
+        let tab = self.tab;
+        use_side_effect(move || {
+            let raw = text.read().trim().to_string();
+            // An empty box **and** an unparseable one are both Auto: the box is cleared on the
+            // way to typing a new number, and a keystroke that has not settled on a count yet
+            // must not leave the chart on the old one. Parsed wide and *then* clamped — a
+            // `u16` parse would answer `None` for anything over 65 535, so a fat-fingered
+            // count would read as Auto instead of as the cap.
+            let bins = raw
+                .parse::<u64>()
+                .ok()
+                .map(|n| n.clamp(1, MAX_BINS as u64) as u16)
+                .filter(|_| !raw.is_empty());
+            if bins == *reported.peek() {
+                return;
+            }
+            reported.set(bins);
+            // Through `edit`, not `commit`: this closure is built once, so a captured config
+            // would be the one from the first render and typing a bin count would undo every
+            // encoder change made since the histogram was picked.
+            edit(session, tab, |config| config.bins = bins);
+        });
+
+        // Leaving the box is when it is made to agree with what it reported. `reported` is
+        // peeked, not read: this must wake on focus alone, or the echo would land mid-keystroke
+        // and overwrite what is being typed.
+        use_side_effect(move || {
+            if focus() == Focus::Not {
+                let echo = (*reported.peek()).map_or_else(String::new, |n| n.to_string());
+                text.set_if_modified(echo);
+            }
+        });
+
+        rect()
+            .width(Size::fill())
+            .vertical()
+            .spacing(LABEL_GAP)
+            .child(Eyebrow::new("BINS").color(theme.label_color))
+            .child(
+                ValueField::new(text)
+                    .placeholder("Auto")
+                    .max_len(bins_digits())
+                    .a11y_id(a11y_id)
+                    .width(Size::px(CONTROL_WIDTH)),
+            )
+    }
+}
+
 /// One legend row: the swatch a mark is drawn in, the name it carries, and — for a slice —
 /// its share, which a pie has no axis to read off.
+///
+/// A row over a **series** is also the control that hides it: a press toggles, ⌥-press
+/// isolates. A hidden row keeps its swatch and its slot and goes dim, because the swatch is
+/// what says which colour comes back.
 #[derive(PartialEq)]
 struct LegendRow {
     entry: LegendEntry,
+    tab: TabId,
+    /// What a press and an ⌥-press commit, or `None` for an inert row. Resolved by the strip,
+    /// which is where the encoding rules are — this row knows only how to write one.
+    next: Option<(ChartConfig, ChartConfig)>,
+    /// Whether ⌥ is down, mirrored by the strip (pointer events carry no modifiers).
+    alt: State<bool>,
     key: DiffKey,
 }
 
@@ -520,27 +783,62 @@ impl KeyExt for LegendRow {
     }
 }
 
+/// How far a hidden legend row is faded — enough to read as off, not so far as to be
+/// unreadable, since it is also the control that brings the series back.
+const HIDDEN_ALPHA: u8 = 110;
+
 impl Component for LegendRow {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
+        let session = use_radio::<SessionState, Chan>(Chan::Chart(self.tab));
+        let mut hovered = use_state(|| false);
+
+        let dim = |color: Color| {
+            if self.entry.hidden {
+                color.with_a(HIDDEN_ALPHA)
+            } else {
+                color
+            }
+        };
+        let tab = self.tab;
+        let alt = self.alt;
+        let next = self.next.clone();
+        let pressable = next.is_some();
+
         rect()
             .width(Size::fill())
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
             .spacing(8.)
+            // A row that does nothing must not light up under the pointer.
+            .maybe(pressable && hovered(), |el| {
+                el.background(theme.tile_active_background)
+            })
+            .maybe(pressable, |el| {
+                el.corner_radius(4.)
+                    .padding((2., 4.))
+                    .on_pointer_enter(move |_| hovered.set(true))
+                    .on_pointer_leave(move |_| hovered.set(false))
+                    .on_press(move |_| {
+                        if let Some((toggled, isolated)) = &next {
+                            let next = if *alt.peek() { isolated } else { toggled };
+                            commit(session, tab, next.clone());
+                        }
+                    })
+            })
             .child(
                 rect()
                     .width(Size::px(SWATCH))
                     .height(Size::px(SWATCH))
                     .corner_radius(2.)
-                    .background(self.entry.swatch),
+                    .background(dim(self.entry.swatch)),
             )
             .child(
                 // Flexing and ellipsizing, so a long column name gives up its own width
                 // rather than pushing the share off the strip (AGENTS.md §3).
                 Caption::new(self.entry.label.clone())
-                    .color(theme.legend_color)
+                    .color(dim(theme.legend_color))
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
@@ -637,13 +935,17 @@ fn tile_dress(theme: &ChartTheme, selected: bool, hovered: bool) -> (Color, Colo
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
     use freya::radio::RadioStation;
+    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
     use freya_testing::TestingRunner;
     use strata_core::engine::column_info;
     use strata_core::theme::load;
-    use strata_model::{ColumnInfo, Origin};
+    use strata_model::{Axis, ChartData, ChartSeries, ColumnInfo, Origin};
 
     use super::super::config::resolve;
+    use super::super::paint::Dress;
     use super::*;
+    use crate::components::form::FIELD_HEIGHT;
+    use crate::components::typography::scale;
     use crate::theme::strata_theme;
 
     /// A date, a category and two measures — enough for every encoder to have something to
@@ -673,9 +975,35 @@ mod tests {
             let config = store.read().chart(tab);
             let roles = Roles::of(&columns());
             let encoding = resolve(&config, &roles);
+            // The legend the body would hand over, off a stand-in result whose series are the
+            // encoding's own Y columns — built through `legend` rather than by hand, so what
+            // a row does here is what a row does in the app.
+            let data = ChartData::Table {
+                axis: Axis {
+                    labels: vec!["a".into()],
+                    positions: None,
+                },
+                series: encoding
+                    .ys
+                    .iter()
+                    .map(|name| ChartSeries {
+                        name: name.clone(),
+                        values: vec![Some(1.)],
+                    })
+                    .collect(),
+            };
+            let key = super::super::legend(
+                &data,
+                encoding.mark,
+                &Dress::new(
+                    &get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart"),
+                    &scale(),
+                ),
+                &encoding.hidden,
+            );
             rect()
                 .expanded()
-                .child(ControlStrip::new(tab, config, encoding, roles))
+                .child(ControlStrip::new(tab, config, encoding, roles).legend(key))
         };
         TestingRunner::new(
             app,
@@ -831,6 +1159,216 @@ mod tests {
 
         click_text(&mut runner, ChartSort::ByYDesc.label());
         assert_eq!(config(&session).sort, ChartSort::ByYDesc);
+    }
+
+    /// **The bin count is the one control here that is part of the read**, so it is offered
+    /// only for the mark that has bins — and clearing the box is Auto rather than a number.
+    #[test]
+    fn the_bin_count_is_offered_for_a_histogram_and_an_empty_box_is_auto() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+        assert!(!shows(&runner, "BINS"), "no other mark bins anything");
+
+        click_text(&mut runner, "Histogram");
+        assert!(shows(&runner, "BINS"), "{:?}", texts(&runner));
+        assert_eq!(config(&session).bins, None, "unset until it is typed");
+
+        type_into_bins(&mut runner, "40");
+        assert_eq!(config(&session).bins, Some(40));
+
+        // Emptying the box is Auto, not zero and not the last number typed.
+        type_into_bins(&mut runner, "");
+        assert_eq!(config(&session).bins, None);
+
+        // Past the read's own cap the box commits the cap, so what it accepts and what the
+        // engine counts are the same number.
+        type_into_bins(&mut runner, "5000");
+        assert_eq!(config(&session).bins, Some(MAX_BINS as u16));
+    }
+
+    /// **The bin count commits from a `use_side_effect`, so it must read the config rather
+    /// than capture it.** That closure is built once (AGENTS.md §3); a captured config is the
+    /// one from the first render, and typing a count would silently undo every encoder change
+    /// made since the histogram was picked.
+    #[test]
+    fn a_bin_count_does_not_undo_the_encoder_edits_made_after_it_was_mounted() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+        click_text(&mut runner, "Histogram");
+
+        // An edit on another channel *after* the field mounted — a histogram takes one Y, so
+        // its trigger reads the single column and the pick replaces it.
+        click_text(&mut runner, "revenue");
+        click_text(&mut runner, "cost");
+        assert_eq!(
+            config(&session).ys.as_deref(),
+            Some(["cost".to_string()].as_ref())
+        );
+
+        // …survives a bin count typed afterwards.
+        type_into_bins(&mut runner, "12");
+        let stored = config(&session);
+        assert_eq!(stored.bins, Some(12));
+        assert_eq!(
+            stored.ys.as_deref(),
+            Some(["cost".to_string()].as_ref()),
+            "the bin count wrote back a stale config"
+        );
+    }
+
+    /// Type `text` into the bins box, replacing whatever is there.
+    ///
+    /// The box is found from its own eyebrow's laid-out position rather than by element type —
+    /// an `Input` renders as a `paragraph` of spans, which is not what `texts` walks — so this
+    /// still encodes no pixel offsets of its own.
+    fn type_into_bins(runner: &mut TestingRunner, text: &str) {
+        let label = runner
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|l| l.text == "BINS")
+                    .map(|_| node.layout().area)
+            })
+            .unwrap_or_else(|| panic!("no BINS section: {:?}", texts(runner)));
+        let point = (
+            f64::from(label.min_x() + 20.),
+            f64::from(label.max_y() + LABEL_GAP + FIELD_HEIGHT / 2.),
+        );
+        runner.move_cursor(point);
+        runner.click_cursor(point);
+        settle(runner);
+        // Cleared a character at a time — the box holds at most the cap's three digits, and a
+        // select-all chord would be testing the fork's editable rather than this control.
+        for _ in 0..6 {
+            runner.press_key(Key::Named(NamedKey::Backspace));
+        }
+        for ch in text.chars() {
+            runner.press_key(Key::Character(ch.to_string()));
+        }
+        settle(runner);
+    }
+
+    /// **The scale is offered where the mark plots position, not extent.** A bar is read as
+    /// area from a baseline, and a log axis has none.
+    #[test]
+    fn the_scale_toggle_follows_the_mark_and_writes_a_repaint() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+        // The derived mark over this schema is a line, which plots position.
+        assert!(shows(&runner, "SCALE"), "{:?}", texts(&runner));
+        click_text(&mut runner, "Log");
+        assert!(config(&session).log_y);
+        click_text(&mut runner, "Linear");
+        assert!(!config(&session).log_y);
+
+        // A bar is read as area from a baseline, so the control goes — and the preference is
+        // kept, so it comes back with the mark that can draw it.
+        click_text(&mut runner, "Log");
+        click_text(&mut runner, "Bar");
+        assert!(!shows(&runner, "SCALE"), "{:?}", texts(&runner));
+        assert!(config(&session).log_y, "the config still holds it");
+        click_text(&mut runner, "Line");
+        assert!(shows(&runner, "SCALE"));
+    }
+
+    /// **A legend row is the control that hides its series**, and ⌥ isolates. The modifier
+    /// comes from the strip's own key mirroring, because a pointer event carries none.
+    #[test]
+    fn a_legend_press_hides_a_series_and_alt_press_isolates_it() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+        // The default encoding plots both measures, so the legend has two rows.
+        assert!(shows(&runner, "LEGEND"), "{:?}", texts(&runner));
+
+        click_legend(&mut runner, "cost");
+        assert_eq!(config(&session).hidden, ["cost"]);
+        click_legend(&mut runner, "cost");
+        assert!(
+            config(&session).hidden.is_empty(),
+            "the press is its own undo"
+        );
+
+        // ⌥ down: isolate `revenue`, so everything else goes.
+        runner.send_event(alt(KeyboardEventName::KeyDown));
+        settle(&mut runner);
+        click_legend(&mut runner, "revenue");
+        assert_eq!(config(&session).hidden, ["cost"]);
+
+        // ⌥-pressing the sole visible series restores them all rather than emptying the chart.
+        click_legend(&mut runner, "revenue");
+        assert!(config(&session).hidden.is_empty());
+
+        // ⌥ up: the ordinary toggle is back.
+        runner.send_event(alt(KeyboardEventName::KeyUp));
+        settle(&mut runner);
+        click_legend(&mut runner, "revenue");
+        assert_eq!(config(&session).hidden, ["revenue"]);
+    }
+
+    /// **⌥-press edits the hidden set; it does not rebuild it.** A name for a series this
+    /// result has no column for is intent the config keeps — pruning it would spend a choice
+    /// the next result might honour, and would make the two legend gestures disagree about the
+    /// same field.
+    #[test]
+    fn alt_press_keeps_hidden_names_this_result_has_no_series_for() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+        // A name from an earlier result, which this one cannot answer.
+        {
+            let tab = *session.peek().order.first().expect("the one tab");
+            let mut station = session;
+            let mut store = station.write_channel(Chan::Chart(tab));
+            let mut stale = store.chart(tab);
+            stale.hidden = vec!["margin".into()];
+            store.set_chart(tab, stale);
+        }
+        settle(&mut runner);
+
+        runner.send_event(alt(KeyboardEventName::KeyDown));
+        settle(&mut runner);
+        click_legend(&mut runner, "revenue");
+        assert_eq!(
+            config(&session).hidden,
+            ["margin", "cost"],
+            "the stale name survived the isolate"
+        );
+
+        // …and the ⌥-press that restores everything leaves it alone too.
+        click_legend(&mut runner, "revenue");
+        assert_eq!(config(&session).hidden, ["margin"]);
+    }
+
+    fn alt(name: KeyboardEventName) -> PlatformEvent {
+        PlatformEvent::Keyboard {
+            name,
+            key: Key::Named(NamedKey::Alt),
+            code: Code::AltLeft,
+            modifiers: if name == KeyboardEventName::KeyDown {
+                Modifiers::ALT
+            } else {
+                Modifiers::empty()
+            },
+        }
+    }
+
+    /// Press the legend row for `name`. The legend's labels are the series names, and they are
+    /// the *last* runs of that text in the strip — the Y encoder's trigger and its menu rows
+    /// carry the same words.
+    fn click_legend(runner: &mut TestingRunner, name: &str) {
+        let areas: Vec<_> = runner.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|l| l.text == name)
+                .map(|_| node.layout().area)
+        });
+        let area = areas
+            .last()
+            .unwrap_or_else(|| panic!("no legend row {name:?}: {:?}", texts(runner)));
+        let point = (
+            f64::from(area.min_x() + area.width() / 2.),
+            f64::from(area.min_y() + area.height() / 2.),
+        );
+        runner.move_cursor(point);
+        runner.click_cursor(point);
+        settle(runner);
     }
 
     /// **Every control here changes what is drawn, and none of them leaves the chart.** The

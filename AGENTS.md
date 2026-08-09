@@ -108,6 +108,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   table drop's own words (`ddl::left_invalid`) off the **aliases** half of `PlanDeps` — raw, so it
   over-reports on purpose — and never cascades. `Blocked::CreateView`/`DropView` stay as the agent
   path's refusals.
+- **A typed `COPY` is DataFusion's own write behind the two checks the Export window used to stand
+  in for, and the Export window is unchanged.** `ddl::copy::copy_to` plans once, gates that plan
+  and drives it — no text re-rendered, so the plan judged is the plan that runs. The bare-word
+  partition check is `export`'s, shared; the NULL-partition refusal is `export`'s wording reached
+  by a **pre-flight count** over the planned input, since a typed COPY has no snapshot's free
+  counts — one extra scan, exact zero or decline. A `__snap_` source is the router's
+  `ReservedName`; the effect is `None`; `Blocked::CopyTo` stays as the agent path's refusal. And
+  `keep_partition_by_columns` is stated in the statement's own `OPTIONS`, never as a session `SET`
+  nothing restores.
 - **An append re-reads the table's facts; it does not re-register it, and it leaves the views
   alone.** Re-registering replaces the provider, and *that* is what strands the `Arc` a view
   captured — which is why a table Refresh re-creates them. An `INSERT` cannot change the shape a
@@ -184,6 +193,25 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **The chart's sort is a view transform over the settled data, and its comparison is total in
   both directions.** Never in `ChartQuery`, so flipping it repaints rather than re-reads; the
   comparator takes a direction flag, because reversing it moves the gaps to the head of the chart.
+- **A chart's controls are repaints, and the bin count is the one exception — because the engine
+  does the counting.** `bins` reaches `ChartQuery` and is clamped to the *shared* `MAX_BINS` at
+  both ends of the wire; the box bounds its input and re-echoes on blur, and parses wide before
+  it clamps. An empty box is the engine's `√n`. `hidden`, `log_y` and `sort` never reach the read.
+- **A hidden series keeps its slot, and the order is sorted-then-hidden.** Blank the values, never
+  drop the series, or a legend press recolours the chart; sorting after hiding would reshuffle a
+  `ByYDesc` axis. Keyed by name, dropped by `resolve` for a mark that cannot un-hide, ⌥-press
+  edits the set rather than rebuilding it — and the legend survives the all-hidden notice, which
+  names it, but no other, which would key colours for a plot that is not drawn.
+- **A log axis never refuses; it says which of two reasons sent it back to linear.** One
+  `ValueCoord` with two arms, offered only where a mark plots position rather than extent,
+  decade-rounded with the next decade out when a bound sits on one. A histogram's empty bins are
+  not a blocking zero; an overflowed **ratio** is a hang, because that is what plotters iterates;
+  and nothing positive at all is no banner, because there is no chart under it to explain.
+- **The crosshair rules through the hovered mark, and its pieces are absolute siblings of the
+  plot.** Freya repaints every node every frame and a canvas re-runs `on_render` each pass, so a
+  pointer-tracked crosshair replots the whole chart per mouse sample; riding on `hover` is free.
+  The value is carried on the `Hit`, never inverted back out of the pixel row, and the plot
+  frame comes back in `draw`'s own answer rather than a second slot.
 - **A snapshot read has no order of its own; order is the ordinal column.** Reads that need order
   `ORDER BY __strata_ord` (unsorted reads entire, user sorts as the tie-break) and every reader
   projects it away — export must never write it. Measured: above 10 MB a bare `LIMIT/OFFSET` read
@@ -283,6 +311,13 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   same `util::collapse_sql` that renders the preview.
 - **Silent corruption is refused, never warned about — and the refusal is checked against read data,
   not declared metadata** (the Hive NULL-partition gate reads the footer, proceeds only on exact zero).
+- **A secret Strata must keep lives in the OS keystore, and config holds a reference to it — which
+  is a property of the types, not a rule to remember.** `strata_core::secret`: `SecretRef` is a
+  minted id that rides `settings_merge!`; `Secret` derives no `Serialize`, has no `Display`, and
+  redacts its `Debug`. Empty is not a secret, absence is not an error, `open_keystore` runs once in
+  `main`, and `APP_ID` is the bundle id `bundle-macos.sh` reads. Never a plaintext fallback.
+  In memory it is **zeroed, not guarded** — mlock/mprotect would cover one link of six and read as
+  stronger than it is; exposure is managed by lifetime (read per use, never cache).
 - **One app-global config store.** Disk is a startup input read **once** — no file watching, ever.
   `write_config` is the sole write path. Settings is a **channel**, not its own global.
 - **A draft of shared state commits a per-field diff against its seed, never the whole struct**

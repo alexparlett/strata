@@ -19,6 +19,7 @@
 //! a column that vanishes from one result and returns in the next must bring the user's
 //! choice back with it, and a config the surface silently rewrote could not do that.
 
+use strata_core::engine::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartQuery, ChartRole, ChartSort, ChartX, ColumnInfo};
 
 /// How many result rows the renderer-first read will draw before it refuses (spec §7).
@@ -191,6 +192,29 @@ pub fn sortable(mark: ChartMark) -> bool {
     !matches!(mark, ChartMark::Scatter | ChartMark::Histogram)
 }
 
+/// Whether this mark's value axis can be logarithmic.
+///
+/// A **bar** and an **area** are read as area from a baseline — the length of the bar and the
+/// filled span *are* the magnitude — and a log axis has no baseline to measure from, so the
+/// same picture would mean something the reader has no way to recover. A **pie** has no axis
+/// at all. What is left is the three marks that plot position rather than extent, which is
+/// exactly where a log axis earns its keep: a line, a scatter, and a histogram's counts.
+pub fn log_axis(mark: ChartMark) -> bool {
+    matches!(
+        mark,
+        ChartMark::Line | ChartMark::Scatter | ChartMark::Histogram
+    )
+}
+
+/// Whether this mark draws **several** series, so a legend press has anything to hide.
+///
+/// A pie is deliberately not one of them. Hiding a slice would silently recompute every
+/// remaining percentage against a smaller total, which is the chart telling a different story
+/// than the data (spec §1.4) — so its legend rows stay inert.
+pub fn hideable(mark: ChartMark) -> bool {
+    takes_many_ys(mark)
+}
+
 // ---- intent + schema → the read ----
 
 /// What the chart is drawing: the config resolved against the result actually in hand. Every
@@ -203,6 +227,14 @@ pub struct Encoding {
     pub x: Option<String>,
     pub ys: Vec<String>,
     pub series: Option<String>,
+    /// A histogram's bin count, `None` for the engine's own choice. Empty for every other
+    /// mark, which has nothing to bin.
+    pub bins: Option<u16>,
+    /// The series the legend has hidden, by name — empty for a mark whose legend cannot
+    /// un-hide them. Names this result has no series for are **kept**: one matches nothing,
+    /// and dropping it would spend a choice the next result might be able to honour.
+    pub hidden: Vec<String>,
+    pub log_y: bool,
     pub sort: ChartSort,
 }
 
@@ -272,6 +304,25 @@ pub fn resolve(config: &ChartConfig, roles: &Roles) -> Encoding {
         x,
         ys,
         series,
+        // Only a histogram has bins, so the value is dropped for every other mark the way a
+        // series column is — the config keeps it, and switching back to a histogram brings it
+        // with you.
+        bins: config.bins.filter(|_| mark == ChartMark::Histogram),
+        // Dropped for a mark whose legend cannot **un**-hide, exactly as `bins` is dropped for
+        // a mark with nothing to bin. A pie's Y is an ordinary measure a bar may well have
+        // hidden earlier, and a pie's rows are inert — honouring the set there would blank the
+        // chart with no control on screen to bring it back. The config keeps it, so the bar
+        // comes back as the user left it.
+        hidden: if hideable(mark) {
+            config.hidden.clone()
+        } else {
+            Vec::new()
+        },
+        // A mark whose value axis cannot be logarithmic never draws one, even if the config
+        // remembers a mark that could. The gate lives here rather than only in the strip
+        // because the strip is where a control is *offered* and this is where the read and
+        // the paint agree on what is actually being drawn.
+        log_y: config.log_y && log_axis(mark),
         sort: config.sort,
     }
 }
@@ -325,7 +376,11 @@ pub fn encode(
         ChartMark::Histogram => match encoding.ys.first() {
             Some(col) => Ok(ChartQuery::Histogram {
                 col: col.clone(),
-                bins: None,
+                // Clamped to the read's own cap here as well as in the engine, so what the
+                // control accepts and what the engine counts are the same number.
+                bins: encoding
+                    .bins
+                    .map(|bins| usize::from(bins).clamp(1, MAX_BINS)),
             }),
             None => Err(no_y(roles)),
         },
@@ -559,6 +614,7 @@ mod tests {
             ys: Some(vec!["revenue".into(), "cost".into()]),
             series: Some("country".into()),
             sort: ChartSort::ResultOrder,
+            ..ChartConfig::default()
         };
         assert_eq!(
             read(&config, &roles),
@@ -606,6 +662,7 @@ mod tests {
             ys: Some(vec!["margin".into(), "cost".into()]),
             series: Some("region".into()),
             sort: ChartSort::ResultOrder,
+            ..ChartConfig::default()
         };
         let resolved = resolve(&config, &roles);
         assert_eq!(resolved.x.as_deref(), Some("month"), "X falls back");
@@ -723,6 +780,102 @@ mod tests {
             ..ChartConfig::default()
         };
         assert_eq!(resolve(&chosen, &roles).mark, ChartMark::Area);
+    }
+
+    /// **A bin count is part of the read, and only a histogram has one.** It reaches
+    /// `ChartQuery`, so a new value is a new cache entry — and it is clamped where it is
+    /// encoded as well as in the engine, because a control that accepts 5 000 over a read that
+    /// answers 200 shows one thing and means another.
+    #[test]
+    fn a_bin_count_rides_in_the_read_clamped_and_only_for_a_histogram() {
+        let roles = Roles::of(&[column("n", DataType::Int64)]);
+        let histogram = |bins| ChartConfig {
+            mark: Some(ChartMark::Histogram),
+            bins,
+            ..ChartConfig::default()
+        };
+        assert_eq!(
+            read(&histogram(Some(24)), &roles),
+            Ok(ChartQuery::Histogram {
+                col: "n".into(),
+                bins: Some(24),
+            })
+        );
+        // Auto is the absence of a count, not a number standing in for one.
+        assert_eq!(
+            read(&histogram(None), &roles),
+            Ok(ChartQuery::Histogram {
+                col: "n".into(),
+                bins: None,
+            })
+        );
+        assert_eq!(
+            read(&histogram(Some(5_000)), &roles),
+            Ok(ChartQuery::Histogram {
+                col: "n".into(),
+                bins: Some(MAX_BINS),
+            })
+        );
+
+        // Another mark has nothing to bin, and the config still holds the count for when the
+        // histogram comes back.
+        let bar = ChartConfig {
+            mark: Some(ChartMark::Bar),
+            bins: Some(24),
+            ..ChartConfig::default()
+        };
+        assert_eq!(resolve(&bar, &roles).bins, None);
+        assert_eq!(bar.bins, Some(24));
+    }
+
+    /// **The two display transforms never reach the read.** Hiding a series and flipping the
+    /// value axis are repaints, so the same columns under any of them encode to the same
+    /// `ChartQuery` — which is what keeps them off cache identity.
+    #[test]
+    fn hiding_a_series_and_a_log_axis_leave_the_read_alone() {
+        let roles = sales();
+        let plain = ChartConfig {
+            mark: Some(ChartMark::Line),
+            ..ChartConfig::default()
+        };
+        let dressed = ChartConfig {
+            hidden: vec!["cost".into()],
+            log_y: true,
+            ..plain.clone()
+        };
+        assert_eq!(read(&plain, &roles), read(&dressed, &roles));
+
+        // A hidden name is kept whole, however stale — pruning it would spend a choice the
+        // next result might be able to honour.
+        let stale = ChartConfig {
+            hidden: vec!["margin".into()],
+            ..plain
+        };
+        assert_eq!(resolve(&stale, &roles).hidden, ["margin"]);
+    }
+
+    /// **A log axis is offered where a mark plots position, not extent.** A bar and an area are
+    /// read as area from a baseline, which a log axis has none of, so the preference is dropped
+    /// from the encoding rather than drawn — and the config keeps it for the marks that can.
+    #[test]
+    fn only_the_marks_that_plot_position_resolve_a_log_axis() {
+        let roles = sales();
+        for (mark, expected) in [
+            (ChartMark::Line, true),
+            (ChartMark::Scatter, true),
+            (ChartMark::Histogram, true),
+            (ChartMark::Bar, false),
+            (ChartMark::Area, false),
+            (ChartMark::Pie, false),
+        ] {
+            assert_eq!(log_axis(mark), expected, "{mark:?}");
+            let config = ChartConfig {
+                mark: Some(mark),
+                log_y: true,
+                ..ChartConfig::default()
+            };
+            assert_eq!(resolve(&config, &roles).log_y, expected, "{mark:?}");
+        }
     }
 
     /// A measure on X is not also a default Y: an untouched config must never plot a column

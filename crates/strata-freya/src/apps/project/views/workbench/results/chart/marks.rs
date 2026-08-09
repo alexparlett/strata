@@ -19,7 +19,6 @@ use freya::engine::prelude::{Canvas, FontCollection};
 use freya::plot::plotters::chart::{ChartBuilder, ChartContext};
 use freya::plot::plotters::coord::cartesian::Cartesian2d;
 use freya::plot::plotters::coord::ranged1d::ValueFormatter;
-use freya::plot::plotters::coord::types::RangedCoordf64;
 use freya::plot::plotters::coord::Shift;
 use freya::plot::plotters::prelude::{
     AreaSeries, Circle, Color as PlotColor, DrawingArea, DrawingAreaErrorKind, IntoDrawingArea,
@@ -32,8 +31,8 @@ use strata_model::{Axis, ChartBin, ChartData, ChartMark, ChartPoint, ChartSeries
 
 use strata_core::util::clip;
 
-use super::axis::{nice_max, readout, ticks, Categories};
-use super::paint::{Dress, Frame, Hit};
+use super::axis::{log_span, nice_max, readout, ticks, Categories, ValueCoord};
+use super::paint::{Cross, Drawn, Dress, Frame, Hit, PlotArea};
 
 /// Anything drawn by this module.
 type Plot = Result<(), DrawingAreaErrorKind<PlotSkiaBackendError>>;
@@ -74,7 +73,8 @@ const PIE_RADIUS: f64 = 0.34;
 /// clips one to a dozen characters.
 const AXIS_LABEL_CHARS: usize = 12;
 
-/// Paint `frame` onto `canvas` at `size` **logical** pixels, answering where each mark landed.
+/// Paint `frame` onto `canvas` at `size` **logical** pixels, answering where each mark landed
+/// and where the plot's own frame ended up.
 ///
 /// The one draw body, and the only one there may be: the live [`canvas`](freya::prelude::canvas)
 /// callback and the offscreen capture behind Copy Image ([`super::capture`]) both come through
@@ -83,18 +83,20 @@ const AXIS_LABEL_CHARS: usize = 12;
 /// the capture has no context to build: it has a raster surface and the root
 /// [`FontCollection`](freya::engine::prelude::FontCollection).
 ///
-/// The hit regions are **returned**, not written through a handle, so a capture cannot overwrite
-/// what the visible plot last recorded for its pointer.
+/// Both halves of the answer are **returned**, not written through a handle, so a capture cannot
+/// overwrite what the visible plot last recorded for its pointer — which is also why the plot
+/// frame the crosshair rides in comes back here rather than through a second slot.
 pub fn draw(
     canvas: &Canvas,
     font_collection: &mut FontCollection,
     size: Size2D,
     frame: &Frame,
-) -> Vec<Hit> {
+) -> Drawn {
     let mut marks = Vec::new();
+    let mut area_out = None;
     if size.width < MIN_WIDTH || size.height < MIN_HEIGHT {
         // Too small to have drawn anything, so there is nothing to be over either.
-        return marks;
+        return (marks, area_out);
     }
     let area = PlotSkiaBackend::new(
         canvas,
@@ -104,15 +106,37 @@ pub fn draw(
     .into_drawing_area();
 
     let dress = &frame.dress;
+    // A log axis is a *view* preference, and the frame carries it resolved against the mark
+    // (`config::log_axis`); whether the data can carry one is `mod.rs`'s question, asked once
+    // so the banner and the paint cannot disagree.
+    let log = frame.log_y;
     let drawn = match &frame.data {
         ChartData::Table { axis, series } => match frame.mark {
             ChartMark::Pie => pie(&area, dress, axis, series, &mut marks),
-            ChartMark::Line => lines(&area, dress, axis, series, false, &mut marks),
-            ChartMark::Area => lines(&area, dress, axis, series, true, &mut marks),
-            _ => bars(&area, dress, axis, series, &mut marks),
+            ChartMark::Line => lines(
+                &area,
+                dress,
+                axis,
+                series,
+                false,
+                log,
+                &mut marks,
+                &mut area_out,
+            ),
+            ChartMark::Area => lines(
+                &area,
+                dress,
+                axis,
+                series,
+                true,
+                false,
+                &mut marks,
+                &mut area_out,
+            ),
+            _ => bars(&area, dress, axis, series, &mut marks, &mut area_out),
         },
-        ChartData::Points(points) => scatter(&area, dress, points, &mut marks),
-        ChartData::Bins(bins) => histogram(&area, dress, bins, &mut marks),
+        ChartData::Points(points) => scatter(&area, dress, points, log, &mut marks, &mut area_out),
+        ChartData::Bins(bins) => histogram(&area, dress, bins, log, &mut marks, &mut area_out),
         // A refusal carries nothing to draw at all (spec §1.4) — the body renders the reason
         // in place of the canvas.
         ChartData::OverCap { .. } | ChartData::Duplicates { .. } => Ok(()),
@@ -123,13 +147,30 @@ pub fn draw(
         // is not `error!` only because a resize drag would repeat it per frame.
         tracing::warn!("chart: {err}");
     }
-    marks
+    (marks, area_out)
+}
+
+/// Where a cartesian mark's plot frame landed, recorded off plotters' own geometry so the
+/// crosshair and the marks cannot disagree about where the plot is.
+fn plot_area_of<X>(
+    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, ValueCoord>>,
+) -> PlotArea
+where
+    X: Ranged<ValueType = f64>,
+{
+    let (xs, ys) = chart.plotting_area().get_pixel_range();
+    PlotArea {
+        left: xs.start as f32,
+        top: ys.start as f32,
+        right: xs.end as f32,
+        bottom: ys.end as f32,
+    }
 }
 
 /// A mark's hit box from the two data coordinates that bound it, through plotters' own
 /// mapping — never through a second copy of the layout arithmetic.
 fn hit_box<X>(
-    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, RangedCoordf64>>,
+    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, ValueCoord>>,
     a: (f64, f64),
     b: (f64, f64),
     label: String,
@@ -145,6 +186,13 @@ where
         top: ay.min(by) as f32,
         right: ax.max(bx) as f32,
         bottom: ay.max(by) as f32,
+        // The bar's own end: `b` is the value, `a` the baseline, so this is the edge the
+        // crosshair rules through — and it carries `b`'s value rather than letting the
+        // readout invert the pixel row back into one.
+        cross: Cross {
+            at: ((ax + bx) as f32 / 2., by as f32),
+            value: b.1,
+        },
         label,
     }
 }
@@ -155,7 +203,7 @@ const POINT_REACH: f32 = 7.;
 
 /// A point's hit box: [`POINT_REACH`] in every direction from where it was drawn.
 fn hit_point<X>(
-    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, RangedCoordf64>>,
+    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, ValueCoord>>,
     at: (f64, f64),
     label: String,
 ) -> Hit
@@ -168,6 +216,12 @@ where
         top: y as f32 - POINT_REACH,
         right: x as f32 + POINT_REACH,
         bottom: y as f32 + POINT_REACH,
+        // The point itself, not the box's corner — the box is a *reach* around it, and a
+        // crosshair drawn on its top edge would name a row [`POINT_REACH`] off the value.
+        cross: Cross {
+            at: (x as f32, y as f32),
+            value: at.1,
+        },
         label,
     }
 }
@@ -181,10 +235,12 @@ fn bars<'a>(
     axis: &Axis,
     series: &[ChartSeries],
     hits: &mut Vec<Hit>,
+    area_out: &mut Option<PlotArea>,
 ) -> Plot {
     let cats = Categories::indexed(axis.labels.len());
     let values = value_range(series.iter().flat_map(|s| s.values.iter().copied()));
-    let mut chart = frame_on(area, cats.clone(), values.clone())?;
+    let mut chart = frame_on(area, cats.clone(), ValueCoord::linear(values.clone()))?;
+    *area_out = Some(plot_area_of(&chart));
     mesh(
         &mut chart,
         dress,
@@ -224,30 +280,52 @@ fn bars<'a>(
 
 /// A line per series, optionally filled down to the baseline. A `None` cell ends the run it
 /// was in: the next value starts a new one, so the gap stays a gap (spec §4).
+///
+/// `log` only ever arrives for a plain line — an area is read as the span between the line and
+/// the baseline, and a log axis has none ([`log_axis`](super::config::log_axis)).
+#[allow(clippy::too_many_arguments)]
 fn lines<'a>(
     area: &'a Area<'a>,
     dress: &Dress,
     axis: &Axis,
     series: &[ChartSeries],
     filled: bool,
+    log: bool,
     hits: &mut Vec<Hit>,
+    area_out: &mut Option<PlotArea>,
 ) -> Plot {
     let count = axis.labels.len();
     // The rows' own X positions where the result is already in X order, so an irregular time
     // series draws with its real gaps; equally spaced otherwise (see `axis`).
     let cats = Categories::placed(axis.positions.as_ref(), count)
         .unwrap_or_else(|| Categories::indexed(count));
+    let all = || {
+        series
+            .iter()
+            .flat_map(|s| s.values.iter().copied())
+            .flatten()
+    };
     let values = value_range(series.iter().flat_map(|s| s.values.iter().copied()));
-    let mut chart = frame_on(area, cats.clone(), values.clone())?;
+    let coord = value_coord(log, all(), &values);
+    // A log axis has no zero, so what a mark measures from is the axis's own floor. An area is
+    // never one of them — the span it fills *is* the magnitude, which is why a log axis is not
+    // offered for it.
+    let base = if log {
+        coord.range().start
+    } else {
+        0f64.clamp(values.start, values.end)
+    };
+    let y_label = coord.tick_label();
+    let mut chart = frame_on(area, cats.clone(), coord)?;
+    *area_out = Some(plot_area_of(&chart));
     mesh(
         &mut chart,
         dress,
         x_labels(area),
         &category_label(&cats, axis),
-        &ticks(&values),
+        &*y_label,
     )?;
 
-    let base = 0f64.clamp(values.start, values.end);
     for (index, one) in series.iter().enumerate() {
         let color = rgba(dress.series(index));
         let runs = runs(&one.values, &cats);
@@ -282,28 +360,39 @@ fn lines<'a>(
             ));
         }
     }
+    // A log axis has no zero on it, so there is no zero rule to draw either.
+    if log {
+        return Ok(());
+    }
     zero_baseline(&mut chart, dress, &cats, &values)
 }
 
 /// Raw points over two measures — marks, not a sequence, so nothing is joined.
 ///
 /// **Both** axes are measurement axes ([`data_range`]), not value axes: a scatter plots one
-/// measure against another, and neither is a magnitude read against zero.
+/// measure against another, and neither is a magnitude read against zero. Only Y takes a log
+/// scale: the strip's toggle is the *value* axis's, and a scatter's X is a second measure
+/// rather than a second value.
 fn scatter<'a>(
     area: &'a Area<'a>,
     dress: &Dress,
     points: &[ChartPoint],
+    log: bool,
     hits: &mut Vec<Hit>,
+    area_out: &mut Option<PlotArea>,
 ) -> Plot {
     let xs = data_range(points.iter().map(|p| p.x));
     let ys = data_range(points.iter().map(|p| p.y));
+    let coord = value_coord(log, points.iter().map(|p| p.y), &ys);
+    let y_label = coord.tick_label();
     let mut chart = ChartBuilder::on(area)
         .margin_top(MARGIN_TOP)
         .margin_right(MARGIN_RIGHT)
         .x_label_area_size(X_LABEL_AREA)
         .y_label_area_size(Y_LABEL_AREA)
-        .build_cartesian_2d(xs.clone(), ys.clone())?;
-    mesh(&mut chart, dress, x_labels(area), &ticks(&xs), &ticks(&ys))?;
+        .build_cartesian_2d(xs.clone(), coord)?;
+    *area_out = Some(plot_area_of(&chart));
+    mesh(&mut chart, dress, x_labels(area), &ticks(&xs), &*y_label)?;
 
     let color = rgba(dress.series(0)).mix(0.55);
     chart.draw_series(
@@ -323,11 +412,18 @@ fn scatter<'a>(
 
 /// The engine's bins, drawn at their real edges — the one mark whose X axis is a measurement
 /// rather than a category.
+///
+/// A **log** count axis is the long-tailed distribution's own reading, and it is the one place
+/// a bar here does not measure from zero: a logarithm has no zero, so the bars stand on the
+/// axis floor instead. An empty bin has no bar either way, which is why a zero count does not
+/// take the log axis away (see [`log_fallback`](super::log_fallback)).
 fn histogram<'a>(
     area: &'a Area<'a>,
     dress: &Dress,
     bins: &[ChartBin],
+    log: bool,
     hits: &mut Vec<Hit>,
+    area_out: &mut Option<PlotArea>,
 ) -> Plot {
     let (Some(first), Some(last)) = (bins.first(), bins.last()) else {
         return Ok(());
@@ -338,29 +434,28 @@ fn histogram<'a>(
         first.lo..first.lo + 1.
     };
     let counts = value_range(bins.iter().map(|b| Some(b.count as f64)));
+    let coord = value_coord(log, bins.iter().map(|b| b.count as f64), &counts);
+    let base = if log { coord.range().start } else { 0. };
+    let y_label = coord.tick_label();
     let mut chart = ChartBuilder::on(area)
         .margin_top(MARGIN_TOP)
         .margin_right(MARGIN_RIGHT)
         .x_label_area_size(X_LABEL_AREA)
         .y_label_area_size(Y_LABEL_AREA)
-        .build_cartesian_2d(span.clone(), counts.clone())?;
-    mesh(
-        &mut chart,
-        dress,
-        x_labels(area),
-        &ticks(&span),
-        &ticks(&counts),
-    )?;
+        .build_cartesian_2d(span.clone(), coord)?;
+    *area_out = Some(plot_area_of(&chart));
+    mesh(&mut chart, dress, x_labels(area), &ticks(&span), &*y_label)?;
 
     let color = rgba(dress.series(0));
-    chart
-        .draw_series(bins.iter().map(|bin| {
-            Rectangle::new([(bin.lo, 0.), (bin.hi, bin.count as f64)], color.filled())
-        }))?;
+    chart.draw_series(
+        bins.iter().map(|bin| {
+            Rectangle::new([(bin.lo, base), (bin.hi, bin.count as f64)], color.filled())
+        }),
+    )?;
     for bin in bins {
         hits.push(hit_box(
             &chart,
-            (bin.lo, 0.),
+            (bin.lo, base),
             (bin.hi, bin.count as f64),
             format!(
                 "{} to {}: {}",
@@ -466,9 +561,9 @@ pub fn pie_slices(series: &ChartSeries) -> Vec<(usize, f64)> {
 fn frame_on<'a>(
     area: &'a Area<'a>,
     x: Categories,
-    y: Range<f64>,
+    y: ValueCoord,
 ) -> Result<
-    ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<Categories, RangedCoordf64>>,
+    ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<Categories, ValueCoord>>,
     DrawingAreaErrorKind<PlotSkiaBackendError>,
 > {
     ChartBuilder::on(area)
@@ -479,10 +574,21 @@ fn frame_on<'a>(
         .build_cartesian_2d(x, y)
 }
 
+/// The value axis this mark is drawn against: logarithmic if the user asked for one and the
+/// values can carry it, linear otherwise.
+///
+/// **A log axis never refuses.** `values` that no logarithm can cover — the surface's banner
+/// says so, non-blockingly — fall back to the linear span rather than leaving the pane empty.
+fn value_coord(log: bool, values: impl Iterator<Item = f64>, linear: &Range<f64>) -> ValueCoord {
+    log.then(|| log_span(values))
+        .flatten()
+        .map_or_else(|| ValueCoord::linear(linear.clone()), ValueCoord::log)
+}
+
 /// The gridlines, the axes and their labels. `light_line_style` is transparent because the
 /// only horizontal rules we want are the ones a tick sits on.
 fn mesh<'a, X>(
-    chart: &mut ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<X, RangedCoordf64>>,
+    chart: &mut ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<X, ValueCoord>>,
     dress: &Dress,
     x_labels: usize,
     x_label: &dyn Fn(&f64) -> String,
@@ -508,7 +614,7 @@ where
 /// The rule at zero, drawn only when the data crosses it — otherwise the axis itself is the
 /// baseline and a second line on top of it is noise.
 fn zero_baseline<'a, X>(
-    chart: &mut ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<X, RangedCoordf64>>,
+    chart: &mut ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<X, ValueCoord>>,
     dress: &Dress,
     cats: &Categories,
     values: &Range<f64>,

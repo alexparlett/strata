@@ -17,11 +17,11 @@ from the write pass (`query::SnapshotStats`), not a footer. In Freya the handle 
 (an `Arc<Engine>` + Deref) held in context — not stored in any god-object `AppState`. Statement
 policy is one router in front of dispatch: `sql::validate::classify(stmt, Capability)` answers
 `Query` / `Intercept(StmtKind)` / `Refuse(Blocked)`. `Capability::Editor` runs queries and
-introspection and **intercepts** the rest — 14 recognised kinds, of which `CREATE TABLE` / CTAS
-are implemented today (each remaining kind's destination is an app funnel that already exists:
-view DDL onto `Engine::create_view`, `CREATE EXTERNAL TABLE` onto Table Config's registration
-path, and so on; until its ED task lands, an intercepted kind answers `ddl::execute`'s
-"not implemented yet"). The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
+introspection and **intercepts** the rest — 14 recognised kinds, of which `CREATE TABLE` / CTAS,
+`INSERT`, `DROP TABLE`, `CREATE` / `DROP VIEW` and `COPY` are implemented today (each remaining
+kind's destination is an app funnel that already exists: `CREATE EXTERNAL TABLE` onto Table
+Config's registration path, and so on; until its ED task lands, an intercepted kind answers
+`ddl::execute`'s "not implemented yet"). The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
 `INSERT OVERWRITE`, `PREPARE` of a non-query, `DROP` of a non-table/view object, reserved
 `__snap_` names, multi-statement buffers, and unknown kinds.
 `Capability::Agent` is read-only and refuses every non-query with its original wording.

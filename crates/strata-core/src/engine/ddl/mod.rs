@@ -21,6 +21,7 @@
 //! `catalog::register_external`. ED-02 ships the dispatch and the vocabulary; each arm is filled
 //! by the task that owns its capability, and until then answers with its stub refusal.
 
+mod copy;
 mod tables;
 mod views;
 
@@ -153,7 +154,7 @@ pub async fn execute(
         StmtKind::CreateView => views::create_statement(ctx, stmt).await,
         StmtKind::DropView => views::drop_statement(ctx, stmt).await,
         // ED-07 — editor `COPY … TO`, behind the pre-flight NULL-partition gate.
-        StmtKind::Copy => Err(unimplemented(kind)),
+        StmtKind::Copy => copy::copy_to(ctx, stmt).await,
         // ED-08 — the session overlay and prepared statements.
         StmtKind::Set | StmtKind::Reset => Err(unimplemented(kind)),
         StmtKind::Prepare | StmtKind::Deallocate => Err(unimplemented(kind)),

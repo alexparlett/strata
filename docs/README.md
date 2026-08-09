@@ -13,7 +13,7 @@ everything below.
 | Document | What it covers |
 |---|---|
 | [SNAPSHOT_SPEC.md](SNAPSHOT_SPEC.md) | The result read model: a Run materializes an immutable Arrow IPC snapshot; identity, lifecycle, pins, the row-order ordinal, and the freya-query layer over it. |
-| [STATEMENTS_SPEC.md](STATEMENTS_SPEC.md) | The SQL statement surface: the classify → run/intercept/refuse router, internal tables (`CREATE TABLE` / CTAS), the editor and agent policies, and what is still being lifted. |
+| [STATEMENTS_SPEC.md](STATEMENTS_SPEC.md) | The SQL statement surface: the classify → run/intercept/refuse router, internal tables and the writes over them, typed view DDL, typed `COPY`, the editor and agent policies, and what is still being lifted. |
 | [COMPLETION_SPEC.md](COMPLETION_SPEC.md) | SQL completion: the synchronous engine-authoritative provider, the position model, ranking, and the editor integration. |
 | [EXPLAIN_PLAN_SPEC.md](EXPLAIN_PLAN_SPEC.md) | The EXPLAIN plan view: the typed `QueryPlan` the engine hands over, self-time attribution, the three metric tiers, and the rendered tree. |
 | [CHART_SPEC.md](CHART_SPEC.md) | The chart view: six marks over the result snapshot, encoders, sort, refusals — and why the chart computes nothing SQL can say. |

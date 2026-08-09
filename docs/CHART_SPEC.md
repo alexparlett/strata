@@ -49,7 +49,8 @@ the shared toolbar in both modes (`results/toolbar.rs`).
 The chart body (`results/chart/`) is two panes under that toolbar:
 
 - **Left control strip** (232 logical px, its own scroll — `chart/strip.rs`): the mark tiles
-  (six, three to a row), the X / Y / Series encoders, the sort toggle, and the legend.
+  (six, three to a row), the X / Y / Series encoders, a histogram's bin count, the sort and scale
+  toggles, and the legend.
 - **Right canvas pane**: the plot, a non-blocking high-cardinality banner across the top when
   warranted, and a refusal notice in place of the canvas when there is nothing honest to draw.
 
@@ -185,9 +186,10 @@ scatter points.
 
 ## 6. Config and state
 
-`ChartConfig` (serde, strata-model): `{ mark, x, ys, series, sort }` — column references and a
-view preference, no results. It lives on `QueryTab` under **`Chan::Chart(tab)`** (so an encoder
-edit re-charts this body and wakes nothing else) and persists via `TabSnapshot::chart`.
+`ChartConfig` (serde, strata-model): `{ mark, x, ys, series, bins, hidden, log_y, sort }` — column
+references, a bin count and three view preferences, no results. It lives on `QueryTab` under
+**`Chan::Chart(tab)`** (so an encoder edit re-charts this body and wakes nothing else) and
+persists via `TabSnapshot::chart`.
 
 The config holds **intent**: `mark` and `ys` are `Option` (unset ⇒ derive), and `x` is a
 three-state `ChartX { Auto, RowIndex, Column(name) }` — "not chosen" and "chosen to be the row
@@ -220,6 +222,35 @@ of the query's own order, never a reshuffle. `ByX` sorts by true position where 
 points are unordered and histogram bins are ascending by construction, so the strip offers the
 toggle for neither.
 
+**`hidden` and `log_y` are the other two view transforms; `bins` is the one channel that is part
+of the read.** The engine does a histogram's counting, so a bin count reaches
+`ChartQuery::Histogram` and a new value is a new cache entry — clamped to `engine::MAX_BINS` where
+it is encoded as well as in the engine, so the control and the read cannot disagree; an empty box
+is `None`, which is the engine's own `√n`. The other two never touch identity:
+
+- **`hidden`** (`chart/hide.rs` — `hide::applied`) blanks a hidden series' values to all-`None`
+  **in place**. Positions, and therefore `Dress::series` colours, never move under a legend press,
+  and `marks` needs no idea it happened. Keyed by series **name** — a label, not a key, so a
+  NULL-valued series and a literal `"(null)"` one toggle together (accepted). It is applied
+  **after** the sort, or hiding the first series would reshuffle a `ByYDesc` chart's category
+  axis. Not pruned against the result: a stale name matches nothing and comes back with its
+  column — which ⌥-press honours too, editing the set rather than rebuilding it from the current
+  legend. `resolve` drops it whole for a mark whose legend cannot un-hide (a pie's rows are
+  inert, and its Y is an ordinary measure a bar may have hidden earlier). ⌥-press isolates, and
+  on the sole visible series shows them all again. The legend survives the **all-hidden notice**,
+  which names it as the way back — and no other, since every other notice draws no plot for a
+  swatch to key.
+- **`log_y`** is offered only where a mark plots position rather than extent (`config::log_axis`:
+  line, scatter, histogram — a bar and an area are read as area from a baseline, which a log axis
+  has none of; a pie has no axis) and **never refuses**: it falls back to a linear axis under the
+  non-blocking banner, and `mod.rs::log_fallback` says which of two reasons it was. One is a value
+  at or below zero — a histogram's empty bins are not such a value, since a zero count paints
+  nothing on either axis and blocking on one would take the scale away from the long tails it
+  exists for. The other is a span whose **ratio** overflows: a log axis is bounded by `end/start`
+  rather than `end - start`, and plotters turns an overflowed ratio into a `usize::MAX` tick count
+  it counts down on the render thread. A result with nothing positive in it at all gets neither
+  message: `log_span` answers `None` for that too, and there is no chart under it to explain.
+
 ## 7. Guardrails
 
 Computed from the settled `ChartData` or the encoding — never re-derived in the UI. Every
@@ -240,11 +271,15 @@ notice is a *blank pane*, indistinguishable from a bug:
 | Scatter with no finite point | nothing to chart |
 | Empty result / no series plotted | nothing to chart |
 | Pie over a negative value | a pie cannot show negative values — chart it as a bar (dropping the slice would silently change the total every percentage reads against; a zero or NULL is arithmetic, drawn around) |
+| Every series hidden from the legend | every series is hidden — press a legend entry to show it again (the one empty state the user caused, and the only one they can undo from the control that caused it; it sits *after* the empty shapes, so a result with no rows still says so) |
 
 Plus the **non-blocking banner** over the canvas when `axis.labels.len() > 60` (`CROWDED`) — the
 labels are already in hand, so the nudge costs no second query, and the chart still renders
 beneath it, unaltered. It wears the Export window's warning banner (the `chart` theme's
-`warning_*` box, the sheet's semantic `warning` for glyph and text).
+`warning_*` box, the sheet's semantic `warning` for glyph and text). The same banner carries the
+log axis's own fallback ("values at or below zero are shown on a linear axis"), which takes
+precedence over the crowding nudge because it explains what the user is looking at rather than
+suggesting they change it.
 
 There is deliberately **no materialize cap, no sampling, and no aggregation fallback**: the
 answer to "too much data" is always the user's own SQL. The refusals name the fix in prose, and
@@ -294,6 +329,36 @@ becoming a hand-rolled axis stack:
   **strictly increasing** — the case where result order and value order coincide. Otherwise
   placing marks by value would re-order the axis §1.6 says is the user's, so it falls back to
   equal spacing.
+- The **value** axis is a second one: `axis.rs::ValueCoord`, a `Ranged` with a linear and a
+  logarithmic arm. One coordinate rather than making every mark generic over its Y — that would
+  split each mark into a build half and a draw half and grow a type parameter on `mesh`,
+  `hit_box` and `zero_baseline`. A log axis skips `nice_max` and the proportional `EDGE_AIR`
+  (both linear arithmetic that pushes the floor through zero) and rounds out to whole decades
+  instead, taking the *next* decade out when a bound already sits on one — the log version of the
+  same idea, and what stops a long-tail histogram drawing every count of 1 as a bar of no height.
+  A log tick abbreviates **per value**, the deliberate opposite of the linear rule above: a decade
+  axis has no single magnitude to choose one unit from.
+
+**Crosshair** (`chart/paint.rs`). Two hairlines across the plot frame and a value label, ruled
+through the **hovered mark** rather than under the pointer. That is a cost model, not a
+simplification: Freya has no incremental rendering (`render_pipeline.rs` repaints every node every
+frame) and `CanvasElement::render` calls its `on_render` on each pass, so any reactive write here
+re-runs `marks::draw` — a full plotters replot plus a rebuild of every hit region, on the render
+thread. A pointer-tracked crosshair paid that on every mouse sample; riding on the hover costs
+nothing beyond what the readout already costs, for the same reason `Hit::anchor` exists. The price
+is that the axis can only be read at a mark, which is where the numbers are.
+
+Each `Hit` carries the mark's own point **and its value**, so the readout is never inverted back
+out of the pixel row — that round trip put `11.01` under a tooltip reading `11`. `PlotArea`
+(plotters' own `plotting_area().get_pixel_range()`) comes back **with** the hit regions, in
+`draw`'s own answer rather than a second slot, only so the rules span the plot rather than the
+pane; a pie answers none and has no crosshair. The value label **flips below its rule** where
+sitting above it would leave the plot — the same flip the hover card makes, and a commoner case
+than it sounds: a value axis ends on a nice number, so a maximum that is already one (any
+percentage topping out at 100) puts the tallest mark exactly on the frame's top edge. The three
+pieces are absolute siblings of the plot, not children of a wrapper: an absolutely positioned node
+resolves against its parent's area, and a wrapper here is a *stacked* sibling of a fill-height plot
+— measured, its rule landed a whole pane below the pointer.
 
 **Hover readout** (`chart/paint.rs`). The paint that draws a mark records its **hit region** —
 a box for bars, bins and points, a wedge (start angle + sweep, so the arc crossing zero tests
@@ -330,6 +395,12 @@ marks that draw in more than one colour have anything to key: a series legend na
 in ramp order; a pie legend lists the **drawn** slices — from the same walk the wedges are drawn
 from, so a colour is never keyed to a category the plot skipped — with each slice's share as a
 percentage. Scatter and histogram, one colour by construction, show none.
+
+A series row is also the control that **hides** that series (§6): a press toggles, ⌥-press
+isolates, and a hidden row keeps its swatch and its slot and goes dim — the swatch is what says
+which colour comes back. The modifier is mirrored from the strip's own global key handlers,
+because a pointer event carries none (AGENTS.md §3), and it is re-read from every key event so a
+key-up lost while the window is unfocused cannot leave it stuck. A pie's rows stay inert.
 
 ## 10. Analytical charts are SQL, mapped
 
