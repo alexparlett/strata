@@ -45,7 +45,7 @@ pub async fn run_explain(ctx: &SessionContext, sql: &str) -> Result<QueryPlan, S
     };
 
     // Re-plan the inner logical plan to physical. `SessionState` has an inherent
-    // `create_physical_plan` in DataFusion 43 (no `Session` trait import needed).
+    // `create_physical_plan` in DataFusion (no `Session` trait import needed).
     let state = ctx.state();
     let physical = state
         .create_physical_plan(inner)
@@ -106,7 +106,7 @@ fn walk_physical(root: &dyn ExecutionPlan) -> Vec<PlanNode> {
         let (name, detail) = split_name_detail(line.trim());
         let kind = PlanKind::classify(&name);
         let (rows, metrics) = node_metrics(p);
-        // Derive the one comparable per-node time (EXPLAIN_PLAN_SPEC §7) from the
+        // Derive the one comparable per-node time (EXPLAIN_PLAN_SPEC §3) from the
         // typed metrics — logic lives in `crate::plan`, pure over `Metric`.
         let self_ms = self_time_ms(kind, &metrics);
         let self_label = self_ms.map(fmt_ms).unwrap_or_default();

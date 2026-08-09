@@ -6,7 +6,10 @@ of external tables + saved views, a tabbed SQL editor, a virtualized results gri
 inspector, table config, export via `COPY … TO`, a command palette, and query history. Product
 name **Strata** (uneven sedimentary layers = data strata).
 
-The current effort is a **UI migration from Dioxus (wry/webview) to Freya 0.4 (Skia/native)**.
+The app is built on **Freya 0.4 (Skia/native)**. It began as a Dioxus (wry/webview) app and was
+rewritten clean-slate on Freya; the Dioxus frontend has been **deleted**. The open work is the
+remaining workstreams (`.claude/tasks/`): the statement lift (ED-05..10), the agent chat pane
+(AA-06), chart follow-ons, and design polish.
 
 This file is the **map** — build, layout, and where everything is. @AGENTS.md is the **bar** — the
 rules, one line each, imported into every session alongside this file; hold all work to it. Both
@@ -85,7 +88,7 @@ A virtual workspace (no root package). `cargo run` at the root targets the **Fre
 
 Members:
 
-- **`strata-freya`** — the Freya (Skia/native) frontend. **The port target** and the default build.
+- **`strata-freya`** — the Freya (Skia/native) frontend. **The app** and the default build.
 - **`strata-core`** — engine logic: the DataFusion boundary (query/plan/profile/serialize/value_tree),
   config, theme, SQL language service. The only place DataFusion is touched — bar a **dev**-dependency
   in `strata-freya`, so a test can build an Arrow fixture without bending a signature to be testable.
@@ -109,15 +112,13 @@ Members:
 
 Excluded from the workspace (deliberately):
 
-- **`crates/strata-dioxus`** — the old Dioxus app we're porting *from*, kept as **reference code
-  only**: it references the engine protocol deleted from `strata-core` with P2-01, so it **no
-  longer builds** — read it for feature behaviour, don't try to fix its build.
 - **`crates/freya`** — our **Freya fork checkout** (below).
 
-**Note on the two frontends:** the Freya app is a clean-slate, Valin-shaped rewrite with its own
-architecture (Radio `SessionState`, stateful `QueryTab`s, `EngineCtx` in context) — never carry a
-Dioxus-app pattern (`GlobalStore`, `dispatch`/`action`, the muda menu, the old keymap/hotkeys
-registry) across.
+**Note on the old frontend:** the Dioxus app (`crates/strata-dioxus`) has been **deleted** — the
+Freya app is a clean-slate, Valin-shaped rewrite with its own architecture (Radio `SessionState`,
+stateful `QueryTab`s, `EngineCtx` in context). Its patterns (`GlobalStore`, `dispatch`/`action`,
+the muda menu, the old keymap/hotkeys registry, the `Command`/`Event` engine protocol) must not
+come back; if you find one referenced in older notes, it is history, not a target.
 
 ## The Freya fork
 
@@ -157,7 +158,8 @@ channels, no request ids. In Freya the handle is `EngineCtx` (`Arc<Engine>` + De
 context. Snapshots are **Arrow IPC**; lifecycle is the facade's own bookkeeping
 (`docs/SNAPSHOT_SPEC.md`). The SQL function set is the **live registry**, not a list we keep.
 Statement policy is one router in front of dispatch: `Engine::run` classifies, then runs a query,
-intercepts a statement, or refuses it — the editor is a full-statement surface, the agent stays
+intercepts a statement, or refuses it — the editor runs queries and `CREATE TABLE`/CTAS today,
+the remaining intercepted statements are being lifted one by one (ED-05..10), and the agent stays
 read-only.
 
 Full model — the snapshot format argument, the function registry, the statement router and its
@@ -167,37 +169,24 @@ surfaces: [docs/reference/ENGINE.md](docs/reference/ENGINE.md).
 
 ## Docs index (`docs/`)
 
-**`reference/`** — the agent-facing detail split out of this file and AGENTS.md (routing table
-above). Keep it true in the same change as the code, exactly as with the task files.
+Everything in `docs/` is **documentation of the code as built** — plans and tracking live in
+`.claude/tasks/`. [docs/README.md](docs/README.md) is the index; keep every document true in the
+same change as the code, exactly as with the task files.
 
-Migration:
-
-- **`FREYA_PORT_PLAN.md`** — why we're migrating and the phased plan.
-- **`FREYA_STATE_ARCHITECTURE.md`** — the **definitive** per-window state design; every API
-  verified against Freya 0.4 source. **Supersedes `FREYA_PORT_PLAN.md` §4.**
-- **`freya-state-dataflow.mermaid`** — data-flow diagram for the above.
-- **`FREYA_THEME_SPEC.md`** — the native JSON theme format (sheet + palette + components + fonts).
-
-Shipping:
-
-- **`RELEASING.md`** — how a build reaches a tester: `scripts/bundle-macos.sh` (universal binary,
-  `.app`, icon, signing, notarization, DMG), the **Release** workflow, `scripts/version.sh`, the
-  Gatekeeper bypass testers need while builds are unsigned, and the notarization secrets.
-
-Product / design:
-
-- **`DESIGN_SPEC.md`** — **§14 is the current source of truth** (stack, tokens, surfaces, DDL policy).
-- **`FEATURES.md`** — full feature spec (every surface + its DataFusion/engine hook).
-- **`DEV_TASKS.md`** — the backlog: UI-surface audits (design-vs-code drift) + functional workstreams.
-
-Feature specs: `AGENT_ACCESS_SPEC.md` (+ `agent-access-dataflow.mermaid`), `CHART_SPEC.md`
-(the grounded chart-view design — supersedes the handoff bundle's CHART_SPEC on mechanism;
-`CHART_FUNCTIONS.md` is its DataFusion capability map), `COMPLETION_SPEC.md`
-(the as-built P2-04 design — supersedes `SQL_LANGUAGE_SPEC.md` §4), `CONNECTIONS_SPEC.md`,
-`EXPLAIN_PLAN_SPEC.md`, `EXPORT_OPTIONS.md`, `IMPORT_OPTIONS.md`, `SQL_LANGUAGE_SPEC.md`,
-`STATEMENTS_SPEC.md` (the full-statement editor — internal tables, typed DDL, editor COPY,
-session statements; supersedes the managed-DDL sections of `reference/ENGINE.md` on mechanism as
-its workstream lands), `EDITOR_LANG_SPIKE.md`, `F7-shared-state.md`, `SNAPSHOT_SPEC.md`.
+- **`ARCHITECTURE.md`** — the system end to end: workspace, engine, query round trip, statement
+  routing, state, windows. The place to start (and to keep pointing at the right detail docs).
+- **`reference/`** — the agent-facing detail split out of this file and AGENTS.md (routing table
+  above).
+- **`FREYA_STATE_ARCHITECTURE.md`** — per-window state in full; every API verified against
+  Freya 0.4 source.
+- **`RELEASING.md`** — how a build reaches a tester: `scripts/bundle-macos.sh`, the **Release**
+  workflow, `scripts/version.sh`, signing/notarization, the Gatekeeper bypass.
+- Feature docs: `SNAPSHOT_SPEC.md` (the result read model), `STATEMENTS_SPEC.md` (the statement
+  router and surface), `COMPLETION_SPEC.md`, `EXPLAIN_PLAN_SPEC.md`, `CHART_SPEC.md`
+  (+ `CHART_FUNCTIONS.md`, the chart-side SQL survey), `CONNECTIONS_SPEC.md`,
+  `IMPORT_OPTIONS.md`, `EXPORT_OPTIONS.md`, `AGENT_ACCESS_SPEC.md` (run dataflow diagram
+  inlined), `FREYA_THEME_SPEC.md`.
+  The `_SPEC` suffixes are historical — engine code comments cite these paths, so the names stay.
 
 The **design handoff** lives in **`.claude/design-handoff/`** (gitignored — local only). It's a
 Claude Design (claude.ai/design) bundle: the `.dc.html` HTML/CSS prototypes that are the
@@ -209,14 +198,16 @@ per-bundle README. Read the `.dc.html` source directly; don't render or screensh
 
 ## Task backlog (`.claude/tasks/`)
 
-The Freya-rewrite backlog lives in **`.claude/tasks/`** (committed): a top `README.md` index, then
-**one folder per phase / workstream**, each with its own `README.md` and **one file per task**. Each
-task file is self-contained — current state, what to build, acceptance, Freya components, and the
-`DEV_TASKS.md` ID it traces to — so a session can pick up a single task (e.g. in a worktree) without
-loading the rest. Read the top `README.md` first (status legend, phase order, known bugs).
+The backlog lives in **`.claude/tasks/`** (committed): a top `README.md` index, then **one folder
+per phase / workstream**, each with its own `README.md` and **one file per task**. Each task file
+is self-contained — current state, what to build, acceptance, Freya components — so a session can
+pick up a single task (e.g. in a worktree) without loading the rest. Read the top `README.md`
+first (status legend, what remains, known bugs).
 
-Phases 2–3 are essentially done and phase 4 is well advanced; **what each finished task settled —
-including several corrections that must not be re-litigated** (the catalog is a store and not a
-query; diagnostics are a reconciliation; a log is recorded by its observer; only real facts) —
-is [docs/reference/SETTLED_TASKS.md](docs/reference/SETTLED_TASKS.md), with the rule form of each
-in [AGENTS.md](AGENTS.md) §2.
+The numbered phases are done (their folders removed); what remains is design polish (phase 5) and
+the open workstream tasks — the statement lift (ED-05..10), the agent chat pane (AA-06) and the
+chart follow-ons. **What each finished task settled — including several corrections that must not
+be re-litigated** (the catalog is a store and not a query; diagnostics are a reconciliation; a
+log is recorded by its observer; only real facts) — is
+[docs/reference/SETTLED_TASKS.md](docs/reference/SETTLED_TASKS.md), with the rule form of each in
+[AGENTS.md](AGENTS.md) §2.

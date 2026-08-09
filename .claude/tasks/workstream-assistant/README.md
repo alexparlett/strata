@@ -2,9 +2,10 @@
 
 The native chat surface: a right-side pane in the project window where the user talks to an
 assistant that investigates their data. Graduated from **AA-06** (as that task predicted it
-might); the AA workstream's README links here. Spec: `docs/AGENT_ACCESS_SPEC.md` §9 carries the
-forward design this workstream builds; everything below AA (vocabulary, bridge, policy gate,
-Agents pane, error taxonomy) is reused unchanged.
+might); the AA workstream's README links here. `docs/AGENT_ACCESS_SPEC.md` documents the
+system this workstream builds on and records the pane's settled shape under "What is not
+built"; the forward design lives in this folder's task files. Everything below AA (vocabulary,
+bridge, policy gate, Agents pane, error taxonomy) is reused unchanged.
 
 ## The brain decision (settled 2026-08 — do not re-litigate without new facts)
 

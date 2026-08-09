@@ -19,7 +19,7 @@ read by duplicating them onto every row. That is exactly the exception §10 pre-
 - `ChartSpec` (`apps/project/query/chart.rs`) is the freya-query capability precedent:
   keyed `(snapshot, query, display config)`, `stale_time(MAX)`, `enable(readable)`.
 - DataFusion 54 has the `regr_*` aggregate family (`regr_slope`, `regr_intercept`,
-  `regr_r2` — verified against the pinned sources, `docs/CHART_FUNCTIONS.md` §1.1); one
+  `regr_r2` — verified against the pinned sources, `docs/CHART_FUNCTIONS.md` §5); one
   aggregation call computes all three.
 - The strip's per-mark conditional sections (`chart/strip.rs`) and `config.rs` gate
   predicates are the pattern for a scatter-only toggle.
@@ -56,5 +56,5 @@ read by duplicating them onto every row. That is exactly the exception §10 pre-
       nothing else new.
 
 ## References
-`docs/CHART_SPEC.md` §10. `docs/CHART_FUNCTIONS.md` §1.1 (regression family).
+`docs/CHART_SPEC.md` §10. `docs/CHART_FUNCTIONS.md` §5 (regression family).
 `apps/project/query/chart.rs` (`ChartSpec` — the capability pattern to copy).

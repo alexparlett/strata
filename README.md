@@ -1,8 +1,7 @@
 # Strata
 
 A local, **Athena-style parquet query workspace** — a polished native IDE for querying parquet, CSV and JSON with SQL,
-with no Glue catalog or schema setup. Built with
-[Freya](https://freyaui.dev/) 0.4 (Skia, native — no webview) and
+with no Glue catalog or schema setup. Built with [Freya](https://freyaui.dev/) 0.4 (Skia, native — no webview) and
 [Apache DataFusion](https://datafusion.apache.org/).
 
 Work is organised into **projects**: a folder with a `.strata/` directory holding its catalog, session and query
@@ -12,34 +11,78 @@ history. Open one per window; the app reopens what you had at last quit.
 
 ## What it does
 
-- **Catalog** of external **tables** (parquet/csv/json over files, directories, or globs — one table over any mix) and
-  **views** (saved SQL), in a filterable sidebar with type-coloured columns and Hive `PART` badges.
-- **Query workspace** — tabs, a syntax-highlighted SQL editor (DataFusion dialect) with completion and live
-  diagnostics, Run (⌘/Ctrl+Enter), Explain and Explain analyze, Format SQL, Save and Save-as-view.
-- **Results grid** — virtualized, type-coloured cells with per-column resize and autofit, sort, find-in-results,
-  pagination, and cell/row/column selection with copy as TSV / CSV / JSON / Markdown. Double-click a nested cell for
-  its JSON, or the row gutter for the whole record. `EXPLAIN` renders as a plan tree.
+### Data in
+
+- **Catalog** of external **tables** (parquet / CSV / JSON / Arrow over files, directories, or globs — one table over
+  any mix) and **views** (saved SQL), in a filterable sidebar with type-coloured columns, `PART` badges on
+  Hive-partition columns, and an `INTERNAL` badge on tables Strata itself wrote. A table whose source is missing stays
+  in the list as a failed row with its reason — the catalog shows what the project *says*, not just what registered.
+- **Connections** — read the same formats straight out of **S3**, **GCS**, or any **S3-compatible** store (Cloudflare
+  R2, MinIO, …via a custom endpoint), plus plain HTTP(S) for a single public file. Strata never stores, prompts for,
+  or reads a secret: a connection carries a bucket, a provider and an auth *mode* (ambient credentials, a named
+  `~/.aws` profile, a service-account key *file path*), and credentials resolve at query time from the machine's own
+  chains — `aws sso login` in another terminal just works. Connections live in `project.json` beside the tables, so a
+  colleague who has the bucket has the connection. Hive-partitioned lakes over a bucket work, pruning included.
+- **Table Config** — register or edit a table: multi-path sources with browse, per-format read options (CSV delimiter,
+  header, quoting, compression…; JSON as one-record-per-line or a whole-document array), and Hive-partition detection
+  that *lists* the `key=value` levels rather than asking you to type them, with typed partition columns.
+
+### Querying
+
+- **Query workspace** — tabs (drag to reorder, duplicate, rename, close-others/right/all, reopen closed), each owning
+  its own editor buffer, undo history and results view; all of it restored at reopen.
+- **SQL editor** (DataFusion dialect) — syntax highlighting, completion fed by the engine's own vocabulary (keywords,
+  tables, views, columns, CTEs, and functions with their real signatures), and live diagnostics that go well past
+  parse errors: policy refusals name the surface that owns the statement, *every* unknown table and column is flagged
+  with its span, and each statement is dry-planned against the live session so type errors surface before you run.
+  Format SQL, Run / Cancel (⌘↵), Explain and Explain analyze, Save and Save-as-view.
+- **Statements** — the editor runs queries (`SELECT`, `EXPLAIN`, `SHOW`, `DESCRIBE`) and `CREATE TABLE` /
+  `CREATE TABLE … AS SELECT`, which spool real, durable tables into the project (`.strata/tables/`, Arrow IPC) and
+  register them like any other — that's the `INTERNAL` badge. The rest of the statement surface (`INSERT`,
+  `DROP`, `CREATE VIEW`, `COPY … TO`, `SET`, …) is classified and routed but still being lifted statement by
+  statement: today those answer "not implemented yet" at Run. A short list is refused outright with the reason
+  (`CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`, `INSERT OVERWRITE`). One statement per Run; an intercepted
+  statement reports its outcome in the results pane without disturbing the tab's last result.
+- **Query history** — successful runs only, deduplicated, in the drawer: press to load, double-press to load and run.
+  Persisted per project (`.strata/history.jsonl`).
+
+### Results
+
+- **Results grid** — virtualized, type-coloured cells with per-column resize and double-click autofit, whole-snapshot
+  sort, find-in-results, pagination (100–1000 rows a page), and Excel-style selection — cells, rows or columns — with
+  copy as TSV / CSV / JSON / Markdown. The status bar shows a live selection aggregate (count / Σ / avg / min / max)
+  and the result's age. Double-click the row gutter for a record view; double-click a nested cell for a lazy,
+  virtualized value tree.
+- **Chart view** — flip the results pane from Table to Chart: bar, line, area, scatter, histogram and pie, with X / Y /
+  Series encoders constrained to what each mark can draw, a legend, a hover readout, and sort as a pure repaint.
+  The chart renders the result you already ran — it computes nothing SQL can say — so a refusal ("more than one row
+  per cell") names the `GROUP BY` that fixes it rather than aggregating behind your back.
+- **Explain plan** — `EXPLAIN` renders as an operator tree (physical or logical, raw text a toggle away);
+  `EXPLAIN ANALYZE` adds real metrics: per-operator self-time with a share bar, a `HOTSPOT` badge on the operator
+  that dominates, and the full metric set grouped behind a disclosure.
 - **Column inspector** — type, nested-field tree, and **only facts that were actually read**: parquet footer
   statistics and the table row count, plus an opt-in full **scan** (behind a cost confirm) for the numbers the footer
   can't answer.
-- **Bottom drawer** — **Problems** (every open tab's SQL diagnostics, grouped by tab), **Events** (what the session
-  did), **History** (past runs; press to load, double-press to load and run).
-- **Table Config** — multi-path sources with browse, format options, and Hive-partition detection (typed, with the
-  string-cast warning).
-- **Export window** (via `COPY … TO`) — parquet/csv/json/arrow with per-format options, Hive partitioning, and a
-  preview built from the run's real schema and rows.
-- **Settings window** — Theme (with sync-with-OS), System, Data display, and **Engine ▸ Properties**, which edits
-  DataFusion's own configuration keys directly.
-- **Themes** — `Midnight` (dark) and `Daylight` (light) ship built in; user themes are JSON files in the themes
-  directory. See [`docs/FREYA_THEME_SPEC.md`](docs/FREYA_THEME_SPEC.md).
+- **Export window** — CSV, JSON, Parquet or Arrow with per-format options, Hive partitioning with a tree preview
+  built from the run's real rows, and a preview of the file itself. The window pins the snapshot it was opened on,
+  so re-running the query while it's open can't truncate the write: what you export is what was on screen.
+
+### The app around it
+
+- **Bottom drawer** — **Problems** (live SQL diagnostics for every open tab, plus project-scope conditions like
+  failed registrations), **Events** (what the session did), **History**.
+- **Command palette** (⌘K) — actions, tables, views, saved queries and columns in one search.
+- **Settings window** — Theme (with sync-with-OS), System, Data display, **Keymap** (every command rebindable, with
+  conflict detection and reassign), **Agent access**, and **Engine ▸ Properties**, which edits DataFusion's own
+  configuration keys directly and badges the ones that need an engine restart.
+- **Themes** — `Midnight` (dark) and `Daylight` (light) ship built in; user themes are JSON files of ~100 named
+  colour roles dropped into the themes directory. See [`docs/FREYA_THEME_SPEC.md`](docs/FREYA_THEME_SPEC.md).
+- **Multi-window** — one window per project, a launcher for recents, native menubar with Open Recent, and child
+  windows (settings, export, configure, connection) that pin to their owner. Window geometry and layout persist.
 - **Agent access** — an opt-in MCP server so an AI agent (Claude Code, Cursor, Copilot…) can list your catalog,
-  inspect schemas and run read-only SQL. Its queries are **real runs** on your engine, shown in the sidebar's
+  inspect schemas and run **read-only** SQL. Its queries are real runs on your engine, shown in the sidebar's
   **Agents** pane — a press opens any of them in a new tab. Your tabs stay yours. The same tools are available with
   the app closed, over stdio: `strata mcp <project>`. See [Agent access](#agent-access) below.
-- **Managed catalog DDL policy** — the editor runs `SELECT`/`EXPLAIN`/`SHOW`/`DESCRIBE` **only**. Everything else is
-  blocked with a message naming the surface that owns it: `CREATE TABLE` / `CREATE EXTERNAL TABLE` / `INSERT` → Table
-  Config, `CREATE VIEW` → Save as view, `DROP` → the catalog, `COPY TO` → Export, `SET`/`RESET` → Settings.
-  `CREATE DATABASE`/`SCHEMA` are refused outright.
 
 ---
 
@@ -72,7 +115,7 @@ The root's `default-members` is the Freya app, so a bare `cargo run` at the repo
 is the one to use for real work. Either way the first build pulls DataFusion and compiles Skia — give it time.
 
 To try it against real data, open the repo's **`sample/`** folder as a project: it registers parquet, CSV and JSON
-tables, a Hive-partitioned `events/` directory, and two saved views.
+tables, a Hive-partitioned `events/` directory, internal tables, saved views and queries.
 
 ### Tests
 
@@ -80,8 +123,10 @@ tables, a Hive-partitioned `events/` directory, and two saved views.
 cargo test --workspace --locked
 ```
 
-`--workspace` rather than a bare `cargo test`, which `default-members` would narrow to `strata-freya` alone. After any
-theme change, regenerate and verify the committed schema:
+`--workspace` rather than a bare `cargo test`, which `default-members` would narrow to `strata-freya` alone. The
+connections integration test drives a real MinIO through testcontainers and deliberately **fails** (rather than
+skipping) without a container runtime — Docker, colima or Testcontainers Cloud all serve. After any theme change,
+regenerate and verify the committed schema:
 
 ```bash
 UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync
@@ -110,8 +155,9 @@ signing rung the build took, and the `xattr -dr com.apple.quarantine` step teste
 
 Strata can serve its own catalog and query engine to an AI agent over the
 [Model Context Protocol](https://modelcontextprotocol.io). The agent lists tables, inspects schemas and runs
-**read-only** SQL — the editor's policy exactly. Its queries are real runs against the same engine, materializing the
-same immutable snapshots your own do, so anything it finds you can page, sort, export or take over.
+**read-only** SQL — every write-shaped statement is refused with the same wording the editor would use. Its queries
+are real runs against the same engine, materializing the same immutable snapshots your own do, so anything it finds
+you can page, sort, export or take over.
 
 The agent works in **query sessions** of its own, not in your tabs: the sidebar's **Agents** pane shows each connected
 agent, what it is working on and every query it has run, with the figures each one came back with. Press a query and it
@@ -285,50 +331,77 @@ The design — the tool vocabulary, the policy gate, the error taxonomy and the 
 
 ## Architecture
 
-A virtual Cargo workspace (no root package):
+A virtual Cargo workspace (no root package). The app began life on Dioxus (webview); it was rewritten on Freya for
+native rendering, and the Dioxus frontend has since been deleted.
 
+```mermaid
+flowchart LR
+    freya["<b>strata-freya</b><br/>the app — one module per OS window:<br/>launcher · project · settings · export · configure · connection"]
+    agent["<b>strata-agent</b><br/>MCP server + headless host<br/>(read-only tool vocabulary)"]
+    core["<b>strata-core</b><br/>engine logic — the DataFusion boundary,<br/>config, theme, SQL language service"]
+    model["<b>strata-model</b><br/>serde data vocabulary<br/>(schema · results · catalog · session)"]
+    editor["<b>strata-code-editor</b><br/>Skia code editor<br/>(Rope + tree-sitter)"]
+    macro_["<b>strata-command-macro</b><br/>#[command_router] proc macro"]
+    fork["<b>crates/freya</b> (submodule)<br/>our Freya fork — Skia renderer,<br/>components, freya-query, freya-radio"]
+    df["Apache DataFusion 54"]
+
+    freya --> core
+    freya --> model
+    freya --> editor
+    freya --> agent
+    freya --> macro_
+    freya --> fork
+    agent --> core
+    core --> model
+    core --> df
 ```
-crates/strata-freya         the Freya (Skia/native) frontend — the app; one module per OS window
-                            under apps/ (project, launcher, settings, export, configure)
-crates/strata-core          engine logic: the DataFusion boundary (query/plan/profile/serialize),
-                            config, theme, SQL language service. The only place DataFusion is touched
-crates/strata-model         leaf data vocabulary, serde only (schema, results, catalog, session…)
-crates/strata-code-editor   vendored Skia code editor (Rope buffer + tree-sitter highlighting)
-crates/freya                our Freya fork (git submodule), resolved by local path — excluded
-                            from the workspace, but the build depends on this checkout
-```
+
+- **`strata-freya`** — the Freya (Skia/native) frontend and the default build target.
+- **`strata-core`** — the only place DataFusion is touched: query, plan, profile, export, the statement router, the
+  SQL language service, config and themes.
+- **`strata-model`** — leaf data vocabulary, serde only. No logic.
+- **`strata-code-editor`** — the vendored code editor the SQL surface is built on.
+- **`strata-agent`** — agent access: the tool vocabulary, the MCP server, and the headless stdio host. Deliberately
+  Freya-free, which is what lets one implementation serve the in-app HTTP server and `strata mcp` alike.
+- **`strata-command-macro`** — the command palette's registration mechanism.
+- **`crates/freya`** — our Freya fork (git submodule), resolved by local path — excluded from the workspace, but the
+  build depends on this checkout.
 
 The engine (`strata_core::engine::Engine`) is a **direct-call async facade**: it owns a private multi-thread Tokio
 runtime, spawns each call onto it, and the caller awaits the `JoinHandle` — so query CPU never touches the render
 thread and Freya's non-Tokio UI executor awaits engine methods like any async fn. There are no channels, no request
-ids and no worker loop; the Dioxus-era `Command`/`Event` protocol was deleted in the port.
+ids and no worker loop. A Run materializes an immutable on-disk **Arrow IPC snapshot**; every later read — page, sort,
+chart, export — is a bounded read of that snapshot, which is what makes paging stable and caching sound.
 
-The full per-module map is in **[`docs/reference/MODULE_MAP.md`](docs/reference/MODULE_MAP.md)**,
-and the state design in [`docs/FREYA_STATE_ARCHITECTURE.md`](docs/FREYA_STATE_ARCHITECTURE.md).
+**[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** is the guided tour — how a query round-trips, how statements are
+routed, where state lives, how windows relate. The full per-module map is
+[`docs/reference/MODULE_MAP.md`](docs/reference/MODULE_MAP.md).
 
 ---
 
 ## Docs
 
-- [`CLAUDE.md`](CLAUDE.md) — build, workspace layout, docs index, and where to look for the rest.
-- [`AGENTS.md`](AGENTS.md) — the engineering bar and every settled convention, one line each.
-- [`docs/reference/`](docs/reference) — the detail behind both: the module map, the architecture
-  invariants and their reasoning, the Freya UI conventions, the engine model, the fork/git workflow,
-  and what each finished task settled.
-- [`docs/FREYA_PORT_PLAN.md`](docs/FREYA_PORT_PLAN.md) — why the migration, and the phased plan.
-- [`docs/FREYA_STATE_ARCHITECTURE.md`](docs/FREYA_STATE_ARCHITECTURE.md) — the per-window state design.
-- [`docs/SNAPSHOT_SPEC.md`](docs/SNAPSHOT_SPEC.md) — the result-snapshot read model.
-- [`docs/AGENT_ACCESS_SPEC.md`](docs/AGENT_ACCESS_SPEC.md) — the agent tool vocabulary, its policy gate, and the bridge.
-- [`docs/DEV_TASKS.md`](docs/DEV_TASKS.md) — the backlog. Task files live in `.claude/tasks/`.
+**[`docs/README.md`](docs/README.md)** indexes everything. The short version:
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the system as built, end to end. Start here.
+- [`docs/reference/`](docs/reference) — the engineering reference behind [`CLAUDE.md`](CLAUDE.md) (the map) and
+  [`AGENTS.md`](AGENTS.md) (the rules): the module map, the architecture invariants and their reasoning, the UI
+  conventions, the engine model, the workflow, and what each finished task settled.
+- Feature deep-dives: [`SNAPSHOT_SPEC.md`](docs/SNAPSHOT_SPEC.md) (the result read model),
+  [`STATEMENTS_SPEC.md`](docs/STATEMENTS_SPEC.md) (the statement router),
+  [`CONNECTIONS_SPEC.md`](docs/CONNECTIONS_SPEC.md), [`CHART_SPEC.md`](docs/CHART_SPEC.md),
+  [`COMPLETION_SPEC.md`](docs/COMPLETION_SPEC.md), [`EXPLAIN_PLAN_SPEC.md`](docs/EXPLAIN_PLAN_SPEC.md),
+  [`AGENT_ACCESS_SPEC.md`](docs/AGENT_ACCESS_SPEC.md), [`FREYA_THEME_SPEC.md`](docs/FREYA_THEME_SPEC.md).
 
 ---
 
 ## Status
 
-Under active development. Strata began as a Dioxus (webview) app and was rewritten on Freya for native rendering; the
-Dioxus frontend has since been removed, so the Freya app is the only one. The catalog, editor, results grid,
-inspector, drawer, export and settings surfaces are in place. Remaining work — the connections and chart workstreams
-among it — is tracked in [`docs/DEV_TASKS.md`](docs/DEV_TASKS.md) and `.claude/tasks/`.
+Under active development, and substantially built: the catalog, connections, editor, statement router, results grid,
+chart view, explain plan, inspector, drawer, export, settings, themes, multi-window and agent access are all in
+place. The two open workstreams are the statement lift (implementing the intercepted statements one by one —
+`INSERT`, `DROP`, `CREATE VIEW`, `COPY`, `SET`…) and the in-app agent chat pane. The backlog lives in
+`.claude/tasks/`.
 
 ## License
 

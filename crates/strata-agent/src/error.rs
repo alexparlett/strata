@@ -1,4 +1,4 @@
-//! The error taxonomy (`docs/AGENT_ACCESS_SPEC.md` §7) — every fault an agent can see,
+//! The error taxonomy (`docs/AGENT_ACCESS_SPEC.md`, "Error taxonomy") — every fault an agent can see,
 //! typed once and rendered once.
 //!
 //! Two absences are the design:
@@ -29,7 +29,7 @@ use crate::host::{Project, QuerySessionId};
 /// produce; a state the type permits, and a refusal with no reason is unactionable.
 const UNJUDGED: &str = "The statement was refused, but no reason was recorded.";
 
-/// One of §7's classes. The `Display` is what the agent reads.
+/// One of the taxonomy's classes. The `Display` is what the agent reads.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentError {
     /// Blocked DDL/DML. Carries the refusals so the message is the **editor's own**, from

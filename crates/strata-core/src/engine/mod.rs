@@ -589,7 +589,7 @@ impl Engine {
     ///   confirm see it like any other work — a CTAS is a full scan, and a window closing over
     ///   one has to ask.
     /// - `Refuse(b)` never reaches DataFusion at all: classification is in front of `ctx.sql`
-    ///   precisely because DDL executes *eagerly* inside it (spec §2), so anything that must
+    ///   precisely because DDL executes *eagerly* inside it (spec §3), so anything that must
     ///   not run cannot be allowed to plan.
     ///
     /// The `SQLOptions` triple the read path carries (`query::materialize`) stays all-false and

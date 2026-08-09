@@ -1,204 +1,57 @@
-# Connections + remote object-store sources (S21)
+# Connections — reading from remote object stores
 
-Spec for the Connections feature (**v11**): reading parquet/csv/etc. from remote object stores (**S3, GCS, HTTP** —
-Azure dropped) via **project-scoped connections**, with **no app-managed secrets**. Design source: v11 `Strata.dc.html`
+How Strata reads parquet/CSV/JSON out of S3, GCS and plain HTTP(S). A **connection** is a
+project-scoped description of one remote object store: the bucket (or origin) it names, the
+provider that serves it, and a *reference* to where credentials live. Tables then read through a
+connection by naming it.
 
-+ `FEATURES.md` §6/§15b + CHANGELOG.
+Two rules shape everything below:
 
-## Direction (decided)
+- **Strata never stores, prompts for, or reads a secret.** A connection carries only non-secret
+  metadata — bucket, region, endpoint, an auth *mode* — plus at most a named `~/.aws` profile or a
+  service-account key **file path**. Credentials resolve at query time from the machine's own
+  provider chains. There is no key, token or secret field anywhere in the model
+  (`crates/strata-model/src/connection.rs`), so one cannot be persisted by accident.
+- **DataFusion resolves nothing itself.** There is no built-in "read `s3://…`": the embedder
+  builds an `object_store` and registers it per bucket, or every scan fails with *"No suitable
+  object store found"*. Registering that store is the whole of what a connection *does*
+  (`crates/strata-core/src/engine/store.rs`).
 
-- Connections live in a **project-scoped sidebar pane**, not in Settings.
-- **The app never stores or prompts for secrets** — no keys, no inline credentials. Access + region resolve at query
-  time from the host's standard provider chains (AWS/GCS config files, env vars, instance/pod roles).
-- For AWS we **wrap the `aws-config` default provider chain in an
-  `object_store::CredentialProvider`** (the datafusion-cli pattern) — the chosen approach, not the env-only fallback.
-- **Provider is an explicit picker** (S3 / GCS / HTTP), *not* inferred from a typed URL scheme.
+## Providers
 
-## Provider scope
+Three providers — **S3**, **GCS**, **HTTP** (`ProviderId::ALL`, pinned at three by test). The
+provider is an **explicit picker** in the editor, never inferred from a typed URL scheme.
 
-Registered ourselves (`ctx.register_object_store(url, store)` per bucket), so the set is what **`object_store`**
-implements + which feature we enable.
+- **S3-compatible** stores (Cloudflare R2, MinIO, Alibaba OSS, Tencent COS) ride the S3 provider
+  via its **Endpoint** field plus an **Allow plain HTTP** toggle — they are not separate
+  providers. An `http://` endpoint without the toggle is refused by name, because the underlying
+  HTTP client is built `https_only` and would otherwise fail every request with a bare
+  "builder error".
+- **HTTP** is a public origin: always anonymous, no auth control, no region — the address itself
+  is a whole URL, scheme included.
 
-- **v11 supported providers: S3, GCS, HTTP** only. **Azure was dropped** in v11 — no
-  `az://` / `abfs://`, no Azure store/feature.
-- **S3-compatible** stores (Cloudflare R2 / MinIO / Alibaba OSS / Tencent COS) ride the **S3** provider via a custom
-  **Endpoint** (+ an **Allow HTTP** toggle) — not separate providers.
-- (datafusion-cli's built-in remote schemes are `s3`/`oss`/`cos`/`gs`/`http(s)`; we register stores ourselves
-  regardless, so this only informs the S3-compatible path.)
+## Identity and persistence
 
-## 1. Connections pane (§15b)
+**A connection's identity is its URL** — scheme *and* authority, `ConnectionDef::url()` — because
+that is exactly what DataFusion's object-store registry keys on. Never the bucket alone:
+`s3://lake` and `gs://lake` share a bucket and are two different connections over two different
+stores. Everything that addresses a connection (a registration outcome, a store row, the
+Configure picker, a table def) names it by this URL. The pane's sort order is the **address**, so
+`upsert_connection` replaces by URL and inserts in address order.
 
-- Left **activity rail** top group = **Catalog** | **Connections** (`sidebarPane`; clicking the active pane collapses
-  the sidebar — VS Code model).
-- Each row: a **provider badge** (labeled `S3` / `GCS` / `HTTP` — rounded-rect outline in `currentColor`/accent, not one
-  shared cloud glyph) · bucket · **status dot** — green *Connected* (the chain resolves: Ambient / picked profile / SA
-  file / Anonymous; **HTTP is always public → Connected**) vs amber *Needs credentials* (the chain yields nothing, e.g.
-  profile mode with no profile chosen).
-- **Edit is menu-only:** the row is not clickable (cursor `default`); Edit / Forget come from the ⋮ / right-click
-  catalog row-menu (`kind:"conn"`; Forget → remove-confirm).
-- Empty state: icon + one-line explainer + **Add connection**.
-- **Add / Edit dialog — as built (Connections 03), a child *window* rather than a dialog**
-  (`data-winframe="conn"`, like Configure and Export). Departures from the canvas, each a state
-  removed rather than a field renamed:
-    - **HTTP is one box holding a whole URL** (`http://aserver:8484`), scheme included — no
-      prefix chip and no scheme picker, because `http://` and `https://` are two different
-      origins and only the person typing knows which their server speaks. A **path is a
-      validation error naming the part to drop**, never trimmed off: the registry keys on scheme
-      and authority, so a connection carrying one would go in under a key nothing looks up.
-    - **A bucket name is checked against its provider's own published rules** before Save and
-      before `connect` — the same call, so the two cannot disagree. S3's are AWS's four (3-63
-      characters, lowercase/digits/dots/hyphens, alphanumeric at both ends, no `..`); GCS's are
-      Google's, which are **not** the same (underscores allowed, a dotted name to 222 with each
-      part to 63, no dotted-decimal IP, no `goog` prefix, no `google`).
-    - **Client options** are a table of `object_store` `ClientConfigKey` rows (timeouts, proxy,
-      HTTP version, user agent), edited as rows and committed as a map, offered on every
-      provider because all three stores are built on one HTTP client. `allow_http` is **not**
-      among them: on HTTP it is derived from the scheme typed, and on S3 it is the endpoint's own
-      toggle — and a plain-`http` endpoint without that toggle is now **refused by name**, because
-      reqwest is built `https_only` and otherwise fails every request with a bare
-      "builder error".
-    - **A new S3 connection opens with a blank region, not `us-east-1`.** That seed is exactly the
-      arrow-rs#2795 default in a user's handwriting — the builder assumes `us-east-1` silently, the
-      credential probe still passes, and the connection registers green over the wrong region.
-      Blank blocks Save and says why; `us-east-1` stays the placeholder.
-    - **A field's error lives in the footer, not on the field.** One value both disables Save and
-      explains it, so the form cannot hold two accounts of its own validity. The label still
-      carries `REQUIRED`.
-    - **HTTP shows the URL box and nothing else** — no auth pill, no region, no endpoint: a
-      control that cannot mean anything for the chosen provider is not shipped disabled.
-  Save writes the def, persists it, deregisters the old URL when an edit **moved** the bucket or
-  the provider, and asks for a whole-catalog pass; the window then watches its own row and closes
-  on `Ready`.
-- **Add / Edit dialog:**
-    - **PROVIDER** segmented picker (S3 / GCS / HTTP) — explicit; switching provider sanitises the auth mode to one
-      valid for it.
-    - **BUCKET** (REQUIRED) — scheme-qualified (e.g. `s3://acme-lake`). A non-editable **scheme-prefix chip** shows
-      **only for HTTP** (`https://`); S3/GCS hide it since the provider picker already states the scheme.
-    - Per-provider auth control + fields (see §2 / §6). **No key/secret fields anywhere.**
-    - Save/validation is **per-provider** (e.g. S3 Region required).
-- Keyed by **scheme+authority (bucket)** in the `connections` map — the same map the Configure-table connection dropdown
-  reads.
+The def stores the **address** and derives the scheme from the provider:
 
-## 2. Auth model — no app-managed secrets
+- **S3 / GCS** — the bucket name alone (`acme-lake`). Storing the scheme too would be two
+  statements of one fact that can disagree: an `s3://` bucket under a GCS provider would read one
+  way and register another.
+- **HTTP** — the whole origin (`http://aserver:8484`). `http` and `https` are two different
+  origins, so the scheme is part of the address and only the person typing knows which their
+  server speaks.
 
-The app stores only **non-secret metadata** per connection. Credentials resolve at query time from the standard provider
-chains; the app never takes or stores keys.
-
-**Auth is provider-specific** (`connAuthOptions(provider)`) — see §6:
-
-- **S3** — Ambient / Named profile / Anonymous.
-- **GCS** — Ambient (ADC) / Service-account **file path** / Anonymous.
-- **HTTP** — none (always anonymous).
-
-## 3. Credential mechanics (researched)
-
-- **DataFusion core resolves nothing.** The embedder builds an `object_store` and calls
-  `ctx.register_object_store(&Url::parse("s3://<bucket>")?, Arc::new(store))`
-  **per bucket** — else *"No suitable object store found"*.
-- **`object_store` alone is env-only.** `AmazonS3Builder::from_env()` reads `AWS_*`
-  env vars + IMDS / ECS / web-identity. It does **not** read `~/.aws` **profiles** or do **SSO**; `AWS_PROFILE` alone is
-  ignored.
-- **The full "normal AWS" chain** (env → profile → SSO → IMDS → `credential_process`)
-  is the **`aws-config`** SDK crate.
-- **The bridge (our direction):** wrap `aws-config`'s resolved credentials in an
-  `object_store::CredentialProvider` and feed `AmazonS3Builder` — the datafusion-cli pattern. Needs `aws-config` +
-  `aws-credential-types`; vendor datafusion-cli's
-  ~200-line bridge (it's a binary crate, not a stable API).
-  **Built** as `strata_core::engine::store::SdkCredentials` — and it resolves **per request**, not once at build,
-  because that is the whole reason to wrap the SDK's provider instead of copying a key out of it: SSO / assumed-role
-  / IMDS credentials expire in minutes and the SDK's provider is what knows how to refresh them.
-- **Ambient and Named profile are two different providers, not one chain with a setting.** `aws-config`'s
-  `ConfigLoader::profile_name` configures the default chain's *Profile arm*; it does not move that arm to the front,
-  and `DefaultCredentialsChain::build` is unconditionally `Environment → Profile → WebIdentity → ECS → IMDS`. Built
-  that way (as it was first time), a Strata launched from a shell exporting `AWS_ACCESS_KEY_ID` signs as the
-  *environment* identity while the pane shows the profile the user chose — Ambient and Profile become the same
-  connection wherever ambient credentials exist, and a misspelled profile name still shows green. So **Ambient** is
-  `aws_config::defaults(...)` (the whole chain, whatever answers) and **Named profile** is
-  `ProfileFileCredentialsProvider` alone (that profile's own mechanism — `source_profile`, `role_arn`,
-  `sso_session`, `credential_process` — and no fallback to anyone else's identity).
-- **Region must be set explicitly** (arrow-rs#2795 — not reliably auto-derived), so the S3 connection's Region field is
-  load-bearing. `AmazonS3Builder` silently defaults it to `us-east-1`, so `engine::store` **refuses** a blank one
-  rather than letting that default stand.
-- **GCS** resolves via `from_env` / a service-account file (ADC path) — no extra SDK. One consequence worth stating:
-  an ambient GCS connection with no credentials at all still *builds* (the builder installs the GCE metadata
-  provider without asking anything), so it is the one arm whose status cannot be known without a request to the
-  bucket — and that request is not worth making.
-- **The status dot is the connect outcome, not a separate probe.** `engine::store::connect` resolves the credential
-  chain once and throws the answer away, *before* registering: green is a connection that registered, amber is the
-  `Err` it reported, with what to fix. Without that probe a credential-less connection registers happily and the
-  diagnosis lands on every table over the bucket instead — one opaque signing error each, in the wrong place.
-  Registration is therefore all-or-nothing: a connection is never both refused and live.
-
-## 4. Configure-table: local vs object store (FEATURES §6) — as built (Connections 04)
-
-- A **LOCATION** segmented control at the top — **Local** / **Remote** (the canvas's *Local disk* / *Object store*) — makes the choice **explicit** (not
-  inferred from the first path's scheme). Both modes share name, format, and Hive partitioning.
-- **Local:** the multi-path source list + per-row **Browse** (unchanged).
-- **Object store:** a **single SOURCE PATH** (no add/remove, **no Browse** — object-store paths are text-only), entered
-  **relative to the connection's bucket**
-  (rendered with a non-editable bucket prefix). Plus a **TYPE** segmented (S3/GCS/HTTP) filtering a **CONNECTION**
-  dropdown (the same `Select` the FORMAT control is) with a **New connection…** entry; switching provider auto-selects
-  its first connection, empty-provider shows an inline hint.
-- **Removed** vs earlier drafts: the inline Manage/auth form (auth lives solely on the connection now), the
-  **Public-bucket** toggle, the Disconnect action, and the **first-path-wins store-mismatch guard** (a table's store is
-  the selected connection by construction).
-- Validation blocks Register when object-store mode has **no connection** selected, and keeps the **S3 region** check
-  via the connection.
-
-**What the def stores, and where the two halves meet.** `TableDef::connection` is the chosen connection's
-`url()` — a *reference*, never a copy of the bucket, the provider or the auth — and it is the one field that says a
-table is remote: its sources are bucket-relative exactly when it is `Some`, stored as typed (never `relativize`d, which
-measures against the project folder). `strata_core::project::resolve_source` takes the connection and is the single
-place the two are composed; `register::table_spec` calls it, and so does the window's own Hive detection, so a remote
-path is never resolved by the local rule. The engine half needs nothing: the store went in under that URL in
-`register_pass`'s first phase.
-
-**Four departures from the canvas:**
-
-- **The toggle's second answer is `Remote`, not `Object store`.** That is the implementation's word — the thing
-  DataFusion registers and this app calls a connection — and a reader who has never met it cannot tell which of the two
-  answers is theirs. `Remote` is the question the row is actually asking; TYPE, CONNECTION and a bucket-relative path
-  explain themselves from there. The concept keeps its name everywhere it is not a label (the pane, the spec, the code).
-- **The LOCATION and TYPE pills are text-only** — no leading glyphs — because the connection editor's PROVIDER pill next
-  door is, and the two windows' pills should read as one control.
-- **New connection… does not open an editor**; it sets the project window's `ConnectionRequest`, the same slot the
-  pane's `+`, its empty-state CTA and a row's *Edit connection* set. The editor is that window's child, so it survives a
-  Configure window closed while it is up, and the connection it saves appears in this picker without a reopen. It opens
-  on the editor's **own** default provider rather than the TYPE currently picked: the target is that window's identity,
-  and a provider seed would make two *New connection* windows possible at once.
-- **A def naming a connection this project no longer has keeps naming it**, and Save is blocked with
-  `'s3://gone' is not a connection in this project.` Rewriting it to "local disk" would silently re-point the table at a
-  relative path on the user's own machine — the same treatment a format with no reader gets.
-
-**A forget now has a consequence**, since a table's sources can name a connection: the confirm lists the tables whose
-def reads through it and the views behind those, in the sentence a table drop already uses.
-
-**Hive partitioning works over a bucket, and needed nothing.** DataFusion's partitioning is entirely at the
-`ObjectStore` level (`list_partitions` over `list_with_delimiter`'s common prefixes, `parse_partitions_for_path` over
-the object path), and `engine::catalog::detect_partitions` already listed through the session's registered store rather
-than `read_dir`. The MinIO test proves the whole arm: the keys are **found** by listing the bucket, the folder levels
-register as the typed columns the def declares, every partition's rows come back carrying its folder's values, and a
-filter on a partition column takes the pruning path through the same store. The one thing that changed is the
-**failure** message: a partitioned source whose location came back empty is now *listed* — `std::fs` for a local
-directory as before, `ObjectStore::list` for a bucket (`store_holds_ext`, the client `detect_partitions` already uses)
-— so a remote lake under plain `2024/` folders gets the same "No .csv files under 'x' match the partition columns
-'year'." a local one does, and a prefix that really is empty is not blamed on the columns. One bounded listing, only
-on a failure, only for a partitioned source; a glob brings none, because a pattern is not a place to list.
-
-## 5. Persistence — as built (Connections 01)
-
-Connections carry **no secrets**. The per-provider **non-secret def** persists in the project's `.strata/` and reloads
-on open (hydrating the pane + the Configure-table connection list); saved on add / edit / forget.
-
-**Settled: the whole def rides the committed `project.json`**, beside the tables and views —
-`ProjectDefs::connections`, sorted by bucket like every other section. The open question below (split the
-per-machine `profile` / `saPath` into the gitignored `session.json`) is **closed against splitting**: a def carrying
-only a profile *name* and a key *file path* holds nothing a colleague may not have, and a catalog whose tables live
-in a bucket is not shareable if the bucket isn't. **No key/secret ever touches disk via the app** either way.
-
-The shape is `strata_model::ConnectionDef` — a **bucket plus a tagged provider**, where the provider *is* its own
-settings (the same argument as `SourceFormat`: a region means nothing to the HTTP store, and a def carrying every
-provider's fields has states where they disagree):
+Defs persist in the committed `.strata/project.json` (`ProjectDefs::connections`), beside the
+tables and views. Nothing in a def needs gitignoring: a profile *name* and a key *file path* hold
+nothing a colleague may not have. The shape is a tagged provider — the provider *is* its own
+settings, so an S3 region cannot be written down on a GCS bucket:
 
 ```json
 { "address": "acme-lake",
@@ -210,68 +63,203 @@ provider's fields has states where they disagree):
 { "address": "http://aserver:8484", "provider": { "provider": "http" } }
 ```
 
-The field is **`address`, not `bucket`** (`serde(alias = "bucket")` for the name, and
-`ConnectionDef::migrated` for the value — an HTTP connection written under the older shape stored
-the authority alone and derived `https`, so `load_defs` prepends it rather than letting a
-scheme-less URL be refused on the next open): S3 and GCS address a bucket whose scheme their provider states, while an
-HTTP connection addresses a whole origin URL, and one field cannot be named for only one of them.
-`client_config` is absent unless set.
+`client_config` is absent unless set; every provider setting is `#[serde(default)]`, so a def
+written before a setting existed still loads. Older files that stored the field as `bucket` (and,
+for HTTP, without a scheme) load through a serde alias plus `ConnectionDef::migrated`.
 
-Two deliberate differences from the v11 canvas's flat object, both of them states being removed rather than fields
-being renamed:
+## Auth modes
 
-- **An S3 / GCS address is the bucket alone**, not the scheme-qualified string. The scheme comes from the provider
-  (`ConnectionDef::url()` → `s3://acme-lake`), so an `s3://` bucket under a GCS provider cannot be written down;
-  the form strips a pasted prefix. **An HTTP address is the whole URL**, because its scheme is not the provider's
-  to state. `url()` is the registry key either way.
-- **`profile` / `saPath` live inside `auth`**, not beside it — `{"mode":"profile","name":…}`. A profile named on an
-  Ambient connection is not a state worth having.
+Per provider, and only secret-free options exist (`S3Auth` / `GcsAuth` in
+`crates/strata-model/src/connection.rs`):
 
-Every provider's settings are `#[serde(default)]`, so a def written before a setting existed still loads.
+| Provider | Modes |
+|---|---|
+| S3 | **Ambient** (the host's whole chain) · **Named profile** (a profile from `~/.aws/config`) · **Anonymous** (unsigned, public bucket) |
+| GCS | **Ambient** (Application Default Credentials) · **Service-account file** (a key-file *path*, never inline JSON) · **Anonymous** |
+| HTTP | none — always anonymous |
 
-## 6. Provider auth options
+## How credentials resolve
 
-Provider is chosen by the **PROVIDER picker**; the field set + auth control change per provider. Only secret-free
-options are offered.
+Credentials resolve **at query time** from the machine's own chains; the app never copies a key
+out of them.
 
-### S3 — `s3://` (+ S3-compatible via endpoint)
+**S3** wraps the AWS SDK's resolved credential provider in an `object_store`
+`CredentialProvider` (`engine::store::SdkCredentials`) that re-resolves **per request**, not once
+at build. That is the point of wrapping the provider rather than copying a key out of it:
+SSO / assumed-role / IMDS credentials expire in minutes, and the SDK's provider is the thing that
+knows how to refresh them — an `aws sso login` in another terminal just works. The `aws-config`
+dependency exists because `object_store` alone is env-only: it reads `AWS_*` variables plus
+IMDS/ECS/web-identity, but does not parse `~/.aws` profiles, does not do SSO, and ignores
+`AWS_PROFILE`.
 
-- **Fields:** Bucket · **Region — required** (arrow-rs#2795) · optional **Endpoint** + **Allow HTTP** toggle
-  (S3-compatible: R2 / MinIO / OSS / COS).
-- **Auth:** **Ambient** (env → `~/.aws` profiles → SSO → web-identity → ECS → IMDS) · **Named profile** (dropdown from
-  `~/.aws/config`) · **Anonymous** (`skip_signature`).
-- **Bridge:** `aws-config` needed **only** for profile / SSO; env / IMDS / ECS / anonymous work with `object_store`
-  alone. **Excluded:** any key / secret / token.
+**Ambient and Named profile are two different providers, not one chain with a setting.**
+Naming a profile on `aws-config`'s default chain only configures that chain's *Profile arm* —
+the chain stays `Environment → Profile → WebIdentity → ECS → IMDS` — so a Strata launched from a
+shell exporting `AWS_ACCESS_KEY_ID` would sign as the *environment* identity while the row showed
+the chosen profile, and a misspelled profile name would still connect green. So **Ambient** is
+`aws_config::defaults(…)` (the whole chain, whatever answers) and **Named profile** is
+`ProfileFileCredentialsProvider` standalone: that profile's own mechanism (`source_profile`,
+`role_arn`, `sso_session`, `credential_process`) and no fallback to anyone else's identity.
+Pinned by test (`store.rs`, `a_named_profile_signs_as_that_profile_and_not_as_the_environment`).
 
-### GCS — `gs://`
+**GCS** is native `object_store`: Ambient is ADC (`GOOGLE_APPLICATION_CREDENTIALS`, then the
+gcloud ADC file, then the GCE/GKE metadata server); Service-account uses
+`with_service_account_path` — the key file's path, never its contents. One consequence worth
+knowing: the builder installs the GCE metadata arm without a request, so an ambient GCS
+connection on a machine with no credentials at all still registers cleanly and fails at first
+read — the one arm whose status cannot be known without asking the bucket.
 
-- **Fields:** Bucket.
-- **Auth:** **Ambient / ADC** (`GOOGLE_APPLICATION_CREDENTIALS` → gcloud ADC → GCE/GKE metadata) · **Service-account
-  file** (a **path**, not inline JSON) · **Anonymous**.
-- Native to `object_store`; no extra SDK. **Excluded:** inline SA JSON key, bearer token.
+**S3 region is required and never defaulted.** `AmazonS3Builder` silently assumes `us-east-1`
+when the region is blank (arrow-rs#2795), which resolves to a real endpoint serving a different
+bucket's worth of nothing — so the engine refuses a blank region rather than letting the default
+stand, and the editor blocks Save on the same terms.
 
-### HTTP (S) — `http(s)://`
+## Connecting is all-or-nothing
 
-- No auth control, no fields beyond the bucket/URL — always anonymous ("public URL").
+`engine::store::connect` **probes the credential chain before registering**: it resolves the
+chain once, throws the answer away, and only then registers the store. On `Err` nothing is
+registered — including anything an earlier pass registered under the same URL, which is
+deregistered rather than left behind. A connection is never both refused and live, which is what
+makes its status a single honest row: without the probe, a credential-less connection would
+register happily and the diagnosis would land on every table over the bucket as one opaque
+signing error each.
 
-| Provider          | Required non-secret fields                | Secret-free auth modes                         | Stored def                                          | Extra dep                       |
-|-------------------|-------------------------------------------|------------------------------------------------|-----------------------------------------------------|---------------------------------|
-| S3 (+ compatible) | Region (+ Endpoint/Allow-HTTP for compat) | Ambient · Named profile · Anonymous            | `{provider,region,auth,profile,endpoint,allowHttp}` | `aws-config` (profile/SSO only) |
-| GCS               | —                                         | Ambient/ADC · Service-account file · Anonymous | `{provider,auth,saPath}`                            | none                            |
-| HTTP(S)           | —                                         | (none — anonymous)                             | `{provider,auth:"anonymous"}`                       | none                            |
+One honest limit: the probe checks that the host can *produce* a credential, not that the bucket
+*accepts* it. Wrong-but-well-formed credentials connect green and surface at the first read.
 
-## 7. Design alignment
+## Address rules
 
-The v10 "design changes required" (drop the Access-key form, per-provider auth, no-secrets copy, required Region,
-status-dot legend, provider set) were **all incorporated in v11** — plus Azure dropped, an explicit provider picker,
-single-path object-store tables, and a custom connection dropdown. So the spec above *is* the v11 design; no outstanding
-design asks.
+Each provider's published naming rules live in **one place** — `Provider::check_address` — called
+by both the engine's `connect` and the connection editor, so a name refused at the field is
+refused by the engine in the same words:
 
-## References
+- **S3** — AWS's four general-purpose bucket rules: 3–63 characters;
+  lowercase/digits/dots/hyphens; alphanumeric at both ends; no `..`. The S3-compatible stores are
+  all at least this strict, so applying AWS's rules refuses nothing they would have accepted.
+- **GCS** — Google's rules, which are deliberately *not* the same: underscores allowed, a dotted
+  name may run to 222 characters (each part to 63), no dotted-decimal IP, no `goog` prefix, no
+  `google` anywhere.
+- **HTTP** — a whole origin URL. Anything after the authority is **refused by name** rather than
+  trimmed: the registry keys on scheme + authority, so a path here would register under a key
+  nothing looks up. The message quotes the part to drop and says it belongs to the table that
+  reads through the connection.
 
-- DataFusion CLI data sources: <https://datafusion.apache.org/user-guide/cli/datasources.html>
-- DataFusion `query_aws_s3`
-  example: <https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/external_dependency/query_aws_s3.rs>
-- `aws-config` crate: <https://docs.rs/aws-config/latest/aws_config/>
--
-`object_store::aws::AmazonS3Builder`: <https://docs.rs/object_store/latest/object_store/aws/struct.AmazonS3Builder.html>
+The checks are deliberately not exhaustive — each provider reserves further names no local check
+can settle — they catch what is *statically* wrong so the user is told at the field instead of by
+a signing error.
+
+## Client options
+
+`client_config` is `object_store`'s own `ClientConfigKey` map, offered on every provider because
+all three stores are built on one HTTP client: timeouts, connection pooling, proxy settings, HTTP
+version and keep-alive, user agent, certificate trust — 16 keys, enumerated in
+`engine::store::CLIENT_KEYS` with a description each (the editor offers them with autocomplete).
+`check_client_config` validates the map in both the editor and `connect`: an unknown name or a
+blank value is refused by name rather than silently dropped at build time.
+
+`allow_http` is deliberately **not** among them, because it is already said elsewhere and a
+second control for one setting is two controls that can disagree: on S3 it is the endpoint's own
+toggle, and on HTTP it is derived from the scheme the user typed.
+
+## The connection editor
+
+A **child window** of the project window (`crates/strata-freya/src/apps/connection/`), one per
+def. Its rows, top to bottom — and which rows exist depends on the provider, and only on the
+provider (a control that cannot mean anything for the chosen provider is not shipped disabled):
+
+1. **PROVIDER** — segmented pill, S3 / GCS / HTTP.
+2. **The address box** — bucket for S3/GCS, whole origin URL for HTTP.
+3. **AUTHENTICATION** (S3 and GCS only) — the mode pill plus whatever it refers to. The S3
+   profile is picked from a `Select` over the machine's own configuration
+   (`Engine::aws_profiles` reads the section headers of `~/.aws/config` and `~/.aws/credentials`
+   — names only, nothing from a profile's body).
+4. **REGION** and **ENDPOINT** (S3 only). A new connection opens with a **blank** region —
+   `us-east-1` is the placeholder, never the value, because a seeded `us-east-1` is exactly the
+   silent builder default in the user's handwriting. Blank blocks Save and says why.
+5. **CLIENT OPTIONS** — the key/value table, edited as rows and committed as a map.
+6. A standing note saying where credentials actually come from — the no-secrets rule, stated in
+   the window that would otherwise look like the place to type a key.
+
+A field's error lives in the **footer**, not on the field: one value both disables Save and
+explains it, so the form cannot hold two accounts of its own validity.
+
+Save writes the def, persists the project, **deregisters the old URL itself** when the edit moved
+the bucket or the provider (nothing downstream ever sees the def it replaced), and asks for a
+whole-catalog registration pass; the window then watches its own row and closes when the
+connection settles.
+
+## The Connections pane
+
+A sidebar pane beside the Catalog, reached from the activity rail (clicking the active pane
+collapses the sidebar). Each row is a catalog-style row:
+
+- a **provider badge** (`S3` / `GCS` / `HTTP`),
+- the bucket (or origin),
+- a **status glyph**: nothing when connected, a spinner while the registration pass is out, or a
+  warning triangle whose hover shows the engine's refusal in full. The status *is* the connect
+  outcome — no separate liveness poll, no request to the bucket.
+- a trailing **⋮** menu (also right-click) with **Edit** and **Forget**. The row itself is not
+  clickable: a connection is a thing you look at, not a thing you open.
+
+The header's `+`, the empty state's CTA and a row's Edit all open the editor window. **Forget has
+a consequence**, since table defs can name the connection: the confirm lists the tables whose
+sources read through it and the views behind those, then removes the def and deregisters the
+store.
+
+## Registration order
+
+Connections are the **first phase** of the project registration pass
+(`strata_core::register::register_pass`): every connection registers before any table, because a
+table's source path cannot resolve to an object store that is not registered yet — an ordering
+bug there would look exactly like a broken table. A whole-catalog ↻ re-connects everything; a
+single table's Refresh does not re-connect anything.
+
+## Tables over a connection
+
+`TableDef::connection` holds the chosen connection's `url()` — a *reference*, never a copy of the
+bucket, provider or auth — and it is the one field that says a table is remote. Exactly when it
+is set, the table's sources are **bucket-relative** (`events/2024/**/*.parquet`), stored as
+typed. `strata_core::project::resolve_source` is the single place the two halves compose: given
+the connection it prepends the URL, and without one it joins onto the project folder. One
+function taking the connection, rather than a local rule with a remote one beside it, so a
+bucket-relative source can never be silently resolved against the local disk.
+
+In the Configure window, **LOCATION** is an explicit Local / Remote toggle — never inferred from
+a path's scheme. Remote mode shows a single bucket-relative SOURCE PATH (rendered with the
+non-editable bucket prefix), a TYPE segmented control that *filters* a CONNECTION dropdown (a
+filter, never the table's provider), and a **New connection…** entry that opens the editor. A def
+naming a connection the project no longer has keeps naming it, and Save is blocked with:
+
+> 's3://gone' is not a connection in this project. Choose one, or add it back.
+
+Rewriting it to local disk would silently re-point the table at a relative path on the user's own
+machine.
+
+## Hive-partitioned lakes over a bucket
+
+Partition detection is format-agnostic and works over any registered store:
+`engine::catalog::detect_partitions` reads `key=` levels from glob segments in the path, or finds
+them by **listing** — `list_with_delimiter` through the session's registered object store, the
+same call for a local disk and a bucket. Partition columns register typed, rows come back
+carrying their folder's values, and a filter on a partition column takes DataFusion's pruning
+path through the same store.
+
+The whole arm is proven against a real MinIO in
+`crates/strata-core/tests/object_store_minio.rs` — deliberately not `#[ignore]`d, because it is
+the only thing that would catch a regression in the S3 credential bridge (see CLAUDE.md for the
+container-runtime requirement).
+
+## How a query reaches a bucket
+
+```mermaid
+flowchart LR
+    subgraph project [".strata/project.json"]
+        C["ConnectionDef<br/>s3://acme-lake · region · profile"]
+        T["TableDef events<br/>connection = s3://acme-lake<br/>source = events/2024/"]
+    end
+    C -->|"register pass, phase 1:<br/>probe chain, register store"| R["object-store registry<br/>key = s3://acme-lake"]
+    T -->|"resolve_source"| U["s3://acme-lake/events/2024/"]
+    U --> S["ListingTable scan"]
+    R --> S
+    S -->|"per request"| P["SdkCredentials →<br/>host's own credential chain"]
+```

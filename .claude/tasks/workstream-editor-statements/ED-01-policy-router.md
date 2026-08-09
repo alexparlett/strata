@@ -53,7 +53,7 @@ then fails at Run — `Engine::query`'s `SQLOptions::with_allow_ddl(false)` refu
 DataFusion's own wording. ED-02's `Engine::run` is what closes that.
 
 **Handoff for ED-08 — `EXECUTE` is the one `Verdict::Query` the query path cannot run.** It is
-`Query` rather than `Intercept` (spec §6.5), so the interim note above does not cover it and no
+`Query` rather than `Intercept` (spec §1, the EXECUTE caveat), so the interim note above does not cover it and no
 new dispatch arm will: `run_and_snapshot` sets `with_allow_statements(false)`
 (`engine/query.rs`), so `verify_plan` rejects `LogicalPlan::Statement(Execute)` with DataFusion's
 wording. ED-08 must widen that triple **per dispatch** for this arm — the read path's all-false

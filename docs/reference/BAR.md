@@ -12,12 +12,12 @@ the bolded lead sentence there is verbatim the bolded lead here, so it greps.
 - **Verify from source before agreeing.** If Alex asserts an API or behaviour, check it in the fork
   (`crates/freya/`) or the crate before confirming; correct it if it's wrong. Same bar for your own
   claims: don't enshrine or restate an API you haven't just looked at.
-- **Framework-native idiom — never pattern-carrying.** When porting a feature, find the
-  Freya/freya-query native shape first (fork examples, Valin) and build to that. The Dioxus app is
-  a *behavioural* reference only, never an architecture to bridge to: no adapters, echo fields,
-  parallel ids, or compatibility shims to keep old shapes alive ("I don't want to keep a pattern
-  that worked with dioxus for the sake of it"). Prefer widening a native id over introducing a
-  mapping. Breaking `strata-dioxus`'s build is expected — it is already broken on purpose.
+- **Framework-native idiom — never pattern-carrying.** Find the Freya/freya-query native shape
+  first (fork examples, Valin) and build to that: no adapters, echo fields, parallel ids, or
+  compatibility shims to keep old shapes alive ("I don't want to keep a pattern that worked with
+  dioxus for the sake of it"). Prefer widening a native id over introducing a mapping. The Dioxus
+  app this rule guarded against has been deleted; its patterns (`GlobalStore`, `dispatch`/`action`,
+  the `Command`/`Event` protocol) stay gone.
 - **Model impossible states out of existence; fail loud on the rest.**
   - A project can't exist without a folder, so `ProjectState.root` is `PathBuf` (not `Option`), has
     no `Default`, and is only built full from load/scaffold. Don't thread `Option`s or blank

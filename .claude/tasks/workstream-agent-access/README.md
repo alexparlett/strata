@@ -5,10 +5,10 @@ later) lists the catalog, inspects schemas, and runs read-only SQL — with **ev
 real run** on the ordinary press → snapshot machinery, shown in the window's Agents pane and
 promotable into a new tab with one press.
 
-**Spec: `docs/AGENT_ACCESS_SPEC.md`** (+ `docs/agent-access-dataflow.mermaid`). Read it first —
-it carries the settled decisions (read-only policy, agent-managed query sessions, one app server
-with default-to-single-project scoping, cached-stats-only profiling) and the **verified**
-Tokio ↔ Freya bridge design every task here builds on.
+**Docs: `docs/AGENT_ACCESS_SPEC.md`** (now the as-built documentation, run dataflow diagram
+inlined). Read it first — it carries the settled decisions (read-only policy, agent-managed
+query sessions, one app server with default-to-single-project scoping, cached-stats-only
+profiling) and the verified Tokio ↔ Freya bridge design every task here builds on.
 
 The architecture in one line: **one read-only tool vocabulary over one UI bridge, with thin
 swappable frontends** — MCP server first (any MCP client is the chat surface), native chat pane
@@ -67,8 +67,8 @@ everything below it unchanged.
   `actions::open_sql` — a new tab, focused, holding ordinary editable text. What an
   agent skips is only the *gate* in front of a funnel where that gate is a question for the user
   — never the funnel itself, or the two ways of doing one thing start to drift.
-- **An agent that is not in the window does not touch the window's state** (AA-03b, reversing
-  spec §1 for the MCP frontend). An MCP client is in a terminal, so its runs get their own
+- **An agent that is not in the window does not touch the window's state** (AA-03b; the doc's
+  "Agent runs are real runs" section). An MCP client is in a terminal, so its runs get their own
   surface — the Agents pane — rather than the user's tabs, which stealing focus, piling up and
   costing a validation pass each made untenable. Scoping is structural: `StrataTools` *is* one
   agent, and every session-scoped tool is scoped to its id, so an agent is never handed a handle

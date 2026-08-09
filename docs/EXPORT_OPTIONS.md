@@ -1,8 +1,10 @@
-# Export options — the as-built surface
+# Export options — the Export window and the COPY it writes
 
-What the Export window (P4-10) offers per format, and the `COPY … TO` it produces. This replaces
-the pre-build capability survey: that document ranked options **Core / Advanced / Skip** for a
-disclosure the canvas then removed, and described DataFusion 43.
+What the Export window offers per format, and the `COPY … TO` it produces. The window opens from
+the results toolbar on the run that is on screen, and it **pins that snapshot**
+(`Engine::pin_snapshot`) for its whole life — so a re-run in the tab behind cannot retire or
+truncate the table under a running `COPY`, and an export is always an export of what was on
+screen.
 
 Two sources of truth sit under this, and they are the ones to change:
 
@@ -18,9 +20,19 @@ Engine: **DataFusion 54**. Its `COPY` planner lowercases bare option keys and ap
 `TableParquetOptions` field names.
 
 ```sql
-COPY (SELECT * FROM <snapshot> [ORDER BY "col" ASC|DESC NULLS LAST] [LIMIT n OFFSET m])
+COPY (SELECT "col_a", "col_b", … FROM <snapshot>
+      ORDER BY ["col" ASC|DESC NULLS LAST,] "__strata_ord"
+      [LIMIT n OFFSET m])
 TO '<path>' STORED AS <FMT> [PARTITIONED BY (a, b)] [OPTIONS (…)]
 ```
+
+The `SELECT` names the result's columns **explicitly, never `*`**: the snapshot file carries the
+`__strata_ord` bookkeeping column, and a `COPY` must not write bookkeeping into the user's file.
+The ordinal is what the read *orders by* instead — alone for an unsorted export, as the tie-break
+under a user sort — so even an unsorted export carries an `ORDER BY`, which is what makes "the
+file matches what was on screen" true rather than hopeful: an unordered `LIMIT/OFFSET` over a
+split scan is nondeterministic (measured — `docs/SNAPSHOT_SPEC.md` §9). See
+`export::select_sql` and its tests.
 
 ---
 
@@ -59,8 +71,8 @@ re-ordered afterwards. `NULLS LAST` in both directions, matching the grid.
 
 ## JSON
 
-Newline-delimited only (one object per line). DataFusion's writer can also emit a JSON array, but
-the canvas offers NDJSON alone, so the spec doesn't spell the option.
+Newline-delimited only (one object per line). DataFusion's writer can also emit a JSON array;
+Strata offers NDJSON alone, so the spec doesn't spell the option.
 
 | Group | Control | Values | Default | `OPTIONS` key |
 |---|---|---|---|---|
@@ -80,8 +92,7 @@ the canvas offers NDJSON alone, so the spec doesn't spell the option.
 - **The level group only exists for codecs that take one.** It appears and disappears with the
   codec, because a level on snappy is a control that changes nothing. The level also rides *inside*
   the codec (`Codec::Zstd(3)` → `zstd(3)`), so a level can't be set on a codec that would ignore it.
-- **Row-group size is a row count**, not a byte size — the master canvas's stale `FMT_META` mock
-  labels it in MB, which is wrong.
+- **Row-group size is a row count**, not a byte size.
 - Per-column knobs (encoding, bloom filters) are not offered: they are per-column settings and this
   is a per-export surface.
 
@@ -90,6 +101,35 @@ the canvas offers NDJSON alone, so the spec doesn't spell the option.
 No write options exist, so `Format::Arrow` carries no fields and the window shows a
 [`Note`](../crates/strata-freya/src/components/form/row.rs) saying so. An empty row would read as
 "still loading". (Arrow IPC *can* carry LZ4/ZSTD at the format level; DataFusion doesn't expose it.)
+
+---
+
+## The PREVIEW pane
+
+A full section of the window, showing what the chosen options will actually produce
+(`strata-freya::apps::export::preview`). It re-renders on every edit, and it shows **only real
+facts**: every row is a row the grid already fetched (the page in hand, carried in as
+`ExportTarget::sample`), every type is the run's own schema, every count is read from the run.
+Nothing is estimated.
+
+Per format:
+
+- **CSV** — the first rows of the page, rendered by a mirror of the writer's own rules: the
+  chosen delimiter, quote, escape and null text, a field quoted exactly when it contains the
+  delimiter, the quote or a newline, and the same escape resolution as the spec (`\t` previews as
+  a tab). The header row follows its toggle.
+- **JSON** — the same rows as NDJSON, strings quoted and numbers/booleans bare per the schema.
+- **Parquet** — a schema summary (`message result { … }` with each column's physical type and
+  repetition) plus the settings that will be written: codec and level, statistics, row-group
+  size, writer version, dictionary. No rows — a parquet file has none to show as text.
+- **Arrow** — the schema, and "(no write options)".
+- **Partitioned** (any format) — the Hive tree the export will write, built **only from values
+  genuinely present in the page in hand**: the first few branches, a trailing `…` when there are
+  more, and an honest line — `shape from the N rows loaded; the full export covers M rows` —
+  because the page is not the snapshot. It also states the levels in order and whether partition
+  columns are kept in the files.
+
+An empty result previews as `(no rows to preview)` rather than a bare header.
 
 ---
 
@@ -111,8 +151,8 @@ Rules that cost something to rediscover:
   answer every consumer reads (preview, suggested name, spec) — they once disagreed.
 - **Numeric and string columns only.** A directory name has to be a short stable scalar; a
   timestamp or a struct has none.
-- **Reordering is ▲▼ buttons, not drag-and-drop.** The canvas uses HTML5 drag events, which have no
-  equivalent here, and order is the whole meaning of the list (outermost level first).
+- **Reordering is ▲▼ buttons, not drag-and-drop**, and order is the whole meaning of the list
+  (outermost level first).
 - **Column names must be a single bare word.** DataFusion 54's COPY parser re-renders each
   identifier with `Ident::to_string()`, so a quoted name arrives with its quotes attached and
   matches no field. The export says so plainly rather than emitting SQL that fails on a stray token.
@@ -145,18 +185,18 @@ empty the column list and make partitioning unusable.
 
 ## Deliberately not built
 
-Each of these is in the canvas or the pre-build survey and was dropped on purpose:
+Each of these appeared in earlier designs and was dropped on purpose:
 
 - **The ADVANCED disclosure.** The list is flat: a format's advanced controls are just more of that
   format's options.
 - **The size estimate** (`≈ 1.2 MB`, in the footer and over the preview). It came from invented
-  per-codec compression factors; a fabricated byte figure beside real ones is what the column
-  inspector rejected (P3-08). The footer quotes the real row count.
+  per-codec compression factors, and a fabricated byte figure beside real ones breaks the
+  only-real-facts rule the column inspector settled. The footer quotes the real row count.
 - **The NULL partition warning banner.** The engine refuses and names the column, so a standing
   banner warned about something that could not happen.
-- **The high-cardinality warning** as the canvas computes it — a distinct count over an 80-row
-  sample is a derived-from-what's-on-screen number of exactly the sort P3-08 rejected.
-- **The Clipboard tile.** The canvas dropped it (2026-07-12) once the grid grew its own copy
-  controls, so "export" here always means a file on disk.
+- **The high-cardinality warning** — a distinct count over an 80-row sample is a
+  derived-from-what's-on-screen number of exactly the sort the only-real-facts rule rejects.
+- **The Clipboard tile.** The grid grew its own copy controls, so "export" here always means a
+  file on disk.
 - **A hand-built file browser.** The destination is the native `rfd` dialog; duplicating an OS
   dialog is not the deliverable.

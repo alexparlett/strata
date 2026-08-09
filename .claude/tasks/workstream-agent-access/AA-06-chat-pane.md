@@ -16,5 +16,5 @@ is not restated here so it cannot drift.
 
 Everything this file used to carry — placement, @-mentions, step cards, promotion through
 `actions::open_sql`, the honest-degradation and streaming-cancel acceptance — moved into
-AS-01..04 with the detail an implementing session needs. Spec §9 records the decision at the
-spec level.
+AS-01..04 with the detail an implementing session needs. The doc records the decision in
+`docs/AGENT_ACCESS_SPEC.md` under "What is not built".
