@@ -22,6 +22,7 @@ use bytes::Bytes;
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, Response};
 use http_body_util::combinators::BoxBody;
+use http_body_util::Collected;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper::server::conn::http1;
@@ -125,7 +126,7 @@ async fn serving(scripts: Vec<Vec<String>>, fault: Option<(u16, &'static str)>) 
                         let body = req
                             .collect()
                             .await
-                            .map(|b| b.to_bytes())
+                            .map(Collected::to_bytes)
                             .unwrap_or_default();
                         seen.lock().unwrap().push(Sent {
                             path,

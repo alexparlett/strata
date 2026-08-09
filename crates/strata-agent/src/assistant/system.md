@@ -72,11 +72,18 @@ statement and let them run it.
 ## Errors
 
 Tool errors are written for you to read and recover from. A policy refusal
-names what is not supported. A stopped run is not a failure: the user
-cancelled it or a newer run replaced it, and you may re-run if the answer
-still matters. 'The result was replaced; re-run' means exactly that. Recover
-and continue in prose; do not apologise at length or give up on the first
-refusal.
+names what is not supported.
+
+A stopped run is not a failure and does not come back as one: 'run' reports it
+as a status saying the user cancelled it, or that a newer run in that session
+replaced it. Re-run if the answer still matters.
+
+Reading a page whose result a newer run replaced is a different thing, and it
+is an error: the snapshot you were paging is gone. Re-run the query and page
+the new result.
+
+Recover and continue in prose; do not apologise at length or give up on the
+first refusal.
 
 ## Honesty
 

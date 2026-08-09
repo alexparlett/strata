@@ -619,10 +619,12 @@ Things that must not regress. Each was fought for once already.
   and the discriminator is the minted id, never the name.** That pane answers "what is working
   on my project right now" about *external* clients; the assistant is part of the app and its
   runs render as step cards in its own transcript. It stays one more agent to everything below
-  (its own `AgentId`, its own query sessions, the same gate) and is excluded from the pane
-  alone, by `StrataTools::agent_id()` — the id the app itself minted. Keying on
-  `AgentIdentity::assistant()`'s name would let any MCP client hide from the pane by claiming
-  that name at `initialize`, which is the worst possible version of this rule.
+  (its own `AgentId`, its own query sessions, the same gate) and is to be excluded from the pane
+  alone, by `StrataTools::agent_id()` — the id the app itself minted. **The accessor is the seam;
+  the filter is AS-04's, landing with the pane it belongs to**, so nothing enforces this yet and
+  the task file carries it. Keying on `AgentIdentity::assistant()`'s name would let any MCP client
+  hide from the pane by claiming that name at `initialize`, which is the worst possible version of
+  this rule.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion hides the defs whose registration **failed** — precisely
   the rows the catalog exists to show, because a table that is merely broken has no engine

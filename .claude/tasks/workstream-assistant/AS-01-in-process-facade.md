@@ -36,7 +36,8 @@ query you ran into their own editor".
 > assistant: Alex settled that the Agents pane is for **headless MCP clients only**, and the
 > assistant's runs live in the chat transcript instead. Both model-facing strings that named the
 > pane (`open_query_session`'s doc and the handler `instructions`) were reworded to say what is
-> true on all three transports — the user can see what the agent runs and can promote it. The
+> true on all three transports — the promotion is scoped to "wherever Strata's window is open",
+> because the headless host (AA-05) has no window, no editor and nobody watching. The
 > assistant is still one more agent to everything *below*; it is only the pane it is kept out
 > of, by `StrataTools::agent_id()` rather than by its identity's name. See
 > `AS-02-provider-seam-and-loop.md` and `AS-04-chat-pane.md`.

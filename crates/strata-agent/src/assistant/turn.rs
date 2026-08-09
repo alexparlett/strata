@@ -399,7 +399,7 @@ async fn drive<H: Host>(
 
         let opened = tokio::select! {
             biased;
-            _ = cancel.cancelled() => return Settle::Cancelled,
+            () = cancel.cancelled() => return Settle::Cancelled,
             opened = brain.client().exec_chat_stream(
                 brain.model().clone(),
                 request,
@@ -415,7 +415,7 @@ async fn drive<H: Host>(
         loop {
             let next = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => return Settle::Cancelled,
+                () = cancel.cancelled() => return Settle::Cancelled,
                 next = stream.next() => next,
             };
             match next {
@@ -509,7 +509,7 @@ async fn drive<H: Host>(
             let called = tokio::select! {
                 biased;
                 // Dropping this future is the engine's abort — see the module note.
-                _ = cancel.cancelled() => {
+                () = cancel.cancelled() => {
                     // The calls that never ran are answered to the *model*, so the conversation
                     // stays usable...
                     answers.extend(calls[at..].iter().map(|c| ToolResponse::from_tool_call(c, STOPPED)));

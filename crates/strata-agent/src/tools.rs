@@ -403,10 +403,11 @@ impl<H: Host> StrataTools<H> {
     ///
     /// The app's own answer to "is this the in-app assistant?", and the reason that question
     /// has an honest answer at all: the chat pane's `StrataTools` is one the app constructed,
-    /// so it holds an id nothing else can claim. The Agents pane uses it to leave the
-    /// assistant *out* — that pane says which external clients are connected to the project
+    /// so it holds an id nothing else can claim. **The Agents pane will use it to leave the
+    /// assistant out** — that pane says which external clients are connected to the project
     /// right now, and the assistant is not connected to anything, it is part of the app (its
-    /// runs show as step cards in the transcript instead).
+    /// runs show as step cards in the transcript instead). Future tense on purpose: the filter
+    /// is AS-04's, with the pane it belongs to, and this accessor is the seam it will read.
     ///
     /// Deliberately **not** a name comparison against [`AgentIdentity::assistant`]. An
     /// identity is a claim a client makes at `initialize`, so keying a "hide this from the
@@ -1061,8 +1062,8 @@ impl<H: Host> StrataTools<H> {
 
     /// Open a query session and return its handle: a place your queries run in sequence,
     /// each replacing the last. It is yours, not one of the user's editor tabs — nothing you
-    /// do here disturbs what they are working on. The user can see what you run and can
-    /// promote any query you ran into their own editor.
+    /// do here disturbs what they are working on. Where Strata's window is open, the user can
+    /// see what you run and promote any query you ran into their own editor.
     #[tool(name = "open_query_session")]
     async fn open_query_session_tool(
         &self,
@@ -1139,8 +1140,8 @@ impl<H: Host> StrataTools<H> {
 Read-only: SELECT, EXPLAIN, SHOW and DESCRIBE run; everything else is refused. \
 Start with list_tables and describe_table to learn the catalog, validate to check SQL \
 cheaply, then open_query_session and run. Your work lives in query sessions of your own, \
-which the user can watch and promote into their editor — so it never \
-disturbs the tabs they are working in. Open a session per line of investigation; each run \
+which the user can watch and promote into their editor wherever Strata's window is open — so \
+it never disturbs the tabs they are working in. Open a session per line of investigation; each run \
 in a session replaces the last one's result."
 )]
 impl<H: Host> ServerHandler for StrataTools<H> {}

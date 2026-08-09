@@ -43,6 +43,7 @@ doc-valid-idents = [
     "JetBrains",
     "MinIO",
     "MiniSky",
+    "OpenAI",
     "PROPFIND",
     "PageUp",
     "PascalCase",

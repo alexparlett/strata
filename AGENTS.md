@@ -316,9 +316,10 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   front of it is the *editor's* policy.** `offer_sql` is the assistant's own tool, never on the
   router; it validates before the card exists, which is what lets it hand over a write the
   assistant is itself refused. Explanatory SQL stays an ordinary code block.
-- **The Agents pane lists the clients that dialled in, so the in-app assistant is not in it —
-  and the discriminator is the minted id, never the name.** `StrataTools::agent_id()`; keying on
-  the identity would let any MCP client hide by claiming it.
+- **The Agents pane lists the clients that dialled in, so the in-app assistant does not belong in
+  it — and the discriminator is the minted id, never the name.** `StrataTools::agent_id()` is the
+  seam; the filter itself is AS-04's, with the pane. Keying on the identity would let any MCP
+  client hide by claiming it.
 
 **Stores and state**
 

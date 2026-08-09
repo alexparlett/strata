@@ -165,7 +165,79 @@ Nothing is measured twice.
 - No conversation persistence — the transcript is the pane's ephemeral state.
 - No RAG, no embeddings, no genai `chain`/`agent` features.
 
+## Corrected by review (2026-08-09) — do not re-introduce
+
+A max-effort adversarial pass over the first cut found fifteen correctness defects. What each
+one taught is recorded here because most of them are shapes that read as obviously fine:
+
+- **A turn stages its messages and commits them once.** Written first as a push per message,
+  which was three defects at once: a cancelled turn's cleanup could land *after* a newer turn
+  had written (leaving tool calls with a user message between them and their results — the
+  request every provider rejects), a turn that failed before the model said anything left the
+  user's question dangling with no reply, and the whole history was deep-cloned under the lock
+  every round. `Staged` removes all three, and it is also what makes `shutdown_background`
+  safe: a task dropped mid-flight has committed a whole block or nothing.
+- **Anthropic's effort ladder is empty, and the reason is not "Anthropic has no such control".**
+  Setting a rung makes genai enable extended thinking; Anthropic then requires the thinking
+  block back alongside the tool results, and genai 0.6.5 cannot supply it (its streamer
+  hardcodes `captured_thought_signatures: None` and its serializer drops the parts). So every
+  tool-using turn would fail at round two. The table's test is "does the whole path work",
+  not "does the vendor have a knob" — restore `LADDER` when genai can round-trip it.
+- **`capture_reasoning_content` is not a display option.** It is what makes genai's OpenAI
+  Responses adapter request and record the encrypted reasoning item, without which a gpt-5
+  tool loop re-sends its calls with the reasoning missing in front of them. Gemini captures
+  signatures unconditionally, which is exactly why the gap was invisible from that side.
+- **One tool message per round, not one per call.** genai's Anthropic adapter emits a `user`
+  entry per Tool-role message with no merging (its Gemini adapter merges explicitly), so N
+  parallel calls answered as N messages leave the message after the assistant turn answering
+  only the first. `From<Vec<ToolResponse>>` is genai's own shape for it.
+- **The assistant message is assembled here, not by `into_assistant_message_for_tool_use`**,
+  which keeps signatures and calls and silently drops every text part — so the model's own
+  narration reached the pane and vanished from its memory.
+- **An empty reply is a failure, not an empty message.** Recording `assistant("")` is refused
+  by Anthropic on every later send, and `Conversation` cannot be edited, so it killed the
+  conversation permanently while the turn reported success.
+- **`captured_stop_reason` is read**: a reply cut off by the output limit settles `Truncated`,
+  never `Answered`.
+- **Tool results are bounded before they enter the model's memory** (`MAX_TOOL_RESULT`), with
+  the cut naming `read_page`. A `run` answer carries up to `MAX_PAGE_SIZE` rows and is re-sent
+  every round and every turn; one large call exhausted the context window with no recovery.
+- **The scope is a boundary, not a default.** `scoped` overwrote nothing, so a model that named
+  a *different* open project was served against it — a pane could reach every other window's
+  data, and the step card carries no project to say which. It overwrites now, and
+  `list_projects` answers with the pane's project alone.
+- **`check_base_url` normalizes the parsed URL's path**, not the raw text: a base carrying an
+  api-version query got the slash inside the query, and genai's join then ate the path segment.
+- **A blank base URL reads as absent**, or a cleared box is refused with "Clear it in Settings".
+- **`offer_sql` claims what `validate` delivers and no more.** It is not a parse guarantee:
+  validate deliberately stays silent on an incomplete trailing statement, on unresolved columns
+  where the resolver's scope is incomplete, and on a `;`-separated batch. The doc says so; the
+  residual is below.
+- Smaller, all fixed: `offer_sql`'s schema goes through rmcp's own normalizer (it was leaking
+  `"title": "OfferParams"`), the bad-arguments sentence is shared with the ten, `tokio`'s `time`
+  feature is declared rather than inherited, `Running` uses `tokio_util`'s `DropGuard`, a
+  cancelled `JoinError` settles as `Cancelled`, pinned context is fenced as attached data rather
+  than run together with the question, an empty ask is refused before a socket opens,
+  `ProviderKind::all()` reads the table instead of being a second list, and the env check uses
+  `var_os` so the key is not copied onto our heap to be looked at.
+
+The test suite grew with each: the stub now records the path and the `Authorization` header,
+fails an unscripted request instead of answering an empty reply, and can serve a 4xx, and the
+cancel test waits on `Engine::is_running` rather than a fixed sleep.
+
 ## Known, and owed elsewhere
+
+**`offer_sql` is not a parse gate, and closing that needs a seam the vocabulary does not have.**
+`Engine::validate` is right for a live editor buffer and therefore silent on three things that
+reach a card: an incomplete trailing statement, an unresolved column where the resolver's scope
+is incomplete, and a `;`-separated batch (which Run then refuses whole). The sound check is
+`sql::classify_one`, which is the engine's and sits behind a `SessionContext` no tool holds.
+Adding a non-tool method to `StrataTools` for it would blunt AS-01's "the public methods *are*
+the ten tools", so it is recorded rather than done. The user-visible cost today is a card whose
+Run press fails in the editor's own words.
+
+**Anthropic effort is off until genai can round-trip a thinking block** — one line in
+`PROVIDERS` (`efforts: LADDER`) when it can, and nothing else changes.
 
 **A cancelled run leaves a stale `Running` row in the app's own agents satellite.**
 `strata_freya::agent::directory::run` sends its `AgentNotice::RunSettled` *after* awaiting the
