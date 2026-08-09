@@ -156,8 +156,14 @@ Rules that cost something to rediscover:
 - **Column names must be a single bare word.** DataFusion 54's COPY parser re-renders each
   identifier with `Ident::to_string()`, so a quoted name arrives with its quotes attached and
   matches no field. The export says so plainly rather than emitting SQL that fails on a stray token.
-- **Keep-columns is a session config** (`execution.keep_partition_by_columns`), not a COPY option,
-  so it is set per partitioned export.
+- **Keep-columns rides in the statement's own `OPTIONS`**
+  (`'execution.keep_partition_by_columns'`). It is a session config, but DataFusion's physical
+  planner reads that exact key out of the COPY's options first and only falls back to the session
+  when it is absent — so an export states its answer and leaves the engine's setting alone. It was
+  a `SET` once, and never restored: invisible for as long as nothing could read it back, and one
+  export deciding the answer for every later one the moment `SET` and `SHOW` became statements a
+  user can type. The `execution.` namespace stays on the key because `TableOptions::set` skips
+  that namespace, which is what lets it reach the planner without the format refusing it.
 - **A NULL in a partition column is refused, not warned about** — see below.
 
 ### NULL partition values
@@ -170,12 +176,20 @@ unrecoverable once the source result is gone.
 `export::partition_columns_have_no_nulls` refuses the export and names the column. Two things make
 that cheap and reliable:
 
-- **It is a footer read, not a scan.** The snapshot is a parquet file we wrote, so the per-column
-  null count is already in its metadata — which is why `query::snapshot_writer_props` sets
-  `EnabledStatistics::Chunk` explicitly rather than trusting parquet-rs's default.
-- **The rule is "proceed only on an exact zero"**, which also disposes of DataFusion's statistics
-  ambiguity: `Precision::Exact(num_rows)` doubles as its "no statistics for this column" fallback.
-  An all-NULL column and one we can't vouch for are both reasons to decline.
+- **It is neither a scan nor a footer read.** The snapshot is Arrow IPC, which carries no column
+  statistics at all — but the file was never worth asking. `query::materialize` streams every batch
+  to write it and `Array::null_count` is a stored field, so the exact per-column count is a running
+  sum over data already in hand (`query::SnapshotStats`, held for the snapshot's lifetime). Free to
+  produce, a slice index to read.
+- **The rule is "proceed only on an exact zero."** `SnapshotStats` is exact by construction — it
+  counted every row that was written — so there is no "unknown" reading to disambiguate. A missing
+  entry is not zero nulls; it is a count we cannot vouch for, and that declines too.
+
+**The typed `COPY` reaches the same refusal by a different route.** A statement the user types has
+no snapshot behind it, so `ddl::copy` counts over the statement's planned input before dispatching
+it — one extra scan per partitioned typed COPY, same exact-zero rule, and the same sentence from
+`export::partition_null_refusal`, so the two surfaces state one fact once
+(`STATEMENTS_SPEC.md` §6.4).
 
 **Schema nullability is not the signal and cannot be** — DataFusion reports every column of every
 real table as nullable, parquet sources included (measured). Gating on `ColumnInfo.nullable` would

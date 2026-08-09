@@ -124,8 +124,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Editor statements** (ED-05..10) — the open capability arms over the built router/dispatch
-   spine; ED-04/05 include the catalog pane's internal-table treatment.
+1. **Editor statements** (ED-08..10) — the open capability arms over the built router/dispatch
+   spine.
 2. **Agent access AA-06** — the chat pane (starts with the deferred brain decision; read AA-03c's
    identity finding first).
 3. **Chart follow-ons** (05–07, 09–11) — presets, interactivity, templates, shape panel,

@@ -108,6 +108,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   table drop's own words (`ddl::left_invalid`) off the **aliases** half of `PlanDeps` — raw, so it
   over-reports on purpose — and never cascades. `Blocked::CreateView`/`DropView` stay as the agent
   path's refusals.
+- **A typed `COPY` is DataFusion's own write behind the two checks the Export window used to stand
+  in for, and the Export window is unchanged.** `ddl::copy::copy_to` plans once, gates that plan
+  and drives it — no text re-rendered, so the plan judged is the plan that runs. The bare-word
+  partition check is `export`'s, shared; the NULL-partition refusal is `export`'s wording reached
+  by a **pre-flight count** over the planned input, since a typed COPY has no snapshot's free
+  counts — one extra scan, exact zero or decline. A `__snap_` source is the router's
+  `ReservedName`; the effect is `None`; `Blocked::CopyTo` stays as the agent path's refusal. And
+  `keep_partition_by_columns` is stated in the statement's own `OPTIONS`, never as a session `SET`
+  nothing restores.
 - **An append re-reads the table's facts; it does not re-register it, and it leaves the views
   alone.** Re-registering replaces the provider, and *that* is what strands the `Arc` a view
   captured — which is why a table Refresh re-creates them. An `INSERT` cannot change the shape a

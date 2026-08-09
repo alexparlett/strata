@@ -1,6 +1,6 @@
 # ED-07 · Editor COPY TO: pre-flight NULL gate + native dispatch
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-02
+**Workstream:** Editor statements · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** ED-02
 
 ## Goal
 
@@ -9,55 +9,73 @@ surface used to provide: bare-word partition identifiers and the NULL-partition 
 The Export window is unchanged and remains the snapshot-backed, race-free path. The dispatch and
 report it rides: `docs/STATEMENTS_SPEC.md` §2.
 
-## Current state
+## What was built
 
-- `Engine::export` (`engine/mod.rs:938`) + `export::run_export` (`engine/export.rs:218`) render
-  COPY against a pinned snapshot; the NULL gate `partition_columns_have_no_nulls`
-  (`export.rs:411`) reads exact counts from the spool's `SnapshotStats` — proceed only on exact
-  zero (DF 54 misfiles NULL partition values; schema nullability is no signal, DF reports
-  everything nullable). Bare-word check: `is_bare_word` (`export.rs:438`) — DF 54's COPY parser
-  re-renders quoted idents broken.
-- Known wart to fix here: `run_export` sets `datafusion.execution.keep_partition_by_columns` per
-  export (`export.rs:255`) and never restores it — invisible today, observable once SET and
-  `df_settings` are real (ED-08).
+`engine/ddl/copy.rs::copy_to`, reached from `ddl::execute`'s `StmtKind::Copy` arm. Documented as
+built in `docs/STATEMENTS_SPEC.md` §6.4, with the invariant in AGENTS.md §2 +
+`docs/reference/INVARIANTS.md`.
 
-## What to build
+1. **Bare-word partition idents**, before planning, through `export::partition_columns_are_bare_words`
+   — made `pub(super)` and shared, not copied. Asked of the strings `CopyToStatement::partitioned_by`
+   holds, which are `Ident::to_string()`'s output, so a quoted `PARTITIONED BY ("region")` arrives
+   *with its quotes* and is refused in the Export window's own words. That message's bad-name
+   rendering moved from `{bad:?}` to `'{bad}'` in the same change: `Debug` on an
+   already-quoted string prints escaped Rust at the user, and single quotes are the house
+   convention for identifiers (AGENTS.md §3). Only `single plain word` was pinned by a test.
+2. **Pre-flight NULL gate** (`no_null_partition_values`) when `partition_by` is non-empty:
+   `count_all()` plus one `count(col)` per partition column over the **planned input**, decoded
+   positionally, nulls derived as `rows - non_null` — the shape `profile::aggregates` already uses,
+   which sidesteps the fallible `ExprFunctionExt` FILTER builder. Refuses on anything but an exact
+   zero, in `export::partition_null_refusal`'s wording (extracted so both surfaces state one fact
+   once). One extra scan per partitioned typed COPY.
+3. **Dispatch drives the planned `LogicalPlan::Copy`**, not a re-parse of the text — see the
+   deviation below. Report is `Exported N rows to '<path>'` off the sink's `count` column;
+   `effect: None`.
+4. **The `keep_partition_by_columns` wart is gone**, and not by save/restore: `run_export` now
+   sends `'execution.keep_partition_by_columns' '<bool>'` in the COPY's own `OPTIONS`. DataFusion's
+   physical planner reads that key out of the statement's options and only falls back to the
+   session config when it is absent (`physical_planner.rs`, the `Copy` arm), and
+   `TableOptions::set` skips the whole `execution.` namespace, so the key reaches the planner
+   without a format refusing it as unknown. Nothing needs coordinating with ED-08: the session is
+   never written in the first place. `format_options` split into `format_pairs` + `options_clause`
+   so the partition option can join the format's.
+5. A `__snap_` source needed no code — the router already refuses it (`Blocked::ReservedName`,
+   `names_reserved`'s `CopyTo` arm). `Blocked::CopyTo` and its message stay verbatim as the agent
+   path's refusal.
 
-`engine/ddl.rs::copy_to`:
+## Deviations from the original plan
 
-1. From the parsed `CopyToStatement`: partition idents through the export module's bare-word
-   check and wording (shared, not copied); a `__snap_`-prefixed source reference →
-   `Blocked::ReservedName` (a typed `COPY (SELECT * FROM __snap_3)` must never write
-   `__strata_ord`).
-2. **Pre-flight NULL gate** when `PARTITIONED BY` is non-empty: run
-   `SELECT count(*) FILTER (WHERE "p" IS NULL) AS n_p, …` over the statement's source; refuse on
-   any non-zero with `partition_columns_have_no_nulls`' wording. One extra scan per partitioned
-   typed COPY — the honest price of generality; the Export window keeps its free counts.
-3. Dispatch the user's statement text via `ctx.sql` (dml-only options); report
-   "Exported N rows to '<path>'" from the sink's count column. `StoreEffect::None` — a COPY
-   changes no catalog state; history and the event log still record it (ED-02).
-4. Fix the `keep_partition_by_columns` wart in `run_export`: save/restore around the COPY (or
-   route through ED-08's overlay if it lands first — coordinate, don't duplicate).
-5. Update the COPY invariant text (AGENTS.md §2 + `docs/reference/INVARIANTS.md`) — editor COPY
-   dispatches natively behind the pre-flight NULL gate; the Export window is unchanged — and move
-   COPY out of `docs/STATEMENTS_SPEC.md`'s *Not yet implemented* list, documenting the built
-   behaviour there.
-   `Blocked::CopyTo` and its message stay verbatim
-   — the agent surface still renders them; the editor path simply no longer reaches them.
+- **The plan is driven, not the text.** The task said "dispatch the user's statement text via
+  `ctx.sql`". The statement is planned anyway for the NULL gate, so re-parsing would gate one
+  value and execute another — the exact failure the `INSERT` arm's "the plan that was gated is the
+  plan that runs" exists to prevent. Driving the plan *is* `ctx.sql` minus the re-parse:
+  `execute_logical_plan` special-cases `Ddl` and `Statement` and hands `LogicalPlan::Copy` to
+  `DataFrame::new`. The dml-only `SQLOptions` floor is still applied, as defense in depth.
+- **The count is built with the DataFrame API, not a rendered `SELECT count(*) FILTER (…)`.**
+  Internal logic does not write SQL (the `profile` rule), and counting over the planned input means
+  the thing measured is the thing that will be written.
+- **The keep-columns fix is an option, not a save/restore** (point 4 above).
 
-## Acceptance
+## Known and stated
 
-- Unpartitioned COPY to CSV/parquet/JSON/Arrow writes the file(s) and reports the row count;
-  the written file has no `__strata_ord` column even when the source query selects from a
-  snapshot-backed table indirectly (reserved-name refusal test).
-- Partitioned COPY with a NULL in a partition column refuses, names the column, writes nothing;
-  with exact-zero NULLs it writes the partition directories.
-- A quoted partition identifier refuses with the bare-word message.
-- After any export (window or typed), `SHOW VARIABLES`-visible
-  `keep_partition_by_columns` equals what it was before the export.
-- The Export window's tests are untouched and green.
+- The gate is a **pre-flight, not a lock**. The Export window writes an immutable snapshot; a typed
+  COPY reads live tables, and a partitioned one reads them twice. Said plainly in the module doc
+  rather than papered over.
+- No destination gate: a typed COPY may write anywhere the user can, exactly as the Export window
+  may.
 
 ## Verification
 
-`cargo test -p strata-core`; run the app: type a partitioned COPY over a fixture with a NULL
-partition value (refused), fix the data, re-run (files on disk inspected).
+`cargo test -p strata-core` — `engine::ddl::copy`'s seven tests (every format flat; reserved-name
+refusal writing nothing; NULL refusal then the same statement over a filtered source; the gate
+ignoring non-partition columns; the quoted-ident message asserted whole; a column named twice in
+`PARTITIONED BY`; the engine's options unmoved by a partitioned COPY) plus
+`tests/engine_export.rs`, whose keep-columns test now also reads
+`SHOW datafusion.execution.keep_partition_by_columns` back and asserts the export left it alone.
+
+**One defect found and fixed in review.** The gate built one `count` per *entry* of `partition_by`,
+so `PARTITIONED BY (region, region)` — which DataFusion plans without complaint — died in the
+pre-flight aggregate's own schema construction ("duplicate unqualified field name
+`count(t.region)`"), refusing a statement that would have run and naming a query the user never
+wrote. It now counts once per distinct name, with the case pinned by
+`a_column_partitioned_by_twice_is_counted_once`.
