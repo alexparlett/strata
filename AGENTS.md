@@ -249,6 +249,11 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   dispatch.** `run` asks `Engine::policy_verdicts` and fails closed, never rewrites SQL, reports a
   stop as a status, and asks `Engine::snapshot_live` rather than reading prose. `read_page` does
   **not** pin.
+- **The vocabulary is public methods and `#[tool]` is a wrapper over them; the model-facing
+  manifest is derived from the router that serves MCP.** A wrapper only resolves `Caller` and
+  holds `Busy`, then delegates to the method (`_as` for a session-scoped one); the in-process
+  caller is `Caller::Owned` by construction. `manifest()` reads `tool_router().list_all()` —
+  never a hand-kept list, never an in-process shim that re-implements a body.
 - **An agent drives the app through the app's own funnels, and works in a surface of its own; only
   a *gate* may be skipped, and only when the gate is a question for the user** (the T2 confirm). The
   run is dispatched straight at the engine on the query session's own `WsId`, bracketed by the

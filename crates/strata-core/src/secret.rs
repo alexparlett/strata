@@ -328,13 +328,17 @@ mod tests {
         refuse(Error::NoStorageAccess("the keychain is locked".into()));
         assert_eq!(
             key.get(),
-            Err(SecretError::Unavailable("the keychain is locked".to_string()))
+            Err(SecretError::Unavailable(
+                "the keychain is locked".to_string()
+            ))
         );
 
         refuse(Error::NotSupportedByStore("read-only store".to_string()));
         assert_eq!(
             key.put(&Secret::new("value").unwrap()),
-            Err(SecretError::Failed("Unsupported: read-only store".to_string()))
+            Err(SecretError::Failed(
+                "Unsupported: read-only store".to_string()
+            ))
         );
 
         refuse(Error::NoStorageAccess("the keychain is locked".into()));

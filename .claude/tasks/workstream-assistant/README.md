@@ -91,7 +91,7 @@ query sessions, the same policy gate, the same error taxonomy verbatim — and b
 
 | # | Task | Status | Depends on |
 |---|---|---|---|
-| 01 | In-process facade + tool manifest: the vocabulary callable without rmcp | ⬜ | AA-03c |
+| 01 | In-process facade + tool manifest: the vocabulary callable without rmcp | ✅ | AA-03c |
 | 02 | Provider seam + the loop: `genai`, streaming, tool dispatch, cancel | ⬜ | 01 |
 | 03 | Settings ▸ Assistant: the provider roster + default entry | ⬜ | 05 |
 | 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ⬜ | 02, 03 |

@@ -1,6 +1,42 @@
 # AS-01 · In-process facade + tool manifest
 
-**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AA-03c (all shipped)
+**Workstream:** Assistant · **Status:** ✅ · **Depends on:** AA-03c (all shipped)
+
+## As built
+
+`crates/strata-agent/src/tools.rs` is now two halves. The **public methods on `StrataTools`
+are the ten tools** — plain arguments in, the wire result types out, no rmcp type in any
+signature — and the `#[tool_router]` block is one wrapper each, doing only what a semantic
+call cannot: resolving which agent the *request* is (`Caller`) and holding it against the idle
+sweep (`Busy`). Every wrapper is `#[tool(name = "…")]` over a `_tool`-suffixed method, so the
+wire names are unchanged and the plain names belong to the facade. A session-scoped tool has a
+private `_as` core taking the `AgentId`, which is `open_query_session`'s old split generalized:
+the wrapper passes the request's agent, the public method passes `self.connection.agent`.
+
+`StrataTools::manifest() -> Vec<ToolSpec>` is the vocabulary as plain data, **derived from
+`Self::tool_router().list_all()`** — the same names, doc-comment descriptions and schemars
+schemas `tools/list` advertises. `AgentIdentity::assistant()` is the in-process caller's
+constant identity (`strata-assistant`), owned by the crate because there is no protocol for
+the assistant to introduce itself over.
+
+**Binding a model's tool call by name to one of these methods is AS-02's**, not this task's:
+the string arrives inside `genai`'s tool-call type, argument-deserialization failures need a
+message that reads well *to a model*, and neither belongs in a crate that has no provider in
+it. Surveyed against `longcipher/bob` and `neuron` while deciding — both build exactly the
+object-safe-tool + name-keyed-registry shape rmcp's own `ToolRouter` already is, which is why
+the manifest is derived from that router rather than a third registry being introduced. rmcp's
+dispatch path itself is unreachable in-process (`ToolCallContext` needs a live `Peer`), and it
+would answer in content blocks rather than typed values, losing the typing both crates prize.
+
+The doc-comment audit changed nothing, as the task expected. The one line worth re-reading was
+`open_query_session`'s "the user watches your sessions in the Agents pane and can promote any
+query you ran into their own editor" — true on the in-process transport too, because the
+assistant is one more agent and its sessions appear in that pane (AS-04 says so as well).
+
+Tests: `crates/strata-agent/tests/facade.rs` (the vocabulary end to end with no rmcp import in
+the file, the policy refusal, the manifest against the wire's own ten names and each tool's
+advertised properties) and `the_manifest_is_derived_from_the_router_that_serves_mcp` in
+`tools.rs`, which is the only side of the crate boundary that can see the router.
 
 ## Goal
 

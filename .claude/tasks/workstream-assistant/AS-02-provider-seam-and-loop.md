@@ -46,6 +46,17 @@ confirmed: `ChatRequest` (messages + tools), `MessageContent` parts (`ToolCall`,
    settle, on error, on cancel, or on a bounded number of tool rounds per send (a guard
    against a runaway loop — refusing with a plain "stopped after N tool rounds" beats spinning;
    pick N generously).
+
+   **The name→method binding is this task's, and it is deliberately here.** AS-01 ships ten
+   typed methods plus `StrataTools::manifest()`; a model answers with a *name* and a JSON
+   object, and turning one into the other needs both the provider's tool-call type and a
+   message for bad arguments that reads well to a model — neither of which belongs in a crate
+   with no provider in it. Keep it one match over `manifest()`'s names with a test that every
+   manifest entry dispatches, so a tool added to the router cannot reach the model with no arm
+   behind it. Do **not** grow a second tool trait or registry to avoid the match: rmcp's
+   `ToolRouter` already is that registry (which is what `manifest()` reads), its dispatch path
+   needs a live `Peer` we do not have, and it answers in content blocks rather than typed
+   values — the AS-01 file records the survey.
 3. **The outward stream.** The loop reports events on a channel the pane consumes: turn
    started, text delta, tool call started (name + args), tool call settled (the result the
    *pane* needs for a step card: SQL · row count · elapsed · query session — not the full
