@@ -67,7 +67,7 @@ open — headless host included — with zero new replay code. `docs/STATEMENTS_
   (`crates/strata-core/src/engine/catalog.rs:68`) — the `SourceFormat::Arrow` arm exists.
 - The def→spec projection is `table_spec` (`strata-core/src/register.rs:54`); replay is
   `register_pass`/`register_project` (both hosts).
-- Verified (spec §2): DF's native CTAS is RAM-whole `MemTable` — unusable; the Arrow sink writes
+- Verified (DataFusion 54; restated in `engine/ddl/tables.rs`'s module doc): DF's native CTAS is RAM-whole `MemTable` — unusable; the Arrow sink writes
   LZ4-frame IPC; `ArrowFormat::infer_stats` returns unknown.
 
 ## What to build

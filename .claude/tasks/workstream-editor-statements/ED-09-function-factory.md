@@ -6,14 +6,14 @@
 
 `CREATE FUNCTION` for SQL-bodied scalar macros, session-scoped, with the function registry's
 live-ness kept honest: a created function reaches autocomplete/signature/docs on the next
-keystroke. `docs/STATEMENTS_SPEC.md` §6.6.
+keystroke. The dispatch and report it rides: `docs/STATEMENTS_SPEC.md` §2.
 
 ## Current state
 
 - `functions::snapshot(&ctx)` (`engine/functions.rs:23`) walks `ctx.udfs()/udafs()/udwfs()`
   **once** at `Engine::new` (`engine/mod.rs:302`) into an immutable field — the "function set is
   the live registry" invariant, which runtime-created functions would silently break today.
-- Verified (spec §2): `FunctionFactory` trait (`create(&self, state, CreateFunction) ->
+- Verified (workstream README, DataFusion 54 facts): `FunctionFactory` trait (`create(&self, state, CreateFunction) ->
   RegisterFunction`), installed via `SessionContext::with_function_factory`; without one, CREATE
   FUNCTION errors "Function factory has not been configured"; the body arrives as a parsed
   `Expr`; DROP FUNCTION deregisters across all registries with no factory needed.

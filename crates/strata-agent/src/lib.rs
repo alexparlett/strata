@@ -1,9 +1,9 @@
 //! **Agent access** — the read-only tool vocabulary an AI agent drives a Strata project
 //! with, everything about it that is frontend-agnostic.
 //!
-//! `docs/AGENT_ACCESS_SPEC.md` is the contract; this crate is §5 (the vocabulary), §6 (the
-//! policy gate and the transport's guard rails) and §7 (the error taxonomy), over the one
-//! deliberate abstraction of §3: the [`Host`] seam. There is **no Freya dependency**, and
+//! `docs/AGENT_ACCESS_SPEC.md` is the contract; this crate is the tool vocabulary, the
+//! policy gate and the transport's guard rails, and the error taxonomy, over the one
+//! deliberate abstraction: the [`Host`] seam. There is **no Freya dependency**, and
 //! that is the property doing the work — it is what lets the vocabulary be tested against
 //! [`mock::MockHost`] with no window or renderer, reused headless (AA-05), and later called
 //! in-process by the chat pane (AA-06) rather than re-implemented for it.

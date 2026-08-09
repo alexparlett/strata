@@ -1,12 +1,10 @@
-# SQL Completion — design spec (as built, P2-04)
+# SQL Completion
 
-**Status: definitive.** This documents the completion system as implemented across
-`strata-core::engine::sql` (the language side), `strata-code-editor` (the popup), and
-`strata-freya` (the wiring). It **supersedes `SQL_LANGUAGE_SPEC.md` §4** (which described
-the pre-build plan: a debounced async pipeline, substring ranking, ⌘Space-only). Follow-on
-work: `P2-22` shipped **function signatures in the completion detail** (an enriched
-engine `FunctionSym` catalog; the docs-panel + signature-help popups were dropped —
-see the task file); `P2-23` (validator fitness — multi-error).
+The completion system, across `strata-core::engine::sql` (the language side),
+`strata-code-editor` (the popup), and `strata-freya` (the wiring). Functions complete with
+their real signatures in the row's detail, from the engine's `FunctionSym` catalog; a docs
+panel and a signature-help popup were prototyped and dropped — the signature in the
+completion detail is the surviving surface.
 
 ## 1. Principles
 
@@ -26,9 +24,9 @@ see the task file); `P2-23` (validator fitness — multi-error).
    never to a mysteriously empty list.
 4. **The editor makes zero grammar judgments.** `strata-code-editor` owns keys, placement,
    and the accept edit, generically; *what a position offers* — including nothing — is
-   entirely the provider's answer. Completion is a mount-site service beside the language
-   (like `use_validation`), not part of `EditorLanguage`: highlight queries are static
-   data, completion needs live app state (catalog, registry).
+   entirely the provider's answer. Completion is a mount-site service beside the language,
+   not part of `EditorLanguage`: highlight queries are static data, completion needs live
+   app state (catalog, registry).
 5. **Mid-edit text is a valid prefix, not a mistake.** Guards and suppressions treat the
    draft as something being *composed*: quiet inside strings/comments/dangling decimals,
    no premature unresolved-column squiggles before a FROM exists (see §8).
@@ -78,9 +76,10 @@ trailing comparison operator) for §5's affinity forces.
 Two kinds, deliberately distinguished:
 
 - **Parser-derived** (track the engine automatically): the keyword universe
-  (`ALL_KEYWORDS` minus `BLOCKED_KEYWORDS` — the managed-DDL policy), name-position
-  reservedness (`lex::is_reserved_in_name_position` over the `RESERVED_FOR_*_ALIAS`
-  tables — also the identifier-quoting rule).
+  (`ALL_KEYWORDS` minus `BLOCKED_KEYWORDS` — the statement router's refused forms,
+  kept honest against `validate::classify` by test; `docs/STATEMENTS_SPEC.md`),
+  name-position reservedness (`lex::is_reserved_in_name_position` over the
+  `RESERVED_FOR_*_ALIAS` tables — also the identifier-quoting rule).
 - **Declared** (grammar/policy knowledge no parser table encodes, one definition each):
   - `LADDER` — the canonical clause order (`SELECT → FROM → WHERE → GROUP BY → HAVING →
     QUALIFY → ORDER BY → LIMIT → OFFSET`), plus `SET_OPS` appended to every tail.
@@ -88,8 +87,10 @@ Two kinds, deliberately distinguished:
     vs literal/direction words that end items; shared by the role test and the
     projection scraper.
   - `EXPR_OPS`, `JOIN_CONT`, `ORDER_CONT` — clause-internal continuations.
-  - `STATEMENT_KEYWORDS` — the policy-shaped statement leads (SELECT/WITH/EXPLAIN/
-    SHOW/DESCRIBE forms).
+  - `STATEMENT_KEYWORDS` — the curated statement leads (SELECT/WITH/EXPLAIN/
+    SHOW/DESCRIBE forms). Not the router's whole allowance (the editor also runs
+    typed DDL, `COPY` and the session statements) — the blank-statement offer is
+    deliberately the query/inspection leads.
   - `MULTI_WORD` — presentation phrases (`GROUP BY`, `LEFT JOIN`, `IS NOT NULL`).
   - `JOIN_LEADINS` — join modifiers after which `JOIN` itself is next.
 
@@ -205,7 +206,7 @@ Performance model, sized against a 100-tables × 1000-columns catalog:
 The editor owns the **generic** machinery; `CompletionItem/Kind/Request` are its own
 types (no strata-core dependency), the provider is a component prop
 (`on_completions: Callback<CompletionRequest, Vec<CompletionItem>>`) wired at the mount
-(tab.rs) — the same seam as `use_validation`.
+(tab.rs).
 
 - **Key claim**: while open, unmodified ↑/↓ (wrap), Enter/Tab (accept), Esc (close) are
   consumed *before* the app's pre-key gate and the editor's own `process_key`, with
@@ -237,9 +238,9 @@ the set-op ladder restart; the probes are where known degradations are *document
 tests* (a derived-table alias dot-completes to silence — subquery scopes are deferred).
 
 If a future catalog outgrows the sync budget: keep the popup synchronous and move only
-the provider call onto the P2-18 validation pattern (spawn + cancel-and-rearm +
-revision gate) behind the same `on_completions` seam. LSP (process boundary, JSON-RPC)
-is categorically out — the provider lives in-process.
+the provider call off-frame (spawned work behind a revision gate — the diagnostics
+driver's pattern) behind the same `on_completions` seam. LSP (process boundary,
+JSON-RPC) is categorically out — the provider lives in-process.
 
 ## 10. Known trade-offs (chosen, not hidden)
 
@@ -260,16 +261,17 @@ is categorically out — the provider lives in-process.
   and differs from the parser dialect's identifier characters (`$`/`@`/`#` are word chars
   under `generic`) — a `price$usd` column dismisses the popup at the `$`. A
   provider-supplied word predicate would close this, reaching the configured dialect the
-  way `lex` does (`lex::dialect`, WJ-04); deferred until it bites.
-- The three SELECT-list scrapers (`column_aliases`, `projection_columns`,
-  `select_column_refs`) share the grammar tables and now agree on depth/literal
-  policy, but remain three walks — a single parameterised scraper is a clean refactor
-  awaiting P2-23's resolver work.
-- The no-FROM diagnostic suppression in `validate.rs` is the third mid-edit stopgap of
-  its class (now depth-0-scoped so CTE drafts keep the grace) — consciously superseded
-  by **P2-23** (native multi-error name resolution in front of the planner).
+  way `lex` does (`lex::dialect`); deferred until it bites.
+- The SELECT-list scrapers (`column_aliases`, `projection_columns`) and the reference
+  collector (`refs_in`) share the grammar tables and agree on depth/literal policy, but
+  remain separate walks — a single parameterised scraper is a clean refactor deferred
+  until it earns its keep.
+- The no-FROM grace in `validate.rs` keeps column references quiet before a FROM
+  exists (depth-0-scoped, so CTE drafts keep it) — mid-edit text is composition, not
+  error (§1), even though the native resolver reports every unknown name once a scope
+  exists.
 - Type-aware argument narrowing (only numeric columns inside `sum(`) needs registry
-  signature metadata. **P2-22** landed that metadata (`FunctionSym.signatures`, from the
-  DataFusion registry) — currently used only for the completion detail; narrowing the
-  argument offer against it is the open follow-on (the docs-panel + signature-help UX
-  that would have consumed it was dropped).
+  signature metadata, and that metadata exists (`FunctionSym.signatures`, from the
+  DataFusion registry) — today it renders only the completion detail; narrowing the
+  argument offer against it is unbuilt (the docs-panel + signature-help UX that would
+  also have consumed it was dropped).

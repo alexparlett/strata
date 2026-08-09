@@ -7,11 +7,14 @@ typed `CREATE EXTERNAL TABLE`, editor `COPY … TO`, session statements (`SET`/`
 `CREATE FUNCTION` — while the agent surface stays read-only and every settled funnel (the catalog
 store, the persist path, the epoch discipline, the snapshot lifecycle) stays exactly where it is.
 
-**Spec: `docs/STATEMENTS_SPEC.md`.** Read it first — it carries the settled decisions (providers
-for identity/visibility, interception for lifecycle; Arrow IPC internal tables as ordinary defs;
-DROP on both origins; statements in history; session-scoped SET/PREPARE/functions) and the
-**verified DataFusion 54 source facts** every task here builds on. Do not re-derive those facts;
-do not re-litigate §3 (why lifecycle cannot live in the provider traits).
+**Docs: `docs/STATEMENTS_SPEC.md`** — the statement surface **as built** (router, dispatch,
+providers, internal tables, and the two writes over them). Read it first; do not re-litigate its
+§3 (why lifecycle cannot live in the provider traits). The settled design for each *unbuilt*
+statement — typed view DDL onto the save-view funnel, session-scoped SET/PREPARE/functions, and
+the rest — lives in its own task file
+below, each self-contained, on top of the **verified DataFusion 54 facts** at the bottom of this
+file. Do not re-derive those facts. When a task lands, move its statements out of the doc's
+*Not yet implemented* list and document the built behaviour there, in the same change.
 
 The architecture in one line: **classify in front of dispatch, execute through funnels that
 already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Refuse` (ED-01, done),
@@ -78,6 +81,23 @@ reassuring the user at exactly the moment the action became destructive.
   `runtime.*`/`format.*` refuse toward Settings, RESET lands on the Settings baseline.
 - **Every def mutation persists at its mutation point** through the persist funnel and bumps the
   epoch via `catalog_settled` — the `save_view` shape, generalized.
+
+## Verified DataFusion 54 facts (do not re-derive)
+
+Verified against the sources this workspace compiles
+(`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`, `datafusion-54.0.0` and siblings).
+The open tasks hang off these; the facts behind the *landed* tasks (eager DDL, the in-RAM CTAS,
+`information_schema` enumeration, and ED-05's `insert_into` and `find_and_deregister` behaviour)
+are restated in the code's own module docs (`engine/ddl/tables.rs`, `engine/providers.rs`) and in
+`docs/STATEMENTS_SPEC.md`.
+
+| Fact | Evidence | Task |
+|---|---|---|
+| `CREATE OR REPLACE VIEW` over a **table** name silently replaces the table (the `(true, Ok(_))` arm never checks `table_type`) | `context/mod.rs:939-972` | ED-06 |
+| PREPARE/EXECUTE/DEALLOCATE supported; plans stored in `SessionState.prepared_plans` (**`pub(crate)`** — no public enumeration); EXECUTE returns the bound plan as a plain DataFrame | `context/mod.rs:733-772`, `:1534-1587`; `session_state.rs:208`, `:984-1013` | ED-08 |
+| `SQLOptions::verify_plan` rejects `Ddl` / `Dml`+`Copy` / `Statement` per flag, visiting subqueries — and **cannot see through EXECUTE**, so DML must be fenced at PREPARE | `context/mod.rs:2305-2339` | ED-08 |
+| Native SET applies `datafusion.runtime.*` live (rebuilds the RuntimeEnv); native RESET restores **DataFusion's** default, not the Settings baseline — both are why SET/RESET never run natively | `context/mod.rs:1115-1219` | ED-08 |
+| CREATE FUNCTION requires a `FunctionFactory` (`with_function_factory`); the body arrives as a parsed `Expr`; DROP FUNCTION deregisters across all registries with no factory needed | `context/mod.rs:2204-2227`, `:474-481`, `:1481-1486` | ED-09 |
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

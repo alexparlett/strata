@@ -191,7 +191,10 @@ account. The script accepts either — set `AC_APPLE_ID`, `AC_PASSWORD` and `AC_
 you would rather use the Apple ID route locally.
 
 Locally, the script finds a Developer ID certificate in your keychain on its own; export the
-notary variables in your shell to notarize from your laptop too.
+notary variables in your shell to notarize from your laptop too. One name differs from the
+secrets table: locally the script wants `AC_API_KEY_PATH` — the path to the `.p8` file — where
+the workflow secret `AC_API_KEY` holds the base64-encoded contents (the workflow writes the file
+and does the translation).
 
 ---
 

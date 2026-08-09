@@ -1,4 +1,4 @@
-//! The EXPLAIN plan view (P2-05, EXPLAIN_PLAN_SPEC v3 — the v19 design mock): a toolbar
+//! The EXPLAIN plan view (EXPLAIN_PLAN_SPEC §5): a toolbar
 //! (Physical/Logical text segments, ANALYZE badge, Raw/Tree toggle) over an indented tree
 //! of operator cards — or the raw plan text. All values arrive pre-typed and pre-labelled
 //! from the engine (`strata_core::engine::plan`) — the view does no unit math.

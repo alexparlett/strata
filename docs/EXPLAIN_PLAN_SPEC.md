@@ -1,271 +1,272 @@
-# Strata — EXPLAIN Plan View — Design Spec (v3)
+# Strata — EXPLAIN Plan View (as built)
 
-**For:** the designer, to lay out the EXPLAIN plan view. Supersedes the v1 mock in
-`Strata.dc.html` (`planTree()`) and the pgjson-framed v2 of this doc.
+The EXPLAIN plan view: the results pane's rendering of an `EXPLAIN [ANALYZE]` as an
+indented tree of operator cards, with per-operator self-time, a time-share bar, hotspot flagging,
+insight callouts, and a grouped full-metrics grid.
 
-**Read this first.** The engine does **all** the work — it walks DataFusion's own typed plan objects and live metrics
-and hands the UI **one plain data structure**
-(`QueryPlan`), already parsed, typed, and unit-formatted. There is **no JSON, no pgjson, no text parsing** on the UI
-side. So: **design from the data model in §§1–4.** Everything the UI can show is in there. If the design needs the data
-in a different shape (extra fields, grouped metrics, a computed value), the engine can produce it — that's the whole
-point of §8.
+The design's one load-bearing idea: **the engine does all the work.** `engine::run_explain` walks
+DataFusion's own typed `LogicalPlan` / `ExecutionPlan` trees and each operator's live `MetricsSet`,
+and hands the UI one plain, typed, unit-formatted data structure (`QueryPlan`). There is no JSON
+and no plan-text parsing anywhere — the raw indent text exists only as an opaque string for the
+Raw toggle. The view does no unit math; every number arrives with a ready-to-print label.
+
+Code lives in two places:
+
+- **Engine:** `crates/strata-core/src/engine/plan/` (the model — `tree.rs`, `metrics.rs`,
+  `detail.rs`, `sql.rs`, `fmt.rs`) and `crates/strata-core/src/engine/explain.rs` (the walk).
+- **View:** `crates/strata-freya/src/apps/project/views/workbench/results/explain_plan/`
+  (`mod.rs` shell + toolbar, `node.rs` the card, `palette.rs` colour resolution).
 
 ---
 
-## 1. What the UI receives: `QueryPlan`
+## 1. Reaching the view
 
-One object per `EXPLAIN`, delivered to the view:
+The editor toolbar has two presses next to Run — **Explain plan** and **Explain analyze**
+(`editor/toolbar.rs`). Each calls the shared press funnel with
+`QueryMode::Explain { analyze }` (`actions::press_query`), which snapshots the tab's editor text
+into a fresh-nonce `QuerySpec` on the tab's request slot. The results pane subscribes that press
+(`RunQuery` in `query/run_query.rs`); its Explain arm rewrites the SQL with
+`plan::as_explain(sql, analyze)` — strip any leading `EXPLAIN [ANALYZE] [VERBOSE]`, prepend the
+requested prefix — and calls `Engine::explain`. The buffer itself is untouched; the rewrite
+applies to the press's snapshot at dispatch.
 
+The settled outcome is `QueryOutcome::Plan(QueryPlan)` — a third outcome beside `Rows` and
+`Statement`, because Explain is something the *press* asked for, not something the router decided.
+The results pane renders it as `ExplainPlan`, and the status bar summarises the shown tree
+(`Physical plan · N operators`).
+
+Two engine facts (see `docs/SNAPSHOT_SPEC.md` §4):
+
+- **An explain materializes no snapshot.** `Engine::explain` supersedes the workspace's in-flight
+  run (mutually exclusive, like a re-run) but leaves the tab's settled snapshot alone — the
+  previous result grid is still there behind the plan.
+- **Cancel works the same as for a run** — the press's nonce, `Engine::cancel`, settles
+  `Err("cancelled")`.
+
+A statement *typed* as `EXPLAIN SELECT …` and dispatched through Run is classified `Query` by the
+statement router and executes as an ordinary rows query — DataFusion returns the plan text as a
+result table. The structured plan view is only built by the two toolbar presses.
+
+```mermaid
+sequenceDiagram
+    participant T as Editor toolbar
+    participant Q as RunQuery (freya-query)
+    participant E as Engine::explain
+    participant V as ExplainPlan view
+    T->>Q: press_query(QueryMode::Explain { analyze })
+    Q->>E: as_explain(sql, analyze)
+    E->>E: plan → unwrap Explain/Analyze → re-plan physical<br/>ANALYZE: execute (collect) for live metrics
+    E->>E: walk typed trees → PlanNode[] + Metric[]
+    E-->>Q: QueryPlan (no snapshot)
+    Q-->>V: QueryOutcome::Plan
 ```
-QueryPlan {
-  physical:     PlanNode[]   // the operator tree, flattened, depth-tagged
-  logical:      PlanNode[]   // same, for the logical plan
-  analyze:      bool         // true = EXPLAIN ANALYZE (physical nodes carry metrics)
-  physicalText: string       // raw indent text, for the "Raw" toggle
-  logicalText:  string       // raw indent text, for the "Raw" toggle
+
+---
+
+## 2. The data model
+
+All types are in `strata_core::engine::plan` (re-exported from `plan/mod.rs`), with no DataFusion
+dependency — the view links against the model, never the planner.
+
+### `QueryPlan` (`plan/tree.rs`)
+
+One object per explain:
+
+```rust
+pub struct QueryPlan {
+    pub logical: Vec<PlanNode>,
+    pub physical: Vec<PlanNode>,
+    pub logical_text: String,   // raw indent text, for the Raw toggle
+    pub physical_text: String,  // ditto (with metrics under ANALYZE)
+    pub analyze: bool,          // true = EXPLAIN ANALYZE
 }
 ```
 
-- Both trees are **flat arrays in pre-order**, each node tagged with a `depth`
-  (0 = root). Render as an indented list; `depth` gives the indent. (Not nested — no recursion needed.)
-- **Plain `EXPLAIN`** → `logical` + `physical` populated, `analyze=false`, **no per-node metrics** (the query isn't
-  executed).
-- **`EXPLAIN ANALYZE`** → `analyze=true`, `physical` nodes carry **live metrics**;
-  `logical` is still populated (structure only, no metrics).
-- Both trees can be shown (Physical / Logical tabs); ANALYZE defaults to physical.
+- Both trees are **flat arrays in pre-order**, each node tagged with a `depth` (0 = root). The
+  view renders an indented list; no recursion.
+- **Plain `EXPLAIN`** → both trees populated, `analyze == false`, no metrics anywhere.
+- **`EXPLAIN ANALYZE`** → `analyze == true`; the query is actually executed so `physical` nodes
+  carry live metrics. `logical` is still populated (structure only — logical nodes never carry
+  metrics).
+- `is_some()` (at least one tree present) gates the view; `run_explain` returns `Err` if both
+  trees came back empty.
+- `max_ms()` is the largest per-node self-time across the physical tree, floored at `1.0` — the
+  normaliser for the time-share bars and the hotspot threshold.
 
----
+### `PlanNode` (`plan/tree.rs`)
 
-## 2. A node: `PlanNode`
-
-What the UI has for each operator today:
-
-```
-PlanNode {
-  name:   string      // "ParquetExec", "HashJoinExec", "Projection"
-  detail: string      // one-line operator config (may be long — see §5.4)
-  kind:   Kind        // source | join | exchange | agg | sort | proj | limit | util
-  depth:  int         // indent level
-  rows:   int | null  // output rows — null when the operator doesn't emit them
-  time:   { ms: number, label: string } | null   // see note below
-  metrics: string     // ← CURRENTLY a flat "name=value · name=value …" string
+```rust
+pub struct PlanNode {
+    pub name: String,        // "ParquetExec", "HashJoinExec", "Projection"
+    pub detail: String,      // one-line operator config (parsed by the card, §5)
+    pub kind: PlanKind,      // Source | Join | Exchange | Agg | Sort | Proj | Limit | Util
+    pub depth: usize,
+    pub rows: Option<u64>,   // output_rows — ANALYZE only; None where absent (RepartitionExec)
+    pub self_ms: Option<f64>,// derived self-time (§3); None on plain EXPLAIN
+    pub self_label: String,  // self_ms formatted ("2.1 ms")
+    pub metrics: Vec<Metric>,// typed, pre-labelled (ANALYZE only; empty otherwise)
 }
 ```
 
-`kind` maps to the accent colour (source `#7ee787` · join `#d2a8ff` · exchange
-`#79c0ff` · agg `#ffa657` · sort `#f0a5c0` · proj `#4cc6ff` · limit `#ffcf6b` · util `#8b95a3`).
+`PlanKind::classify` buckets by operator name (physical `*Exec` and logical node names, including
+the file-format sources — `ParquetExec`, `CsvExec`, … — which don't contain "scan"). The kind
+drives only the accent colour and the self-time attribution arm.
 
-`time` is currently DataFusion's `elapsed_compute` (ms). **This is the wrong headline** — it's `~0` on scans and absent
-on joins/exchanges (see §5.2); §7 defines the value we should send instead (per-operator "self-time").
+Two absences the layout handles: `rows` is `None` on every `RepartitionExec` (it emits no row
+count), and there is no reliable single "time" field on a raw operator — which is exactly why
+`self_ms` exists.
 
-**`metrics` is the problem.** Today it's one pre-joined string of every remaining metric — the "wall" the design must
-break up. The engine can instead send a **structured, typed list** (§8) so the design can tier it. Everything below (§3,
-§4) describes the *values* that go in there, however we shape it.
+### `Metric` (`plan/metrics.rs`)
 
-### Example — one real node (the events scan), as data
+There is **no flat metrics string**. Each operator carries a typed list:
 
-```
-{
-  name:   "ParquetExec",
-  detail: "file_groups={1 group: [[…/events/year=2024/month=01/data.parquet, …/month=02/data.parquet]]}, projection=[user_id, action, amount], predicate=amount@3 IS NOT NULL",
-  kind:   "source",
-  depth:  14,
-  rows:   7,
-  time:   { ms: 0.000001, label: "1ns" },   // elapsed_compute — misleading; real cost below
-  metrics: {                                  // shown here structured (the §8 target shape)
-    time_elapsed_processing:        { value: 15594334, type: "time",  label: "15.6ms" },
-    time_elapsed_scanning_total:    { value: 17147249, type: "time",  label: "17.1ms" },
-    metadata_load_time:             { value: 22353002, type: "time",  label: "22.4ms" },
-    bytes_scanned:                  { value: 605,      type: "bytes", label: "605 B"  },
-    row_groups_matched_statistics:  { value: 2,        type: "count", label: "2"      },
-    file_open_errors:               { value: 0,        type: "count", label: "0", zero: true },
-    // …~18 more, most zero…
-  }
+```rust
+pub struct Metric {
+    pub name: String,     // "bytes_scanned", "metadata_load_time", …
+    pub value: u64,       // raw aggregate: ns for Time, bytes for Bytes/Memory, else a count
+    pub kind: MetricKind, // Count | Time | Bytes | Memory | Ratio
+    pub label: String,    // unit-aware, ready to print ("15.6 ms", "605 B", "48,213")
+    pub zero: bool,       // value == 0 — lets the UI hide the many zero counters
 }
 ```
 
----
+The engine builds these in `explain.rs::node_metrics` from each operator's aggregated
+`MetricsSet`: the `MetricKind` comes from DataFusion's `MetricValue` **variant** first (stable —
+`elapsed_compute`'s name contains no "time"), then a name heuristic for generic operator-defined
+counts/gauges. Timestamps are dropped (not metrics); `output_rows` surfaces as the headline `rows`
+*and* stays in the list (tier-3 "Output" group). `Ratio`/pruning metrics have no single scalar
+unit, so their label is DataFusion's own display string; everything else is formatted by
+`MetricKind::format` (`fmt_ns` / `fmt_bytes` / `fmt_int` in `plan/fmt.rs`).
 
-## 3. The full reference dataset (real `EXPLAIN ANALYZE`)
+### The walk (`engine/explain.rs`)
 
-The worst case to design against: a join + group-by + top-N over the sample data — **18 nodes, depth 0→14, two join
-branches.** The whole `physical` array as data (zero-valued metrics elided; times shown with their real units):
-
-| depth | name                                   | kind     | rows | time (compute) | notable metrics                                                                                                                           |
-|-------|----------------------------------------|----------|------|----------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| 0     | SortPreservingMergeExec                | sort     | 4    | 21µs           | —                                                                                                                                         |
-| 1     | SortExec (TopK fetch=20)               | sort     | 4    | 156µs          | `row_replacements` 4                                                                                                                      |
-| 2     | ProjectionExec                         | proj     | 4    | 3µs            | —                                                                                                                                         |
-| 3     | AggregateExec (FinalPartitioned)       | agg      | 4    | 4.79ms         | `peak_mem_used` 3.4KB                                                                                                                     |
-| 4     | CoalesceBatchesExec                    | util     | 4    | 9µs            | —                                                                                                                                         |
-| 5     | RepartitionExec Hash([country,action]) | exchange | —    | *none*         | `repartition_time` 29µs · `send_time` 679µs · `fetch_time` 337ms\*                                                                        |
-| 6     | AggregateExec (Partial)                | agg      | 4    | 4.06ms         | `peak_mem_used` 4.2KB                                                                                                                     |
-| 7     | CoalesceBatchesExec                    | util     | 4    | 6µs            | —                                                                                                                                         |
-| 8     | HashJoinExec (Inner)                   | join     | 4    | *none*         | `build_time` 216µs · `join_time` 146µs · `build_mem_used` 2.1KB · `build_input_rows` 4 · `input_rows` 5 · `output_batches` 4              |
-| 9     | CoalesceBatchesExec                    | util     | 4    | 15µs           | —                                                                                                                                         |
-| 10    | RepartitionExec Hash([user_id])        | exchange | —    | *none*         | `repartition_time` 4.3ms · `send_time` 19µs · `fetch_time` 256ms\*                                                                        |
-| 11    | CoalesceBatchesExec                    | util     | 4    | 40µs           | —                                                                                                                                         |
-| 12    | FilterExec (amount IS NOT NULL)        | util     | 4    | 134µs          | —                                                                                                                                         |
-| 13    | RepartitionExec RoundRobin             | exchange | —    | *none*         | `repartition_time` 1ns · `send_time` 8µs · `fetch_time` 32ms\*                                                                            |
-| 14    | ParquetExec (events)                   | source   | 7    | 1ns            | `time_elapsed_processing` 15.6ms · `metadata_load_time` 22ms · `bytes_scanned` 605 · `row_groups_matched_statistics` 2 · +~18 mostly-zero |
-| 9     | CoalesceBatchesExec                    | util     | 5    | 16µs           | —                                                                                                                                         |
-| 10    | RepartitionExec Hash([user_id])        | exchange | —    | *none*         | `repartition_time` 10µs · `send_time` 7µs · `fetch_time` 4.4ms\*                                                                          |
-| 11    | ParquetExec (users)                    | source   | 5    | 578µs\*\*      | `metadata_load_time` 3.2ms · `bytes_scanned` 210                                                                                          |
-
-\* `fetch_time` = downstream-pull **wait**, not work — never surface it as cost (§7). \*\* shown as
-`time_elapsed_processing`; its `elapsed_compute` is also `1ns`.
-
-Three data facts the layout must handle (all visible above):
-
-- **`rows` is `null` on every `RepartitionExec`.** Don't assume a row count.
-- **`time`/compute is `null` on Repartition and HashJoin**, and `1ns` on scans. There is no reliable "the time" field
-  per node — hence §7.
-- **Every operator surfaces a different metric set.** A scan has ~24 metrics; a
-  `ProjectionExec` has 2. The card must adapt, not assume fixed slots.
+`run_explain` plans the statement under `SQLOptions` with DML/DDL/statements disallowed, unwraps
+the `LogicalPlan::Explain` / `Analyze` wrapper to the inner plan, walks it into `logical`, then
+re-plans it physical. Under ANALYZE it executes the physical plan (`collect`) so live metrics land
+on the operators, then walks `physical` — reading each node's name, one-line display
+(`split_name_detail` on `"Name: detail"`), and metrics directly from the typed objects.
+`physical_text` uses `DisplayableExecutionPlan::with_metrics` under ANALYZE, plain `displayable`
+otherwise.
 
 ---
 
-## 4. Metrics catalogue — everything the engine can hand you
+## 3. Self-time attribution
 
-Every metric the engine can emit, with the **type** it will tag it as (so the design can format + group), which
-operators emit it, and whether it's usually zero. This is the palette to design from.
+There is no universal per-operator time: `elapsed_compute` is `~0` on scans and absent on
+joins/exchanges, and each operator family reports its own time metrics. `self_time_ms(kind,
+metrics)` (`plan/metrics.rs`) derives the one comparable "work done here" number per node:
 
-| Metric                                                                                                    | Type                           | Emitted by                                           | Usually 0  | Meaning                                                  |
-|-----------------------------------------------------------------------------------------------------------|--------------------------------|------------------------------------------------------|------------|----------------------------------------------------------|
-| `output_rows`                                                                                             | count                          | most (not Repartition)                               | no         | rows the operator emitted → the **rows** field           |
-| `elapsed_compute`                                                                                         | time                           | compute ops; `1ns` on scans; absent on join/exchange | no         | CPU time in this operator                                |
-| `time_elapsed_processing`                                                                                 | time                           | sources                                              | no         | real per-scan processing time (scan "self-time")         |
-| `time_elapsed_scanning_total`                                                                             | time                           | sources                                              | no         | total scan wall incl. wait                               |
-| `time_elapsed_scanning_until_data`                                                                        | time                           | sources                                              | no         | time to first batch                                      |
-| `time_elapsed_opening`                                                                                    | time                           | sources                                              | no         | file-open time                                           |
-| `metadata_load_time`                                                                                      | time                           | sources                                              | no         | parquet footer/metadata load — **can dominate**          |
-| `*_eval_time` (bloom / page_index / row_pushdown / statistics)                                            | time                           | sources                                              | often tiny | predicate + pruning eval times                           |
-| `bytes_scanned`                                                                                           | bytes                          | sources                                              | no         | bytes read from files                                    |
-| `row_groups_matched_statistics` / `_pruned_statistics`                                                    | count                          | sources                                              | often 0    | row groups kept / skipped by min-max stats               |
-| `row_groups_matched_bloom_filter` / `_pruned_bloom_filter`                                                | count                          | sources                                              | often 0    | kept / skipped by bloom filter                           |
-| `page_index_rows_matched` / `_pruned`                                                                     | count                          | sources                                              | often 0    | rows kept / skipped by page index                        |
-| `pushdown_rows_matched` / `_pruned`                                                                       | count                          | sources                                              | often 0    | rows kept / skipped by pushdown filter                   |
-| `file_open_errors` / `file_scan_errors` / `num_predicate_creation_errors` / `predicate_evaluation_errors` | count                          | sources                                              | ~always 0  | error counters — **surface loudly iff non-zero**         |
-| `repartition_time`                                                                                        | time                           | exchange                                             | no         | actual repartition work (exchange "self-time")           |
-| `send_time`                                                                                               | time                           | exchange                                             | no         | time sending batches downstream (wait-ish)               |
-| `fetch_time`                                                                                              | time                           | exchange                                             | no         | **downstream-pull wait — not work; never use as cost**   |
-| `build_time` / `join_time`                                                                                | time                           | join                                                 | no         | hash build / probe time (join self-time = build+join)    |
-| `build_input_rows` / `input_rows`                                                                         | count                          | join                                                 | no         | rows on build side / probe side                          |
-| `build_mem_used`                                                                                          | memory                         | join                                                 | no         | hash-table memory                                        |
-| `output_batches`                                                                                          | count                          | join + others                                        | no         | record batches emitted                                   |
-| `peak_mem_used`                                                                                           | memory                         | aggregate                                            | no         | peak operator memory                                     |
-| `spill_count` / `spilled_rows`                                                                            | count · `spilled_bytes` memory | aggregate / sort                                     | usually 0  | spilling under memory pressure — **tier-2 iff non-zero** |
-| `skipped_aggregation_rows`                                                                                | count                          | aggregate                                            | usually 0  | rows skipped by adaptive aggregation                     |
-| `row_replacements`                                                                                        | count                          | sort (TopK)                                          | no         | TopK heap replacements                                   |
-| `selectivity`                                                                                             | ratio                          | filter (some builds)                                 | no         | fraction of rows kept                                    |
+| kind | self-time = | fallback |
+|---|---|---|
+| `Source` | `time_elapsed_processing` | `time_elapsed_scanning_total` → `elapsed_compute` |
+| `Join` | `build_time` + `join_time` | `elapsed_compute` (only when both are absent) |
+| `Exchange` | `repartition_time` | 0 |
+| everything else | `elapsed_compute` | 0 |
 
-Types the design can rely on for formatting: **count** (plain int, thousands-sep), **time** (µs/ns/ms/s, pre-formatted
-label), **bytes** (`605 B`, `3.1 MB`), **memory** (same as bytes), **ratio** (`50%`). The engine attaches the `type` and
-a ready-to-print `label`; the design never re-derives units.
+`fetch_time` and `send_time` are deliberately never used — they are exchange **wait**, not work
+(measured: a 337 ms `fetch_time` on a plan that ran ~30 ms wall). Returns `None` when the node
+carries no metrics at all (plain EXPLAIN), `Some(0.0)` when the kind's metric happens to be
+absent. Self-time drives the time chip, the share bar, and HOTSPOT.
 
 ---
 
-## 5. Data constraints the layout must handle
+## 4. The three metric tiers
 
-**5.1 Metrics are many, mostly zero, operator-specific.** Scan ~24, projection 2. On small data most pruning/error
-counters are 0. → needs a presentation *strategy*, not fixed slots (see §6.3).
+Under ANALYZE each card shows its metrics in three tiers (rendered in `node.rs`):
 
-**5.2 No universal "time" or "memory" field.** `elapsed_compute` is `1ns` on scans and `null` on join/exchange; each
-kind reports its own time metric. → the engine will send a single derived **self-time** per node (§7) so the design has
-one comparable number for the chip / bar / hotspot.
+**Tier 1 — headline, always shown.** `rows` (when present) · self-time (clock icon +
+`self_label`) · `bytes_scanned` (Source nodes only) · the time-share bar. The bar's fill is
+`round(self_ms / max_ms × 100)` clamped to **3–100%** (`bar_pct`), so a non-zero time always
+reads; the fill takes the node's kind colour.
 
-**5.3 `rows` and `time` can be `null`.** Every `RepartitionExec` has no rows; join/exchange have no `elapsed_compute`.
-Chips must handle absence.
+**Tier 2 — insight callouts, only when non-zero.** `insights(&metrics)` (`plan/metrics.rs`)
+derives tone-coded pills, in priority order:
 
-**5.4 `detail` is long.** A `ParquetExec` detail is ~300 chars (file paths +
-`projection` + `predicate` + `pruning_predicate`). Wrap, and ideally clamp to 2 lines with expand.
+1. every non-zero `*_error(s)` counter — `Err` (red), surfaced loudly;
+2. spills — `spilled <bytes>` or `<n> spill(s)` — `Warn`;
+3. row-group pruning: `pruned P/(P+M) row groups` (`Ok`) when anything was pruned, else
+   `matched M row group(s)` (`Info`) — statistics and bloom-filter counters summed;
+4. `pushdown removed N rows` — `Ok`;
+5. `peak <mem>` / `build <mem>` high-water marks — `Info`;
+6. `selectivity <label>` — `Info`, whenever present.
 
-**5.5 Single-node & shallow plans are the common case.** `SELECT *` → one node.
-`SELECT … LIMIT n` → 1–3. The 18-node tree is the exception. The view must look intentional at 1 node (no dangling
-connectors) and legible at 18 (deep indent).
+Zeros never appear here. The function is pure over `Metric` and unit-tested.
 
----
-
-## 6. Proposed visual (design owns this — this is a starting point)
-
-**6.1 Toolbar (~40px):** Physical / Logical tabs (both trees always available, incl. ANALYZE, which defaults to
-physical) · summary reflecting the active tab (`Plan with metrics · 18 operators` / `Physical plan · N` /
-`Logical plan · N`) · ANALYZE badge (physical tab only) · Raw/Tree toggle (Raw = `physicalText` /
-`logicalText`). No per-query totals — the data has none.
-
-**6.2 Node card:** indented `depth × 22px`, left border + square in the kind colour; header = square · name · optional
-HOTSPOT badge; detail line (wrap/clamp, §5.4); then the metrics block (ANALYZE only).
-
-**6.3 Metrics — the core problem, three tiers:**
-
-- **Tier 1 headline (always):** `rows` (if present) · **self-time** (§7) · `bytes`
-  (sources) · the time-share bar (normalised on self-time).
-- **Tier 2 insights (only when non-zero):** small callouts that carry signal —
-  `pruned 3/4 row groups`, `pushdown removed 1.2k`, `spilled 4 MB`, `peak 3.4 KB`, non-zero `*_errors`. Zeros never
-  appear here.
-- **Tier 3 full metrics (collapsed):** `Metrics (24) ▸` → typed, grouped grid; zeros hidden behind a "show zeros"
-  toggle.
-
-> Applied to the events scan: headline `7 rows · 15.6 ms · 605 B` + bar; tier-2
-> `matched 2 row groups`; collapsed `Metrics (24)`.
-
-**6.4 Tree/indent:** indent by `depth`; optional faint connector lines that degrade to nothing at a single node; cards
-stay full-width, indent eats from the left.
-
-**6.5 States:** single node (no connectors) · logical vs physical (tabs when both present) · Raw (indent text, h-scroll,
-mono) · error (reuse the query-error banner)
-· running ("Explaining…" spinner).
+**Tier 3 — the full grid, collapsed.** A `▸ Metrics (N)` expander opens a bordered grid grouped
+under fixed headers — `METRIC_GROUPS` (`plan/metrics.rs`): Output · Time · I/O · Pruning ·
+Memory & spill · Exchange · Join · Errors · Other, in that order. `metric_group(name)` buckets by
+name (first match wins); a metric no rule claims lands in "Other". Zero-valued metrics are hidden
+behind a `show zeros (n)` toggle in the grid's footer, and render at reduced opacity when shown.
+Each value is coloured by its `MetricKind`, each group header by its group.
 
 ---
 
-## 7. Self-time — the one derived value the engine adds
+## 5. The rendered layout
 
-Because there's no single time field (§5.2), the engine computes one comparable **self-time** per node ("work done
-here") and sends it as `time`. It drives the time chip, the time-share bar, and HOTSPOT. **`fetch_time`/`send_time` are
-excluded — exchange wait, not work** (`fetch_time` was 337ms on a plan that ran ~30ms wall).
+### Toolbar (38 px, `explain_plan/mod.rs`)
 
-| kind                                          | self-time =                | fallback                                          |
-|-----------------------------------------------|----------------------------|---------------------------------------------------|
-| source                                        | `time_elapsed_processing`  | `time_elapsed_scanning_total` → `elapsed_compute` |
-| join                                          | `build_time` + `join_time` | `elapsed_compute`                                 |
-| exchange                                      | `repartition_time`         | 0                                                 |
-| agg / sort / filter / proj / coalesce / merge | `elapsed_compute`          | 0                                                 |
+- **Physical / Logical pill** — a `SegmentedToggle`, shown only when both trees are non-empty.
+  The selected tab lives on the results pane per press (like the page number), so the status
+  bar's summary reads the same selection. `effective_tab` falls back to whichever tree is present
+  when only one is — the pill never offers an empty tree.
+- **ANALYZE badge** — an amber pill, shown only under ANALYZE *and* on the physical tab (the
+  metrics live there).
+- **Raw / Tree toggle** — a `ToggleButton` at the trailing edge. Raw renders the active tree's
+  `physical_text` / `logical_text` verbatim in a scrollable mono readout; Tree renders the cards.
+- The row is a `Toolbar`, so a narrow pane folds it rather than spilling; the pill and
+  badge form the unshrinkable leading run.
 
-HOTSPOT = self-time ≥ 60% of the max self-time in the tree. On the reference plan this correctly flags the two
-Aggregates (4.79/4.06ms) and the events scan (15.6ms)
-— which the current `elapsed_compute`-only value misses entirely.
+### The tree body
+
+Rows render top-down in pre-order. Each row is `plan_row` (`node.rs`): a 22 px **rail column per
+ancestor level**, lit only where the tree visually continues (`guide_rails` in `plan/detail.rs` —
+an ancestor's rail stays on while a later node exists at that depth), then the card. A single-node
+plan (`SELECT *` is one node) shows no dangling connectors by construction. The card list is
+keyed by the shown tree, so switching Physical ↔ Logical remounts the cards — expand state
+belongs to that tree's nodes, not to list positions.
+
+### One card (`PlanNodeCard`)
+
+A 1 px hairline box with a clipped 3 px kind-coloured accent strip down the left (the border-left
+idiom — Freya's `Border` is all-sides), holding a content column:
+
+- **Head:** 6 px kind square · mono operator name in the kind colour · **HOTSPOT** badge when
+  `self_ms >= max_ms × 0.6` (ANALYZE only).
+- **Detail grid:** the operator's one-line `detail` parsed by `detail_parts` (`plan/detail.rs`)
+  into `DetailPart { key, val, has_key }` rows — a bracket-aware split on top-level commas, with a
+  leading `key=` lifted out only when the head is a short (< 26 byte) identifier. Keyed parts
+  render as a two-column definition grid (key column sized to the widest key); bare fragments span
+  the full width. A long detail (more than 2 parts, or over 110 chars) collapses to its first two
+  parts behind a `▸ Detail` expander — never clamped text.
+- **Tiers 1–3** as in §4, each present only under ANALYZE (`metrics` non-empty).
+
+Each card owns its own detail-expand / metrics-collapse / show-zeros state.
+
+### Colour
+
+Every colour resolves through `PlanPalette` (`palette.rs`): the `explain_plan` component theme
+plus the shared type palette and tones it borrows. The mapping mirrors the core's CSS-var palette
+(`PlanKind::color`, `MetricKind::color`, `group_color`, `InsightTone::color` — one mapping source,
+two frontends): Source→string, Join→bool, Exchange→number, Agg→timestamp, Sort→struct,
+Proj→accent, Limit→map, Util→muted; Errors always the error tone.
 
 ---
 
-## 8. The engine ↔ design contract (tell me the shape)
+## 6. Extension seam
 
-The UI renders whatever `PlanNode` shape we agree on — the engine already holds all the values above and can emit them
-however the design needs. Today `metrics` is a flat string; the **proposed target** (drop-in, contained engine change)
-is:
+The contract is one-directional: **the engine emits typed data; the UI renders what it is
+handed.** In practice:
 
-```
-PlanNode {
-  name, detail, kind, depth,
-  rows:     int | null,
-  selfTime: { ms: number, label: string } | null,   // §7
-  metrics: [                                          // typed, ordered, pre-labelled
-    { name, value, type, label, zero }                // type ∈ count|time|bytes|memory|ratio
-  ]
-}
-```
+- **A new metric** an operator starts emitting needs no code anywhere: `node_metrics` picks it up
+  from the `MetricsSet`, `metric_kind` types it, and it appears in the tier-3 grid (bucketed by
+  `metric_group`, "Other" if no rule claims it).
+- **A new tier-2 callout** is one clause in `insights()` — pure over `Metric`, unit-tested next to
+  the existing ones.
+- **A new tier-3 group** is an entry in `METRIC_GROUPS`, a branch in `metric_group`, and a colour
+  in `group_color` + `PlanPalette::group`.
+- **A new attribution rule** (an operator family whose real cost hides in a named metric) is an
+  arm in `self_time_ms`.
 
-With that, the design builds tier-1/2/3 purely from `metrics` (filter by `type`,
-`zero`, and a name allowlist) — no parsing, no unit math.
-
-**Open questions for the designer** (answers drive what the engine emits):
-
-1. Tier-2 shortlist — confirm which metrics deserve a callout (draft: pruning matched/pruned, pushdown removed, spills,
-   `peak_mem`, `build_mem`, non-zero errors).
-2. Tier-3 grouping — group headers you want (draft: Output · Time · I/O · Pruning · Memory/Spill · Exchange · Join ·
-   Errors)?
-3. Do you want self-time as the headline time, `elapsed_compute` as a secondary, or both shown?
-4. Detail: clamp-to-2-lines-with-expand, or full always?
-5. Single-node layout: same card centred, or a lighter treatment?
-
-Say the word on #3/#8-shape and I'll switch the engine from the flat `metrics`
-string to the structured list (small, contained change — flagged in DEV_TASKS S12).
+Nothing on the UI side enumerates metric names except the two headline reads (`bytes_scanned` on
+sources, and the grid's grouping via the shared `metric_group`) — everything else is driven by the
+typed fields on `Metric`.

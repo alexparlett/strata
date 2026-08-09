@@ -20,7 +20,7 @@ use super::selection::Selection;
 /// **Table/Chart segmented toggle** sits at the left (P2-07): it reads the tab's per-tab view
 /// mode off `Chan::View(id)` and a press flips it, swapping the body under this bar. The right
 /// cluster are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke
-/// IconButton); **Find is grid-only** (CHART_SPEC §1), Reload and Download show in both modes.
+/// IconButton); **Find is grid-only** (CHART_SPEC §2), Reload and Download show in both modes.
 ///
 /// **Search** (P2-09) toggles the find popover — an [`Attached`] panel on the [`Menu`] base for
 /// its backdrop dismissal (outside-click / its own Esc). Every close path goes through
@@ -201,7 +201,7 @@ impl Component for ResultsToolbar {
                     .child(toggle),
                 TOOLBAR_TWO_ICON_WIDTH,
             )
-            // Find is grid-only (CHART_SPEC §1), so in Chart mode there is no item at all rather
+            // Find is grid-only (CHART_SPEC §2), so in Chart mode there is no item at all rather
             // than an empty slot still charged for its width.
             .maybe(view == ResultsView::Grid, |bar| {
                 bar.item(

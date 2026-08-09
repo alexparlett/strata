@@ -1,516 +1,348 @@
-# Full-statement editor — lifting the managed-DDL policy (ED)
+# SQL statements — how the editor runs, intercepts and refuses them
 
-Spec for the **full SQL statement surface** in Strata's editor: internal tables persisted to disk
-(`CREATE TABLE` / CTAS, `INSERT`, `DROP TABLE`), typed view DDL, typed `CREATE EXTERNAL TABLE`,
-`COPY … TO`, session statements (`SET`/`RESET`, `PREPARE`/`EXECUTE`/`DEALLOCATE`) and
-`CREATE FUNCTION` — replacing the managed-DDL
-policy's blanket refusal with a per-statement router while keeping every settled funnel (the
-catalog store, the persist path, the epoch discipline, the snapshot lifecycle) exactly where it is.
-Design settled 2026-08-04 with Alex; workstream: `.claude/tasks/workstream-editor-statements/`.
+The editor is a **full-statement surface**: one classification in front of dispatch decides, per
+parsed statement, whether Run executes a query, performs the statement as an engine method, or
+refuses it with the same words the squiggle showed. The agent surface asks the same classifier and
+stays read-only. This file documents that surface as built — the router, the dispatch, the
+provider layer, and the statement family implemented so far (internal tables, and the two writes
+over them). The remaining statement lift (typed view DDL, COPY, session statements, functions,
+typed `CREATE EXTERNAL TABLE`) is tracked in `.claude/tasks/workstream-editor-statements/`.
 
-The one-sentence architecture: **Strata owns the catalog/schema providers as the identity and
-visibility layer, and owns statement lifecycle by interception in the engine facade** — because
-DataFusion 54's provider traits are resolution/enumeration interfaces, not lifecycle ones, and the
-machinery the lifecycle needs (the classifier, the Arrow IPC spool, `register_external`,
-`create_view`, the registration pass) already exists. An internal table is an ordinary `TableDef`
-whose sources point at `.strata/tables/<name>/` with `format: Arrow` — replayed on open by the
-existing pass, in the headless host too, with zero new code.
+```mermaid
+flowchart TD
+    RUN["Engine::run(ws, tag, sql)"] --> CLS{"sql::classify_one\n(parse, then classify(stmt, Editor))"}
+    CLS -- "empty buffer /\nmulti-statement" --> ERR1["Err — 'Nothing to run' /\n'Run executes one statement at a time'"]
+    CLS -- "Verdict::Query" --> Q["query() byte-for-byte\nthe only arm that touches\nthe snapshot lifecycle"]
+    CLS -- "Verdict::Intercept(kind)" --> DDL["ddl::execute, under the bookkeep\nbracket explain shares\n(cancel / is_running / close confirm)"]
+    CLS -- "Verdict::Refuse(blocked)" --> ERR2["Err(blocked.editor_message())\nbefore DataFusion can plan"]
+    Q --> ROWS["RunOutcome::Rows\nresults grid, snapshot, pages"]
+    DDL --> REP["RunOutcome::Statement(report)"]
+    REP --> SETTLE["the settle: StoreEffect fold →\npersist funnel → catalog epoch →\nhistory + event log"]
+```
 
-**On mechanism this spec supersedes the managed-DDL sections of `docs/reference/ENGINE.md` and the
-policy invariants listed in §10** — each amendment lands with the task that implements it, per the
-AGENTS.md upkeep rule; until then the code enforces the old policy and the old text stays true.
+## 1. The shape of a Run
 
----
+`sql::classify_one` (`engine/sql/validate.rs`) parses the buffer with the engine's own dialect and
+takes exactly one statement from it — an empty buffer is `Nothing to run`, a multi-statement
+buffer is `Run executes one statement at a time`. The statement then classifies
+(`classify(stmt, Capability::Editor)`) into one of three verdicts, and `Engine::run` spends the
+verdict (§2).
 
-## 1. Direction (decided)
+**What classifies `Query`** — the snapshot pipeline, unchanged: `SELECT`, `EXPLAIN` /
+`EXPLAIN ANALYZE`, `DESCRIBE`, and every `SHOW` form (`TABLES`, `COLUMNS`, `FUNCTIONS`,
+`VARIABLES`, `DATABASES`, `SCHEMAS`). `EXECUTE` also classifies `Query` — it returns rows — but
+cannot run yet: the read path pins `with_allow_statements(false)`, so it fails with DataFusion's
+wording until the session-statements task lifts it per-dispatch.
 
-- **Scope**: internal tables (CTAS / `CREATE TABLE` / `INSERT` / `DROP`); typed `CREATE`/`DROP
-  VIEW`; typed `CREATE EXTERNAL TABLE` onto the Table Config funnel; editor `COPY TO`; session
-  statements + `CREATE FUNCTION`. The editor runs the full statement surface — the only remaining
-  editor refusals are the short list in §4; unknown statement kinds stay default-deny.
-- **Internal-table data is Arrow IPC under `.strata/tables/`** — type fidelity, the same rationale
-  as snapshots (parquet cannot write a union or a zero-field struct, so some query results could
-  not become tables). Data files are gitignored; the defs in `project.json` are the shareable half.
-- **The agent surface stays read-only.** The one policy predicate gains a capability parameter;
-  the MCP gate keeps exactly today's refusals and today's messages. Curated write tools may arrive
-  later as new tools — never by loosening `run` (AGENT_ACCESS_SPEC §1 stands).
-- **DROP TABLE works on both origins, without a confirm dialog.** Internal: deregister, then
-  delete `.strata/tables/<name>/`. External: def removal only — source files untouched, and the
-  report says so. The report names dependent views after the fact; the catalog surface keeps its
-  before-the-fact confirm for the pointer gesture. This amends the "DROP is not supported"
-  routing.
-- **History records successful statements as well as data runs** — a typed `CREATE TABLE` is a
-  query the user may want back. Amends the "only successful data runs" invariant; dedupe and cap
-  unchanged.
-- **Save-as-view stays.** Typed view DDL and ⌘S are two gestures into one funnel
-  (`Engine::create_view` + the store fold); views created either way are indistinguishable.
-- **Session things are session-scoped, and say so.** The SET overlay, prepared statements and
-  created functions die with the engine (a restart is the `ProjectRoot` remount); every report
-  string states the scope. Defs survive; nothing session-scoped is persisted.
+Everything else is either **intercepted** (an engine-method implementation whose outcome the store
+folds — §6) or **refused** (the short list in §4).
 
-## 2. DataFusion 54 ground truth (verified)
+## 2. Dispatch and outcomes
 
-Verified against the sources this workspace compiles
-(`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`, `datafusion-54.0.0` and siblings).
-Every design decision below hangs off one of these; do not re-derive them.
+`Engine::run` (`engine/mod.rs`) routes; nothing else does:
 
-| Fact | Evidence |
-|---|---|
-| CTAS materializes the whole result in RAM as a `MemTable`, then calls the **sync** `register_table` — no disk, no hook earlier | `datafusion-54.0.0/src/execution/context/mod.rs:868-927` (`create_memory_table`; both creating arms `collect_partitioned().await` → `MemTable::try_new`) |
-| DDL executes eagerly inside `ctx.sql` (`execute_logical_plan`), returning an empty DataFrame | `context/mod.rs:686-775` |
-| INSERT plans through `TableProvider::insert_into`; `ListingTable` supports it for Arrow — directory-collection URL required, schema-checked, appends one LZ4-frame IPC file per statement, `Append` only | `physical_planner.rs:845`; `datafusion-catalog-listing-54.0.0/src/table.rs:614-681`; `datafusion-datasource-arrow-54.0.0/src/file_format.rs:227-241` |
-| DROP TABLE/VIEW = `find_and_deregister` → `SchemaProvider::deregister_table`; type-checked, knows nothing of files or defs | `context/mod.rs:1052-1078`, `:1430-1455` |
-| `CREATE OR REPLACE VIEW` over a **table** name silently replaces the table (the `(true, Ok(_))` arm never checks `table_type`) | `context/mod.rs:939-972` |
-| PREPARE/EXECUTE/DEALLOCATE supported; plans stored in `SessionState.prepared_plans` (**`pub(crate)`** — no public enumeration); EXECUTE returns the bound plan as a plain DataFrame | `context/mod.rs:733-772`, `:1534-1587`; `session_state.rs:208`, `:984-1013` |
-| `SQLOptions::verify_plan` rejects `Ddl` / `Dml`+`Copy` / `Statement` per flag, visiting subqueries — and **cannot see through EXECUTE**, so DML must be fenced at PREPARE | `context/mod.rs:2305-2339` |
-| Native SET applies `datafusion.runtime.*` live (rebuilds the RuntimeEnv); native RESET restores **DataFusion's** default, not the Settings baseline | `context/mod.rs:1115-1219` |
-| CREATE FUNCTION requires a `FunctionFactory` (`with_function_factory`); the body arrives as a parsed `Expr` | `context/mod.rs:2204-2227`, `:474-481`, `:1481-1486` |
-| SHOW TABLES rewrites to `SELECT * FROM information_schema.tables` and **errors when information_schema is off** (today's default); all information_schema views enumerate via `SchemaProvider::table_names()` across every schema — a separate snapshot schema hides nothing, only a filtering provider does | `datafusion-sql-54.0.0/src/statement.rs:1627-1636`; `datafusion-catalog-54.0.0/src/information_schema.rs:96-216` |
-| `TableProvider::statistics` is unused by mainline DF — a snapshot-native provider buys no stats | `datafusion-catalog-54.0.0/src/table.rs:312-315` |
-| The DFParser statement space is closed (five variants, matched without a wildcard); the sqlparser space is wildcard-refused — default-deny protects against new statement kinds | `datafusion-sql-54.0.0/src/parser.rs:285-296` |
+- **`Query`** delegates to `query()` **byte-for-byte** — same supersede, same retire-on-dispatch,
+  same pins. It is the only arm that touches the snapshot lifecycle, which is what keeps "DDL does
+  not retire snapshots" true by construction rather than by care.
+- **`Intercept(kind)`** goes to `engine/ddl/`'s `execute`, bracketed by `Engine::bookkeep` — the
+  same in-flight lifecycle `explain` uses — so `cancel`, `is_running` and the close-while-running
+  confirm see an intercepted statement like any other work. A CTAS is a full scan; a window
+  closing over one has to ask.
+- **`Refuse(blocked)`** returns `Err(blocked.editor_message())` before DataFusion can plan — the
+  run fails in the results pane with the words the squiggle showed.
 
-## 3. Why not providers for lifecycle (the investigation's central question)
+A statement's outcome is a **value the app folds**, never something to read back out of
+DataFusion:
 
-Two designs were produced from opposite premises — provider-maximal and interception-minimal —
-and converged. DF 54's provider traits cannot carry table lifecycle:
+```rust
+pub enum RunOutcome {
+    Rows(QueryOutput, RecordBatch),   // exactly query()'s result
+    Statement(StatementReport),       // no snapshot
+}
 
-- **CTAS**: by the time `SchemaProvider::register_table` fires, the result is already whole in
-  RAM inside a finished `MemTable`, and the hook is sync — no await, no streaming to disk. The
-  only place that can spool a CTAS result is in front of `ctx.sql`.
-- **DROP**: `deregister_table` carries no caller identity, and routine internals call it
-  constantly — `Engine::register` deregisters before re-inferring on every re-scan, snapshot
-  retirement deregisters, DF's own `CREATE OR REPLACE VIEW` deregisters. A provider that deleted
-  files there would delete user data on a sidebar refresh. Authorization cannot live in a trait
-  that cannot see its caller.
-- **Write-back**: a provider that accreted native-DDL state would need the app to introspect it
-  (a refetch — the `FetchCatalog` shape the store invariant forbids) or an event channel out of
-  DF's trait machinery — the message-passing architecture the direct-call facade deleted.
-  Interception returns the outcome as a value, which folds into the store like every existing
-  mutation.
-- **Half the scope never touches the traits**: SET, PREPARE, COPY, CREATE FUNCTION are
-  session-level. The router must exist for them regardless.
+pub struct StatementReport {
+    pub kind: StmtKind,               // labels come off StmtKind::label — one spelling
+    pub message: String,              // the sentence the user reads, IDE register
+    pub count: Option<u64>,           // rows moved; None is "not applicable", not zero
+    pub elapsed_ms: u128,
+    pub effect: Option<StoreEffect>,  // what the app folds; None where nothing catalog-held changed
+}
+```
 
-Where a hook *does* see what we need, it is used: INSERT executes through
-`TableProvider::insert_into` (stock `ListingTable`), and enumeration goes through our own
-`table_names()` (§5). A custom `TableProvider` for internal tables was examined and rejected — a
-delegating wrapper over `ListingTable` would track a visibly growing trait for no behavior we
-need; a snapshot-native provider was rejected because its two claimed wins are already delivered
-(`with_file_sort_order` on the listing registration; exact null counts from the spool's
-`SnapshotStats`) and the third (`statistics`) feeds nothing (§2).
+`StoreEffect` (`engine/ddl/mod.rs`) is the catalog mutation the statement leaves behind:
+`TableUpserted { def, meta }`, `TableRemoved { name, dependents }`, `ViewUpserted`, `ViewRemoved`,
+`RescanTable`, `FunctionsChanged`. An effect carries the def *and* what registration learned, so
+the sidebar row lands `Reg::Ready` directly.
+
+**The settle** (`apps/project/state/statement.rs`) is one fold for every effect, driven from the
+tab's request keeper so a statement run in a background tab still lands: store upsert on the
+matching `ProjChan` → `persisted_defs` writes `project.json` through the persist funnel →
+`catalog_settled` bumps the epoch (every tab's diagnostics re-derive) → the event log. The log
+entry is recorded by the fold, not by the run-logging hook, because only the fold knows whether
+the def actually reached disk — a success row logged over a failed write would promise a table the
+next open loses.
+
+The **results pane** renders a statement as a status row — icon, the kind's label, the engine's
+sentence — without disturbing the tab's last result grid. **History** records a successful
+statement like any successful run: a typed `CREATE TABLE` is a query the user may want back; its
+`count` is the rows it moved, and the dedupe and cap are unchanged.
+
+## 3. Why interception, not providers
+
+DataFusion 54's provider traits are resolution and enumeration interfaces, not lifecycle ones.
+`SchemaProvider::register_table` is **sync** and carries **no caller identity**: by the time DF's
+own CTAS calls it the whole result is already in RAM as a `MemTable`, so no provider can spool a
+result to disk — and routine internals deregister constantly (every re-scan, snapshot retirement,
+DF's own `CREATE OR REPLACE VIEW`), so a provider that deleted files on deregister would delete
+user data on a sidebar refresh. DDL also executes **eagerly** inside `ctx.sql`, so anything that
+must not run has to be refused before planning; and provider-accreted state would have to be read
+back out of DataFusion — the `FetchCatalog` refetch the catalog invariant forbids — where an
+interception returns the outcome as a value one fold applies. So lifecycle is intercepted in front
+of `ctx.sql`, and the providers keep the two jobs the traits can carry: identity and visibility
+(§5). Settled — do not re-litigate.
 
 ## 4. The router
 
-`policy_block` (`engine/sql/validate.rs:343`) becomes the classification half of a router:
+`classify(stmt: &DFStatement, cap: Capability) -> Verdict` (`engine/sql/validate.rs`) is the whole
+statement policy:
 
 ```rust
 pub enum Capability { Editor, Agent }
 
 pub enum Verdict {
-    Query,                  // SELECT / EXPLAIN / SHOW / DESCRIBE / EXECUTE → snapshot pipeline
-    Intercept(StmtKind),    // engine-method implementation + store write-back
-    Refuse(Blocked),        // rendered by the consumer, per surface
+    Query,                  // the snapshot pipeline, unchanged
+    Intercept(StmtKind),    // engine-method implementation + store fold
+    Refuse(Blocked),        // rendered per surface
 }
-
-pub fn classify(stmt: &DFStatement, cap: Capability) -> Verdict;
 ```
 
-with `StmtKind` covering `CreateExternalTable`, `CreateTable`, `Ctas`, `Insert`, `DropTable`,
-`CreateView`, `DropView`, `Copy`, `Set`, `Reset`, `Prepare`, `Deallocate`, `CreateFunction`,
-`DropFunction`.
+`StmtKind` names the fourteen intercepted forms: `CreateExternalTable`, `CreateTable`, `Ctas`,
+`Insert`, `DropTable`, `CreateView`, `DropView`, `Copy`, `Set`, `Reset`, `Prepare`, `Deallocate`,
+`CreateFunction`, `DropFunction`. `StmtKind::label` is the one spelling of each statement's name —
+stub refusals, reports and the results pane all read it.
 
-- **One predicate, one new axis, zero copies.** `Capability::Agent` returns exactly today's
-  answers — every non-query a `Refuse` carrying the same `Blocked` variant — so
-  `Engine::policy_verdicts` stays as the agent-facing wrapper and `strata-agent/src/tools.rs`
-  does not change. The parity tests become a per-capability matrix, plus a pin that Agent refuses
-  everything Editor intercepts.
-- **Fail closed, default deny.** Parse failure is still `Err` ("could not judge"); the sqlparser
-  wildcard still lands `Refuse(Unsupported)`; the DFParser match stays wildcard-free so a new DF
-  variant is a compile error.
-- **The editor's refusal set shrinks to almost nothing; `Blocked`'s existing variants stay
-  defined as the agent path's error messages.** `Capability::Agent` refuses
-  `CREATE EXTERNAL TABLE`/`CREATE TABLE`/`INSERT`/`CREATE VIEW`/`DROP VIEW`/`DROP`/`COPY`/`SET`/
-  `RESET` exactly as today — the agent error path renders `editor_message()` and `strata-agent`'s
-  parity tests name `Blocked::CreateTable`/`Insert`/`CreateDatabase` directly (`error.rs:145`,
-  `tools.rs:1762`) — while on the Editor path every one of those statements classifies
-  `Intercept` and runs, so those variants are unreachable there. New refusals join the vocabulary
-  for the cases with no sane meaning: INSERT into a non-internal target, `INSERT OVERWRITE`,
-  owned/runtime/format-key `SET`, non-query `PREPARE`, reserved names — same register (terse
-  sentences, single-quoted identifiers).
-- **What the editor still refuses, in full**: `CREATE DATABASE`/`SCHEMA` (structurally impossible
-  — §5), transactions and unknown statement kinds (default deny), the context-dependent refusals
-  above, and unsupported clauses inside accepted statements (constraints, `TEMPORARY`,
-  data-column lists on external tables). Everything else runs.
-- **One statement per Run** (today's behavior, kept): a multi-statement buffer is judged per
-  statement by diagnostics as now, and Run refuses a mixed batch with a policy message.
-- **Reserved names, read and write**: an intercepted statement that references a
-  `__snap_`-prefixed table — or **names one as its target** — is refused. The read half keeps a
-  typed `COPY (SELECT * FROM __snap_3)` from writing `__strata_ord` into a user file. The write
-  half keeps `CREATE TABLE __snap_2 …` / CTAS / `CREATE VIEW __snap_2` / `INSERT` / `DROP` off
-  the snapshot namespace: `snapshot_name` is `__snap_{seq}` off a counter starting near zero
-  (`engine/mod.rs:517`), and a collision is invisible in SHOW/information_schema because the same
-  prefix filters it. (ED-03 correction: `register_table` is **not** last-write-wins — the provider
-  keeps `MemorySchemaProvider`'s "already exists" error — so the collision costs a *Run*, failing
-  on a name the user cannot see, rather than silently displacing their table. Same conclusion,
-  worse failure than the one first written down.) Defense in depth at the funnel:
-  `register_external` refuses a reserved-prefix spec name too, which also covers a
-  Configure-typed or hand-edited def.
+- **Both surfaces answer from one match arm.** `classify_form` returns
+  `(Verdict, Option<Blocked>)` — the editor's answer and the agent's beside it — so an arm cannot
+  answer one surface and forget the other. `Capability::Agent` never intercepts: every non-query
+  refuses with the exact `Blocked` variant and wording the agent gate shipped with, and
+  `Engine::policy_verdicts` stays the agent-facing wrapper. Parity is a test of a table, not of
+  two functions kept in step.
+- **Fail closed, default deny.** Parse failure is `Err` ("could not judge"); the sqlparser
+  wildcard lands `Refuse(Unsupported)`; the DFParser match is wildcard-free, so a new DataFusion
+  statement variant is a compile error rather than a statement that slips through.
+- **Classification is a pure function of the parsed statement.** A refusal that needs context the
+  statement does not carry (an INSERT target's origin, a SET key's class) is decided at dispatch,
+  with the same `Blocked` vocabulary, so every refusal's wording has one home
+  (`Blocked::editor_message`).
+- **The `SQLOptions` triple is defense in depth behind this, not the gate.** The read path stays
+  all-false; intercepted arms set a per-class floor at dispatch. `verify_plan` visits subqueries,
+  so smuggled nested DDL still dies at the second gate — but it can only refuse a class of plan,
+  not name the surface that owns a capability.
 
-**Dispatch.** New facade entry:
+**Reserved names.** An intercepted statement that references a `__snap_`-prefixed table — or names
+one as its target — refuses with `Blocked::ReservedName` ("Names starting with '__snap_' are
+reserved for query results"). The read half keeps a typed `COPY (SELECT * FROM __snap_3)` from
+ever writing `__strata_ord` into a user's file; the write half keeps `CREATE TABLE __snap_2` and
+friends off the namespace a Run mints into, where the provider would answer "already exists" for a
+name the same prefix hides from every catalog reader. `register_external` backstops the same rule
+at the funnel, because a def also arrives from Table Config, a hand-edited `project.json`, or an
+older build.
 
-```rust
-pub enum RunOutcome {
-    Rows(QueryOutput, RecordBatch),      // exactly today's query() result
-    Statement(StatementReport),          // no snapshot
-}
+**What the editor refuses**, with the squiggle and the run failure sharing one string:
 
-pub struct StatementReport {
-    pub kind: StmtKind,
-    pub message: String,                 // IDE register, states session scope where relevant
-    pub count: Option<u64>,              // rows created / inserted / exported
-    pub elapsed_ms: u128,
-    pub effect: Option<StoreEffect>,     // what the app folds into ProjectState
-}
+| Statement | Wording |
+|---|---|
+| `CREATE DATABASE` / `CREATE SCHEMA` | "CREATE DATABASE and CREATE SCHEMA are not supported" |
+| `UPDATE`, `DELETE`, transactions, unknown kinds | "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and DESCRIBE can run here" |
+| `DROP` of a non-table, non-view object | "DROP is not supported in the editor. Deregister tables from the catalog" |
+| `INSERT OVERWRITE` | "INSERT OVERWRITE is not supported. Drop the table and recreate it with CREATE TABLE AS" |
+| `PREPARE` of a non-query body | "PREPARE supports queries only" |
+| A `__snap_` name in an intercepted statement | "Names starting with '__snap_' are reserved for query results" |
+| A multi-statement buffer | "Run executes one statement at a time" |
+| An empty buffer | "Nothing to run" |
 
-pub async fn run(&self, ws: WsId, tag: RunTag, sql: String, page_size: usize)
-    -> Result<RunOutcome, String>;
-```
-
-`Verdict::Query` delegates to today's `query()` byte-for-byte — same supersede, same
-retire-on-dispatch, same pins. **Only the query arm touches the snapshot lifecycle**; DDL never
-retires a snapshot (SNAPSHOT_SPEC's "DDL / catalog changes do not retire snapshots" stands).
-`Verdict::Intercept` goes to a new `engine/ddl.rs` submodule; long-running kinds (CTAS, COPY)
-register in-flight entries so `cancel`/`is_running`/the close confirm keep working, and their
-cleanup removes partial output like `run_and_snapshot` does. `Verdict::Refuse` returns
-`Err(editor_message())` — the run fails in the results pane with the words the squiggle showed.
-
-**The `SQLOptions` triple becomes per-class defense-in-depth** behind the front classification:
-the read path keeps all-false (`query.rs:450`, `explain.rs:23`, unchanged); INSERT dispatches
-dml-only; PREPARE/EXECUTE/DEALLOCATE statements-only; CTAS's inner SELECT all-false. Since
-`verify_plan` visits subqueries, smuggled nested DDL still dies at the second gate. Dry-plan
-validation stays side-effect-free for DDL — planning builds the `Ddl`/`Dml`/`Copy` node without
-executing (execution lives only in `execute_logical_plan`), so typed DDL gets name-resolution
-squiggles for free.
+Known wording drift: the `Unsupported` message still says "Only SELECT, EXPLAIN, SHOW and DESCRIBE
+can run here", which is stale now that `CREATE TABLE` / CTAS run. The older `Blocked` variants
+(`CreateTable`, `Insert`, `CopyTo`, `Set`, …) stay defined as **the agent path's error messages** —
+`strata-agent` names them directly, so deleting one is a compile break — and are unreachable from
+the editor, which intercepts every one of those statements.
 
 ## 5. The provider layer — identity and visibility, never lifecycle
 
-`engine/providers.rs`, installed in `build_context` via `register_catalog` under the existing
-`strata` name:
+`engine/providers.rs`, installed in `build_context` before anything registers. Two jobs and no
+third:
 
-- **`StrataCatalogProvider`** — exactly one schema, `public`; `register_schema` /
-  `deregister_schema` refuse structurally, so `CREATE SCHEMA` is impossible by construction, not
-  just by policy (the `is_owned_key` config fence keeps its job as the second layer).
-  **`CREATE DATABASE` is not, and cannot be** (ED-03 correction to the line above): DataFusion's
-  `create_catalog` registers into the `CatalogProviderList`, not into a `CatalogProvider`, and
-  `CatalogProviderList::register_catalog` returns an `Option` with no way to fail
-  (`datafusion-54.0.0/src/execution/context/mod.rs:1030-1050`). A refusing list could only lie
-  ("catalog already exists") or silently no-op, both worse end-states than a refusal — so the
-  router's `Blocked::CreateDatabase` is its only gate, and the first line for `CREATE SCHEMA` too.
-- **`StrataSchemaProvider`** — tables keyed by **folded** name (defense in depth for the one
-  case-insensitive namespace); `table_names()` filters `__snap_`-prefixed entries while `table()`
-  resolves everything, so every existing reader, `DROP`'s `find_and_deregister`, validation's
-  `table_exist` and snapshot retirement work with zero call-site changes. The prefix predicate
-  lives next to `snapshot_name` in `query.rs` (`is_snapshot_name`) and is imported here, so the
-  hiding rule and the naming rule cannot drift. Everything else is `MemorySchemaProvider`'s
-  behaviour verbatim, its duplicate-name error included. Folding on **both** sides is what makes
-  the namespace genuinely case-insensitive: `SELECT * FROM "MyView"` now resolves the view named
-  `MyView`, where DataFusion alone would treat the quoted spelling as a different table. The
-  fold-preservation oracle moved with it, pinning the stored identity rather than which spellings
-  resolve.
+- **Identity.** One catalog (`strata`) with exactly one schema (`public`), tables keyed by
+  `fold_ident` on both write and read — so the single namespace is genuinely case-insensitive
+  rather than case-insensitive-if-you-came-in-through-a-`&str`. `register_schema` and
+  `deregister_schema` refuse, so `CREATE SCHEMA` is impossible **by construction**, not by policy.
+  `CREATE DATABASE` cannot be stopped here: DataFusion registers it into the
+  `CatalogProviderList`, whose `register_catalog` returns an `Option` with no way to fail — a
+  refusing list could only lie or silently no-op — so the router's `Blocked::CreateDatabase` is
+  its only gate, and the first line for `CREATE SCHEMA` too.
+- **Visibility.** `table_names()` filters the `__snap_` result snapshots while `table()` still
+  resolves them. Every `information_schema` view and every `SHOW` form enumerates through
+  `table_names()` and nothing else, so one filter hides the spool from all of them and keeps
+  `__strata_ord` out of `information_schema.columns` — while paging, chart, export and snapshot
+  retirement, which address a snapshot by name, notice nothing. That filter is what makes
+  `datafusion.catalog.information_schema` safe to default **on** (set before the override loop, so
+  a user's `false` still wins; `ENGINE_KEYS` names `true` so a removed override lands back on it) —
+  which is why `SHOW TABLES` works on a fresh project. The prefix predicate is `is_snapshot_name`,
+  defined next to the function that mints the names, so the hiding rule and the naming rule cannot
+  drift.
 
-Companion decision: flip `datafusion.catalog.information_schema` default **on** (still a
-user-facing Settings key, not owned). Today `SHOW TABLES` is policy-allowed but fails at plan
-time on a fresh project; behind the filter it works and agrees with the sidebar (modulo
-`Reg::Failed` rows, which are unregistered and thus absent from SHOW — documented, and exactly
-why the store remains the catalog authority). "Default" here means two things kept in step:
-`build_context` sets it on the `SessionConfig` **before** the override loop, so a user's `false`
-still wins, and `ENGINE_KEYS` names `true` so a *removed* override lands back on what the engine
-was built with rather than on DataFusion's own `false`.
+Everything else is `MemorySchemaProvider`'s behaviour verbatim, duplicate-name error included, so
+every existing reader, `find_and_deregister`, validation's `table_exist` and snapshot retirement
+work with no call-site changes.
 
-## 6. Per-capability design
+One engine default rides with this: `datafusion.runtime.list_files_cache_limit` is `0`. DataFusion
+54 turns a list-files cache on by default with an **infinite TTL**, which silently serves the
+previous file set to every re-listing — the catalog's ↻, Configure's re-inference, and
+`CREATE OR REPLACE TABLE`. `ENGINE_KEYS` names `0` as Strata's default and `build_runtime` applies
+it before any override. A re-scan means "list the sources again".
 
-### 6.1 Internal tables — CTAS, CREATE TABLE, INSERT, DROP TABLE
+## 6. Intercepted statements
 
-**Layout**: `.strata/tables/<slug>/part-<n>.arrow` — folded name, filesystem-sanitized with a
-short hash when sanitizing changed anything; LZ4-frame Arrow IPC (the snapshot codec, and the
-same one DF's Arrow sink writes). `ensure_gitignore` adds `tables/`; `tidy_strata_dir` sweeps
-`.strata/tables/.tmp-*`. The persist funnel keeps owning `.strata`'s metadata files; the engine
-owns the `tables/` payload with the snapshot writer's discipline (tmp + rename, tidy on open).
+### 6.1 Internal tables — `CREATE TABLE` and CTAS
 
-**CTAS** (`Intercept(Ctas)`) — **as built (ED-04); this replaces the draft's rendered-SQL
-mechanism.** The parsed statement goes to `SessionState::statement_to_plan`, whose
-`CreateMemoryTable { name, constraints, input, if_not_exists, or_replace, column_defaults }` is
-everything the arm needs, and the spool is a `LogicalPlan::Copy` node built over `input` directly
-— `CopyTo::new(input, "<data_dir>/.tmp-<pid>-<n>/", [], format_as_file_type(ArrowFormatFactory),
-{})`, driven through `DataFrame`. **No SQL text is rendered and no span is sliced**: the query
-that runs is the parsed query. (Slicing was rejected on evidence — sqlparser's `Spanned` impls
-carry `todo` gaps and `Location` is character-based, the same offset arithmetic over judged text
-`PolicyRefusal` already refuses; and re-rendering would be a fidelity claim about a round trip
-nothing verifies.) Planning is side-effect free, so this also inherits DataFusion's own
-exhaustive clause refusals — `TEMPORARY`, `LOCATION`, `PARTITION BY` and fifty more, each in its
-own words — and its resolution of a declared column list against the query (cast + rename). What
-is refused here is what DF *plans without enforcing*: constraints and column defaults, plus
-duplicate result column names (DF's `ensure_unique_column_names` rule, which its own projection
-check does not cover for a join's two same-named fields; an IPC file would store both and every
-later read would degrade). A `__snap_`-prefixed target refuses at the router (§4 reserved names),
-and `register_external` backstops it with the same `Blocked::ReservedName` wording. `IF NOT
-EXISTS` / `OR REPLACE` / plain-exists resolve against the engine's own namespace
-(`ctx.table_provider`, tables + views, case-insensitive, a view refused outright) — which is the
-store's namespace minus `Reg::Failed` rows, and a create over one of those replaces the broken
-def rather than erroring, because a shadow copy of the store's names inside the engine would be
-the second catalog the invariant forbids. Rename tmp → `.strata/tables/<slug>/` (atomic; a crash
-leaves only a tmp dir the tidy sweeps). Zero-row results and plain `CREATE TABLE (cols…)` — whose
-plan is an `EmptyRelation` — write one empty IPC file carrying the schema (IPC self-describes, so
-replay infers without a schema in the def). Register through the existing funnel:
-`register_external` with `TableSpec { format: Arrow, paths: [dir], internal: true }` →
-`TableMeta` → `StoreEffect::TableUpserted { def, meta }`. `Engine::set_data_dir(root)` takes the
-**project folder** at open (both hosts) — the data directory and the def's project-relative
-source path are both derived from it — and CTAS refuses politely when unset.
+The one implemented interception (`engine/ddl/tables.rs`). An internal table is an **ordinary def
+whose data Strata owns** — `TableOrigin::Internal` is a flag on `TableDef`, never a second kind of
+thing.
 
-**One DataFusion default had to move for any of this to work.** DF 54 runs a `ListFilesCache` by
-default (1 MiB, **infinite TTL**), so a re-listing of a table's directory returns the previous
-answer. `CREATE OR REPLACE` failed outright against it, and D5's "a re-scan picks up new files"
-promise — the catalog's ↻ and the Configure window's re-inference — was already quietly broken by
-it. `ENGINE_KEYS` now names `0` as Strata's default for
-`datafusion.runtime.list_files_cache_limit` and `build_runtime` applies it before any override
-(and therefore always builds a runtime). It stays a default, not an owned key.
+The parsed statement goes to `SessionState::statement_to_plan`, which executes nothing and buys
+two things outright: DataFusion's planner already refuses every clause it does not implement
+(`TEMPORARY`, `LOCATION`, `PARTITION BY` and fifty more, each in its own words), and it already
+resolves a declared column list against the query, casting and renaming to it. What Strata refuses
+on top is what DataFusion plans without enforcing — constraints and column defaults — plus
+duplicate result column names (an IPC file would store both, and every later read would resolve
+the second onto the first), and running with no project open ("… needs a project folder to store
+the table's data").
 
-**INSERT** (`Intercept(Insert)`, native execution): the interception only gates the target —
-resolve the parsed target name against the engine's internal-name set and refuse an external
-table or a view ("'events' is an external table. INSERT targets internal tables"); refuse
-`INSERT OVERWRITE` before the Arrow sink's `not_impl` would. Then dispatch the user's own text
-via `ctx.sql` with dml-only options: `ListingTable::insert_into` appends one schema-checked
-IPC file. One file per INSERT, no compaction — documented; `DROP` + CTAS is the compaction story
-until a task exists. The fold requests `ScanScope::Table` so `TableMeta.rows` refreshes through
-the scan driver, never store-side arithmetic.
+The spool is a `LogicalPlan::Copy` node built over the plan's `input` directly, `STORED AS ARROW`
+into `.strata/tables/.tmp-…/`, then renamed into `.strata/tables/<slug>/` (atomic; a crash leaves
+only a tmp dir the tidy sweeps). **No SQL text is re-rendered and no span is sliced** — the query
+that runs is the query the user wrote, by construction rather than by fidelity of a round trip.
+`IF NOT EXISTS` / `OR REPLACE` / plain-exists resolve against the one namespace tables and views
+share. A bare `CREATE TABLE (cols…)` plans as an `EmptyRelation` and writes one empty,
+schema-carrying IPC file — IPC self-describes, so replay infers without a schema in the def.
 
-The engine-side internal set (`TableSpec.internal` recorded at registration, folded names) is
-**not a second catalog** — it is derived state rebuilt by the same registration pass that builds
-everything else, and it answers exactly one engine-side question: may a write statement target
-this provider. The store remains the only UI-facing catalog.
+Registration goes through the funnel every table uses: `register_external` with
+`TableSpec { format: Arrow, internal: true }` → `TableMeta` →
+`StoreEffect::TableUpserted { def, meta }`. The def is a `TableDef` with `origin: Internal` and a
+project-relative source, so the store, the persist funnel, replay and the headless host need no
+new code. The def travels and the data does not: `tables/` is gitignored, and a clone without the
+data gets an honest `Reg::Failed` row in its own words.
 
-**DROP TABLE** (`Intercept(DropTable)`, both origins): `cancel_profile` → `ctx.deregister_table`
-→ (internal only) delete `.strata/tables/<slug>/` → `StoreEffect::TableRemoved`. Deregister-first
-means no new plan can scan it; an in-flight scan holds open fds or fails as cleanly as a retired
-snapshot. External: def removal only — "'x' removed from the catalog. Source files were not
-deleted". No cascade: the report names dependent views from the store's `ViewInfo` deps; they go
-`Reg::Failed` honestly on the next pass (a `ViewTable`'s inlined plan keeps executing until
-reload — D11's verified finding — and the epoch bump makes diagnostics re-derive immediately,
-which is the surface that matters). `IF EXISTS` honored. Snapshots are unaffected by design —
-results are materialized copies.
+Around it, as built:
 
-**Arrow row counts**: a thin `StrataArrowFormat` wrapping DF's `ArrowFormat` implements
-`infer_stats` by reading Arrow IPC footers — exact row counts from metadata-only reads (each
-batch header carries its length) — used by the `SourceFormat::Arrow` arm, so internal tables (and
-external Arrow tables) get real `TableMeta.rows` while staying "only real facts". Null counts
-deliberately stay profile/pre-flight territory; nothing displays table-level null counts.
-Constraints and column defaults stay refused in v1 — DF does not enforce constraints even on
-`MemTable`; a delegating provider wrapper for INSERT defaults, and a RAM-caching wrapper for a
-measured-hot table, are noted future extensions.
+- `StrataArrowFormat` (`engine/arrow_stats.rs`) wraps DataFusion's `ArrowFormat` to answer
+  `infer_stats` from the IPC file footer — exact row counts from metadata-only reads — so the one
+  table Strata itself wrote can say how many rows it holds. Row counts only; null counts stay
+  profile territory.
+- The catalog row wears an `INTERNAL` badge ("Strata stores this table's data in the project"),
+  because origin is what stands between the user and a drop that means two different things.
+- `Engine::is_internal` is an engine-side set of folded names, rebuilt by the same registration
+  pass that builds everything else (`note_origin` from every path that registers) — never a second
+  catalog. It answers one question: may a write statement target this provider.
+- **Configure is absent** from an internal row's menu — it edits sources, format and partition
+  columns, and an internal table has none to edit, ever — so the window is structurally unable to
+  receive an internal def.
+- A drop of an internal table **deletes its data** — see the next section.
+- `register_external` hands the table the runtime's per-file **statistics cache**
+  (`ListingTable::with_cache`). `SessionContext::register_listing_table` does this for itself, so
+  snapshots always had it and only the hand-built config did not; without it statistics are
+  re-read on every scan *and* every registration. **Not** the list-files cache, which
+  `ENGINE_KEYS` zeroes on purpose: that one answers "which files are there", and a re-scan means
+  asking again. This one answers "what is in *this* file", invalidated on size and mtime.
 
-**Replay**: an internal def is `TableDef { name, format: Arrow, sources:
-[".strata/tables/<slug>/"], partition_cols: [], origin: Internal }` — the existing
-`register_pass` / `register_project` replays it with zero new code, headless host included. A
-clone without the gitignored data yields an honest `Reg::Failed` row from the existing
-no-files mapping.
+### 6.2 Writes over an internal table — `INSERT` and `DROP TABLE`
 
-### 6.2 Typed CREATE / DROP VIEW
+**`INSERT` is DataFusion's own write behind a target gate.** The statement is planned (side-effect
+free) and the gate reads what the plan names: a target outside `Engine::is_internal` is refused
+(`Blocked::InsertExternal` — a view is the same refusal, neither being a directory a
+`CREATE TABLE` wrote), and any write op that is not `Append` is refused
+(`Blocked::InsertOverwrite`; the router already catches `INSERT OVERWRITE` off the bare statement,
+while `REPLACE INTO` reaches the arm because only the plan names it). Everything after the gate is
+DataFusion's INSERT path unchanged — the column list, the source query, the schema check, and the
+single LZ4-frame IPC file the Arrow sink appends. **The plan that was gated is the plan that
+runs**: driving it *is* `execute_logical_plan`'s own arm for a DML node, so re-dispatching the
+text would gate one value and execute another.
 
-`Intercept(CreateView)`: extract the folded name and the definition query's canonical rendering
-(what lands in `ViewDef.sql`), then fence and delegate:
+One file per statement and **no compaction** — `DROP TABLE` plus `CREATE TABLE AS SELECT * FROM t`
+is the compaction story until a task owns one.
 
-- The name resolves to a **base table** → refuse ("'sales' is a table") — this closes DF's own
-  silent table-replacement hazard (§2).
-- A `__snap_`-prefixed view **name**, like a `__snap_` reference in the body → refuse (§4
-  reserved names, both halves).
-- Plain `CREATE VIEW` over an existing view → "View 'v' already exists. Use CREATE OR REPLACE
-  VIEW."
-- Otherwise → the existing `Engine::create_view(name, sql)` — one implementation shared with ⌘S,
-  returning `ViewMeta` for the same fold the Save flow uses. Running the statement natively was
-  rejected precisely because the store write-back needs `ViewMeta` (columns + `plan_deps`);
-  intercept-and-delegate gets the outcome from the engine's answer, no introspection.
+The effect is `StoreEffect::RescanTable`, and its fold **re-reads the table's facts without
+re-registering it**. Re-registering replaces the provider, and that is what strands the `Arc` a
+view captured (D10/D11) — the only reason a table Refresh re-creates the views above it. An append
+cannot change the shape a view captured (the sink schema-checks first) and the provider re-LISTs
+per scan anyway, so the fold is `refresh_table_rows` → `Engine::table_meta` →
+`ProjectState::table_reread`: no re-inference, no view churn, no epoch bump, no `Loading` flash.
+The count is still read from the footers, never added up from what the statement claimed.
 
-`Intercept(DropView)`: type-check, `Engine::drop_view` (idempotent), `StoreEffect::ViewRemoved`.
-Replay ordering stays covered by `view_order` since the def lands in the same collection.
+**`DROP TABLE` works on both origins, and is the one place a table is dropped.** The catalog
+pane's confirm reaches `ddl::tables::drop_table` through `Engine::drop_table` after its store-first
+write; a typed statement reaches it through the router. That sharing is the point: a pane that
+merely deregistered would orphan an internal table's data forever, since no def would point at it
+and `tidy_strata_dir` sweeps only `.tmp-…`.
 
-### 6.3 COPY TO
+The target resolves against the engine's namespace first — an unknown name errors, `IF EXISTS`
+reports a no-op with nothing to fold, a view says which statement drops it. Then **deregister
+first**, so no plan built afterwards can resolve the name while a scan already running finishes
+against its own provider. Only then is the data destroyed, and only where the def is internal.
+Dependent views are **named, never cascaded**: read from the providers before the deregister,
+because a `ViewTable`'s plan was inlined at creation and goes on executing until reload.
 
-`Intercept(Copy)`, native execution after a pre-flight:
+The data is discarded **by rename** — the directory moves into a `.tmp-…` sibling and is only then
+walked, the mirror of the spool's publish-by-rename, so an interrupted delete leaves what the
+`.strata` sweep collects rather than a half-emptied directory under a live table name. The rename
+is the operation and the removal is housekeeping (logged, not returned); a failure of the *rename*
+puts the provider back, so a drop that reports a failure has not half-happened. And because an
+`INSERT` is one file with no compaction, a heavily written table's delete is not instant, so it
+holds a `BackgroundGuard` and the close-while-running confirm asks before a window takes the
+runtime away.
 
-1. Partition idents must be bare words — reuse the export module's check and wording (DF 54's
-   COPY parser re-renders quoted idents broken).
-2. **The NULL-partition gate survives, as a pre-flight**: when `PARTITIONED BY` is present, run
-   `SELECT count(*) FILTER (WHERE "p" IS NULL) …` over the source first; proceed only on exact
-   zero per column, same wording as `partition_columns_have_no_nulls`. Cost: one extra scan per
-   partitioned typed COPY — the Export window keeps getting its counts free from the spool's
-   `SnapshotStats`; the typed path pays for generality. (DF 54 misfiles NULL partition values
-   into a neighbouring value's directory; schema nullability is not a signal — DF reports every
-   column nullable.)
-3. Dispatch the user's statement text natively; report "Exported N rows to '<path>'" from the
-   sink count.
+Both wordings are the engine's — `ddl::drop_intent` before the fact, the report's after — so the
+confirm cannot promise what the report then contradicts: an internal drop names the data, an
+external one keeps "the source files on disk are not deleted".
 
-Also in this task: `run_export` sets `datafusion.execution.keep_partition_by_columns` per export
-and never restores it — invisible today, observable once SET and `df_settings` are real. Fix by
-save/restore or the overlay.
+### 6.3 Not yet implemented
 
-### 6.4 SET / RESET
+`CREATE VIEW`, `DROP VIEW`, `COPY`, `SET`, `RESET`, `PREPARE`,
+`DEALLOCATE`, `CREATE FUNCTION`, `DROP FUNCTION` and `CREATE EXTERNAL TABLE` all classify
+`Intercept` — the editor draws no squiggle — and answer at Run with `ddl::execute`'s stub refusal:
+"*KIND* is not implemented yet". `EXECUTE` classifies `Query` and fails in the read path (§1).
+Each kind's implementation, and the design it follows, lives in its task file under
+`.claude/tasks/workstream-editor-statements/`; the dispatch's `match` is exhaustive on `StmtKind`
+with no wildcard, so a kind the router learns to intercept is a compile error until an arm owns
+it.
 
-Engine-implemented, never native (§2 gives both reasons: runtime keys applied live bypassing the
-restart discipline; RESET landing on DF defaults instead of the Settings baseline — a second
-config authority). `Engine::set_session` / `reset_session`:
+## 7. A statement, end to end
 
-- Refuse owned keys (`is_owned_key`), `datafusion.runtime.*` ("Engine runtime options are set in
-  Settings") and `datafusion.format.*` (display keys are Settings territory — a session format
-  change would split-brain the grid formatter and chart-read cache identity, which key off the
-  Settings store's display subset).
-- Otherwise apply to the live ctx and record in `session_overlay: Mutex<BTreeMap<String,
-  String>>`. `RESET k` removes the overlay entry and re-applies the **Settings baseline** (or the
-  DF default when unset). Engine-wide (all tabs, agent reads included), gone on restart; the
-  report says "for this session". A `set_config` restart drops the overlay silently —
-  documented. `SHOW VARIABLES` / `df_settings` then truthfully reflect the live session.
-
-### 6.5 PREPARE / EXECUTE / DEALLOCATE
-
-PREPARE is intercepted only to verify its **inner** plan with the read-path `SQLOptions`
-(`verify_plan` cannot see through EXECUTE, so DML/DDL are fenced at PREPARE: "PREPARE supports
-queries"), then dispatched natively — DF stores the optimized plan in session state. EXECUTE
-classifies as `Verdict::Query` and rides the full snapshot pipeline (ordinal, page 1, stats all
-unchanged) under statements-only options — safe because PREPARE gated the inner plan. DEALLOCATE
-is native plus a one-line report. DF's prepared-plan map is `pub(crate)`, so the engine keeps a
-name → param-types mirror feeding completion. All of it dies with the session.
-
-### 6.6 CREATE FUNCTION
-
-`StrataFunctionFactory` installed at `build_context`. v1 accepts SQL-bodied scalar functions
-(`CREATE FUNCTION f(x BIGINT) RETURNS BIGINT RETURN x + 1`) as a `ScalarUDF` substituting
-arguments into the stored body `Expr` (the upstream `function_factory.rs` pattern); other
-languages and non-scalar forms refuse tersely. After a successful CREATE/DROP FUNCTION the engine
-**re-snapshots** the function catalog: `Engine::functions()` becomes swappable (`Arc` behind a
-lock) with a revision counter the completion layer keys on, so autocomplete/signature/docs see
-the change on the next keystroke — the live-registry invariant kept honest. Session-scoped, not
-persisted; if persistence is ever wanted it is a `FunctionDef` list in `project.json` replayed by
-the pass — deferring costs nothing.
-
-### 6.7 Typed CREATE EXTERNAL TABLE
-
-`Intercept(CreateExternalTable)` — the typed form of Table Config: the parsed statement maps onto
-an ordinary external `TableDef` and rides the same funnel, so Table Config and typed DDL are two
-gestures into one registration path, exactly as ⌘S and typed `CREATE VIEW` are for views. DF's
-native path (`TableProviderFactory` → registration behind the store's back) is never used — the
-def, not the engine registration, is the durable artifact.
-
-- **Mapping**: `STORED AS` → `SourceFormat` (`PARQUET`/`CSV`/`JSON`/`ARROW`; anything else
-  refused by name — the Avro-fallthrough rule, P4-11); `LOCATION` → one source, relativized when
-  under the project root (Configure's own rule); `PARTITIONED BY` → `partition_cols`;
-  `OPTIONS(…)` → the matching `CsvRead`/`JsonRead` fields (`format.has_header`,
-  `format.delimiter`, quote/escape/comment/compression/newlines-in-values/infer-rows). **Any
-  OPTIONS key with no def field is refused by name** — a silently dropped option is a def that
-  lies about how the table reads.
-- **Column lists**: accepted only where every listed column is a partition column (its declared
-  type carries into the def, checked against the supported partition types —
-  Utf8/Int32/Int64/Date32). Data columns refuse: "Schemas are inferred. Remove the column list."
-- Also refused, loudly: constraints, `ORDER BY` clauses, `UNBOUNDED`, `TEMPORARY`, a reserved
-  `__snap_` name (§4). `IF NOT EXISTS` honored against the store's namespace.
-- **Outcome**: `register_external` from the built def → `TableMeta` →
-  `StoreEffect::TableUpserted { def (origin External), meta }` — the identical fold, persist and
-  epoch bump as CTAS's (§7). `Blocked::CreateExternalTable` and its message stay as the agent
-  path's refusal.
-
-## 7. Integration dataflow (CTAS end to end)
-
-At Run: `Engine::run` classifies → `Intercept(Ctas)` → spool the inner SELECT to
-`.strata/tables/t/part-0.arrow` → register via `register_external`
+CTAS, the implemented case. At Run: `Engine::run` classifies → `Intercept(Ctas)` → spool the inner
+query to `.strata/tables/<slug>/` → register via `register_external`
 (`TableSpec { format: Arrow, internal: true }`) → return `RunOutcome::Statement` carrying
 `StoreEffect::TableUpserted { def, meta }`.
 
-At settle — byte-for-byte the `save_view` shape (`editor/actions.rs:254`): store upsert on
-`ProjChan::Tables` (the sidebar shows the row immediately, `Reg::Ready(meta)`) → `persisted_defs`
-rewrites `.strata/project.json` atomically through the persist funnel → `catalog_settled` epoch
-bump (diagnostics revalidate; other tabs resolve `t`) → history + event log → the results pane
-renders a statement row ("Table 't' created, 1,204 rows") — no grid, no snapshot.
+At settle: store upsert on `ProjChan::Tables` (the sidebar shows the row immediately,
+`Reg::Ready(meta)`) → `persisted_defs` rewrites `.strata/project.json` atomically through the
+persist funnel → `catalog_settled` epoch bump (diagnostics revalidate; other tabs resolve the new
+name) → history + event log → the results pane renders a statement row ("Table 't' created, 1,204
+rows") — no grid, no snapshot.
 
-At next open — zero new code: `load_defs` → `from_defs` → the scan driver → `register_pass` →
-`table_spec` resolves the project-relative source against the root → `register_external`
-re-registers over the same files. The headless host replays identically. DROP runs the loop
-backwards (deregister → delete dir → `TableRemoved` fold → persist → bump); INSERT appends a file
-and its effect requests `ScanScope::Table`.
+At next open — zero new code: `load_defs` → the scan driver → `register_pass` → `table_spec`
+resolves the project-relative source against the root → `register_external` re-registers over the
+same files. The headless host replays identically.
 
-An internal table is an ordinary def whose sources live under `.strata/`, so the scan driver,
-persist funnel and headless host handle it with no new code — that half of the claim holds, and it
-is what makes replay free.
-
-**But "there is no new integration surface" was too strong, and the catalog pane is the
-correction** (found while building ED-03; settled 2026-08-08). Landing in `ProjectState.tables` is
-required — the store *is* the catalog — and the consequence is that an internal table inherits
-every affordance a table row has, three of which do not mean the same thing on a def whose data
-Strata owns:
-
-- **Configure does not apply at all.** It edits sources, format and partition columns, and an
-  internal table has none of those to edit, ever. The item is **absent** from the row menu, which
-  is the catalog's existing treatment for an item that could never apply to a row kind (the view
-  menu has no Refresh, for the same reason) rather than parking, which means "not right now".
-  With the item gone the window cannot receive an internal def — `ConfigureTarget::Edit` is set
-  only from that menu and from Configure's own post-save transition on a *New* table — so it
-  needs no internal mood and must not grow a guard for one. This **replaces** the earlier
-  read-only-window design.
-- **Drop is one action with two entry points, and they must be one funnel.** The sidebar's drop
-  and the editor's `DROP TABLE` both destroy an internal table; drafted separately, the sidebar's
-  would have removed the def and left `.strata/tables/<slug>/` orphaned, under a dialog whose
-  fixed copy promises "files on disk are not deleted". Both go through `engine::ddl::drop_table`,
-  with the dialog as the confirm in front of it, and the origin-dependent wording stated once.
-- **The row has to show which origin it is** — it is what stands between the user and that drop.
-
-**Refresh** is the one that survives unchanged, and it is load-bearing: re-inference is how row
-counts move after an INSERT.
-
-Task ownership: the row and the menu are ED-04's (where `TableOrigin` is introduced), the drop is
-ED-05's.
-
-## 8. Lifetimes (state in one table)
+## 8. Lifetimes
 
 | Thing | Lives | Survives restart | Persisted |
 |---|---|---|---|
 | Internal table data | `.strata/tables/<slug>/` | yes | yes (gitignored) |
 | Internal table def | `project.json` + store row | yes | yes (shareable) |
 | Views (either gesture) | `project.json` + store row | yes | yes |
-| SET overlay | `Engine.session_overlay` | no | no |
-| Prepared statements | DF session state + engine mirror | no | no |
-| Created functions | DF registries + function-catalog snapshot | no | no |
 | Snapshots | temp dir, retire-on-dispatch | no (by design) | no |
 
-## 9. Honest costs (accepted, documented)
-
-- **CTAS name-semantics ownership**: `IF NOT EXISTS`/`OR REPLACE`/unique-columns are
-  reimplemented beside DF's arm; new DF clauses arrive as refusals, not silent misbehavior (the
-  interceptor matches the parsed statement exhaustively on the fields it understands).
-- **`ListingTable::insert_into` internals** (file-per-INSERT, append-only Arrow, collection URL)
-  are observed behavior, not contract — pinned by an integration test in the style of the
-  snapshot-order tests.
-- **File growth**: one IPC file per INSERT, no compaction v1.
-- **SET re-implementation** duplicates a slice of DF's `set_variable` (~50 lines) — deliberate;
-  the alternative is a second config authority and an owned-key bypass.
-- **FunctionFactory subset**: SQL scalar macros only; expansion is additive, refusals are the
-  contract.
-- **Three session lifetimes** the user can conflate (overlay, prepared, functions) — every report
-  string says "for this session"; §8 is the reference.
-- **Two-agent races** (editor DDL vs a concurrent agent read) yield clean scan errors, the same
-  class as snapshot retirement — no locking added, the registration pass's existing stance.
-
-## 10. Invariant amendments (landed with the owning task, per the upkeep rule)
-
-| Settled text (AGENTS.md §2 / reference file) | Amendment | Lands with |
-|---|---|---|
-| "Managed DDL policy. The editor runs SELECT/EXPLAIN/SHOW/DESCRIBE only…" (INVARIANTS.md, ENGINE.md) | ✅ **Landed.** Became the router invariant (classification, ED-01) plus the dispatch invariant (`Engine::run` routes, only its query arm touches the snapshot lifecycle; a statement's outcome is a value one fold applies — ED-02) | ED-01/ED-02 |
-| "Views are Save's artifact… typed DDL is blocked" | Typed view DDL is a second gesture into the same funnel | ED-06 |
-| "History is a list of queries… only successful data runs" | ✅ **Landed.** Successful statements enter history too, `count` as the rows moved; dedupe/cap and the success-only rule unchanged | ED-02 |
-| "DROP is not supported in the editor. Deregister tables from the catalog" (message + routing) | ✅ **Landed.** DROP TABLE works on both origins from the editor; the catalog confirm remains for the pointer gesture and is now a gesture in front of the *same* call (`ddl::tables::drop_table`) rather than its own deregister, so an internal table's data cannot be orphaned by one path and deleted by the other. `Blocked::Drop` stays as the agent path's message | ED-05 |
-| "COPY TO is not supported in the editor. Use Export" | Editor COPY dispatches natively behind the pre-flight NULL gate; Export window unchanged | ED-07 |
-| "CREATE EXTERNAL TABLE is not supported in the editor. Register tables in Table Config" | The typed form intercepts onto the Table Config funnel (def-first); message stays as the agent refusal | ED-10 |
-| "SET is not supported in the editor. Engine options are set in Settings" | Session overlay for non-owned, non-runtime, non-format keys; Settings stays the durable authority | ED-08 |
-| Agent access "Read-only v1" (AGENT_ACCESS_SPEC §1) | **Unchanged** — restated with the capability parameter | ED-01 |
-| Snapshot lifecycle ("DDL does not retire snapshots", no epoch in the query key) | **Unchanged** — the query arm is byte-for-byte today's path | — |
-
-## 11. Workstream
-
-`.claude/tasks/workstream-editor-statements/` — ED-01…ED-10, ordering and dependencies in its
-README. ED-01 (router) and ED-02 (`Engine::run` + statement results) unblock everything;
-ED-04 → ED-05 is the only hard chain; ED-03/06/07/08/09/10 parallelize after ED-02.
+Session-scoped outcomes — the SET overlay, prepared statements, created functions — die with the
+engine when their statements land, and the `StatementReport` contract already encodes it: a
+session-scoped outcome's message says "for this session", because the report is the one place the
+user learns the scope.

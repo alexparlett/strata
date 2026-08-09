@@ -1,127 +1,213 @@
-# Chart view — the DataFusion function survey
+# Shaping a result for the chart in SQL
 
-What SQL over the snapshot can express, and which chart shapes each family buys. Companion to
-`docs/CHART_SPEC.md` (the buildable spec — **renderer-first**: the chart computes nothing SQL can
-say, so every capability below is something the *user writes* — or the scaffold/snippets write
-for them — never an engine-side chart pipeline). This file is the **capability map**: every
-aggregate, window and scalar family in the engine considered for what it buys a chart, including
-the ones considered and rejected.
+The chart maps result columns onto marks and computes nothing SQL can say
+(`docs/CHART_SPEC.md` §1.2) — so the shape of the chart is the shape of the query. This file is
+the practical reference for writing that query: which function families the engine offers, and
+what chart shape each one buys, with an example where it helps.
 
-> **Framing revision.** An earlier revision of this file read the survey as the slots of an
-> engine-side query algebra (`ChartQuery ≈ { group, measures, window, derived }`) that
-> `Engine::chart` would compose. That pipeline was built, reviewed and withdrawn — the spec's
-> §1.2 records why. The survey itself is unchanged and still the ground truth for what a chartable
-> query can contain; what changed is **who writes the query**: the user, in SQL, with the
-> scaffold and snippet templates as the on-ramp, and the chart mapping the resulting columns onto
-> marks.
+The enumeration was read from the **pinned DataFusion 54.0.0 sources** (`all_default_*_functions`
+in each functions crate), not from the upstream docs pages, which track a newer version. The live
+registry is always the truth (`docs/reference/ENGINE.md`).
 
-**Ground truth:** the enumeration below was read from the **pinned DataFusion 54.0.0 sources**
-(`datafusion-functions{,-aggregate,-window,-nested}-54.0.0` in the cargo registry —
-`all_default_*_functions` in each crate's `lib.rs`), not from the upstream docs pages, which track
-a newer version. The live registry is the truth (`docs/reference/ENGINE.md`); anything built from
-this file re-verifies against it.
+Two facts about the chart worth keeping in mind throughout:
+
+- **Result order is the axis order.** Rows draw in the order the query produced them, and a
+  `GROUP BY` has no output order of its own — so a grouped query that should read left-to-right
+  ends with an `ORDER BY`.
+- **Columns are the encoding.** Several aggregate columns are several series with no
+  configuration; a category column picked in the Series encoder pivots long→wide. A preset shape
+  (candlestick, box plot, error band) is just columns in named roles.
 
 ---
 
-## 1. The survey
+## 1. One value per category — `GROUP BY` + aggregates
 
-### 1.1 Aggregate functions (`datafusion-functions-aggregate` 54)
+The bread and butter behind bars, lines, areas and pies — and the fix the chart's own refusals
+name: over the row cap, or with two rows in one pivot cell, the answer is always a `GROUP BY`.
 
-| Family | Functions | What it buys the chart |
-|---|---|---|
-| Basic reducers | `sum` `avg` `min` `max` `count` | The core Y pipeline (spec §5). `count(*)` is the Y-less default. |
-| Robust center | `median`, `approx_median` | A skew-honest alternative to `avg` in the aggregate menu. |
-| Percentiles | `percentile_cont(p) WITHIN GROUP`, `approx_percentile_cont`, `approx_percentile_cont_with_weight` | **Box plots** (p25/p50/p75 in one pass), percentile bands on lines. Exact for grouped charts, `approx_` for very high row counts. |
-| Spread | `stddev`, `stddev_pop`, `var_samp`, `var_pop` | **Error bars / ±σ bands** around an `avg` series — one extra measure expr, same GROUP BY. |
-| Regression | `regr_slope` `regr_intercept` `regr_r2` `regr_avgx` `regr_avgy` `regr_count` `regr_sxx` `regr_syy` `regr_sxy`, `corr`, `covar_samp` `covar_pop` | **Scatter trendline** with an honest R², computed in-engine — never a client-side fit. `corr` labels the relationship without drawing it. |
-| Order-sensitive | `first_value(y ORDER BY x)`, `last_value(y ORDER BY x)`, `nth_value` | **OHLC/candlestick**: `first_value`/`last_value` ordered by time + `min`/`max`, grouped by `date_bin` bucket — a candle series is *one* GROUP BY. Also "value at bucket start/end" summaries. |
-| Cardinality | `approx_distinct` (HyperLogLog) | Cheap distinct counts: series-count preflight, count-distinct as a Y reducer. |
-| Set/sample | `array_agg`, `string_agg` | Per-group example values for tooltips/legends (bounded — never a whole column). |
-| Grouping meta | `grouping()` + `ROLLUP` / `CUBE` / `GROUPING SETS` (expr layer, verified in `datafusion-expr` 54) | Subtotal rows in the same pass: **Pareto totals, stacked-bar grand totals, drill-down summaries** without a second query; `grouping()` tells the pivot which rows are subtotals. |
-| Considered, no chart use | `bool_and/or`, `bit_and/or/xor` | Nothing a chart encodes; excluded from the menu rather than "supported but pointless". |
+Reducers: `sum`, `avg`, `min`, `max`, `count` (and `count(*)` when there is no measure);
+`median` / `approx_median` as the skew-honest centre.
 
-Any aggregate is also a window function via `OVER` — that composition is most of §1.2's value.
+```sql
+SELECT country, sum(revenue) AS revenue
+FROM sales
+GROUP BY country
+ORDER BY revenue DESC;
+```
 
-### 1.2 Window functions (`datafusion-functions-window` 54)
+Two aggregates are two series (`sum(revenue), sum(cost)`); keeping a second grouping column in
+the SELECT list and choosing it in the Series encoder splits one measure into a series per value:
 
-| Family | Functions | What it buys the chart |
-|---|---|---|
-| Numbering | `row_number` | Explicit row numbering inside user SQL. (Not order preservation for the chart — that is the snapshot ordinal, `SNAPSHOT_SPEC.md` §9; `row_number() OVER ()` with no `ORDER BY` follows scan order, which is nondeterministic above 10 MB.) |
-| Ranking | `rank`, `dense_rank` | **Top-N + Other**: rank series/categories by measure, fold the tail into `Other` with a CASE — the *constructive* answer to high cardinality, where the current design only refuses. |
-| Distribution | `percent_rank`, `cume_dist` | **ECDF** — a cumulative-distribution chart is `cume_dist() OVER (ORDER BY x)`, essentially free, and often the honest replacement for a histogram. |
-| Bucketing | `ntile(n)` | **Equal-count bins**: decile/quartile summaries — the complement of the histogram's equal-width bins for skewed data. |
-| Offsets | `lag(expr, k, default)`, `lead` | **Period-over-period**: delta and growth-rate series (`(y - lag(y)) / lag(y)`) over a bucketed axis; waterfall segments. |
-| Positional | `first_value`, `last_value`, `nth_value` (window forms) | **Indexed comparison**: normalize every series to its first bucket (`y / first_value(y) OVER (PARTITION BY series ORDER BY x) * 100`) so different-scale series compare on one axis. |
-| Aggregates over frames | `avg/sum/min/max(y) OVER (… ROWS BETWEEN …)` | **Moving average** (frame `k PRECEDING`), **running total** (`UNBOUNDED PRECEDING`), rolling min/max envelope. |
-| Whole-partition | `sum(y) OVER (PARTITION BY x)` / `OVER ()` | **Share-of-total**: percent-of-whole per group → **100%-stacked** bars/areas and pie percentages, computed where the data is. |
+```sql
+SELECT month, region, sum(revenue) AS revenue
+FROM sales
+GROUP BY month, region
+ORDER BY month;          -- X: month, Y: revenue, Series: region
+```
 
-### 1.3 Scalar functions (`datafusion-functions` 54) — the group-key transforms
+`FILTER` splits a measure without a second grouping column:
 
-| Family | Functions | What it buys the chart |
-|---|---|---|
-| Temporal bucketing | `date_bin(stride, x, origin)` | The temporal X mechanism (spec §5). |
-| Temporal truncation/parts | `date_trunc`, `date_part`/`extract` | **Seasonality matrices**: `extract(dow)` × `extract(hour)` as the two axes of a heatmap; month-of-year cycles. A calendar heatmap is one GROUP BY over two `date_part`s. |
-| Temporal conversion | `to_timestamp*`, `from_unixtime`, `to_date`, `to_char` | Rescuing string/epoch "temporal" columns into real temporal X (the name-regex fallback in spec §3 becomes a *cast offer*, not a guess); `to_char` for engine-side bucket labels. |
-| Numeric binning | `floor`, `ceil`, `round`, `trunc` | Numeric X bins: `floor(x / w) * w` (spec §5). No `width_bucket` in 54 — the arithmetic form is the mechanism, not a workaround. |
-| Scales | `log`, `log10`, `ln`, `power` | **Log-scale binning** for heavy-tailed histograms (`floor(log10(x))` decade buckets). Axis *display* scaling stays in the renderer; binning math belongs to the engine. |
-| Sign/branching | `abs`, `signum`, `CASE` (expr) | Waterfall up/down split; Top-N's `Other` fold; user-defined banding (`CASE WHEN x < 10 THEN 'small' …`). |
-| Sampling | `random()` | The only honest sampler: an **explicit, user-visible** `WHERE random() < p` for scatter over huge results — opt-in, labeled, never automatic (no `TABLESAMPLE` exists in 54; spec §1.4 stands). |
-| Series generation | `generate_series(start, stop, step)` + `unnest` (`datafusion-functions-nested` 54, `range.rs`) | **Honest gap-filling**: generate the full bucket calendar, LEFT JOIN the aggregate onto it, and an empty bucket becomes an explicit zero/absent row *by user choice*. Upgrades spec §5's "gaps only" from a permanent limitation to the default of a toggle. |
-| Null handling | `coalesce`, `nullif` | The zero-vs-gap choice made explicit in the query (`coalesce(sum_y, 0)` only when gap-fill is on). |
-| Labels | `concat`, `format` | Composite group keys (two-column X, series labels) built engine-side so the pivot stays dumb. |
+```sql
+SELECT month,
+       sum(amount) FILTER (WHERE status = 'paid')    AS paid,
+       sum(amount) FILTER (WHERE status = 'refunded') AS refunded
+FROM invoices GROUP BY month ORDER BY month;
+```
 
----
+Subtotals in the same pass: `ROLLUP` / `CUBE` / `GROUPING SETS`, with `grouping()` telling the
+result which rows are the subtotals.
 
-## 2. The system: presets are column-role mappings over SQL the user owns
+## 2. Time series — `date_bin`, `date_trunc`, `date_part`
 
-The six chart types stop being the design's unit, but not the way the algebra revision thought.
-Read §1 as a whole and the real shape is: **every analytical chart is an ordinary SQL result
-whose columns play named roles.**
+`date_bin(stride, ts, origin)` is the temporal bucketing mechanism — an even stride from an
+origin, which keeps buckets comparable across the whole range; `date_trunc` snaps to calendar
+units instead.
 
-- The user (or a scaffold/snippet template) writes the query — `date_bin` group, percentiles,
-  window functions, whatever §1 offers.
-- The chart maps result columns onto mark roles: a **candlestick** is open/high/low/close
-  columns over a bucketed X; a **box plot** is p25/p50/p75 (+ whisker) columns; **error bands**
-  are `y`, `y_lo`, `y_hi`; a **Pareto** is a measure column beside a running-share column the
-  user computed with `sum(y) OVER (ORDER BY …)`; an **ECDF** is `cume_dist() OVER (ORDER BY x)`
-  charted as a line. The renderer keys marks off the preset; the engine only ever ran the
-  user's SQL.
-- **Guardrails stay uniform** because every preset flows through the same `Rows` read — result
-  order, `cap + 1`, duplicate-refusal. A new preset inherits refusal behaviour by construction.
-- **The scaffold stays total**: each preset ships with the SQL template that produces its
-  columns, so every chart the system can draw is one the user can open, read and edit — the
-  no-shadow-language principle (spec §1.3) scales with the system instead of being outgrown by
-  it.
+```sql
+SELECT date_bin(INTERVAL '1 day', created_at, TIMESTAMP '2024-01-01') AS day,
+       count(*) AS n
+FROM events
+GROUP BY day
+ORDER BY day;
+```
 
-## 3. Tiers — what to build, in what order
+A temporal X defaults the mark to a line, and the axis places buckets at their true positions —
+an irregular series draws with its real gaps.
 
-**Tier A — better on-ramps, no new marks**: scaffold templates beyond plain `GROUP BY` — Top-N +
-Other (rank + CASE fold, the constructive answer to high cardinality), share-of-total
-(100%-stacked via `sum(y) OVER …`), `FILTER`-split series. Each is a snippet the user lands on
-and owns.
+`date_part` / `extract` pull cycle components for seasonality: `extract(dow FROM ts)` as X and
+`extract(hour FROM ts)` as a series is a weekly cycle in one `GROUP BY` over two parts.
 
-**Tier B — new mark presets** (one role mapping + one renderer each; SQL template alongside):
-box plot, error bands, candlestick, ECDF, Pareto, heatmap (two group columns), indexed
-comparison, period-over-period delta. The one candidate for engine computation is the scatter
-**trendline** (`regr_*` in a single call) — weighed when 05 is picked up, as the exception it
-would be.
+Rescuing columns that are temporal in meaning but not in type (a Utf8 timestamp, an epoch
+number): `to_timestamp*`, `from_unixtime`, `to_date`. The chart derives a column's role from its
+Arrow type, never its name — the cast in SQL is what makes a string chartable as time. `to_char`
+formats a bucket into a label engine-side when the display format isn't what's wanted.
 
-**Tier C — toggles and rescues**: gap-fill via `generate_series` LEFT JOIN (a template, default
-off = gaps); explicit labeled `random() < p` sampling for scatter (never automatic); log-decade
-histogram binning; temporal *cast offers* (`to_timestamp` / `from_unixtime`) replacing the
-name-regex guess.
+Note a stride constraint the role system mirrors: `date_bin` with a day-or-wider stride is
+refused over a `Time` column (a time of day has no calendar under it) — which is why the chart
+distinguishes instants from clock times (`docs/CHART_SPEC.md` §3).
 
-**Considered and rejected**: `bool_*`/`bit_*` reducers (nothing to encode); `TABLESAMPLE`
-(absent in 54 — its absence is load-bearing for the honesty principle); native gap-fill/`locf`
-(absent; the `generate_series` join is the mechanism); `width_bucket` (absent — which is exactly
-why the histogram is the one mark that computes, spec §1.2).
+## 3. Distributions
 
-Renderer cost note: every Tier B mark is rects, lines, circles and polygons — nothing new from
-`freya-plotters-backend`; the pie wedge (`fill_polygon`) is already the most exotic path used.
+The **histogram mark** bins engine-side already (the one computed mark) — reach for SQL when its
+equal-width bins are the wrong reading:
 
-## 4. Where this lands in the workstream
+- **Percentile summaries** — `percentile_cont(p) WITHIN GROUP (ORDER BY x)` computes exact
+  percentiles (p25/p50/p75 in one pass makes the columns of a box-plot-shaped result);
+  `approx_percentile_cont` (and `…_with_weight`) for very high row counts.
 
-Tasks 01–04 build the renderer-first chassis (`Rows` read + pivot, marks, strip, guardrails +
-scaffold); nothing in them pre-builds for a tier that hasn't been picked up (AGENTS.md §5). Task
-05 is the delivery vehicle: Tier A templates, Tier B presets picked by value, Tier C toggles
-behind them. The survey above is the menu those choices order from.
+  ```sql
+  SELECT region,
+         percentile_cont(0.25) WITHIN GROUP (ORDER BY latency) AS p25,
+         percentile_cont(0.50) WITHIN GROUP (ORDER BY latency) AS p50,
+         percentile_cont(0.75) WITHIN GROUP (ORDER BY latency) AS p75
+  FROM requests GROUP BY region;
+  ```
+
+- **Equal-count bins** — `ntile(n) OVER (ORDER BY x)` for decile/quartile summaries, the
+  complement of equal-width bins for skewed data.
+- **ECDF** — `cume_dist() OVER (ORDER BY x)` charted as a line is a cumulative distribution,
+  often the honest replacement for a histogram; `percent_rank` is its rank-based sibling.
+- **Numeric bins by hand** — `floor(x / w) * w` groups a numeric X into width-`w` bins (there is
+  no `width_bucket` in DataFusion 54); `floor(log10(x))` buys decade buckets for heavy-tailed
+  data (`log`, `log2`, `log10`, `ln`, `power` are all present).
+
+## 4. Running, cumulative and comparative lines — window functions
+
+Any aggregate is also a window function via `OVER`, which is where most of the line-chart
+vocabulary comes from:
+
+- **Moving average** — a frame: `avg(y) OVER (ORDER BY x ROWS BETWEEN 6 PRECEDING AND CURRENT
+  ROW)`.
+- **Running total** — `sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT
+  ROW)`.
+- **Period-over-period** — `lag(y)` / `lead(y)`: delta and growth-rate series over a bucketed
+  axis.
+
+  ```sql
+  SELECT day, n,
+         (n - lag(n) OVER (ORDER BY day)) * 100.0 / lag(n) OVER (ORDER BY day) AS growth_pct
+  FROM daily GROUP BY day, n ORDER BY day;
+  ```
+
+- **Indexed comparison** — normalize each series to its first bucket so different-scale series
+  compare on one axis: `y / first_value(y) OVER (PARTITION BY series ORDER BY x) * 100`
+  (`first_value` / `last_value` / `nth_value` all have window forms).
+- **Share of total** — `sum(y) OVER (PARTITION BY x)` or `OVER ()` for percent-of-whole:
+  100%-stacked readings and pie percentages, computed where the data is.
+
+`row_number() OVER (ORDER BY …)` numbers rows explicitly. It is not needed for order itself —
+result order is already the chart's axis order, carried by the snapshot ordinal
+(`docs/SNAPSHOT_SPEC.md` §9) — and `row_number() OVER ()` with no `ORDER BY` follows scan order,
+which is nondeterministic on large results.
+
+## 5. Spread and relationships
+
+- **Error bands** — `stddev` / `stddev_pop` / `var_samp` / `var_pop` beside an `avg` in the same
+  `GROUP BY` gives `y`, and `avg ± stddev` gives `y_lo` / `y_hi` — three series on one axis.
+- **Trendline numbers** — the regression family computes an honest fit in-engine:
+  `regr_slope`, `regr_intercept`, `regr_r2` (plus `regr_avgx/avgy/count/sxx/syy/sxy`);
+  `corr` and `covar_samp` / `covar_pop` quantify the relationship without drawing it. The chart
+  draws no fitted line itself (`docs/CHART_SPEC.md` §8), but the fit's endpoints are one query
+  away.
+- **OHLC-shaped results** — the order-sensitive aggregates `first_value(y ORDER BY x)` and
+  `last_value(y ORDER BY x)` beside `min` / `max`, grouped by a `date_bin` bucket, make
+  open/high/low/close columns in a single `GROUP BY`.
+
+## 6. Taming cardinality
+
+The chart refuses over its caps and banners a crowded axis rather than sampling or truncating —
+the constructive answers live in SQL:
+
+- **Top-N + Other** — rank categories by measure and fold the tail:
+
+  ```sql
+  WITH ranked AS (
+    SELECT country, sum(revenue) AS revenue,
+           rank() OVER (ORDER BY sum(revenue) DESC) AS r
+    FROM sales GROUP BY country
+  )
+  SELECT CASE WHEN r <= 10 THEN country ELSE 'Other' END AS country,
+         sum(revenue) AS revenue
+  FROM ranked GROUP BY 1 ORDER BY revenue DESC;
+  ```
+
+- **Explicit sampling** for scatter over huge results — `WHERE random() < 0.01`. There is no
+  `TABLESAMPLE` in DataFusion 54, and the chart never samples on its own, so a sample is always
+  visible in the query that made it.
+- **Cardinality preflight** — `approx_distinct(col)` (HyperLogLog) answers "how many series
+  would this split make" cheaply; `count(DISTINCT col)` is the exact form.
+- `array_agg` / `string_agg` collect bounded per-group examples when a label needs to carry a
+  sample of its members.
+
+## 7. Gaps, zeroes and missing buckets
+
+A NULL Y cell draws as a **gap** — a line is cut, never interpolated. That is the honest default
+for a bucket with no rows, but "no rows" and "zero" are different claims, and the choice belongs
+in the query:
+
+```sql
+WITH calendar AS (
+  SELECT unnest(generate_series(TIMESTAMP '2024-01-01', TIMESTAMP '2024-03-31',
+                                INTERVAL '1 day')) AS day
+)
+SELECT c.day, coalesce(sum(e.amount), 0) AS amount   -- 0 = "measured, nothing happened"
+FROM calendar c
+LEFT JOIN events e ON date_bin(INTERVAL '1 day', e.at, TIMESTAMP '2024-01-01') = c.day
+GROUP BY c.day ORDER BY c.day;
+```
+
+`generate_series` produces the full bucket calendar; the LEFT JOIN makes an empty bucket an
+explicit row; `coalesce` (or its absence) states whether that row is a zero or a gap. `nullif`
+goes the other way when a sentinel value should become a gap.
+
+## 8. Nested and JSON columns
+
+A nested column (struct, list, map, union) has no axis to sit on — the encoders never offer it.
+Flattening it is SQL:
+
+- **`unnest`** turns a list column into rows (one mark per element) or a struct column into its
+  fields.
+- **JSON accessors** — the engine registers `json_get` and the `->` / `->>` operators over Utf8
+  columns holding JSON text; `->> 'price'` extracts a field, and a cast makes it a measure.
+- `concat` builds a composite category key (two columns as one X, or one series label)
+  engine-side, so the chart's pivot stays a reshape.

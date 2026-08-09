@@ -199,7 +199,7 @@ pub struct Settings {
     pub agent_access: AgentAccess,
 }
 
-/// The agent-access server's settings (`docs/AGENT_ACCESS_SPEC.md` §6): one app-wide
+/// The agent-access server's settings (`docs/AGENT_ACCESS_SPEC.md`, "The in-app server"): one app-wide
 /// Streamable-HTTP server on loopback, opt-in, bearer-authenticated.
 ///
 /// One nested struct rather than three flat fields because they are read and written as a
@@ -213,7 +213,8 @@ pub struct Settings {
 /// see `strata_agent::server::mint_token`.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct AgentAccess {
-    /// Whether the server listens at all. Off by default (spec §6).
+    /// Whether the server listens at all. Off by default — the capability ships dark until
+    /// the user turns it on.
     #[serde(default)]
     pub enabled: bool,
     /// The loopback port to bind. Fixed rather than ephemeral so a client configuration

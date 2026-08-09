@@ -6,8 +6,8 @@
 
 Typed `COPY … TO` runs from the editor — natively, behind the two checks only the managed
 surface used to provide: bare-word partition identifiers and the NULL-partition corruption gate.
-The Export window is unchanged and remains the snapshot-backed, race-free path.
-`docs/STATEMENTS_SPEC.md` §6.3.
+The Export window is unchanged and remains the snapshot-backed, race-free path. The dispatch and
+report it rides: `docs/STATEMENTS_SPEC.md` §2.
 
 ## Current state
 
@@ -38,7 +38,11 @@ The Export window is unchanged and remains the snapshot-backed, race-free path.
    changes no catalog state; history and the event log still record it (ED-02).
 4. Fix the `keep_partition_by_columns` wart in `run_export`: save/restore around the COPY (or
    route through ED-08's overlay if it lands first — coordinate, don't duplicate).
-5. Update the COPY invariant text per spec §10. `Blocked::CopyTo` and its message stay verbatim
+5. Update the COPY invariant text (AGENTS.md §2 + `docs/reference/INVARIANTS.md`) — editor COPY
+   dispatches natively behind the pre-flight NULL gate; the Export window is unchanged — and move
+   COPY out of `docs/STATEMENTS_SPEC.md`'s *Not yet implemented* list, documenting the built
+   behaviour there.
+   `Blocked::CopyTo` and its message stay verbatim
    — the agent surface still renders them; the editor path simply no longer reaches them.
 
 ## Acceptance

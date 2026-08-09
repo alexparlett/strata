@@ -82,7 +82,10 @@ Then two more, settled in review:
     convenience constructor applies that we had to re-apply by hand, after `collect_stat`.
 
 Landed with it: the invariant amendments (AGENTS.md §2 + `reference/INVARIANTS.md` +
-`reference/ENGINE.md`, and `STATEMENTS_SPEC.md` §10's DROP row).
+`reference/ENGINE.md`), and both statements documented as built in `STATEMENTS_SPEC.md` — out of
+its *Not yet implemented* list and into a section of their own, per this workstream's own rule.
+(The spec's old amendment table went with the docs rebuild that made the file a record of the code
+as built rather than a plan for it.)
 
 ---
 
@@ -90,8 +93,8 @@ Landed with it: the invariant amendments (AGENTS.md §2 + `reference/INVARIANTS.
 
 The two write statements over ED-04's tables. INSERT executes on stock DataFusion machinery
 behind an origin gate; DROP TABLE works on both origins from the editor — internal deletes its
-data, external removes only the def — with dependents named in the report.
-`docs/STATEMENTS_SPEC.md` §6.1.
+data, external removes only the def — with dependents named in the report. The built substrate
+these ride on is documented in `docs/STATEMENTS_SPEC.md` §6.1.
 
 ## Current state
 
@@ -108,7 +111,7 @@ data, external removes only the def — with dependents named in the report.
     without a new parameter.
   - `TableDef.origin` is what the sidebar's drop must branch on for its wording and its data
     deletion; the row already renders the distinction (`INTERNAL` badge, `entry.rs`).
-- Verified (spec §2): `ListingTable::insert_into` for Arrow requires a directory-collection URL
+- Verified (workstream README, DataFusion 54 facts): `ListingTable::insert_into` for Arrow requires a directory-collection URL
   (`listing_url` already emits the trailing slash), schema-checks via
   `logically_equivalent_names_and_types`, appends one LZ4 IPC file, `Append` only.
 - The catalog surface's drop confirm (`views/project/dialogs/drop_confirm.rs` — the path in the
@@ -141,7 +144,9 @@ data, external removes only the def — with dependents named in the report.
 - `IF EXISTS` honored; deregister-first so a racing scan fails as cleanly as a retired snapshot;
   snapshots themselves unaffected (materialized copies).
 - Update the drop-routing invariant text (AGENTS.md §2 + `docs/reference/INVARIANTS.md`) in this
-  change, per spec §10.
+  change — DROP TABLE works on both origins from the editor; the catalog confirm remains for the
+  pointer gesture — and move INSERT/DROP out of `docs/STATEMENTS_SPEC.md`'s *Not yet implemented* list, documenting the
+  built behaviour there.
 
 **The sidebar drop is the same destructive action, so it goes through the same funnel** (gap found
 while building ED-03; settled with Alex 2026-08-08). As this task was first drafted, the editor's

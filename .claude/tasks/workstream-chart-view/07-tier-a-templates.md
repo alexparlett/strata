@@ -68,6 +68,7 @@ the interactive composer; these are the fixed templates).
       pass the registry's generated tests.
 
 ## References
-`docs/CHART_FUNCTIONS.md` §3 Tier A. `docs/CHART_SPEC.md` §8 (why the strip is ruled out).
+`docs/CHART_FUNCTIONS.md` §1, §4, §6 (the SQL behind the Tier A templates). `docs/CHART_SPEC.md`
+§8 (why the strip is ruled out).
 `05-analytical-presets.md` (the remaining tiers). AGENTS.md §2 (the palette is a registry of
 offers; bodies call existing funnels).
