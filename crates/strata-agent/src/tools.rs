@@ -666,12 +666,21 @@ impl<H: Host> StrataTools<H> {
     /// Derived from `tool_router()`, the router that serves MCP, never a second list: a
     /// tool added to the block below appears here with no further edit, carrying the same
     /// name, the same doc comment and the same schemars-generated argument schema an MCP
-    /// client reads out of `tools/list`. Sorted by name, because the router's own listing is.
+    /// client reads out of `tools/list`.
+    ///
+    /// **Ordered by name here rather than trusted from the router**, and that is a promise
+    /// this list has to keep itself. `ToolRouter` is backed by a `HashMap`, whose iteration
+    /// order is randomized per process; `list_all` happens to sort on the way out
+    /// (rmcp 3.0.1, `handler/server/router/tool.rs`), but a manifest that inherited its order
+    /// from a dependency's listing would reorder on the day that changed — and a *model-facing*
+    /// list that reorders is not a cosmetic problem: the tool block sits at the head of every
+    /// request, so shuffling it invalidates the provider's prompt cache on every turn and
+    /// silently doubles what a conversation costs. Cheap to guarantee, expensive to discover.
     ///
     /// A method for the caller's sake — the answer is the same for every value of this type,
     /// since the router *is* the vocabulary and not this value's state.
     pub fn manifest(&self) -> Vec<ToolSpec> {
-        Self::tool_router()
+        let mut tools: Vec<ToolSpec> = Self::tool_router()
             .list_all()
             .into_iter()
             .map(|tool| ToolSpec {
@@ -679,7 +688,9 @@ impl<H: Host> StrataTools<H> {
                 description: tool.description.unwrap_or_default().into_owned(),
                 input_schema: Value::Object(JsonObject::clone(&tool.input_schema)),
             })
-            .collect()
+            .collect();
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
+        tools
     }
 
     pub async fn list_projects(&self) -> ProjectsResult {
@@ -2014,9 +2025,13 @@ mod tests {
     #[test]
     fn the_manifest_is_derived_from_the_router_that_serves_mcp() {
         let tools = StrataTools::new(MockHost::new(Vec::new()));
-        let router = StrataTools::<MockHost>::tool_router().list_all();
+        let mut router = StrataTools::<MockHost>::tool_router().list_all();
         let manifest = tools.manifest();
 
+        // Paired by name rather than by position, because `manifest` sorts for itself and
+        // the router's listing order is the router's business — the point of this test is
+        // that every tool crosses over intact, not that two iterators happen to agree.
+        router.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(manifest.len(), router.len());
         for (spec, tool) in manifest.iter().zip(&router) {
             assert_eq!(spec.name, tool.name);

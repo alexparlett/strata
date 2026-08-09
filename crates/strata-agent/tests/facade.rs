@@ -223,6 +223,13 @@ async fn a_blocked_statement_is_refused_in_the_editors_own_words() {
 /// The manifest is what an in-process loop hands its model, and it has to be the same offer
 /// an MCP client gets: the ten names `mcp_over_http.rs` pins off `tools/list`, each with the
 /// description and argument schema that listing carries.
+///
+/// **The order is asserted rather than sorted away, and the difference from
+/// `mcp_over_http.rs` is deliberate.** That test sorts because it reads names back off the
+/// wire, where the order is the transport's; this one reads `manifest()`, which sorts for
+/// itself and says so — a model-facing tool list that reordered per process would invalidate
+/// the provider's prompt cache every turn, so the ordering is a promise worth a test rather
+/// than a detail worth tolerating.
 #[test]
 fn the_manifest_offers_exactly_what_the_wire_advertises() {
     let manifest = StrataTools::new(MockHost::new(Vec::new())).manifest();
