@@ -5,8 +5,14 @@
 //! policy gate and the transport's guard rails, and the error taxonomy, over the one
 //! deliberate abstraction: the [`Host`] seam. There is **no Freya dependency**, and
 //! that is the property doing the work — it is what lets the vocabulary be tested against
-//! [`mock::MockHost`] with no window or renderer, reused headless (AA-05), and later called
-//! in-process by the chat pane (AA-06) rather than re-implemented for it.
+//! [`mock::MockHost`] with no window or renderer, reused headless (AA-05), and called
+//! in-process by the assistant (AS-01) rather than re-implemented for it.
+//!
+//! The in-process path is [`StrataTools`]'s own public methods: the ten tools with no rmcp
+//! type in any signature, plus [`StrataTools::manifest`] — the same names, descriptions and
+//! argument schemas an MCP client reads out of `tools/list`, derived from the router that
+//! answers it. The `#[tool]` methods are wrappers over those bodies, so one vocabulary has
+//! three transports rather than three vocabularies having one name.
 //!
 //! ```text
 //!   rmcp server  ─┐
@@ -43,4 +49,4 @@ pub use host::{
     QuerySessionInfo, QuerySessionState, RegState, RunMode, RunSettle, Settled,
 };
 pub use server::{mint_token, AgentServer, MCP_PATH};
-pub use tools::{StrataTools, MAX_PAGE_SIZE};
+pub use tools::{StrataTools, ToolSpec, MAX_PAGE_SIZE};

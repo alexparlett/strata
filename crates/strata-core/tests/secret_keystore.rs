@@ -43,7 +43,8 @@ fn a_secret_round_trips_through_the_os_keystore() {
         "a freshly minted reference names nothing"
     );
 
-    key.put(&Secret::new("strata-as-05-first").unwrap()).unwrap();
+    key.put(&Secret::new("strata-as-05-first").unwrap())
+        .unwrap();
     assert_eq!(
         key.get().unwrap().as_ref().map(Secret::expose),
         Some("strata-as-05-first")
