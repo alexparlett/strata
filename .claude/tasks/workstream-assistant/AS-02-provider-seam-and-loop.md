@@ -83,7 +83,13 @@ confirmed: `ChatRequest` (messages + tools), `MessageContent` parts (`ToolCall`,
 Authored here, once: what Strata is, the IDE register for user-facing prose (AGENTS.md §3 —
 the assistant's words render in the transcript), the tool guidance (validate before run when
 unsure; read_page for more rows; sessions are yours; the user may promote), and honesty rules
-(cite runs, never invent columns). Keep it in a `.md` include, not a string literal.
+— chief among them **no number in prose without a run behind it**: every quantitative claim
+is backed by a tool round the pane renders as a step card the user can promote, edit and
+rerun. A wrong answer that shows its SQL is recoverable; a wrong answer in bare prose is
+poison. Never invent columns. A write intent (CTAS, COPY, view DDL) is **drafted, never
+executed**: answer with the statement for the user to promote and run — the refusal the tool
+returns is the design working, not an obstacle to route around. Keep the prompt in a `.md`
+include, not a string literal.
 
 ## What is NOT this task
 
