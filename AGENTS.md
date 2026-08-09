@@ -134,6 +134,24 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **The chart's sort is a view transform over the settled data, and its comparison is total in
   both directions.** Never in `ChartQuery`, so flipping it repaints rather than re-reads; the
   comparator takes a direction flag, because reversing it moves the gaps to the head of the chart.
+- **A chart's controls are repaints, and the bin count is the one exception — because the engine
+  does the counting.** `bins` reaches `ChartQuery` and is clamped to the *shared* `MAX_BINS` at
+  both ends of the wire; the box bounds its input and re-echoes on blur, and parses wide before
+  it clamps. An empty box is the engine's `√n`. `hidden`, `log_y` and `sort` never reach the read.
+- **A hidden series keeps its slot, and the order is sorted-then-hidden.** Blank the values, never
+  drop the series, or a legend press recolours the chart; sorting after hiding would reshuffle a
+  `ByYDesc` axis. Keyed by name, dropped by `resolve` for a mark that cannot un-hide, ⌥-press
+  edits the set rather than rebuilding it — and the legend survives the all-hidden notice, which
+  names it, but no other, which would key colours for a plot that is not drawn.
+- **A log axis never refuses; it says which of two reasons sent it back to linear.** One
+  `ValueCoord` with two arms, offered only where a mark plots position rather than extent,
+  decade-rounded with the next decade out when a bound sits on one. A histogram's empty bins are
+  not a blocking zero; an overflowed **ratio** is a hang, because that is what plotters iterates;
+  and nothing positive at all is no banner, because there is no chart under it to explain.
+- **The crosshair rules through the hovered mark, and its pieces are absolute siblings of the
+  plot.** Freya repaints every node every frame and a canvas re-runs `on_render` each pass, so a
+  pointer-tracked crosshair replots the whole chart per mouse sample; riding on `hover` is free.
+  The value is carried on the `Hit`, never inverted back out of the pixel row.
 - **A snapshot read has no order of its own; order is the ordinal column.** Reads that need order
   `ORDER BY __strata_ord` (unsorted reads entire, user sorts as the tie-break) and every reader
   projects it away — export must never write it. Measured: above 10 MB a bare `LIMIT/OFFSET` read

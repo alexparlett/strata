@@ -25,8 +25,10 @@ use strata_model::{ChartData, ChartMark};
 
 use freya::components::Tooltip;
 
+use super::axis::readout;
 use super::marks;
 use super::ChartTheme;
+use crate::components::typography::Meta;
 
 /// Every colour and font the painter needs, lifted out of the theme in `render` so the paint
 /// callback itself touches no hooks.
@@ -107,6 +109,10 @@ fn blend(a: Color, b: Color, t: f32) -> Color {
 pub struct Frame {
     pub data: ChartData,
     pub mark: ChartMark,
+    /// Whether the value axis is drawn logarithmically — already resolved against the mark
+    /// (`config::log_axis`) and against the data (`mod.rs::log_fallback`), so the painter only
+    /// has to obey it.
+    pub log_y: bool,
     pub dress: Dress,
 }
 
@@ -123,6 +129,15 @@ pub enum Hit {
         top: f32,
         right: f32,
         bottom: f32,
+        /// Where the mark itself sits and what it is worth — a bar's top edge at its centre, a
+        /// point's own coordinates, and the value the axis puts there.
+        ///
+        /// Distinct from the box, which is a *reach* around the mark: a point's box is
+        /// [`POINT_REACH`](super::marks) larger in every direction, so its top edge is not
+        /// where the value is. And the value is **carried, not inverted** — mapping it back
+        /// out of the pixel row is a round trip through integer pixels, which put `11.01`
+        /// under a tooltip reading `11`.
+        cross: Cross,
         label: String,
     },
     /// A pie's wedge: where its arc starts, and how far it sweeps.
@@ -177,6 +192,15 @@ impl Hit {
         }
     }
 
+    /// Where the crosshair rules through this mark and what it reads there — `None` for a
+    /// wedge, which sits on no axis and has no row or column to rule.
+    pub fn cross(&self) -> Option<Cross> {
+        match self {
+            Hit::Box { cross, .. } => Some(*cross),
+            Hit::Wedge { .. } => None,
+        }
+    }
+
     /// Where the readout for this mark hangs — a point on the **mark**, not under the pointer.
     ///
     /// Anchoring to the mark is what makes the hover state settle: a readout that follows the
@@ -204,9 +228,31 @@ impl Hit {
     }
 }
 
-/// Where a paint leaves what it drew, for the pointer to read back. A plain `RefCell` and not
-/// a `State`: nothing renders from it, so a write must not wake anything.
-pub type Hits = Rc<RefCell<Vec<Hit>>>;
+/// Where the crosshair rules through one mark, and the value the axis puts there.
+#[derive(Clone, Copy, PartialEq)]
+pub struct Cross {
+    pub at: (f32, f32),
+    pub value: f64,
+}
+
+/// Where a cartesian mark's plot frame landed — read off plotters' own geometry by the paint
+/// that built it, for the same reason a [`Hit`] is.
+///
+/// It is what the crosshair's rules are clipped to, so they span the plot rather than the pane
+/// whatever the axes' insets happen to be. `None` for a pie, which has no frame.
+#[derive(Clone, Copy, PartialEq)]
+pub struct PlotArea {
+    /// The plotting area, in logical canvas coordinates.
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+/// Where a paint leaves what it drew, for the pointer to read back: every mark's hit region,
+/// and the plot frame they sit in. A plain `RefCell` and not a `State`: nothing renders from
+/// it, so a write must not wake anything.
+pub type Plotted = Rc<RefCell<(Vec<Hit>, Option<PlotArea>)>>;
 
 /// Which mark the pointer is over, and where on it to say so.
 ///
@@ -217,10 +263,19 @@ pub type Hits = Rc<RefCell<Vec<Hit>>>;
 struct Hover {
     label: String,
     at: (f32, f32),
+    /// Where the crosshair rules through the mark, and what it reads there. Carried rather
+    /// than looked up again, so the rules and the readout name the same mark this state
+    /// settled on. `None` for a pie's wedge, which has no axis to rule.
+    cross: Option<Cross>,
 }
 
 /// How far the readout sits from its anchor, so it never covers the mark it names.
 const READOUT_OFFSET: f32 = 14.;
+
+/// The crosshair's own furniture: a hairline, and the inset its readout keeps from the plot's
+/// left edge.
+const HAIRLINE: f32 = 1.;
+const CROSS_READOUT_GAP: f32 = 4.;
 
 /// Squared distance from a mark's anchor to the pointer — the tie-break when hit regions
 /// overlap. Squared because only the ordering is wanted, and `total_cmp` needs a total order.
@@ -255,7 +310,7 @@ impl Component for ChartCanvas {
             move || seed
         });
 
-        let hits: Hits = use_hook(|| Rc::new(RefCell::new(Vec::new())));
+        let plotted: Plotted = use_hook(|| Rc::new(RefCell::new((Vec::new(), None))));
         let mut hover = use_state(|| None::<Hover>);
         let mut size = use_state(Size2D::default);
         let mut readout_size = use_state(Size2D::default);
@@ -264,18 +319,19 @@ impl Component for ChartCanvas {
         // would capture the *first* frame forever (AGENTS.md §3).
         use_side_effect_with_deps(&self.frame, move |frame| {
             slot.set(Rc::new(frame.clone()));
-            // The repaint this asks for rebuilds every hit region, so whatever the readout was
-            // naming is gone: keeping it would leave a label pinned over a mark that has moved
-            // or is no longer drawn.
+            // The repaint this asks for rebuilds every hit region and re-lays the plot frame,
+            // so whatever the readout was naming is gone: keeping it would leave a label
+            // pinned over a mark that has moved or is no longer drawn, and a crosshair
+            // ruling through an axis that has changed underneath it.
             hover.set(None);
             platform.send(UserEvent::RequestRedraw);
         });
 
         let plot = canvas(RenderCallback::new({
-            let hits = Rc::clone(&hits);
+            let plotted = Rc::clone(&plotted);
             move |context| {
                 let frame = Rc::clone(&slot.peek());
-                marks::draw(context, &frame, &hits);
+                marks::draw(context, &frame, &plotted);
             }
         }))
         .width(Size::fill())
@@ -290,7 +346,7 @@ impl Component for ChartCanvas {
             size.set_if_modified(e.area.size);
         })
         .on_pointer_move({
-            let hits = Rc::clone(&hits);
+            let plotted = Rc::clone(&plotted);
             move |e: Event<PointerEventData>| {
                 let at = e.element_location();
                 let (x, y) = (at.x as f32, at.y as f32);
@@ -298,14 +354,16 @@ impl Component for ChartCanvas {
                 // pushed: hit regions are a fixed reach around a point, so two series that
                 // pass within that reach overlap, and taking the first would make the later
                 // series unnameable anywhere in the band.
-                let found = hits
+                let found = plotted
                     .borrow()
+                    .0
                     .iter()
                     .filter(|hit| hit.contains(x, y))
                     .min_by(|a, b| reach(a.anchor(), x, y).total_cmp(&reach(b.anchor(), x, y)))
                     .map(|hit| Hover {
                         label: hit.label().to_string(),
                         at: hit.anchor(),
+                        cross: hit.cross(),
                     });
                 if *hover.peek() != found {
                     hover.set(found);
@@ -317,6 +375,69 @@ impl Component for ChartCanvas {
                 hover.set(None);
             }
         });
+
+        // The crosshair: two hairlines across the plot frame through the **hovered mark**, and
+        // the value its row sits at, read back through the axis's own mapping. Placed from the
+        // recorded frame rather than the pane, so the rules line up with the gridlines whatever
+        // the plot's insets are.
+        //
+        // **Through the mark, not under the pointer** — and that is the whole cost model, not a
+        // simplification. Freya has no incremental rendering (`render_pipeline.rs`: every node
+        // repaints every frame) and `CanvasElement::render` calls its `on_render` each pass, so
+        // *any* reactive write here re-runs `marks::draw` — a full plotters replot plus a
+        // rebuild of every hit region, on the render thread. A crosshair that followed the
+        // pointer would do that on every mouse sample. Riding on `hover` instead costs nothing
+        // beyond what the readout already costs, for the same reason `Hit::anchor` exists: the
+        // state changes when the hovered *mark* changes, so a slow drag across one bar is
+        // zero renders. The price is that the value axis can only be read at a mark, which is
+        // where the numbers are.
+        let label_height = self.frame.dress.label.1 as f32;
+        // **Absolute siblings of the plot, not children of a wrapper.** An absolutely
+        // positioned node resolves its offsets against its parent's area — and a wrapper here
+        // would be a *stacked* sibling of a fill-height plot, so its own area starts below the
+        // canvas and every hairline inside it lands off screen. Measured: the horizontal rule
+        // came out 600px (one pane) below where the pointer was.
+        let crosshair: Vec<Element> = hover
+            .read()
+            .as_ref()
+            // A wedge answers no cross and a pie records no plot frame — either way there is
+            // no axis here to rule through.
+            .and_then(|hover| hover.cross)
+            .zip(plotted.borrow().1)
+            .map(|(Cross { at: (x, y), value }, frame)| {
+                let dress = self.frame.dress.clone();
+                // In front of the plot for the same reason the readout is: two siblings on one
+                // layer have no paint order (AGENTS.md §3). Never a pointer target either — a
+                // hit-testable hairline under the pointer would take the pointer off the
+                // canvas and unmount the crosshair that drew it.
+                let hair = |el: Rect| el.layer(Layer::Relative(1)).interactive(false);
+                vec![
+                    hair(rect())
+                        .position(Position::new_absolute().left(x).top(frame.top))
+                        .width(Size::px(HAIRLINE))
+                        .height(Size::px(frame.bottom - frame.top))
+                        .background(dress.tick)
+                        .into_element(),
+                    hair(rect())
+                        .position(Position::new_absolute().left(frame.left).top(y))
+                        .width(Size::px(frame.right - frame.left))
+                        .height(Size::px(HAIRLINE))
+                        .background(dress.tick)
+                        .into_element(),
+                    hair(rect())
+                        .position(
+                            Position::new_absolute()
+                                .left(frame.left + CROSS_READOUT_GAP)
+                                // Above the rule, so the label names the row it sits on rather
+                                // than covering it.
+                                .top(y - CROSS_READOUT_GAP - label_height),
+                        )
+                        .background(dress.background)
+                        .child(Meta::new(readout(value)).color(dress.tick))
+                        .into_element(),
+                ]
+            })
+            .unwrap_or_default();
 
         let readout = hover.read().clone().map(|hover| {
             let (pane, card) = (*size.read(), *readout_size.read());
@@ -336,10 +457,11 @@ impl Component for ChartCanvas {
                 // **In front of the plot, explicitly.** Freya paints by layer and holds the
                 // nodes of one layer in a hash set, so two siblings on the same layer paint in
                 // whatever order that set iterates — the readout came out *behind* the marks,
-                // showing through only where one was semi-transparent. `Relative(1)` is the
+                // showing through only where one was semi-transparent. A relative layer is the
                 // whole fix; `Overlay` is a jump for things that must clear the window, and a
-                // readout only has to clear its own sibling.
-                .layer(Layer::Relative(1))
+                // readout only has to clear its own siblings. `2` rather than `1` because the
+                // crosshair is one of those siblings and the card names a mark, so it wins.
+                .layer(Layer::Relative(2))
                 .position(
                     Position::new_absolute()
                         .top(flip(hover.at.1, card.height, pane.height))
@@ -361,13 +483,124 @@ impl Component for ChartCanvas {
             .width(Size::fill())
             .height(Size::fill())
             .child(plot)
+            .children(crosshair)
             .maybe_child(readout)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use freya_testing::TestingRunner;
+    use strata_core::theme::load;
+    use strata_model::{ChartBin, ChartData};
+
     use super::*;
+    use crate::components::typography::scale;
+    use crate::theme::strata_theme;
+
+    /// **The crosshair rules through the hovered mark, from the frame the paint recorded, over
+    /// a real layout.**
+    ///
+    /// Two things only a mounted layout can prove. First, that the hairlines reach the screen
+    /// at all: their geometry comes out of plotters rather than out of the tree, and a unit
+    /// test on [`Mapping`] alone did not catch them landing a whole pane below the pointer.
+    /// Second, that they sit on the **mark** — which is what makes the crosshair free. Freya
+    /// repaints every node every frame and `CanvasElement::render` re-runs `on_render` each
+    /// pass, so a crosshair that followed the pointer would replot the whole chart on every
+    /// mouse sample; riding on the hover means the state changes only when the hovered mark
+    /// does.
+    #[test]
+    fn a_crosshair_rules_through_the_hovered_mark_and_reads_its_row_off_the_axis() {
+        let app = || {
+            use_init_theme(|| strata_theme(&load("midnight")));
+            let theme = get_theme!(
+                &None::<super::super::ChartThemePartial>,
+                super::super::ChartThemePreference,
+                "chart"
+            );
+            rect()
+                .width(Size::fill())
+                .height(Size::fill())
+                .child(ChartCanvas::new(Frame {
+                    data: ChartData::Bins(
+                        (0..4)
+                            .map(|i| ChartBin {
+                                lo: f64::from(i),
+                                hi: f64::from(i + 1),
+                                count: 10 + i as u64,
+                            })
+                            .collect(),
+                    ),
+                    mark: ChartMark::Histogram,
+                    log_y: false,
+                    dress: Dress::new(&theme, &scale()),
+                }))
+        };
+        let (mut runner, _) = TestingRunner::new(app, (800., 600.).into(), |_| {}, 1.);
+        runner.sync_and_update();
+        // The hit regions and the plot frame are recorded *by* the paint, and headless only
+        // paints on demand.
+        runner.render();
+        // Inside the second bin, low enough to be over the bar rather than above it.
+        runner.move_cursor((400., 500.));
+        runner.sync_and_update();
+        runner.sync_and_update();
+
+        // The two hairlines: one column the height of the plot, one row its width. Found by
+        // their geometry, which is the thing under test — they are placed from the frame the
+        // paint recorded, not from the pane.
+        let hairlines: Vec<Area> = runner.find_many(|node, _| {
+            let area = node.layout().area;
+            (area.width() == HAIRLINE || area.height() == HAIRLINE).then_some(area)
+        });
+        let column = *hairlines
+            .iter()
+            .find(|area| area.width() == HAIRLINE)
+            .expect("no vertical hairline");
+        let row = *hairlines
+            .iter()
+            .find(|area| area.height() == HAIRLINE)
+            .expect("no horizontal hairline");
+        assert!(
+            column.height() > 300. && row.width() > 400.,
+            "the hairlines are not the size of the plot frame: {column:?} {row:?}"
+        );
+
+        let labels: Vec<String> =
+            runner.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()));
+        // The readout is the *mark's* value — bin 2 of 4, counted 11 — because that is where
+        // the row is ruled. A crosshair that followed the pointer would say something else.
+        assert!(
+            labels.iter().any(|text| text == "11"),
+            "the readout does not name the hovered mark's value: {labels:?}"
+        );
+
+        // **The rules track the mark, not the pointer.** Moving within the same bar changes
+        // neither — which is the property that makes this free, so it is asserted rather than
+        // described.
+        runner.move_cursor((410., 470.));
+        runner.sync_and_update();
+        let settled: Vec<Area> = runner.find_many(|node, _| {
+            let area = node.layout().area;
+            (area.width() == HAIRLINE || area.height() == HAIRLINE).then_some(area)
+        });
+        assert!(
+            settled.contains(&column) && settled.contains(&row),
+            "the crosshair moved with the pointer inside one mark: {settled:?}"
+        );
+
+        // Off every mark: no crosshair at all.
+        runner.move_cursor((5., 5.));
+        runner.sync_and_update();
+        let after: Vec<Area> = runner.find_many(|node, _| {
+            let area = node.layout().area;
+            (area.width() == HAIRLINE || area.height() == HAIRLINE).then_some(area)
+        });
+        assert!(
+            after.is_empty(),
+            "the crosshair survived the pointer leaving the plot: {after:?}"
+        );
+    }
 
     /// A wedge is an arc, and every pie has one that crosses zero. Describing it as two wrapped
     /// bounds gave that one `to < from`, so an ordinary `from <= a < to` answered false for the

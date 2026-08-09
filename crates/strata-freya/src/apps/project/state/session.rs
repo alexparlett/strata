@@ -929,6 +929,9 @@ mod tests {
                 ys: Some(vec!["revenue".into()]),
                 series: Some("region".into()),
                 sort: ChartSort::ByYDesc,
+                bins: Some(24),
+                hidden: vec!["cost".into()],
+                log_y: true,
             },
         );
         s.switch(a);
@@ -966,6 +969,11 @@ mod tests {
         );
         assert_eq!(rb.chart.series.as_deref(), Some("region"));
         assert_eq!(rb.chart.sort, ChartSort::ByYDesc);
+        // The bin count and the two display preferences travel with the rest of it — a tab
+        // reopened on a histogram must come back binned the way it was left.
+        assert_eq!(rb.chart.bins, Some(24));
+        assert_eq!(rb.chart.hidden, ["cost"]);
+        assert!(rb.chart.log_y);
     }
 
     /// The rail toggles follow the design's `onRailPane` / `onOpen*` semantics: toggling the

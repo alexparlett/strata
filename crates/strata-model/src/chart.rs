@@ -71,7 +71,8 @@ impl ChartMark {
 }
 
 /// **How the user left the chart** (`docs/CHART_SPEC.md` §6): a mark, three column
-/// assignments and a view preference. Persisted per tab (`TabSnapshot::chart`).
+/// assignments, a bin count and three view preferences. Persisted per tab
+/// (`TabSnapshot::chart`).
 ///
 /// This is *intent*, never a resolved read. Every channel can say "I have not chosen" —
 /// [`None`] on the mark and the Ys, [`ChartX::Auto`] on X — and an unchosen channel takes the
@@ -81,9 +82,11 @@ impl ChartMark {
 /// ever reaching a [`ChartQuery`]: a reference that no longer resolves falls back to the
 /// default rather than being written out of the config, so it comes back if the column does.
 ///
-/// [`sort`](Self::sort) is the odd one out: a **view transform** over the settled
-/// [`ChartData`], not part of the read (spec §6), so flipping it repaints without
-/// re-querying and never touches cache identity.
+/// [`sort`](Self::sort), [`hidden`](Self::hidden) and [`log_y`](Self::log_y) are the odd ones
+/// out: **view transforms** over the settled [`ChartData`], not part of the read (spec §6), so
+/// flipping any of them repaints without re-querying and never touches cache identity.
+/// [`bins`](Self::bins) is the opposite — the engine does the counting, so it rides in the
+/// request.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct ChartConfig {
     /// The chosen mark, or `None` to take the default for X's role (line over a temporal X,
@@ -102,6 +105,28 @@ pub struct ChartConfig {
     /// the explicit choice, which are the same thing here, so there is nothing to tell apart.
     #[serde(default)]
     pub series: Option<String>,
+    /// How many bins a histogram is cut into, or `None` for the engine's own `√n` choice.
+    ///
+    /// The one channel here that *is* part of the read: a bin count changes what the engine
+    /// counts, so it reaches [`ChartQuery::Histogram`] and a new value is a new entry. An
+    /// integer rather than a count of any width, because a [`ChartQuery`] is cache identity
+    /// and identity has no floats in it.
+    #[serde(default)]
+    pub bins: Option<u16>,
+    /// The series the legend has pressed out of the chart, **by name**.
+    ///
+    /// A view preference in [`sort`](Self::sort)'s class: it never reaches a [`ChartQuery`],
+    /// and it is not pruned against the result — a name this result has no series for matches
+    /// nothing and is harmless, and keeping it is what brings the choice back when the column
+    /// does. A [`ChartSeries::name`] is a label and not a key, so a NULL-valued series and a
+    /// literal `"(null)"` one are hidden and shown together; that is accepted coarseness
+    /// rather than a reason to key a user-facing legend by position.
+    #[serde(default)]
+    pub hidden: Vec<String>,
+    /// Draw the value axis logarithmically. A display transform, like
+    /// [`sort`](Self::sort) — a repaint, never a re-read.
+    #[serde(default)]
+    pub log_y: bool,
     /// How the settled rows are ordered on the way to the marks.
     #[serde(default)]
     pub sort: ChartSort,

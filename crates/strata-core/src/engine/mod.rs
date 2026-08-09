@@ -51,6 +51,9 @@ pub mod value_tree;
 /// included — should go through it rather than hand-writing a row whose `kind` and `role` are
 /// then a second opinion about the same type.
 pub use catalog::{chart_role, column_info, TableMeta, TableSpec, ViewMeta};
+/// The bin cap the histogram read clamps to — `pub` so the control offering a bin count is
+/// bounded by the same number rather than a second copy of it.
+pub use chart::MAX_BINS;
 /// The intercepted-statement vocabulary (ED-02): what an arm answers with, what the app folds.
 pub use ddl::{StatementOutcome, StatementReport, StoreEffect};
 pub use query::purge_snapshot_root;

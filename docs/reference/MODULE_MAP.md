@@ -664,12 +664,16 @@ src/apps/project/                the project window (Valin-shaped)
                                  `ChartSpec` subscription and the notice states; config.rs
                                  the column roles, the per-mark option sets, and the one
                                  place a `ChartConfig` + a schema resolve into a `ChartQuery`
-                                 (`resolve` → `encode`); sort.rs the strip's order, a view
-                                 transform over the settled data; strip.rs the mark picker,
-                                 the X/Y/Series encoders, the sort toggle and the legend;
-                                 paint.rs the frame + the `canvas` (slot-peeked, redraw
-                                 requested); axis.rs the plotters `Ranged` category coord +
-                                 nice max + abbreviated tick; marks.rs a render fn per mark;
+                                 (`resolve` → `encode`); sort.rs the strip's order and hide.rs
+                                 the legend's hidden set, both view transforms over the settled
+                                 data (sorted **then** hidden); strip.rs the mark picker, the
+                                 X/Y/Series encoders, the bin count, the sort + scale toggles
+                                 and the pressable legend; paint.rs the frame + the `canvas`
+                                 (slot-peeked, redraw requested) + the crosshair, ruled through the
+                                 hovered mark so it costs no repaint;
+                                 axis.rs the plotters `Ranged`s — the category coord and the
+                                 linear-or-log `ValueCoord` — plus nice max, decade span and
+                                 abbreviated tick; marks.rs a render fn per mark;
                                  preview.rs the headless PNG harness (the plan view's), because
                                  a chart's correctness is *visual*
         explain_plan/            the EXPLAIN plan view (P2-05, EXPLAIN_PLAN_SPEC v3): mod.rs the
