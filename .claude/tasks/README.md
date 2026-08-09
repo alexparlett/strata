@@ -94,10 +94,12 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 - **Assistant** ([`workstream-assistant/`](workstream-assistant/README.md), AS) — the native
   chat pane, graduated from AA-06 with its brain decision settled: an app-owned agentic loop
   over a **pluggable provider seam** (the `genai` crate — Anthropic, OpenAI, Gemini, Ollama,
-  OpenAI-compatible), driving the AA tool vocabulary in-process. Four tasks: in-process facade
-  + tool manifest, provider seam + loop, Settings ▸ Assistant, the pane. Decision record in
-  that workstream's README; the doc records the pane as not built
-  (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
+  OpenAI-compatible), driving the AA tool vocabulary in-process. Five tasks: in-process facade
+  + tool manifest, provider seam + loop, Settings ▸ Assistant (a **roster** of provider
+  entries — the per-conversation pick of entry/model/effort lives on the pane's composer, a
+  split settled 2026-08-09), the pane, and the **secret store** (OS keystore; config holds
+  references, never keys). Decision records in that workstream's README; the doc records the
+  pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
 - **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
   ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,

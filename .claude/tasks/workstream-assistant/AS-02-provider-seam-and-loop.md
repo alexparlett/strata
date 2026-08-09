@@ -21,15 +21,23 @@ confirmed: `ChatRequest` (messages + tools), `MessageContent` parts (`ToolCall`,
 
 ## What to build
 
-1. **The provider config, as plain data.** A serde struct this module owns (the app maps
-   Settings onto it in AS-03): provider kind (Anthropic · OpenAI · Gemini · Ollama ·
-   OpenAI-compatible), model name, optional base URL (required for the last two), optional API
-   key. Construction of the `genai` client happens in **one** place from this struct —
-   `AuthResolver` answers keys from the struct with the provider's env var as fallback (genai's
-   own default), `ServiceTargetResolver` answers the custom-endpoint cases. A config that
-   cannot make a client (compat with no URL, keyed provider with no key anywhere) is a typed
-   error naming the missing field and where it is set — this is what the pane's honest
-   degradation (AS-04) renders.
+1. **The selection, as plain data, per send.** A struct this module owns, handed in with
+   every send — the app resolves it from the conversation's pick (AS-04) over the roster
+   entry (AS-03) at send time; the loop holds no global config and reads no Settings.
+   Fields: provider kind (Anthropic · OpenAI · Gemini · Ollama · OpenAI-compatible), model
+   name, optional base URL (required for the last two), optional API key **as a resolved
+   string** — the *caller* resolves the AS-05 reference to a key before the call, so this
+   crate stays keystore-free exactly as it stays Freya-free — and an optional **effort**.
+   Effort is not a portable knob (Anthropic spells it as a thinking budget, OpenAI as
+   `reasoning_effort`, Ollama not at all): the provider table (AS-03's one table, homed in
+   this module) declares per kind whether it exists and how it maps, and **verify `genai`'s
+   `ChatOptions` coverage of it at the pinned version** before promising it anywhere. A kind
+   without one simply has no field, end to end. Construction of the `genai` client happens in
+   **one** place from this struct — `AuthResolver` answers keys from the struct with the
+   provider's env var as fallback (genai's own default), `ServiceTargetResolver` answers the
+   custom-endpoint cases. A selection that cannot make a client (compat with no URL, keyed
+   provider with no key anywhere) is a typed error naming the missing field and where it is
+   set — this is what the pane's honest degradation (AS-04) renders.
 2. **The turn loop.** Input: system prompt + pinned context blocks (@-mentions arrive as
    `describe_table` results the pane already fetched) + transcript. One iteration: send with
    the manifest's tools → consume the stream, forwarding text deltas and tool-call starts to

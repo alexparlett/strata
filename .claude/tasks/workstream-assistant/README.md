@@ -56,6 +56,28 @@ Two standing cautions for every task here: **verify `genai`'s API from its sourc
 version before building on a summary of it** (the bar, AGENTS.md §1), and the pin is a
 workspace dependency like any other — an upgrade is a deliberate change, not a drift.
 
+## The selection split (settled 2026-08-09 — do not re-merge)
+
+AS-03 was first written as one global provider + model + key, with an explicit "no
+per-conversation model switching" line. Alex overturned that after reviewing IntelliJ's AI
+Assistant: **Settings owns the roster, the chat surface owns the pick.**
+
+- **Roster (AS-03, config):** named provider entries keyed by `Uuid` — kind · default model ·
+  endpoint · key reference — plus one default entry. Slow-changing, secret-bearing,
+  machine-scoped. The connections pattern, minus the secrets: keys live in the **AS-05 secret
+  store** (OS keystore), config holds only a reference. "Stored like the bearer token" was the
+  wrong precedent for third-party billing credentials and is withdrawn.
+- **Pick (AS-04, composer footer):** entry · model · effort, per conversation, on the
+  transcript satellite, seeded from the default. Fast-changing intent — the def/runtime
+  split applied to the assistant. AS-02 takes the resolved pick **per send** and holds no
+  global config, which also made its signature more testable.
+
+One import caution: in IntelliJ the "agent" slot picks among *external agent processes*
+(Junie, Codex — ACP sidecars). Strata's analogue is the **roster entry** — one loop, ours,
+brains pluggable underneath. The screenshots are not an argument for ACP-style pluggable
+agents; that is the sidecar shape rejected above, and per-conversation model choice validates
+the `genai` decision rather than pressuring it.
+
 ## Architecture in one line
 
 **genai is the mouth, `StrataTools` is the hands, the loop is ours** — one turn = stream the
@@ -71,8 +93,9 @@ query sessions, the same policy gate, the same error taxonomy verbatim — and b
 |---|---|---|---|
 | 01 | In-process facade + tool manifest: the vocabulary callable without rmcp | ⬜ | AA-03c |
 | 02 | Provider seam + the loop: `genai`, streaming, tool dispatch, cancel | ⬜ | 01 |
-| 03 | Settings ▸ Assistant: provider · model · endpoint · key | ⬜ | — |
-| 04 | The chat pane: transcript, step cards, @-mentions, promote, stop | ⬜ | 02, 03 |
+| 03 | Settings ▸ Assistant: the provider roster + default entry | ⬜ | 05 |
+| 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ⬜ | 02, 03 |
+| 05 | Secret store: OS-keystore-backed keys, references in config | ⬜ | — |
 
 ## Why the order
 
@@ -84,8 +107,11 @@ vocabulary with no MCP peer at all — the property the spec (§5) already promi
 own tool list, so there is **one** vocabulary with two transports rather than two vocabularies.
 02 builds the loop against 01 + `MockHost` — testable with no window, no renderer, and no real
 vendor (point `genai`'s OpenAI-compat adapter at a local stub server rather than shaping any
-production signature for a test). 03 is a settings pane in AA-04's image and can run in
-parallel. 04 is the Freya surface and comes last because everything under it is then proven.
+production signature for a test). 05 is a pure mechanism with no dependency into the
+workstream — it can land first or in parallel, and 03 consumes only its reference type, so
+the pane can start before the store finishes. 03 is a settings pane in AA-04's image and runs
+in parallel with 01/02. 04 is the Freya surface and comes last because everything under it is
+then proven.
 
 ## Standing rules this workstream inherits
 
