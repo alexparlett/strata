@@ -48,6 +48,7 @@ Read this index first, then open only the phase/workstream file you're working i
 - 🟢 **UI only** — the view exists but is a shell: on fixture data, decorative, or not dispatched.
 - 🟡 **partial** — some of it works; specifics in the task.
 - ⬜ **todo** — not started in Freya.
+- ➡ **graduated** — the task moved to its own workstream; its file is the pointer.
 - `[core ✓]` — the underlying logic already exists in `strata-core`; only Freya UI/wiring remains.
 
 ## Where we are
@@ -87,9 +88,16 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   verified Tokio↔Freya bridge, with thin swappable frontends. **01–05 (incl. 03b/03c) ✅**: the
   in-app MCP server, the Agents pane (an agent's runs are dispatched straight at the engine and
   shown in their own surface, promotable into a **new** tab — never a press on the user's tabs),
-  the Settings pane, and the headless `strata mcp <project>` stdio host. Open: **AA-06, the chat
-  pane** (the flagship follow-on). Docs: `docs/AGENT_ACCESS_SPEC.md` (as-built, dataflow
-  diagram inlined).
+  the Settings pane, and the headless `strata mcp <project>` stdio host. **AA-06 (the chat
+  pane) graduated to its own workstream** (below). Docs: `docs/AGENT_ACCESS_SPEC.md` (as-built,
+  dataflow diagram inlined).
+- **Assistant** ([`workstream-assistant/`](workstream-assistant/README.md), AS) — the native
+  chat pane, graduated from AA-06 with its brain decision settled: an app-owned agentic loop
+  over a **pluggable provider seam** (the `genai` crate — Anthropic, OpenAI, Gemini, Ollama,
+  OpenAI-compatible), driving the AA tool vocabulary in-process. Four tasks: in-process facade
+  + tool manifest, provider seam + loop, Settings ▸ Assistant, the pane. Decision record in
+  that workstream's README; the doc records the pane as not built
+  (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
 - **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
   ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,

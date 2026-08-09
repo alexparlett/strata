@@ -27,8 +27,9 @@ engine handles for the data reads. The vocabulary is deployed:
   (`crates/strata-agent/src/headless.rs`; the CLI branch is in
   `crates/strata-freya/src/main.rs`). The `Host` here is a plain `Engine` with the project's
   registration pass replayed over it.
-- **In-process** — the planned chat pane will call the same tool layer directly, with no MCP
-  hop. Not built yet (see [What is not built](#what-is-not-built)).
+- **In-process** — the planned assistant pane will call the same tool layer directly, with no
+  MCP hop: an app-owned agentic loop over a pluggable provider seam. Not built yet (see
+  [What is not built](#what-is-not-built)).
 
 `strata-agent` has **no Freya dependency**, and that is the property doing the work: it is
 what lets one implementation of the vocabulary serve HTTP, serve stdio, be called in-process
@@ -371,9 +372,12 @@ the disconnection.
 
 Stated so the reader does not go looking:
 
-- **The in-process chat pane** — a native conversation surface in the project window, calling
-  this same tool layer directly. The vocabulary is shaped for it (it can be driven with no
-  MCP peer at all), but no pane exists.
+- **The in-process assistant pane** — a native conversation surface in the project window,
+  calling this same tool layer directly. The vocabulary is shaped for it (it can be driven
+  with no MCP peer at all), but no pane exists. Its shape is settled: the app owns the
+  agentic loop, and the provider is pluggable (`genai` — Anthropic, OpenAI, Gemini, Ollama,
+  OpenAI-compatible), chosen in Settings. The design and decision record live in
+  `.claude/tasks/workstream-assistant/`.
 - **MCP resources** — the vocabulary is tools only.
 - **Curated writes** (register a table, save a view, export). If they ever arrive, they
   arrive as new, separately permissioned tools; `run` never loosens.
