@@ -689,13 +689,20 @@ impl Engine {
                 self.cancel_profile(name);
                 self.note_origin(name, false);
             }
-            // Nothing for the engine to learn. A view's own lifecycle is `create_view` /
-            // `drop_view`, which already cancel its scan; an `INSERT` moves data under a
-            // registration that is unchanged; and the function catalog is not a table.
-            StoreEffect::ViewUpserted { .. }
-            | StoreEffect::ViewRemoved { .. }
-            | StoreEffect::RescanTable { .. }
-            | StoreEffect::FunctionsChanged => {}
+            // A redefined view measures something else now and a dropped one measures nothing,
+            // so a scan of either is already a lie — cancelled here for the reason
+            // `TableRemoved` gives, since the statement runs in a task that cannot reach the
+            // lifecycle. `Engine::create_view` / `drop_view` cancel for the gestures that call
+            // them directly (⌘S, the pane's drop confirm), which never produce an effect.
+            StoreEffect::ViewUpserted { def, .. } => {
+                self.cancel_profile(&def.name);
+            }
+            StoreEffect::ViewRemoved { name } => {
+                self.cancel_profile(name);
+            }
+            // Nothing for the engine to learn. An `INSERT` moves data under a registration that
+            // is unchanged, and the function catalog is not a table.
+            StoreEffect::RescanTable { .. } | StoreEffect::FunctionsChanged => {}
         }
     }
 
@@ -1353,71 +1360,28 @@ impl Engine {
     }
 
     /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and
-    /// what it reads (D10). `CREATE OR REPLACE` — redefinition is the ⌘S-on-a-view path.
-    ///
-    /// `name` is whatever the user typed (it rides in `.strata/project.json`, a shared,
-    /// committed file), so it goes through [`quote_ident`] rather than straight into the
-    /// statement — which is the only reason a name like `Sales 2024` can be a view at all.
-    /// The view's identity is then [`fold_ident(name)`](fold_ident), which is what the
-    /// lookup below asks for.
+    /// what it reads (D10) — **the ⌘S gesture's entry into [`ddl::create_view`]**, which a
+    /// typed `CREATE VIEW` enters through [`run`](Engine::run) instead. `CREATE OR REPLACE`:
+    /// redefinition is the ⌘S-on-a-view path.
     pub async fn create_view(&self, name: String, sql: String) -> Result<ViewMeta, String> {
         // Redefining the view changes what a scan of it would even mean — see `register`.
+        // The typed gesture cannot do this from inside its task, so `settle_effect` does it
+        // there, off the effect the statement returns.
         self.cancel_profile(&name);
         let ctx = self.ctx.clone();
         self.rt()
-            .spawn(async move {
-                let stmt = format!(
-                    "CREATE OR REPLACE VIEW {} AS {sql}",
-                    quote_ident(name.as_str())
-                );
-                let df = ctx.sql(&stmt).await.map_err(|e| e.to_string())?;
-                // The DDL only takes effect when its (empty) result is driven.
-                let _ = df.collect().await;
-                // The freshly-registered view's own `DataFrame` gives both the columns
-                // and what it reads — the planner has already resolved it, so we never
-                // parse the SQL ourselves.
-                //
-                // `bare(fold_ident(…))`, not the raw `&str`: `impl Into<TableReference>
-                // for &str` parses, and a *quoted* name (`Sales 2024`, `say "hi"`) does
-                // not survive a parse — it would be looked up under a name the DDL never
-                // created. `fold_ident` is exactly what the DDL registered, and `bare`
-                // then takes it verbatim instead of parsing it a second time.
-                let t = ctx
-                    .table(TableReference::bare(fold_ident(name.as_str())))
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let deps = catalog::plan_deps(t.logical_plan());
-                let columns = t
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| catalog::column_info(f))
-                    .collect();
-                Ok(ViewMeta {
-                    columns,
-                    tables: deps.tables,
-                    aliases: deps.aliases,
-                })
-            })
+            .spawn(async move { ddl::create_view(&ctx, &name, &sql).await })
             .await
             .map_err(|e| format!("create view task failed: {e}"))?
     }
 
-    /// Drop the SQL view `name` (idempotent — `IF EXISTS`). Quoted the same way
-    /// [`create_view`](Engine::create_view) quoted it, so the drop names the same view.
+    /// Drop the SQL view `name` (idempotent — `IF EXISTS`) — the catalog pane's entry into
+    /// [`ddl::drop_view`], as a typed `DROP VIEW` reaches it through [`run`](Engine::run).
     pub async fn drop_view(&self, name: String) -> Result<(), String> {
         self.cancel_profile(&name);
         let ctx = self.ctx.clone();
         self.rt()
-            .spawn(async move {
-                ctx.sql(&format!(
-                    "DROP VIEW IF EXISTS {}",
-                    quote_ident(name.as_str())
-                ))
-                .await
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-            })
+            .spawn(async move { ddl::drop_view(&ctx, &name).await })
             .await
             .map_err(|e| format!("drop view task failed: {e}"))?
     }

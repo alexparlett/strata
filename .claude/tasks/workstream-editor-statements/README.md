@@ -30,7 +30,7 @@ already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Re
 | 03 | Strata providers: `StrataCatalogProvider` + `StrataSchemaProvider`, information_schema on | ✅ | — | — |
 | 04 | Internal tables, engine half: `TableDef.origin`, CTAS spool, `StrataArrowFormat` stats, replay | ✅ | — | 02 |
 | 05 | INSERT (native, target-gated) + DROP TABLE (both origins) | ✅ | — | 04 |
-| 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ⬜ | — | 02 |
+| 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ✅ | — | 02 |
 | 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ⬜ | — | 02 |
 | 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ⬜ | — | 02 |
 | 09 | `StrataFunctionFactory` + swappable function catalog | ⬜ | — | 02 |
@@ -44,7 +44,7 @@ fold — every later task returns a `StatementReport` through it, so it must exi
 capability lands. 03 is independent of the chain (it changes enumeration, not dispatch) but
 should land before or with 04, so `SHOW TABLES` works — and hides snapshots — by the time the
 first internal table exists. 04 → 05 is the only hard chain: INSERT and DROP gate on the
-internal-name set and the data-dir layout 04 establishes. 06/07/08/09/10 are parallel after 02 —
+internal-name set and the data-dir layout 04 establishes. 07/08/09/10 are parallel after 02 —
 each is one `StmtKind` arm plus its engine method(s); 10 maps the parsed statement onto a def and
 reuses the registration funnel outright, so it is the smallest of the arms.
 
@@ -87,13 +87,13 @@ reassuring the user at exactly the moment the action became destructive.
 Verified against the sources this workspace compiles
 (`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`, `datafusion-54.0.0` and siblings).
 The open tasks hang off these; the facts behind the *landed* tasks (eager DDL, the in-RAM CTAS,
-`information_schema` enumeration, and ED-05's `insert_into` and `find_and_deregister` behaviour)
-are restated in the code's own module docs (`engine/ddl/tables.rs`, `engine/providers.rs`) and in
+`information_schema` enumeration, ED-05's `insert_into` and `find_and_deregister` behaviour, and
+ED-06's replace-a-table hazard) are restated in the code's own module docs
+(`engine/ddl/tables.rs`, `engine/ddl/views.rs`, `engine/providers.rs`) and in
 `docs/STATEMENTS_SPEC.md`.
 
 | Fact | Evidence | Task |
 |---|---|---|
-| `CREATE OR REPLACE VIEW` over a **table** name silently replaces the table (the `(true, Ok(_))` arm never checks `table_type`) | `context/mod.rs:939-972` | ED-06 |
 | PREPARE/EXECUTE/DEALLOCATE supported; plans stored in `SessionState.prepared_plans` (**`pub(crate)`** — no public enumeration); EXECUTE returns the bound plan as a plain DataFrame | `context/mod.rs:733-772`, `:1534-1587`; `session_state.rs:208`, `:984-1013` | ED-08 |
 | `SQLOptions::verify_plan` rejects `Ddl` / `Dml`+`Copy` / `Statement` per flag, visiting subqueries — and **cannot see through EXECUTE**, so DML must be fenced at PREPARE | `context/mod.rs:2305-2339` | ED-08 |
 | Native SET applies `datafusion.runtime.*` live (rebuilds the RuntimeEnv); native RESET restores **DataFusion's** default, not the Settings baseline — both are why SET/RESET never run natively | `context/mod.rs:1115-1219` | ED-08 |

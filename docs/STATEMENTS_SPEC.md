@@ -4,8 +4,8 @@ The editor is a **full-statement surface**: one classification in front of dispa
 parsed statement, whether Run executes a query, performs the statement as an engine method, or
 refuses it with the same words the squiggle showed. The agent surface asks the same classifier and
 stays read-only. This file documents that surface as built — the router, the dispatch, the
-provider layer, and the statement family implemented so far (internal tables, and the two writes
-over them). The remaining statement lift (typed view DDL, COPY, session statements, functions,
+provider layer, and the statement family implemented so far (internal tables, the two writes over
+them, and typed view DDL). The remaining statement lift (COPY, session statements, functions,
 typed `CREATE EXTERNAL TABLE`) is tracked in `.claude/tasks/workstream-editor-statements/`.
 
 ```mermaid
@@ -305,9 +305,64 @@ Both wordings are the engine's — `ddl::drop_intent` before the fact, the repor
 confirm cannot promise what the report then contradicts: an internal drop names the data, an
 external one keeps "the source files on disk are not deleted".
 
-### 6.3 Not yet implemented
+### 6.3 Typed view DDL — `CREATE VIEW` and `DROP VIEW`
 
-`CREATE VIEW`, `DROP VIEW`, `COPY`, `SET`, `RESET`, `PREPARE`,
+**A second gesture into the funnel ⌘S already uses** (`engine/ddl/views.rs`). `views::create` is
+the body `Engine::create_view` spawns for Save-as-view, so a view is indistinguishable by origin:
+one store row, one `project.json` entry, one set of deps, and either gesture edits the row the
+other made. The effect is `StoreEffect::ViewUpserted { def, meta }` — the same pair Save folds.
+
+The statement is **never run natively**, for two reasons. DataFusion's own
+`CREATE OR REPLACE VIEW` over a **table** name silently replaces the table (`context/mod.rs`, the
+`(true, Ok(_))` arm deregisters whatever is there without asking `table_type`), so a typo would
+turn a registered parquet table into a view while its def went on naming files nothing reads. And
+the store write-back needs a `ViewMeta`, which introspecting for afterwards is the refetch the
+catalog invariant forbids — `views::create` reads it off the freshly-registered view's own
+`DataFrame`, where the planner has already resolved everything.
+
+`ViewDef` is `{ name, sql }` and nothing else, so a typed statement has to arrive at exactly that
+pair: the folded target name (`TableReference::parse_str`, DataFusion's own identifier
+normalization) and the **definition query's canonical rendering** — the query node alone, not the
+statement around it. That is what makes the row round-trip, because it is the same string ⌘S
+would have saved from a tab holding that query. It is also why the clauses `CREATE VIEW` can
+carry are refused **by name**, from a destructure with no `..`: the statement is rebuilt around
+the query, so a clause nobody read is a clause silently dropped, and `CREATE TEMPORARY VIEW`
+would create a permanent one. A clause sqlparser learns later is a compile error rather than a
+promise Strata quietly breaks.
+
+The fences, all resolved before anything runs:
+
+| Case | Answer |
+|---|---|
+| The name is a base table | "'sales' is a table" — `OR REPLACE` does not soften it |
+| Plain `CREATE VIEW` over an existing view | "View 'v' already exists. Use CREATE OR REPLACE VIEW" |
+| `IF NOT EXISTS` | "CREATE VIEW IF NOT EXISTS is not supported. Use CREATE OR REPLACE VIEW" |
+| A column list | "A view's column list is not supported. Alias the columns in the query" |
+| `TEMPORARY`, `MATERIALIZED`, `SECURE`, `OR ALTER`, `TO`, `COMMENT`, `CLUSTER BY`, `COPY GRANTS`, `WITH NO SCHEMA BINDING`, view options, MySQL's `ALGORITHM`/`DEFINER`/`SQL SECURITY` | "CREATE VIEW does not support *CLAUSE*" |
+| A `__snap_` view name or a `__snap_` read in its body | `Blocked::ReservedName`, at the router (§4) |
+
+`DROP VIEW` resolves the target the same way — an unknown name errors, `IF EXISTS` reports a
+no-op with nothing to fold, a table name says which statement drops it ("'t' is a table. Use DROP
+TABLE") — and then names what it leaves behind, **never cascading**, in the wording a table drop
+already uses (`ddl::left_invalid`, shared so the two cannot describe one consequence two ways).
+Its dependents come from `catalog::dependents_of_view`, the sibling of the table drop's
+`dependent_views`: the inliner leaves a view's *name* behind as a `SubqueryAlias` and its base
+tables at the leaves, so a reader of `orders` and a reader of the view over `orders` are told
+apart by which half of `PlanDeps` the name is in — exactly the split the store keeps
+(`ViewInfo::deps` vs `view_deps`), which is what makes the typed drop's report and the catalog
+pane's warning the same fact.
+
+Profiles are cancelled by `Engine::settle_effect` off the returned effect rather than inside the
+arm, for the reason `TableRemoved` gives: the statement runs in a task that cannot reach the
+lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Engine::create_view` /
+`drop_view`, which never produce an effect.
+
+Replay needs no code of its own: a typed view is a `ViewDef`, and `register_pass`'s fixed-point
+rounds order a chain from cold exactly as they do a saved one.
+
+### 6.4 Not yet implemented
+
+`COPY`, `SET`, `RESET`, `PREPARE`,
 `DEALLOCATE`, `CREATE FUNCTION`, `DROP FUNCTION` and `CREATE EXTERNAL TABLE` all classify
 `Intercept` — the editor draws no squiggle — and answer at Run with `ddl::execute`'s stub refusal:
 "*KIND* is not implemented yet". `EXECUTE` classifies `Query` and fails in the read path (§1).
