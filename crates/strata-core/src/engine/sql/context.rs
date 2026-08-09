@@ -26,6 +26,10 @@ pub enum Clause {
     /// `DESCRIBE <relation>` — an inspection statement whose operand is a relation
     /// name, like a FROM target.
     Describe,
+    /// `EXECUTE <name>` / `DEALLOCATE <name>` — a session statement whose operand is a
+    /// **prepared statement** name (ED-08). One clause for both, because the operand is
+    /// the same set of names and nothing else can complete either.
+    Execute,
     Unknown,
 }
 
@@ -187,8 +191,23 @@ fn clause_of(word: &str) -> Clause {
         "LIMIT" => Clause::Limit,
         "OFFSET" => Clause::Offset,
         "DESCRIBE" => Clause::Describe,
+        "EXECUTE" | "DEALLOCATE" => Clause::Execute,
+        // `PREPARE` is deliberately absent: it also appears *inside* `DEALLOCATE PREPARE p`,
+        // where the nearest-clause scan would take it and lose the prepared-name offer.
         _ => Clause::Unknown,
     }
+}
+
+/// Whether `clause`'s keyword only governs when it **leads the statement**.
+///
+/// Every other entry in [`clause_of`] is a word that can only appear as a clause keyword, so the
+/// nearest-clause scan can take it wherever it sits. `EXECUTE` and `DEALLOCATE` are not: sqlparser
+/// classes every word in its dictionary as a `Keyword` — including the non-reserved ones that are
+/// perfectly legal column names — so a table with an `execute` column would otherwise have that
+/// column govern the rest of its SELECT list, and the offer there is *prepared statements only*,
+/// which is empty. A statement lead cannot be reached mid-list, so position is the whole test.
+fn leads_statement_only(clause: Clause) -> bool {
+    matches!(clause, Clause::Execute)
 }
 
 /// The uniform continuation test: the token just before the caret ends a complete
@@ -240,6 +259,20 @@ fn role_at(clause: Clause, prev: Option<&Tok>, prev2: Option<&Tok>) -> Role {
         Clause::Describe => {
             // `DESCRIBE |` expects the relation; after it, the statement is done.
             if prev.is_some_and(|t| t.kind == TokKind::Keyword && t.eq_ci("DESCRIBE")) {
+                Role::Operand
+            } else {
+                Role::Continuation
+            }
+        }
+        Clause::Execute => {
+            // `EXECUTE |` / `DEALLOCATE [PREPARE] |` expects the prepared name; after it, the
+            // rest is arguments. Postgres lets `DEALLOCATE` take an optional `PREPARE` (which
+            // sqlparser and DataFusion both ignore), so the name follows either word.
+            let named = prev.is_some_and(|t| {
+                t.kind == TokKind::Keyword
+                    && (t.eq_ci("EXECUTE") || t.eq_ci("DEALLOCATE") || t.eq_ci("PREPARE"))
+            });
+            if named {
                 Role::Operand
             } else {
                 Role::Continuation
@@ -463,11 +496,14 @@ fn governing_clause(
         if s < scope {
             scope = s;
         }
-        if s == scope
-            && branch[i].kind == TokKind::Keyword
-            && clause_of(&branch[i].text) != Clause::Unknown
-        {
-            return Some(i);
+        if s == scope && branch[i].kind == TokKind::Keyword {
+            let clause = clause_of(&branch[i].text);
+            // A statement-lead-only keyword governs from position 0 and nowhere else — see
+            // [`leads_statement_only`]. Skipped rather than returned, so the scan carries on to
+            // the real clause behind it (`SELECT execute, |` keeps `SELECT`).
+            if clause != Clause::Unknown && !(leads_statement_only(clause) && i != 0) {
+                return Some(i);
+            }
         }
     }
     None
@@ -484,12 +520,14 @@ fn clause_region(branch: &[Tok], branch_scopes: &[i32], gov: usize) -> Range<usi
             end = i;
             break;
         }
-        if branch_scopes[i] == scope
-            && t.kind == TokKind::Keyword
-            && clause_of(&t.text) != Clause::Unknown
-        {
-            end = i;
-            break;
+        if branch_scopes[i] == scope && t.kind == TokKind::Keyword {
+            // The same guard the governing scan uses, and it is total here: this region starts at
+            // `gov + 1`, so a statement lead can never legitimately appear inside one.
+            let clause = clause_of(&t.text);
+            if clause != Clause::Unknown && !leads_statement_only(clause) {
+                end = i;
+                break;
+            }
         }
     }
     gov + 1..end

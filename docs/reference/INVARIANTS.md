@@ -835,6 +835,61 @@ Things that must not regress. Each was fought for once already.
   whole namespace, which is what lets the key reach the planner without a format refusing it.
   Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.4,
   [EXPORT_OPTIONS.md](../EXPORT_OPTIONS.md).
+- **A typed `SET` is a session overlay in front of Settings, and the overlay wins for its keys
+  until `RESET` or restart.** Neither statement runs natively, and the two reasons are opposite
+  halves of one rule — Settings stays the durable config authority. Native `SET` applies
+  `datafusion.runtime.*` **live**, rebuilding the `RuntimeEnv` under the session, which is exactly
+  the discipline `restart_owed` exists to hold; native `RESET` restores **DataFusion's** default
+  rather than the value Settings names, so a user who set `batch_size` in Settings, typed `SET`,
+  then typed `RESET` would land on 8192 with their own setting silently gone. So `ddl::session`
+  applies a `SET` through the same `ConfigOptions::set` call `Engine::set_config` makes — one
+  funnel, so the two ways an option moves cannot land differently — records it in `SessionScope`'s
+  overlay, and a `RESET` drops the entry and re-applies `config::effective` over the engine's own
+  overrides (DataFusion's `reset` only for a hand-typed key the catalogue names no default for).
+  Four key classes are **refused** rather than overlaid, each toward the surface that owns it and
+  on `RESET` as much as on `SET`: `is_owned_key`, `datafusion.runtime.*` (a restart), and the two
+  the app reads from the **Settings store** rather than from the session —
+  `datafusion.format.*` (`config::is_display_key` — the grid formatter and the chart read's cache
+  identity) and `config::DIALECT_KEY` (the language service carries the dialect on its own
+  `Catalog` snapshot, built from Settings, while the validator and the planner read it live, so a
+  session value leaves completion lexing the buffer by rules the planner has stopped using —
+  WJ-04, and silent: nothing fails, the two layers just disagree). Those last two are one rule
+  with two surfaces, which is why each gets its own sentence and not its own mechanism. The
+  overlay is **engine-wide**, because every tab and every agent read plans against the one
+  `SessionState`, and the precedence rule lives in the one place the two writers meet:
+  `set_config` skips a key the overlay holds, recording the new baseline for the eventual `RESET`
+  to land on rather than overwriting what the user just typed. `restart_owed` is untouched — a
+  runtime key can never enter the overlay. The statement is **planned**, never read off the AST,
+  because the planner is what refuses scope modifiers and `HIVEVAR`, folds `SET TIMEZONE` onto
+  `datafusion.execution.time_zone`, lower-cases the key and renders the value.
+  **And writing the option is only half of applying it.** `NowFunc` captures
+  `execution.time_zone` when it is *registered* and bakes it into the literal its `simplify`
+  returns (the `to_timestamp` family too), so every writer also calls
+  `engine::refresh_config_dependent_udfs` — which is what DataFusion's own `set_variable` /
+  `reset_variable` do after the same `options.set`, and what `SessionStateBuilder` does at
+  construction, which is why a launch override always worked and a live change silently did not.
+  Skipped, a `SET` reports success, moves `SHOW`, and leaves `now()` in the zone the engine was
+  built with until a restart. The Settings Apply had the same gap and is fixed with the typed
+  statements, because "the two ways an option moves cannot land differently" is worth nothing if
+  both land wrong.
+  Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.5.
+- **`PREPARE` runs natively because DataFusion owns the plan; the fence and the mirror are ours,
+  and the fence can be nowhere else.** `SQLOptions::verify_plan` descends into a `Prepare` node's
+  input but an `Execute` node has **no inputs**, so a DML/DDL body refused at `PREPARE` or it is
+  never refused at all: the router answers off the parsed statement
+  (`Blocked::PrepareNonQuery`) and the dispatch verifies the plan under `dml=false, ddl=false,
+  statements=true`. Storing it is `execute_logical_plan`'s own arm, so the optimizer pass, the
+  arity check and the duplicate-name error stay DataFusion's — which is why the mirror is written
+  **after** the dispatch and never before it, and why `DEALLOCATE`'s "does not exist" is
+  DataFusion's too. The mirror exists at all only because `SessionState::prepared_plans` is
+  `pub(crate)` — there is no public enumeration — and completion has to offer the names; it holds
+  types, rendered through `short_type` at the boundary so the language service never depends on
+  DataFusion's, exactly as `FunctionSym` does not. Both statements carry
+  `StoreEffect::PreparedChanged`: nothing persists, and it is still an effect for the reason
+  `FunctionsChanged` is one — `EXECUTE p` resolves now and did not a moment ago, so the catalog
+  epoch has to move with it. **A restart clears all of it by construction**, not by a teardown
+  step: the remount builds a new `Engine`, whose `SessionScope` is a fresh `Default`.
+  Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.5.
 - **A re-scan means "list the sources again", so this engine runs no list-files cache.** DataFusion
   54 turns one on by default — 1 MiB, **infinite TTL** — and with it every re-listing answers with
   the file set from last time: the catalog's ↻, the Configure window's re-inference and
@@ -1113,7 +1168,8 @@ Things that must not regress. Each was fought for once already.
   `visit_relations` (`CREATE VIEW`'s name, `DROP`'s name list) are named explicitly rather than
   assumed.
   Every interception is a **second gesture into a funnel that already exists**, never a second
-  implementation: typed view DDL onto the body ⌘S runs (`ddl::views::create`, ED-06), typed
+  implementation: typed view DDL onto the body ⌘S runs (`ddl::views::create`, ED-06), a `SET` onto
+  the `ConfigOptions::set` call `Engine::set_config` makes (ED-08), typed
   `CREATE EXTERNAL TABLE` onto Table Config's own def-first registration.
   (ED-01 landed classification, ED-02 the dispatch below; each `StmtKind`'s implementation is its
   own ED task, and until one lands its statement classifies, draws no squiggle, and fails at Run
@@ -1127,8 +1183,15 @@ Things that must not regress. Each was fought for once already.
   showed, and returned *before* anything reaches `ctx.sql`, because DataFusion executes DDL
   eagerly inside it. **One statement per Run**, refused here with a policy sentence rather than
   left to DataFusion complaining about its own parser. The `SQLOptions` triple in
-  `query::materialize` stays all-false and is now defense in depth behind the classification, not
-  the gate: it can refuse a class of plan, never name the surface that owns the capability.
+  `query::materialize` is now defense in depth behind the classification, not the gate: it can
+  refuse a class of plan, never name the surface that owns the capability. It stays all-false for
+  every read but one — `EXECUTE`, whose plan *is* a `LogicalPlan::Statement` — and that widening is
+  a **`ReadPolicy` on the dispatch** (`sql::read_policy`, beside `classify`), never a mode the read
+  path offers: it is sound only because `PREPARE` verified the prepared plan under the read triple
+  and `verify_plan` cannot see through an `Execute` node (it has no inputs) to do it again. So
+  `Engine::query` stays the read-only entry every other caller keeps and the widened body is
+  private — one body either way, because a second copy of the snapshot lifecycle is what the whole
+  discipline exists to avoid.
   Because only the query arm spools, "DDL does not retire snapshots" is true **by construction** —
   an intercepted statement rides `Engine::bookkeep`, the in-flight bracket `explain` shares
   (supersede, abort handle, `DispatchGuard`, settle by `dispatch` and never by `tag`), which

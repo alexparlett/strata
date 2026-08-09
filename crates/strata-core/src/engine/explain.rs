@@ -20,6 +20,12 @@ use crate::engine::plan::{
 /// logical and physical trees into `PlanNode`s, reading each node's name,
 /// one-line detail, and metrics directly from the DataFusion types.
 pub async fn run_explain(ctx: &SessionContext, sql: &str) -> Result<QueryPlan, String> {
+    // All-false, and deliberately **not** widened for `EXECUTE` the way the read path is (ED-08).
+    // Widening only moves where this fails: the walk below unwraps to the explained plan and asks
+    // for a *physical* one, and a `Statement(Execute)` has none — the bound plan exists only inside
+    // DataFusion's `execute_prepared`. So an `EXPLAIN EXECUTE p` gets DataFusion's own refusal
+    // either way, and the Run path (which returns DataFusion's textual explain rows rather than
+    // walking a plan tree) is the one that can serve it. Spec §6.5.
     let opts = SQLOptions::new()
         .with_allow_dml(false)
         .with_allow_ddl(false)

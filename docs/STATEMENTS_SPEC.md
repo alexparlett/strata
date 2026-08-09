@@ -5,8 +5,8 @@ parsed statement, whether Run executes a query, performs the statement as an eng
 refuses it with the same words the squiggle showed. The agent surface asks the same classifier and
 stays read-only. This file documents that surface as built — the router, the dispatch, the
 provider layer, and the statement family implemented so far (internal tables, the two writes over
-them, typed view DDL, and typed `COPY`). The remaining statement lift (session statements,
-functions, typed `CREATE EXTERNAL TABLE`) is tracked in
+them, typed view DDL, typed `COPY`, and the session statements). The remaining statement lift
+(functions, typed `CREATE EXTERNAL TABLE`) is tracked in
 `.claude/tasks/workstream-editor-statements/`.
 
 ```mermaid
@@ -31,9 +31,10 @@ verdict (§2).
 
 **What classifies `Query`** — the snapshot pipeline, unchanged: `SELECT`, `EXPLAIN` /
 `EXPLAIN ANALYZE`, `DESCRIBE`, and every `SHOW` form (`TABLES`, `COLUMNS`, `FUNCTIONS`,
-`VARIABLES`, `DATABASES`, `SCHEMAS`). `EXECUTE` also classifies `Query` — it returns rows — but
-cannot run yet: the read path pins `with_allow_statements(false)`, so it fails with DataFusion's
-wording until the session-statements task lifts it per-dispatch.
+`VARIABLES`, `DATABASES`, `SCHEMAS`), and `EXECUTE` of a prepared query. `EXECUTE` is the one
+query form whose plan is a `LogicalPlan::Statement`, which the read path's all-false `SQLOptions`
+triple refuses — so the router answers a second thing about it, `sql::read_policy`, and the
+widening rides that **dispatch** rather than the path (§6.5).
 
 Everything else is either **intercepted** (an engine-method implementation whose outcome the store
 folds — §6) or **refused** (the short list in §4).
@@ -42,9 +43,10 @@ folds — §6) or **refused** (the short list in §4).
 
 `Engine::run` (`engine/mod.rs`) routes; nothing else does:
 
-- **`Query`** delegates to `query()` **byte-for-byte** — same supersede, same retire-on-dispatch,
-  same pins. It is the only arm that touches the snapshot lifecycle, which is what keeps "DDL does
-  not retire snapshots" true by construction rather than by care.
+- **`Query`** delegates to `query()`'s body **byte-for-byte** — same supersede, same
+  retire-on-dispatch, same pins — carrying only the `ReadPolicy` the router answered (§1). It is
+  the only arm that touches the snapshot lifecycle, which is what keeps "DDL does not retire
+  snapshots" true by construction rather than by care.
 - **`Intercept(kind)`** goes to `engine/ddl/`'s `execute`, bracketed by `Engine::bookkeep` — the
   same in-flight lifecycle `explain` uses — so `cancel`, `is_running` and the close-while-running
   confirm see an intercepted statement like any other work. A CTAS is a full scan; a window
@@ -72,8 +74,11 @@ pub struct StatementReport {
 
 `StoreEffect` (`engine/ddl/mod.rs`) is the catalog mutation the statement leaves behind:
 `TableUpserted { def, meta }`, `TableRemoved { name, dependents }`, `ViewUpserted`, `ViewRemoved`,
-`RescanTable`, `FunctionsChanged`. An effect carries the def *and* what registration learned, so
-the sidebar row lands `Reg::Ready` directly.
+`RescanTable`, `FunctionsChanged`, `PreparedChanged`. An effect carries the def *and* what
+registration learned, so the sidebar row lands `Reg::Ready` directly. The last two persist nothing
+— functions and prepared statements are session-scoped (§8) — and are still effects for the reason
+an effect exists: a name that did not resolve a moment ago now does, so the catalog epoch has to
+move with it.
 
 **The settle** (`apps/project/state/statement.rs`) is one fold for every effect, driven from the
 tab's request keeper so a statement run in a background tab still lands: store upsert on the
@@ -161,6 +166,12 @@ older build.
 | A `__snap_` name in an intercepted statement | "Names starting with '__snap_' are reserved for query results" |
 | A multi-statement buffer | "Run executes one statement at a time" |
 | An empty buffer | "Nothing to run" |
+
+**The dispatch-time refusals are deliberately not in that table**, because they draw no squiggle:
+they need context the parsed statement does not carry, so the editor cannot know them while the
+user is typing and the refusal arrives at Run. They share the `Blocked` vocabulary and nothing
+else. Today they are an `INSERT`'s target origin and write op (§6.2, `Blocked::InsertExternal` /
+`InsertOverwrite`) and a `SET` / `RESET` key's class (§6.5, four of them).
 
 Known wording drift: the `Unsupported` message still says "Only SELECT, EXPLAIN, SHOW and DESCRIBE
 can run here", which is stale now that `CREATE TABLE` / CTAS run. The older `Blocked` variants
@@ -410,22 +421,104 @@ the editor path simply no longer reaches them.
 One thing moved on the window's side with this: `keep_partition_by_columns` is now stated in the
 `COPY`'s own `OPTIONS` rather than by a session `SET`. DataFusion's physical planner reads that key
 out of the statement's options and only falls back to the session config when it is absent, and the
-`SET` was never restored — invisible for as long as nothing could read it back, and the moment
-`SET` and `SHOW` become statements a user can type (§6.5) one partitioned export would be deciding
+`SET` was never restored — invisible for as long as nothing could read it back, and now that `SET`
+and `SHOW` are statements a user can type (§6.5) one partitioned export would otherwise be deciding
 the answer for every later one, window or typed. It keeps its `execution.` namespace because
 `TableOptions::set` skips that namespace entirely, which is what lets the key reach the planner
 without a format refusing it as unknown.
 
-### 6.5 Not yet implemented
+### 6.5 Session statements — `SET` / `RESET` and `PREPARE` / `EXECUTE` / `DEALLOCATE`
 
-`SET`, `RESET`, `PREPARE`,
-`DEALLOCATE`, `CREATE FUNCTION`, `DROP FUNCTION` and `CREATE EXTERNAL TABLE` all classify
-`Intercept` — the editor draws no squiggle — and answer at Run with `ddl::execute`'s stub refusal:
-"*KIND* is not implemented yet". `EXECUTE` classifies `Query` and fails in the read path (§1).
-Each kind's implementation, and the design it follows, lives in its task file under
-`.claude/tasks/workstream-editor-statements/`; the dispatch's `match` is exhaustive on `StmtKind`
-with no wildcard, so a kind the router learns to intercept is a compile error until an arm owns
-it.
+`engine/ddl/session.rs`. Everything here dies with the engine, and every report says so, because
+the report is the one place the user learns a statement's scope (§8).
+
+**`SET` and `RESET` never run natively**, and the two reasons are opposite halves of one rule —
+Settings stays the durable config authority. Native `SET` applies `datafusion.runtime.*` *live*,
+rebuilding the `RuntimeEnv` under the session, which is exactly the discipline `restart_owed`
+exists to hold; native `RESET` puts a key back to **DataFusion's** default rather than the value
+Settings names, so a user who set `batch_size` in Settings, typed `SET`, then typed `RESET` would
+land on 8192 with their own setting silently gone.
+
+So a `SET` is applied through the same `ConfigOptions::set` call `Engine::set_config` uses and
+recorded in a **session overlay** (`SessionScope`); a `RESET` drops the overlay entry and
+re-applies the Settings baseline (`config::effective` — the override when the user named one, else
+the `ENGINE_KEYS` default), falling back to DataFusion's own `reset` for a hand-typed key the
+catalogue names no default for. The statement is **planned**, not read off the AST: the planner is
+what refuses scope modifiers and `HIVEVAR`, folds `SET TIMEZONE` onto
+`datafusion.execution.time_zone`, lower-cases the key and renders the value.
+
+**Writing the option is only half of applying it**, and the other half is silent if you skip it.
+`NowFunc` captures `execution.time_zone` when it is *registered* and bakes it into the literal its
+`simplify` returns; the `to_timestamp` family does the same. So every path that moves an option
+also calls `engine::refresh_config_dependent_udfs` — DataFusion's own `set_variable` and
+`reset_variable` do exactly this after the same `options.set`, and the `SessionStateBuilder` does
+it at construction, which is why a launch override always worked. Without it a `SET` reports
+success, moves `SHOW`, and leaves `now()` answering in the zone the engine was *built* with until a
+restart. Both typed statements and the Settings Apply share the one call.
+
+The overlay is **engine-wide** — every tab and every agent read plans against the one
+`SessionState` — and it **wins for its keys until `RESET` or restart**: a Settings Apply over an
+overlaid key records the new baseline and leaves the live value alone (`Engine::set_config` skips
+it), which makes "the last thing you typed is what is in force" true without a precedence table. A
+restart drops the overlay silently, which is the same sentence read the other way round.
+`restart_owed` is unchanged, because a runtime key can never enter the overlay:
+
+| Key class | Answer | Why |
+|---|---|---|
+| `is_owned_key` | "This option is managed by Strata and cannot be set" | Strata names its own catalog, schema and `collect_spans` |
+| `datafusion.runtime.*` | "Engine runtime options require a restart. Set them in Settings" | they configure the `RuntimeEnv`, fixed at engine start |
+| `datafusion.format.*` | "Display options are set in Settings" | the grid formatter and the chart read's cache identity both come from the Settings store, so a session value would split-brain them |
+| `datafusion.sql_parser.dialect` | "The SQL dialect is set in Settings" | the same rule, one surface over: completion carries the dialect on its own `Catalog` snapshot, built from Settings, while the validator and the planner read it live — so a session value leaves the editor lexing the buffer by rules the planner has stopped using (WJ-04) |
+
+The last two are **one rule with two surfaces**: a key some part of the app reads from the Settings
+store rather than from the session cannot have a session value, or the two answer differently about
+the same buffer. All four refuse `RESET` as well as `SET`: a native `RESET` of a runtime key
+rebuilds the `RuntimeEnv` exactly as a native `SET` does, and a key Strata owns is not the user's
+to put back either.
+
+**`PREPARE` and `DEALLOCATE` do run natively** — DataFusion owns the prepared plan, and `EXECUTE`
+then rides the ordinary snapshot pipeline (pages, sorts, exports, the lot). What is Strata's is the
+fence and the mirror:
+
+- **The fence is `PREPARE`'s, and it can be nowhere else.** `SQLOptions::verify_plan` descends into
+  a `Prepare` node's input but an `Execute` node has no inputs, so a DML/DDL body has to be refused
+  at `PREPARE` or it never is. The router refuses a non-query body off the parsed statement
+  (`Blocked::PrepareNonQuery`, "PREPARE supports queries only"); the dispatch verifies the *plan*
+  under `dml=false, ddl=false, statements=true`, the same defense-in-depth the `INSERT` and `COPY`
+  arms keep. Storing the plan is `execute_logical_plan`'s own arm, so the optimizer pass, the arity
+  check against declared types and the duplicate-name error are all DataFusion's.
+- **The mirror exists because `SessionState::prepared_plans` is `pub(crate)`** — DataFusion has no
+  public enumeration — and completion has to offer the names. It is written *after* the dispatch, so
+  a duplicate name keeps DataFusion's error and the mirror cannot claim a plan the session does not
+  hold; `DEALLOCATE` removes from it the same way, and its "Prepared statement 'p' does not exist"
+  is DataFusion's too.
+
+`EXECUTE`'s widening is `sql::read_policy` (§1) — a `ReadPolicy` carried on the dispatch, never a
+mode the read path offers: `Engine::query` stays the read-only entry, and the widened body is
+private. It unwraps `EXPLAIN`, because `verify_plan` visits the whole tree and would otherwise
+refuse `Explain { Statement(Execute) }` at its child, so a typed `EXPLAIN EXECUTE p` runs and comes
+back as DataFusion's own textual explain rows.
+
+**The Explain *gesture* cannot serve that form, and is left refusing it.** It unwraps to the
+explained plan and asks for a **physical** one, and a `Statement(Execute)` has none — the bound
+plan exists only inside DataFusion's `execute_prepared`. Widening `run_explain`'s options would
+move the failure one step rather than remove it, so the widening is not there and `engine::explain`
+says why where it keeps its own all-false triple.
+
+Completion offers prepared names at an `EXECUTE` / `DEALLOCATE` operand (`Clause::Execute`) and
+nowhere else — and only where that word **leads the statement**, because sqlparser classes every
+word in its dictionary as a keyword, so a table with an `execute` column would otherwise have that
+column govern the rest of its SELECT list and empty the offer there
+(`context::leads_statement_only`). The rest of the session statements' completion is ED-11.
+
+### 6.6 Not yet implemented
+
+`CREATE FUNCTION`, `DROP FUNCTION` and `CREATE EXTERNAL TABLE` classify `Intercept` — the editor
+draws no squiggle — and answer at Run with `ddl::execute`'s stub refusal: "*KIND* is not
+implemented yet". Each kind's implementation, and the design it follows, lives in its task file
+under `.claude/tasks/workstream-editor-statements/`; the dispatch's `match` is exhaustive on
+`StmtKind` with no wildcard, so a kind the router learns to intercept is a compile error until an
+arm owns it.
 
 ## 7. A statement, end to end
 
@@ -452,8 +545,12 @@ same files. The headless host replays identically.
 | Internal table def | `project.json` + store row | yes | yes (shareable) |
 | Views (either gesture) | `project.json` + store row | yes | yes |
 | Snapshots | temp dir, retire-on-dispatch | no (by design) | no |
+| The `SET` overlay | `SessionScope`, engine-wide | no (by design) | no |
+| Prepared statements | DataFusion's `prepared_plans` + the `SessionScope` mirror | no (by design) | no |
 
 Session-scoped outcomes — the SET overlay, prepared statements, created functions — die with the
 engine when their statements land, and the `StatementReport` contract already encodes it: a
 session-scoped outcome's message says "for this session", because the report is the one place the
-user learns the scope.
+user learns the scope. It is true **by construction** rather than by a teardown step: a restart is
+a new `Engine`, whose `SessionScope` is a fresh `Default` and whose `SessionContext` holds no
+prepared plans. Nothing has to remember to clear anything.

@@ -39,6 +39,7 @@ fn catalog() -> Catalog {
             aggregate: vec!["sum".into(), "count".into()],
             window: vec!["row_number".into()],
         },
+        Vec::new(),
         "generic".into(),
     )
 }
@@ -281,6 +282,36 @@ fn describe_offers_relations() {
     assert!(at("DESCRIBE events |").is_empty());
 }
 
+/// **A statement lead only governs when it leads the statement.** sqlparser classes every word in
+/// its dictionary as a `Keyword`, `execute` and `deallocate` included, so without the
+/// position guard a table with an `execute` column would have that column govern the rest of its
+/// SELECT list — where the offer is prepared statements only, i.e. empty. The user's column names
+/// are not ours to reserve.
+#[test]
+fn a_column_named_execute_does_not_govern_its_clause() {
+    fn col(name: &str) -> ColumnInfo {
+        column_info(&Field::new(name, DataType::Utf8, true))
+    }
+    let cols = [col("execute"), col("deallocate"), col("amount")];
+    let cat = Catalog::build(
+        [("jobs", &cols[..])],
+        [],
+        FunctionCatalog::default(),
+        Vec::new(),
+        "generic".into(),
+    );
+    for sql in ["SELECT execute, ", "SELECT deallocate, "] {
+        let items = complete(&format!("{sql} FROM jobs"), sql.len(), &cat, false);
+        assert!(
+            items.iter().any(|c| c.label == "amount"),
+            "{sql}| lost its columns: {:?}",
+            items.iter().map(|c| c.label.as_str()).collect::<Vec<_>>()
+        );
+    }
+    // …and the statement lead still governs from position 0, where it is one.
+    assert!(complete("EXECUTE ", 8, &cat, false).is_empty());
+}
+
 #[test]
 fn select_before_from_falls_back_to_all_columns() {
     let items = at("SELECT na|");
@@ -466,6 +497,7 @@ fn weird_identifiers_insert_quoted() {
         [("t", &cols[..])],
         [],
         FunctionCatalog::default(),
+        Vec::new(),
         "generic".into(),
     );
     let items = complete("SELECT  FROM t", 7, &cat, false);
@@ -618,6 +650,7 @@ fn grammar_vocabulary_columns_insert_quoted() {
         [("t", &cols[..])],
         [],
         FunctionCatalog::default(),
+        Vec::new(),
         "generic".into(),
     );
     let items = complete("SELECT  FROM t", 7, &cat, false);

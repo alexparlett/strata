@@ -117,6 +117,27 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   `ReservedName`; the effect is `None`; `Blocked::CopyTo` stays as the agent path's refusal. And
   `keep_partition_by_columns` is stated in the statement's own `OPTIONS`, never as a session `SET`
   nothing restores.
+- **A typed `SET` is a session overlay in front of Settings, and the overlay wins for its keys
+  until `RESET` or restart.** Neither runs natively: native `SET` applies `runtime.*` live
+  (bypassing `restart_owed`) and native `RESET` restores *DataFusion's* default, not the Settings
+  one. `ddl::session` applies through `set_config`'s own `ConfigOptions::set` and records in
+  `SessionScope`; a `RESET` drops the entry and re-applies `config::effective`. Owned,
+  `runtime.*`, `format.*` and the parser **dialect** refuse toward Settings — on `RESET` as much
+  as on `SET`; the last two are one rule (a key the app reads from the Settings store cannot have
+  a session value, or two layers answer differently about one buffer). The
+  overlay is engine-wide, and `set_config` skips a key it holds, so a Settings Apply records the
+  baseline the eventual `RESET` lands on rather than overwriting what the user typed.
+  `restart_owed` unchanged. And **writing an option is only half of applying it** — every writer
+  also calls `refresh_config_dependent_udfs`, or `SET …time_zone` moves `SHOW` and leaves `now()`
+  in the build-time zone.
+- **`PREPARE` runs natively because DataFusion owns the plan; the fence and the mirror are ours,
+  and the fence can be nowhere else.** `verify_plan` descends into a `Prepare`'s input and an
+  `Execute` has none, so a DML/DDL body is refused at `PREPARE` or never. The mirror exists only
+  because `prepared_plans` is `pub(crate)`, and it is written **after** the dispatch so a duplicate
+  name keeps DataFusion's error. `EXECUTE`'s widening is a `ReadPolicy` on the dispatch
+  (`sql::read_policy`), never a mode `Engine::query` offers. Both carry
+  `StoreEffect::PreparedChanged` — nothing persists, but a name resolves now that did not. A
+  restart clears the lot by construction: a new `Engine` is a fresh `SessionScope`.
 - **An append re-reads the table's facts; it does not re-register it, and it leaves the views
   alone.** Re-registering replaces the provider, and *that* is what strands the `Arc` a view
   captured — which is why a table Refresh re-creates them. An `INSERT` cannot change the shape a

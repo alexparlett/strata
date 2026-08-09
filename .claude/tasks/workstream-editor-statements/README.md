@@ -3,8 +3,8 @@
 Lifting the managed-DDL policy into a **full-statement editor**: internal tables persisted under
 `.strata/tables/` (`CREATE TABLE` / CTAS, `INSERT`, `DROP TABLE`), typed `CREATE`/`DROP VIEW`,
 editor `COPY … TO`, typed `CREATE EXTERNAL TABLE`, session statements (`SET`/`RESET`,
-`PREPARE`/`EXECUTE`/`DEALLOCATE`) and
-`CREATE FUNCTION` — while the agent surface stays read-only and every settled funnel (the catalog
+`PREPARE`/`EXECUTE`/`DEALLOCATE`), `CREATE FUNCTION`, and finally the completion offer that catches
+up with all of them — while the agent surface stays read-only and every settled funnel (the catalog
 store, the persist path, the epoch discipline, the snapshot lifecycle) stays exactly where it is.
 
 **Docs: `docs/STATEMENTS_SPEC.md`** — the statement surface **as built** (router, dispatch,
@@ -33,9 +33,10 @@ already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Re
 | 05 | INSERT (native, target-gated) + DROP TABLE (both origins) | ✅ | — | 04 |
 | 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ✅ | — | 02 |
 | 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ✅ | — | 02 |
-| 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ⬜ | — | 02 |
+| 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ✅ | — | 02 |
 | 09 | `StrataFunctionFactory` + swappable function catalog | ⬜ | — | 02 |
 | 10 | Typed CREATE EXTERNAL TABLE onto the Table Config funnel | ⬜ | — | 02 |
+| 11 | Completion for the statements the editor now runs | ⬜ | — | 08 (ideally 09, 10) |
 
 ## Why the order
 
@@ -47,7 +48,9 @@ should land before or with 04, so `SHOW TABLES` works — and hides snapshots �
 first internal table exists. 04 → 05 is the only hard chain: INSERT and DROP gate on the
 internal-name set and the data-dir layout 04 establishes. 07/08/09/10 are parallel after 02 —
 each is one `StmtKind` arm plus its engine method(s); 10 maps the parsed statement onto a def and
-reuses the registration funnel outright, so it is the smallest of the arms.
+reuses the registration funnel outright, so it is the smallest of the arms. **11 is last on
+purpose**: completion's lead table and its "offer only what Run accepts" agreement are one table
+each, and editing them once per statement is how the offer and the router would drift apart.
 
 ## The catalog pane is part of 04 and 05, not a later polish pass
 
@@ -95,10 +98,12 @@ code's own module docs (`engine/ddl/tables.rs`, `engine/ddl/views.rs`, `engine/d
 
 | Fact | Evidence | Task |
 |---|---|---|
-| PREPARE/EXECUTE/DEALLOCATE supported; plans stored in `SessionState.prepared_plans` (**`pub(crate)`** — no public enumeration); EXECUTE returns the bound plan as a plain DataFrame | `context/mod.rs:733-772`, `:1534-1587`; `session_state.rs:208`, `:984-1013` | ED-08 |
-| `SQLOptions::verify_plan` rejects `Ddl` / `Dml`+`Copy` / `Statement` per flag, visiting subqueries — and **cannot see through EXECUTE**, so DML must be fenced at PREPARE | `context/mod.rs:2305-2339` | ED-08 |
-| Native SET applies `datafusion.runtime.*` live (rebuilds the RuntimeEnv); native RESET restores **DataFusion's** default, not the Settings baseline — both are why SET/RESET never run natively | `context/mod.rs:1115-1219` | ED-08 |
 | CREATE FUNCTION requires a `FunctionFactory` (`with_function_factory`); the body arrives as a parsed `Expr`; DROP FUNCTION deregisters across all registries with no factory needed | `context/mod.rs:2204-2227`, `:474-481`, `:1481-1486` | ED-09 |
+
+ED-08's three facts (the `pub(crate)` prepared-plan store, `verify_plan` not seeing through
+`EXECUTE`, and what native SET/RESET do to the runtime and the baseline) are now restated in
+`engine/ddl/session.rs`'s own module doc and in `docs/STATEMENTS_SPEC.md` §6.5, like every other
+landed task's.
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.

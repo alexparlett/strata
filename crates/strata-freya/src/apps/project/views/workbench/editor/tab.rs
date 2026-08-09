@@ -1,6 +1,6 @@
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::RunId;
-use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{use_catalog, Chan, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::workbench::editor::toolbar::EditorToolbar;
 use crate::components::divider::Divider;
 use crate::keymap::{chord_from_event, edit_bindings};
@@ -114,10 +114,16 @@ impl Component for EditorTab {
         // resolves the name the way the planner does, so the two land on the same dialect
         // even when the value is one `ConfigOptions` refuses.
         let project = use_radio_station::<ProjectState, ProjChan>();
+        // The catalog **epoch**, read so the snapshot is rebuilt by a mutation that moves no store
+        // row: a `PREPARE` or a `DEALLOCATE` (ED-08) leaves nothing in `ProjectState` and every
+        // other catalog mutation bumps this too, so subscribing here costs no extra rebuild and
+        // makes "what the engine resolves against moved" one signal rather than two.
+        let epoch = use_catalog();
         let mut catalog = use_state(sql::Catalog::default);
         {
             use_side_effect(move || {
                 let p = project.read();
+                let _ = epoch.read();
                 let dialect =
                     effective(&settings.read().settings.engine, DIALECT_KEY).unwrap_or_default();
                 *catalog.write() = sql::Catalog::build(
@@ -134,6 +140,7 @@ impl Component for EditorTab {
                         )
                     }),
                     engine.functions().clone(),
+                    engine.prepared(),
                     dialect,
                 );
             });

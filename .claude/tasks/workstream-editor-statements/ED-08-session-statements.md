@@ -1,6 +1,47 @@
 # ED-08 · Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-02
+**Workstream:** Editor statements · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** ED-02
+
+## As built
+
+`engine/ddl/session.rs`, documented in `docs/STATEMENTS_SPEC.md` §6.5 and pinned by
+`AGENTS.md` §2 / `docs/reference/INVARIANTS.md`. Three corrections to the plan below, all settled
+while building:
+
+- **`Blocked::SetRuntime` is reworded, not interpolated.** The draft's message named the key
+  (`"'datafusion.runtime.memory_limit' requires a restart…"`), which `Blocked::editor_message`
+  cannot do — it takes no argument, and the rule is that a refusal's wording has one home. The
+  variant now reads "Engine runtime options require a restart. Set them in Settings", which carries
+  the same information without a second place to spell it.
+- **`PREPARE`/`DEALLOCATE` carry `StoreEffect::PreparedChanged`, not `None`.** Nothing persists,
+  but `EXECUTE p` resolves now and did not a moment ago — the exact argument `FunctionsChanged`
+  already makes — so the catalog epoch has to move, or the language-service snapshot and every
+  tab's diagnostics keep an answer the engine has stopped giving. The editor tab's completion
+  catalog now reads that epoch, which is also what rebuilds it.
+- **There is a fourth refused key class: `datafusion.sql_parser.dialect`
+  (`Blocked::SetDialect`).** Found in review. The draft's three classes missed it, and the miss
+  was silent rather than loud: the language service carries the dialect on its own `Catalog`
+  snapshot, built from the **Settings** store, while the validator and the planner read it
+  **live** — so `SET datafusion.sql_parser.dialect = 'mysql'` left completion lexing the buffer by
+  rules the planner had already stopped using, which is WJ-04 exactly, and nothing would have
+  reported it. It is the same rule as `format.*` one surface over, so it is stated as one rule
+  with two surfaces rather than as a second mechanism.
+- **Writing a `ConfigOptions` key is only half of applying it.** Found by adversarial review, and
+  it was a call made deliberately while building and made wrong: the plan said "the `set_config`
+  apply path's options-set call", so that is all this did — but DataFusion's own `set_variable`
+  makes the *same* call and then re-registers every UDF whose `with_updated_config` answers, and
+  `NowFunc` captures `execution.time_zone` at registration and bakes it into the literal its
+  `simplify` returns. So `SET datafusion.execution.time_zone` reported success, moved `SHOW`, and
+  left `now()` in the zone the engine was built with. `Engine::set_config` had the identical gap,
+  which is why the fix is a shared `refresh_config_dependent_udfs` called by all three writers
+  rather than a patch on the new arm: "the two ways an option moves cannot land differently" was
+  true and worth nothing, because both landed wrong.
+
+Completion offers prepared names at an `EXECUTE` / `DEALLOCATE` operand (`Clause::Execute`) and
+nowhere else. The rest of the session statements' completion — statement leads, `SET`/`RESET`
+config keys and their values — is **ED-11**, split out rather than folded in here: a dotted config
+key is one name the completion layer's `.`-rule reads as a qualified column, and fixing that is a
+change to the caret model, not a table entry.
 
 ## Goal
 

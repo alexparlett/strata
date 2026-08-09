@@ -18,16 +18,19 @@ from the write pass (`query::SnapshotStats`), not a footer. In Freya the handle 
 policy is one router in front of dispatch: `sql::validate::classify(stmt, Capability)` answers
 `Query` / `Intercept(StmtKind)` / `Refuse(Blocked)`. `Capability::Editor` runs queries and
 introspection and **intercepts** the rest — 14 recognised kinds, of which `CREATE TABLE` / CTAS,
-`INSERT`, `DROP TABLE`, `CREATE` / `DROP VIEW` and `COPY` are implemented today (each remaining
-kind's destination is an app funnel that already exists: `CREATE EXTERNAL TABLE` onto Table
-Config's registration path, and so on; until its ED task lands, an intercepted kind answers
+`INSERT`, `DROP TABLE`, `CREATE` / `DROP VIEW`, `COPY` and the session statements
+(`SET` / `RESET`, `PREPARE` / `DEALLOCATE`) are implemented today (each remaining kind's
+destination is an app funnel that already exists: `CREATE EXTERNAL TABLE` onto Table Config's
+registration path, and so on; until its ED task lands, an intercepted kind answers
 `ddl::execute`'s "not implemented yet"). The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
-`INSERT OVERWRITE`, `PREPARE` of a non-query, `DROP` of a non-table/view object, reserved
-`__snap_` names, multi-statement buffers, and unknown kinds.
+`INSERT OVERWRITE`, `PREPARE` of a non-query, `SET`/`RESET` of an owned, `runtime.*`, `format.*` or
+dialect key, `DROP` of a non-table/view object, reserved `__snap_` names, multi-statement buffers,
+and unknown kinds.
 `Capability::Agent` is read-only and refuses every non-query with its original wording.
-`Engine::run` is where that classification is *spent*: `Query` delegates to `query()`
+`Engine::run` is where that classification is *spent*: `Query` delegates to `query()`'s body
 byte-for-byte (the only arm that touches the snapshot lifecycle, so "DDL does not retire
-snapshots" holds by construction), `Intercept(kind)` goes to `engine/ddl/` under the same
+snapshots" holds by construction), carrying only the `ReadPolicy` `EXECUTE` needs;
+`Intercept(kind)` goes to `engine/ddl/` under the same
 in-flight bracket `explain` uses, and `Refuse` returns the editor's own message before anything
 can plan. A statement comes back as a `StatementReport` carrying a `StoreEffect` the app folds —
 never something to read back out of DataFusion. One statement per Run.

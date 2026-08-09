@@ -383,8 +383,9 @@ pub async fn run_and_snapshot(
     sql: &str,
     page_size: usize,
     fmt: &CellFormat,
+    policy: ReadPolicy,
 ) -> Result<(QueryOutput, RecordBatch, SnapshotStats), String> {
-    let result = materialize(ctx, engine_id, snapshot, sql, page_size, fmt).await;
+    let result = materialize(ctx, engine_id, snapshot, sql, page_size, fmt, policy).await;
     if result.is_err() {
         // The stream may have died mid-spool — drop the partial file (no table was
         // registered yet, so the id is simply never a readable snapshot).
@@ -460,6 +461,33 @@ fn json_unions_as_text(df: DataFrame) -> Result<DataFrame, String> {
     df.select(exprs).map_err(|e| e.to_string())
 }
 
+/// What a read is allowed to **plan** — the `SQLOptions` [`materialize`] puts in front of the
+/// statement it is about to spool.
+///
+/// The read path's triple is all-false and that is the default: it is defense in depth behind the
+/// router's classification (spec §4), so it may only ever narrow. The one widening is `EXECUTE`,
+/// whose plan *is* a `LogicalPlan::Statement` — and it is safe for exactly one reason, which is
+/// why it rides the dispatch rather than the path: `PREPARE` already verified the inner plan under
+/// the read triple, and `verify_plan` cannot see through an `Execute` node (it has no inputs) to
+/// do it again. A read that has not been through that fence never gets this.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReadPolicy {
+    /// Queries and introspection: DDL, DML and statements all refused.
+    #[default]
+    ReadOnly,
+    /// The above, plus `LogicalPlan::Statement` — `EXECUTE` of a prepared query (ED-08).
+    Statements,
+}
+
+impl ReadPolicy {
+    fn options(self) -> SQLOptions {
+        SQLOptions::new()
+            .with_allow_dml(false)
+            .with_allow_ddl(false)
+            .with_allow_statements(self == ReadPolicy::Statements)
+    }
+}
+
 async fn materialize(
     ctx: &SessionContext,
     engine_id: u64,
@@ -467,6 +495,7 @@ async fn materialize(
     sql: &str,
     page_size: usize,
     fmt: &CellFormat,
+    policy: ReadPolicy,
 ) -> Result<(QueryOutput, RecordBatch, SnapshotStats), String> {
     let start = Instant::now();
     let snap = snapshot_name(snapshot);
@@ -476,13 +505,8 @@ async fn materialize(
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let opts = SQLOptions::new()
-        .with_allow_dml(false)
-        .with_allow_ddl(false)
-        .with_allow_statements(false);
-
     let df = ctx
-        .sql_with_options(sql, opts)
+        .sql_with_options(sql, policy.options())
         .await
         .map_err(|e| e.to_string())?;
     let df = json_unions_as_text(df)?;
