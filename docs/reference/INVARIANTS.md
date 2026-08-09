@@ -187,6 +187,36 @@ Things that must not regress. Each was fought for once already.
     chart the first time it was written. A gap is not a small value; `total_cmp` and a stated place
     for the missing ones are what keep the withdrawn pipeline's `sort_by` panic from coming back.
 
+  And one **Copy Image** settled (Rz2/08):
+
+  - **A chart image is the chart, so the capture and the paint are one draw body.** Copy Image
+    renders the *same* `Frame` the visible canvas is painting — held as an `Rc` and handed to
+    both, so the toolbar item and the plot cannot describe different charts — through the same
+    `marks::draw`, which takes a canvas and a `FontCollection` rather than a `CanvasContext`
+    exactly so the offscreen path has nothing to reimplement. `draw` **returns** its hit regions
+    instead of writing them through a handle, so a capture cannot overwrite what the visible plot
+    last recorded for its pointer. And it needs no paint pass at all: the `FontCollection` is a
+    root context (`consume_root_context`, the same one `freya-code-editor` measures against), so
+    a press renders on its own rather than raising a flag the next paint has to notice. The
+    capture is a fixed 1600x900 at 2x — the pane's own size would copy whatever labels a narrow
+    drag had thinned away, and drawing the export's pixels as logical units would leave a 10pt
+    tick label lost in a chart at twice the size. The background is filled first (the live canvas
+    is transparent over the pane, which paints it), and the pixels are converted to
+    **unpremultiplied RGBA** on the way out, because `raster_n32_premul` is the platform's native
+    order (BGRA on Apple) and a raw read puts a blue-for-red chart on the pasteboard. Nothing is
+    written to disk: the clipboard grew image support in the fork rather than the app growing a
+    save-to-PNG stopgap. It grew it **inside the existing shape** — the platform integration still
+    provides a `Box<dyn ClipboardProvider>` into the root context and `Clipboard` still reads it
+    from there; what changed is that the trait is the fork's own and covers images as well as
+    text, and copypasta was **replaced** by arboard rather than run beside it, because text and
+    images are one clipboard and a second backend is a second claim on the same selection. The
+    Linux trade is stated where it lives (`ClipboardContext`): arboard reaches Wayland over
+    `wlr-data-control` / `ext-data-control` and otherwise falls back through XWayland, where
+    copypasta used the standard `wl_data_device`. No crate speaks that protocol *and* carries
+    images, and a second provider for text alone is the thing being avoided.
+    The item is **absent** over a notice rather than disabled, because there
+    is no chart to copy and a greyed control says there is one that is merely unavailable.
+
   And one the **guardrails** settled (Rz2/04):
 
   - **A refusal names its fix in prose, and V1 puts no control behind it.** The chart aggregates

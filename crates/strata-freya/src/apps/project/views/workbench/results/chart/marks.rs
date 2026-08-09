@@ -7,13 +7,15 @@
 //! *data* shape first and uses the mark only to choose between the readings of a table, so a
 //! frame whose mark and data have momentarily disagreed still paints something true.
 //!
-//! Coordinates are logical: `CanvasContext::size` is already divided by the scale factor and
-//! the canvas is pre-scaled, so a `12` here is 12 logical pixels on any display.
+//! Coordinates are logical: the canvas arrives pre-scaled and `size` is already divided by that
+//! scale, so a `12` here is 12 logical pixels on any display — and the same on the offscreen
+//! surface Copy Image renders into, which scales itself the same way.
 
 use std::f64::consts::{FRAC_PI_2, TAU};
 use std::mem::take;
 use std::ops::Range;
 
+use freya::engine::prelude::{Canvas, FontCollection};
 use freya::plot::plotters::chart::{ChartBuilder, ChartContext};
 use freya::plot::plotters::coord::cartesian::Cartesian2d;
 use freya::plot::plotters::coord::ranged1d::ValueFormatter;
@@ -25,13 +27,13 @@ use freya::plot::plotters::prelude::{
 };
 use freya::plot::PlotSkiaBackend;
 use freya::plot::PlotSkiaBackendError;
-use freya::prelude::{CanvasContext, Color};
+use freya::prelude::{Color, Size2D};
 use strata_model::{Axis, ChartBin, ChartData, ChartMark, ChartPoint, ChartSeries};
 
 use strata_core::util::clip;
 
 use super::axis::{nice_max, readout, ticks, Categories};
-use super::paint::{Dress, Frame, Hit, Hits};
+use super::paint::{Dress, Frame, Hit};
 
 /// Anything drawn by this module.
 type Plot = Result<(), DrawingAreaErrorKind<PlotSkiaBackendError>>;
@@ -72,18 +74,31 @@ const PIE_RADIUS: f64 = 0.34;
 /// clips one to a dozen characters.
 const AXIS_LABEL_CHARS: usize = 12;
 
-/// Paint `frame` onto `context`'s canvas, recording into `hits` where each mark landed.
-pub fn draw(context: &mut CanvasContext, frame: &Frame, hits: &Hits) {
+/// Paint `frame` onto `canvas` at `size` **logical** pixels, answering where each mark landed.
+///
+/// The one draw body, and the only one there may be: the live [`canvas`](freya::prelude::canvas)
+/// callback and the offscreen capture behind Copy Image ([`super::capture`]) both come through
+/// here, so a mark cannot be drawn one way on screen and another way in a copied image. It takes
+/// the two things a `CanvasContext` would have carried rather than the context itself, because
+/// the capture has no context to build: it has a raster surface and the root
+/// [`FontCollection`](freya::engine::prelude::FontCollection).
+///
+/// The hit regions are **returned**, not written through a handle, so a capture cannot overwrite
+/// what the visible plot last recorded for its pointer.
+pub fn draw(
+    canvas: &Canvas,
+    font_collection: &mut FontCollection,
+    size: Size2D,
+    frame: &Frame,
+) -> Vec<Hit> {
     let mut marks = Vec::new();
-    let size = context.size;
     if size.width < MIN_WIDTH || size.height < MIN_HEIGHT {
         // Too small to have drawn anything, so there is nothing to be over either.
-        hits.borrow_mut().clear();
-        return;
+        return marks;
     }
     let area = PlotSkiaBackend::new(
-        context.canvas,
-        context.font_collection,
+        canvas,
+        font_collection,
         (size.width as i32, size.height as i32),
     )
     .into_drawing_area();
@@ -108,9 +123,7 @@ pub fn draw(context: &mut CanvasContext, frame: &Frame, hits: &Hits) {
         // is not `error!` only because a resize drag would repeat it per frame.
         tracing::warn!("chart: {err}");
     }
-    // Replaced wholesale, never appended: what the pointer can be over is exactly what this
-    // paint drew.
-    *hits.borrow_mut() = marks;
+    marks
 }
 
 /// A mark's hit box from the two data coordinates that bound it, through plotters' own

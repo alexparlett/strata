@@ -6,6 +6,7 @@
 //! that a gap cuts a run and that an axis spans its data, and none of them can see that a
 //! legend has run off the pane or that a wedge is aliased.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use datafusion::arrow::datatypes::{DataType, Field};
@@ -143,11 +144,11 @@ fn body(data: ChartData, mark: ChartMark, schema: Vec<ColumnInfo>) -> impl IntoE
                 .legend(legend(&data, mark, &dress)),
         )
         // The body's own pane, floor and all — not a second copy of it (see `canvas_pane`).
-        .child(super::canvas_pane(ChartCanvas::new(Frame {
+        .child(super::canvas_pane(ChartCanvas::new(Rc::new(Frame {
             data,
             mark,
             dress,
-        })))
+        }))))
 }
 
 /// Render one mark to `target/chart-<name>.png`.

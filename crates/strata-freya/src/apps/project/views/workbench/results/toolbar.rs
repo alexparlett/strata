@@ -13,6 +13,7 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_core::config::Command;
 
+use super::chart::ChartCapture;
 use super::find::FindState;
 use super::selection::Selection;
 
@@ -37,6 +38,11 @@ use super::selection::Selection;
 /// (a running query shows the Running body instead), so the button can't fire while a query
 /// executes. Reload / Download stay stubbed until their layers land (re-run P2-15, export in
 /// Phase 4).
+///
+/// **Copy Image** is the Chart body's (Chart 08): it renders the settled frame offscreen and puts
+/// the pixels on the system clipboard (`chart::capture`). It is here rather than in the strip
+/// because it acts on the same settled run Download does, and it is absent — not disabled —
+/// wherever the chart drew a notice instead of a plot.
 #[derive(PartialEq)]
 pub struct ResultsToolbar {
     /// The tab whose results this pane shows — Trash clears its Run trigger, the toggle
@@ -48,11 +54,28 @@ pub struct ResultsToolbar {
     /// hasn't settled rows — there is nothing to export, so the button is disabled rather than
     /// opening a window onto nothing.
     export: Option<ExportLaunch>,
+    /// The chart a press of **Copy Image** would capture (Chart 08). `Some` only in Chart mode
+    /// over a plot that actually drew: it is set by the chart body's drawable branch, so a
+    /// notice state has no item at all rather than a dead one — there is no chart to copy, and
+    /// a greyed control would suggest there is one that is merely unavailable.
+    copy_image: Option<ChartCapture>,
 }
 
 impl ResultsToolbar {
     pub fn new(tab: TabId, find: FindState, export: Option<ExportLaunch>) -> Self {
-        Self { tab, find, export }
+        Self {
+            tab,
+            find,
+            export,
+            copy_image: None,
+        }
+    }
+
+    /// The settled chart Copy Image acts on — the chart body's to supply, since only it knows
+    /// whether a plot was drawn.
+    pub fn copy_image(mut self, capture: Option<ChartCapture>) -> Self {
+        self.copy_image = capture;
+        self
     }
 }
 
@@ -180,7 +203,8 @@ impl Component for ResultsToolbar {
             );
 
         // The row folds tail-first once the pane is too narrow to hold it (P5-06,
-        // `components::toolbar`): Export goes first, then Clear, then Reload.
+        // `components::toolbar`): Copy Image where there is one, then Export, then Clear, then
+        // Reload.
         //
         // **The Table/Chart toggle is the leading run**, so it never folds — it decides what the
         // whole body below is, and it flexes to push the tool cluster to the far end exactly as
@@ -240,6 +264,14 @@ impl Component for ResultsToolbar {
                         }
                     }),
             )
+            // Chart mode only, and only over a plot that drew — the body hands one down exactly
+            // then, so there is no state in which this is present and does nothing.
+            .map(self.copy_image.clone(), |bar, capture| {
+                bar.item(
+                    ToolbarAction::new(IconName::Copy, "Copy chart as image")
+                        .on_press(move |_| capture.copy()),
+                )
+            })
             // Zero width, so it costs the fold arithmetic nothing and never folds.
             .pinned(search_anchor, 0.);
 

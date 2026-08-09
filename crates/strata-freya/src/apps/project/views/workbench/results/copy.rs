@@ -2,7 +2,7 @@
 //! selection against the current page, serialize it with the core writers
 //! (`strata_core::engine::serialize` — TSV / CSV / JSON / Markdown, headers on, nested
 //! cells as real JSON), and land the text on the system clipboard via
-//! `freya::clipboard` — the same per-window copypasta provider the text inputs use, so
+//! `freya::clipboard` — the same handle the text inputs and the chart's Copy Image use, so
 //! there is exactly one clipboard stack in the app.
 //!
 //! Consumers: the grid's right-click [`copy_menu`] and focused ⌘C (TSV), and the record

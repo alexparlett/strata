@@ -151,6 +151,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   different wherever a stride is, because a day-wide `date_bin` over a `Time` column is refused;
   and a chart read's cache identity is `(snapshot, query, **display config**)`, because
   axis labels render through `datafusion.format.*`.
+- **A chart image is the chart, so the capture and the paint are one draw body.** Copy Image
+  renders the canvas's own `Rc<Frame>` through the same `marks::draw` (a canvas + a
+  `FontCollection`, never a `CanvasContext`), which **returns** its hit regions so a capture
+  cannot overwrite the plot's. No paint pass: the font collection is a root context. Fixed
+  1600x900 at 2x, background filled first, read back as unpremultiplied RGBA, nothing on disk.
+  The fork's clipboard grew images rather than the app growing a save-to-PNG stopgap, **inside
+  its existing shape**: the integration still provides a `Box<dyn ClipboardProvider>` into the
+  root context. The trait is the fork's own now and covers images; copypasta was **replaced** by
+  arboard rather than run beside it, because text and images are one clipboard.
 - **A chart refusal names its fix in prose, and V1 puts no control behind it.** The
   *Aggregate in SQL* press was built and cut: sound mechanism, wrong surface (no tool puts it
   among the encoders), and it stood in for the chart-side aggregation actually worth building.

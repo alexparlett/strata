@@ -33,6 +33,14 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
   written out of the config. What a control offers is the mark's own option set, so an invalid
   encoding is unreachable rather than reported. The sort is a view transform over the settled
   data, never part of the read.
+- **A chart image is the chart** (08). Copy Image renders the canvas's own `Rc<Frame>` through
+  the same `marks::draw`, which is why `draw` takes a canvas + a `FontCollection` (never a
+  `CanvasContext`) and **returns** its hit regions. No paint pass: the font collection is a root
+  context, so the plan's capture-during-paint slot was never needed. The fork's clipboard grew
+  images rather than the app growing a save-to-PNG stopgap, by **replacing** copypasta with
+  arboard — one backend, because text and images are one clipboard — **inside** the existing
+  `Box<dyn ClipboardProvider>` seam, which the integrations still fill. Deleting that seam was
+  tried and rejected.
 - **A time column is two roles** (04): `Instant` (date/timestamp) and `Clock` (time of day) are
   identical on an axis and differ wherever a stride does — DataFusion refuses a day-wide
   `date_bin` over a `Time`. Nothing in V1 reads the distinction; it is kept because recovering
@@ -50,7 +58,7 @@ design-handoff bundle's CHART_SPEC + `screenshots/chart-*.png` are the *visual* 
 | 05 | Analytical presets — the remaining menu (follow-on) | ⬜ | Rz2 | 07, 10 |
 | 06 | Interactivity — bins, legend toggle, log axis, crosshair | ⬜ | Rz2 | 01–04 |
 | 07 | Tier A templates — palette commands that write the SQL | ⬜ | Rz2 | 01–04 |
-| 08 | Copy chart as image — fork clipboard + offscreen capture | ⬜ | Rz2 | 02 |
+| 08 | Copy chart as image — fork clipboard + offscreen capture | ✅ | Rz2 | 02 |
 | 09 | Shape panel — the aggregation composer, its own surface | ⬜ | Rz2 | 01–04 |
 | 10 | Tier B marks — heatmap, error bands, box plot | ⬜ | Rz2 | 01–04 |
 | 11 | Scatter trendline `[core]` | ⬜ | Rz2 | 01–04 (10 for strip layout) |
@@ -65,8 +73,8 @@ histogram, pin, most tests) carry over. 02 makes the surface real over schema-de
 03 adds the strip and persisted config; 04 adds the refusal surfaces.
 
 06–11 are the 2026-08 redesign (planned with Alex; the decisions each file marks "settled in
-planning" are his — do not re-ask them). 06/07/08 are mutually independent quick wins — pick
-up in any order, one session each. 09 is independent of all of them (it re-promotes
+planning" are his — do not re-ask them). 06/07/08 were mutually independent quick wins — pick
+up in any order, one session each (08 is done). 09 is independent of all of them (it re-promotes
 `quote_col`, nothing else shared) and ships the INVARIANTS/CHART_SPEC §8 amendment. 10 comes
 before 11 only because both touch the strip's layout. 07 and 10 both grow
 `chart/templates.rs` — whichever lands second merges. 05 is what remains of the presets menu
