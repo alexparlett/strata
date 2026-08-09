@@ -232,6 +232,81 @@ Things that must not regress. Each was fought for once already.
     makes that gap tolerable is a reason not to close it. What survives is the role split above.
     Re-litigate the *placement* only with a surface that isn't the strip.
 
+  And four the **interactivity** pass settled (Rz2/06), all about which side of the read a
+  control sits on:
+
+  - **A chart's controls are repaints, and the bin count is the one exception — because the
+    engine does the counting.** `ChartConfig` grew four channels and only `bins` reaches a
+    `ChartQuery`: a new bin count is a new cache entry, exactly as it should be, while `hidden`,
+    `log_y` and `sort` are transforms over data already in hand. The cap is
+    `engine::MAX_BINS`, `pub` and clamped at **both** ends of the wire, because a box that
+    accepts 5 000 over a read that answers 200 shows one thing and means another. An empty box
+    is `None` and `None` is the engine's `√n` — reachable by clearing the field, which is why
+    the strip owns a small buffer of its own rather than reusing `NumberField` (a number field
+    has no state for "deliberately no number"). It **bounds its box and normalizes it when it
+    is left** (AGENTS.md §3): `max_len` is the cap's own digit count, and losing focus re-echoes
+    what was committed — without both, the box showed `5000` over a 200-bin chart, which is the
+    "shows one thing and means another" failure the shared cap exists to prevent. The parse is
+    wide and the clamp comes after it, or a count over 65 535 would fail a `u16` parse and read
+    as Auto rather than as the cap.
+  - **A hidden series keeps its slot, and the order it is hidden in is sorted-then-hidden.**
+    Hiding blanks a series' `values` to all-`None` rather than removing it (`chart::hide`), so
+    positions — and therefore `Dress::series` colours — never move under a legend press, and
+    `marks` needs no idea it happened (a `None` cell is already a gap and hit regions are built
+    per finite value). It is keyed by **name**, so a NULL-valued series and a literal `"(null)"`
+    one toggle together: accepted coarseness, because the name is what the user pressed and a
+    position-keyed legend forgets the choice the moment the SELECT list changes. `sort::sorted`
+    runs **before** `hide::applied`, or hiding the first series would silently reshuffle a
+    `ByYDesc` chart's whole category axis. `resolve` drops the set for a mark whose legend cannot
+    un-hide, exactly as it drops `bins` for a mark with nothing to bin — a pie's Y is an ordinary
+    measure a bar may have hidden earlier, and honouring it there blanks the pie with no control
+    on screen to bring it back. ⌥-press **edits** the set rather than rebuilding it from the
+    current legend, so a name this result cannot answer survives the gesture the way it survives
+    an ordinary press; on the sole visible series it shows them all again, so the gesture cannot
+    empty the chart. And the **legend survives the one notice that names it**: the all-hidden
+    notice says "press a legend entry", and built only on the drawable path the legend vanished
+    exactly when its own message named it — a dead end the tab carried across a re-run and a
+    restart, because `hidden` is persisted. Only that one: every other notice draws no plot and
+    offers no way back through the legend, so keying colours beside one would name colours
+    nothing on screen is wearing.
+  - **A log axis never refuses; it says why it could not and draws linearly.** `ValueCoord`
+    (`chart::axis`) is one plotters `Ranged` with a linear and a log arm, so no mark has to be
+    generic over its Y — the alternative was splitting every mark into a build half and a draw
+    half. It is offered only where a mark plots **position** rather than extent (`log_axis`:
+    line, scatter, histogram; a bar and an area are read as area from a baseline, which a log
+    axis has none of), and `log_fallback` answers **which** of two reasons sent it back to
+    linear, because a banner that blames zeros that are not there is worse than none. A value at
+    or below zero is one; the other is a span whose **ratio** overflows — a log axis is bounded
+    by `end/start`, not by `end - start`, and `LogCoord::key_points` turns an overflowed ratio
+    into a `usize::MAX` tick count it then counts down one at a time on the render thread (a
+    column holding 1e-300 and 1e300 reaches it). A histogram's **empty bins are not such a
+    value**: a zero count paints nothing on either axis, and blocking on one would take the log
+    scale away from exactly the long-tailed distributions it exists for. And a result with
+    **nothing positive in it at all** gets no banner — `log_span` answers `None` for that and
+    for an unusable ratio alike, and reporting the ratio's message told a user whose every value
+    was NULL that their data spanned too many orders of magnitude. `log_span` rounds out to
+    whole decades and takes the *next* decade out when a bound already sits on one — the log
+    version of `EDGE_AIR`, and without it the commonest log histogram there is draws every count
+    of 1 as a bar of no height.
+  - **The crosshair rules through the hovered mark, and its pieces are absolute siblings of the
+    plot.** Through the **mark**, not under the pointer, and that is a cost model rather than a
+    simplification: Freya has no incremental rendering (`render_pipeline.rs` repaints every node
+    every frame) and `CanvasElement::render` calls its `on_render` on each pass, so *any*
+    reactive write here re-runs `marks::draw` — a full plotters replot plus a rebuild of every
+    hit region, on the render thread. A crosshair that followed the pointer did that on every
+    mouse sample; riding on `hover` costs nothing beyond what the readout already costs, for the
+    same reason `Hit::anchor` exists. The price is that the axis can only be read at a mark,
+    which is where the numbers are. The value is **carried on the `Hit`, never inverted out of
+    the pixel row** — that round trip put `11.01` under a tooltip reading `11` — and `PlotArea`
+    (plotters' own `plotting_area().get_pixel_range()`) comes back **with** the hit regions, in
+    `draw`'s own answer rather than a second slot, only so the rules span the plot rather than
+    the pane — the capture gets one too and drops it, which is the point of returning both. The value label
+    **flips below its rule** rather than off the top of the plot, because a maximum that is
+    already a nice number puts the tallest mark exactly on `frame.top`. The three pieces hang off the canvas root,
+    not off a wrapper: an absolutely positioned node resolves against its parent's area, and a
+    wrapper would be a *stacked* sibling of a fill-height plot — measured, its horizontal rule
+    came out one whole pane below the pointer.
+
 - **A snapshot read has no order of its own; order is the ordinal column.** (`SNAPSHOT_SPEC.md`
   §9; lands with the workstream re-cut.) Above 10 MB an Arrow File scan range-splits and a bare
   `LIMIT/OFFSET` read sits over a `CoalescePartitionsExec` — measured: at 3M rows the *same page

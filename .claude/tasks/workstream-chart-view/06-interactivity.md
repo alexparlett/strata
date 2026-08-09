@@ -1,6 +1,6 @@
 # Chart 06 · Interactivity — bins, legend toggle, log axis, crosshair
 
-**Workstream:** Chart (Rz2) · **Status:** ⬜ · **Depends on:** 01–04 · Independent of 07–11.
+**Workstream:** Chart (Rz2) · **Status:** ✅ · **Depends on:** 01–04 · Independent of 07–11.
 
 ## Goal
 Four view-side controls that bring the chart to parity with standard data tooling, none of
@@ -79,16 +79,85 @@ path b/c also ride):
   pixels.
 
 ## Acceptance
-- [ ] A bin count re-reads and redraws; Auto restores the engine's `√n` choice; the value
+- [x] A bin count re-reads and redraws; Auto restores the engine's `√n` choice; the value
       persists per tab.
-- [ ] Legend press hides/shows without any color shifting; ⌥-press isolates; pie legend is
+- [x] Legend press hides/shows without any color shifting; ⌥-press isolates; pie legend is
       unchanged; all-hidden shows the notice.
-- [ ] Log axis on a positive series redraws with decade ticks and no baseline; a series with
+- [x] Log axis on a positive series redraws with decade ticks and no baseline; a series with
       values ≤ 0 stays linear under the banner; flipping the toggle never re-reads.
-- [ ] Crosshair tracks over cartesian marks only, readout agrees with the axis format, and
+- [x] Crosshair tracks over cartesian marks only, readout agrees with the axis format, and
       the canvas does not repaint on mouse move.
-- [ ] `cargo build` + `cargo test -p strata-freya` green; preview harness
-      (`chart/preview.rs`) gains log + crosshair + hidden-series fixtures.
+- [x] `cargo build` + `cargo test -p strata-freya` green; preview harness
+      (`chart/preview.rs`) gains log + crosshair + hidden-series fixtures
+      (`chart-hidden-series`, `chart-log-histogram`, `chart-log-refused`, `chart-crosshair`).
+
+## What was built, and where it differs from the plan
+
+Landed as planned except for the nine below. Five of them came out of the `adversarial-review`
+pass, which returned **BLOCK** on the first cut (5 critical / 10 warning / 4 note); the rerun
+notes below are what those findings changed. The rules are in `docs/reference/INVARIANTS.md`
+(the chart entry, "the interactivity pass"), one-lined in AGENTS.md 2, and spelled out in
+`docs/CHART_SPEC.md` 6/7/9.
+
+- **The bin cap is shared, not restated.** `engine::MAX_BINS` is now `pub` and the encode site
+  clamps to it, rather than a literal `200` in the UI — a box that accepts 5 000 over a read
+  that answers 200 shows one thing and means another.
+- **The log axis is one `Ranged`, not a type parameter.** `axis::ValueCoord` has a linear and a
+  log arm, so `mesh` / `hit_box` / `zero_baseline` / `frame_on` keep one Y type and no mark had
+  to split into a build half and a draw half. `Categories` was already the precedent.
+- **`log_span` takes the *next* decade out when a bound already sits on one.** The plan said to
+  bypass the linear padding; that alone floors a long-tail histogram at exactly 1 and draws
+  every count of 1 as a bar of no height. This is the log version of `EDGE_AIR`.
+- **A histogram's empty bins do not block the log axis.** The plan's rule is "any value at or
+  below zero draws linear under the banner". Applied literally to counts it would take the log
+  scale away from nearly every long tail, and a zero-count bin paints nothing on either axis —
+  so `chart/mod.rs::log_blocked` answers `false` for `Bins` and keeps the literal rule for the
+  shapes whose zeros *are* drawn (tables and points). Flagged as a judgment call.
+- **Hiding is applied *after* the sort** (`hide::applied` over `sort::sorted`), and it is its
+  own module rather than living in `sort.rs`. Hiding the first series before a `ByYDesc` sort
+  would reshuffle the whole category axis — visibility has to be the last thing that happens.
+- **The crosshair's pieces are absolute siblings of the plot**, not children of a wrapper. A
+  wrapper is a *stacked* sibling of a fill-height plot, so its area starts below the canvas;
+  measured, the horizontal rule landed one whole pane below the pointer. Pinned by
+  `paint.rs::a_crosshair_rules_through_the_hovered_mark_and_reads_its_row_off_the_axis`, which
+  asserts the hairlines' geometry — a unit test on the mapping alone did not catch it.
+- **The crosshair rules through the hovered mark, not under the pointer.** The plan's shape —
+  pointer position in a `use_state`, quantized to whole pixels if it measured badly — measures
+  *worse* than badly: Freya has no incremental rendering (`render_pipeline.rs` repaints every
+  node every frame) and `CanvasElement::render` calls `on_render` on each pass, so every
+  reactive write re-runs `marks::draw`, a full plotters replot plus a rebuild of every hit
+  region, on the render thread. Quantizing to whole pixels still leaves ~600 replots crossing
+  the plot. Riding on `hover` instead honours the plan's own acceptance line ("the canvas does
+  not repaint on mouse move") and costs nothing over today, for the same reason `Hit::anchor`
+  exists. **The trade-off is real and worth a look:** the value axis can now only be read at a
+  mark, not at an arbitrary height. Reading it anywhere needs incremental rendering in the fork
+  (AGENTS.md §6), which is a task of its own.
+- **The value is carried on the `Hit`, not inverted out of the pixel row.** Round-tripping
+  value → pixel → value through integer pixels put `11.01` under a tooltip reading `11`. That
+  removed `Mapping`'s value range and log flag entirely; what is left is `PlotArea`, the rect
+  the rules are clipped to.
+- **`resolve` gates `hidden` by the mark**, the way it already gates `bins` and `log_y`. A pie's
+  Y is an ordinary measure a bar may have hidden earlier, and a pie's legend rows are inert —
+  honouring the set there blanked the pie with no control on screen to bring it back.
+- **The legend is built whether or not a notice replaces the plot.** Built only on the drawable
+  path (the obvious place, since that is where the data is), it vanished exactly when the
+  all-hidden notice told the user to press it — and `hidden` is persisted, so the tab carried
+  that dead end across a re-run and a restart. Over a single-measure result there was no way
+  out of it at all.
+- **⌥-press edits the hidden set rather than rebuilding it from the current legend**, so a name
+  this result cannot answer survives the gesture the way it survives an ordinary press. The two
+  legend gestures now agree about the same field.
+- **The bin box bounds its input and re-echoes on blur**, and parses wide before it clamps.
+  Without the first two it showed `5000` over a 200-bin chart — the "shows one thing and means
+  another" failure the shared `MAX_BINS` was introduced to prevent (AGENTS.md §3, and
+  `NumberField`'s own contract). Without the third, a count over 65 535 failed a `u16` parse and
+  read as Auto rather than as the cap.
+- **`log_span` refuses a span whose *ratio* overflows, and the banner says which reason it
+  was.** A log axis is bounded by `end/start`, not `end - start`: `LogCoord::key_points` turns
+  an overflowed ratio into a `usize::MAX` bold-tick count and then counts it down one at a time
+  on the render thread — a frozen window, from a column holding both 1e-300 and 1e300. The
+  guard needed a second banner message, so `log_blocked -> bool` became
+  `log_fallback -> Option<&'static str>`.
 
 ## References
 `docs/CHART_SPEC.md` §6 (sort as the view-transform precedent), §9. AGENTS.md §3 (modifier
