@@ -32,7 +32,7 @@ async fn snapshot(eng: &Engine) -> SnapshotId {
 fn rows_q(x: Option<&str>, ys: &[&str], series: Option<&str>) -> ChartQuery {
     ChartQuery::Rows {
         x: x.map(String::from),
-        ys: ys.iter().map(|y| y.to_string()).collect(),
+        ys: ys.iter().map(ToString::to_string).collect(),
         series: series.map(String::from),
         cap: 1_000,
     }

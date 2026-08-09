@@ -265,7 +265,7 @@ impl Component for ChartView {
                                 data,
                                 mark: mark_now,
                                 log_y: encoding.log_y && fallback.is_none(),
-                                dress: dress.clone(),
+                                dress,
                             });
                             snap = Some(ChartCapture::new(Rc::clone(&frame), log));
                             let plot = ChartCanvas::new(frame);
@@ -530,7 +530,7 @@ fn legend(data: &ChartData, mark: ChartMark, dress: &Dress, hidden: &[String]) -
             // The name, not the position: it is what the config remembers, and what survives
             // a re-run that changes how many series there are.
             series: toggles.then(|| one.name.clone()),
-            hidden: hidden.iter().any(|name| *name == one.name),
+            hidden: hidden.contains(&one.name),
             label: one.name.clone(),
         })
         .collect()
@@ -802,7 +802,7 @@ mod tests {
         });
         assert!(!widths.is_empty(), "the notice rendered no text at all");
         assert!(
-            widths.iter().any(|w| *w == COPY_WIDTH),
+            widths.contains(&COPY_WIDTH),
             "no text run kept the copy width — the pane reflowed the notice instead of \
              clipping it: {widths:?}"
         );
@@ -1028,7 +1028,7 @@ mod tests {
             // The one measure this result has is the one the user hid.
             let columns = [column_info(&Field::new("amount", DataType::Float64, true))];
             let roles = Roles::of(&columns);
-            let encoding = config::resolve(&config, &roles);
+            let encoding = resolve(&config, &roles);
             let data = hide::applied(table(&[Some(1.), Some(2.)]), &encoding.hidden);
             let all_hidden = hide::all_hidden(&data, &encoding.hidden);
             // The body's own rule, verbatim — a copy that drifted would prove nothing.

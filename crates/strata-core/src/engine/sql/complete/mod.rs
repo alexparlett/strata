@@ -396,7 +396,7 @@ fn column_item(name: &str, detail: Option<&str>, replace: &Range<usize>) -> Comp
         label: name.to_string(),
         insert: ident_insert(name),
         kind: CompletionKind::Column,
-        detail: detail.map(|d| d.to_string()),
+        detail: detail.map(ToString::to_string),
         replace: replace.clone(),
     }
 }

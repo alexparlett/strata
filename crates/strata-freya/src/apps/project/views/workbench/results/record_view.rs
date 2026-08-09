@@ -158,6 +158,9 @@ impl PreviewMemo {
 }
 
 impl Component for RecordView {
+    // Two theme reads and the whole field gutter: one row per column of the record, each
+    // dressed by dtype. Length here is the field count, not tangle.
+    #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, RecordViewThemePreference, "record_view");
         // The shared type palette dresses the field gutter's dtype labels.

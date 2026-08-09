@@ -91,7 +91,7 @@ fn window_sym(udwf: &WindowUDF) -> FunctionSym {
 fn signatures(sig: &Signature) -> Vec<Vec<String>> {
     let mut overloads = dedup(render(&sig.type_signature));
     if let Some(names) = &sig.parameter_names {
-        for o in overloads.iter_mut() {
+        for o in &mut overloads {
             if o.len() == names.len() {
                 *o = names.clone();
             }

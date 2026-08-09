@@ -204,7 +204,7 @@ mod function_sym_tests {
             kind: FnKind::Scalar,
             signatures: sigs
                 .iter()
-                .map(|o| o.iter().map(|s| s.to_string()).collect())
+                .map(|o| o.iter().map(ToString::to_string).collect())
                 .collect(),
             ret: ret.map(String::from),
             description: None,

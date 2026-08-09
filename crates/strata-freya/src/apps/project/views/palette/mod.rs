@@ -340,10 +340,7 @@ impl Component for PaletteOverlay {
                 move |e: Event<KeyboardEventData>| {
                     let chord = chord_from_event(&e);
                     let command = chord.and_then(|c| resolve(&station.peek().settings, &c));
-                    if matches!(
-                        command,
-                        Some(Command::CommandPalette) | Some(Command::Cancel)
-                    ) {
+                    if matches!(command, Some(Command::CommandPalette | Command::Cancel)) {
                         close();
                     }
                     e.prevent_default();
@@ -467,10 +464,11 @@ impl Component for SearchRow {
                                 // no text in it and must not re-home the lit row (holding Shift
                                 // to type a capital would jump to the top before the character
                                 // arrived).
-                                (_, Key::Character(_))
-                                | (_, Key::Named(NamedKey::Backspace | NamedKey::Delete)) => {
-                                    PaletteKey::Typed
-                                }
+                                (
+                                    _,
+                                    Key::Character(_)
+                                    | Key::Named(NamedKey::Backspace | NamedKey::Delete),
+                                ) => PaletteKey::Typed,
                                 _ => PaletteKey::Inert,
                             };
                             // Only the two the field acts on go through to it.

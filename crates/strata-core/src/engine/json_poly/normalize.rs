@@ -236,7 +236,7 @@ mod tests {
             utf8("content"),
         ]));
         let mut v = json!({"id": 7, "content": {"kind": "image"}});
-        fit(&mut v, &plain(target.clone()));
+        fit(&mut v, &plain(target));
         assert_eq!(v["id"], json!(7), "a typed sibling is untouched");
         assert_eq!(v["content"], json!(r#"{"kind":"image"}"#));
     }
@@ -252,7 +252,7 @@ mod tests {
             {"content": {"kind": "image"}},
             {"content": ["a", "b"]},
         ]);
-        fit(&mut v, &plain(target.clone()));
+        fit(&mut v, &plain(target));
         assert_eq!(v[0]["content"], json!("text"));
         assert_eq!(v[1]["content"], json!(r#"{"kind":"image"}"#));
         assert_eq!(v[2]["content"], json!(r#"["a","b"]"#));
@@ -268,7 +268,7 @@ mod tests {
         let target = DataType::Struct(Fields::from(vec![Field::new("content", mid, true)]));
 
         let mut v = json!({"content": {"content": [{"content": {"deep": true}}]}});
-        fit(&mut v, &plain(target.clone()));
+        fit(&mut v, &plain(target));
         assert_eq!(
             v["content"]["content"][0]["content"],
             json!(r#"{"deep":true}"#)
@@ -287,7 +287,7 @@ mod tests {
 
         // An actual list is left as it is.
         let mut v = json!(["a", "b"]);
-        fit(&mut v, &plain(target.clone()));
+        fit(&mut v, &plain(target));
         assert_eq!(v, json!(["a", "b"]));
     }
 
@@ -297,7 +297,7 @@ mod tests {
     fn a_null_against_a_list_target_is_not_wrapped() {
         let target = DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true)));
         let mut v = json!(null);
-        fit(&mut v, &plain(target.clone()));
+        fit(&mut v, &plain(target));
         assert_eq!(v, json!(null));
     }
 
@@ -307,7 +307,7 @@ mod tests {
     fn a_wrapped_scalar_still_gets_its_element_treatment() {
         let target = DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true)));
         let mut v = json!(7);
-        fit(&mut v, &plain(target.clone()));
+        fit(&mut v, &plain(target));
         assert_eq!(v, json!(["7"]));
     }
 

@@ -274,7 +274,6 @@ mod tests {
         assert_eq!(inserted.count, Some(1), "the statement itself landed");
 
         let (mut runner, project) = {
-            let engine = engine.clone();
             let root = root.clone();
             TestingRunner::new(
                 move || {

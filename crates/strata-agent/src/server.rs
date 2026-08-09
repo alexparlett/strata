@@ -223,7 +223,7 @@ async fn sweep<H: Host>(tools: StrataTools<H>, cancel: CancellationToken) {
     let mut ticks = tokio::time::interval(STATELESS_IDLE / 2);
     loop {
         tokio::select! {
-            _ = cancel.cancelled() => break,
+            () = cancel.cancelled() => break,
             _ = ticks.tick() => tools.retire_idle(STATELESS_IDLE),
         }
     }
@@ -244,7 +244,7 @@ async fn accept<H: Host>(
     };
     loop {
         let stream = tokio::select! {
-            _ = cancel.cancelled() => break,
+            () = cancel.cancelled() => break,
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => stream,
                 // One refused connection is not a reason to stop listening — but retrying
@@ -253,8 +253,8 @@ async fn accept<H: Host>(
                 Err(e) => {
                     tracing::warn!("agent server accept failed: {e}");
                     tokio::select! {
-                        _ = cancel.cancelled() => break,
-                        _ = tokio::time::sleep(ACCEPT_BACKOFF) => continue,
+                        () = cancel.cancelled() => break,
+                        () = tokio::time::sleep(ACCEPT_BACKOFF) => continue,
                     }
                 }
             },

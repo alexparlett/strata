@@ -36,7 +36,7 @@ pub type Control = form::Control<Edit>;
 
 /// What this window is exporting — every field read from the run that opened it, and none of
 /// it editable. Immutable because the snapshot is: the window pins it for its whole life
-/// (SNAPSHOT_SPEC §4), so these facts stay true even if the tab behind re-runs.
+/// (`SNAPSHOT_SPEC` §4), so these facts stay true even if the tab behind re-runs.
 #[derive(Clone, PartialEq)]
 pub struct ExportTarget {
     pub snapshot: SnapshotId,
@@ -660,7 +660,7 @@ pub fn thousands(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);

@@ -60,7 +60,7 @@ impl Component for DataDisplayPane {
                     .child(
                         Switch::new()
                             .toggled(zebra)
-                            .on_toggle(move |_| ctx.edit(|s| s.zebra = !s.zebra)),
+                            .on_toggle(move |()| ctx.edit(|s| s.zebra = !s.zebra)),
                     ),
             )
             .child(
@@ -69,7 +69,7 @@ impl Component for DataDisplayPane {
                         .width(Size::px(FIELD_WIDTH))
                         .unit("px")
                         .on_change(move |px: u32| {
-                            ctx.edit(|s| s.default_col_width = f64::from(px))
+                            ctx.edit(|s| s.default_col_width = f64::from(px));
                         }),
                 ),
             )

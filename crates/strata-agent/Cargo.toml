@@ -63,3 +63,8 @@ tokio = { version = "1", features = ["full"] }
 # answers before any framing is read. Already in the graph via rmcp's reqwest transport.
 reqwest = { version = "0.13", features = ["json"] }
 serde_json = "1"
+
+# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
+# `clippy.toml`). Every member inherits the same set — CI denies it.
+[lints]
+workspace = true

@@ -143,7 +143,7 @@ impl Component for Results {
 /// The pane once its tab owns the current press: subscribes `use_query` on the press's
 /// [`QuerySpec`] (through [`QuerySpec::query`] — the settings are cache identity) and
 /// derives the body from the query state. `stale_time(MAX)` because a Run is an *action* —
-/// a settled entry must never re-execute by itself (SNAPSHOT_SPEC §6); only a new press
+/// a settled entry must never re-execute by itself (`SNAPSHOT_SPEC` §6); only a new press
 /// (fresh nonce → new key) runs again. The tab's keeper (`views::keeper`) subscribes
 /// the same entry for as long as the press stays current, so unmounting this body on a tab
 /// switch never starts the entry aging out.
@@ -163,6 +163,9 @@ impl KeyExt for ResultsBody {
 }
 
 impl Component for ResultsBody {
+    // The run subscription, the `running`-slot mirror with its nonce guard, and an arm per
+    // query state. The mirror's effect has to sit beside the subscription it mirrors.
+    #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         let engine = use_consume::<EngineCtx>();
         let query = use_query(self.spec.query(&engine));
@@ -308,7 +311,7 @@ impl Component for ResultsBody {
         // (`AGENTS.md` §4).
         let export_app = use_consume::<AppCtx>();
         let export_log = use_consume::<LogCtx>();
-        let export_engine = engine.clone();
+        let export_engine = engine;
         // What that log belongs to, so the window it opens closes with it rather than with the
         // window that owns it (`platform::owner`).
         let export_subtree = use_consume::<Subtree>();
@@ -388,7 +391,7 @@ impl Component for ResultsBody {
                             res: Ok(fetched), ..
                         } => {
                             let fv = pages.view(
-                                PageKey::Snapshot(page_spec.clone()),
+                                PageKey::Snapshot(page_spec),
                                 || {
                                     Rc::new(GridData::from_page(
                                         rows.output.columns.clone(),

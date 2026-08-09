@@ -224,7 +224,7 @@ pub(crate) fn rel_offset(slice: &str, line: u64, column: u64) -> usize {
     let base = slice
         .split_inclusive('\n')
         .take(line)
-        .map(|l| l.len())
+        .map(str::len)
         .sum::<usize>();
     (base + column).min(slice.len())
 }

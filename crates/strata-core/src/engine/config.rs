@@ -2,7 +2,7 @@
 //! Properties** (design24). A flat, datafusion-free list of known keys — name +
 //! built-in default (as the string we store/apply) + a value [`Kind`] (for validation)
 //! + a one-line description — used by the Properties editor's autocomplete, inspector,
-//! and value validation, and by [`crate::engine`] to apply the overrides.
+//!   and value validation, and by [`crate::engine`] to apply the overrides.
 //!
 //! It is **not** a whitelist: any `datafusion.*` key may be entered in the editor;
 //! unknown keys are applied best-effort (DataFusion rejects the ones it doesn't know).

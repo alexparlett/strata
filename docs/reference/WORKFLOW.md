@@ -54,6 +54,58 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
   against fork source and hand off to a Mac build (see CLAUDE.md's environment note).
+- **Clippy is part of that check, and a lint wrong for this codebase is allowed once at the
+  workspace rather than at every site it fires.** The command is
+  `cargo clippy --workspace --all-targets --locked -- -D warnings`, and CI runs it before the
+  tests. Three files carry the whole policy:
+
+  **The set** — `[workspace.lints]` in the root `Cargo.toml`, inherited by all six members
+  (`[lints] workspace = true`), the vendored editor included. It is `clippy::all` plus a
+  hand-picked readability/complexity list, and **not** `clippy::pedantic`. Pedantic entire was
+  weighed and rejected: a large part of that group argues with conventions this repo settled
+  deliberately — `must_use_candidate` and `missing_errors_doc`/`missing_panics_doc` against
+  "private app, use `pub` freely" (§1), `needless_pass_by_value` against Freya components taking
+  their props by value, `single_match_else` and `map_unwrap_or` against the house reading order,
+  the `cast_*` family against arithmetic that is already checked where it matters. A lint set
+  whose findings are mostly noise trains you to skim the output, which costs more than the group
+  finds. So each lint is named, and it is named because someone would want the change it asks for.
+
+  **The knobs** — `clippy.toml`. A threshold there is a claim about the *shape of the codebase*,
+  and it re-licenses every future function up to its number, so it is only worth setting when
+  clippy's default measures a Rust idiom this codebase genuinely does not follow. **Making named
+  files pass is not such a reason** — that is what a site-local `#[allow]` is for, and the
+  difference matters because the allow does not travel and the threshold does. Measured rather
+  than assumed: at clippy's own `cognitive-complexity` / `too-many-arguments` / `type-complexity`
+  defaults the whole workspace produces **four** findings, so those three keys are deliberately
+  absent and the four are allowed at their sites. Only `too-many-lines-threshold` is set (200
+  against a default of 100), because a component `render` really is a fixed hook prelude plus one
+  declarative tree; the handful still over 200 carry a reasoned allow each rather than pushing the
+  number up to meet them. `avoid-breaking-exported-api = false` is the load-bearing entry and is
+  easy to miss: clippy will not suggest changing a `pub` signature by default, and in a workspace
+  where everything is `pub` that silences `unnecessary_wraps` and its neighbours almost
+  everywhere. `doc-valid-idents` holds the **prose** nouns — DataFusion, MinIO, the IDEs cited as
+  design precedent — that `doc_markdown` would otherwise have you backtick as if they were code.
+  The `allow-*-in-tests` family is there because this workspace's tests live in the same file as
+  their subject and are linted with it: a fixture that unwraps is being direct, and saying so once
+  here beats an attribute per test module. One trap when editing this file: **cargo does not
+  reliably re-lint on a `clippy.toml` change alone**, so touch a source file before concluding an
+  entry is unnecessary — that mistake removed two live `doc-valid-idents` entries here once and
+  read as a clean run.
+
+  **The escapes, in order.** A workspace-level `allow` with its reason first when the lint is
+  wrong about the *codebase* (it states one judgement once), then an inline `#[allow]` when it is
+  wrong about **one site** (and it has to carry why it is true there). A threshold is not a third
+  escape: it belongs to the paragraph above, and reaching for it to silence specific findings is
+  the failure this ordering exists to catch. `new_without_default` is allowed at the workspace
+  precisely because it had accumulated five inline allows saying the same sentence five times, and
+  `match_same_arms` because a match here is written one arm per variant with the prose for *that*
+  variant on it — two arms answering alike is a fact about the answer, not a duplication. Both
+  went the other way for `too_many_arguments`: six sites, each a different set of context handles,
+  so six inline allows and the default threshold left alone.
+
+  Note what is **not** linted: `crates/freya` is a workspace `exclude` resolved by path, and
+  `cargo clippy` runs clippy-driver over members only, so the fork answers to its own CI and its
+  own conventions (§6). A `clippy.toml` at our root does not reach it.
 - **A change you wrote is reviewed by critics who cannot see why you wrote it** — the
   `adversarial-review` skill, in front of the build check and never in place of it. A model that
   can see the reasoning behind a diff rates that diff more favourably than a neutral reader, and
@@ -171,13 +223,22 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   through, and `AGENTS.md` is written almost entirely in "never" — the fix is to grep the diff for
   the forbidden thing itself rather than asking whether the rule was violated, turning an absence
   the model must notice into a query the search answers.
-- **CI runs that same check on every PR** (`.github/workflows/ci.yml`): `cargo test --workspace
-  --locked` on **macOS** (the platform we ship — a green Linux build proves nothing about the muda
-  menubar or the traffic-light gutter), with `submodules: true`, because the build resolves Freya by
-  local path and without the fork checkout nothing compiles. `--workspace` and not a bare
-  `cargo test`, which `default-members` would narrow to `strata-freya` alone. It asserts the
-  submodule sits at the recorded gitlink **before** compiling, so §6's unpushed-fork-commit trap
-  fails in seconds with that named as the cause instead of as a missing method 40 minutes in.
+- **CI runs that same check on every PR** (`.github/workflows/ci.yml`): the clippy gate, then
+  `cargo test --workspace --locked`, on **macOS** (the platform we ship — a green Linux build proves
+  nothing about the muda menubar or the traffic-light gutter), with `submodules: true`, because the
+  build resolves Freya by local path and without the fork checkout nothing compiles. `--workspace`
+  and not a bare `cargo test`, which `default-members` would narrow to `strata-freya` alone. It
+  asserts the submodule sits at the recorded gitlink **before** compiling, so §6's
+  unpushed-fork-commit trap fails in seconds with that named as the cause instead of as a missing
+  method 40 minutes in.
+  The clippy step runs **first** because it is check-only — no codegen, no linking, no test
+  binaries — so a lint failure lands minutes before a full test build would have finished, and the
+  dependency artifacts it does build are plain rustc output the test step reuses. Its `-D warnings`
+  sits after the `--`, which is what keeps it scoped to that one invocation: the toolchain step's
+  `rustflags: ''` stays, and it stays for the reason it was added — the action's default would
+  apply `-D warnings` to the dependency builds too, and a warning in DataFusion is not a fact about
+  this repo. That override was originally a note that denying warnings needed two long-standing
+  warnings resolved first; both were, in the change that added this gate.
 - **Only the tests that need the container runtime queue for it, and the split is a test target.**
   Everything the shared MinIO worker forces on a job — the repo-wide queue below, the cloud agent,
   the release step, the capacity retry — was being paid for by the whole suite, when one test file

@@ -16,7 +16,7 @@
 //!
 //! *Left invalid*, never "will stop working". A dependent view captured its sources by `Arc`
 //! when it was created and never re-resolves their names, so it keeps answering after the
-//! drop and fails only on the next reload (verified against DataFusion 54 — DEV_TASKS
+//! drop and fails only on the next reload (verified against DataFusion 54 — `DEV_TASKS`
 //! D10/D11). So the warning says exactly what the catalog row will say afterwards: these
 //! views are flagged, and they will not survive a reopen.
 //!
@@ -364,8 +364,8 @@ impl Component for DropConfirm {
             .maybe_child(callout);
 
         Dialog::new()
-            .on_dismiss(move |_| slot.set(None))
-            .on_confirm(move |_| confirm(&key_engine))
+            .on_dismiss(move |()| slot.set(None))
+            .on_confirm(move |()| confirm(&key_engine))
             .header(DialogHeader::new(IconName::Trash, tones.error, title))
             .body(body)
             .action(
@@ -682,7 +682,6 @@ mod tests {
                 sql: "SELECT 1".into(),
                 meta: "—".into(),
             }],
-            ..Default::default()
         };
         let mut p = ProjectState::from_defs(defs, root.to_path_buf());
         for name in ["orders", "users"] {
@@ -1411,7 +1410,6 @@ mod tests {
         assert!(dir.exists(), "the CTAS wrote its data");
 
         let (mut runner, (mut slot, ..)) = {
-            let engine = engine.clone();
             let root = root.clone();
             TestingRunner::new(
                 app,

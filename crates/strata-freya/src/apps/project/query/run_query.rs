@@ -76,7 +76,7 @@ impl QuerySpec {
     /// here, because the settings below are part of the cache identity — a hand-built
     /// subscription with different settings would be a *different* entry, and mounting it
     /// would dispatch the same press a second time. `stale_time(MAX)` so a settled press
-    /// never re-executes by itself (SNAPSHOT_SPEC §6); `clean_time` stays at the default
+    /// never re-executes by itself (`SNAPSHOT_SPEC` §6); `clean_time` stays at the default
     /// so a superseded press's entry is garbage-collected once nothing subscribes it.
     pub fn query(&self, engine: &EngineCtx) -> Query<RunQuery> {
         Query::new(self.clone(), RunQuery(engine.captured())).stale_time(Duration::MAX)

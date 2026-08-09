@@ -220,7 +220,7 @@ pub async fn register_project(
         .iter()
         .map(|v| (v.name.clone(), v.sql.clone()))
         .collect();
-    register_pass(engine, connections, tables, views, settled).await
+    register_pass(engine, connections, tables, views, settled).await;
 }
 
 #[cfg(test)]

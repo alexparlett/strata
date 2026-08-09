@@ -538,7 +538,7 @@ impl ThemeRegistry {
                         for s in theme.missing_syntax(syntax_scopes) {
                             tracing::warn!("theme {}: missing syntax scope '{s}'", path.display());
                         }
-                        upsert(&mut entries, theme, Source::User)
+                        upsert(&mut entries, theme, Source::User);
                     }
                     Err(e) => tracing::warn!("skipping theme {}: {e}", path.display()),
                 }
@@ -575,7 +575,8 @@ fn parse_theme_file(path: &Path) -> Result<StrataTheme, String> {
         // A pre-roles file fails on the missing `roles` field; name the real problem instead of
         // handing the author a bare serde error.
         if raw.contains("\"sheet\"") {
-            format!("pre-roles theme format (has a 'sheet' section); see docs/FREYA_THEME_SPEC.md")
+            "pre-roles theme format (has a 'sheet' section); see docs/FREYA_THEME_SPEC.md"
+                .to_string()
         } else {
             e.to_string()
         }
@@ -734,6 +735,21 @@ pub fn resolve_typography(t: &StrataTheme) -> Typography {
 pub fn generate_schema(syntax_scopes: &[&str]) -> serde_json::Value {
     use serde_json::{json, Map, Value};
 
+    // The type scale — one `typeRole` per named role; mirrors `Typography`'s fields.
+    const TYPE_ROLES: &[&str] = &[
+        "title",
+        "strong_body",
+        "body_medium",
+        "control",
+        "body",
+        "caption",
+        "data_value",
+        "code_block",
+        "field_label",
+        "meta",
+        "mono_path",
+    ];
+
     let mut role_props = Map::new();
     let mut role_required = Vec::new();
     for role in Role::ALL {
@@ -759,20 +775,6 @@ pub fn generate_schema(syntax_scopes: &[&str]) -> serde_json::Value {
         syntax_props.insert((*s).to_string(), json!({ "$ref": "#/$defs/color" }));
     }
 
-    // The type scale — one `typeRole` per named role; mirrors `Typography`'s fields.
-    const TYPE_ROLES: &[&str] = &[
-        "title",
-        "strong_body",
-        "body_medium",
-        "control",
-        "body",
-        "caption",
-        "data_value",
-        "code_block",
-        "field_label",
-        "meta",
-        "mono_path",
-    ];
     let mut typo_props = Map::new();
     for r in TYPE_ROLES {
         typo_props.insert((*r).to_string(), json!({ "$ref": "#/$defs/typeRole" }));

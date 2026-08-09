@@ -98,15 +98,15 @@ impl Component for OpenPromptCard {
             .child(Prose::new("Remember, don't ask again").color(roles.get(Role::TextPlaceholder)));
 
         Dialog::new()
-            .on_dismiss(move |_| open.dismiss())
+            .on_dismiss(move |()| open.dismiss())
             // Enter takes the primary action, which is the comp's This Window.
-            .on_confirm(move |_| {
+            .on_confirm(move |()| {
                 open.choose(
                     enter_platform.clone(),
                     enter_app.clone(),
                     false,
                     *remember.peek(),
-                )
+                );
             })
             .header(header)
             .body(
@@ -136,7 +136,7 @@ impl Component for OpenPromptCard {
                             new_app.clone(),
                             true,
                             *remember.peek(),
-                        )
+                        );
                     })
                     .child(Control::new("New Window")),
             )
@@ -149,7 +149,7 @@ impl Component for OpenPromptCard {
                             this_app.clone(),
                             false,
                             *remember.peek(),
-                        )
+                        );
                     })
                     .child(Control::new("This Window")),
             )

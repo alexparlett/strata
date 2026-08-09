@@ -10,7 +10,7 @@ use crate::theme::{use_roles, Role};
 /// success dress — a rounded icon tile over what ran, then the engine's own sentence.
 ///
 /// No grid and no pager, because there is nothing to page: a statement returns no rows. The
-/// tab's previous snapshot is not retired either (SNAPSHOT_SPEC §4), so pressing Run on a
+/// tab's previous snapshot is not retired either (`SNAPSHOT_SPEC` §4), so pressing Run on a
 /// `SELECT` again brings the grid straight back from the result that was already there.
 #[derive(PartialEq)]
 pub struct StatementState {

@@ -346,7 +346,7 @@ impl Component for ProfilePicker {
                             ctx.edit(move |draft| draft.profile = name);
                         }
                     })
-                    .child(MonoValue::new(name.clone()))
+                    .child(MonoValue::new(name))
                     .into()
             })
             .collect();
@@ -489,8 +489,8 @@ impl Component for Endpoint {
                         Switch::new()
                             .toggled(allow_http)
                             .enabled(has_endpoint)
-                            .on_toggle(move |_| {
-                                ctx.edit(|draft| draft.allow_http = !draft.allow_http)
+                            .on_toggle(move |()| {
+                                ctx.edit(|draft| draft.allow_http = !draft.allow_http);
                             }),
                     )
                     // A *sibling* of the switch, never its parent: a built-in's press reaches
@@ -582,7 +582,7 @@ impl Component for OptionToolbar {
                         let mut slot = ctx.selected_option;
                         let mut added = *slot.peek();
                         ctx.edit(|draft| {
-                            added = Some(draft.client_config.add(String::new(), String::new()))
+                            added = Some(draft.client_config.add(String::new(), String::new()));
                         });
                         slot.set(added);
                     }),

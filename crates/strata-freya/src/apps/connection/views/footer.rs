@@ -75,7 +75,6 @@ impl Component for Footer {
         );
 
         let cancel = {
-            let platform = platform.clone();
             Button::new()
                 .height(Size::px(ACTION_HEIGHT))
                 // Always available: a pass in flight is the project window's, and it answers on
@@ -89,7 +88,6 @@ impl Component for Footer {
             .height(Size::px(ACTION_HEIGHT))
             .enabled(!connecting && note.is_none())
             .on_press({
-                let engine = engine.clone();
                 move |_: Event<PressEventData>| save(ctx, project, rescan, engine.clone(), report)
             })
             .child(Control::new(match connecting {

@@ -397,7 +397,7 @@ mod tests {
         let who = agent("claude-code");
         let answered = QuerySessionId::new();
 
-        let (opened, _) = block_on(join(
+        let (opened, ()) = block_on(join(
             directory.open_query_session(Path::new("/w/sales"), &who),
             async {
                 let Some(AgentAsk::OpenQuerySession { agent, reply }) = asks.recv().await else {
@@ -421,7 +421,7 @@ mod tests {
         let (mut asks, _notices) = window(&directory, "sales", "/w/sales");
         let session = QuerySessionId::new();
 
-        let (closed, _) = block_on(join(
+        let (closed, ()) = block_on(join(
             directory.close_query_session(Path::new("/w/sales"), AgentId::new(), session),
             async {
                 let Some(AgentAsk::CloseQuerySession { reply, .. }) = asks.recv().await else {
@@ -474,7 +474,7 @@ mod tests {
         let directory = AgentDirectory::default();
         let (mut asks, _notices) = window(&directory, "sales", "/w/sales");
 
-        let (settled, _) = block_on(join(
+        let (settled, ()) = block_on(join(
             directory.run(
                 Path::new("/w/sales"),
                 AgentId::new(),
@@ -501,7 +501,7 @@ mod tests {
         let (mut asks, mut notices) = window(&directory, "sales", "/w/sales");
         let session = QuerySessionId::new();
 
-        let (settled, _) = block_on(join(
+        let (settled, ()) = block_on(join(
             directory.run(
                 Path::new("/w/sales"),
                 AgentId::new(),
@@ -534,7 +534,7 @@ mod tests {
         let who = AgentId::new();
         let session = QuerySessionId::new();
 
-        let (settled, _) = block_on(join(
+        let (settled, ()) = block_on(join(
             directory.run(
                 Path::new("/w/sales"),
                 who,
@@ -590,7 +590,7 @@ mod tests {
         let session = QuerySessionId::new();
 
         let mut after = None;
-        let (settled, _) = block_on(join(
+        let (settled, ()) = block_on(join(
             directory.run(
                 Path::new("/w/sales"),
                 who,
@@ -689,7 +689,7 @@ mod tests {
         let (mut asks, _notices) = window(&directory, "sales", "/w/sales");
         let session = QuerySessionId::new();
 
-        let (listed, _) = block_on(join(
+        let (listed, ()) = block_on(join(
             directory.query_sessions(Path::new("/w/sales"), AgentId::new()),
             async {
                 let Some(AgentAsk::QuerySessions { reply, .. }) = asks.recv().await else {

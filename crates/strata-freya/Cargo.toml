@@ -94,3 +94,8 @@ freya-testing = { workspace = true }
 # touched only in `strata-core` (AGENTS.md §2), and this keeps that true of everything shipped
 # while letting a test build its own fixture inline rather than bending a signature to be testable.
 datafusion = "54"
+
+# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
+# `clippy.toml`). Every member inherits the same set — CI denies it.
+[lints]
+workspace = true

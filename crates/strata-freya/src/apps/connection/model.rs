@@ -148,10 +148,10 @@ impl Default for ConnectionDraft {
     }
 }
 
-/// The catalogue is small enough to offer whole: the name box shows **every** match and scrolls,
-/// where the properties grid caps its list at seven. What is capped here is the panel's *height*
-/// (`views::form::SUGGEST_ROWS`), not the answer — an option cut from the list is one the user
-/// cannot find by typing more, since these names share so many substrings.
+// The catalogue is small enough to offer whole: the name box shows **every** match and scrolls,
+// where the properties grid caps its list at seven. What is capped here is the panel's *height*
+// (`views::form::SUGGEST_ROWS`), not the answer — an option cut from the list is one the user
+// cannot find by typing more, since these names share so many substrings.
 
 /// One row of the client-options table: an option and its value, under an id that outlives both.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -726,7 +726,7 @@ mod tests {
         };
         assert_eq!(http.blocker(), None);
         // …and the prose about it is the URL's, not the bucket's.
-        let mut urlless = http.clone();
+        let mut urlless = http;
         urlless.address = String::new();
         assert!(urlless.blocker().unwrap().contains("URL"));
     }

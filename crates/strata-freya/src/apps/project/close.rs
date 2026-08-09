@@ -197,8 +197,6 @@ pub fn use_engineless_close(
     let open = use_consume::<OpenCtx>();
     let closing = use_state(|| false);
     let close = {
-        let app = app.clone();
-        let platform = platform.clone();
         move || {
             let mut closing = closing;
             if *closing.peek() {

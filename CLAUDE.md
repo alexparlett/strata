@@ -51,6 +51,15 @@ The same script is what the **Release** workflow runs (Actions → Release → R
 also bump the crate version, tag the commit and publish a release page in the same press.
 `scripts/version.sh` owns the version number. See **`docs/RELEASING.md`**.
 
+Linting is part of the check, and CI runs it before the tests:
+
+```bash
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+The curated lint set is `[workspace.lints]` in the root `Cargo.toml` and the thresholds are
+`clippy.toml`; both are annotated, and [AGENTS.md](AGENTS.md) §7 has the rule for adding to them.
+
 Formatting is the **`fmt` skill**, never `cargo fmt --all` (which reformats the fork — see
 [AGENTS.md](AGENTS.md) §7). Running the app is the **`run-app` skill**; one Strata window across
 every session, enforced by a hook. Reviewing a change *you* just wrote is the

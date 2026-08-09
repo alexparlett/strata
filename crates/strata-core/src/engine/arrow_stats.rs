@@ -181,7 +181,7 @@ async fn footer_rows(store: &Arc<dyn ObjectStore>, object: &ObjectMeta) -> Optio
     // build — inside a function whose whole contract is to answer `None` for a file it cannot
     // read. One bad `.arrow` file in a user's external table is enough to reach it.
     let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(blocks.len());
-    for block in blocks.iter() {
+    for block in blocks {
         let start = u64::try_from(block.offset()).ok()?;
         let len = u64::try_from(block.metaDataLength()).ok()?;
         let end = start.checked_add(len).filter(|end| *end <= size)?;
@@ -300,11 +300,7 @@ mod tests {
     #[tokio::test]
     async fn only_the_row_count_is_claimed() {
         let (store, meta) = written("claims", 2, 4);
-        let schema = Arc::new(datafusion::arrow::datatypes::Schema::new(vec![Field::new(
-            "n",
-            DataType::Int32,
-            false,
-        )]));
+        let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int32, false)]));
         let ctx = datafusion::prelude::SessionContext::new();
         let stats = StrataArrowFormat::default()
             .infer_stats(&ctx.state(), &store, schema, &meta)

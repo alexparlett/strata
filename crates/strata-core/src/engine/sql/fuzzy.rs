@@ -35,14 +35,6 @@ pub(crate) fn match_tier(candidate: &str, partial: &str) -> Option<u8> {
 /// start (`ui` → `u`ser_`i`d, `ordid` → `ord`er_`id`). Small backtracking search —
 /// candidate/partial lengths are identifier-sized.
 fn word_boundary_match(candidate: &str, partial: &str) -> bool {
-    let c: Vec<char> = candidate.chars().collect();
-    let starts: Vec<bool> = c
-        .iter()
-        .enumerate()
-        .map(|(i, ch)| *ch != '_' && (i == 0 || c[i - 1] == '_'))
-        .collect();
-    let p: Vec<char> = partial.chars().collect();
-
     fn go(c: &[char], starts: &[bool], p: &[char], from: usize, pi: usize, run: bool) -> bool {
         if pi == p.len() {
             return true;
@@ -55,6 +47,14 @@ fn word_boundary_match(candidate: &str, partial: &str) -> bool {
         }
         false
     }
+
+    let c: Vec<char> = candidate.chars().collect();
+    let starts: Vec<bool> = c
+        .iter()
+        .enumerate()
+        .map(|(i, ch)| *ch != '_' && (i == 0 || c[i - 1] == '_'))
+        .collect();
+    let p: Vec<char> = partial.chars().collect();
     go(&c, &starts, &p, 0, 0, false)
 }
 

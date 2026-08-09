@@ -5,7 +5,7 @@
 //!
 //! Every number in this panel was *read*, never derived from what happens to be on screen. The
 //! Dioxus inspector used to compute Rows / Nulls / Distinct / Min / Max from the current page of
-//! the current tab's query and present them as column facts (DEV_TASKS U9); they described one
+//! the current tab's query and present them as column facts (`DEV_TASKS` U9); they described one
 //! page of one query. What replaced them is the two-tier model this panel renders: **free
 //! metadata** — footer-derived, so it varies by source format and is often absent entirely — and,
 //! with P3-09, what a full **scan** computed. A fact never appears in both, and an absent fact is

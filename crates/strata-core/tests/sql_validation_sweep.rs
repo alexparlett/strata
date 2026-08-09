@@ -407,7 +407,7 @@ async fn bad_names_all_reported_and_engine_agrees() {
             messages(&out)
         );
         assert!(
-            out.iter().all(|d| d.is_error()),
+            out.iter().all(Diagnostic::is_error),
             "non-error fault in {sql:?}"
         );
         // The resolver must never invent an error the engine wouldn't hit.
@@ -425,7 +425,7 @@ async fn exact_case_quoted_misses_stay_engine_authoritative() {
     let ctx = fixture().await;
     let out = run(&ctx, "SELECT \"Name\" FROM t").await;
     assert!(!out.is_empty(), "quoted case miss must error");
-    assert!(out.iter().all(|d| d.is_error()));
+    assert!(out.iter().all(Diagnostic::is_error));
 }
 
 // ---- 3. mid-edit drafts: quiet ---------------------------------------------

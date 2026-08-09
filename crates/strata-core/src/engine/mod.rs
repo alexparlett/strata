@@ -682,7 +682,7 @@ impl Engine {
         let Some(effect) = effect else { return };
         match effect {
             StoreEffect::TableUpserted { def, .. } => {
-                self.note_origin(&def.name, def.origin.is_internal())
+                self.note_origin(&def.name, def.origin.is_internal());
             }
             // A dropped table is no longer a write target, and a profile still scanning it is
             // now measuring files that may already be gone — cancelled here rather than inside
@@ -2741,7 +2741,7 @@ mod tests {
     }
 
     /// **Neither refusal touches the snapshot lifecycle.** DDL does not retire a snapshot
-    /// (SNAPSHOT_SPEC §4), so the workspace's settled result is still there to page after a
+    /// (`SNAPSHOT_SPEC` §4), so the workspace's settled result is still there to page after a
     /// statement runs in the same tab — which is also what makes the results pane's "previous
     /// snapshot survives" claim true rather than hopeful.
     #[tokio::test]
@@ -2846,7 +2846,7 @@ mod read_options_tests {
         d
     }
 
-    fn write(dir: &PathBuf, name: &str, body: &str) -> String {
+    fn write(dir: &Path, name: &str, body: &str) -> String {
         let path = dir.join(name);
         std::fs::write(&path, body).expect("fixture");
         path.to_string_lossy().into_owned()
@@ -2854,10 +2854,10 @@ mod read_options_tests {
 
     /// The same, gzipped — a compression option can only be proved by a genuinely compressed
     /// file whose name carries the suffix.
-    fn write_gz(dir: &PathBuf, name: &str, body: &str) -> String {
+    fn write_gz(dir: &Path, name: &str, body: &str) -> String {
         let path = dir.join(name);
         let mut enc = flate2::write::GzEncoder::new(
-            std::fs::File::create(&path).expect("fixture"),
+            File::create(&path).expect("fixture"),
             flate2::Compression::default(),
         );
         enc.write_all(body.as_bytes()).expect("compress");
@@ -3049,10 +3049,7 @@ mod read_options_tests {
             .query(WsId(1), RunTag(1), "SELECT * FROM strict".into(), 100)
             .await
             .expect_err("the short file cannot be read against the merged schema");
-        assert!(
-            err.to_string().contains("incorrect number of fields"),
-            "{err}"
-        );
+        assert!(err.contains("incorrect number of fields"), "{err}");
 
         let meta = eng
             .register(spec(

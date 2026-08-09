@@ -66,5 +66,5 @@ pub use project::{FaultKind, ProjChan, ProjectState, Reg};
 /// testable (the command palette's index is tested exactly this way).
 #[cfg(test)]
 pub use project::{TableRow, ViewInfo, ViewRow};
-pub use session::{ProblemGroup, SessionState, Stamp};
+pub use session::{ProblemGroup, QueryTab, SessionState, Stamp};
 pub use statement::use_statement_settle;

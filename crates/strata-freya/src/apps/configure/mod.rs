@@ -303,7 +303,6 @@ impl App for ConfigureApp {
         use_register_window(
             &self.app,
             {
-                let target = target.clone();
                 move || WindowKind::Configure {
                     owner,
                     target: target.clone(),

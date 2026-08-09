@@ -401,7 +401,7 @@ impl Component for ControlStrip {
 
         // The engine does the binning, so this one is part of the read — a new count is a new
         // entry rather than a repaint. Only a histogram has bins to count.
-        let bins = (mark == ChartMark::Histogram).then(|| BinsField {
+        let bins = (mark == ChartMark::Histogram).then_some(BinsField {
             tab: self.tab,
             current: self.encoding.bins,
         });

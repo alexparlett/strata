@@ -849,7 +849,7 @@ mod tests {
         // next result might be able to honour.
         let stale = ChartConfig {
             hidden: vec!["margin".into()],
-            ..plain.clone()
+            ..plain
         };
         assert_eq!(resolve(&stale, &roles).hidden, ["margin"]);
     }

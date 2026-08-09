@@ -716,7 +716,7 @@ mod tests {
     /// rather than that one, since the next sum added would fail identically and silently.
     #[test]
     fn every_result_schema_describes_an_object() {
-        fn object_schema<T: schemars::JsonSchema>(named: &str) {
+        fn object_schema<T: JsonSchema>(named: &str) {
             let schema = serde_json::to_value(schemars::schema_for!(T)).unwrap();
             assert_eq!(
                 schema.get("type").and_then(|t| t.as_str()),

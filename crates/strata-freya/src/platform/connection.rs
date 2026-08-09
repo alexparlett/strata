@@ -71,7 +71,7 @@ pub fn open_connection(platform: Platform, launch: ConnectionLaunch) {
             id,
             WindowKind::Connection {
                 owner,
-                target: launch.target.clone(),
+                target: launch.target,
             },
         );
         ctx.set_window_parent(id, Some(owner));

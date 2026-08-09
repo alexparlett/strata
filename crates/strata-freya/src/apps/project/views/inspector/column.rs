@@ -17,7 +17,7 @@
 //! and bins would need boundaries, which need min/max first, i.e. a *second* full pass over data
 //! we have just told the user is expensive to read once. The canvas's bars were prototype seed
 //! data; a bar drawn from anything else here would be the fabrication this panel exists to
-//! avoid. Recorded in the P3-09 task file and DEV_TASKS D4.
+//! avoid. Recorded in the P3-09 task file and `DEV_TASKS` D4.
 
 use async_io::Timer;
 use freya::components::CircularLoader;
@@ -448,7 +448,6 @@ impl Component for ScannedStatistics {
         let t = &self.theme;
         let previous = held.read();
         let cancel = {
-            let engine = engine.clone();
             let owner = owner.clone();
             move |_| {
                 // Both halves, because they answer different questions: the engine stops paying
@@ -609,16 +608,16 @@ fn shown<'a>(scan: &'a Scan, held: Option<&'a CatalogProfile>, announced: bool) 
 const NESTED_NOTE: &str =
     "The scan describes top-level columns, so it reports nothing for a nested field.";
 
-/// Was this scan stopped deliberately rather than broken?
-///
-/// `cancelled` is what a press of Cancel settles — and, for the moment before the store drops the
-/// request, what a scan aborted by a re-registration settles. `superseded` is a re-scan replacing
-/// this one. Neither is news the user needs told: they asked for it, or the app did on their behalf.
-///
-/// The rule itself is the **engine's** (`engine::stopped_on_purpose`), because the strings are: this
-/// used to be a local `== "cancelled" || starts_with("superseded")`, and the event log grew a second
-/// copy that had already drifted (it caught the cancel but not the supersede). One definition, beside
-/// the constants that produce it.
+// Was this scan stopped deliberately rather than broken?
+//
+// `cancelled` is what a press of Cancel settles — and, for the moment before the store drops the
+// request, what a scan aborted by a re-registration settles. `superseded` is a re-scan replacing
+// this one. Neither is news the user needs told: they asked for it, or the app did on their behalf.
+//
+// The rule itself is the **engine's** (`engine::stopped_on_purpose`), because the strings are: this
+// used to be a local `== "cancelled" || starts_with("superseded")`, and the event log grew a second
+// copy that had already drifted (it caught the cancel but not the supersede). One definition, beside
+// the constants that produce it.
 
 /// The zone's frame: the eyebrow (with whatever the scan half puts beside it), the facts box,
 /// the completeness bar, and a tail.

@@ -346,6 +346,11 @@ impl<H: Host> Drop for Connection<H> {
     }
 }
 
+/// What a remembered run is filed under: the agent that ran it, the project it ran in, and the
+/// query session it belongs to. Named because it is stated twice — here and by `remember`'s
+/// return — and the three parts only mean anything together.
+type RunKey = (AgentId, PathBuf, QuerySessionId);
+
 /// The tool vocabulary over one [`Host`], **as one agent**.
 pub struct StrataTools<H: Host> {
     host: Arc<H>,
@@ -353,7 +358,7 @@ pub struct StrataTools<H: Host> {
     /// checked against it: a cache shared by every connection would otherwise let a handle
     /// that leaked between two agents read the other's rows, and a key is a check that
     /// cannot be forgotten.
-    runs: Arc<Mutex<HashMap<(AgentId, PathBuf, QuerySessionId), LastRun>>>,
+    runs: Arc<Mutex<HashMap<RunKey, LastRun>>>,
     /// Stamps each remembered run so the oldest can be found. Shared with every clone of the
     /// service, like the map it orders.
     seq: Arc<AtomicU64>,
@@ -562,12 +567,7 @@ impl<H: Host> StrataTools<H> {
         Ok((project, engine))
     }
 
-    fn key(
-        &self,
-        agent: AgentId,
-        root: &Path,
-        session: QuerySessionId,
-    ) -> (AgentId, PathBuf, QuerySessionId) {
+    fn key(&self, agent: AgentId, root: &Path, session: QuerySessionId) -> RunKey {
         (agent, root.to_path_buf(), session)
     }
 
@@ -974,6 +974,13 @@ impl<H: Host> StrataTools<H> {
 /// them as each tool's `description`, and [`StrataTools::manifest`] hands that same text to
 /// the assistant's model. Written for exactly that register already — terse, second person,
 /// naming the recovery — so they read the same either way.
+// `doc_markdown` is off for this block alone, and the paragraph above is the reason: these doc
+// comments are not documentation, they are the tool `description` rmcp advertises and `manifest`
+// hands to a model. A backtick clippy adds here is markup in a wire string, and it contradicts
+// both the register they are written in and AGENTS.md §3's "no backticks in user-facing text".
+// Everywhere else in this file `read_page` and friends are backticked, correctly, because there
+// they really are prose about code.
+#[allow(clippy::doc_markdown)]
 #[tool_router]
 impl<H: Host> StrataTools<H> {
     /// List the open Strata projects: name and root folder. Every other tool takes an
@@ -1759,8 +1766,6 @@ mod tests {
     /// result, in practice whatever the user has run since.
     #[tokio::test]
     async fn a_remembered_page_does_not_survive_the_engine_that_made_it() {
-        let root = scratch("engine_swap");
-        fs::write(root.join("people.csv"), "id,name\n1,ana\n2,ben\n").unwrap();
         async fn register(engine: &Engine, root: &Path) {
             engine
                 .register(TableSpec {
@@ -1773,6 +1778,9 @@ mod tests {
                 .await
                 .unwrap();
         }
+
+        let root = scratch("engine_swap");
+        fs::write(root.join("people.csv"), "id,name\n1,ana\n2,ben\n").unwrap();
         let project = MockProject::new("sales", &root);
         register(&project.engine, &root).await;
         let tools = StrataTools::new(MockHost::new(vec![project]));
@@ -2054,7 +2062,7 @@ mod tests {
     /// the one shape a well-meaning "unknown" arm could be added to.
     #[test]
     fn a_session_state_crosses_the_wire_unchanged() {
-        let wire = crate::wire::QuerySessionWire::from(crate::host::QuerySessionInfo {
+        let wire = crate::wire::QuerySessionWire::from(host::QuerySessionInfo {
             session: QuerySessionId::new(),
             state: QuerySessionState::Running,
         });

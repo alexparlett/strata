@@ -3,7 +3,7 @@
 //! backgrounded tab's press would have no subscriber: freya-query cleans an unsubscribed
 //! entry after its `clean_time`, and a revisit past that would find nothing and silently
 //! re-execute the press — aborting it mid-flight if it was still running, or re-running
-//! SQL the user only pressed once (SNAPSHOT_SPEC §6: a Run is an *action*). The keeper
+//! SQL the user only pressed once (`SNAPSHOT_SPEC` §6: a Run is an *action*). The keeper
 //! makes subscriber presence track request **currency** instead of tab visibility: while
 //! a press is some tab's `QueryTab::request`, its entry is held live; the moment it is
 //! superseded, cancelled, or its tab closes, its pin unmounts and the entry ages out on

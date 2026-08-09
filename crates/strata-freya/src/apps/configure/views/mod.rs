@@ -1,6 +1,6 @@
 //! The Configure window's views: the title bar, the scrolling body, and the footer.
 //!
-//! The body's order is the canvas's, and one thing in it contradicts DEV_TASKS D7: the busy and
+//! The body's order is the canvas's, and one thing in it contradicts `DEV_TASKS` D7: the busy and
 //! failure blocks are the **last** things in the body, after Hive, not "below import-options,
 //! above Hive". The canvas is newer; it wins.
 

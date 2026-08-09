@@ -63,10 +63,10 @@ impl Component for SystemPane {
                     .row()
                     .trailing()
                     .on_press(move |_: Event<PressEventData>| {
-                        ctx.edit(|s| s.reopen_on_startup = !s.reopen_on_startup)
+                        ctx.edit(|s| s.reopen_on_startup = !s.reopen_on_startup);
                     })
-                    .child(Switch::new().toggled(reopen).on_toggle(move |_| {
-                        ctx.edit(|s| s.reopen_on_startup = !s.reopen_on_startup)
+                    .child(Switch::new().toggled(reopen).on_toggle(move |()| {
+                        ctx.edit(|s| s.reopen_on_startup = !s.reopen_on_startup);
                     })),
             )
             .child(
@@ -87,7 +87,7 @@ impl Component for SystemPane {
                             .placeholder("/Users/you/data")
                             .dialog_title("Default project directory")
                             .on_change(move |dir: String| {
-                                ctx.edit(|s| s.default_project_dir = dir)
+                                ctx.edit(|s| s.default_project_dir = dir);
                             }),
                     ),
             )
@@ -101,10 +101,10 @@ impl Component for SystemPane {
                     .row()
                     .trailing()
                     .on_press(move |_: Event<PressEventData>| {
-                        ctx.edit(|s| s.confirm_close_running = !s.confirm_close_running)
+                        ctx.edit(|s| s.confirm_close_running = !s.confirm_close_running);
                     })
-                    .child(Switch::new().toggled(confirm_close).on_toggle(move |_| {
-                        ctx.edit(|s| s.confirm_close_running = !s.confirm_close_running)
+                    .child(Switch::new().toggled(confirm_close).on_toggle(move |()| {
+                        ctx.edit(|s| s.confirm_close_running = !s.confirm_close_running);
                     })),
             )
             .child(

@@ -58,7 +58,7 @@ async fn fixture_project_registers_and_queries() {
                 assert_eq!(name, &t.name, "tables settle in defs order");
                 match result {
                     Ok(meta) => {
-                        assert!(!meta.columns.is_empty(), "'{name}' inferred a schema")
+                        assert!(!meta.columns.is_empty(), "'{name}' inferred a schema");
                     }
                     Err(_) => failed.push(name.clone()),
                 }

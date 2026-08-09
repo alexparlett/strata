@@ -60,6 +60,12 @@ fn builtin<T: Clone + 'static>(th: &mut Theme, key: &'static str, retune: impl F
 /// Register every component theme the app dresses — Freya built-ins Strata retunes, then
 /// Strata's own components. Called once per theme build; `typo` feeds the two components
 /// whose type is themed (tooltip, editor).
+// Long because it is the table, and the table is the point: AGENTS.md §3 fixes every component's
+// dress onto roles in **one** static mapping, so splitting this into `register_buttons` /
+// `register_inputs` / … would scatter the one place you go to ask what dresses a component. It has
+// no control flow at all — a flat sequence of `builtin::<T>` / `custom` registrations, cognitive
+// complexity zero — so length here measures the component count, not tangle.
+#[allow(clippy::too_many_lines)]
 pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
     // ---- Freya built-ins: partial retunes ---------------------------------------------------
 

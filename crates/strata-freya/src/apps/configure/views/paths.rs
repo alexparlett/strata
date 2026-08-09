@@ -171,7 +171,7 @@ impl Component for BrowseButton {
 
         let menu = Menu::new()
             .min_width(Size::px(MENU_WIDTH))
-            .on_close(move |_| open.set(false))
+            .on_close(move |()| open.set(false))
             .child(
                 MenuButton::new()
                     .on_press(move |_| {
@@ -198,7 +198,7 @@ impl Component for BrowseButton {
         .bottom()
         .align_start()
         .offset(4.)
-        .maybe_child(open().then(|| menu))
+        .maybe_child(open().then_some(menu))
     }
 }
 

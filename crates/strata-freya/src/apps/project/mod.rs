@@ -4,22 +4,22 @@
 //! enum so dispatch is total; the port plan's "trait-object, valin-style" note is overturned,
 //! see that module). `mod.rs` is wiring only — private submodules, re-exported.
 
+mod app;
 mod close;
 mod commands;
 /// `pub` for the Export window: it is its own OS window, so it can't inherit this window's
 /// context and instead carries an [`EngineCtx`](contexts::EngineCtx) clone as a launch value.
 pub mod contexts;
 pub mod model;
-mod project;
 mod query;
 mod state;
 mod views;
 
-pub use close::{CloseGuard, CloseTarget};
-/// [`window_geometry`](project::window_geometry) is `pub` for every path that opens a project
+/// [`window_geometry`](app::window_geometry) is `pub` for every path that opens a project
 /// window: a window's size and position can only be set as it is created, so they are a launch
 /// input the caller resolves — off the render thread, and with a deadline.
-pub use project::{window_geometry, window_geometry_blocking, ProjectApp};
+pub use app::{window_geometry, window_geometry_blocking, ProjectApp};
+pub use close::{CloseGuard, CloseTarget};
 /// The window's engine generation — for [`platform::owner`](crate::platform::owner), which
 /// bounds a child window's life by the mount of this window's project subtree that it borrowed
 /// its handles from. Safe for a child to hold precisely because it is owned by the *window*

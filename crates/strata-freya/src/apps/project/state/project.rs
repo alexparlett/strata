@@ -162,7 +162,7 @@ pub struct ViewInfo {
     pub deps: Vec<String>,
     /// The views it reads (transitive), resolved from the engine's raw aliases. The view
     /// half of the drop warning: `deps` is base tables *by construction*, so it can answer
-    /// "which views read this table" but never "which views read this view" (DEV_TASKS D10
+    /// "which views read this table" but never "which views read this view" (`DEV_TASKS` D10
     /// records that limit) — this list is what answers it.
     pub view_deps: Vec<String>,
 }
