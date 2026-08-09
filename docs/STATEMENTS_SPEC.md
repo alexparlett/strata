@@ -352,6 +352,16 @@ apart by which half of `PlanDeps` the name is in — exactly the split the store
 (`ViewInfo::deps` vs `view_deps`), which is what makes the typed drop's report and the catalog
 pane's warning the same fact.
 
+That half is **raw**, so the report **over-reports on purpose**: a `SubqueryAlias` is what the
+inliner leaves and also what `FROM t AS v` and a CTE named `v` leave, and the plan cannot tell them
+apart — so dropping the view `v` also names a view that merely aliased something else `v`. Kept in
+the safe direction, because a *missed* reader is a destructive action reported as consequence-free
+where a spare one is a name the user can look at. It is not a divergence from the pane either: the
+store's filter keeps an alias only where a view row of that name exists, which is always true of
+the name being dropped, so it cannot subtract this case. Telling the two apart would mean comparing
+the aliased subtree against the view's own registered plan — a change to what `PlanDeps` is, and
+one that would have to move both surfaces at once.
+
 Profiles are cancelled by `Engine::settle_effect` off the returned effect rather than inside the
 arm, for the reason `TableRemoved` gives: the statement runs in a task that cannot reach the
 lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Engine::create_view` /

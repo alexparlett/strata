@@ -105,8 +105,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   name plus the definition **query's** canonical rendering — and because the statement is rebuilt
   around that query, every clause it can carry is refused **by name** from a destructure with no
   `..`, or `CREATE TEMPORARY VIEW` would create a permanent one. A drop names its readers in the
-  table drop's own words (`ddl::left_invalid`) off the **aliases** half of `PlanDeps`, and never
-  cascades. `Blocked::CreateView`/`DropView` stay as the agent path's refusals.
+  table drop's own words (`ddl::left_invalid`) off the **aliases** half of `PlanDeps` — raw, so it
+  over-reports on purpose — and never cascades. `Blocked::CreateView`/`DropView` stay as the agent
+  path's refusals.
 - **An append re-reads the table's facts; it does not re-register it, and it leaves the views
   alone.** Re-registering replaces the provider, and *that* is what strands the `Arc` a view
   captured — which is why a table Refresh re-creates them. An `INSERT` cannot change the shape a

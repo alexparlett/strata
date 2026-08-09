@@ -671,7 +671,12 @@ Things that must not regress. Each was fought for once already.
   `catalog::dependents_of_view`, which reads the **aliases** half of `PlanDeps` where the table
   drop reads the tables half: the inliner leaves a view's name behind as a `SubqueryAlias` and its
   base tables at the leaves, which is the same split the store keeps (`ViewInfo::deps` vs
-  `view_deps`) and so makes the report and the pane's warning one fact. A redefined or dropped
+  `view_deps`) and so makes the report and the pane's warning one fact. That half is **raw** and
+  **over-reports on purpose**: a plan cannot tell an inlined view from `FROM t AS v` or a CTE
+  named `v`, and a *missed* reader is a destructive action reported as consequence-free where a
+  spare one is a name the user can look at. It is not a divergence from the pane either — the
+  store's filter keeps an alias only where a view row of that name exists, which is always true of
+  the name being dropped. A redefined or dropped
   view's profile is cancelled by `Engine::settle_effect` off the returned effect, because the
   statement runs in a task that cannot reach the lifecycle; the direct gestures cancel in
   `create_view` / `drop_view`, which never produce an effect. Replay needs no code of its own — a

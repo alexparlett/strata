@@ -534,6 +534,47 @@ mod tests {
         );
     }
 
+    /// **The reader set is raw, and deliberately biased to over-report.** `PlanDeps::aliases`
+    /// cannot tell an inlined view from a local table alias or a CTE of the same name, so a view
+    /// that merely writes `FROM t AS v` is named by a drop of the view `v`. That is the safe
+    /// direction and the *same* answer the catalog pane's confirm gives: the store's own filter
+    /// (`ProjectState::view_registered`) keeps an alias only where a view row of that name
+    /// exists, which is always true of the name being dropped — so it cannot subtract this case,
+    /// and the two surfaces still say one thing. Under-reporting is what would matter, and the
+    /// first half of this test is what pins it.
+    #[tokio::test]
+    async fn a_drops_readers_over_report_rather_than_miss_one() {
+        let root = scratch("aliases");
+        let eng = Engine::new(BTreeMap::new());
+        eng.set_data_dir(&root);
+        statement(&eng, "CREATE TABLE t AS SELECT 1 AS n")
+            .await
+            .expect("created");
+        statement(&eng, "CREATE VIEW v AS SELECT n FROM t")
+            .await
+            .expect("created");
+        // A real reader, and a view whose only connection to `v` is a local alias spelled alike.
+        statement(&eng, "CREATE VIEW reader AS SELECT n FROM v")
+            .await
+            .expect("created");
+        statement(&eng, "CREATE VIEW impostor AS SELECT n FROM t AS v")
+            .await
+            .expect("created");
+
+        let report = statement(&eng, "DROP VIEW v").await.expect("dropped");
+        assert!(
+            report.message.contains("'reader'"),
+            "the reader that matters is never missed: {}",
+            report.message
+        );
+        assert!(
+            report.message.contains("'impostor'"),
+            "and the alias is named too, which is the raw set's known cost: {}",
+            report.message
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// **A qualified name names one place or nowhere.** Strata has one catalog and one schema, so
     /// `strata.public.v` is a longer spelling of `v` and anything else is refused rather than
     /// silently created here.

@@ -787,6 +787,17 @@ pub async fn dependent_views(ctx: &SessionContext, name: &str) -> Vec<String> {
 /// and a reader of the view over `orders` are told apart by which list the name is in. That is
 /// exactly the split the store keeps (`ViewInfo::deps` vs `view_deps`), which is what makes the
 /// typed drop's report and the pane's warning the same fact.
+///
+/// **The aliases half is raw, and this over-reports on purpose.** A `SubqueryAlias` is what the
+/// inliner leaves *and* what `FROM t AS v` and a CTE named `v` leave, and the plan cannot tell
+/// them apart — so dropping the view `v` also names a view that merely aliased something else `v`.
+/// Kept, for two reasons. It is the safe direction: a **missed** reader is a destructive action
+/// reported as consequence-free, where a spare one is a name the user can look at. And it is not
+/// a divergence from the pane, whose filter (`ProjectState::view_registered`) keeps an alias only
+/// where a view row of that name exists — always true of the name being dropped, so the filter
+/// cannot subtract this case and the two surfaces still say one thing. Telling the two apart
+/// would mean comparing the aliased subtree against the view's own registered plan, which is a
+/// change to what `PlanDeps` *is* and would have to move both surfaces at once.
 pub async fn dependents_of_view(ctx: &SessionContext, name: &str) -> Vec<String> {
     readers(ctx, name, |deps| &deps.aliases).await
 }
