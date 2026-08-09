@@ -199,7 +199,6 @@ fn mutated(to: Settle, chan: ProjChan, write: impl FnOnce(&mut ProjectState)) ->
 /// the arm dispatches at all and its spawned task lands.
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::thread::sleep;
     use std::time::Duration;
 
