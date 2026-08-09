@@ -122,7 +122,7 @@ pub enum ChartRole {
     ///
     /// **Nothing reads the distinction today.** It was split for a scaffold that wrote that
     /// SQL, and the scaffold was cut (`docs/CHART_SPEC.md` §8); the split was kept because
-    /// chart-side bucketing needs it (§10) and the only way to recover it later is a type's
+    /// chart-side bucketing needs it (§3) and the only way to recover it later is a type's
     /// *spelling*, which this taxonomy exists to rule out.
     Instant,
     /// A time of day, with no calendar under it. An axis and a series split like

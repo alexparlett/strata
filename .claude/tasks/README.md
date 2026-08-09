@@ -12,35 +12,35 @@ Read this index first, then open only the phase/workstream file you're working i
   tasks, then **one file per task** — self-contained, with enough context (current state, what to
   build, acceptance, Freya components, source files/specs) that Claude Code can pick it up and
   implement it without loading everything else.
-- **Phases** follow `docs/FREYA_PORT_PLAN.md` §6. Tasks are **feature-level** — small enough to pick
-  up, finish, and verify on a Mac build in one sitting.
-- **Two workstreams** (**Connections**, **Chart view**) sit *outside* the linear phases — they're
-  large features that cut across surfaces and don't belong to one phase. They have their own files.
-- Every task keeps its **`DEV_TASKS.md` ID** (U3, W1, D4, Rz2…) so it traces back to the full spec
-  and honesty notes there. `docs/DEV_TASKS.md` is the **Dioxus** app's backlog — it's nearly all
-  ✅ *there*, and it's the **parity target**: the Freya port has to reach it surface by surface.
+- **Phases** followed the port plan's original 0–6 order. Tasks are **feature-level** — small
+  enough to pick up, finish, and verify on a Mac build in one sitting. A **completed** phase or
+  workstream has its folder removed; what each finished task settled lives in
+  `docs/reference/SETTLED_TASKS.md`.
+- **Workstreams** sit *outside* the linear phases — large features that cut across surfaces and
+  don't belong to one phase. They have their own folders.
+- Tasks carry the old **DEV_TASKS ID** (U3, W1, D4, Rz2…) where one exists. The Dioxus-era
+  backlog those IDs indexed is gone from the repo; the IDs survive as feature names, in the task
+  files and in `docs/reference/SETTLED_TASKS.md`.
 - The **design source of truth** is the `.dc.html` canvases in `.claude/design-handoff/` (read the
-  source, don't screenshot). `docs/DESIGN_SPEC.md` §14 + `docs/FEATURES.md` back them.
+  source, don't screenshot).
 
 ## The big framing (read before sizing anything)
 
-- **The workbench is part-built, part-stub — and the round trip is now wired.** The datagrid core
-  and tab strip are real, and since P2-03 the grid renders the **real result set** (the fixture is
-  gone): page 1 rides the Run's output, later pages are cached snapshot reads, and a minimal pager
-  sits in the status bar. Since P2-01/P2-02, editor → run → engine → results is live: the results
-  state machine (empty / running / grid / explain / error) is driven by freya-query off the tab's
-  SQL. Since P2-06 the **running** body is real (spinner · live elapsed · Cancel/Esc). Still to
-  build: the **explain-plan** body content (its state is reached, the body is a placeholder), the
-  **status bar** pager/info, and the **Table/Chart switcher, find, record view, copy** surfaces. So Phase 2 remains **build *and* wire** — per surface, on a live spine.
-- **The core logic survives.** The DataFusion engine + `Command`/`Event` protocol, the SQL language
-  service (`sql`), `serialize`, `plan`, `profile`, view-deps/validity, config, and `.strata`
-  persistence all live in **`strata-core`/`strata-model`** and are done. So most remaining Freya work
-  is **UI + wiring**, not rebuilding logic. A task tagged `[core ✓]` means "the hard logic exists;
-  build the Freya surface and wire it."
+- **The workbench is built.** Editor → run → engine → results is live end to end: the datagrid
+  and tab strip, the results state machine (empty / running / grid / explain / error / statement)
+  driven by freya-query off the tab's SQL, the running body, the explain-plan view, the
+  status-bar pager, and the Table/Chart switcher, find, record view and copy surfaces all exist
+  in the tree (`views/workbench/`). What each of those slices settled is in
+  `docs/reference/SETTLED_TASKS.md`.
+- **The core logic survives.** The DataFusion engine (now a direct-call async facade), the SQL
+  language service (`sql`), `serialize`, `plan`, `profile`, view-deps/validity, config, and
+  `.strata` persistence all live in **`strata-core`/`strata-model`** and are done. So most
+  remaining Freya work is **UI + wiring**, not rebuilding logic. A task tagged `[core ✓]` means
+  "the hard logic exists; build the Freya surface and wire it."
 - **Freya has been a slow, learn-as-we-go build** (the datagrid alone — hover, selection, resize,
   autofit — took many iterations against Freya's reactivity/event model). Size tasks accordingly; a
   "simple" surface often carries a Freya-idiom discovery cost. Prefer **reusing + theming Freya
-  built-ins** (plan §5) over hand-rolling.
+  built-ins** (AGENTS.md §3) over hand-rolling.
 
 ## Status legend
 
@@ -52,68 +52,80 @@ Read this index first, then open only the phase/workstream file you're working i
 
 ## Where we are
 
+Completed phases have had their task folders removed; their settled record — including the
+corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.md`.
+
 | Phase | Scope | State |
 |---|---|---|
 | 0 · Core extraction | `strata-model` / `strata-core` split; both frontends on the shared core | ✅ done |
-| 1 · Skeleton + engine round-trip | window shell, per-window state scaffold, engine bridge | ✅ shell up, round-trip wired (P2-01/02: direct-call facade + freya-query) |
-| **2 · Workbench** | editor · results grid · tabs · run/explain · toolbar · status bar | 🟡 **datagrid + tabs + running body built; run/explain wired to real results states; plan body + chart-switcher/find/record/copy still to build** → `phase-2-workbench/` |
-| 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · bottom drawer | ✅ **done** — shell · header · catalog sidebar (re-scan · validity · drop confirm · row menus · failure messages) · column inspector + profiling + cost confirm · the whole drawer (Problems · Events · History) → `phase-3-catalog-inspector-drawer/` |
-| 4 · Multi-window | launcher · settings · export · config modal · native close · **write resiliency** | 🟡 **spine (incl. the load-fault close) + launcher + open path + session persistence + the whole Settings window + export + configure done**; New-Project UI (P4-13), layout persistence (P4-14) and **P4-15 (`.strata` write resiliency)** remain → `phase-4-multi-window/` |
-| 5 · Design polish | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | ⬜ ongoing → `phase-5-design-polish/` |
-| 6 · Platform + parity | keymap/hotkeys · command palette · native menu · then delete Dioxus | 🟡 **P6-01 (⌘K palette + its command registry) and P6-02 (the App/File/Edit/Window menubar) done**; the platform seam + the parity sweep remain → `phase-6-platform-parity/` |
+| 1 · Skeleton + engine round-trip | window shell, per-window state scaffold, direct-call facade + freya-query | ✅ done |
+| 2 · Workbench | editor · results grid · tabs · run/explain · find/record/copy · Table/Chart · toolbar · status bar | ✅ done (folder removed) |
+| 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · the whole drawer (Problems · Events · History) | ✅ done (folder removed) |
+| 4 · Multi-window | launcher · settings · export · configure · native close · write resiliency | ✅ done (folder removed) |
+| **5 · Design polish** | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | 🟡 **P5-06 (panel overflow) done; the rest open** → [`phase-5-design-polish/`](phase-5-design-polish/README.md) |
+| 6 · Platform + parity | keymap/hotkeys · command palette · native menu · parity sweep | ✅ done (folder removed) |
 
 ## Cross-cutting workstreams (not in a single phase)
 
-- **Connections + remote object stores** (`workstream-connections/`, DEV_TASKS **W7**) — the
-  activity-rail button, the sidebar connections pane, and the config-table LOCATION toggle +
-  S3/GCS/HTTP object stores. Touches Phase 2/3/4 surfaces. Spec: `docs/CONNECTIONS_SPEC.md`.
-  **W7 is done (01–04)** — the `ConnectionDef` model and its place in the committed
-  `project.json`, the object stores (`engine::store`, with the `aws-config` credential bridge),
-  the registration pass's connections-first phase, the sidebar pane (list · status · Forget), the
-  editor window that adds and edits one (`apps/connection/`), and the Configure window's LOCATION
-  toggle with the object-store branch behind it: a table def names its connection
-  (`TableDef::connection`) and its sources are bucket-relative, composed by
-  `project::resolve_source`. W7-01 raised the workspace's effective MSRV to **rustc 1.94.1**.
-- **Chart view** (`workstream-chart-view/`, DEV_TASKS **Rz2**) — the results Chart surface:
-  engine-side chart data (`Engine::chart` over the snapshot), a plotters/Skia renderer, encoder
-  strip, guardrails. A whole feature surface, not drift. Spec: `docs/CHART_SPEC.md`.
-- **Polymorphic JSON** (`workstream-json-polymorphic/`) — reading JSON whose fields disagree across
-  records (a type-discriminated union), and querying inside the result. Two halves: **WJ-01** the
-  Postgres-style JSON accessors (`json_get` / `->` / `->>`), and **WJ-02** a union-tolerant
-  `FileFormat` that stringifies a conflicted field to `Utf8` instead of failing schema inference.
-  Entirely `strata-core`; no UI surface of its own.
-- **Agent access** (`workstream-agent-access/`, AA) — agent-driven access to a project's data:
-  one read-only tool vocabulary over a verified Tokio↔Freya bridge, with thin swappable
-  frontends — an in-app MCP server first (agent queries land as **real query tabs** on the
-  ordinary press → snapshot machinery), a native chat pane as the flagship follow-on, a headless
-  `strata mcp <project>` stdio host third. Spec: `docs/AGENT_ACCESS_SPEC.md` (+
-  `docs/agent-access-dataflow.mermaid`).
-- **Editor statements** (`workstream-editor-statements/`, ED) — lifting the
-  managed-DDL policy into a full-statement editor: internal tables persisted under
-  `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`, editor
-  `COPY TO`, session statements + `CREATE FUNCTION`. Providers for identity/visibility,
-  interception for lifecycle; the agent surface stays read-only. Spec: `docs/STATEMENTS_SPEC.md`.
+- **Connections + remote object stores** (W7) — ✅ **done (01–04), folder removed**: the
+  `ConnectionDef` model in the committed `project.json`, the object stores (`engine::store`, with
+  the `aws-config` credential bridge), the registration pass's connections-first phase, the
+  sidebar pane, the editor window (`apps/connection/`), and the Configure window's LOCATION
+  toggle (`TableDef::connection`, bucket-relative sources composed by `project::resolve_source`).
+  W7-01 raised the workspace's effective MSRV to **rustc 1.94.1**. Spec:
+  `docs/CONNECTIONS_SPEC.md`; settled record: `docs/reference/SETTLED_TASKS.md`.
+- **Chart view** ([`workstream-chart-view/`](workstream-chart-view/README.md), **Rz2**) — the
+  results Chart surface. **The core is built (00–04 ✅)**: the snapshot ordinal, the
+  renderer-first `Engine::chart` read, the plotters/Skia body, the encoder strip + `ChartConfig`,
+  and the guardrails. Open: the follow-ons (05–11 — presets, interactivity, templates, copy
+  image, shape panel, Tier B marks, trendline). Spec: `docs/CHART_SPEC.md`.
+- **Polymorphic JSON** (WJ) — ✅ **done, folder removed**: the Postgres-style JSON accessors
+  (WJ-01) and the union-tolerant `FileFormat` (WJ-02, `engine::json_poly`). Entirely
+  `strata-core`; no UI surface of its own.
+- **Agent access** ([`workstream-agent-access/`](workstream-agent-access/README.md), AA) —
+  agent-driven access to a project's data: one read-only tool vocabulary (`strata-agent`) over a
+  verified Tokio↔Freya bridge, with thin swappable frontends. **01–05 (incl. 03b/03c) ✅**: the
+  in-app MCP server, the Agents pane (an agent's runs are dispatched straight at the engine and
+  shown in their own surface, promotable into a **new** tab — never a press on the user's tabs),
+  the Settings pane, and the headless `strata mcp <project>` stdio host. Open: **AA-06, the chat
+  pane** (the flagship follow-on). Docs: `docs/AGENT_ACCESS_SPEC.md` (as-built, dataflow
+  diagram inlined).
+- **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
+  ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
+  under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,
+  editor `COPY TO`, session statements + `CREATE FUNCTION`. Providers for identity/visibility,
+  interception for lifecycle; the agent surface stays read-only. **01–04 ✅** (the router,
+  `Engine::run` + statement results, the Strata providers, internal tables); **05–10 open**
+  (INSERT/DROP, typed view DDL, editor COPY, session statements, function factory, typed
+  `CREATE EXTERNAL TABLE`). Docs: `docs/STATEMENTS_SPEC.md` (the surface as built; each open
+  task's design is in its own file).
 
-## Known bugs (carried from DEV_TASKS; re-verify under Freya)
+## Known bugs (carried from the Dioxus-era backlog; re-verify under Freya)
 
 - **Re-opening the already-open project via Open Recent corrupts its saved paths** (relative source
   paths + partition columns mangled on next save). Was in the Dioxus `open_in_current` path — confirm
-  whether the Freya session/persistence port reintroduces it.
-- **Editing a view's SQL and pressing ⌘S saves a new saved-query instead of updating the view.** The
-  editor needs to remember a tab's *origin* (a view) and route Save to `CREATE OR REPLACE VIEW`.
+  whether the Freya session/persistence port reintroduces it (in Freya, `platform::open::decide`
+  makes an own-project open a no-op, which should make the path unreachable).
+
+(The old second entry — ⌘S on a view-bound tab saving a new saved-query — was fixed by P2-16:
+`editor/actions.rs` dispatches Save on the tab's `Origin` and a view tab re-issues
+`CREATE OR REPLACE VIEW`.)
 
 ## Rough order
 
-1. **Phase 2 plumbing first** — wire the query round-trip so the workbench is live, then light up each
-   results feature (sort, record, copy, plan, find, clear, status aggregate) against real data.
-2. **Phase 3** — catalog/inspector/drawer (the app is barely usable without the catalog).
-3. **Phase 4** — launcher + settings + export windows (multi-window on shared state).
-4. **Connections** + **Chart** workstreams (largest net-new features).
-5. **Phase 5 polish** + **Phase 6 platform/parity**, then delete the Dioxus app.
+1. **Editor statements** (ED-05..10) — the open capability arms over the built router/dispatch
+   spine; ED-04/05 include the catalog pane's internal-table treatment.
+2. **Agent access AA-06** — the chat pane (starts with the deferred brain decision; read AA-03c's
+   identity finding first).
+3. **Chart follow-ons** (05–11) — presets, interactivity, templates, copy image, shape panel,
+   Tier B marks, trendline.
+4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
+   with the above.
 
 ## Sourcing
 
-Derived from `docs/FREYA_PORT_PLAN.md` (phases, survives-vs-rewrite, Freya gotchas),
-`docs/FREYA_STATE_ARCHITECTURE.md` (per-window state), `docs/DEV_TASKS.md` (the parity target +
-per-surface drift + honesty calls + known bugs), the `.dc.html` design canvases, and the current
-`strata-freya` tree.
+Derived from the original port plan and the Dioxus-era DEV_TASKS backlog (both since removed
+from the repo — what their completed tasks settled is `docs/reference/SETTLED_TASKS.md`),
+`docs/FREYA_STATE_ARCHITECTURE.md` (per-window state), the `.dc.html` design canvases, and the
+current `strata-freya` tree. The Dioxus app itself has been deleted; the Freya app is the only
+frontend.

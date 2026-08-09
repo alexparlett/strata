@@ -1,14 +1,12 @@
 # Result snapshots — the query round-trip's stable read model
 
-The design for **P2-01**: what a Run materializes, what identifies it, what reads it, and when it
-dies. Supersedes the `QuerySpec { sql, page, epoch }` sketch in `FREYA_STATE_ARCHITECTURE.md` §6
-(that section now matches this spec).
+What a Run materializes, what identifies it, what reads it, and when it dies.
+`FREYA_STATE_ARCHITECTURE.md` §6 is this model's summary.
 
-> **Engine boundary note.** This work also replaced the Dioxus-era `Command`/`Event` channel
-> protocol with a **direct-call async facade** (§5): the engine owns a private Tokio runtime and
-> exposes plain async methods, which freya-query capabilities await directly — the shape
-> freya-query is built for. The retired protocol lives on only in `crates/strata-dioxus`
-> (reference code; no longer builds).
+> **Engine boundary note.** The engine boundary is a **direct-call async facade** (§5): the
+> engine owns a private Tokio runtime and exposes plain async methods, which freya-query
+> capabilities await directly — the shape freya-query is built for. (The Dioxus-era
+> `Command`/`Event` channel protocol it replaced was removed with the Dioxus app.)
 
 ---
 
@@ -23,7 +21,7 @@ Keying results by raw SQL is unsafe and insufficient:
 - **Sort / filter / export** must operate over a *fixed set*, not re-run the query each time.
 
 So a **Run executes the SQL exactly once** and spools the full result to an on-disk **Arrow IPC
-snapshot** (LZ4-compressed) (the `__snap_*` mechanism carried forward from the Dioxus app). Every later read —
+snapshot** (LZ4-compressed). Every later read —
 page, sort, filter, export — is a bounded read *of that snapshot*, and the snapshot is
 **immutable**: once materialized it is never rewritten. Immutability is what makes downstream
 caching sound.
@@ -44,9 +42,8 @@ of the process. It is the snapshot's identity and its storage name:
   opened and exclusively locked by `Engine::new` and held open for the engine's whole life
 
 Because every *execution* allocates a fresh id, snapshot ids are never reused — a re-run of
-identical SQL produces a **new** snapshot. (This deliberately drops state-arch §6's "two tabs
-running the same spec share a cache entry": sharing by SQL identity is exactly the freshness bug
-in §1.)
+identical SQL produces a **new** snapshot. There is deliberately no sharing between two tabs
+running the same SQL: sharing by SQL identity is exactly the freshness bug in §1.
 
 Each window's engine only ever touches its own subdirectory. The **lock file** is what makes that
 survive a *second process*: a pid can be recycled, so the directory name alone never proves its
@@ -82,7 +79,7 @@ QueryOutput {
 ```
 
 id + schema + row count — plus page 1, so the grid renders without a follow-up read. The
-type-aware page-1 `RecordBatch` rides alongside in the event (unchanged from today).
+type-aware page-1 `RecordBatch` rides alongside in the return value.
 
 An **empty result registers no snapshot** (`snapshot: None`, `total: 0`); there are no pages to
 read, and the UI has the schema from `columns`.
@@ -118,7 +115,7 @@ returns a `SnapshotPin` (RAII — dropping it releases): while at least one pin 
 that snapshot is recorded in `deferred` instead of executed, and lands when the last pin drops.
 Pins are counted, so two holders are independent.
 
-The export window (P4-10) is the first holder and the reason this exists: it is opened *on a
+The export window is the canonical holder and the reason this exists: it is opened *on a
 result*, the user may go back and re-run the query while it sits there, and it must still write
 the rows that were on screen when they asked. Without a pin a re-run deregisters the table
 mid-`COPY` — a truncated file under the user's chosen name — or, more quietly, makes a later
@@ -135,7 +132,7 @@ nothing for an epoch to invalidate: catalog freshness is the `ProjectState` stor
 a store, not a query — see `FREYA_STATE_ARCHITECTURE.md` §6), result freshness is the user's Run
 button.
 
-Disk, not memory: RAM holds one page regardless of result size (unchanged).
+Disk, not memory: RAM holds one page regardless of result size.
 
 ## 5. The engine facade
 
@@ -147,7 +144,12 @@ channels, no event stream, and no request ids *crossing the boundary* — the ca
 call's return value (the engine's private dispatch id, below, is bookkeeping the UI never sees).
 
 ```rust
-// Run: execute once → spool a fresh snapshot → page 1 + handle back.
+// The editor's entry point: classify the statement, then run a query (delegating to
+// `query` byte-for-byte), execute an intercepted statement, or refuse it — the
+// statement router, docs/STATEMENTS_SPEC.md.
+async fn run(ws: WsId, tag: RunTag, sql, page_size) -> Result<RunOutcome, String>
+
+// Run's Query arm: execute once → spool a fresh snapshot → page 1 + handle back.
 async fn query(ws: WsId, tag: RunTag, sql, page_size) -> Result<(QueryOutput, RecordBatch), String>
 
 // Read: bounded LIMIT/OFFSET (+ optional whole-snapshot ORDER BY) over one snapshot.
@@ -157,8 +159,8 @@ async fn fetch_page(snapshot, page, page_size, sort: Option<(String, bool)>)
 // Explain: parsed plan tree, no snapshot.
 async fn explain(ws: WsId, tag: RunTag, sql) -> Result<QueryPlan, String>
 
-// Lifecycle: cancel is scoped to the run `tag` (S14 — a stale cancel can't abort a
-// just-started newer run); cleanup_ws is the tab-close hook; Drop clears everything.
+// Lifecycle: cancel is scoped to the run `tag`, so a stale cancel can't abort a
+// just-started newer run; cleanup_ws is the tab-close hook; Drop clears everything.
 fn cancel(ws, tag) -> Option<elapsed_ms> · fn cleanup_ws(ws) · impl Drop
 ```
 
@@ -177,13 +179,13 @@ deliberately engine-internal: it never crosses the boundary, has no UI represent
 replaces nothing the tag can do.)
 
 `sort` stays a read-time parameter (an `ORDER BY` over the whole snapshot before the page
-window — Rz6), never a rewrite of the snapshot. An **unsorted** read is `ORDER BY` the row
+window), never a rewrite of the snapshot. An **unsorted** read is `ORDER BY` the row
 ordinal (§9) — a bare `LIMIT/OFFSET` over the registered table has **no** inherent order, and
-above the scan-split threshold it is measured-nondeterministic. **Filter** (P2-09/P2-13's
-find/filter work) extends `fetch_page` the same way when it lands: a `WHERE` over the snapshot,
-part of the read key, snapshot untouched. **Export** (its own task) adds `Engine::export` over `run_export`,
-streaming from one snapshot. The facade grows one method per feature; the logic lives in the
-engine's submodules as plain async functions.
+above the scan-split threshold it is measured-nondeterministic. **Export** is `Engine::export`
+over `export::run_export`, streaming from one snapshot. The facade grows one method per
+feature, always as a read of the immutable snapshot (a filter, should one ever land, is a
+`WHERE` in the read key — never a rewrite); the logic lives in the engine's submodules as plain
+async functions.
 
 ## 6. The UI layer (freya-query)
 
@@ -203,6 +205,8 @@ RunQuery(Captured<EngineCtx>): QueryCapability<Keys = QuerySpec, Ok = QueryOutco
 
 QueryOutcome::Rows(QueryPage { output: QueryOutput, batch: RecordBatch })   // mode: Run
 QueryOutcome::Plan(QueryPlan)                                               // mode: Explain
+QueryOutcome::Statement(StatementReport)   // mode: Run, intercepted statement — no snapshot,
+                                           // and none retired (docs/STATEMENTS_SPEC.md)
 
 // A page read — targets one immutable snapshot. THIS is the safe cache key.
 PageSpec {
@@ -210,7 +214,6 @@ PageSpec {
     page: usize,
     page_size: usize,
     sort: Option<(String, bool)>,
-    // filter joins here when P2-09/13 land
 }
 FetchSnapshotPage(Captured<EngineCtx>): QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = String>
 ```
@@ -249,15 +252,15 @@ Run flow end-to-end:
 1. Run press: `request.set(Some(QuerySpec { tab, run: RunId::new(), sql: editor_text, mode: Run, page_size }))`.
 2. Results element (and the tab's keeper pin): `use_query(spec.query(&engine))` →
    `Pending/Loading` renders Running.
-3. `RunQuery::run` → `engine.query(tab.into(), run.into(), sql, page_size).await` — the direct
-   facade call (§5); the query settles; grid renders page 1 from `QueryOutput` + holds the handle.
+3. `RunQuery::run` → `engine.run(tab.into(), run.into(), sql, page_size).await` — the direct
+   facade call (§5, the statement router; a `SELECT` reaches `query` one match arm further in);
+   the query settles; grid renders page 1 from `QueryOutput` + holds the handle.
 4. Paging/sort: the grid drives `use_query(FetchSnapshotPage)` with
    `PageSpec { snapshot: handle, … }` — fetched once per distinct key, cache-served after.
 5. Cancel: `engine.cancel(tab.into(), run.into())` — the awaiting run settles `Err("cancelled")`.
 
-Steps 1–3 are wired (P2-02): the workbench owns the `request` slot (props to toolbar + results —
-placement rationale in state-arch §6 "As built"); step 4 lands with the grid model (P2-03), step 5
-with Run→Cancel (P2-15/P2-06).
+The workbench owns the `request` slot and hands it down as props to the toolbar and results
+pane (placement rationale in `FREYA_STATE_ARCHITECTURE.md` §6).
 
 ## 7. `EngineCtx` — the window's handle
 
@@ -277,15 +280,15 @@ path (close / close-others / close-right / close-all) is covered without touchin
 
 ## 8. What this replaces
 
-- The Dioxus runs-by-id store and its hand-rolled page cache — freya-query owns caching.
-- The Dioxus-era `Command`/`Event` channel protocol + worker loop and the router/oneshot demux
-  design that bridged it into freya-query — replaced whole by the direct facade (§5). The
-  protocol survives only in `crates/strata-dioxus` (reference; no longer builds).
-- `QuerySpec { sql, page, epoch }` (state-arch §6, superseded): `page` moved into `PageSpec`
-  reads, `epoch` retired (§4), `window` dropped — nonce + snapshot ids are process-unique, so a
-  per-window discriminator adds nothing.
-- Snapshot naming by `ws_id` (`__snap_{ws}` / `ws_{ws}.parquet`) — replaced by per-run identity
-  (§2); the ws keeps only *ownership* of its current snapshot for lifecycle (§4).
+Two shapes were considered and rejected, and the reasons still constrain the design:
+
+- **Keying results by SQL** (`QuerySpec { sql, page, epoch }`): raw-SQL identity is the
+  freshness bug of §1. `page` belongs on the read (`PageSpec`), and with per-Run identity there
+  is nothing for an `epoch` to invalidate (§4). A per-window discriminator adds nothing either —
+  nonce + snapshot ids are process-unique.
+- **Snapshot naming by workspace** (`__snap_{ws}`): a re-run rewrites the name in place under
+  any reader. Per-run identity (§2) keeps every snapshot immutable; the ws keeps only
+  *ownership* of its current snapshot for lifecycle (§4).
 
 ## 9. Row order — the ordinal column
 
@@ -334,8 +337,9 @@ unordered exactly as every snapshot's were before ordinals existed — both are 
 degraded shapes where that is the honest behavior:
 
 - An `EXPLAIN` / `EXPLAIN ANALYZE`: DataFusion requires those at the plan root, so a window on
-  top fails the whole run — and the managed-DDL policy promises the editor can run them. Their
-  output is a handful of plan rows, nowhere near the split threshold.
+  top fails the whole run — and the statement router's Query arm promises the editor can run
+  them (`docs/STATEMENTS_SPEC.md`). Their output is a handful of plan rows, nowhere near the
+  split threshold.
 - A result with **duplicate column names** (`SELECT a.i, b.i FROM … JOIN …`): the registered
   table resolves columns by name, so a typed column appended after two same-named ones made
   every later read mis-map the second onto the ordinal's slot and fail. Ordinal-less, such a

@@ -1,7 +1,9 @@
 # strata-freya module map
 
-The annotated tree of the Freya app: what each module is and, where it matters, why it is
-shaped that way. Read this when locating code or deciding where something new belongs.
+The annotated tree of the Freya app — plus short maps of its two satellite crates,
+`strata-agent` and `strata-command-macro`, at the end: what each module is and, where it
+matters, why it is shaped that way. Read this when locating code or deciding where something
+new belongs.
 Companion to [CLAUDE.md](../../CLAUDE.md) (workspace layout) and
 [AGENTS.md](../../AGENTS.md) (the rules the shapes follow).
 
@@ -122,6 +124,11 @@ src/task.rs                      `offload` — **the** way blocking work leaves 
                                  a quiet network mount freezes the app. A thread per call (a pool
                                  would let one wedged mount hold up the next open), and cancelling
                                  means dropping the answer — a blocking syscall cannot be stopped
+src/keymap.rs                    Freya-side keymap glue: the event→chord fold, `on_command` (the
+                                 distributed-dispatch handler builder — no registry: each feature
+                                 attaches its own global listener, precedence is document order,
+                                 and a handled press consumes via `prevent_default`) and reactive
+                                 shortcut hints. Policy + resolution live in `strata-core::keymap`
 src/theme/                       Freya theme application. `mod.rs`: RoleColors + `use_roles()`,
                                  StrataPalette + `bridge_sheet` (feeds the fork's 27-slot
                                  ColorsSheet from the roles), syntax registration, ThemesCtx (the
@@ -136,8 +143,15 @@ src/theme/                       Freya theme application. `mod.rs`: RoleColors +
                                  live in `strata-core::theme`; the theme files in root `themes/`
 src/components/                  shared component library
   divider, dot, icon, run_button, segmented_toggle, toggle_button, typography
+  avatar.rs                      the initials tile leading a project row (the header's switcher,
+                                 the launcher's lists). The caller passes the *name* — deriving
+                                 the initials is the component's job, so every list spells a
+                                 project the same way
   badge.rs                       tinted label pill (PART · HOTSPOT · ANALYZE · dtype).
                                  NOT Freya's `Chip` — that's a selectable, focusable control
+  dialog.rs                      the modal dialog shell — every centred confirm is header · body ·
+                                 footer on this one card; callers supply only what differs (the
+                                 header's icon, tone and title run, the body, the buttons)
   keycap.rs                      a **key cap** (`"keycap"` token group): Settings ▸ Keymap's
                                  chords and the palette's shortcut hints have to look like the
                                  same kind of object, and the colours were the `settings` theme's
@@ -148,9 +162,24 @@ src/components/                  shared component library
   sidebar_row.rs                 the left pane's row shell: a preset over Freya's `SideBarItem`
                                  (+ `Activable` for selection), so hover/selected dress and a11y
                                  are shared by the catalog and, later, connections (W7)
+  tones.rs                       the four semantic tones (success · info · warning · error) read
+                                 off the roles as **one** shared hook — the only place that reads
+                                 them; three surfaces had grown three copies of the four-slot read
+  tool_button.rs                 the 28×28 list-toolbar icon button (add / remove / duplicate /
+                                 paste / browse) — the *action* carries the tone, and the label is
+                                 a **required** tooltip, because an icon-only button has no
+                                 accessible name of its own
+  toolbar.rs                     P5-06 — the chrome row that degrades instead of spilling:
+                                 [ leading run (ellipsizes) ][ items (fold tail-first into ⋯) ]
+                                 [ pinned tail (never folds) ]. One fold policy for every row,
+                                 arithmetic over the item list
   type_palette.rs                the seven per-`Kind` hues (`"type_palette"` theme group) +
                                  `kind_color`. Named for Kind, not Arrow; the EXPLAIN plan
                                  borrows the same ramp for operator kinds
+  window.rs                      **window chrome** — the tones every window's body, recessed
+                                 insets, rules and status blocks are built out of. One theme for
+                                 all windows, not one per window; a field is added when a surface
+                                 reads it, never in anticipation
   form/                          **the form vocabulary** every settings-style surface is built
                                  from — export options, the config modal, the Settings panes —
                                  under one `form` component theme. mod.rs carries the theme, the
@@ -183,6 +212,11 @@ src/components/                  shared component library
                                  folder or one file: one buffer, both write it — the picker sets
                                  the box and the box is what reports. One component for both
                                  kinds, because they differ in the picker call and nothing else)
+    options.rs                   **options as data** — a surface hands over a `Vec<Group<E>>` and
+                                 this renders it blind, one component per control *shape*, so a
+                                 new option is a row in a table rather than a branch in a
+                                 component (P4-10 / D6). Every option carries the `Edit` it
+                                 performs, so a control cannot write the wrong field
 src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher.dc.html`)
   mod.rs                         root + window config + the `launcher` component theme
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
@@ -272,6 +306,7 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
                                  merge field, so a token written behind the draft's back would be
                                  overwritten by the next Apply — and Cancel is the undo a
                                  credential wants
+src/apps/export/                 the Export window (P4-10 — `Export.dc.html` for the layout,
                                  `Strata.exportGroups()` for the options) — opened from the
                                  results toolbar, pinned above the project window that asked
   mod.rs                         root + window config + the `export` component theme, and
@@ -323,7 +358,10 @@ src/apps/connection/             the **connection editor** window (W7 · 03 —
                                  provider's fields flat so flipping the picker forgets nothing,
                                  and projects the one in play, plus `ConfigRows` — the client
                                  options edited as identified rows and committed as a map),
-                                 views/ (title_bar · form · status · footer). The form's rows are
+                                 interaction.rs (the editor driven as a user drives it: which
+                                 controls a provider has, and a Save that writes one def and
+                                 deregisters the URL it moved off — tests), views/ (title_bar ·
+                                 form · status · footer). The form's rows are
                                  **all keyed by the provider**, so switching one is a clean
                                  remove-and-add: a row that merely *moves* index is recorded by
                                  the differ as moved and then unwraps a scope it left behind. Configure's shape throughout: a child of the
@@ -353,6 +391,13 @@ src/apps/project/                the project window (Valin-shaped)
                                  created, so they are a launch input the *caller* resolves —
                                  offloaded, and given up on after 250ms, because that read is on
                                  the same folder and used to be what froze the app first
+  close.rs                       the window's **close bridge**: the close-while-running confirm
+                                 (T2) and the last-window-becomes-the-launcher rule, one
+                                 mechanism because both need the OS close held off long enough
+                                 for the UI to act — `on_close` runs on the winit thread and must
+                                 be `Send`, so a guard (`CloseGuard`, atomics) answers it
+                                 synchronously and a declined close sends a `Veto` that wakes the
+                                 UI to do what the hook couldn't, then re-close programmatically
   commands.rs                    P6-01 — the **command registry** the palette's ACTIONS group
                                  offers: nine methods, each carrying its own metadata, over
                                  `strata-command-macro`'s `#[command_router]`. rmcp's declaration
@@ -422,6 +467,11 @@ src/apps/project/                the project window (Valin-shaped)
                                  capped): the record behind the drawer's Events tab. No producer
                                  hook — whichever layer observed the fact appends it (the scan
                                  pass, Save, the drop confirm, the keeper's settle, `cancel_run`)
+                                 history.rs = P4-14's **query-history** satellite
+                                 (`.strata/history.jsonl` — never a store field): a list of
+                                 queries, not presses — a re-run moves its entry up with the
+                                 newest figures, keyed by `collapse_sql`, dedupe before the cap.
+                                 The drawer's History tab reads it; Clear unwrites the file
                                  persist.rs = P4-15's **write funnel**: the one place a `.strata`
                                  write failure is reported. `persisted(log, ProjectFile, write)`
                                  → an event row + a `bool` the caller uses to decline claiming a
@@ -455,6 +505,23 @@ src/apps/project/                the project window (Valin-shaped)
                                  wording because a blocking syscall cannot be cancelled. No
                                  engine, no store, no `Subtree`. Shares the fault arm's
                                  once-only close + confirm-slot drain (`use_engineless_close`)
+    shell.rs                     P3-01 — the body shell: rail | (sidebar · workbench · inspector
+                                 over the drawer), the collapsibles as `ResizableContainer`
+                                 panels — present only when the layout has them open, keyed with
+                                 fixed `.order()` so the workbench survives a sibling collapse
+    rail.rs                      the 48px activity rail: two `ToggleButton` groups — the top
+                                 picks the sidebar pane (Catalog · Agents · Connections), the
+                                 bottom the drawer tab (Problems · Events · History). `on` is
+                                 *derived* from the layout, the single source of truth; a press
+                                 routes through the layout store's toggle
+    configure_launch.rs          P4-11 — the slot a "Configure…" trigger sets and the one place
+                                 that acts on it: a row's ⋮ menu is built inside an event handler
+                                 where no hook may run, so the trigger sets `ConfigureTarget` and
+                                 does nothing else, and this root-mounted watcher — where the
+                                 window's handles actually live — opens the window
+    connection_launch.rs         W7 · 03 — configure_launch's shape verbatim over
+                                 `ConnectionTarget`: a sidebar trigger sets the slot, the
+                                 root-mounted watcher opens the connection editor
     header/
       mod.rs                     the header bar — and the window's macOS title bar: brand ·
                                  switcher · ⌘K/⌘, cluster, drag + double-press-to-fill
@@ -475,7 +542,10 @@ src/apps/project/                the project window (Valin-shaped)
                                  to run. That press is the *only* way an agent's work reaches the
                                  tab strip
       catalog/                   P3-02: mod (pane + sections), section, entry (entry/column/
-                                 saved-query rows), columns (flatten + tests), interaction (tests)
+                                 saved-query rows), columns (flatten + tests), menu (P3-06: one
+                                 item list per row kind, shared by right-click and the ⋮ so the
+                                 two triggers can't drift; Drop opens the confirm, never drops),
+                                 interaction (tests)
       connections/               W7 — the project's object stores: mod (pane + theme + the
                                  header's ⓘ and `+`, one row per `ConnRow`), interaction (tests).
                                  **The catalog entry row's shape**: badge, bucket, one trailing
@@ -555,13 +625,22 @@ src/apps/project/                the project window (Valin-shaped)
                                  subscriber presence) and records history at settle time
     workbench/
       mod.rs, empty.rs           workbench shell + no-query empty state
-      editor/                    SQL editor: tab, toolbar
+      editor/                    SQL editor: tab, toolbar, actions (P2-16 — Format/Clear + the
+                                 Save dispatch on the tab's `Origin`: a view-bound tab re-issues
+                                 `CREATE OR REPLACE VIEW` on *its* view, a saved-query tab
+                                 overwrites by id, a scratch tab Save-As-es; free functions over
+                                 the window's stores, so the toolbar and ⌘S share one
+                                 implementation)
       tab_bar/                   bar, tab, controls (new/navigate/overflow), drag, menu (context menu)
       results/
         mod.rs                   results panel — freya-query-driven states (empty / running /
                                  grid / explain / error) off the workbench's `request` slot
-        datagrid/                mod, header, cell, model  (sticky typed header, virtualized cells,
-                                 per-column resize + double-click autofit)
+        datagrid/                mod, header, cell, row, model, interaction  (sticky typed
+                                 header, virtualized cells, per-column resize + double-click
+                                 autofit; row.rs is one virtualized body row — everything
+                                 reactive read *inside* the memoized builder — owning its cells'
+                                 handlers: record view, value modal, right-click copy menu;
+                                 interaction.rs the focus-routed copy-chord + copy-menu tests)
         record_view.rs           the whole-row modal (P2-10): its nested blocks are
                                  `cell_preview_json`'s **bounded, sampled** text (P2-24), built once
                                  per row through a synchronous `PreviewMemo` rather than per render
@@ -576,6 +655,11 @@ src/apps/project/                the project window (Valin-shaped)
                                  for
         selection.rs             cell/row/column selection model + SelCtl controller
         find.rs                  find-in-results (P2-09): FindState + the page-local filter
+        sort.rs                  column sort (P2-13): the per-run sort intent the header
+                                 chevrons cycle, owned by the results body (so it resets with
+                                 every press, like the page number) and folded into the snapshot
+                                 read — `ORDER BY` over the whole snapshot at page-read,
+                                 `PageSpec.sort` part of the cache key
         chart/                   the Chart body (Rz2): mod.rs is the surface — the
                                  `ChartSpec` subscription and the notice states; config.rs
                                  the column roles, the per-mark option sets, and the one
@@ -585,10 +669,70 @@ src/apps/project/                the project window (Valin-shaped)
                                  the X/Y/Series encoders, the sort toggle and the legend;
                                  paint.rs the frame + the `canvas` (slot-peeked, redraw
                                  requested); axis.rs the plotters `Ranged` category coord +
-                                 nice max + abbreviated tick; marks.rs a render fn per mark
-        toolbar.rs, status_bar.rs, running.rs, explain_plan.rs, empty.rs, error.rs
+                                 nice max + abbreviated tick; marks.rs a render fn per mark;
+                                 preview.rs the headless PNG harness (the plan view's), because
+                                 a chart's correctness is *visual*
+        explain_plan/            the EXPLAIN plan view (P2-05, EXPLAIN_PLAN_SPEC v3): mod.rs the
+                                 `explain_plan` theme + the shell (Physical/Logical segments ·
+                                 ANALYZE badge · Raw/Tree toggle over the tree or the raw text —
+                                 all values arrive pre-typed from `engine::plan`, no unit math);
+                                 node.rs one railed operator card + the three-tier ANALYZE
+                                 metrics block; palette.rs kind / metric / group / tone onto the
+                                 theme's colour fields; preview.rs the headless render harness
+                                 (`--ignored`, writes `target/plan-preview.png`)
+        toolbar.rs, status_bar.rs, running.rs, empty.rs, error.rs
         statement.rs             ED-02's **statement state**: an intercepted statement's report,
                                  in the empty-state layout in success dress. No grid, no pager,
                                  no snapshot handle — the tab keeps the one it had, because DDL
                                  retires nothing
+```
+
+## crates/strata-agent — agent access (Freya-free)
+
+Everything frontend-agnostic about agent access (`docs/AGENT_ACCESS_SPEC.md`). The crate has
+**no Freya dependency**, which is what lets one `StrataTools` serve HTTP (AA-03), stdio headless
+(AA-05) and, later, the in-process chat pane (AA-06).
+
+```
+src/lib.rs                       the crate charter + the seam diagram: rmcp server / stdio host /
+                                 chat loop → `StrataTools` (the ten tools) → `Host`
+src/tools.rs                     the **vocabulary** — the ten read-only tools (spec §5) as the
+                                 rmcp `ServerHandler`, deliberately transport-free. The policy
+                                 gate runs here, *before* dispatch; `run` never rewrites SQL and
+                                 reports a stop as a status, not a fault
+src/host.rs                      the **`Host` seam** — the union of the vocabulary's questions
+                                 and nothing else. Methods return `impl Future + Send` rather
+                                 than `async fn` (rmcp polls on its own runtime and needs `Send`,
+                                 which an `async fn` in a trait doesn't promise)
+src/wire.rs                      the **wire shapes** — flat JSON in/out, projected from the host
+                                 types by the `from_*` fns so no tool assembles a response by
+                                 hand. A cell is `null` or a string (the engine's own
+                                 `CellFormat` text, the same the grid shows)
+src/error.rs                     the error taxonomy (spec §7) — every fault typed once, rendered
+                                 once, as `isError` tool results. No `Stopped` variant (a stop
+                                 is an outcome shape, not a fault) and no `Unauthorized` (a bad
+                                 token is HTTP 401 before any tool runs)
+src/server.rs                    the MCP server: Streamable HTTP on loopback + bearer token,
+                                 stop-on-drop — the Engine pattern (a small private Tokio
+                                 runtime behind a plain handle), because rmcp needs a reactor
+                                 and the UI thread is not one
+src/headless.rs                  AA-05 — the **headless host**: `strata mcp <project>` over
+                                 stdio (the client owns the process, so process ownership *is*
+                                 the auth). A plain `Engine` with the registration pass replayed
+                                 on it; the pass's own outcomes are the catalog
+src/mock.rs                      `MockHost` — a `Host` over plain values and a **real** engine:
+                                 the vocabulary's test rig and the executable statement of what
+                                 a host owes. Public, not `#[cfg(test)]`, because the MCP
+                                 integration test lives in `tests/`
+```
+
+## crates/strata-command-macro
+
+```
+src/lib.rs                       the workspace's one proc macro: `#[command_router]` /
+                                 `#[command]` (P6-01) — rmcp's `#[tool_router]` declaration
+                                 shape (id from the method name, subtext from the doc comment)
+                                 but generating an **enum**, so dispatch is total by
+                                 construction and no unrunnable command exists. It knows nothing
+                                 of Strata's types — a registration mechanism, not a vocabulary
 ```

@@ -80,7 +80,7 @@ pub struct PlanNode {
     /// Output rows (`MetricsSet::output_rows`) — ANALYZE only; `None` on operators
     /// that don't emit a row count (e.g. `RepartitionExec`) or plain EXPLAIN.
     pub rows: Option<u64>,
-    /// Derived per-node **self-time** in ms (EXPLAIN_PLAN_SPEC §7) — the one
+    /// Derived per-node **self-time** in ms (EXPLAIN_PLAN_SPEC §3) — the one
     /// comparable "work done here" number; drives the time chip, the time-share bar
     /// and the hotspot. `None` on plain EXPLAIN (no metrics). See
     /// [`self_time_ms`](super::self_time_ms).

@@ -1,7 +1,7 @@
 //! **Agent access, the app-wide half** (AA-03) — the service directory a project window lends
 //! itself to, the vocabulary of what the server may ask it, and the server's own lifecycle.
 //!
-//! `docs/AGENT_ACCESS_SPEC.md` §4 is the design and every hop in it was verified against the
+//! `docs/AGENT_ACCESS_SPEC.md` ("How a run travels: two planes") is the design and every hop in it was verified against the
 //! fork before any of this was written. In one paragraph: the server lives on its own Tokio
 //! runtime (rmcp needs a reactor; the UI thread is not one), tabs and the catalog are UI-thread
 //! Radio state, and the seam between them is a `tokio::sync` channel — runtime-agnostic, so a

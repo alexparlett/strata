@@ -359,7 +359,7 @@ pub struct ColumnWire {
     pub children: Vec<ColumnWire>,
     /// Facts the source reports **for free** — read at registration, never computed. Empty
     /// for every format without metadata to read, which is every format but Parquet and
-    /// Arrow. Profiling is deliberately not exposed (spec §6).
+    /// Arrow. Profiling is deliberately not exposed (the spec's "The policy gate").
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<StatWire>,
 }

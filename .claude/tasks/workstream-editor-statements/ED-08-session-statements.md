@@ -5,14 +5,15 @@
 ## Goal
 
 Session-scoped statements, with the Settings store untouched as the durable config authority.
-`docs/STATEMENTS_SPEC.md` §6.4 + §6.5.
+The dispatch and report they ride: `docs/STATEMENTS_SPEC.md` §2; the EXECUTE caveat this task
+lifts: §1.
 
 ## Current state
 
 - Config: one app-global store; disk read once; `write_config` the sole write path; the engine's
   overrides are a launch value + `set_config` live-apply; owned keys fenced
   (`engine/config.rs:443`); `restart_owed` measures `runtime.*` against `built_runtime`.
-- Verified (spec §2): native SET applies `runtime.*` live (bypassing the restart discipline) and
+- Verified (workstream README, DataFusion 54 facts): native SET applies `runtime.*` live (bypassing the restart discipline) and
   native RESET restores DataFusion's default, not the Settings baseline — both are why SET/RESET
   never run natively. PREPARE/EXECUTE/DEALLOCATE are supported; plans in
   `SessionState.prepared_plans` (`pub(crate)` — no enumeration); `verify_plan` cannot see
@@ -29,14 +30,17 @@ Session-scoped statements, with the Settings store untouched as the durable conf
 - Otherwise: apply to the live ctx (the `set_config` apply path's options-set call) and record
   in `session_overlay: Mutex<BTreeMap<String, String>>` on `Engine`. `RESET k` removes the
   overlay entry and re-applies the **Settings baseline** from `Engine::overrides` (or the DF
-  default when unset). Reports state the scope: "Set 'k' to 'v' for this session."
+  default when unset). The overlay is engine-wide — all tabs, agent reads included — and gone on
+  restart. Reports state the scope: "Set 'k' to 'v' for this session."
 - Interactions, documented in the module doc: `set_config` (a Settings Apply) re-applies
   baselines under the overlay's keys? No — settled: **the overlay wins for its keys until RESET
   or restart**, and a `set_config` restart drops the overlay silently. `restart_owed` unchanged
   (runtime keys can't enter the overlay).
-- Update the SET/RESET invariant text per spec §10. `Blocked::Set`/`Reset` keep their variants
-  and words for the agent surface; the new `SetOwned`/`SetRuntime`/`SetFormat` messages join
-  them.
+- Update the SET/RESET invariant text (AGENTS.md §2 + `docs/reference/INVARIANTS.md`) — a session
+  overlay for non-owned, non-runtime, non-format keys; Settings stays the durable authority — and
+  move SET/RESET/PREPARE/DEALLOCATE out of `docs/STATEMENTS_SPEC.md` §6.2, documenting the built
+  behaviour (and the session lifetimes in its §8) there. `Blocked::Set`/`Reset` keep their variants
+  and words for the agent surface; the `SetOwned`/`SetRuntime`/`SetFormat` messages join them.
 
 **PREPARE/EXECUTE/DEALLOCATE:**
 - PREPARE: verify the parsed statement's inner statement is a query (`Blocked::PrepareNonQuery`:

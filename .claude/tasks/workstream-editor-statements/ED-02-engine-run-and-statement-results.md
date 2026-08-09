@@ -22,7 +22,7 @@ does today, and the results pane learns to render a statement row. Every later E
 
 ## What to build
 
-Per `docs/STATEMENTS_SPEC.md` §4 + §7:
+Per `docs/STATEMENTS_SPEC.md` §2 + §7:
 
 **Engine (`strata-core`):**
 - `RunOutcome { Rows(QueryOutput, RecordBatch), Statement(StatementReport) }`;
@@ -51,7 +51,7 @@ Per `docs/STATEMENTS_SPEC.md` §4 + §7:
 - **History amendment**: successful statements append to `history.jsonl` like data runs, same
   `collapse_sql` dedupe and cap. Update the history invariant text (AGENTS.md §2 +
   `docs/reference/INVARIANTS.md`, same bolded lead sentence) in this change, per the upkeep rule
-  — and the managed-DDL invariant becomes the router invariant (spec §10, first row).
+  — and the managed-DDL invariant becomes the router invariant (AGENTS.md §2 carries it).
 
 ## Acceptance
 
@@ -103,7 +103,8 @@ something durable must not be logged over a failed `project.json` write (the `sa
 Results pane: `ResultsState::Statement` + `results/statement.rs` (icon tile · `StmtKind::label` ·
 the engine's sentence), status bar `"CREATE TABLE · 12 ms"` off the same label table.
 
-**Not in this change, and flagged:** the spec (§1) settles **no confirm dialog** on a typed `DROP`
+**Not in this change, and flagged:** the workstream settles **no confirm dialog** on a typed `DROP`
+(stated in ED-05)
 — typing the statement and pressing Run *is* the deliberate gesture, where the catalog menu's is a
 pointer gesture that needs one. If that is revisited, it lands in ED-05 (`DROP TABLE`) / ED-06
 (`DROP VIEW`), not here.

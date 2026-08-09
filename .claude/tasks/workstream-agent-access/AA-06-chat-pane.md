@@ -25,7 +25,8 @@ both options drive the identical tool layer on the same `strata-agent` runtime:
 Settle it with Alex against what exists *then* (SDK availability moves fast); record the
 decision and reasoning here before building.
 
-## Forward design (from spec §9 + the prior-art survey)
+## Forward design (from the prior-art survey; this file is now the only copy — the spec
+records the pane as unbuilt and carries no design)
 - **Placement:** right-side pane (the Snowflake Copilot / DataGrip position), toggled from the
   activity rail; conversation-first; streaming responses. Panel layout rides `SessionState`
   (`Chan::Layout` / `Chan::LayoutSize`) like the drawer and sidebar.

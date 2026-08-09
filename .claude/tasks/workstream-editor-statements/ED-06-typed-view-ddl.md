@@ -5,7 +5,7 @@
 ## Goal
 
 Typed view DDL becomes a second gesture into the funnel ⌘S already uses — one merge path, views
-indistinguishable by origin. `docs/STATEMENTS_SPEC.md` §6.2.
+indistinguishable by origin. The dispatch and settle it rides: `docs/STATEMENTS_SPEC.md` §2.
 
 ## Current state
 
@@ -13,7 +13,7 @@ indistinguishable by origin. `docs/STATEMENTS_SPEC.md` §6.2.
   `CREATE OR REPLACE VIEW {quote_ident} AS {sql}`, reads back columns + `plan_deps`;
   `drop_view` (`mod.rs:1070`). The Save flow (`editor/actions.rs:254`) folds
   `ViewDef` upsert → persist → engine call → `ViewMeta` fold → epoch bump.
-- Verified hazard (spec §2): DF's own `CREATE OR REPLACE VIEW` over a **table** name silently
+- Verified hazard (workstream README, DataFusion 54 facts): DF's own `CREATE OR REPLACE VIEW` over a **table** name silently
   replaces the table — the interceptor must fence it; another reason the statement never runs
   natively. The other reason: the store write-back needs `ViewMeta`, and introspecting for it
   would violate catalog-is-the-store.
@@ -33,7 +33,9 @@ indistinguishable by origin. `docs/STATEMENTS_SPEC.md` §6.2.
 - `DROP VIEW`: type-check (a table name → the DROP TABLE arm's territory, refuse here),
   `Engine::drop_view`, `StoreEffect::ViewRemoved`. `IF EXISTS` honored.
 - Update the views-are-Save's-artifact invariant text (AGENTS.md §2 + INVARIANTS.md + the
-  `Blocked::CreateView` doc comment) in this change, per spec §10.
+  `Blocked::CreateView` doc comment) in this change — typed view DDL is a second gesture into the
+  same funnel; the variant and message stay as the agent path's refusal — and move CREATE/DROP
+  VIEW out of `docs/STATEMENTS_SPEC.md` §6.2, documenting the built behaviour there.
 
 ## Acceptance
 

@@ -41,9 +41,8 @@ editing fork code, and §6 here for how the fork relates to the app.
 - **Native Rust tooling, not stray scripts.** Schema/codegen/tests live in the crate.
 - **Verify from source before agreeing.** Check the fork or the crate before confirming an API —
   Alex's assertions included. Same bar for your own claims.
-- **Framework-native idiom — never pattern-carrying.** Find the Freya/freya-query shape first. The
-  Dioxus app is a *behavioural* reference only: no adapters, echo fields, parallel ids, or shims.
-  Breaking `strata-dioxus`'s build is expected.
+- **Framework-native idiom — never pattern-carrying.** Find the Freya/freya-query shape first: no
+  adapters, echo fields, parallel ids, or shims. The deleted Dioxus app's patterns stay gone.
 - **Model impossible states out of existence; fail loud on the rest.** Expected absences get
   defaults; unrecoverable faults are surfaced (`ProjectLoadFailed`), never a silent blank fallback.
   Never shape a production signature or add an `Option` to satisfy a test — build the test's store

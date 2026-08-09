@@ -5,10 +5,10 @@ later) lists the catalog, inspects schemas, and runs read-only SQL — with **ev
 real run** on the ordinary press → snapshot machinery, shown in the window's Agents pane and
 promotable into a new tab with one press.
 
-**Spec: `docs/AGENT_ACCESS_SPEC.md`** (+ `docs/agent-access-dataflow.mermaid`). Read it first —
-it carries the settled decisions (read-only policy, agent-managed query sessions, one app server
-with default-to-single-project scoping, cached-stats-only profiling) and the **verified**
-Tokio ↔ Freya bridge design every task here builds on.
+**Docs: `docs/AGENT_ACCESS_SPEC.md`** (now the as-built documentation, run dataflow diagram
+inlined). Read it first — it carries the settled decisions (read-only policy, agent-managed
+query sessions, one app server with default-to-single-project scoping, cached-stats-only
+profiling) and the verified Tokio ↔ Freya bridge design every task here builds on.
 
 The architecture in one line: **one read-only tool vocabulary over one UI bridge, with thin
 swappable frontends** — MCP server first (any MCP client is the chat surface), native chat pane

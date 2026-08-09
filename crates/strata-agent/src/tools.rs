@@ -1,4 +1,4 @@
-//! The **vocabulary** — the ten read-only tools of `docs/AGENT_ACCESS_SPEC.md` §5, over a
+//! The **vocabulary** — the ten read-only tools of `docs/AGENT_ACCESS_SPEC.md`, over a
 //! [`Host`].
 //!
 //! [`StrataTools`] is the rmcp `ServerHandler`, and it is deliberately transport-free: the

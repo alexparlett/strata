@@ -1,7 +1,7 @@
 //! **Server lifecycle**: what is listening right now, kept in step with the `agent_access`
 //! setting.
 //!
-//! Off by default (spec §6) — AA-03 ships the capability dark and AA-04 builds the control, so
+//! Off by default (the spec's "The in-app server") — AA-03 ships the capability dark and AA-04 builds the control, so
 //! until then the way to turn it on is to edit `agent_access.enabled` in the app config.
 //!
 //! ## Why every workspace window reconciles the same slot

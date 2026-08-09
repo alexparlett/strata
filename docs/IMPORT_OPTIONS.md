@@ -1,75 +1,124 @@
-# Import (read) options — per-format breakdown (for Configure-table design)
+# Import (read) options — what Table Config offers per format
 
-Companion to `EXPORT_OPTIONS.md`. These are the **read** options that apply when registering an external table
-(DataFusion `ListingTable` / `CREATE EXTERNAL
-TABLE`). Today the Configure modal has **none** — CSV/JSON register with DataFusion defaults, so a non-default CSV
-registers *wrong* (wrong delimiter → one giant column; no-header file → first row treated as header). Options should be
-**format-specific**: shown only when the selected format needs them (same pattern as the export modal), and persisted
-into the table spec.
+Companion to `EXPORT_OPTIONS.md`. These are the **read** options the Configure (table config)
+window offers when registering an external table, and how they reach DataFusion's readers.
 
-Priority: **Core** = surface prominently · **Advanced** = behind a disclosure · **Skip** = supported but niche.
+Options are **persisted in the table def**: `SourceFormat` (`strata-model::catalog`) is a tagged
+enum where the format *is* its options — `Csv(CsvRead)`, `Json(JsonRead)` — so a delimiter cannot
+be written down on a parquet table. The options flow into the reader at registration, in both
+halves of the read path (schema inference and the scan), which makes reload deterministic: a
+project reopens reading its files exactly as it did. Every field defaults to DataFusion's own
+default, so a def written before read options existed registers the way it always did.
 
-Source of option names: DataFusion Format Options (<https://datafusion.apache.org/user-guide/sql/format_options.html>).
-Re-validate exact `CsvFormat`/`JsonFormat` builder methods against v43 when wiring.
+Two sources of truth sit under this, and they are the ones to change:
 
----
+- **`strata-model::catalog`** — `CsvRead` / `JsonRead` / `SourceFormat`: the persisted fields and
+  the doc comments carrying each option's semantics and exclusions.
+- **`strata-freya::apps::configure::model`** — `ConfigureDraft::options()`, the list the window
+  renders (options are data, same mechanism as the export window).
 
-## Parquet / Arrow
-
-**No read options.** Schema is self-describing (Parquet footer / Arrow IPC), partition columns come from the Hive path.
-The Configure modal shows only name / sources / partitioning for these — no format section.
+The options render as **one flat list** per format — there is no ADVANCED disclosure. The export
+window folded its own away on the grounds that a format's advanced controls are just more of that
+format's options, and that reasoning holds here too: a disclosure would only be one more thing to
+open before a CSV's quote character can be reached, in a window whose whole subject is how a file
+is read.
 
 ---
 
 ## CSV
 
-The one format that genuinely needs options — without them, many real CSVs can't be registered correctly.
+The format that genuinely needs options — without them, many real CSVs cannot be registered
+correctly (wrong delimiter → one giant column; headerless file → first row eaten as names).
 
-| Control            | Effect                                            | DataFusion option           | Values                                  | Default                  | Priority |
-|--------------------|---------------------------------------------------|-----------------------------|-----------------------------------------|--------------------------|----------|
-| Has header row     | Treat row 1 as column names (vs `column_1…`)      | `HAS_HEADER`                | on / off                                | inferred (usually on)    | **Core** |
-| Delimiter          | Column separator (single char)                    | `DELIMITER`                 | comma · tab · semicolon · pipe · custom | comma                    | **Core** |
-| Null value / regex | Text(s) that mean NULL                            | `NULL_VALUE` / `NULL_REGEX` | any string / regex                      | none                     | **Core** |
-| Quote char         | Field quote character                             | `QUOTE`                     | single char                             | `"`                      | Advanced |
-| Escape char        | Escape character                                  | `ESCAPE`                    | single char                             | none                     | Advanced |
-| Newlines in values | Allow quoted fields to contain newlines           | `NEWLINES_IN_VALUES`        | on / off                                | off                      | Advanced |
-| Comment char       | Skip lines starting with this char                | `COMMENT`                   | single char                             | none                     | Advanced |
-| Schema-infer rows  | Rows scanned to infer column types (0 = all Utf8) | `SCHEMA_INFER_MAX_REC`      | integer                                 | engine default           | Advanced |
-| Compression        | Read gzip/bzip2/xz/zstd-compressed CSVs           | `COMPRESSION`               | none · gzip · bzip2 · xz · zstd         | none (or infer from ext) | Advanced |
+| Control | Effect | Default |
+|---|---|---|
+| HEADER ROW | Row 1 holds column names (off: columns are `column_1`, `column_2`, …) | on |
+| DELIMITER | Field separator — free text, `\t` accepted for tab | `,` |
+| QUOTE CHARACTER | Wraps fields containing the delimiter | `"` |
+| ESCAPE CHARACTER | Escapes a quote inside a quoted field (blank = none) | blank |
+| COMMENT CHARACTER | Skip lines starting with this character (blank = none) | blank |
+| NEWLINES IN VALUES | Allow quoted fields to contain line breaks | off |
+| RAGGED ROWS | Pad rows — or whole files — short of a column with nulls instead of failing the read | off |
+| SCHEMA-INFER ROWS | Rows scanned to infer column types; 0 reads every column as text | engine default |
+| COMPRESSION | None · gzip · bzip2 · xz · zstd | None |
 
 Notes:
 
-- Delimiter is a **single character** — offer named presets (comma/tab/semicolon/ pipe) + optional custom single-char
-  input, mirroring export.
-- These flow through to `register_external` as `CsvFormat::default().with_*(…)`
-  and must be **persisted in the table spec** (deterministic reload).
+- **NEWLINES IN VALUES costs the parallel file split** (`CsvSource::supports_repartitioning`),
+  which is why it defaults off.
+- **RAGGED ROWS** (`truncated_rows`) also covers the multi-path case: one source path carrying a
+  column the others lack reads as the union of the columns found, padded with nulls.
+- **SCHEMA-INFER ROWS** persists as `Option<usize>`: unset means the engine's default, and the
+  window's `0` means DataFusion's "disable inference" arm — every column as text.
+
+### Deliberately not offered
+
+Every offered field reaches **both** halves of the read path — inference and scan. That bar
+excluded options that look available and are not (`CsvRead`'s doc comment is the full argument):
+
+- **NULL value / regex** — `null_regex` is wired into `CsvFormat`'s *inference* only; the scan
+  never sees it. Setting it re-types a column and then fails the scan parsing the very token it
+  was told was null — strictly worse than leaving it off, where the column simply infers as text.
+- **Line terminator** — the mirror image: wired at scan, absent from inference, so the schema and
+  the rows would be read by different rules.
+- `double_quote`, `null_value`, date/time formats and the rest of the writer's options — no read
+  path references them (the export window is where they live).
 
 ---
 
 ## JSON
 
-DataFusion's JSON reader is **NDJSON only** (one record per line). So options are minimal.
+| Control | Effect | Default |
+|---|---|---|
+| SHAPE | One record per line (NDJSON) · JSON array | one record per line |
+| SCHEMA-INFER ROWS | Records scanned to infer the schema; 0 scans every record | scan every record |
+| COMPRESSION | None · gzip · bzip2 · xz · zstd | None |
 
-| Control           | Effect                          | DataFusion option      | Values                          | Default        | Priority |
-|-------------------|---------------------------------|------------------------|---------------------------------|----------------|----------|
-| Compression       | Read gzip/… -compressed NDJSON  | `COMPRESSION`          | none · gzip · bzip2 · xz · zstd | none           | Advanced |
-| Schema-infer rows | Records scanned to infer schema | `SCHEMA_INFER_MAX_REC` | integer                         | engine default | Advanced |
-
-Not supported natively (would be **custom/future** work, flag as such):
-
-- **"JSON records path"** — digging into a nested array inside a whole-document
-  `.json` file. DataFusion only reads NDJSON; whole-document JSON-as-table needs a custom reader (relates to the
-  FEATURES.md "JSON shape detection": NDJSON dir = one table, vs whole-document `.json` = one record / not tabular).
+- **Both shapes are read** — DataFusion 54's `JsonFormat::with_newline_delimited` covers the
+  whole-document array as well as NDJSON, so shape is an option rather than a rule the reader
+  enforces. One caveat rides with the array shape: DataFusion cannot range-split such a file, so
+  a single array file over `datafusion.optimizer.repartition_file_min_size` (10 MB) fails its
+  scan with a `NotImplemented` — loud and self-describing, and only above that size.
+- **Schema inference defaults to scanning every record**, deliberately: the reader exists to
+  notice a type conflict, and a capped scan that misses one types the column wrong and then fails
+  at *query* time on a table the catalog called healthy. The cap is there to opt into speed on
+  files known to be uniform.
 
 ---
 
-## Design implications
+## Parquet / Arrow
 
-1. **Format-swapped options panel** — the Configure modal shows a CSV options section only for CSV, a (minimal) JSON
-   section for JSON, nothing for Parquet/Arrow. Same mechanic as the export modal.
-2. **Core vs advanced** — CSV surfaces header + delimiter + null prominently; the rest behind "Advanced". JSON's are all
-   advanced.
-3. **Persisted, not re-detected** — options live in the table spec so reload is deterministic (same rule as partition
-   `(name, type)`).
-4. **Validation ties in** — with a wrong delimiter the schema-consistency / file-match readout (C3) should still be
-   meaningful; options are applied before inference.
+**No per-table read options — and no empty section saying so.** Twice over:
+
+- The schema is self-describing (parquet footer / Arrow IPC), so there is nothing a read needs
+  telling.
+- Every `ParquetFormat` knob DataFusion does have is an engine-wide setting with a control in
+  **Settings ▸ Engine** already; a per-table copy would be a second place to set the same key
+  (`apps/configure/views/options.rs`).
+
+---
+
+## Compression and file extensions
+
+Whole-file compression applies to the text formats only — parquet and Arrow carry compression
+*inside* the file. The codec changes the extension the source listing filters on: a gzipped CSV
+is `events.csv.gz`, and a listing filtered on `.csv` alone would match none of them, so
+`SourceFormat::extension` composes the format's extension with the codec's
+(DataFusion's own suffixes: `.gz`, `.bz2`, `.xz`, `.zst`).
+
+---
+
+## Hive partition detection
+
+Not a format option, but part of the same window. The partitioning section appears when
+`key=value` levels are found in the sources — spelled as globs in the path (`year=*`), or
+discovered by **listing** the source's store (`engine::catalog::detect_partitions`, which lists
+through the session's registered object store and so works identically over a local folder and a
+bucket). It is format-agnostic.
+
+Discovered columns register **typed**: each level defaults to text with a type picker beside it,
+and a standing warning explains the consequence of leaving one as text — partition values are
+read as text, so `WHERE year = 2024` needs a cast until the column is given its real type. A
+*literal* `key=value` segment in a source path deliberately does not declare a column: the path
+is the listing root, so a literal segment means that level is already consumed, and declaring it
+would produce a table that registers cleanly and returns zero rows for every query.

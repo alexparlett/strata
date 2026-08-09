@@ -198,7 +198,7 @@ Things that must not regress. Each was fought for once already.
     "eject to SQL" in Metabase, Superset and Looker, and every one of them puts it in a menu or
     a surface of its own, never among the encoders — which is where it landed here, the one
     control in the strip that *left* the chart rather than changing it. It was also standing in
-    for the chart having no aggregation of its own (`CHART_SPEC.md` §10), and a shortcut that
+    for the chart having no aggregation of its own (`CHART_SPEC.md` §8), and a shortcut that
     makes that gap tolerable is a reason not to close it. What survives is the role split above.
     Re-litigate the *placement* only with a surface that isn't the strip.
 

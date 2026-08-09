@@ -18,10 +18,10 @@ pub fn is_explain(sql: &str) -> bool {
         .starts_with("explain")
 }
 
-/// Rewrite `sql` to run under `EXPLAIN` / `EXPLAIN ANALYZE` (E4): strip any existing
+/// Rewrite `sql` to run under `EXPLAIN` / `EXPLAIN ANALYZE`: strip any existing
 /// leading `EXPLAIN [ANALYZE] [VERBOSE]` keyword sequence, then prepend the requested
-/// prefix. The editor's Explain-plan / Explain-analyze buttons rewrite the buffer with
-/// this so the mode is explicit + user-editable, then run.
+/// prefix. Applied to the press's snapshot of the editor text at dispatch — the buffer
+/// itself is never rewritten.
 pub fn as_explain(sql: &str, analyze: bool) -> String {
     // Strip a leading keyword (word-boundary, case-insensitive), returning the rest.
     fn strip<'a>(s: &'a str, kw: &str) -> Option<&'a str> {

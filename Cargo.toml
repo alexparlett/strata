@@ -1,11 +1,8 @@
 [workspace]
-# Virtual manifest — no root package. The Freya frontend (`strata-freya`) + the shared core crates
-# + our vendored editor (`strata-code-editor`). The transitional Dioxus app (`strata-dioxus`) is
-# deliberately NOT a member: its editor stack (dioxus-code → arborium-tree-sitter) and ours
-# (strata-code-editor → tree-sitter) both set `links = "tree-sitter"`, and Cargo forbids two
-# packages linking the same native lib in one dependency graph. So `strata-dioxus` is its own
-# workspace (see its Cargo.toml); both workspaces share strata-core / strata-model / strata-forms
-# via path deps. See docs/FREYA_PORT_PLAN.md.
+# Virtual manifest — no root package. The Freya frontend (`strata-freya`) + the shared core
+# crates, the vendored editor (`strata-code-editor`), agent access (`strata-agent`) and the
+# command-palette proc macro (`strata-command-macro`). The Freya fork (`crates/freya`) is
+# excluded but resolved by local path — see docs/ARCHITECTURE.md.
 members = [
     "crates/strata-freya",
     "crates/strata-model",
@@ -14,12 +11,11 @@ members = [
     "crates/strata-command-macro",
     "crates/strata-agent",
 ]
-# `strata-dioxus` is its own workspace (tree-sitter link conflict). `crates/freya` is our Freya fork
-# checkout — kept only for convenient source editing; the build resolves it from git (see
-# `[workspace.dependencies]`), so it must NOT be treated as a member of this workspace.
-exclude = ["crates/strata-dioxus", "crates/freya"]
-# Bare `cargo build` / `cargo run` at the root target the Freya app (the port target). Build the
-# Dioxus app from its own directory (`cd crates/strata-dioxus && cargo run`).
+# `crates/freya` is our Freya fork checkout (a git submodule, its own workspace); the build
+# resolves it from the local path (see `[workspace.dependencies]`), so it must NOT be treated as
+# a member of this workspace.
+exclude = ["crates/freya"]
+# Bare `cargo build` / `cargo run` at the root target the app.
 default-members = ["crates/strata-freya"]
 resolver = "2"
 

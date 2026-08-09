@@ -93,7 +93,7 @@ fn main() {
     // Agent access (AA-03): the cross-thread service directory a project window lends its
     // engine and its ask channel to, plus the slot holding whatever MCP server is listening.
     // Nothing listens yet — a workspace window's `use_agent_server` starts one only if the
-    // `agent_access` setting is on, which it is not by default (spec §6).
+    // `agent_access` setting is on, which it is not by default.
     let agent = create_global_agent();
     // Everything a window — or the menubar handler — is handed, in one value.
     let app = AppCtx {
@@ -236,7 +236,7 @@ fn cli<A: IntoIterator<Item = String>>(args: A) -> Cli {
 /// Nothing app-global is built, because none of it exists for a server with no window — and
 /// the one thing it would be tempting to read, app config, is deliberately left alone: this
 /// process cannot see the app's `datafusion.*` overrides, so the engine runs the defaults
-/// (spec §10; a `--config` flag can arrive when somebody wants one).
+/// (the spec's "The headless host"; a `--config` flag can arrive when somebody wants one).
 fn headless(folder: &str) {
     // **stderr, always.** stdout is the MCP transport's, and one stray log line on it is a
     // parse error at the client — so the subscriber is pointed away from it before anything

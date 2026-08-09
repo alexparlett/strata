@@ -41,5 +41,6 @@ recorded exception).
       template that produces them (spec §1.3). Nothing new computes engine-side.
 
 ## References
-`docs/CHART_FUNCTIONS.md` (the survey + tiers). `docs/CHART_SPEC.md` §4–§5, §10.
+`docs/CHART_FUNCTIONS.md` (the survey; the tier ordering lives in this folder).
+`docs/CHART_SPEC.md` §4–§5, §10.
 `07-tier-a-templates.md`, `09-shape-panel.md`, `10-tier-b-marks.md`, `11-trendline.md`.

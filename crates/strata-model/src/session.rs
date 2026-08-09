@@ -33,7 +33,7 @@ pub enum Origin {
 }
 
 /// Which body the results pane shows for a settled rows outcome — the toolbar's Table/Chart
-/// segmented toggle (P2-07). Per **tab** (CHART_SPEC §1): switching tabs restores the mode,
+/// segmented toggle (P2-07). Per **tab** (CHART_SPEC §2): switching tabs restores the mode,
 /// and it survives re-runs; the chart *config* will be per result set (Chart workstream).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum ResultsView {
@@ -162,7 +162,7 @@ impl Default for Layout {
 
 /// One persisted tab — enough to rebuild its live tab: identity (so `active` / order still
 /// resolve), title, save target, buffer text and results-view intent. Cursor / scroll /
-/// undo are deliberately left out (state-arch §12 — "lean minimal").
+/// undo are deliberately left out (state-arch §5 — "lean minimal").
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct TabSnapshot {
     pub id: TabId,

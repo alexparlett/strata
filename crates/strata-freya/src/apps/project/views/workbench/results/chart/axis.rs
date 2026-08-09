@@ -2,7 +2,7 @@
 //! value axis needs (a nice maximum and an abbreviated tick).
 //!
 //! [`Categories`] is a plotters [`Ranged`], not a hand-rolled tick stack (`docs/CHART_SPEC.md`
-//! §5 forbids one): it hands plotters its own key points, so every gridline and every tick
+//! §9 forbids one): it hands plotters its own key points, so every gridline and every tick
 //! label lands **on a category** and can be labelled with that category's own text. Two
 //! constructions, and the difference is what the read carried:
 //!

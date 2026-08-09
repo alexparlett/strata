@@ -17,11 +17,14 @@ from the write pass (`query::SnapshotStats`), not a footer. In Freya the handle 
 (an `Arc<Engine>` + Deref) held in context — not stored in any god-object `AppState`. Statement
 policy is one router in front of dispatch: `sql::validate::classify(stmt, Capability)` answers
 `Query` / `Intercept(StmtKind)` / `Refuse(Blocked)`. `Capability::Editor` runs queries and
-introspection and **intercepts** the rest — internal tables, typed view DDL onto `Engine::create_view`
-(the same funnel ⌘S uses), typed `CREATE EXTERNAL TABLE` onto Table Config's own registration path,
-`COPY`, `SET`/`RESET`, `PREPARE`/`DEALLOCATE`, `CREATE`/`DROP FUNCTION` — leaving a short refusal
-list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`, unknown kinds, and the context-dependent cases.
-`Capability::Agent` is read-only and refuses every non-query with the words AA-01 shipped.
+introspection and **intercepts** the rest — 14 recognised kinds, of which `CREATE TABLE` / CTAS
+are implemented today (each remaining kind's destination is an app funnel that already exists:
+view DDL onto `Engine::create_view`, `CREATE EXTERNAL TABLE` onto Table Config's registration
+path, and so on; until its ED task lands, an intercepted kind answers `ddl::execute`'s
+"not implemented yet"). The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
+`INSERT OVERWRITE`, `PREPARE` of a non-query, `DROP` of a non-table/view object, reserved
+`__snap_` names, multi-statement buffers, and unknown kinds.
+`Capability::Agent` is read-only and refuses every non-query with its original wording.
 `Engine::run` is where that classification is *spent*: `Query` delegates to `query()`
 byte-for-byte (the only arm that touches the snapshot lifecycle, so "DDL does not retire
 snapshots" holds by construction), `Intercept(kind)` goes to `engine/ddl/` under the same
@@ -29,9 +32,7 @@ in-flight bracket `explain` uses, and `Refuse` returns the editor's own message 
 can plan. A statement comes back as a `StatementReport` carrying a `StoreEffect` the app folds —
 never something to read back out of DataFusion. One statement per Run.
 See `docs/STATEMENTS_SPEC.md` and the invariants in `reference/INVARIANTS.md` for the full rule
-(default-deny, reserved `__snap_` names, `Blocked` grows and never shrinks); ED-01 landed the
-classification and ED-02 the dispatch, and each `StmtKind`'s implementation is the ED task that
-owns its capability — until then an intercepted statement runs into `ddl::execute`'s stub refusal.
+(default-deny, reserved `__snap_` names, `Blocked` grows and never shrinks).
 
 **The catalog and schema providers are ours, for identity and visibility — never lifecycle**
 (ED-03, `engine::providers`, installed in `build_context` before anything registers). One catalog
@@ -97,13 +98,10 @@ path*, never a key.
 which sqlparser reads as a placeholder before the crate's planner sees it — `json_contains` is the
 spelling that works) over Utf8
 columns holding JSON text, and that call is the whole integration: `engine::functions::snapshot`
-walks `ctx.udfs()`, so anything registered reaches autocomplete, signature help and the docs panel
-with no per-function table and no way for the completion pool and the engine to disagree. Adding a
-UDF family means one `register_*` call in `build_context` and nothing else.
-(`.claude/tasks/workstream-json-polymorphic/` — WJ-01, and WJ-02 for the union-tolerant JSON
-reader that makes the accessors pay off.)
+walks `ctx.udfs()`, so anything registered reaches autocomplete and the completion detail with no
+per-function table and no way for the completion pool and the engine to disagree. Adding a UDF
+family means one `register_*` call in `build_context` and nothing else. The union-tolerant JSON
+reader (`engine::json_poly`) is what makes the accessors pay off over mixed-shape files.
 
-> The Dioxus-era `Command`/`Event` channel protocol + worker loop was **deleted from
-> `strata-core`** with P2-01. `crates/strata-dioxus` still references it and therefore **no longer
-> builds** — it is kept as *reference code only* for porting features to Freya. Don't try to fix
-> its build.
+> The Dioxus-era `Command`/`Event` channel protocol + worker loop was deleted along with the
+> Dioxus app itself. The engine's only interface is the direct-call facade above.

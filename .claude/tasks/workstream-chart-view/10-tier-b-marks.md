@@ -90,5 +90,6 @@ comparison, period delta.
       heatmap/band/box fixtures; `config.rs` tests cover the new option sets and errors.
 
 ## References
-`docs/CHART_SPEC.md` §4, §10. `docs/CHART_FUNCTIONS.md` §2–3 (Tier B).
+`docs/CHART_SPEC.md` §4, §10. `docs/CHART_FUNCTIONS.md` §2, §3, §5 (the SQL behind the Tier B
+presets).
 `05-analytical-presets.md`. `07-tier-a-templates.md` (templates module + command pattern).

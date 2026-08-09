@@ -7,7 +7,7 @@
 `CREATE EXTERNAL TABLE` typed in the editor registers an ordinary external table through the
 funnel Table Config already uses — the parsed statement becomes a `TableDef`, and Table Config
 and typed DDL are two gestures into one registration path, exactly as ⌘S and typed `CREATE VIEW`
-are for views. `docs/STATEMENTS_SPEC.md` §6.7.
+are for views. The identical settle as CTAS's: `docs/STATEMENTS_SPEC.md` §2 + §7.
 
 ## Current state
 

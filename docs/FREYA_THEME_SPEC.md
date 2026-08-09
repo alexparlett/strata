@@ -137,7 +137,8 @@ Midnight and Daylight ship embedded (`strata-core` `include_str!`s this repo's `
 User themes: drop a `*.json` of the same shape into the user themes dir
 (macOS `~/Library/Application Support/Strata/themes`, else `~/.config/Strata/themes`); a file
 reusing a built-in `id` replaces it in place. Discovery happens **once** at launch
-(`ThemesCtx::discover()` in `main`).
+(`ThemesCtx::discover()` in `main`), so a new file means a restart.
+(`theme::open_user_themes_dir` exists to reveal the folder but no surface calls it yet.)
 
 ## Example (abbreviated)
 
