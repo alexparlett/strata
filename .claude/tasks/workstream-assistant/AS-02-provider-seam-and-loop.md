@@ -1,109 +1,176 @@
 # AS-02 · Provider seam + the loop
 
-**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-01
+**Workstream:** Assistant · **Status:** ✅ · **Depends on:** AS-01
 
-## Goal
+## As built
 
-The agentic loop, in `strata-agent` (new module, e.g. `strata_agent::assistant`), Freya-free:
-take a transcript + pinned context + the AS-01 manifest, stream one assistant turn from the
-configured provider via **`genai`**, execute any tool calls through the AS-01 facade, and
-repeat until the model answers in prose. Streaming out, cancel in, errors verbatim.
+`crates/strata-agent/src/assistant/`, Freya-free like the rest of the crate — four modules and
+a prompt:
 
-## Why `genai`, in one line each (full record: this workstream's README)
+| File | What it owns |
+|---|---|
+| `provider.rs` | The five provider kinds in **one table**, [`Selection`], `SelectionError`, and the single site a `genai` client is built |
+| `turn.rs` | The loop, the `TurnEvent` stream, `Conversation`, cancel |
+| `dispatch.rs` | Name → method for the ten tools, plus `Scope` and the step card's `Facts` |
+| `offer.rs` | `offer_sql`: the assistant's own eleventh tool, how it hands the user a statement to run |
+| `system.md` | The system prompt, `include_str!`'d |
+| `mod.rs` | `Assistant` (the runtime) and `Running` (a turn in flight) |
 
-Provider abstraction, not agent framework — the loop, transcript and vocabulary are ours;
-tools + streaming + tool-call chunks are in its one `ChatStreamEvent` surface; resolvers make
-config-owned keys and custom endpoints (Ollama, OpenAI-compat) first-class. **Pin the version;
-verify the API from its source before building** — the shapes below are from docs and must be
-confirmed: `ChatRequest` (messages + tools), `MessageContent` parts (`ToolCall`,
-`ToolResponse`), `ChatStreamEvent` (text chunks, `ToolChunk`, `StreamEnd`), `AuthResolver`,
-`ServiceTargetResolver`, `ChatOptions`.
+`genai` is pinned `=0.6.5` and every shape below was read off that source before it was built
+on. Tests: 20 unit tests in the module plus `tests/assistant.rs`, which drives whole turns
+against `MockHost` and a **local stub endpoint** reached through the roster's own
+OpenAI-compatible kind — so the path the test exercises is one a user can configure, and no
+production signature is shaped for it.
 
-## What to build
+### The selection model (the part AS-03 and AS-04 build on)
 
-1. **The selection, as plain data, per send.** A struct this module owns, handed in with
-   every send — the app resolves it from the conversation's pick (AS-04) over the roster
-   entry (AS-03) at send time; the loop holds no global config and reads no Settings.
-   Fields: provider kind (Anthropic · OpenAI · Gemini · Ollama · OpenAI-compatible), model
-   name, optional base URL (required for the last two), optional API key **as a resolved
-   string** — the *caller* resolves the AS-05 reference to a key before the call, so this
-   crate stays keystore-free exactly as it stays Freya-free — and an optional **effort**.
-   Effort is not a portable knob (Anthropic spells it as a thinking budget, OpenAI as
-   `reasoning_effort`, Ollama not at all): the provider table (AS-03's one table, homed in
-   this module) declares per kind whether it exists and how it maps, and **verify `genai`'s
-   `ChatOptions` coverage of it at the pinned version** before promising it anywhere. A kind
-   without one simply has no field, end to end. Construction of the `genai` client happens in
-   **one** place from this struct — `AuthResolver` answers keys from the struct with the
-   provider's env var as fallback (genai's own default), `ServiceTargetResolver` answers the
-   custom-endpoint cases. A selection that cannot make a client (compat with no URL, keyed
-   provider with no key anywhere) is a typed error naming the missing field and where it is
-   set — this is what the pane's honest degradation (AS-04) renders.
-2. **The turn loop.** Input: system prompt + pinned context blocks (@-mentions arrive as
-   `describe_table` results the pane already fetched) + transcript. One iteration: send with
-   the manifest's tools → consume the stream, forwarding text deltas and tool-call starts to
-   the caller as they arrive → on settled tool calls, execute each through the AS-01 facade,
-   append the `ToolCall`/`ToolResponse` pair to the message list, iterate. Stop on a prose
-   settle, on error, on cancel, or on a bounded number of tool rounds per send (a guard
-   against a runaway loop — refusing with a plain "stopped after N tool rounds" beats spinning;
-   pick N generously).
+**`PROVIDERS` is the one table.** Per kind: display label, `BaseUrl` policy
+(`Provider` · `Editable(default)` · `Required`), `KeyUse` policy (`Env(var)` · `Anonymous` ·
+`Unused`), the **effort rungs offered**, an example model for the placeholder, and the private
+`genai` adapter. Settings' form and the composer footer both read it; neither restates it. A
+kind added without a row fails to compile (`ProviderKind::info` is a match).
 
-   **The name→method binding is this task's, and it is deliberately here.** AS-01 ships ten
-   typed methods plus `StrataTools::manifest()`; a model answers with a *name* and a JSON
-   object, and turning one into the other needs both the provider's tool-call type and a
-   message for bad arguments that reads well to a model — neither of which belongs in a crate
-   with no provider in it. Keep it one match over `manifest()`'s names with a test that every
-   manifest entry dispatches, so a tool added to the router cannot reach the model with no arm
-   behind it. Do **not** grow a second tool trait or registry to avoid the match: rmcp's
-   `ToolRouter` already is that registry (which is what `manifest()` reads), its dispatch path
-   needs a live `Peer` we do not have, and it answers in content blocks rather than typed
-   values — the AS-01 file records the survey.
-3. **The outward stream.** The loop reports events on a channel the pane consumes: turn
-   started, text delta, tool call started (name + args), tool call settled (the result the
-   *pane* needs for a step card: SQL · row count · elapsed · query session — not the full
-   JSON), turn settled / failed / cancelled / stopped-at-cap. This event vocabulary is the
-   pane's data source; keep it small and let the transcript state own its accumulation.
-4. **Cancel.** A `CancellationToken` per turn. Cancelling drops the genai stream (the HTTP
-   request dies with it) and must also settle an in-flight engine run through the same abort
-   the connection-drop path already has (AA-03c's tombstone — verify against it, don't grow a
-   second abort). A cancelled turn settles as *cancelled*, never as failed —
-   `stopped_on_purpose` stays the only judge of stopped-vs-failed underneath.
-5. **Errors pass through verbatim.** A tool error (§7 taxonomy) goes back to the **model** as
-   the tool's result — that is the design working, not a failure: the model reads "CREATE
-   TABLE is not supported…" and recovers, exactly as an MCP client would. A *transport/provider*
-   error (bad key, dead endpoint, over quota) fails the turn and surfaces to the pane with the
-   provider's own message.
-6. **Runtime.** genai needs Tokio; the loop runs on `strata-agent`'s own runtime — but note
-   `AgentServer`'s runtime exists only while agent access is enabled, and the assistant must
-   not require that setting. Give the assistant module its own small runtime on the Engine
-   pattern (private runtime, callers await `JoinHandle`s) or hoist a shared one — decide
-   against the code, not this file, and name the reason where it lands.
+**Effort splits in two, and the split is the whole design.** *Whether the control exists* is a
+property of the kind and is declared here — Ollama's list is empty, so no surface offers it and
+a `Selection` carrying one is refused rather than ignored. *What a rung means for a given model*
+is `genai`'s, verified at the pin: its Anthropic adapter already knows `xhigh` needs Opus 4.7+
+and downgrades otherwise, its Gemini adapter already knows `gemini-3` takes a thinking *level*
+where 2.5 takes a *budget*. A per-model capability table here would be a second copy of that,
+stale within a release — the same argument that makes the model name free-form text. The rungs
+are `Low · Medium · High · XHigh · Max`, matching `genai`'s keyword variants; `Budget(u32)`,
+`Minimal` and `None` are deliberately not offered (a token budget means nothing across
+providers, `Minimal` is one vendor's spelling of `Low`, and `None` is what an unset effort
+already says).
 
-## System prompt
+**Three refusals that are `Selection`'s alone**, all answered before a socket opens: a base URL
+on a kind that owns its endpoint, a key on a kind that sends none, and an effort on a kind with
+no ladder. Each is a field silently ignored otherwise, which is a lie on screen.
 
-Authored here, once: what Strata is, the IDE register for user-facing prose (AGENTS.md §3 —
-the assistant's words render in the transcript), the tool guidance (validate before run when
-unsure; read_page for more rows; sessions are yours; the user may promote), and honesty rules
-(cite runs, never invent columns). Keep it in a `.md` include, not a string literal.
+**`Provider::check_base_url` is the one copy of the URL rule** (`Provider::check_address`'s
+precedent), called by client construction *and* available to AS-03's form. Its load-bearing
+half is the **trailing slash**: every adapter joins its path onto the base — Ollama by
+`format!("{base}api/chat")`, the OpenAI family through `Url::join` — so `http://host/v1` reaches
+`http://host/chat/completions` and `http://localhost:11434` reaches `…11434api/chat`, both as a
+connection error naming a URL the user never typed.
+
+**The OpenAI-compatible kind has no environment fallback, and that is a safety property.**
+`genai`'s default auth for its OpenAI adapter is `OPENAI_API_KEY`, and the compatible kind's
+endpoint is whatever host the user typed — so falling back would post their OpenAI key to it.
+`KeyUse::Anonymous` sends an empty bearer instead, which local endpoints ignore and real ones
+answer 401 to, in their own words.
+
+**One kind is two adapters.** OpenAI's newer models speak the Responses API and the rest chat
+completions; which is which is `genai`'s knowledge, so it is asked (`AdapterKind::from_model`)
+and its answer taken **only if it stayed in the family** — `from_model` falls back to Ollama for
+an unrecognized name, and a key-bearing provider silently rerouted to localhost is the worst
+kind of wrong. Everything else is the table's adapter, passed as an explicit `ModelSpec::Iden`
+so nothing is ever inferred from a model name's spelling.
+
+The key rides as a `strata_core::secret::Secret`, not a `String`: the caller resolves the AS-05
+reference before the call (this crate stays keystore-free), and a `Debug` of a `Selection`
+cannot print it.
+
+### The loop
+
+`turn::run` → `Settle` (`Answered` · `Failed(String)` · `Cancelled` · `StoppedAtCap`). The
+outcome is delivered twice and identically — as the last `TurnEvent` and as the return value —
+never one derived from the other. `MAX_TOOL_ROUNDS` is 32.
+
+**Two transcripts, and they are not the same list.** `Conversation` is the *model's* memory
+(provider vocabulary, tool calls and results, opaque outside the crate); the pane's transcript
+is built from `TurnEvent`s. Neither substitutes for the other — a person cannot read a page of
+tool JSON and a model cannot read a step card — and keeping them apart is what keeps `genai` out
+of the frontend.
+
+**Pinned context rides the user's message, not the system prompt.** That was the first shape and
+it invalidates the provider's prompt cache on every turn. On the message it also reads truer: the
+transcript records what the user was pointing at *when they asked*. The system prompt is
+byte-identical on every send.
+
+**`TurnEvent::ToolCall` is emitted from the settled call, not from `ToolCallChunk`.** genai's
+streamers emit a chunk per accumulation step with partial arguments; a card that showed half a
+JSON object and rewrote it is worse than one that appears a moment later, just before the tool
+runs.
+
+**Cancel is a drop, because a drop is already the abort.** Verified against AA-03c rather than
+reimplemented: `Engine`'s `DispatchGuard` is armed for exactly the await a dropped caller
+abandons, and aborts the detached task and retires what it materialized. What a cancel must not
+leave is a conversation the next send cannot use — an assistant message with tool calls and no
+results is a request every provider rejects — so a cancel **answers the outstanding calls**
+with "the user stopped this turn" and only then settles.
+
+**Errors pass through.** A tool error goes back to the model as that tool's result, verbatim
+(the design working). Only a provider or transport fault fails the turn, with the provider's own
+message.
+
+### `offer_sql` — the executable card
+
+The assistant's **eleventh tool**, in `offer.rs`, dispatched by the loop and **never registered
+on the router**: `tools/list` is unchanged and no MCP client is offered a tool it has no
+transcript to use. The loop offers `manifest() + offer::spec()`. That is one vocabulary plus one
+presentation tool on the transport that has a presentation — nothing in it touches `Host`, the
+engine or a query session.
+
+A **tagged markdown fence (` ```sql run `) was built first and withdrawn.** A fence is taught
+only by a paragraph of system prompt, and prompt-taught formatting is followed unevenly — least
+reliably by exactly the small local models the Ollama entry exists for. A tool is taught by its
+*schema*, which is the channel a model follows best and cannot get syntactically wrong. It also
+buys what a fence structurally cannot: **the statement is checked before the card appears**.
+
+That check is `validate` — lints, managed-DDL policy, dry plan — and it is the **editor's**
+policy, not the agent's, which is the point of the tool: a card is executed by the user, in
+their editor, under their capability. So the assistant may offer a `CREATE TABLE` it is itself
+refused, which is exactly the handover the system prompt asks for. Errors only; a warning is
+something the user can read on the card. A statement that does not check out produces **no
+card** — the model is told why and offers a corrected one.
+
+`OfferParams` takes `sql` and nothing else: every other tool takes a `project` because an MCP
+client can be looking at any of several windows, and a chat pane belongs to exactly one. The
+`Scope` supplies it.
+
+### The assistant is not in the Agents pane
+
+Settled 2026-08-09, overturning AS-01's note. That pane answers "which external clients are
+connected to my project right now"; the assistant is part of the app, not connected to it, and
+its runs show as step cards in the transcript instead. The discriminator is
+**`StrataTools::agent_id()`** — the id the app itself minted for the pane — not the identity's
+name: an identity is a claim any MCP client makes at `initialize`, so a name-keyed rule would let
+a client make itself invisible by calling itself `strata-assistant`. Excluding it is AS-04's
+wiring; the accessor and the reasoning are here. Two model-facing strings lost their "in the
+Agents pane" clause so they stay true on all three transports (`open_query_session`'s doc, the
+handler `instructions`).
+
+### The runtime
+
+`Assistant` owns a private two-worker Tokio runtime — the Engine pattern, for the Engine's
+reason. Deliberately **not** `AgentServer`'s: that runtime exists only while agent access is
+switched on in Settings, and the chat pane must not stop working because the user turned the MCP
+server off.
+
+## What AS-04 gets
+
+`Assistant::send(tools, selection, scope, conversation, ask) -> Running`, and `Running` gives
+`next()` (events), `stop()` and `settle()`. Dropping a `Running` cancels its turn — a turn
+nobody is listening to spends tokens and engine time on an answer with nowhere to land.
+
+Events: `Started`, `Delta(String)` (prose, markdown, ordinary code blocks included),
+`Runnable(String)` (an offered statement — an executable card, never also a step card),
+`ToolCall`, `ToolSettled { failed, facts }`, `Settled(Settle)`. `Facts` is what a step card
+shows: SQL · query session · exact rows · the engine's own `elapsed_ms` · a `stopped` reason.
+Nothing is measured twice.
 
 ## What is NOT this task
 
 - No Freya, no Settings UI (AS-03), no transcript rendering (AS-04).
-- No conversation persistence — the transcript is the pane's ephemeral state (like
-  `state::agents`); if chat history is ever wanted it is its own task with its own file rules.
-- No RAG, no embeddings, no genai `chain`/`agent`-adjacent features: chat + tools + streaming
-  only.
+- No conversation persistence — the transcript is the pane's ephemeral state.
+- No RAG, no embeddings, no genai `chain`/`agent` features.
 
-## Acceptance
+## Known, and owed elsewhere
 
-- A loop test drives a full multi-turn tool exchange — question → tool call (`run`) → tool
-  result → prose answer — against `MockHost` and a **local stub endpoint** behind genai's
-  OpenAI-compat adapter (`ServiceTargetResolver` pointed at a test axum server speaking the
-  compat wire shape). No production signature bent for the test (the bar).
-- Streaming order is observable: text deltas arrive before the turn settles; a tool round's
-  events arrive between them in the right order.
-- Cancel mid-stream and cancel mid-run both settle the turn as cancelled and leave the engine
-  clean (no run left in flight — assert via the session's state).
-- A policy refusal round-trips: the stub model sends blocked DDL, receives the editor's own
-  message as the tool result, and the turn still settles in prose.
-- A config that cannot make a client yields the typed error naming field + Settings, without
-  panicking and without a network attempt.
+**A cancelled run leaves a stale `Running` row in the app's own agents satellite.**
+`strata_freya::agent::directory::run` sends its `AgentNotice::RunSettled` *after* awaiting the
+engine, so a dropped run future sends none and `Agents::run_settled` never fires. Pre-existing —
+an MCP client hanging up mid-run does the same, and AA-03c's note says such a row is reaped when
+the connection ends. For the assistant the "connection" is the pane's whole mount, so it would
+sit there. The fix is a drop guard around that await in `agent/directory.rs`, which is Freya-side
+and out of this task's scope; noted in AS-04.

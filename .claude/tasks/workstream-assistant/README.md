@@ -78,6 +78,25 @@ brains pluggable underneath. The screenshots are not an argument for ACP-style p
 agents; that is the sidecar shape rejected above, and per-conversation model choice validates
 the `genai` decision rather than pressuring it.
 
+## Two things AS-02 settled (2026-08-09 — do not re-litigate)
+
+**The Agents pane is for headless MCP clients, and the assistant is not in it.** That pane
+answers "which external clients are connected to my project right now"; the assistant is part of
+the app, and its runs already have a richer home in the transcript. This overturns AS-01's and
+AS-04's earlier notes that its sessions belonged there. Everything *below* the pane is unchanged
+— it is still one more agent to `Host`, the policy gate and the query sessions. The
+discriminator is `StrataTools::agent_id()`, the id the app itself minted, never the identity's
+name: a name is a claim any MCP client can make, and a name-keyed rule would let one hide itself.
+
+**A statement the user can run is an `offer_sql` tool call, not a formatting convention.** A
+tagged markdown fence was built first and withdrawn: a fence is taught only by a paragraph of
+system prompt, and prompt-taught formatting is followed unevenly — least reliably by the small
+local models the Ollama entry exists for. A tool is taught by its schema, and it can *check the
+statement before the card appears*, which a fence structurally cannot. It is the assistant's
+own eleventh tool, never registered on the router, so `tools/list` is unchanged and no MCP
+client is offered a tool it has no transcript to use. SQL the assistant merely explains stays an
+ordinary code block; the whole point is that the two are told apart.
+
 ## Architecture in one line
 
 **genai is the mouth, `StrataTools` is the hands, the loop is ours** — one turn = stream the
@@ -92,7 +111,7 @@ query sessions, the same policy gate, the same error taxonomy verbatim — and b
 | # | Task | Status | Depends on |
 |---|---|---|---|
 | 01 | In-process facade + tool manifest: the vocabulary callable without rmcp | ✅ | AA-03c |
-| 02 | Provider seam + the loop: `genai`, streaming, tool dispatch, cancel | ⬜ | 01 |
+| 02 | Provider seam + the loop: `genai`, streaming, tool dispatch, cancel | ✅ | 01 |
 | 03 | Settings ▸ Assistant: the provider roster + default entry | ⬜ | 05 |
 | 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ⬜ | 02, 03 |
 | 05 | Secret store: OS-keystore-backed keys, references in config | ✅ | — |

@@ -381,12 +381,21 @@ the disconnection.
 Stated so the reader does not go looking:
 
 - **The in-process assistant pane** — a native conversation surface in the project window.
-  The vocabulary underneath it is built and driveable with no MCP peer at all (AS-01, above),
-  but there is no agentic loop, no provider client and no pane. That shape is settled: the app
-  owns the loop, and the provider is pluggable (`genai` — Anthropic, OpenAI, Gemini, Ollama,
-  OpenAI-compatible), chosen in Settings. Binding a model's tool call *by name* to a facade
-  method belongs with the loop, where the provider's own tool-call type lives. The design and
-  decision record are in `.claude/tasks/workstream-assistant/`.
+  Everything underneath it is now built: the vocabulary is driveable with no MCP peer at all
+  (AS-01, above) and the agentic loop over a pluggable provider seam is
+  `strata_agent::assistant` (AS-02 — `genai`, one provider table, streaming, tool dispatch by
+  name, cancel). What is missing is the Freya surface itself and the Settings roster that feeds
+  it (AS-03/AS-04). Two things about that loop bear on this document:
+  - **The assistant is not in the Agents pane.** That pane lists the *external* clients
+    connected to a project; the assistant is part of the app, and its runs render as step cards
+    in its own transcript. It is one more agent to everything described here — its own
+    `AgentId`, its own query sessions, the same gate — and is excluded from the pane alone, by
+    the `AgentId` the app minted for it rather than by the name it goes under.
+  - **The loop offers one tool this document does not list**: `offer_sql`, how the assistant
+    hands the user a statement to execute. It is never registered on the router, so `tools/list`
+    is exactly the ten below and no MCP client is offered it.
+
+  The design and decision record are in `.claude/tasks/workstream-assistant/`.
 - **MCP resources** — the vocabulary is tools only.
 - **Curated writes** (register a table, save a view, export). If they ever arrive, they
   arrive as new, separately permissioned tools; `run` never loosens.

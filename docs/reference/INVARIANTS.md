@@ -582,6 +582,47 @@ Things that must not regress. Each was fought for once already.
   and the fonts, none of which exist for it — and **stdout belongs to the transport**, so
   logging is a parameter (`init_logging(Log::Stderr)`) rather than a constant: one stray log
   line on stdout is a parse error at the client.
+- **The assistant's brain is one table and a per-send value; whether a knob exists is ours,
+  what a rung means is the provider's.** `strata_agent::assistant::provider::PROVIDERS` is the
+  one place a kind's label, base-URL policy, key policy, **effort ladder** and `genai` adapter
+  are written — Settings' roster (AS-03) and the composer footer (AS-04) read it and neither
+  restates it, and `Brain::resolve` is the single site a client is built. `Selection` is plain
+  data handed in with **every send**, so several chat panes on different providers is several
+  values rather than a mode anywhere: the def/runtime split, one layer down. Effort splits in
+  two on purpose — *whether the control exists* is the kind's (Ollama's ladder is empty, so no
+  surface offers it and a selection carrying one is **refused**, not ignored), while *what a
+  rung means for a given model* is `genai`'s, which already downgrades `xhigh` below Opus 4.7
+  and already knows `gemini-3` takes a thinking level where 2.5 takes a budget. A per-model
+  capability table here would be a second copy of that, stale within a release — the same
+  argument that keeps the model name free-form. Three fields are refused rather than dropped (a
+  base URL on a kind that owns its endpoint, a key on a kind that sends none, an effort on a
+  kind with no ladder), because a field silently ignored is a lie on screen; the compatible kind
+  has **no env fallback**, because `genai`'s default would post the user's `OPENAI_API_KEY` to
+  whatever host they typed; and `check_base_url` normalizes the **trailing slash**, without
+  which every adapter's path join reaches a URL the user never wrote.
+- **A cancelled turn is a drop, and the conversation it leaves behind must still be sendable.**
+  Dropping the tool future *is* the engine's abort (`DispatchGuard`) — never a second abort
+  path. But an assistant message carrying tool calls with no results is a request every provider
+  rejects, so a cancel answers the outstanding calls with "the user stopped this turn" before it
+  settles. A cancelled turn settles as `Cancelled`, never `Failed`.
+- **A statement the user can run is a tool call, not a formatting convention — and the check in
+  front of it is the *editor's* policy.** `offer_sql` is the assistant's own tool, dispatched by
+  the loop and **never registered on the router**, so `tools/list` stays the ten and no MCP
+  client is offered a tool it has no transcript to use. A tagged markdown fence was built first
+  and withdrawn: a fence is taught only by prose in the system prompt, which small local models
+  follow unevenly, and it cannot check anything before the text is on screen. The tool validates
+  first, so a card cannot offer SQL that will not parse — against the **editor's** capability,
+  because the card runs in the user's editor, which is what lets the assistant hand over a write
+  it is itself refused. SQL it is merely explaining stays an ordinary code block; telling the two
+  apart is the whole point.
+- **The Agents pane lists the clients that dialled in, so the in-app assistant is not in it —
+  and the discriminator is the minted id, never the name.** That pane answers "what is working
+  on my project right now" about *external* clients; the assistant is part of the app and its
+  runs render as step cards in its own transcript. It stays one more agent to everything below
+  (its own `AgentId`, its own query sessions, the same gate) and is excluded from the pane
+  alone, by `StrataTools::agent_id()` — the id the app itself minted. Keying on
+  `AgentIdentity::assistant()`'s name would let any MCP client hide from the pane by claiming
+  that name at `initialize`, which is the worst possible version of this rule.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion hides the defs whose registration **failed** — precisely
   the rows the catalog exists to show, because a table that is merely broken has no engine

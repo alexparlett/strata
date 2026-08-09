@@ -102,10 +102,14 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   split settled 2026-08-09), the pane, and the **secret store** (OS keystore; config holds
   references, never keys). **01 ✅** (the ten tools are `StrataTools`' own public methods and
   the `#[tool]` items are wrappers over them; `manifest()` derives the model-facing offer from
-  the router that answers `tools/list`) and **05 ✅** (`strata_core::secret` — a `SecretRef` in
-  config, a `Secret` with no serde path at all); 02–04 open. Decision records in that
-  workstream's README; the doc records the loop and pane as not built
-  (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
+  the router that answers `tools/list`), **02 ✅** (`strata_agent::assistant` — one provider
+  table every surface reads, the turn loop with its event stream and cancel, and `offer_sql`,
+  the assistant's own eleventh tool for handing the user a statement to execute) and **05 ✅**
+  (`strata_core::secret` — a `SecretRef` in config, a `Secret` with no serde path at all); 03
+  and 04 open. Two corrections settled with 02 and recorded in that workstream's README: the
+  Agents pane is for **headless MCP clients only** (the assistant is kept out of it by its
+  minted `AgentId`), and a runnable statement is a **tool call**, not a markdown convention.
+  The doc records the pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
 - **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
   ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,

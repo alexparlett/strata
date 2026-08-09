@@ -394,6 +394,24 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
+    /// Which agent this value **is** — the id its [`Connection`] minted.
+    ///
+    /// The app's own answer to "is this the in-app assistant?", and the reason that question
+    /// has an honest answer at all: the chat pane's `StrataTools` is one the app constructed,
+    /// so it holds an id nothing else can claim. The Agents pane uses it to leave the
+    /// assistant *out* — that pane says which external clients are connected to the project
+    /// right now, and the assistant is not connected to anything, it is part of the app (its
+    /// runs show as step cards in the transcript instead).
+    ///
+    /// Deliberately **not** a name comparison against [`AgentIdentity::assistant`]. An
+    /// identity is a claim a client makes at `initialize`, so keying a "hide this from the
+    /// pane" rule on one would let any MCP client make itself invisible by calling itself
+    /// `strata-assistant` — the worst possible version of this rule. The identity stays what
+    /// it is for: attribution.
+    pub fn agent_id(&self) -> AgentId {
+        self.connection.agent
+    }
+
     /// The same vocabulary for a **new** client: a fresh [`AgentId`], the shared host and
     /// the shared run cache. This is what a transport's per-session service factory calls.
     pub fn connection(&self) -> Self {
@@ -1036,8 +1054,8 @@ impl<H: Host> StrataTools<H> {
 
     /// Open a query session and return its handle: a place your queries run in sequence,
     /// each replacing the last. It is yours, not one of the user's editor tabs — nothing you
-    /// do here disturbs what they are working on. The user watches your sessions in the
-    /// Agents pane and can promote any query you ran into their own editor.
+    /// do here disturbs what they are working on. The user can see what you run and can
+    /// promote any query you ran into their own editor.
     #[tool(name = "open_query_session")]
     async fn open_query_session_tool(
         &self,
@@ -1114,7 +1132,7 @@ impl<H: Host> StrataTools<H> {
 Read-only: SELECT, EXPLAIN, SHOW and DESCRIBE run; everything else is refused. \
 Start with list_tables and describe_table to learn the catalog, validate to check SQL \
 cheaply, then open_query_session and run. Your work lives in query sessions of your own, \
-which the user watches in the Agents pane and can promote into their editor — so it never \
+which the user can watch and promote into their editor — so it never \
 disturbs the tabs they are working in. Open a session per line of investigation; each run \
 in a session replaces the last one's result."
 )]

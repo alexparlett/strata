@@ -696,9 +696,10 @@ src/apps/project/                the project window (Valin-shaped)
 
 ## crates/strata-agent — agent access (Freya-free)
 
-Everything frontend-agnostic about agent access (`docs/AGENT_ACCESS_SPEC.md`). The crate has
-**no Freya dependency**, which is what lets one `StrataTools` serve HTTP (AA-03), stdio headless
-(AA-05) and, later, the in-process chat pane (AA-06).
+Everything frontend-agnostic about agent access (`docs/AGENT_ACCESS_SPEC.md`), **and** the
+assistant's loop (AS-02). The crate has **no Freya dependency**, which is what lets one
+`StrataTools` serve HTTP (AA-03), stdio headless (AA-05) and the in-process chat loop, and lets
+that loop be tested against a mock host and a stub endpoint with no window and no vendor.
 
 ```
 src/lib.rs                       the crate charter + the seam diagram: rmcp server / stdio host /
@@ -731,6 +732,27 @@ src/mock.rs                      `MockHost` — a `Host` over plain values and a
                                  the vocabulary's test rig and the executable statement of what
                                  a host owes. Public, not `#[cfg(test)]`, because the MCP
                                  integration test lives in `tests/`
+src/assistant/mod.rs             AS-02 — the **assistant**: `Assistant` (its own small Tokio
+                                 runtime, deliberately not `AgentServer`'s, whose lifetime is a
+                                 setting) and `Running`, a turn in flight. Dropping one cancels
+                                 it
+src/assistant/provider.rs        the **provider seam**: `PROVIDERS`, the one table every surface
+                                 reads a kind's label, URL policy, key policy and **effort
+                                 ladder** from; `Selection` (a pick, per send); `Brain::resolve`,
+                                 the single site a `genai` client is built, which either builds
+                                 one or names the missing field and the pane it is set in
+src/assistant/turn.rs            the **loop** and its `TurnEvent` stream, `Conversation` (the
+                                 *model's* memory, opaque outside the crate — the pane's
+                                 transcript is a different list), and cancel, which is a drop
+                                 because a drop is already the engine's abort
+src/assistant/dispatch.rs        **name → method**: the one match binding a model's tool call to
+                                 the ten, with a bad-arguments message written for a model to
+                                 read, plus `Scope` and the step card's `Facts`
+src/assistant/offer.rs           `offer_sql` — the assistant's own eleventh tool, **never on the
+                                 router**: how it hands the user a statement to execute,
+                                 validated before the card exists
+src/assistant/system.md          the system prompt, `include_str!`'d — prose, in a file, because
+                                 it is edited as prose
 ```
 
 ## crates/strata-command-macro

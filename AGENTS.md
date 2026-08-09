@@ -281,6 +281,23 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   outcomes, its one project is not looked up, it reads no app config and scaffolds nothing — and
   its CLI branch is taken before anything app-global, with logging on **stderr** because stdout
   is the transport's.
+- **The assistant's brain is one table and a per-send value; whether a knob exists is ours,
+  what a rung means is the provider's.** `PROVIDERS` is the only place a kind's label, URL/key
+  policy, effort ladder and adapter are written; `Selection` is handed in with every send, so
+  several panes on several providers is several values and not a mode. Ollama's empty ladder
+  means no control and a **refusal**, never a silent drop — and a per-model capability table
+  would be a stale copy of what `genai` already knows.
+- **A cancelled turn is a drop, and the conversation it leaves must still be sendable.**
+  Dropping the tool future *is* the engine's abort; the outstanding tool calls are answered
+  before the turn settles, or the next send is a request every provider rejects. Cancelled is
+  never failed.
+- **A statement the user can run is a tool call, not a formatting convention — and the check in
+  front of it is the *editor's* policy.** `offer_sql` is the assistant's own tool, never on the
+  router; it validates before the card exists, which is what lets it hand over a write the
+  assistant is itself refused. Explanatory SQL stays an ordinary code block.
+- **The Agents pane lists the clients that dialled in, so the in-app assistant is not in it —
+  and the discriminator is the minted id, never the name.** `StrataTools::agent_id()`; keying on
+  the identity would let any MCP client hide by claiming it.
 
 **Stores and state**
 
